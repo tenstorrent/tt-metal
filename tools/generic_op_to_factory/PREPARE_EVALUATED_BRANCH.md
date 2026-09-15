@@ -29,7 +29,7 @@ python3 -m tools.generic_op_to_factory.prepare_branch \
   --branch evaluated-candidate \
   --runtime /localdev/astancov/sample-migration-target \
   --operation sample_op --golden-suite sample_suite \
-  --output /localdev/astancov/sample-branch-inputs \
+  --output /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/inputs \
   --with-validation-tools
 ```
 
@@ -44,8 +44,19 @@ none`. It never replaces the evaluator pin with a DB value. The complete
 checkpoint is preserved, not just files under the Python operation directory.
 No branch checkout, reset or edits occur in the source worktree.
 
-Both destination paths must be new and separate. Command logs and failures are
-retained; a failed attempt does not delete its partial worktree. `branch.json`
+The target worktree must be new. Preparation output defaults to
+`RUNTIME/generated/generic_op_to_factory/inputs` and must be a new directory inside that
+worktree-local artifact namespace. Validation uses a separate sibling, such as
+`RUNTIME/generated/generic_op_to_factory/validation`. Parent-directory outputs and paths
+inside operation source are rejected. The namespace has its own generated
+`.gitignore`; neither the evaluated `.gitignore` nor shared Git configuration is
+modified. Tracked source, migration allowlist entries and redirected paths are
+forbidden there. Logs/caches therefore do not contaminate source hashes.
+
+After worktree creation, command logs and failures are retained inside it; a
+failed attempt does not delete its partial worktree. If Git cannot create the
+worktree, its diagnostic is returned without making a fake checkout or loose
+parent-directory logs. `branch.json`
 records branch name, immutable source SHA, runtime path, operation/suite and
 recursive submodule SHAs with a checksum. Later movement of the original branch
 does not move an already prepared migration.
@@ -76,13 +87,13 @@ the current HEAD plus tracked/untracked changes. No changes may occur on resume.
 
 ## 3. Validate through the existing driver
 
-Example `/absolute/port.json` (replace all placeholder files with the actual port):
+Example `RUNTIME/generated/generic_op_to_factory/inputs/port.json` (replace placeholders):
 
 ```json
 {
   "runtime": "/localdev/astancov/sample-migration-target",
-  "evaluated_branch": "/localdev/astancov/sample-branch-inputs",
-  "workspace": "/localdev/astancov/sample-validation",
+  "evaluated_branch": "/localdev/astancov/sample-migration-target/generated/generic_op_to_factory/inputs",
+  "workspace": "/localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation",
   "migration_paths": [
     "ttnn/cpp/ttnn/operations/sample/device/sample_device_operation.hpp",
     "ttnn/cpp/ttnn/operations/sample/device/sample_program_factory.cpp",
@@ -96,10 +107,9 @@ Example `/absolute/port.json` (replace all placeholder files with the actual por
     "operation_type": "ttnn::prim::SampleDeviceOperation",
     "factory_source": "ttnn/cpp/ttnn/operations/sample/device/sample_program_factory.cpp"
   },
-  "cache_test": "tests/ttnn/unit_tests/operations/test_sample_native.py",
+  "acceptance_tests": ["tests/ttnn/unit_tests/operations/test_sample_native.py"],
   "build_argv": ["./build_metal.sh", "--enable-ccache"],
   "precompile": false,
-  "allow_source_failures": false,
   "environment": {"CMAKE_BUILD_PARALLEL_LEVEL": "6"}
 }
 ```
@@ -109,22 +119,26 @@ also list bindings, source registration, kernel copies and every other authored
 file. Do not add the original source or original golden tests to this list.
 
 ```bash
-python3 -m tools.generic_op_to_factory.validate_port plan --config /absolute/port.json
-python3 -m tools.generic_op_to_factory.validate_port init --config /absolute/port.json
+python3 -m tools.generic_op_to_factory.validate_port plan --config /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/inputs/port.json
+python3 -m tools.generic_op_to_factory.validate_port init --config /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/inputs/port.json
 python3 -m tools.generic_op_to_factory.validate_port run \
-  --workspace /localdev/astancov/sample-validation --through cache
+  --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation --through acceptance
 # Obtain independent review and supply review.json using REVIEW.md.
 python3 -m tools.generic_op_to_factory.validate_port run \
-  --workspace /localdev/astancov/sample-validation
+  --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation
 ```
 
 There is one build, one full source golden, one full native golden and a separate
-focused cache suite. The source/native route is checked and native generic-op
+focused native acceptance suite. The source/native route is checked and native generic-op
 fallback is forbidden. `source_compare` records the fresh source outcomes, not
-a DB comparison. Source failures block by default; explicitly setting
-`allow_source_failures` allows outcome-parity validation while retaining those
-failures in the receipt. It never turns them into passes. Changed or missing
-native outcomes fail comparison. Existing DB outcomes can still be examined
+a DB comparison. **The source suite does not have to be green.** Ordinary source
+failures/errors remain visible and do not prevent the native suite from running.
+The obsolete `allow_source_failures` configuration key is no longer accepted.
+`native_compare` is mandatory: changed, missing or additional case outcomes block
+completion, including a source failure becoming a native pass. Matching failures
+are never relabeled passes. Hangs, missing/untrusted execution evidence and broken
+test routing still block execution. All selected native acceptance tests must pass.
+Existing DB outcomes can still be examined
 separately with `compare_baseline`; they are not a prerequisite for this mode.
 
 Existing evaluation results are not automatically reused: proving their binding
@@ -132,3 +146,9 @@ to this exact tree, suite and environment is a separate future capability.
 Independent review remains mandatory; descriptor parity and measured host/device
 performance remain the additional protocol in [COMPARISON_GATE.md](COMPARISON_GATE.md),
 not newly implemented gates. No performance claim follows from branch preparation.
+
+Old external evidence may be archived under the target's artifact namespace.
+Preserve its bytes and record the old/new paths separately; absolute paths and
+hashes in old receipts are historical facts, not fields to rewrite for resuming.
+A moved old workspace is an archive, not a resumable validation. New policy or
+source changes require a new plan; cross-workspace result import is not implemented.

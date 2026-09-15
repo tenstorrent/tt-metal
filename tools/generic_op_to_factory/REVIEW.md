@@ -39,7 +39,7 @@ No numerical performance claim is required: `not_measured` is an honest outcome.
 Public-call wall time includes binding, allocation, dispatch and possibly device
 backpressure; it is not an isolated measurement of the cache-hit hook.
 
-After `run --through cache`, supply `WORKSPACE/review.json`:
+After `run --through acceptance`, supply `WORKSPACE/review.json`:
 
 ```json
 {

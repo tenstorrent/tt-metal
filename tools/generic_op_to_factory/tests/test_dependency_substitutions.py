@@ -153,7 +153,7 @@ def test_port_completion_keeps_substitution_scope(port, donor):
     port["dependency_substitutions"] = [donor]
     validate_port.initialize(port)
     validation = validate_port.PortValidation(port["workspace"])
-    validation.run("cache")
+    validation.run("acceptance")
     record_review(validation)
     validation.run()
     result = json.loads((validation.workspace / "attempts/complete/001/result.json").read_text())

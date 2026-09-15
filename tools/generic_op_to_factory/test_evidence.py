@@ -13,7 +13,7 @@ from tools.generic_op_to_factory.export_run import ExportError
 # Reviewed runtime-tool versions. Keep these pins with flow releases; comparing
 # a worktree file with itself would not detect an unreviewed local runner edit.
 RUNNER_SHA256 = "72a490dacafc12c92bc83222415906e583721eda87475020bcd60e22e146900d"
-ADAPTER_SHA256 = "c5a8af818b3d9043511d694ef4b43bd6f980d72e9dc9ae01f5bc88b4cfdb5f81"
+ADAPTER_SHA256 = "7a77fc39f28b2d319755ed95c1751950902108059ce7643160d7469e71f657b4"
 
 
 def check_runner(path, *, precompile, require_raw=True):

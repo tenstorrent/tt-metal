@@ -41,7 +41,7 @@ def evaluated(configured, tmp_path, monkeypatch):
         "runtime": tmp_path / "native-runtime",
         "operation": "sample_op",
         "golden_suite": "sample_suite",
-        "output": tmp_path / "branch-inputs",
+        "output": tmp_path / "native-runtime" / branch.ARTIFACT_DIR / "inputs",
         "revision": revision,
     }
 
@@ -231,13 +231,12 @@ def branch_port(evaluated):
         "runtime": str(runtime),
         "evaluated_branch": str(evaluated["output"]),
         "migration_paths": sorted(files),
-        "workspace": str(runtime.parent / "port-validation"),
+        "workspace": str(runtime / branch.ARTIFACT_DIR / "validation"),
         "source_entry": "ttnn.operations.sample_op:sample_op",
         "native_entry": "ttnn:sample_native",
-        "cache_test": "tests/test_cache.py",
+        "acceptance_tests": ["tests/test_cache.py"],
         "build_argv": ["./build_metal.sh"],
         "precompile": False,
-        "allow_source_failures": False,
         "factory_contract": {
             "operation_header": "ttnn/cpp/ttnn/operations/sample/device/sample.hpp",
             "operation_type": "sample::DeviceOperation",
@@ -255,9 +254,9 @@ def test_branch_validation_never_reads_db_or_installs_export(branch_port, monkey
     monkeypatch.setattr(validate_port.prepare_target, "inspect", forbidden)
     validate_port.initialize(branch_port)
     validation = validate_port.PortValidation(branch_port["workspace"])
-    validation.run("cache")
+    validation.run("acceptance")
     suites = list(validation.workspace.glob("attempts/*/001/junit.xml"))
-    assert {path.parent.parent.name for path in suites} == {"source", "native", "cache"}
+    assert {path.parent.parent.name for path in suites} == {"source", "native", "acceptance"}
     comparison = json.loads((validation.workspace / "attempts/source_compare/001/comparison.json").read_bytes())
     assert comparison["recorded_results_compared"] is False
     assert comparison["observed_failures"] == 0
@@ -287,21 +286,111 @@ def test_branch_port_edits_are_frozen_on_resume(branch_port):
 
 
 @pytest.mark.parametrize("configured", ["failed"], indirect=True)
-@pytest.mark.parametrize("allow", [False, True])
-def test_source_failures_remain_failures_and_require_explicit_policy(branch_port, allow):
-    branch_port["allow_source_failures"] = allow
+def test_source_failures_remain_visible_and_native_comparison_is_mandatory(branch_port):
     validate_port.initialize(branch_port)
     validation = validate_port.PortValidation(branch_port["workspace"])
-    if allow:
-        validation.run("native_compare")
-        comparison = json.loads((validation.workspace / "attempts/native_compare/001/comparison.json").read_bytes())
-        assert comparison["outcomes_match"]
-        assert comparison["observed_failures"] == 1
-    else:
-        with pytest.raises(  # allow-pytest.raises: baseline acceptance
-            ExportError, match="Source baseline has failures"
-        ):
-            validation.run("native")
-        assert validation.state["stages"]["native"]["status"] == "pending"
+    validation.run("native_compare")
+    comparison = json.loads((validation.workspace / "attempts/native_compare/001/comparison.json").read_bytes())
+    assert comparison["outcomes_match"]
+    assert comparison["observed_failures"] == 1
+    assert validation.state["stages"]["native"]["status"] == "complete"
     evidence = json.loads((validation.workspace / "attempts/source_compare/001/comparison.json").read_bytes())
     assert evidence["observed_failures"] == 1
+
+
+@pytest.mark.parametrize("configured", ["failed"], indirect=True)
+@pytest.mark.parametrize("change", ["status", "missing", "added"])
+def test_failing_source_never_disables_native_outcome_or_case_checks(branch_port, monkeypatch, change):
+    original = validate_port.parse_junit_xml
+
+    def changed_native(path):
+        rows = original(path)
+        if "native" in Path(path).parts:
+            if change == "status":
+                rows[0]["status"] = "passed"
+            elif change == "missing":
+                rows[0]["test_name"] = "different_case"
+            else:
+                rows.append({**rows[0], "test_name": "additional_case"})
+        return rows
+
+    monkeypatch.setattr(validate_port, "parse_junit_xml", changed_native)
+    validate_port.initialize(branch_port)
+    validation = validate_port.PortValidation(branch_port["workspace"])
+    with pytest.raises(ExportError, match="Case outcomes differ"):  # allow-pytest.raises: mandatory parity gate
+        validation.run("acceptance")
+    assert validation.state["stages"]["native_compare"]["status"] == "blocked"
+    assert validation.state["stages"]["acceptance"]["status"] == "pending"
+
+
+def test_obsolete_source_failure_switch_is_not_silently_accepted(branch_port):
+    branch_port["allow_source_failures"] = False
+    with pytest.raises(ExportError, match="config keys"):  # allow-pytest.raises: no source-green policy
+        validate_port.plan(branch_port)
+
+
+def test_preparation_refuses_parent_directory_outputs(evaluated):
+    evaluated["output"] = evaluated["runtime"].parent / "loose-evidence"
+    with pytest.raises(ExportError, match="artifacts must be inside"):  # allow-pytest.raises: worktree ownership
+        prepare(evaluated)
+    assert not evaluated["output"].exists()
+    assert not evaluated["runtime"].exists()
+
+
+@pytest.mark.parametrize("kind", ["parent", "source", "input_child", "input_parent", "root"])
+def test_validation_requires_separate_worktree_artifact_directory(branch_port, kind):
+    runtime = Path(branch_port["runtime"])
+    paths = {
+        "parent": runtime.parent / "loose-evidence",
+        "source": runtime / "ttnn" / "evidence",
+        "input_child": Path(branch_port["evaluated_branch"]) / "evidence",
+        "input_parent": runtime / branch.ARTIFACT_DIR / "nested",
+        "root": runtime / branch.ARTIFACT_DIR,
+    }
+    branch_port["workspace"] = str(paths[kind])
+    if kind == "input_parent":
+        branch_port["evaluated_branch"] = str(paths[kind] / "inputs")
+    with pytest.raises(ExportError, match="artifacts must be inside|separate artifact"):  # allow-pytest.raises: paths
+        validate_port.plan(branch_port)
+    assert not paths[kind].exists() or kind == "root"
+
+
+def test_generated_artifacts_do_not_contaminate_source_snapshot(branch_port):
+    initial = validate_port.initialize(branch_port)
+    validation = validate_port.PortValidation(branch_port["workspace"])
+    cache = validation.workspace / "device-cache" / "kernel"
+    cache.mkdir(parents=True)
+    (cache / "binary.elf").write_bytes(b"generated")
+    (validation.workspace / "diagnostic.log").write_text("generated evidence")
+    validation.validate()
+    assert validate_port.digest(validate_port.plan(branch_port)) == initial["plan_sha256"]
+    assert not any(branch.ARTIFACT_DIR in path for path in validation.planned["untracked_files"])
+    assert git(Path(branch_port["runtime"]), "status", "--porcelain") == ""
+
+
+@pytest.mark.parametrize("mutation", ["ignore", "tracked", "allowlist", "symlink"])
+def test_artifact_namespace_cannot_hide_source_or_be_redirected(branch_port, tmp_path, mutation):
+    runtime = Path(branch_port["runtime"])
+    root = runtime / branch.ARTIFACT_DIR
+    if mutation == "ignore":
+        (root / ".gitignore").write_text("different ignore policy\n")
+    elif mutation == "tracked":
+        (root / "source.cpp").write_text("// wrongly tracked source")
+        git(runtime, "add", "-f", str(root / "source.cpp"))
+    elif mutation == "allowlist":
+        branch_port["migration_paths"].append(branch.ARTIFACT_DIR + "/source.cpp")
+    else:
+        (root / "redirected").symlink_to(tmp_path, target_is_directory=True)
+        branch_port["workspace"] = str(root / "redirected" / "validation")
+    with pytest.raises(  # allow-pytest.raises: artifact/source boundary
+        ExportError, match="ignore marker|tracked source|cannot replace|unredirected"
+    ):
+        validate_port.plan(branch_port)
+
+
+def test_evaluated_tree_cannot_occupy_reserved_artifact_namespace(evaluated):
+    revision = commit(evaluated["repository"], {branch.ARTIFACT_DIR + "/source.cpp": b"source"})
+    git(evaluated["repository"], "update-ref", "refs/heads/evaluated-candidate", revision)
+    with pytest.raises(ExportError, match="reserved"):  # allow-pytest.raises: checkpoint namespace collision
+        prepare(evaluated)
+    assert not evaluated["runtime"].exists()

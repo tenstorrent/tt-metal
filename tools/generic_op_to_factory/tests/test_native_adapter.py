@@ -5,10 +5,12 @@
 
 import sys
 import types
+import os
+from pathlib import Path
 
 import pytest
 
-from tools.generic_op_to_factory.native_adapter import Route, resolve
+from tools.generic_op_to_factory.native_adapter import AcceptanceRoute, Route, pytest_collection_finish, resolve
 
 
 @pytest.fixture
@@ -148,3 +150,82 @@ def test_invalid_alias_lists_rejected(aliases):
                 "aliases": aliases,
             }
         )
+
+
+def acceptance_route(tests=None):
+    return AcceptanceRoute(
+        {
+            "source": "synthetic_source:operation",
+            "native": "synthetic_native:operation",
+            "mode": "native",
+            "tests": tests or ["tests/test_contract.py"],
+        }
+    )
+
+
+def test_acceptance_selects_cpp_without_rerouting_source_or_setup(modules, monkeypatch):
+    source, native, runtime = modules
+    original, cpp, generic = source.operation, native.operation, runtime.generic_op
+    monkeypatch.setenv("TT_PRE_MIGRATION_MODE", "source")
+    monkeypatch.delenv("TT_PRE_MIGRATION_ENTRY", raising=False)
+    route = acceptance_route()
+    route.install()
+    try:
+        assert source.operation is original
+        assert runtime.generic_op() == "original"  # setup/readback remain usable
+        assert native.operation.is_cpp_operation
+        assert native.operation(3) == 6
+        assert route.calls == 1
+        assert runtime.generic_op is generic
+        assert os.environ["TT_PRE_MIGRATION_MODE"] == "native"
+        assert os.environ["TT_PRE_MIGRATION_ENTRY"] == "synthetic_native:operation"
+    finally:
+        route.restore()
+    assert native.operation is cpp
+    assert os.environ["TT_PRE_MIGRATION_MODE"] == "source"
+    assert "TT_PRE_MIGRATION_ENTRY" not in os.environ
+
+
+def test_acceptance_rejects_fallback_and_restores_generic_after_exception(modules):
+    _, native, runtime = modules
+    generic = runtime.generic_op
+    native.operation = lambda: runtime.generic_op()
+    native.operation.is_cpp_operation = True
+    route = acceptance_route()
+    route.install()
+    try:
+        with pytest.raises(AssertionError, match="must not fall back"):  # allow-pytest.raises: fallback gate
+            native.operation()
+        assert runtime.generic_op is generic
+    finally:
+        route.restore()
+
+
+def test_acceptance_refuses_python_entry(modules):
+    _, native, _ = modules
+    del native.operation.is_cpp_operation
+    route = acceptance_route()
+    with pytest.raises(ValueError, match="registered C\\+\\+ operation"):  # allow-pytest.raises: direct native gate
+        route.install()
+    assert route.restores == []
+
+
+@pytest.mark.parametrize("collected", [[], ["tests/test_contract.py"], ["tests/test_contract.py", "tests/extra.py"]])
+def test_acceptance_requires_every_listed_file_to_collect(collected):
+    route = acceptance_route(["tests/test_contract.py", "tests/test_memory.py"])
+    session = types.SimpleNamespace(
+        config=types.SimpleNamespace(_migration_route=route),
+        items=[types.SimpleNamespace(path=Path.cwd() / path) for path in collected],
+    )
+    with pytest.raises(pytest.UsageError, match="Every selected acceptance file"):  # allow-pytest.raises: coverage
+        pytest_collection_finish(session)
+
+
+def test_acceptance_allows_multiple_contract_files():
+    files = ["tests/test_contract.py", "tests/test_memory.py"]
+    route = acceptance_route(files)
+    session = types.SimpleNamespace(
+        config=types.SimpleNamespace(_migration_route=route),
+        items=[types.SimpleNamespace(path=Path.cwd() / path) for path in files],
+    )
+    pytest_collection_finish(session)

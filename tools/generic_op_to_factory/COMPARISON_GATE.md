@@ -12,7 +12,8 @@ the test suite. DB results are optional historical evidence, not a source overla
 
 **Status:** this is a review protocol and implementation specification. The
 current [validation driver](validate_port.py) automates build, factory-contract,
-golden-outcome comparisons, supplied cache tests, and a review receipt. It does
+golden-outcome comparisons, supplied native acceptance tests (including cache
+behavior), and a review receipt. It does
 not implement the descriptor comparison, benchmark harness, or numerical
 performance gate described here. Its `complete` status can include
 `performance.classification: "not_measured"`; that is narrower than acceptance

@@ -9,6 +9,7 @@ No production run identity or operation name is embedded in this adapter.
 
 import importlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -86,22 +87,88 @@ class Route:
         self.restores.clear()
 
 
+class AcceptanceRoute(Route):
+    """Observe direct native calls; leave the Python source and setup helpers alone."""
+
+    def __init__(self, specification):
+        tests = specification.get("tests")
+        if not isinstance(tests, list) or not tests or any(not isinstance(test, str) for test in tests):
+            raise ValueError("Acceptance route requires test files")
+        super().__init__({key: value for key, value in specification.items() if key != "tests"})
+        if self.specification["mode"] != "native" or self.specification["aliases"]:
+            raise ValueError("Acceptance tests require a direct native route without source aliases")
+        self.specification["tests"] = tests
+        self.environment_restores = {}
+
+    def install(self):
+        _, _, source = resolve(self.specification["source"])
+        module, name, native = resolve(self.specification["native"])
+        if native is source or not getattr(native, "is_cpp_operation", False):
+            raise ValueError("Acceptance entry must be a different registered C++ operation")
+        ttnn = importlib.import_module("ttnn")
+
+        def dispatch(*args, **kwargs):
+            self.calls += 1
+            generic = ttnn.generic_op
+
+            def forbidden(*args, **kwargs):
+                raise AssertionError("Native acceptance must not fall back to ttnn.generic_op")
+
+            ttnn.generic_op = forbidden
+            try:
+                return native(*args, **kwargs)
+            finally:
+                ttnn.generic_op = generic
+
+        # The underlying callable was checked before wrapping. Preserve the
+        # binding marker for the suite's own selector checks at fixture setup.
+        dispatch.is_cpp_operation = True
+        self.restores.append((module, name, native))
+        setattr(module, name, dispatch)
+        for key, value in {
+            "TT_PRE_MIGRATION_MODE": "native",
+            "TT_PRE_MIGRATION_ENTRY": self.specification["native"],
+        }.items():
+            self.environment_restores[key] = os.environ.get(key)
+            os.environ[key] = value
+
+    def restore(self):
+        super().restore()
+        for key, value in self.environment_restores.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self.environment_restores.clear()
+
+
 def pytest_addoption(parser):
     parser.addoption("--migration-route", help="Explicit source/native golden-suite routing JSON")
+    parser.addoption("--migration-acceptance-route", help="Explicit native-only acceptance-suite routing JSON")
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
     path = config.getoption("--migration-route")
-    if not path:
-        raise pytest.UsageError("The migration adapter requires --migration-route")
-    route = Route(json.loads(Path(path).read_text()))
+    acceptance = config.getoption("--migration-acceptance-route")
+    if bool(path) == bool(acceptance):
+        raise pytest.UsageError("Choose exactly one migration golden or acceptance route")
+    route = (AcceptanceRoute if acceptance else Route)(json.loads(Path(acceptance or path).read_text()))
     try:
         route.install()
     except Exception:
         route.restore()
         raise
     config._migration_route = route
+
+
+def pytest_collection_finish(session):
+    route = session.config._migration_route
+    if isinstance(route, AcceptanceRoute):
+        expected = {(Path.cwd() / test).resolve() for test in route.specification["tests"]}
+        actual = {Path(item.path).resolve() for item in session.items}
+        if actual != expected:
+            raise pytest.UsageError("Every selected acceptance file must collect tests, without additional test files")
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

@@ -9,23 +9,75 @@ and `prepare_branch --branch BRANCH`; it pins the final commit and initializes
 its recursive gitlinks in one fresh worktree. Dirty run changes must first be
 checkpointed by the caller. The tool does not commit, reset, rebase or push them.
 
-In `validate_port`, use `evaluated_branch`, `migration_paths` and
-`allow_source_failures` instead of `preparation`, `export`, `phase` and
+In `validate_port`, use `evaluated_branch` and `migration_paths`
+instead of `preparation`, `export`, `phase` and
 `allow_recorded_failures`. These are mutually exclusive input modes. The source
 baseline comes from running the unchanged operation and golden suite already
 on that branch; DB retrieval and a historical checkout are not involved.
 
 The validation sequence is **one build → factory contract → source golden →
-source-baseline check → native golden → source/native comparison → cache tests
+source-baseline check → native golden → source/native comparison → native acceptance tests
 → independent review → scoped receipt**. Smokes and precompile remain optional.
-`source_compare` checks whether source failures were explicitly allowed; it does
-not claim a DB comparison in this mode. Matching failures remain failures.
+`source_compare` records the source baseline; it does not require a green source
+suite or claim a DB comparison. Ordinary source failures/errors proceed to native
+execution. `native_compare` enforces the same case set and exact outcome classes;
+missing, added or changed outcomes block completion. Matching failures remain
+failures. The obsolete `allow_source_failures` key is rejected.
 Reusing an existing eval report instead of running the source baseline once is
 not implemented: evidence-to-checkpoint/environment binding needs its own gate.
 
 The factory, routing, evidence and review contracts below apply to both modes.
 The old preparation commands/config below are retained only for historical
 reconstruction, **not the starting point for new post-evaluation migrations**.
+
+## Native acceptance tests: more than cache tests
+
+The pre-migration skill authors ordinary Python pytest files and exercises them
+on the unchanged source before checkpointing. They encode operation-specific
+API, validation, output metadata, memory/alias and illegal-write, numerical, branch-boundary and
+cache requirements. Keep source-only planner inspection separate.
+
+Configure a nonempty, unique `acceptance_tests` list of repository-relative `.py`
+files below `tests/`. During migration, the `acceptance` stage runs that list
+**once, on C++ only**, after golden parity. It is not a second source run of the
+skill's tests. Its route adapter supplies `TT_PRE_MIGRATION_MODE=native` and
+`TT_PRE_MIGRATION_ENTRY=native_entry` inside the pytest process before collection.
+Suites must resolve that entry at setup, use the same assertions on both routes,
+and never fall back to Python. The driver observes direct native calls, blocks
+generic-op fallback during those calls, and requires each selected file to
+collect tests. Setup/readback helpers are not covered by that fallback guard.
+Pre-imported generic aliases in the operation path still require suite guards
+and review; call counting alone cannot establish assertion quality or full coverage.
+
+All selected acceptance tests must pass; failure/error/skip/xfail blocks the gate.
+This does not require all original golden tests to pass. Known source defects
+need explicit disposition during acceptance-test authoring, not silent deletion
+or weaker assertions. `PRE_MIGRATION.md` explains the cases and source evidence;
+it is not a second executable gate format or an automatically verified receipt.
+
+The old `cache_test` key and `cache` stage name are no longer accepted. Update
+the reviewed adapter in the target, select the actual acceptance suite, and
+initialize a new plan. Do not relabel an old cache-only suite as complete
+acceptance coverage or rewrite old receipts. Performance measurement and direct
+descriptor comparison still require the additional protocol below.
+
+Illegal-write acceptance combines protected-memory assertions with supported
+Watcher checks; neither alone is a complete allocation-ownership sanitizer. See
+the skill's [case guide](skills/pre-migration-tests/references/cases.md#illegal-writes-check-ownership-as-well-as-addresses).
+The current driver runs the Python assertions but does **not** enable or attest
+Watcher. A recorded, native safety execution profile and its evidence checks
+remain to be integrated before claiming that layer passed. Reuse acceptance
+cases, not an additional full golden sweep, and do not use instrumented timing
+as production-performance evidence.
+
+Memory-poisoning cases also belong in the acceptance suite: vary permitted input
+padding/verified guards and prefill overwrite-only outputs to expose unintended
+reads, missing stores and missing zero-initialization. See the skill's
+[poisoning guide](skills/pre-migration-tests/references/cases.md#memory-poisoning-and-missing-initialization).
+The driver has no generic allocation/scratch-poisoning hook. Operation-specific
+safe helpers and physical coverage evidence are required; prior-work sequences
+alone do not establish direct scratch poisoning. No extra full golden stage is
+needed for these parametrized acceptance cases.
 
 ## Legacy input: reconstructing a historical export
 
@@ -65,7 +117,7 @@ validation and retain its changed-baseline scope in completion evidence.
 5. Supply a native entry-point mapping and operation-specific cache regression
    tests to `tools.generic_op_to_factory.validate_port`. That driver checkpoints build → compiled factory contract → optional source smoke
    → target-source golden suite → DB comparison → optional native smoke → native golden
-   suite → source/native comparison → cache tests → independent code-quality /
+   suite → source/native comparison → native acceptance tests → independent code-quality /
    host-performance review → scoped completion evidence. Use the independent
    agent task and receipt contract in [REVIEW.md](REVIEW.md). Confirmed findings
    must be fixed and revalidated before completion; changed source needs a new
@@ -99,7 +151,7 @@ python3 -m tools.generic_op_to_factory.prepare_target --preparation /absolute/pr
 
 python3 -m tools.generic_op_to_factory.validate_port plan --config /absolute/port.json
 python3 -m tools.generic_op_to_factory.validate_port init --config /absolute/port.json
-python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation --through cache
+python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation --through acceptance
 # Independent agent reviews the final source and evidence; reconcile findings,
 # then write /absolute/new-validation/review.json as described in REVIEW.md.
 python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation
@@ -125,7 +177,7 @@ Example config (replace placeholders, including the complete commit):
     "factory_source": "ttnn/cpp/ttnn/operations/sample/device/sample_program_factory.cpp"
   },
   "smoke_nodeid": null,
-  "cache_test": "tests/ttnn/unit_tests/operations/test_sample_native.py",
+  "acceptance_tests": ["tests/ttnn/unit_tests/operations/test_sample_native.py"],
   "build_argv": ["./build_metal.sh", "--enable-ccache"],
   "precompile": false,
   "precompile_workers": 6,
@@ -173,11 +225,15 @@ each alias is the exact frozen callable; it refuses to replace an unrelated
 existing operation with the same name. All replacements are restored at teardown.
 Keep the native binding distinct from source and alias names. This handles
 known pre-collection aliases, not arbitrary later rebinding inside tests.
-An explicitly selected smoke case must pass. Cache tests must all pass, with no skips.
+An explicitly selected smoke case must pass. Acceptance tests must all pass, with no skips or xfails.
 Their assertions must cover the port's actual address/scalar/optional/alias
 transitions; a green generic test count is not a substitute for that review.
 
-The validation workspace must be outside the target repo and frozen inputs.
+In branch mode, preparation and validation evidence must be separate directories
+under `RUNTIME/generated/generic_op_to_factory/`. Its generated local ignore marker keeps
+logs/caches out of source snapshots; tracked source there is forbidden. The legacy
+historical mode still requires its validation workspace outside the target repo.
+In either mode, validation outputs cannot be placed inside frozen inputs.
 It records tracked diffs, untracked non-ignored source hashes, input/reference
 hashes, commands, logs, JUnit and build libraries. Source/configuration drift
 blocks resume. `--through STAGE` stops at a checkpoint. Failed/interrupted
@@ -187,6 +243,6 @@ port require a new validation workspace, not edited receipts. A completed
 comparison is not a request to rerun a completed device stage.
 
 Completion requires a recorded independent review and is scoped to the recorded
-golden outcomes/tolerances and supplied cache tests. It does not claim universal support, tracing compatibility,
+golden outcomes/tolerances and supplied native acceptance tests. It does not claim universal support, tracing compatibility,
 performance improvement or production readiness. A failing historical baseline
 requires explicit acceptance and remains reported as failing after migration.

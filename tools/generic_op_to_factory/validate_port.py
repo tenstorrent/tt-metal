@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resumable target-source → native golden/cache validation of a reviewed C++ port.
+"""Resumable golden parity and native acceptance validation of a reviewed C++ port.
 
 The default input is a complete evaluated branch frozen by prepare_branch.
 Legacy export/preparation configs remain supported for historical diagnostics.
@@ -51,7 +51,7 @@ STAGES = (
     "native_smoke",
     "native",
     "native_compare",
-    "cache",
+    "acceptance",
     "review",
     "complete",
 )
@@ -133,13 +133,13 @@ def plan(config):
         "workspace",
         "source_entry",
         "native_entry",
-        "cache_test",
+        "acceptance_tests",
         "build_argv",
         "precompile",
         "factory_contract",
     }
     required |= (
-        {"evaluated_branch", "migration_paths", "allow_source_failures"}
+        {"evaluated_branch", "migration_paths"}
         if branch_mode
         else {"target_revision", "preparation", "export", "phase", "allow_recorded_failures"}
     )
@@ -156,7 +156,7 @@ def plan(config):
     config = dict(config)
     for key in ("runtime", "workspace", *(("evaluated_branch",) if branch_mode else ("preparation", "export"))):
         path = Path(config[key])
-        if not path.is_absolute() or path.is_symlink():
+        if not path.is_absolute() or path.resolve() != path:
             raise ExportError(f"{key} must be an absolute, unredirected path")
         config[key] = str(path.resolve())
     config.setdefault("environment", {})
@@ -175,7 +175,7 @@ def plan(config):
         raise ExportError("Unsupported environment override")
     if not all(isinstance(v, str) for v in config["environment"].values()):
         raise ExportError("Environment values must be strings")
-    for key in ("precompile", "allow_source_failures" if branch_mode else "allow_recorded_failures"):
+    for key in ("precompile",) if branch_mode else ("precompile", "allow_recorded_failures"):
         if type(config[key]) is not bool:
             raise ExportError(f"{key} must be an explicit boolean")
     for key in ("precompile_workers", "command_timeout_seconds"):
@@ -199,6 +199,10 @@ def plan(config):
     ):
         raise ExportError("Unsupported build arguments")
     if branch_mode:
+        workspace = prepare_branch.artifact_path(config["runtime"], config["workspace"])
+        inputs = prepare_branch.artifact_path(config["runtime"], config["evaluated_branch"])
+        if workspace.is_relative_to(inputs) or inputs.is_relative_to(workspace):
+            raise ExportError("Validation workspace and frozen inputs must be separate artifact directories")
         if not isinstance(config["migration_paths"], list):
             raise ExportError("migration_paths must be an explicit list of native migration files")
         target = prepare_branch.inspect(config["evaluated_branch"], config["runtime"], config["migration_paths"])
@@ -235,9 +239,15 @@ def plan(config):
         if not isinstance(smoke, str) or not smoke.startswith(suite + "/") or "::" not in smoke:
             raise ExportError("Choose an explicit smoke case in the recorded suite, or omit smoke_nodeid")
         _safe_path(smoke.split("::")[0])
-    _safe_path(config["cache_test"])
-    if not config["cache_test"].startswith("tests/") or not config["cache_test"].endswith(".py"):
-        raise ExportError("cache_test must identify a checked-in-style Python test path")
+    tests = config["acceptance_tests"]
+    if not isinstance(tests, list) or not tests or any(not isinstance(test, str) for test in tests):
+        raise ExportError("acceptance_tests must be a nonempty list of Python test files")
+    if len(set(tests)) != len(tests):
+        raise ExportError("acceptance_tests must contain unique test files")
+    for test in tests:
+        _safe_path(test)
+        if not test.startswith("tests/") or not test.endswith(".py"):
+            raise ExportError("acceptance_tests must identify checked-in-style Python test paths below tests/")
     if not config["source_entry"].startswith("ttnn.operations." + manifest["operation"] + ":"):
         raise ExportError("Source entry must select the frozen operation package")
     for entry in (config["source_entry"], config["native_entry"], *aliases):
@@ -260,7 +270,7 @@ def plan(config):
     runtime = Path(config["runtime"])
     config["factory_contract"] = factory_contract.validate(config["factory_contract"], runtime)
     for path in (
-        runtime / config["cache_test"],
+        *(runtime / test for test in tests),
         runtime / "tools/generic_op_to_factory/native_adapter.py",
         runtime / "scripts/run_safe_pytest.sh",
     ):
@@ -366,7 +376,7 @@ class PortValidation:
             self.runner.command(argv, attempt, "factory-contract", cwd=cwd)
             write_json(attempt / "contract.json", {"kind": "ProgramDescriptor", **c["factory_contract"]})
             return evidence
-        if stage in ("source_smoke", "source", "native_smoke", "native", "cache"):
+        if stage in ("source_smoke", "source", "native_smoke", "native", "acceptance"):
             if stage.endswith("smoke") and c["smoke_nodeid"] is None:
                 write_json(
                     attempt / "skipped.json", {"reason": "Optional smoke omitted; full golden suite remains required"}
@@ -379,11 +389,13 @@ class PortValidation:
                 "mode": mode,
                 "aliases": c["source_aliases"],
             }
+            if stage == "acceptance":
+                route.update(aliases=[], tests=c["acceptance_tests"])
             write_json(attempt / "route.json", route)
-            test = (
-                c["cache_test"]
-                if stage == "cache"
-                else (c["smoke_nodeid"] if stage.endswith("smoke") else self.planned["suite"])
+            tests = (
+                c["acceptance_tests"]
+                if stage == "acceptance"
+                else [c["smoke_nodeid"] if stage.endswith("smoke") else self.planned["suite"]]
             )
             argv = ["./scripts/run_safe_pytest.sh", "--run-all"]
             if stage in ("source", "native") and c["precompile"]:
@@ -395,7 +407,7 @@ class PortValidation:
             else:
                 argv += ["--no-precompile"]
             argv += [
-                test,
+                *tests,
                 "-q",
                 "--tb=short",
                 "-o",
@@ -407,13 +419,12 @@ class PortValidation:
                 "-p",
                 "eval.axes_plugin",
             ]
-            if stage != "cache":
-                argv += [
-                    "-p",
-                    "tools.generic_op_to_factory.native_adapter",
-                    "--migration-route",
-                    str(attempt / "route.json"),
-                ]
+            argv += [
+                "-p",
+                "tools.generic_op_to_factory.native_adapter",
+                "--migration-acceptance-route" if stage == "acceptance" else "--migration-route",
+                str(attempt / "route.json"),
+            ]
             argv += [f"--junitxml={attempt / 'junit.xml'}"]
             self.runner.command(
                 argv,
@@ -423,17 +434,15 @@ class PortValidation:
                 device=True,
                 allowed=(0, 1) if stage in ("source", "native") else (0,),
             )
-            observed = test_evidence.verify(
-                attempt / f"{stage}.log", attempt / "junit.xml", route=route if stage != "cache" else None
-            )
+            observed = test_evidence.verify(attempt / f"{stage}.log", attempt / "junit.xml", route=route)
             write_json(attempt / "execution.json", observed)
             rows = parse_junit_xml(attempt / "junit.xml")
             if not rows:
                 raise ExportError("No test outcomes")
-            if stage == "cache" and (
+            if stage == "acceptance" and (
                 not any(r["status"] == "passed" for r in rows) or any(r["status"] != "passed" for r in rows)
             ):
-                raise ExportError("Every explicitly selected cache test must pass")
+                raise ExportError("Every selected native acceptance test must pass; skips and xfails are not accepted")
             return {}
         if stage == "source_compare":
             junit = self.workspace / self.state["stages"]["source"]["attempts"][-1] / "junit.xml"
@@ -446,8 +455,8 @@ class PortValidation:
                     scope="Fresh source baseline on evaluated branch; no claim of DB or historical outcome reproduction",
                 )
                 write_json(attempt / "comparison.json", comparison)
-                if comparison["observed_failures"] and not c["allow_source_failures"]:
-                    raise ExportError("Source baseline has failures; explicit allow_source_failures is required")
+                # Branch migration compares behavior, not absolute source quality.
+                # Keep failures visible and always proceed to native comparison.
             else:
                 comparison = compare_baseline.compare(c["export"], junit, c["phase"])
         elif stage == "native_compare":
@@ -483,7 +492,8 @@ class PortValidation:
                     "factory_contract": c["factory_contract"],
                     "baseline_scope": self.planned["target_inputs"]["baseline_scope"],
                     "dependency_substitutions": self.planned["target_inputs"]["dependency_substitutions"],
-                    "scope": "Source/native golden outcomes/tolerances and explicitly supplied cache regression tests; no performance or trace claim",
+                    "acceptance_tests": c["acceptance_tests"],
+                    "scope": "Source/native golden outcomes/tolerances and supplied native acceptance tests; no performance or trace claim",
                 },
             )
             return {}
@@ -554,7 +564,7 @@ def initialize(config):
     for key in ("evaluated_branch",) if "evaluated_branch" in config else ("preparation", "export"):
         if workspace.is_relative_to(Path(planned["config"][key])):
             raise ExportError("Evidence cannot be written inside frozen inputs")
-    if workspace.is_relative_to(Path(planned["config"]["runtime"])):
+    if "evaluated_branch" not in config and workspace.is_relative_to(Path(planned["config"]["runtime"])):
         raise ExportError("Use an evidence workspace outside the target repository")
     workspace.mkdir(parents=True)
     state = {

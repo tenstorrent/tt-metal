@@ -51,8 +51,9 @@ else:
     if failed:
         ET.SubElement(case, 'failure', message='synthetic failure')
     ET.ElementTree(root).write(output, encoding='utf-8')
-    if '--migration-route' in sys.argv:
-        route = json.loads(Path(sys.argv[sys.argv.index('--migration-route') + 1]).read_text())
+    route_option = '--migration-acceptance-route' if '--migration-acceptance-route' in sys.argv else '--migration-route'
+    if route_option in sys.argv:
+        route = json.loads(Path(sys.argv[sys.argv.index(route_option) + 1]).read_text())
         print('MIGRATION_ROUTE=' + json.dumps({**route, 'calls': 1}))
     print('SAFE_PYTEST_RAW_EXIT_CODE=' + str(1 if failed else 0))
     print('SAFE_PYTEST_RESULT: FAIL' if failed else 'SAFE_PYTEST_RESULT: PASS')

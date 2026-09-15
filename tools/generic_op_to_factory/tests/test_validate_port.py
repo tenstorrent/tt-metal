@@ -62,7 +62,7 @@ def port(configured, tmp_path):
         "source_entry": "ttnn.operations.sample_op:sample_op",
         "native_entry": "ttnn:sample_native",
         "smoke_nodeid": "eval/golden_tests/sample_suite/test_golden.py::test_sample[case]",
-        "cache_test": "tests/test_cache.py",
+        "acceptance_tests": ["tests/test_cache.py"],
         "build_argv": ["./build_metal.sh"],
         "precompile": False,
         "allow_recorded_failures": False,
@@ -80,6 +80,57 @@ def test_port_plan_read_only(port):
     assert not Path(port["workspace"]).exists()
 
 
+@pytest.mark.parametrize("value", [[], "tests/test_contract.py", [None], ["tests/test_cache.py"] * 2])
+def test_acceptance_requires_explicit_nonempty_unique_file_list(port, value):
+    port["acceptance_tests"] = value
+    with pytest.raises(ExportError, match="acceptance_tests"):  # allow-pytest.raises: acceptance selection gate
+        validate_port.plan(port)
+
+
+def test_old_cache_only_config_is_not_silently_reinterpreted(port):
+    port["cache_test"] = port.pop("acceptance_tests")[0]
+    with pytest.raises(ExportError, match="config keys"):  # allow-pytest.raises: renamed required input
+        validate_port.plan(port)
+
+
+def test_multiple_acceptance_files_run_once_with_direct_native_route(port):
+    runtime = Path(port["runtime"])
+    (runtime / "tests/test_contract.py").write_text("# additional API/output tests\n")
+    port["acceptance_tests"].append("tests/test_contract.py")
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run("acceptance")
+    attempt = validation.workspace / "attempts/acceptance/001"
+    command = json.loads((attempt / "acceptance.command.json").read_bytes())
+    assert all(test in command["argv"] for test in port["acceptance_tests"])
+    assert "--migration-acceptance-route" in command["argv"]
+    route = json.loads((attempt / "route.json").read_bytes())
+    assert route["mode"] == "native"
+    assert route["tests"] == port["acceptance_tests"]
+    assert json.loads((attempt / "execution.json").read_bytes())["route"]["calls"] > 0
+    assert len(validation.state["stages"]["acceptance"]["attempts"]) == 1
+    assert not (validation.workspace / "attempts/source_acceptance").exists()
+
+
+@pytest.mark.parametrize("status", ["failed", "error", "skipped", "xfail", "xpass"])
+def test_acceptance_rejects_every_nonpassing_outcome(port, monkeypatch, status):
+    original = validate_port.parse_junit_xml
+
+    def outcomes(path):
+        rows = original(path)
+        if "acceptance" in Path(path).parts:
+            rows[0]["status"] = status
+        return rows
+
+    monkeypatch.setattr(validate_port, "parse_junit_xml", outcomes)
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    with pytest.raises(ExportError, match="Every selected native acceptance test"):  # allow-pytest.raises: gate
+        validation.run()
+    assert validation.state["stages"]["acceptance"]["status"] == "blocked"
+    assert validation.state["stages"]["review"]["status"] == "pending"
+
+
 @pytest.mark.parametrize("omit", [True, False])
 def test_default_flow_runs_only_two_full_suites_and_cache(port, omit):
     if omit:
@@ -88,13 +139,13 @@ def test_default_flow_runs_only_two_full_suites_and_cache(port, omit):
         port["smoke_nodeid"] = None
     validate_port.initialize(port)
     validation = validate_port.PortValidation(port["workspace"])
-    validation.run("cache")
+    validation.run("acceptance")
     for stage in ("source_smoke", "native_smoke"):
         attempt = validation.workspace / f"attempts/{stage}/001"
         assert (attempt / "skipped.json").is_file()
         assert not list(attempt.glob("*.command.json"))
     real = list(validation.workspace.glob("attempts/*/001/junit.xml"))
-    assert {path.parent.parent.name for path in real} == {"source", "native", "cache"}
+    assert {path.parent.parent.name for path in real} == {"source", "native", "acceptance"}
 
 
 def test_stale_target_adapter_is_refused(port):
@@ -216,7 +267,7 @@ def test_ninja_factory_gate_keeps_unity_configuration_and_fingerprints_metadata(
 def test_complete_synthetic_port_and_resume(port):
     validate_port.initialize(port)
     validation = validate_port.PortValidation(port["workspace"])
-    validation.run("cache")
+    validation.run("acceptance")
     record_review(validation)
     state = validation.run()
     assert all(r["status"] == "complete" for r in state["stages"].values())
@@ -252,10 +303,10 @@ def test_missing_review_blocks_completion_without_rerunning_device_stages(port):
     ):
         validation.run()
     assert validation.state["stages"]["complete"]["status"] == "pending"
-    prior_cache = dict(validation.state["stages"]["cache"])
+    prior_cache = dict(validation.state["stages"]["acceptance"])
     record_review(validation)
     validation.run(retry=True)
-    assert validation.state["stages"]["cache"] == prior_cache
+    assert validation.state["stages"]["acceptance"] == prior_cache
 
 
 @pytest.mark.parametrize(
@@ -283,7 +334,7 @@ def test_invalid_review_is_rejected(port, defect):
 def test_completed_review_drift_is_rejected(port):
     validate_port.initialize(port)
     validation = validate_port.PortValidation(port["workspace"])
-    validation.run("cache")
+    validation.run("acceptance")
     record_review(validation)
     validation.run()
     (validation.workspace / "review.json").write_text("{}")
@@ -345,8 +396,8 @@ def test_port_evidence_cannot_enter_target_repo(port):
         ("build_argv", ["sh", "build_metal.sh"], "Build must use"),
         ("build_argv", ["./build_metal.sh", "--clean"], "Unsupported build"),
         ("build_argv", ["./build_metal.sh", "--configure-only"], "Unsupported build"),
-        ("cache_test", "../test_cache.py", "[Uu]nsafe|[Ii]nvalid|[Pp]ath"),
-        ("cache_test", "tools/test_cache.py", "checked-in-style"),
+        ("acceptance_tests", ["../test_cache.py"], "[Uu]nsafe|[Ii]nvalid|[Pp]ath"),
+        ("acceptance_tests", ["tools/test_cache.py"], "checked-in-style"),
         ("smoke_nodeid", "tests/test_other.py::test_case", "explicit smoke case"),
         (
             "source_entry",
@@ -371,8 +422,8 @@ def test_port_new_untracked_source_blocks_resume(port):
         validate_port.PortValidation(port["workspace"]).run()
 
 
-def test_port_rejects_missing_cache_test(port):
-    port["cache_test"] = "tests/test_missing.py"
+def test_port_rejects_missing_acceptance_tests(port):
+    port["acceptance_tests"] = ["tests/test_missing.py"]
     with pytest.raises(  # allow-pytest.raises: host-only workflow validation
         ExportError, match="Required validation source"
     ):

@@ -19,6 +19,8 @@ from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _saf
 from tools.generic_op_to_factory.prepare_baseline import GitTree
 
 FORMAT_VERSION = 1
+ARTIFACT_DIR = "generated/generic_op_to_factory"
+ARTIFACT_IGNORE = "# Local migration evidence and caches; never operation source.\n*\n"
 TOOL_FILES = {
     "scripts/run_safe_pytest.sh": "RUNNER_SHA256",
     "tools/generic_op_to_factory/native_adapter.py": "ADAPTER_SHA256",
@@ -42,6 +44,39 @@ def absolute(path):
     if not path.is_absolute() or path.resolve() != path:
         raise ExportError("Use absolute, unredirected paths")
     return path
+
+
+def artifact_path(runtime, path):
+    """Reserve a worktree-local namespace; never admit source paths as outputs."""
+    root = absolute(runtime) / ARTIFACT_DIR
+    path = absolute(path)
+    if path == root or not path.is_relative_to(root):
+        raise ExportError(f"Migration artifacts must be inside {root}/<directory>")
+    return path
+
+
+def check_artifacts(runtime):
+    runtime = absolute(runtime)
+    root = absolute(runtime / ARTIFACT_DIR)
+    if git(runtime, "ls-files", "--cached", "--", ARTIFACT_DIR).strip():
+        raise ExportError("Migration artifact directory cannot contain tracked source")
+    marker = root / ".gitignore"
+    if marker.is_symlink() or not marker.is_file() or marker.read_text() != ARTIFACT_IGNORE:
+        raise ExportError("Migration artifact ignore marker is missing or changed")
+
+
+def initialize_artifacts(runtime):
+    """Create only a local ignore marker, without editing repository Git config."""
+    runtime = absolute(runtime)
+    root = absolute(runtime / ARTIFACT_DIR)
+    if git(runtime, "ls-files", "--cached", "--", ARTIFACT_DIR).strip():
+        raise ExportError("Migration artifact directory cannot contain tracked source")
+    root.mkdir(parents=True, exist_ok=True)
+    marker = root / ".gitignore"
+    if not marker.exists() and not marker.is_symlink():
+        with marker.open("x") as stream:
+            stream.write(ARTIFACT_IGNORE)
+    check_artifacts(runtime)
 
 
 def resolve_branch(repository, branch):
@@ -112,12 +147,16 @@ def read_snapshot(directory):
 
 def inspect(directory, runtime, migration_paths=()):
     """Admit only explicitly named migration edits; keep source and tests frozen."""
-    record = read_snapshot(directory)
     runtime = absolute(runtime)
+    artifact_path(runtime, directory)
+    check_artifacts(runtime)
+    record = read_snapshot(directory)
     if str(runtime) != record["runtime"]:
         raise ExportError("Runtime differs from the evaluated branch snapshot")
     base = record["source_revision"]
     tree = GitTree(runtime, base)
+    if any(path == ARTIFACT_DIR or path.startswith(ARTIFACT_DIR + "/") for path in tree.entries):
+        raise ExportError("Evaluated checkpoint uses the reserved migration artifact directory")
     git(runtime, "merge-base", "--is-ancestor", base, "HEAD")
     paths = list(migration_paths)
     if any(not isinstance(path, str) for path in paths) or len(set(paths)) != len(paths):
@@ -130,6 +169,8 @@ def inspect(directory, runtime, migration_paths=()):
             or (path.startswith("tests/") and path in tree.entries)
             or path.startswith(".git/")
             or path == ".git"
+            or path == ARTIFACT_DIR
+            or path.startswith(ARTIFACT_DIR + "/")
             or any(path == prefix or path.startswith(prefix + "/") for prefix in protected)
         ):
             raise ExportError(f"Migration edits cannot replace evaluated source, tests or runtime setup: {path}")
@@ -192,29 +233,36 @@ def prepare(repository, branch, runtime, operation, golden_suite, output, *, wit
             raise ExportError("Operation and golden suite must be Python identifiers")
     if runtime.exists() or runtime.is_symlink() or output.exists() or output.is_symlink():
         raise ExportError("Runtime and evidence destinations must be new")
-    if (
-        output.is_relative_to(runtime)
-        or runtime.is_relative_to(output)
-        or output.is_relative_to(repository)
-        or runtime.is_relative_to(repository)
-    ):
-        raise ExportError("Use separate runtime and evidence directories outside the source repository")
+    artifact_path(runtime, output)
+    if runtime.is_relative_to(repository) or repository.is_relative_to(runtime):
+        raise ExportError("Use a target worktree separate from the source repository")
     ref, revision = resolve_branch(repository, branch)
     tree = GitTree(repository, revision)
+    if any(path == ARTIFACT_DIR or path.startswith(ARTIFACT_DIR + "/") for path in tree.entries):
+        raise ExportError("Evaluated checkpoint uses the reserved migration artifact directory")
     operation_path = f"ttnn/ttnn/operations/{operation}"
     if not any(path.startswith(operation_path + "/") for path in tree.entries):
         raise ExportError("Operation is absent from evaluated branch; checkpoint run changes, do not install DB source")
-    # Reserve evidence before mutating Git. Failed attempts remain inspectable;
-    # never delete a user's checkout or retry by resetting it.
-    output.mkdir(parents=True)
+    # Git requires a new/empty target. Capture its first command before creating
+    # worktree-local evidence; subsequent command logs stream directly to disk.
     commands = []
 
     def run(cwd, args):
         log = output / f"command-{len(commands) + 1}.log"
         commands.append({"cwd": str(cwd), "argv": args, "log": str(log)})
-        (output / "commands.json").write_bytes(json_bytes(commands))
-        with log.open("wb") as stream:
-            result = subprocess.run(args, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, check=False)
+        if not output.exists():
+            result = subprocess.run(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+            if result.returncode:
+                # No usable worktree may exist. Report Git's diagnostic without
+                # creating a misleading target or scattering logs in its parent.
+                raise ExportError(f"Worktree creation failed: {result.stdout.decode(errors='replace')}")
+            initialize_artifacts(runtime)
+            output.mkdir(parents=True)
+            log.write_bytes(result.stdout)
+        else:
+            (output / "commands.json").write_bytes(json_bytes(commands))
+            with log.open("wb") as stream:
+                result = subprocess.run(args, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, check=False)
         commands[-1]["exit_code"] = result.returncode
         (output / "commands.json").write_bytes(json_bytes(commands))
         if result.returncode:
@@ -262,7 +310,7 @@ def main():
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--operation", required=True)
     parser.add_argument("--golden-suite", required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path, help=f"Default: RUNTIME/{ARTIFACT_DIR}/inputs")
     parser.add_argument(
         "--with-validation-tools",
         action="store_true",
@@ -278,7 +326,7 @@ def main():
                     args.runtime,
                     args.operation,
                     args.golden_suite,
-                    args.output,
+                    args.output or args.runtime / ARTIFACT_DIR / "inputs",
                     with_validation_tools=args.with_validation_tools,
                 ),
                 indent=2,
