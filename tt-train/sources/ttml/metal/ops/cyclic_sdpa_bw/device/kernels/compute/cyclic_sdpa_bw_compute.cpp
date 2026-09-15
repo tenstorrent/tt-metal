@@ -62,6 +62,10 @@
 #include "api/compute/transpose_dest.h"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/compute/sdpa_bw_compute_utils.hpp"
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_binary.h"
+#include "ckernel_sfpu_exp.h"
+#endif
 
 // COLUMN_RESIDENT: keep the whole column state across a residency interval
 // instead of taking it fresh every timestep, which is the paper's
@@ -108,6 +112,22 @@
 // then. The other path keeps the scale folded into the exponential instead.
 #ifndef FOLD_SCALE_INTO_KEY
 #define FOLD_SCALE_INTO_KEY 0
+#endif
+
+// SPLIT_SFPU: the score pass's SFPU work -- the exponentials and the dS^T
+// multiplies -- issued from the pack thread, while the math thread issues
+// only FPU work. Both units are fed from one in-order issue slot per thread,
+// so on one thread they take turns; on two they run side by side. The math
+// thread posts the FPU_SFPU semaphore once a column's S^T is complete in the
+// registers, the pack thread waits on it, exponentiates while the math
+// thread forms dP^T - D^T in the other half of the column's registers, then
+// takes the usual commit for the multiply and the packs. Available only
+// where nothing else needs the SFPU on the math thread, i.e. with the scale
+// folded into K (otherwise the statistic is scaled and added there).
+#if FOLD_SCALE_INTO_KEY
+#define SPLIT_SFPU 1
+#else
+#define SPLIT_SFPU 0
 #endif
 
 // SEED_COLUMN_GRADIENTS: start every column's gradients from what is in DRAM,
@@ -207,7 +227,6 @@ constexpr uint32_t grad_score_reg(uint32_t b) {
     return Bt + b;
 }
 constexpr uint32_t stat_reg = Bt;
-constexpr uint32_t mask_reg = Bt + 1u;
 
 // Operands, all per timestep.
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -244,7 +263,15 @@ constexpr uint32_t cb_neg_lse_rem_row = tt::CBIndex::c_30;  // Float32, row layo
 constexpr uint32_t cb_neg_lse_rem = tt::CBIndex::c_9;       // bfloat16, column 0: the matmul path
 constexpr uint32_t cb_neg_u_rem = tt::CBIndex::c_29;
 constexpr uint32_t cb_ones_column = tt::CBIndex::c_28;
-constexpr uint32_t cb_attn_mask = tt::CBIndex::c_6;  // transposed causal
+// The causal mask in additive form, two bfloat16 tiles: the transposed
+// triangle (0 kept, -inf masked) for the diagonal score tile and an all -inf
+// tile for the wholly masked ones. Added to S^T by an accumulating FPU add
+// against a zero tile -- the fence buffer's page, which the writer zeroes --
+// so the exponential makes the zeros itself and no SFPU pass is needed.
+constexpr uint32_t cb_attn_mask = tt::CBIndex::c_6;
+constexpr uint32_t kMaskTriangle = 0;
+constexpr uint32_t kMaskAll = 1;
+constexpr uint32_t cb_zero_tile = tt::CBIndex::c_8;
 constexpr uint32_t cb_slot_release = tt::CBIndex::c_7;
 
 // Intermediates, transposed. dP^T never leaves the registers: the score pass
@@ -302,31 +329,6 @@ void pack_tiles_scaled(
 }
 #endif
 
-// sdpa_bw's apply_mask_on_reg with the scratch register named rather than
-// assumed to be the next one along: score tiles are contiguous here, so the
-// register after one is another score tile.
-void apply_mask_at(
-    const uint32_t scores_reg,
-    const uint32_t mask_register,
-    const uint32_t cb_mask,
-    const uint32_t minus_one,
-    const uint32_t custom_inf) {
-    copy_init(cb_mask);
-    copy_tile(cb_mask, /* tile_idx */ 0, mask_register);
-
-    mask_tile_init();
-    mask_tile(scores_reg, mask_register);
-
-    // No scale here: the exponential applies it, and the mask's minus
-    // infinity survives being scaled either way.
-    binop_with_scalar_tile_init();
-    add_unary_tile(mask_register, minus_one);
-    mul_unary_tile(mask_register, custom_inf);
-
-    add_binary_tile_init();
-    add_binary_tile(scores_reg, mask_register, scores_reg);
-}
-
 // Broadcast a query tile's statistic (row 0 of its row-layout tile) down the
 // rows of DST. Once per column of the score grid, since every key tile of
 // the column shares it. The statistic goes through SrcB as it did through
@@ -364,6 +366,72 @@ void add_statistic_column(const uint32_t first_reg, const uint32_t count, const 
         add_binary_tile(first_reg + b, broadcast_reg, first_reg + b);
     }
 }
+
+#if SPLIT_SFPU && defined(TRISC_PACK)
+// The pack thread's SFPU: the same exponential and multiply the math thread
+// would run, addressed the same way (DEST_TARGET is per thread), minus the
+// wait for the math unit that the math-thread versions carry -- ordering
+// against the FPU is the semaphore's job here.
+namespace pack_sfpu {
+
+inline void set_dst(const uint32_t tile) {
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << 6) + get_dest_buffer_base());
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
+inline void next_face() {
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+}
+
+inline void clear_dst() {
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+}
+
+// Hold the packer until this thread's SFPU writes have landed.
+inline void wait_before_pack() {
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+}
+
+// Once per kernel: the SFPU config register, the address mods the
+// exponential and the multiply walk the tile with, and the exponential's
+// constants (1/ln 2 in LREG12, its c2 in LREG13) -- what sdpa_exp_tile_init
+// does on the math thread, for this thread's copies of those registers.
+inline void init() {
+    ckernel::sfpu::_init_sfpu_config_reg();
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+}
+
+// P = exp(x) in place, the 21-bit exponential, four faces.
+inline void exp_tile(const uint32_t tile) {
+    set_dst(tile);
+    for (uint32_t face = 0; face < 4u; ++face) {
+        ckernel::sfpu::_sfpu_exp_21f_bf16_tti_</*SCALE_EN*/ false, DST_ACCUM_MODE, /*CLAMP_NEGATIVE*/ false, 8>(0);
+        next_face();
+    }
+    clear_dst();
+}
+
+// out = a * b, Float32, four faces.
+inline void mul_tiles(const uint32_t a, const uint32_t b, const uint32_t out) {
+    set_dst(0);
+    for (uint32_t face = 0; face < 4u; ++face) {
+        ckernel::sfpu::calculate_sfpu_binary_mul</*APPROX*/ false, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE>(
+            a, b, out);
+        next_face();
+    }
+    clear_dst();
+}
+
+}  // namespace pack_sfpu
+#endif
 
 void exp_column(const uint32_t first_reg, const uint32_t count) {
 #if FOLD_SCALE_INTO_KEY
@@ -454,9 +522,15 @@ void kernel_main() {
     // It is what keeps the two variants bitwise comparable.
 
     compute_kernel_hw_startup(cb_query, cb_key, cb_attention_weights);
+#if SPLIT_SFPU
+    // The score pass's FPU -> SFPU handshake, one count per column posted by
+    // the math thread and taken by the pack thread.
+    MATH((t6_semaphore_init(semaphore::FPU_SFPU, 0, semaphore::SEMAPHORE_MAX_VALUE)));
+    PACK((pack_sfpu::init()));
+#endif
     copy_init(cb_query);
     matmul_init(cb_key_operand, cb_query);
-    cb_wait_front(cb_attn_mask, onetile);
+    cb_wait_front(cb_attn_mask, 2);
     cb_wait_front(cb_ones_column, onetile);
 
     for (uint32_t s = 0; s < slice_count; ++s) {
@@ -600,33 +674,34 @@ void kernel_main() {
                 }
             }
             if (diagonal) {
-                // The diagonal tile of column a is key tile b = a.
-                apply_mask_at(score_reg(a), mask_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
+                // The mask, added: -inf where the key index exceeds the query
+                // index on the diagonal tile (b = a), everywhere on the tiles
+                // above it (b > a). The exponential then makes exact zeros
+                // there, and every later sum runs over the whole block.
+                reconfig_data_format(cb_attn_mask, cb_zero_tile);
+                add_tiles_init(cb_attn_mask, cb_zero_tile, /* acc_to_dest */ true);
+                for (uint32_t b = a; b < Bt; ++b) {
+                    add_tiles(cb_attn_mask, cb_zero_tile, (b == a) ? kMaskTriangle : kMaskAll, 0, score_reg(b));
+                }
             }
 
-#if !FOLD_SCALE_INTO_KEY
+#if SPLIT_SFPU
+            // S^T is complete in the registers: hand it to the pack thread's
+            // SFPU, which exponentiates while the FPU goes on to dP^T.
+            MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+#else
             // The exponential carries the scale, so -L and its remainder are
             // divided by it in the broadcast register and added on the SFPU.
             broadcast_statistic_rows_to_dst(stat_reg, cb_neg_lse_row, a);
             add_statistic_column(score_reg(0), Bt, stat_reg);
             broadcast_statistic_rows_to_dst(stat_reg, cb_neg_lse_rem_row, a);
             add_statistic_column(score_reg(0), Bt, stat_reg);
-#endif
             exp_column(score_reg(0), Bt);
-            for (uint32_t b = 0; b < Bt; ++b) {
-                if (diagonal && b > a) {
-                    // Key tile after the query tile: wholly masked. Zeroing
-                    // P^T there lets every later sum run over all of the
-                    // block's tiles without knowing about the triangle,
-                    // since dS^T inherits the zero through its P^T factor.
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(score_reg(b), /* 0.0f */ 0u);
-                }
-            }
+#endif
 
             // dP^T - D^T for the column: -D broadcast into every register of
-            // the second half (the statistic and mask registers are free by
-            // now), then V dO^T accumulated onto it. The FPU adds into DST.
+            // the second half (the statistic register is free by now), then
+            // V dO^T accumulated onto it. The FPU adds into DST.
             for (uint32_t b = 0; b < Bt; ++b) {
                 broadcast_statistic_rows_to_dst(grad_score_reg(b), cb_neg_u_row, a);
             }
@@ -640,20 +715,36 @@ void kernel_main() {
                 // column-0 tile)^T. Same formats as V and dO, so the same init.
                 matmul_tiles(cb_ones_column, cb_neg_u_rem, 0, a, grad_score_reg(b));
             }
+
+#if SPLIT_SFPU
+            // Pack thread: the exponentials as soon as S^T is posted, then --
+            // after the math thread's commit, which says dP^T - D^T is in --
+            // the multiplies, and the packs once the SFPU has written them.
+            PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+            for (uint32_t b = 0; b < Bt; ++b) {
+                PACK((pack_sfpu::exp_tile(score_reg(b))));
+            }
+            PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t b = 0; b < Bt; ++b) {
+                PACK((pack_sfpu::mul_tiles(grad_score_reg(b), score_reg(b), grad_score_reg(b))));
+            }
+            PACK((pack_sfpu::wait_before_pack()));
+#else
             // dS^T = P^T (dP^T - D^T), and the softmax scale where K does not
             // carry it.
             mul_binary_tile_init();
             for (uint32_t b = 0; b < Bt; ++b) {
                 mul_binary_tile(grad_score_reg(b), score_reg(b), grad_score_reg(b));
             }
-#if !FOLD_SCALE_INTO_KEY
             binop_with_scalar_tile_init();
             for (uint32_t b = 0; b < Bt; ++b) {
                 mul_unary_tile(grad_score_reg(b), scaler_bits);
             }
-#endif
             tile_regs_commit();
             tile_regs_wait();
+#endif
             for (uint32_t b = 0; b < Bt; ++b) {
                 pack_tile</* out_of_order */ true>(score_reg(b), cb_attention_weights, b * Bt + a);
                 pack_tile</* out_of_order */ true>(grad_score_reg(b), cb_grad_scores, b * Bt + a);

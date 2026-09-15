@@ -33,31 +33,42 @@ constexpr uint32_t kFaceElems = 256;
 constexpr uint16_t kBf16One = 0x3F80;
 constexpr uint32_t kFp32One = 0x3F800000u;
 
-// mask[row, col] = 1 where col >= row (the transposed causal mask), else 0.
-// Tile layout: four 16 x 16 faces, 0 top-left, 1 top-right, 2 bottom-left,
-// 3 bottom-right, row-major within a face.
-template <typename T, T kOne>
-inline void fill_transposed_causal_mask_tile(uint32_t l1_addr) {
-    T* p = reinterpret_cast<T*>(l1_addr);
+constexpr uint16_t kBf16MinusInf = 0xFF80;
+
+// The additive form of the transposed causal mask: 0 where col >= row (the
+// key index is at most the query index), -inf elsewhere. Added to S^T by the
+// FPU before the exponential, which turns -inf into an exact 0. Tile layout:
+// four 16 x 16 faces, 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right,
+// row-major within a face.
+inline void fill_additive_transposed_causal_mask_tile(uint32_t l1_addr) {
+    uint16_t* p = reinterpret_cast<uint16_t*>(l1_addr);
     for (uint32_t face = 0; face < 4u; ++face) {
         const uint32_t row0 = (face >= 2u) ? kFaceRows : 0u;
         const uint32_t col0 = (face & 1u) ? kFaceRows : 0u;
         for (uint32_t h = 0; h < kFaceRows; ++h) {
             for (uint32_t w = 0; w < kFaceRows; ++w) {
-                *p++ = (col0 + w >= row0 + h) ? kOne : T{0};
+                *p++ = (col0 + w >= row0 + h) ? uint16_t{0} : kBf16MinusInf;
             }
         }
     }
 }
 
-inline void generate_transposed_causal_mask_tile(uint32_t cb_id) {
-    cb_reserve_back(cb_id, 1);
-    if (get_dataformat(cb_id) == DataFormat::Float32) {
-        fill_transposed_causal_mask_tile<uint32_t, kFp32One>(get_write_ptr(cb_id));
-    } else {
-        fill_transposed_causal_mask_tile<uint16_t, kBf16One>(get_write_ptr(cb_id));
+inline void fill_constant_bf16_tile(uint32_t l1_addr, uint16_t value) {
+    uint16_t* p = reinterpret_cast<uint16_t*>(l1_addr);
+    for (uint32_t i = 0; i < 4u * kFaceElems; ++i) {
+        p[i] = value;
     }
-    cb_push_back(cb_id, 1);
+}
+
+// The two mask tiles of a diagonal block pair, bfloat16: tile 0 for the
+// diagonal score tile (the triangle), tile 1 all -inf for the wholly masked
+// tiles above it. Both are added to S^T by the FPU.
+inline void generate_causal_mask_tiles(uint32_t cb_id) {
+    cb_reserve_back(cb_id, 2);
+    const uint32_t base = get_write_ptr(cb_id);
+    fill_additive_transposed_causal_mask_tile(base);
+    fill_constant_bf16_tile(base + get_tile_size(cb_id), kBf16MinusInf);
+    cb_push_back(cb_id, 2);
 }
 
 // The Src registers hold 19 bits: a Float32 unpacked into one keeps its sign,

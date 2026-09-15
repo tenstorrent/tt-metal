@@ -115,8 +115,13 @@ void kernel_main() {
     constexpr uint32_t kTimesteps = sched.num_timesteps();
 
     // The compute kernel forms S^T, so its diagonal tile takes the transposed
-    // causal mask: live where the key index is at most the query index.
-    cyclic_dataflow::generate_transposed_causal_mask_tile(cb_attn_mask);
+    // causal mask, in additive form (0 or -inf): live where the key index is
+    // at most the query index.
+    cyclic_dataflow::generate_causal_mask_tiles(cb_attn_mask);
+    // The compute kernel adds the mask with an accumulating FPU add whose
+    // second operand is this zero tile: the fence buffer's page, never
+    // written by anyone else (only its push and pop counters are used).
+    cyclic_dataflow::zero_tile(get_write_ptr(tt::CBIndex::c_8), get_tile_size(tt::CBIndex::c_8));
     cyclic_dataflow::generate_ones_column_tile(tt::CBIndex::c_28);  // for the D remainder
 
     // Slot-0 addresses of the packet's statistic buffers (this kernel never
