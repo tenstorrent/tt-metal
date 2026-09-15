@@ -168,6 +168,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     bool block_cyclic_cache_tp_sharded = false,
     // For trace replay, supplies chunk_start_idx on-device. Mutually exclusive with chunk_start_idx and kv_len.
     const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    // Real-token end (actual_end); caps the derived kv_len at ceil32(valid_end) so a partial chunk scores
+    // the same window the scalar path does. Requires chunk_start_idx_tensor.
+    const std::optional<ttnn::Tensor>& valid_end_tensor = std::nullopt,
     // Trace-safe cache-slot select: 1-element uint32 USER id; the reader recomposes
     // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
