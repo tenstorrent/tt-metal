@@ -4,6 +4,9 @@
 
 #include "ttnn_ops.hpp"
 
+#include <algorithm>
+#include <limits>
+
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/cluster.hpp>
@@ -193,7 +196,11 @@ ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std
 }
 
 ttnn::Tensor ring_shift(
-    const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
+    const ttnn::Tensor& tensor,
+    const std::optional<uint32_t> cluster_axis,
+    const RingShiftDirection direction,
+    const RingShiftTransport transport,
+    const uint32_t connections) {
     auto& ctx = ttml::autograd::ctx();
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();
@@ -219,40 +226,81 @@ ttnn::Tensor ring_shift(
     auto output_tensor = ttnn::empty_like(tensor);
 
     const uint32_t num_devices = mesh_shape.mesh_size();
+    const bool forward = (direction == RingShiftDirection::Forward);
+    const auto receiver_of = [&](const tt::tt_fabric::MeshCoordinate& sender_coord) {
+        const uint32_t idx = sender_coord[cluster_axis_value];
+        const uint32_t target_idx = forward ? (idx + 1) % ring_size : (idx + ring_size - 1) % ring_size;
+        tt::tt_fabric::MeshCoordinate recv_coord = sender_coord;
+        recv_coord[cluster_axis_value] = target_idx;
+        return recv_coord;
+    };
+
+    // Direct: one sender core per fabric link between the two chips, so the
+    // links run in parallel. The count is the minimum over the pairs, which
+    // on a homogeneous ring is the same everywhere. Fifo: one core, as ever.
+    uint32_t cores_per_pair = 1U;
+    if (transport == RingShiftTransport::Direct) {
+        uint32_t links = std::numeric_limits<uint32_t>::max();
+        for (const auto& sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
+            const auto count = static_cast<uint32_t>(
+                tt::tt_fabric::get_forwarding_link_indices(
+                    mesh_device_ptr->get_fabric_node_id(sender_coord),
+                    mesh_device_ptr->get_fabric_node_id(receiver_of(sender_coord)))
+                    .size());
+            links = std::min(links, count);
+        }
+        TT_FATAL(links >= 1U, "ring_shift: no fabric link between some ring neighbours");
+        cores_per_pair = connections == 0U ? links : std::min(connections, links);
+    }
 
     // Build connections for even->odd and odd->even transfers separately
     // This two-phase approach avoids deadlock since send is blocking
-    const auto send_recv_core = tt::tt_metal::CoreCoord(0, 0);
     std::vector<tt::tt_metal::distributed::SocketConnection> even_to_odd_connections;
     std::vector<tt::tt_metal::distributed::SocketConnection> odd_to_even_connections;
-    even_to_odd_connections.reserve(num_devices / 2);
-    odd_to_even_connections.reserve(num_devices / 2);
+    even_to_odd_connections.reserve(num_devices / 2 * cores_per_pair);
+    odd_to_even_connections.reserve(num_devices / 2 * cores_per_pair);
 
-    const bool forward = (direction == RingShiftDirection::Forward);
     for (const auto& sender_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         const uint32_t idx = sender_coord[cluster_axis_value];
-        const uint32_t target_idx = forward ? (idx + 1) % ring_size : (idx + ring_size - 1) % ring_size;
-
-        tt::tt_fabric::MeshCoordinate recv_coord = sender_coord;
-        recv_coord[cluster_axis_value] = target_idx;
-
+        const auto recv_coord = receiver_of(sender_coord);
         auto& target_connections = (idx % 2U == 0U) ? even_to_odd_connections : odd_to_even_connections;
-        target_connections.emplace_back(
-            tt::tt_metal::distributed::MeshCoreCoord{sender_coord, send_recv_core},
-            tt::tt_metal::distributed::MeshCoreCoord{recv_coord, send_recv_core});
+        for (uint32_t c = 0; c < cores_per_pair; ++c) {
+            // Senders in worker row 0, receivers in row 1: the socket runtime
+            // refuses a core that appears in two connections of one socket,
+            // and (0, 0) on both ends is what the Fifo path always used.
+            const auto sender_core = transport == RingShiftTransport::Direct ? tt::tt_metal::CoreCoord(c, 0)
+                                                                              : tt::tt_metal::CoreCoord(0, 0);
+            const auto receiver_core = transport == RingShiftTransport::Direct ? tt::tt_metal::CoreCoord(c, 1)
+                                                                                : tt::tt_metal::CoreCoord(0, 0);
+            target_connections.emplace_back(
+                tt::tt_metal::distributed::MeshCoreCoord{sender_coord, sender_core},
+                tt::tt_metal::distributed::MeshCoreCoord{recv_coord, receiver_core});
+        }
     }
 
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
+    const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
+    const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
+
+    if (transport == RingShiftTransport::Direct) {
+        // Every chip is a sender in one phase and a receiver in the other, and
+        // its two programs sit in its own command queue in that order, so the
+        // ordering the Fifo path's host synchronisations enforce is already
+        // there; none are issued.
+        socket_manager.send_direct(tensor, inter_host_params, even_to_odd_params);
+        output_tensor = socket_manager.recv_direct(output_tensor, inter_host_params, even_to_odd_params);
+        socket_manager.send_direct(tensor, inter_host_params, odd_to_even_params);
+        output_tensor = socket_manager.recv_direct(output_tensor, inter_host_params, odd_to_even_params);
+        return output_tensor;
+    }
 
     tt::tt_metal::distributed::Synchronize(*mesh_device_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
     // Phase 1: Even positions send, odd positions receive
-    const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, even_to_odd_params);
 
     // Phase 2: Odd positions send, even positions receive
-    const core::distributed::IntraMeshParameters odd_to_even_params{odd_to_even_connections};
     socket_manager.send(tensor, inter_host_params, odd_to_even_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
 

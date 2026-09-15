@@ -8,6 +8,7 @@
 #include "metal/ops/ring_cyclic_sdpa_bw/ring_cyclic_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
 
@@ -68,6 +69,9 @@ enum class RingBackwardKind {
     CyclicInPlace,
 };
 
+// shift_transport is how every ring shift in the forward and the backward
+// moves its bytes (see ttnn_fixed::distributed::RingShiftTransport). It is
+// orthogonal to backward_kind: both backwards shift the same tensors.
 autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
@@ -75,6 +79,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
     const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
     RingBackwardKind backward_kind = RingBackwardKind::TwoPass,
-    uint32_t rows_per_block_tiles = 1U);
+    uint32_t rows_per_block_tiles = 1U,
+    ttnn_fixed::distributed::RingShiftTransport shift_transport = ttnn_fixed::distributed::RingShiftTransport::Fifo);
 
 }  // namespace ttml::ops::distributed

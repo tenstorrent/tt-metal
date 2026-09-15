@@ -30,6 +30,25 @@ enum class RingShiftDirection {
 };
 
 /**
+ * How a ring shift moves its bytes.
+ *
+ * Fifo is the original: one core per chip streams the tensor through the
+ * socket's DRAM FIFO in fabric-packet pages, each page acknowledged by the
+ * receiver before the next, and the receiver copies it out to the output
+ * tensor. Measured under 2.5 GB/s per chip on Blackhole, an order of
+ * magnitude below the link.
+ *
+ * Direct has the sender write fabric packets straight into the receiver's
+ * output tensor after a one-page address handshake, with one sender core per
+ * fabric link between the two chips, so the transfer runs at link rate and
+ * the two links of a p150 pair are both used. The result is bitwise the same.
+ */
+enum class RingShiftTransport {
+    Fifo,
+    Direct,
+};
+
+/**
  * Ring shift operation - shifts tensor to next/previous device in the ring.
  *
  * @param tensor The input tensor to shift
@@ -41,11 +60,17 @@ enum class RingShiftDirection {
  *        If std::nullopt (the default) and the device fabric is 1D, axis 1 is used.
  *        For multi-dimensional fabrics, this parameter must be explicitly specified.
  * @param direction Direction to shift: Forward (i -> i+1) or Backward (i -> i-1)
+ * @param transport Fifo (the original) or Direct; see RingShiftTransport.
+ * @param connections For Direct: sender cores per chip pair, one per fabric
+ *        link; 0 means every link the fabric reports between the two chips.
+ *        Ignored for Fifo, which always uses one.
  * @return The tensor received from the neighbor device
  */
 ttnn::Tensor ring_shift(
     const ttnn::Tensor& tensor,
     const std::optional<uint32_t> cluster_axis = std::nullopt,
-    const RingShiftDirection direction = RingShiftDirection::Forward);
+    const RingShiftDirection direction = RingShiftDirection::Forward,
+    const RingShiftTransport transport = RingShiftTransport::Fifo,
+    const uint32_t connections = 0U);
 
 }  // namespace ttml::ttnn_fixed::distributed

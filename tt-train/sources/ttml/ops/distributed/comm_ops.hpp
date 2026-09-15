@@ -31,5 +31,6 @@ autograd::TensorPtr broadcast(
 autograd::TensorPtr ring_shift(
     const autograd::TensorPtr& tensor,
     const std::optional<uint32_t> cluster_axis = std::nullopt,
-    const ttnn_fixed::distributed::RingShiftDirection direction = ttnn_fixed::distributed::RingShiftDirection::Forward);
+    const ttnn_fixed::distributed::RingShiftDirection direction = ttnn_fixed::distributed::RingShiftDirection::Forward,
+    const ttnn_fixed::distributed::RingShiftTransport transport = ttnn_fixed::distributed::RingShiftTransport::Fifo);
 }  // namespace ttml::ops::distributed

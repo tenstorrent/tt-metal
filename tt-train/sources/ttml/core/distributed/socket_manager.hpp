@@ -59,7 +59,33 @@ public:
         const InterHostParameters& inter_host_params,
         const IntraMeshParameters& intra_mesh_params);
 
+    // Intra-mesh only. The sender writes straight into the receiver's tensor
+    // over fabric; the socket carries only the address handshake and the
+    // completion token, so it is a different socket from the FIFO one (a
+    // small L1 FIFO instead of an 80 MB DRAM one) and is cached separately.
+    // One fabric packet stream per connection, so more connections means
+    // more links in parallel -- up to the number of links between the two
+    // chips, which the op checks.
+    void send_direct(
+        const ttnn::Tensor& tensor,
+        const InterHostParameters& inter_host_params,
+        const IntraMeshParameters& intra_mesh_params);
+
+    [[nodiscard]] ttnn::Tensor recv_direct(
+        ttnn::Tensor tensor,
+        const InterHostParameters& inter_host_params,
+        const IntraMeshParameters& intra_mesh_params);
+
 private:
+    struct DirectSocketPair {
+        std::shared_ptr<DistributedContext> distributed_ctx;
+        std::vector<tt::tt_metal::distributed::SocketConnection> connections;
+        tt::tt_metal::distributed::MeshSocket send_socket;
+        tt::tt_metal::distributed::MeshSocket recv_socket;
+    };
+    DirectSocketPair& get_direct_socket(
+        const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params);
+
     std::unique_ptr<ISocket> create_socket(std::shared_ptr<DistributedContext> distributed_ctx, Rank rank);
     std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket> create_intra_mesh_socket(
         std::shared_ptr<DistributedContext> distributed_ctx, const IntraMeshParameters& params);
@@ -69,6 +95,7 @@ private:
     SocketType m_type{SocketType::MPI};
     std::vector<std::unique_ptr<ttnn::distributed::ISocket>> m_inter_host_sockets;
     std::vector<std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket>> m_intra_mesh_sockets;
+    std::vector<std::unique_ptr<DirectSocketPair>> m_intra_mesh_direct_sockets;
 };
 
 }  // namespace ttml::core::distributed

@@ -5,6 +5,8 @@
 #include "socket_manager.hpp"
 
 #include "autograd/auto_context.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/recv_direct_async.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/send_direct_async.hpp"
 
 namespace {
 
@@ -138,6 +140,52 @@ std::unique_ptr<ISocket> SocketManager::create_socket(std::shared_ptr<Distribute
 
     return ttnn::distributed::create_socket(
         m_type, ttnn::distributed::EndpointSocketType::BIDIRECTIONAL, mesh_device, rank, socket_config);
+}
+
+void SocketManager::send_direct(
+    const ttnn::Tensor& tensor,
+    const InterHostParameters& inter_host_params,
+    const IntraMeshParameters& intra_mesh_params) {
+    auto& pair = get_direct_socket(inter_host_params, intra_mesh_params);
+    ttnn::experimental::send_direct_async(tensor, pair.send_socket);
+}
+
+ttnn::Tensor SocketManager::recv_direct(
+    ttnn::Tensor tensor, const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params) {
+    auto& pair = get_direct_socket(inter_host_params, intra_mesh_params);
+    ttnn::experimental::recv_direct_async(tensor, pair.recv_socket);
+    return tensor;
+}
+
+SocketManager::DirectSocketPair& SocketManager::get_direct_socket(
+    const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params) {
+    TT_FATAL(
+        inter_host_params.distributed_ctx->rank() == inter_host_params.rank,
+        "direct socket transfers are intra-mesh only");
+    for (const auto& pair : m_intra_mesh_direct_sockets) {
+        if (pair->distributed_ctx == inter_host_params.distributed_ctx &&
+            pair->connections == intra_mesh_params.connections) {
+            return *pair;
+        }
+    }
+
+    auto mesh_device = ttml::autograd::ctx().get_device_ptr();
+    // The FIFO only ever holds the 64-byte handshake page, so a small L1 FIFO
+    // on the receiver core is all the socket needs.
+    tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{};
+    socket_mem_config.socket_storage_type = ttnn::BufferType::L1;
+    socket_mem_config.fifo_size = 1024U;
+    tt::tt_metal::distributed::SocketConfig socket_config(intra_mesh_params.connections, socket_mem_config);
+    socket_config.distributed_context = inter_host_params.distributed_ctx;
+    auto [send_socket, recv_socket] =
+        tt::tt_metal::distributed::MeshSocket::create_socket_pair(mesh_device, mesh_device, socket_config);
+    m_intra_mesh_direct_sockets.push_back(std::make_unique<DirectSocketPair>(DirectSocketPair{
+        .distributed_ctx = inter_host_params.distributed_ctx,
+        .connections = intra_mesh_params.connections,
+        .send_socket = std::move(send_socket),
+        .recv_socket = std::move(recv_socket),
+    }));
+    return *m_intra_mesh_direct_sockets.back();
 }
 
 std::unique_ptr<ttnn::distributed::BidirectionalFabricSocket> SocketManager::create_intra_mesh_socket(

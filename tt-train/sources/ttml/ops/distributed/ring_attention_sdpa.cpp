@@ -61,7 +61,8 @@ autograd::TensorPtr ring_attention_sdpa(
     const std::optional<autograd::TensorPtr>& mask,
     const ttml::metal::AttentionMaskType mask_type,
     RingBackwardKind backward_kind,
-    uint32_t rows_per_block_tiles) {
+    uint32_t rows_per_block_tiles,
+    ttnn_fixed::distributed::RingShiftTransport shift_transport) {
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
@@ -178,9 +179,9 @@ autograd::TensorPtr ring_attention_sdpa(
 
         if (step < ring_size - 1) {
             k_current = ttnn_fixed::distributed::ring_shift(
-                k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward);
+                k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward, shift_transport);
             v_current = ttnn_fixed::distributed::ring_shift(
-                v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward);
+                v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward, shift_transport);
         }
     }
 
@@ -201,6 +202,7 @@ autograd::TensorPtr ring_attention_sdpa(
                                       mask_type,
                                       backward_kind,
                                       rows_per_block_tiles,
+                                      shift_transport,
                                       mesh_device]() mutable {
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
         const auto& grad_output = out->get_grad();
@@ -363,15 +365,15 @@ autograd::TensorPtr ring_attention_sdpa(
             if (step > 0) {
                 // Shift K/V forward to get position for next backward iteration
                 k_current = ttnn_fixed::distributed::ring_shift(
-                    k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                    k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
                 v_current = ttnn_fixed::distributed::ring_shift(
-                    v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                    v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
 
                 // Shift grad accumulators
                 grad_K_accum = ttnn_fixed::distributed::ring_shift(
-                    grad_K_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                    grad_K_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
                 grad_V_accum = ttnn_fixed::distributed::ring_shift(
-                    grad_V_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward);
+                    grad_V_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
             }
         }
 

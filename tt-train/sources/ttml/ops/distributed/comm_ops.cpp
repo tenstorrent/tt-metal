@@ -103,18 +103,20 @@ autograd::TensorPtr broadcast(const autograd::TensorPtr& tensor, const std::opti
 autograd::TensorPtr ring_shift(
     const autograd::TensorPtr& tensor,
     const std::optional<uint32_t> cluster_axis,
-    const ttnn_fixed::distributed::RingShiftDirection direction) {
+    const ttnn_fixed::distributed::RingShiftDirection direction,
+    const ttnn_fixed::distributed::RingShiftTransport transport) {
     // Forward pass: shift in the specified direction
-    auto out =
-        autograd::create_tensor(ttnn_fixed::distributed::ring_shift(tensor->get_value(), cluster_axis, direction));
+    auto out = autograd::create_tensor(
+        ttnn_fixed::distributed::ring_shift(tensor->get_value(), cluster_axis, direction, transport));
 
     // Backward pass: shift in the opposite direction to route gradients back
     const auto opposite_direction = (direction == ttnn_fixed::distributed::RingShiftDirection::Forward)
                                         ? ttnn_fixed::distributed::RingShiftDirection::Backward
                                         : ttnn_fixed::distributed::RingShiftDirection::Forward;
-    autograd::GradFunction grad = [tensor, out, cluster_axis, opposite_direction]() {
+    autograd::GradFunction grad = [tensor, out, cluster_axis, opposite_direction, transport]() {
         if (out->is_grad_initialized()) {
-            tensor->add_grad(ttnn_fixed::distributed::ring_shift(out->get_grad(), cluster_axis, opposite_direction));
+            tensor->add_grad(
+                ttnn_fixed::distributed::ring_shift(out->get_grad(), cluster_axis, opposite_direction, transport));
         }
     };
 
