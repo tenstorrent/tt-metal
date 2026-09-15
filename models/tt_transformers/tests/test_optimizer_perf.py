@@ -43,14 +43,18 @@ STAGE_DECODE = "decode"
 STAGE_PATH = "trace+1cq"
 
 
-def _signpost(name: str, enabled: bool) -> None:
-    """Tracy signpost, only under the device profiler. Best-effort: a missing mark costs the stage split."""
+def signpost(name: str, enabled: bool) -> None:
+    """Tracy signpost, only under the device profiler. Best-effort: a missing mark costs the stage split.
+
+    Call sites pass literal names: tt-opt's harness scanner reads `signpost("...")` calls
+    from the source to learn the windows, and an f-string is invisible to it.
+    """
     if not enabled:
         return
     try:
-        from tracy import signpost
+        from tracy import signpost as tracy_signpost
 
-        signpost(name)
+        tracy_signpost(name)
         print(f"PERF_GATE_SIGNPOST {name}", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"  [perf-gate] signpost {name!r} not emitted ({type(exc).__name__}: {exc})", flush=True)
@@ -196,19 +200,19 @@ def test_optimizer_direct_perf(monkeypatch):
             # The measured region. Under the profiler the start/stop pair is what tt-perf-report
             # slices on (the run's manifest names them), so weight load and warm-up stay out of the
             # per-op profile; the stage pairs inside it split that profile into prefill and decode.
-            _signpost("start", profiling)
+            signpost("start", profiling)
             prefill_ms = []
             first_token = None
             for _ in range(prefill_samples):
-                _signpost(f"stage:{STAGE_PREFILL}", profiling)
+                signpost("stage:prefill", profiling)
                 prefill_start = time.perf_counter()
                 first_token = _prefill(generator, input_ids, page_table, kv_cache, sampling_params, enable_trace)
                 ttnn.synchronize_device(mesh_device)
                 prefill_ms.append((time.perf_counter() - prefill_start) * 1000.0)
-                _signpost(f"stage:{STAGE_PREFILL}:end", profiling)
+                signpost("stage:prefill:end", profiling)
             ttft_ms = statistics.median(prefill_ms)
 
-            _signpost(f"stage:{STAGE_DECODE}", profiling)
+            signpost("stage:decode", profiling)
             decode_start = time.perf_counter()
             _decode(
                 generator,
@@ -222,8 +226,8 @@ def test_optimizer_direct_perf(monkeypatch):
             )
             ttnn.synchronize_device(mesh_device)
             end = time.perf_counter()
-            _signpost(f"stage:{STAGE_DECODE}:end", profiling)
-            _signpost("stop", profiling)
+            signpost("stage:decode:end", profiling)
+            signpost("stop", profiling)
 
             decode_seconds = end - decode_start
             decode_tokens_per_second = decode_tokens / decode_seconds
