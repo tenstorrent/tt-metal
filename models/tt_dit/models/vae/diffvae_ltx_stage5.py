@@ -39,6 +39,7 @@ from ...layers.neighborhood_permute import (
 )
 from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
+from ...utils.memory_log import log_dram
 from ...utils.tensor import fast_device_to_host
 from ...utils.tensor import from_torch as sharded_from_torch
 from ...utils.tensor import local_device_to_torch
@@ -473,33 +474,6 @@ def _reshape_retiled(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
     if rm is not x:
         ttnn.deallocate(rm)
     return out
-
-
-def log_ccl_cache(ccl_manager, label: str) -> None:
-    """Under ``DIFFVAE_MEM_LOG``, itemise the CCL manager's persistent ping-pong buffers by kind and shape."""
-    if not os.environ.get("DIFFVAE_MEM_LOG") or ccl_manager is None:
-        return
-    rows = []
-    total = 0
-    for key, buffers in ccl_manager._ping_pong_buffer_cache.items():
-        nbytes = sum(b.volume() * b.element_size() for b in buffers)
-        total += nbytes
-        rows.append((nbytes, f"{key[0]} x{len(buffers)} {tuple(key[1])}"))
-    lines = [f"  {nbytes / 2**20:8.1f} MiB  {desc}" for nbytes, desc in sorted(rows, reverse=True)]
-    logger.info(f"[ccl-cache] {label}: {total / 2**30:.2f} GiB per chip in {len(rows)} shape(s)\n" + "\n".join(lines))
-
-
-def log_dram(mesh_device, label: str) -> None:
-    """Log allocated DRAM when ``DIFFVAE_MEM_LOG`` is set."""
-    if not os.environ.get("DIFFVAE_MEM_LOG"):
-        return
-    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
-    banks = view.num_banks
-    logger.info(
-        f"[dram] {label}: allocated {view.total_bytes_allocated_per_bank * banks / 2**30:6.2f} GiB"
-        f" of {view.total_bytes_per_bank * banks / 2**30:.2f} GiB,"
-        f" largest contiguous free {view.largest_contiguous_bytes_free_per_bank * banks / 2**30:5.2f} GiB"
-    )
 
 
 def _release_intermediates(tensors: Sequence[ttnn.Tensor], *, keep: ttnn.Tensor) -> None:

@@ -28,8 +28,9 @@ from ...layers.neighborhood_attention import (
 from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
 from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
+from ...utils.memory_log import log_ccl_cache, log_dram
 from ...utils.tracing import traced_function
-from .diffvae_ltx_stage5 import TILE, log_ccl_cache, log_dram
+from .diffvae_ltx_stage5 import TILE
 from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
 
 #: Executors that take this chip's W-band and reassemble the window across the shard seam.

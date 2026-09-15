@@ -146,6 +146,18 @@ class CCLManager:
             dim += len(shape)
         return dim
 
+    def ping_pong_buffer_report(self):
+        """Return ``(nbytes, description)`` per cached ping-pong shape, largest first.
+
+        ``nbytes`` counts every buffer under that key on one chip; the description names the
+        collective kind, the number of buffers and the shape.
+        """
+        rows = []
+        for key, buffers in self._ping_pong_buffer_cache.items():
+            nbytes = sum(b.volume() * b.element_size() for b in buffers)
+            rows.append((nbytes, f"{key[0]} x{len(buffers)} {tuple(key[1])}"))
+        return sorted(rows, reverse=True)
+
     def get_rs_ping_pong_buffer(
         self,
         shape,
