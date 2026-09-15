@@ -145,7 +145,7 @@ void PrefetcherPipeImpl::build_config_pages() {
     sender_page[si++] = layout.noc_xy_offset;
     sender_page[si++] = layout.sent_offset;   // word[7]: local sent/wr block; same offset is the remote sent base
     sender_page[si++] = layout.acked_offset;  // word[8]: local acked block (receivers' NoC atomics land here)
-    sender_page[si++] = active_credit_lanes_;
+    sender_page[si++] = 0;                    // word[9]: reserved (P is per program, in the kernel-config slot)
     for (uint32_t ri = 0; ri < num_recv; ++ri) {
         auto phys = device_->worker_core_from_logical_core(receiver_vec[ri]);
         sender_page[si++] = static_cast<uint32_t>(phys.x);
@@ -170,7 +170,7 @@ void PrefetcherPipeImpl::build_config_pages() {
         const uint32_t slot = ri * credit_lane_capacity_ * l1_alignment;
         receiver_page[rci++] = layout.sent_offset + slot;   // word[7]: sender's NoC atomics land here
         receiver_page[rci++] = layout.acked_offset + slot;  // word[8]: local acked (cached stores)
-        receiver_page[rci++] = active_credit_lanes_;
+        receiver_page[rci++] = 0;                           // word[9]: reserved
         receiver_page[rci++] = static_cast<uint32_t>(sender_phys.x);
         receiver_page[rci++] = static_cast<uint32_t>(sender_phys.y);
         config_pages_[receiver_vec[ri]] = std::move(receiver_page);
@@ -185,23 +185,6 @@ void PrefetcherPipeImpl::write_config_to_device() {
             TT_FATAL(
                 detail::WriteToDeviceL1(target_device, core, config_address_, page_copy),
                 "Failed to write PrefetcherPipe config page to core {} on device {}",
-                core.str(),
-                target_device->id());
-        }
-    }
-}
-
-void PrefetcherPipeImpl::write_config_word_to_device(uint32_t word_idx) {
-    TT_FATAL(device_ != nullptr, "PrefetcherPipe device cannot be null");
-    const uint32_t word_addr = config_address_ + word_idx * static_cast<uint32_t>(sizeof(uint32_t));
-    for (const auto& [core, page] : config_pages_) {
-        TT_FATAL(word_idx < page.size(), "PrefetcherPipe config page too short for word {}", word_idx);
-        std::vector<uint32_t> word{page[word_idx]};
-        for (IDevice* target_device : device_->get_devices()) {
-            TT_FATAL(
-                detail::WriteToDeviceL1(target_device, core, word_addr, word),
-                "Failed to write PrefetcherPipe config word {} to core {} on device {}",
-                word_idx,
                 core.str(),
                 target_device->id());
         }
@@ -310,18 +293,11 @@ void PrefetcherPipeImpl::set_active_credit_lanes(uint32_t num_lanes) {
         "PrefetcherPipe num_pipe_consumer_threads already set to {}, cannot reprogram to {}",
         active_credit_lanes_,
         num_lanes);
+    // Host state only. P reaches the device packed into each program's kernel-config slot
+    // (build_prefetcher_pipe_config_payload), so it is ordered with the program that uses it;
+    // nothing in the persistent config page is touched after Create. The one-shot 1 -> P
+    // guard above stays because the persistent credit block is interpreted through P.
     active_credit_lanes_ = num_lanes;
-    for (auto& [core, page] : config_pages_) {
-        (void)core;
-        TT_FATAL(
-            page.size() > PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES,
-            "PrefetcherPipe config page too short to hold num_credit_lanes");
-        page[PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES] = active_credit_lanes_;
-    }
-    // Only word[9] changes. config_pages_ is the Create-time image: the device owns the
-    // checkpoint, counters and cursors after the first launch, so rewriting whole pages here
-    // would silently reset persisted pipe state.
-    write_config_word_to_device(PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES);
 }
 
 void PrefetcherPipeImpl::validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const {

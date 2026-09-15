@@ -31,7 +31,8 @@
 //   │     word[6]  noc_xy_offset         // page-relative → after header
 //   │     word[7]  pages_sent_offset
 //   │     word[8]  pages_acked_offset
-//   │     word[9]  num_credit_lanes      // active pipe-consumer lanes (≤ allocated capacity)
+//   │     word[9]  reserved (0)          // active lane count P travels in the per-program
+//   │                                    // kernel-config slot, see remote_dfb_constants.h
 //   ├── NOC XY table
 //   ├── pad → PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN
 //   ├── SENT block   (word[7]) — one L1_ALIGNMENT slot per (receiver, lane)
@@ -50,10 +51,13 @@
 //   words the same core wrote. The sender page and every receiver page share this layout, so
 //   the same slot offset addresses the mirror counter on the peer.
 //
-//   Active lane count P is word[9] (Attach num_pipe_consumer_threads / relay num_producers).
-//   Layout stride per receiver is PREFETCHER_PIPE_MAX_CREDIT_LANES on Quasar (1 on WH/BH),
-//   so activating more consumers does not resize persistent L1. Sender stripes pages_sent to
-//   lane (entry_idx % P); receiver hart tid binds to lane tid. Still one ring and one page.
+//   Active lane count P (Attach num_pipe_consumer_threads / relay num_producers) is not in
+//   the page: it is packed into the program's kernel-config slot so it arrives in CQ order
+//   with the program that uses it. It is armed once per pipe lifetime (1 -> P) because the
+//   persistent credit block below is interpreted through it. Layout stride per receiver is
+//   PREFETCHER_PIPE_MAX_CREDIT_LANES on Quasar (1 on WH/BH), so activating more consumers
+//   does not resize persistent L1. Sender stripes pages_sent to lane (entry_idx % P);
+//   receiver hart tid binds to lane tid. Still one ring and one page.
 //   The sender page's word[7]/word[8] are the block bases; a receiver page's are that
 //   receiver's lane-0 slot within each block.
 
@@ -80,12 +84,12 @@ inline constexpr uint32_t PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE = 5;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_NOC_XY_OFFSET = 6;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET = 7;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET = 8;
-inline constexpr uint32_t PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES = 9;
+// word[9] reserved.
 
 // Quasar: config pages reserve this many lane (sent,acked) slots per receiver so
 // consumer relay bind can activate up to this many producers without resizing
 // persistent L1 (same role as max_receivers_per_pipe for receiver fanout). WH/BH
-// use 1. Active count is word[9], not this capacity.
+// use 1. The active count is per program (kernel-config slot), not this capacity.
 inline constexpr uint32_t PREFETCHER_PIPE_MAX_CREDIT_LANES = 4;
 
 // The SENT and ACKED blocks each start on this boundary (and the config page itself is

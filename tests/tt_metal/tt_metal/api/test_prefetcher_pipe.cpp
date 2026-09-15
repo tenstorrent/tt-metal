@@ -38,6 +38,7 @@
 #include "mesh_dispatch_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/cross_node_dfb_test_utils.hpp"
 #include "hostdev/remote_dfb_config_layout.h"
+#include "hostdev/remote_dfb_constants.h"
 #include "tests/tt_metal/tt_metal/api/prefetcher_pipe_test_utils.hpp"
 
 namespace tt::tt_metal {
@@ -1225,8 +1226,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
     }
 }
 
-// Host-only: Attach(..., num_pipe_consumer_threads) and/or relay register program word[9];
-// over-capacity and reprogram-to-different-P are rejected.
+// Host-only: Attach(..., num_pipe_consumer_threads) and/or relay arm the pipe's lane count,
+// which dispatch packs into each program's kernel-config slot; over-capacity and
+// reprogram-to-different-P are rejected.
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming) {
     if (!is_quasar_arch()) {
         GTEST_SKIP() << "Lane-credit capacity > 1 is Quasar-only";
@@ -1248,8 +1250,27 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
         Program program = CreateProgram();
         EXPECT_EQ(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256, /*num_pipe_consumer_threads=*/2), 0u);
         EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
-        EXPECT_EQ(pipe.impl().config_page(CoreCoord(0, 0))[PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES], 2u);
-        EXPECT_EQ(pipe.impl().config_page(CoreCoord(1, 0))[PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES], 2u);
+        // P is not in the persistent page (word[9] stays reserved); it travels in the program's
+        // kernel-config slot, packed above relay_dfb_id, on sender and receiver cores alike.
+        const auto& per_core = program.impl().get_per_core_prefetcher_pipes();
+        for (const CoreCoord core : {CoreCoord(0, 0), CoreCoord(1, 0)}) {
+            EXPECT_EQ(pipe.impl().config_page(core)[9], 0u);
+            const auto payload =
+                program_dispatch::build_prefetcher_pipe_config_payload(program.impl(), per_core.at(core));
+            const uint32_t relay_word = payload[REMOTE_DFB_REGION_HEADER_WORDS + 2];
+            EXPECT_EQ(prefetcher_pipe_slot_credit_lanes(relay_word), 2u);
+            EXPECT_EQ(prefetcher_pipe_slot_relay_id(relay_word), std::numeric_limits<uint8_t>::max());
+        }
+        // A single-lane pipe's slot is bit-identical to the pre-lane encoding.
+        auto pipe_single =
+            experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, /*ring_size=*/1024);
+        Program program_single = CreateProgram();
+        EXPECT_EQ(AttachPrefetcherPipe(program_single, pipe_single, pipe_single.all_cores(), 256), 0u);
+        const auto single_payload = program_dispatch::build_prefetcher_pipe_config_payload(
+            program_single.impl(), program_single.impl().get_per_core_prefetcher_pipes().at(CoreCoord(1, 0)));
+        EXPECT_EQ(
+            single_payload[REMOTE_DFB_REGION_HEADER_WORDS + 2],
+            static_cast<uint32_t>(std::numeric_limits<uint8_t>::max()));
 
         // Matching relay num_producers is a no-op; mismatch must throw.
         experimental::dfb::DataflowBufferConfig match{
@@ -1260,6 +1281,36 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
         };
         EXPECT_NO_THROW(experimental::CreatePrefetcherPipeRelayDataflowBuffer(program, receiver_cores, match, 0));
         EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
+    }
+
+    {
+        // Lanes armed by a relay *after* the Attach: the slot payload is built from the pipe at
+        // dispatch time, so it must carry the relay's P, not the P=1 the participant was added with.
+        auto pipe =
+            experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, /*ring_size=*/1024);
+        Program program = CreateProgram();
+        EXPECT_EQ(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256), 0u);
+        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
+        experimental::dfb::DataflowBufferConfig late{
+            .entry_size = 256,
+            .num_entries = 4,
+            .num_producers = 2,
+            .pap = experimental::dfb::AccessPattern::STRIDED,
+        };
+        const uint32_t relay_id =
+            experimental::CreatePrefetcherPipeRelayDataflowBuffer(program, receiver_cores, late, 0);
+        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
+        const auto& per_core = program.impl().get_per_core_prefetcher_pipes();
+        const auto recv_payload =
+            program_dispatch::build_prefetcher_pipe_config_payload(program.impl(), per_core.at(CoreCoord(1, 0)));
+        const uint32_t recv_word = recv_payload[REMOTE_DFB_REGION_HEADER_WORDS + 2];
+        EXPECT_EQ(prefetcher_pipe_slot_credit_lanes(recv_word), 2u);
+        EXPECT_EQ(prefetcher_pipe_slot_relay_id(recv_word), program.impl().get_dataflow_buffer(relay_id)->device_slot);
+        const auto send_payload =
+            program_dispatch::build_prefetcher_pipe_config_payload(program.impl(), per_core.at(CoreCoord(0, 0)));
+        const uint32_t send_word = send_payload[REMOTE_DFB_REGION_HEADER_WORDS + 2];
+        EXPECT_EQ(prefetcher_pipe_slot_credit_lanes(send_word), 2u);
+        EXPECT_EQ(prefetcher_pipe_slot_relay_id(send_word), std::numeric_limits<uint8_t>::max());
     }
 
     {

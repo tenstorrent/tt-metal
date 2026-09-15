@@ -54,9 +54,10 @@ public:
     uint32_t num_credit_lanes() const { return active_credit_lanes_; }
     // Slots allocated in the config page (Quasar may reserve headroom above active).
     uint32_t credit_lane_capacity() const { return credit_lane_capacity_; }
-    // Set active lanes from consumer geometry; updates host pages + word[9] on device.
-    // May upgrade from the Create-time default of 1, or no-op if already equal.
-    // Reprogramming to a different value after arming is rejected.
+    // Set active lanes from consumer geometry. Host state only: dispatch packs the value into
+    // every attached program's kernel-config slot (ordered with that program), nothing in
+    // persistent L1 is written. May upgrade from the Create-time default of 1, or no-op if
+    // already equal. Reprogramming to a different value after arming is rejected.
     void set_active_credit_lanes(uint32_t num_lanes);
     // Lane mode (num_lanes > 1) needs an exact entry ring whose entry count is a multiple of
     // num_lanes; throws otherwise. Call before set_active_credit_lanes so a rejected Attach
@@ -78,7 +79,6 @@ private:
     void setup_buffers(BufferType buffer_type);
     void build_config_pages();
     void write_config_to_device();
-    void write_config_word_to_device(uint32_t word_idx);
     void release_allocations() noexcept;
 
     uint64_t data_allocation_id_ = 0;
@@ -93,7 +93,8 @@ private:
     uint32_t ring_size_ = 0;
     // Physical lane slots in the config page (Create-time allocation).
     uint32_t credit_lane_capacity_ = 1;
-    // Active lanes for striping / wait_front (word[9]); set from relay num_producers.
+    // Active lanes for striping / wait_front (per-program kernel-config slot); set from Attach
+    // num_pipe_consumer_threads / relay num_producers.
     uint32_t active_credit_lanes_ = 1;
     uint32_t config_page_size_ = 0;
     uint32_t credit_reset_offset_ = 0;

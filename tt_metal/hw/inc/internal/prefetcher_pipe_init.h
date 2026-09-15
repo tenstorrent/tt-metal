@@ -68,7 +68,7 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET);
     const uint32_t acked_ptr =
         config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET);
-    // Active lane count (word[9]) is cached by the PrefetcherPipe ctor, not the iface.
+    // Active lane count (kernel-config slot) is cached by the PrefetcherPipe ctor, not the iface.
 
     const uint32_t size_aligned = fifo_size - (fifo_size % entry_size);
     const uint32_t fifo_limit = fifo_start_addr + size_aligned;
@@ -104,7 +104,8 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.aligned_pages_acked_ptr = acked_ptr;  // local, cached stores
         iface.remote_pages_acked_ptr = acked_ptr;   // same slot on the sender page
         iface.fifo_limit_page_aligned = fifo_limit;
-        iface.relay_id = static_cast<uint8_t>(relay_dfb_id_word);
+        // Low byte only; the slot word also carries the active lane count (remote_dfb_constants.h).
+        iface.relay_id = static_cast<uint8_t>(prefetcher_pipe_slot_relay_id(relay_dfb_id_word));
     }
 }
 
