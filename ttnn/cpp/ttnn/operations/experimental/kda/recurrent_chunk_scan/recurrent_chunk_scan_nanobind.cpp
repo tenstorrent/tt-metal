@@ -118,6 +118,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 group summarizes. Defaults to 0.
             chunk_count (int, optional): Chunks in that range, 0 meaning to the
                 end. Defaults to 0.
+            wrap_indicator (ttnn.Tensor, optional): Required device-local scalar
+                in segmented mode. Ordinary summaries reject wrap controls.
+            wrap_chunk (int, optional): Strictly interior boundary in the local
+                ``G*N`` chunks. Required and nonzero in segmented mode.
             emit_tail_summaries (bool, optional): Return an additional ``(A,B)``
                 pair for the post-wrap part of every folded group. Defaults to false.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
