@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -28,6 +29,10 @@ inline uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
 
 struct operation_attributes_t {
     uint32_t k{};
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id{};
+    std::optional<CoreRangeSet> sub_core_grid{};
+    tt::tt_metal::SubDeviceManagerId subdevice_manager_id{};
+    CoreRangeSet resolved_worker_core_grid{};
     // Restrict the search to the first `valid_length` columns of each row instead of the full last
     // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
