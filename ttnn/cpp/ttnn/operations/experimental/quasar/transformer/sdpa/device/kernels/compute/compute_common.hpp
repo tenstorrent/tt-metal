@@ -42,20 +42,43 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
 
+#ifdef ARCH_QUASAR
+// Operand of the LAST actual pack, so pack_reconfig_out() runs pack_init ONLY on a real operand change.
+// Reset to the sentinel at each kernel_main entry (reset_pack_operand_tracking()). Per-TRISC global; the
+// PACK thread's copy is what gates its pack_init.
+inline uint32_t g_last_pack_operand = 0xFFFFFFFFu;
+ALWI void reset_pack_operand_tracking() { g_last_pack_operand = 0xFFFFFFFFu; }
+#else
+ALWI void reset_pack_operand_tracking() {}
+#endif
+
 // Switch the packer output operand to `out_dfb`.
 //
-// Quasar packer quirk: `pack_reconfig_data_format(new)` only updates the pack DATA FORMAT, not the
-// output ring/address, when the pack output OPERAND changes (api/compute/reconfig_data_format.h NOTE
-// ARCH_QUASAR: "call pack_init(new_cb_id) before pack_tile when switching pack output operand"). Without
-// a pack_init the packer keeps writing to the previously-configured ring, so the intended output DFB is
-// never written -> all-zero output, no assert (observed on the emulator; e.g. seq128 sdpa returned an
-// all-zero tensor). Every working Quasar compute kernel (pool_generic / conv2d / binary_ng) calls
-// pack_init at output switches. WH/BH do NOT need this (pack_reconfig alone re-targets correctly there;
-// validated 13/13), so the pack_init is ARCH_QUASAR-gated to leave the validated WH path byte-identical.
+// Quasar packer quirk: `pack_reconfig_data_format(new)` only updates the pack DATA FORMAT, not the output
+// ring/address (api/compute/reconfig_data_format.h NOTE ARCH_QUASAR; Quasar `_llk_pack_reconfig_data_
+// format_` writes only THCON_PACKER<N>_REG0_IN_DATA_FORMAT). Re-pointing the pack dest requires
+// `pack_init` (→ `_llk_pack_mop_config_(buf_desc)` re-latches L1_Dest_addr). Without it the packer keeps
+// writing to the previous ring → the intended DFB is never written → all-zero output, no assert (this
+// caused sdpa's first emulator run to return an all-zero tensor).
+//
+// BUT `pack_init` is a FULL re-init: it also resets the packer's per-tile dest write pointer /
+// accumulation-section state. Calling it at a SAME-operand reconfig (e.g. mid-L1-accumulate, like
+// fma_block_merged_sum pass 2 reconfiguring dfb_sum after pass 1 already packed it) clobbers the
+// in-progress accumulation (bounded-wrong output). So `pack_init` must run ONLY on a genuine operand
+// change vs the last ACTUAL pack — tracked at runtime here (handles cross-helper carry and if-constexpr
+// branches without static per-site classification; runtime-tracking design from the sdpa_decode fork).
+// Requirement: every pack-operand switch goes through this wrapper; matmul_blocks / pack_tile inherit
+// the wrapper-set operand (they never call pack_init/pack_reconfig themselves).
+//
+// WH/BH do NOT need any of this (pack_reconfig alone re-targets correctly there; validated 13/13), so
+// everything is ARCH_QUASAR-gated to leave the validated WH path byte-identical.
 ALWI void pack_reconfig_out(uint32_t out_dfb) {
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_data_format(out_dfb);  // format always re-applied; same-operand safe
 #ifdef ARCH_QUASAR
-    pack_init(out_dfb);
+    if (out_dfb != g_last_pack_operand) {
+        pack_init(out_dfb);
+        g_last_pack_operand = out_dfb;
+    }
 #endif
 }
 
