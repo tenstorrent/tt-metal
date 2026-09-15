@@ -543,7 +543,11 @@ void kernel_main() {
 
             /* OUT_IM = QK @ V_CHUNK */
             reconfig_data_format(dfb_v_in, dfb_qk_im);  // DEBUG
-            pack_reconfig_out(dfb_out_im);
+            // Re-point the packer to the ACTUAL matmul output (dfb_out_mm), not the hardcoded dfb_out_im:
+            // for the first chunk dfb_out_mm == dfb_out_accumulate_im (reassigned to dfb_out_im only after
+            // this matmul), so a hardcoded dfb_out_im pack_init sends chunk 0's OUT to the wrong ring and its
+            // contribution is lost. Must match the matmul's out arg.
+            pack_reconfig_out(dfb_out_mm);
             matmul_blocks(
                 dfb_qk_im,
                 dfb_v_in,
