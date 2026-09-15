@@ -2253,11 +2253,18 @@ void sdpa_inner_loop(
                 }
 
                 /**
-                 * alias_mm2_cur_out += alias_mm2_prev_out * dfb_exp_max_diff
-                 * This uses L1 accumulation to accumulate onto mm2_cur_out.
+                 * alias_mm2_cur_out += alias_mm2_prev_out * dfb_exp_max_diff, as two non-accumulating
+                 * ops (the proven sdpa_decode flash form): scale prev in place, then add it into cur.
+                 * Do NOT use the fused pack_accumulate=true form here: it L1-accumulates onto the
+                 * already-pushed QK@V tiles in alias_mm2_cur_out WITHOUT a reserve_back, relying on the
+                 * packer dest landing on those tiles — which the Quasar sticky-dest packer (pack_init
+                 * re-latches L1_Dest_addr; WR-relative, no-wrap addressing) mis-targets → the prev-chunk
+                 * contribution is lost and compounds per chunk (multi-chunk PCC ~0.03). WH is unaffected
+                 * but this two-op form is arch-agnostic and validated on both.
                  */
-                mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                    alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_cur_out);
+                mul_block_bcast_cols<Sq_chunk_t, vDHt, true /*immediate_pop*/, false /*pack_accumulate*/>(
+                    alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_prev_out);
+                add_block_inplace<true>(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
             }
 
             // Swap DFB handles to prepare for next iteration.
