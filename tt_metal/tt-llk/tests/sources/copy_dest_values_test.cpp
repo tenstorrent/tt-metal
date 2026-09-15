@@ -34,6 +34,15 @@
 //     kernel-authoring mistake cannot masquerade as a copy defect);
 //   * the DESTINATION slot now holds the source tile's data (the actual claim).
 //
+// The tile geometry is a parameter, which is the point of the tiny-tile cells:
+// copy_dest_value hardcodes the FULL-tile DST stride in two places --
+// _llk_math_eltwise_sfpu_start_ uses set_dst_write_addr<DstTileShape::Tile32x32>
+// (tile_index << 6, i.e. x64 rows) and the functor uses its own
+// dst_tile_size = 64 -- while DstTileSizeLog2 is 5 for Tile32x16 and 4 for
+// Tile16x16. VectorMode::RC also walks a fixed four faces regardless of how
+// many the tile has. So for a tile that is not 32x32 the primitive may address
+// a different slot than the surrounding op and the packer do.
+//
 // TILE_CNT selects the occupancy: TILE_CNT=2 means the destination slot holds a
 // different tile's data when the copy runs, TILE_CNT=1 means it was never
 // written. Both copy directions (0 -> 1 and 1 -> 0) are covered, which
@@ -44,6 +53,7 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -69,10 +79,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(FACE_C_DIM),
+        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
+        tensor_shape.face_r_dim,
+        tensor_shape.face_r_dim,
+        tensor_shape.total_num_faces(),
+        tensor_shape.total_num_faces());
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false /* unpack_to_dest */>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
@@ -110,12 +133,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // The preceding op: a plain datacopy, so every DEST slot it touches holds a
     // known tile and any deviation in the result is attributable.
+    const std::uint32_t num_faces = static_cast<std::uint32_t>(params.num_faces_r_dim_A) * static_cast<std::uint32_t>(params.num_faces_c_dim_A);
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        4 /* num_faces */, formats.math);
+        num_faces, formats.math);
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false /* unpack_to_dest */>(
-            tile, formats.math, formats.math, 4 /* num_faces */);
+            tile, formats.math, formats.math, num_faces);
     }
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, false /* unpack_to_dest */>();
 
@@ -155,10 +179,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const ckernel::TensorShape tensor_shape = {
+        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(FACE_C_DIM),
+        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
+
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 32 * 32 /* tile_size */, FACE_R_DIM, 32 /* total_col_dim */, 4 /* num_faces */, false /* partial_face */);
+        formats.pack_src, formats.pack_dst, tensor_shape.total_tensor_size(), tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
     _llk_pack_init_<PackMode::Default, false /* zero_output */>(
-        formats.pack_src, FACE_R_DIM, 32 /* tile_c_dim */, 4 /* num_faces */, RESULT_TILES, false /* skip_bh_tilize_workaround */);
+        formats.pack_src, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, RESULT_TILES, false /* skip_bh_tilize_workaround */);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_packer_wait_for_math_done_();

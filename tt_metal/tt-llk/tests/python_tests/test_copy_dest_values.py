@@ -49,10 +49,13 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     COPY_DEST_VALUES_FORMAT,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     SFPU_TILE_INDICES,
     TILE_COUNT,
     VECTOR_MODE,
 )
+from helpers.tile_shape import construct_tile_shape
 
 # Input and output share the format: the copy is meant to be value-preserving,
 # so any L1 conversion on the way in or out would blur the thing under test.
@@ -61,9 +64,13 @@ FORMATS = [
     InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
 ]
 
-# One 32x32 tile per DEST slot, all four faces -- VectorMode::RC covers them all.
-TILE_DIMENSIONS = [32, 32]
-ELEMENTS_PER_TILE = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+# Full 32x32 tile (4 faces) plus the tiny tiles: 16x32 (2 faces) and 16x16 (1
+# face). The tiny tiles are the interesting ones -- copy_dest_value hardcodes
+# the 32x32 DST stride (x64 rows) in both _llk_math_eltwise_sfpu_start_ and its
+# own dst_tile_size, and VectorMode::RC walks a fixed four faces, so for a tile
+# that is not 32x32 the primitive may not address the slot the surrounding op
+# and the packer use.
+TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
 
 #: (source DEST slot, destination DEST slot). Both directions, because "the
 #: store never lands" and "the store lands at the load's offset" are
@@ -88,10 +95,13 @@ def _dest_acc(output_format):
     formats=FORMATS,
     direction=DIRECTIONS,
     occupancy=list(OCCUPANCY),
+    tile_dimensions=TILE_DIMENSIONS,
 )
-def test_copy_dest_values(formats, direction, occupancy):
+def test_copy_dest_values(formats, direction, occupancy, tile_dimensions):
     src_slot, dst_slot = direction
     prefilled_tiles = OCCUPANCY[occupancy]
+    tile_shape = construct_tile_shape(tile_dimensions)
+    elements_per_tile = tile_shape.total_tile_size()
 
     if prefilled_tiles <= src_slot:
         pytest.skip(
@@ -104,19 +114,20 @@ def test_copy_dest_values(formats, direction, occupancy):
     # directly comparable. Distinct per-tile ranges make a slot mix-up loud:
     # tile 0 is in [1, 2), tile 1 in [-2, -1), so no value can be mistaken for
     # the other tile's, for zero, or for uninitialised DEST.
-    input_dimensions = [2 * TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
+    input_dimensions = [2 * tile_dimensions[0], tile_dimensions[1]]
     src_A, tile_cnt_A, _, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        tile_dimensions=tile_dimensions,
         spec_A=StimuliSpec.uniform(low=1.0, high=2.0),
     )
     src_A = src_A.clone()
-    src_A[ELEMENTS_PER_TILE:] = -src_A[ELEMENTS_PER_TILE:]
+    src_A[elements_per_tile:] = -src_A[elements_per_tile:]
 
     tiles_in = [
-        src_A[i * ELEMENTS_PER_TILE : (i + 1) * ELEMENTS_PER_TILE] for i in range(2)
+        src_A[i * elements_per_tile : (i + 1) * elements_per_tile] for i in range(2)
     ]
 
     configuration = TestConfig(
@@ -130,6 +141,8 @@ def test_copy_dest_values(formats, direction, occupancy):
         ],
         runtimes=[
             TILE_COUNT(prefilled_tiles),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
             # copy_dest_value(dst_index_in, dst_index_out, unused): DST_IN0 is
             # the source slot, DST_IN1 the destination, DST_OUT unused.
             SFPU_TILE_INDICES(
@@ -147,6 +160,10 @@ def test_copy_dest_values(formats, direction, occupancy):
             # The kernel always packs DEST[0] and DEST[1] so either direction
             # can be graded without the host tracking which slot moved.
             tile_count_res=2,
+            num_faces=tile_shape.total_num_faces(),
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
             sfpu=True,
         ),
         dest_acc=_dest_acc(formats.output_format),
@@ -155,12 +172,12 @@ def test_copy_dest_values(formats, direction, occupancy):
     res_from_L1 = configuration.run().result
 
     assert (
-        len(res_from_L1) == 2 * ELEMENTS_PER_TILE
-    ), f"expected two {ELEMENTS_PER_TILE}-element output tiles, got {len(res_from_L1)}"
+        len(res_from_L1) == 2 * elements_per_tile
+    ), f"expected two {elements_per_tile}-element output tiles, got {len(res_from_L1)}"
 
     res = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     tiles_out = [
-        res[i * ELEMENTS_PER_TILE : (i + 1) * ELEMENTS_PER_TILE] for i in range(2)
+        res[i * elements_per_tile : (i + 1) * elements_per_tile] for i in range(2)
     ]
 
     host_src = tiles_in[src_slot].to(torch.float32)
@@ -208,5 +225,5 @@ def test_copy_dest_values(formats, direction, occupancy):
         f"  DEST[{src_slot}] after  {got_src[:4].tolist()}\n"
         f"  input tile {dst_slot}    {host_dst[:4].tolist()}\n"
         f"  elements differing from DEST[{src_slot}]: "
-        f"{int((got != tiles_out[src_slot]).sum())} of {ELEMENTS_PER_TILE}"
+        f"{int((got != tiles_out[src_slot]).sum())} of {elements_per_tile}"
     )
