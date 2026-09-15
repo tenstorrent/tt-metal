@@ -888,10 +888,13 @@
     # downward once both are primed.
     pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
     pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_tokenizer.py
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_sampling.py
     pytest --timeout 600 models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
+    # The cached, traced decode paths against the uncached graphs above them.
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
     # The pipeline tests need the CustomVoice checkpoint, a second 4.3 GB download on
     # a cold cache; Base carries the speaker encoder, CustomVoice the nine speakers.
     pytest --timeout 1200 models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py

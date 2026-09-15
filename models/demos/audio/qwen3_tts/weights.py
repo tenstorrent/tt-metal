@@ -42,6 +42,7 @@ CODEC_SUBFOLDER = "speech_tokenizer"
 CODEC_DECODER_PREFIX = "decoder."
 
 CONFIG_FILE = "config.json"
+GENERATION_CONFIG_FILE = "generation_config.json"
 WEIGHTS_FILE = "model.safetensors"
 SPEAKER_PREFIX = "speaker_encoder."
 TALKER_PREFIX = "talker."
@@ -205,6 +206,25 @@ def load_codec_decoder_state(dtype=torch.float32, allow_download=True):
             tensor = f.get_tensor(name)
             state[name[len(CODEC_DECODER_PREFIX) :]] = tensor if dtype is None else tensor.to(dtype)
     return state
+
+
+@functools.lru_cache(maxsize=None)
+def _generation_config_json(allow_download=True):
+    path = os.path.join(checkpoint_dir(allow_download), GENERATION_CONFIG_FILE)
+    if not os.path.isfile(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def generation_config(allow_download=True):
+    """The checkpoint's own sampling settings, as a fresh dict.
+
+    Both decoders sample by default here: the talker reads `temperature`, `top_k`, `top_p`
+    and `repetition_penalty`, the code predictor the `subtalker_*` keys. Greedy decoding
+    is not a safe simplification of this; see `sampling`.
+    """
+    return json.loads(json.dumps(_generation_config_json(allow_download)))
 
 
 def talker_config(allow_download=True):

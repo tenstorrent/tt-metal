@@ -37,27 +37,43 @@ decoder, and the `codec_head` projection. On host: tokenisation, the embedding g
 small `text_projection` MLP over the prompt, sampling, and the quantizer's table lookup.
 That is 2.03B of the parameters on device and a few million of lookups on host.
 
-Correctness first, and the cost is real: there is no KV cache, so every step recomputes the
-whole prefix. Cost grows as the square of the utterance length, which is fine for a short
-sentence and needs a cache before anything long.
+**Sampling, not greedy.** The checkpoint ships `do_sample: true` and this follows it, with
+its own temperature, top_k and `repetition_penalty`. Greedy is not the conservative
+choice: upstream's package, on CPU, greedy, runs past the end of the text and spends the
+rest of its budget on a silence code. Measured 699 frames of a 700 frame budget against
+414 frames and a clean stop when sampling. `sampling` carries the details.
+
+**Both decoders carry a KV cache and run from a captured trace.** One 28-layer step and
+one 5-layer step, replayed per frame, which puts a sentence at roughly 44 ms per frame, or
+half of real time. Two rules the traces impose, each of which cost a board reset to learn:
+capture every trace before executing any of them, and allocate nothing new once one is
+live. Both are why `_capture` warms both decoders before it captures either, and why the
+loop below releases the one buffer it allocates per frame.
 """
 
 import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.demos.audio.qwen3_tts import frontend
+from models.demos.audio.qwen3_tts import frontend, sampling
 from models.demos.audio.qwen3_tts import weights as checkpoint
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import (
-    TtCodePredictor,
-    preprocess_code_predictor_parameters,
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
+    TtCodePredictorCachedDecoder,
+    preprocess_cached_predictor_parameters,
 )
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_codec import TtCodecDecoder, preprocess_codec_parameters
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import TtTalker, preprocess_talker_parameters
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
+    TtTalkerCachedDecoder,
+    preprocess_cached_talker_parameters,
+)
 
 # Upstream's fixed slices into the prompt: three leading ids of role, five trailing.
 ROLE_IDS = 3
 TAIL_IDS = 5
+
+# Frames the cache is sized for when the caller names no limit. 12.5 frames a second, so
+# this is 32 s of speech.
+DEFAULT_MAX_FRAMES = 400
 
 
 class HostEmbeddings:
@@ -139,17 +155,28 @@ def build_custom_voice_prefill(text, speaker, language, tables=None):
 
 
 class Qwen3TTSPipeline:
-    """The three device blocks plus the host loop that drives them."""
+    """The three device blocks plus the host loop that drives them.
 
-    def __init__(self, device, num_layers=None):
+    The talker's cache is sized on construction, so `max_frames` is fixed for the life of
+    the instance; ask for what you need up front. Each `generate` prefills eagerly and
+    then captures the two step traces, since the two cannot coexist.
+    """
+
+    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None):
         self.device = device
+        self.max_frames = max_frames
         self.tables = HostEmbeddings()
-        self.talker = TtTalker(device, preprocess_talker_parameters(device, num_layers=num_layers))
-        self.predictor = TtCodePredictor(device, preprocess_code_predictor_parameters(device))
-        self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device))
         self.talker_config = checkpoint.talker_config()
         self.groups = self.talker_config["code_predictor_config"]["num_code_groups"]
         self.eos = self.talker_config["codec_eos_token_id"]
+
+        # A prompt is n_text + 11 positions, so leave room for the longest text the
+        # tokenizer will hand back plus every frame plus the warmup slot past both.
+        self.prompt_room = self.talker_config.get("max_position_embeddings", 2048)
+        room = min(self.prompt_room, 512) + max_frames + 8
+        self.talker = TtTalkerCachedDecoder(device, preprocess_cached_talker_parameters(device), max_seq=room)
+        self.predictor = TtCodePredictorCachedDecoder(device, preprocess_cached_predictor_parameters(device))
+        self.codec = TtCodecDecoder(device, preprocess_codec_parameters(device))
         self.codec_head = ttnn.from_torch(
             self.tables.codec_head.t().contiguous(),
             dtype=ttnn.bfloat16,
@@ -158,17 +185,48 @@ class Qwen3TTSPipeline:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _to_device(self, tensor):
-        return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        self.generation = checkpoint.generation_config()
+        self.generator = None if seed is None else torch.Generator().manual_seed(seed)
 
-    def _talker_step(self, embeddings):
-        """Run the talker over the prompt so far; return the last hidden state and cb0 logits."""
-        length = embeddings.shape[1]
-        cos, sin, mask = self.talker.host_inputs(length)
-        hidden = self.talker(*(self._to_device(t) for t in (embeddings, cos, sin, mask)))
-        last = ttnn.slice(hidden, [0, length - 1, 0], [1, length, hidden.shape[2]])
-        logits = ttnn.linear(last, self.codec_head)
-        return ttnn.to_torch(last).float().reshape(1, 1, -1), ttnn.to_torch(logits).float().reshape(-1)
+    def _capture(self):
+        """Warm both decoders, then capture both, in that order.
+
+        A trace cannot compile new programs, so each decoder runs its step once eagerly
+        first. Those warmup buffers have to exist before the first trace does, and no
+        trace may execute until the last one is captured: capturing the predictor's after
+        the talker's had already run hung the device until it was reset.
+        """
+        self.talker.warmup()
+        self.predictor.warmup()
+        self.talker.capture()
+        self.predictor.capture()
+
+    def _pick(self, logits, seen=(), penalty=1.0):
+        """One id from a row of logits: the checkpoint's sampler, or argmax if told to."""
+        row = logits.detach().float().reshape(-1)
+        if not self.generation.get("do_sample", True):
+            return int(row.argmax())
+        return sampling.sample(
+            row,
+            seen=seen,
+            temperature=self.generation.get("temperature", 1.0),
+            top_k=self.generation.get("top_k", 0),
+            top_p=self.generation.get("top_p", 1.0),
+            penalty=penalty,
+            generator=self.generator,
+        )
+
+    def _inner_pick(self):
+        """The code predictor's sampler, which reads the `subtalker_*` settings."""
+        if not self.generation.get("subtalker_dosample", self.generation.get("do_sample", True)):
+            return None  # the predictor defaults to argmax
+        return lambda row: sampling.sample(
+            row,
+            temperature=self.generation.get("subtalker_temperature", 1.0),
+            top_k=self.generation.get("subtalker_top_k", 0),
+            top_p=self.generation.get("subtalker_top_p", 1.0),
+            generator=self.generator,
+        )
 
     def _frame_embedding(self, frame):
         """The 16 codebooks of one frame, summed, which becomes the next prompt position.
@@ -180,27 +238,50 @@ class Qwen3TTSPipeline:
             total = total + self.tables.predictor_tables[index][code].reshape(1, 1, -1)
         return total + self.tables.tts_pad
 
-    def generate(self, text, speaker="ryan", language="English", max_frames=400, on_frame=None):
+    def generate(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None):
         """text -> (waveform [1, N] at 24 kHz, codes [frames, 16]).
 
-        Greedy throughout. Upstream samples by default, and at its shipped
-        `repetition_penalty` of 1.05 that occasionally loops for dozens of frames before
-        speaking; greedy is both reproducible and free of that.
+        Sampled with the checkpoint's own settings. Pass `seed` to the constructor for a
+        reproducible run; the same seed and text give the same waveform.
         """
+        limit = min(max_frames or self.max_frames, self.max_frames)
         embeddings, _ = build_custom_voice_prefill(text, speaker, language, self.tables)
-        frames = []
+        prompt = embeddings.shape[1]
+        if prompt + limit + 1 > self.talker.max_seq:
+            raise ValueError(
+                f"prompt of {prompt} plus {limit} frames exceeds the cache's {self.talker.max_seq}; "
+                "build the pipeline with a larger max_frames"
+            )
 
-        for step in range(max_frames):
-            hidden, logits = self._talker_step(embeddings)
-            first = int(logits.argmax())
+        # A prefill is eager work, and eager work beside a live trace is what hangs the
+        # device, so every utterance releases, prefills, then captures again. That costs
+        # about two seconds per utterance and buys back the frame loop.
+        self.talker.release()
+        self.predictor.release()
+        self.talker.reset()
+        hidden = self.talker.prefill(embeddings)
+        last = ttnn.slice(hidden, [0, prompt - 1, 0], [1, prompt, hidden.shape[2]])
+        ttnn.deallocate(hidden)
+        self._capture()
+
+        inner = self._inner_pick()
+        penalty = self.generation.get("repetition_penalty", 1.0)
+        frames, seen = [], []
+        for step in range(limit):
+            logits = ttnn.linear(last, self.codec_head)
+            row = ttnn.to_torch(logits).float().reshape(-1)
+            ttnn.deallocate(logits)  # released before the next trace runs, or it aliases trace memory
+            first = self._pick(row, seen=seen, penalty=penalty)
             if first == self.eos:
                 break
-            rest = self.predictor.generate(hidden, first)
+            seen.append(first)
+
+            rest = self.predictor.generate(ttnn.to_torch(last).float().reshape(1, 1, -1), first, pick=inner)
             frame = [first] + list(rest)
             frames.append(frame)
             if on_frame is not None:
                 on_frame(step, frame)
-            embeddings = torch.cat([embeddings, self._frame_embedding(frame)], dim=1)
+            last = self.talker.step(self._frame_embedding(frame), prompt + step)
 
         if not frames:
             raise RuntimeError("the talker emitted end-of-speech before any frame")

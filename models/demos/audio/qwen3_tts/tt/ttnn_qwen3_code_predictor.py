@@ -193,12 +193,16 @@ class TtCodePredictor:
             positions.append(table[code].reshape(1, 1, -1))
         return torch.cat(positions, dim=1)
 
-    def generate(self, talker_hidden, first_code):
-        """Greedy decode of codebooks 1 to 15 from the talker's hidden state and codebook 0.
+    def generate(self, talker_hidden, first_code, pick=None):
+        """Codebooks 1 to 15, from the talker's hidden state and codebook 0.
+
+        `pick` maps one row of logits to an id, and defaults to argmax. See
+        `sampling.sample` for why the shipped configuration does not use argmax here.
 
         Recomputes the prefix each step rather than carrying a KV cache. 15 passes over at
         most 16 positions of a 5-layer model, which is cheap enough to leave for later.
         """
+        pick = pick or (lambda row: int(row.argmax()))
         codes = [int(first_code)]
         for step in range(self.groups - 1):
             embeddings = self.build_embeddings(talker_hidden, codes)
@@ -211,5 +215,5 @@ class TtCodePredictor:
             # The newest position is the last one, and step k reads it with lm_head[k].
             row = ttnn.slice(hidden, [0, length - 1, 0], [1, length, hidden.shape[2]])
             logits = ttnn.linear(row, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
-            codes.append(int(ttnn.to_torch(logits).float().reshape(-1).argmax()))
+            codes.append(int(pick(ttnn.to_torch(logits).float().reshape(-1))))
         return codes[1:]

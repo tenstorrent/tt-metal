@@ -17,14 +17,44 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 1 | Mel front-end, 128 bins at 24 kHz | host | **done** |
 | 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
 | 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
-| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **prefill done**, PCC 0.995 |
-| 5 | Code Predictor (5 layers, 15 steps per frame) | device | **done**, logits PCC 0.995 |
+| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **done**, PCC 0.995, KV cache + trace |
+| 5 | Code Predictor (5 layers, 15 steps per frame) | device | **done**, logits PCC 0.995, KV cache + trace |
 | 6 | Codec decoder → waveform (1920x) | device | **done**, waveform PCC 0.995 |
 | 7 | Dual-track prompt + decode loop | host + device | **done**, end to end |
+| 8 | Sampling (`sampling.py`) | host | **done**, matches `transformers` |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
 single position of the talker's prompt. Its width matches the talker's hidden size, so
 nothing projects between them.
+
+## Speed
+
+A CustomVoice utterance, 86 text tokens, on one P300 chip:
+
+| stage | time | per second of audio |
+|---|---|---|
+| prefill, 97 positions | 1.5 s | once per utterance |
+| talker + code predictor, 341 frames | 15.1 s | 0.55 s |
+| codec decoder | 7.9 s | 0.29 s |
+| **total for 27.3 s of speech** | **23.0 s** | **0.84x real time** |
+
+44 ms per frame, of which the talker's 28-layer step is 13 and the predictor's 15 steps are
+30. Both run from captured traces over a KV cache; the uncached talker step cost 2471 ms.
+
+The first run at any new codec length pays its kernel build: 48 s against 7.9 s for the same
+341 frames a second time. Length bucketing would flatten that and is not done yet.
+
+## Sampling
+
+The checkpoint ships `do_sample: true`, and the pipeline follows it. **Greedy decoding is
+not a safe simplification of this model.** Upstream's own package, on CPU, greedy, on a four
+sentence prompt: 699 frames of a 700 frame budget, speaking about half the text and filling
+the rest with a silence code. The same prompt sampled: 414 frames and a clean stop. The
+device behaves the same way for the same reason, so `sampling.py` reproduces the library's
+processor order (repetition penalty, then temperature, then top_k and top_p) and the
+pipeline reads the settings out of `generation_config.json`.
+
+Pass `seed` to `Qwen3TTSPipeline` for a reproducible run.
 
 ## Hardware
 
@@ -186,6 +216,7 @@ duplicate these tests or claim coverage that does not exist.
 |---|---|
 | `weights.py` | checkpoint resolution and the speaker-encoder weight reader |
 | `frontend.py` | host text path: tokenizer, prompt wrappers, language resolution |
+| `sampling.py` | host sampler, matching `transformers`' processor order |
 | `tt/` | TTNN blocks |
 | `reference/` | CPU references (PCC oracles); `reference/qwen/` is vendored upstream, Apache-2.0 |
 | `tests/` | host tests, `tests/pcc/` for device correctness |
