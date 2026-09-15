@@ -2026,6 +2026,41 @@ def dflash_width_set(max_context, num_blocks, horizon=None, verify=None, max_run
     return ladder
 
 
+def mtp_pv_width_ladder(max_context, draft_len, bucket=1024, max_rungs=None):
+    """Verify widths an MTP serving session can migrate through.
+
+    The packed verify's ``S_k`` is fixed per captured trace, and a replay may
+    only attend positions the mask it was captured with covers, so a session
+    needs ``S_k >= pos + K + 2`` at every position it reaches. Sizing one
+    capture to ``anchor_pos + horizon`` is what makes the horizon a hard
+    GENERATION BUDGET; a ladder lets the session move to a wider trace instead.
+
+    Doubling keeps the rung count logarithmic and bounds the wasted width at
+    <2x, which matters more here than for dFlash: the MTP masks are rebuilt on
+    the host and uploaded at ``[1, 1, P_v, S_k]`` on EVERY replay, so width is
+    per-iteration bandwidth, not just device footprint.
+
+    Pure: config-time arithmetic, no device and no model instance.
+    """
+
+    def _r(n):
+        return ((int(n) + bucket - 1) // bucket) * bucket
+
+    tail = int(draft_len) + 2
+    smallest = _r(tail)
+    largest = _r(int(max_context) + tail)
+    ladder, rung = [], smallest
+    while rung < largest:
+        ladder.append(rung)
+        rung = _r(rung * 2)
+    ladder.append(largest)
+    if max_rungs is not None and len(ladder) > int(max_rungs):
+        # Keep the LARGEST rungs: dropping a small rung only widens short
+        # prompts, while dropping the largest would leave long ones uncovered.
+        ladder = ladder[-int(max_rungs) :]
+    return ladder
+
+
 def _dflash_drafter_config(snapshot):
     """Read the drafter checkpoint's HF config. Pure: file read, no device."""
     import json as _json
@@ -3058,6 +3093,9 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         # dFlash class's _spec_active_owner for the async path that reaches it).
         self._spec_active_owner = None
         self._spec_first_step = True
+        self._spec_last_pt = None
+        # Verify-width ladder for the live session (see mtp_pv_width_ladder).
+        self._spec_width_ladder = None
         self._spec_horizon = int(os.environ.get("GEMMA4_MTP_SERVE_HORIZON", "2048"))
         logger.info(
             f"Gemma4MTP serving: K={self._SPEC_K} (N={self._SPEC_N}/step), "
@@ -3162,12 +3200,36 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             draft_len=self._SPEC_K,
         )
         spec._use_trace = True
-        spec.serving_setup(int(anchor_id), int(start), max_new_tokens=self._spec_horizon)
+        # WIDTH SET: a single capture sized to anchor + horizon makes the
+        # horizon a hard generation budget -- past it this class used to end the
+        # request with a full end-of-sequence row (review finding on
+        # tt-metal#56048, same shape as step 3 for dFlash). The ladder lets the
+        # session migrate to a wider trace instead. Only the rung this prompt
+        # needs is captured now, so TTFT is unchanged; the rest are captured on
+        # first crossing. Packed verify only -- the batch-dim verify has no
+        # width-dependent capture, so it never had the cap.
+        max_seq_len = int(getattr(self.model_args[0], "max_seq_len", 0))
+        ladder = None
+        if max_seq_len and spec._fused_packed_enabled():
+            ladder = mtp_pv_width_ladder(max_seq_len, self._SPEC_K)
+        if ladder:
+            spec.serving_setup_widths(int(anchor_id), int(start), ladder)
+        else:
+            spec.serving_setup(int(anchor_id), int(start), max_new_tokens=self._spec_horizon)
         self._spec = spec
+        self._spec_width_ladder = ladder
         self._spec_active_owner = self._spec_pt_identity(page_table)
         self._spec_cur = (int(anchor_id), int(start))
         self._spec_first_step = True
-        self._spec_budget_end = int(start) + self._spec_horizon - self._SPEC_N - 1
+        # The capture bound THIS table; re-stage only when it changes after it.
+        self._spec_last_pt = page_table[:1].clone() if page_table is not None else None
+        # With a ladder the reach is the WIDEST rung, not the horizon: the
+        # session migrates rather than stopping, so what remains here is a
+        # backstop at the end of the context (vLLM's own max_model_len stop
+        # arrives first). Without a ladder the horizon is still the budget.
+        self._spec_budget_end = (
+            max(ladder) - self._SPEC_K - 2 if ladder else int(start) + self._spec_horizon - self._SPEC_N - 1
+        )
         logger.info(
             f"Gemma4MTP session: seed+capture {_time.time()-t0:.1f}s " f"(anchor={int(anchor_id)}, start={start})"
         )
@@ -3226,6 +3288,33 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             # No session for this row (batched prefill, or a dropped non-owner
             # session): serve plain baseline, matching the reserved width.
             return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        # Re-stage the fused verify's page tables when vLLM's block table for
+        # this request CHANGES. The KV manager allocates a block only every
+        # ~block_size tokens, so a session captured at prefill holds the
+        # prompt's blocks and zeros past them: once generation crosses out of
+        # the prompt's last block the verify reads and WRITES the null block.
+        # The dFlash twin has always done this (refresh_page_tables); MTP
+        # claimed a one-time install sufficed because "block-output
+        # pre-allocates the full block table", which is not what the runner
+        # hands over -- the table's WIDTH is fixed at max_num_blocks_per_req,
+        # its CONTENT grows. Same finding as tt-metal#55548 D2 on the qwen36
+        # MTP verify trace, and here it also reaches the host map behind the
+        # per-iteration hot-block uploads (see refresh_page_tables).
+        cur_pt = kwargs.get("page_table")
+        if cur_pt is not None:
+            row = cur_pt[:1] if cur_pt.dim() > 1 else cur_pt
+            prev = getattr(self, "_spec_last_pt", None)
+            if prev is None or not torch.equal(prev, row):
+                if self._bounded_sliding_kv_cache:
+                    # Sliding layers ring on a static pool; the FULL-attention
+                    # table is the one that grows, so rebuild the hybrid set
+                    # from what the runner passed this step before re-staging.
+                    _ptpl = self._build_per_layer_page_tables(page_tables_per_layer, cur_pt)
+                    _ptpl = self._pad_sliding_page_tables_for_bounded(_ptpl, kwargs.get("kv_cache"), authoritative=True)
+                    if _ptpl:
+                        self.model[0]._active_page_tables_per_layer = _ptpl
+                self._spec.refresh_page_tables(row)
+                self._spec_last_pt = row.clone()
         cur_token, cur_pos = self._spec_cur
         if cur_pos >= self._spec_budget_end:
             logger.warning(
@@ -3321,6 +3410,8 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         self._spec_pending = None
         self._spec_pending_owner = None
         self._spec_active_owner = None
+        self._spec_last_pt = None
+        self._spec_width_ladder = None
         if self._spec is not None:
             self._spec.serving_release()
             self._spec = None

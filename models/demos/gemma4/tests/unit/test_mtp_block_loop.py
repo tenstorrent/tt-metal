@@ -29,6 +29,7 @@ class _StubSession:
         self.scripted = list(scripted)
         self.calls = []
         self.released = False
+        self.restaged = []
 
     def serving_step(self, cur_token, cur_pos):
         self.calls.append((cur_token, cur_pos))
@@ -37,6 +38,11 @@ class _StubSession:
 
     def serving_release(self):
         self.released = True
+
+    def refresh_page_tables(self, page_table):
+        """The decode path re-stages the captured page tables whenever vLLM's
+        block table for the request changes; record the rows it was given."""
+        self.restaged.append(page_table.clone())
 
 
 class _Harness:
@@ -155,6 +161,8 @@ def _live_session_instance(monkeypatch, scripted, owner, baseline="baseline-out"
     h._spec_budget_end = 10_000
     h._spec_horizon = 2048
     h._spec_first_step = False
+    h._spec_last_pt = None  # nothing staged yet -> the first step stages
+    h._bounded_sliding_kv_cache = False
     h.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
     return h
 
@@ -198,3 +206,41 @@ def test_live_session_is_served_for_its_own_owner(monkeypatch):
 
     assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
     assert h._spec is not None
+
+
+def test_page_tables_are_restaged_when_the_block_table_changes(monkeypatch):
+    """vLLM allocates a KV block only every block_size tokens, so a session
+    captured at prefill holds the prompt's blocks and zeros past them. The
+    fused verify binds its page tables at capture, so without a re-stage it
+    reads AND writes the null block once generation crosses out of the
+    prompt's last block (tt-metal#55548 D2 on the qwen36 MTP trace; here it
+    also reaches the host map behind the per-iteration hot-block uploads).
+    """
+    pt = torch.tensor([[3, 4, 5, 0]], dtype=torch.int32)
+    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]] * 4, None)
+    session = h._spec
+
+    h.decode_forward(
+        tokens=torch.tensor([[11]], dtype=torch.int32),
+        start_pos=torch.tensor([[100]], dtype=torch.int32),
+        page_table=pt,
+    )
+    assert len(session.restaged) == 1  # first step stages the current table
+
+    # Same table on the next step: nothing to do.
+    h.decode_forward(
+        tokens=torch.tensor([[26]], dtype=torch.int32),
+        start_pos=torch.tensor([[106]], dtype=torch.int32),
+        page_table=pt,
+    )
+    assert len(session.restaged) == 1
+
+    # A newly allocated block appears -> re-stage.
+    grown = torch.tensor([[3, 4, 5, 9]], dtype=torch.int32)
+    h.decode_forward(
+        tokens=torch.tensor([[26]], dtype=torch.int32),
+        start_pos=torch.tensor([[112]], dtype=torch.int32),
+        page_table=grown,
+    )
+    assert len(session.restaged) == 2
+    assert session.restaged[-1].reshape(-1).tolist() == [3, 4, 5, 9]
