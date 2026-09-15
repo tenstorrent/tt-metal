@@ -970,7 +970,7 @@ TEST(CyclicSdpaBwGroupTest, FourGroupsWithTallBlocks) {
 // Everything above builds its own program. This is the op: it derives the
 // layout from the tensor shapes and the device's grid, allocates its own
 // outputs, and is what a model would call.
-void check_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32_t d = 64) {
+void check_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32_t d = 64, uint32_t max_groups = 0) {
     auto* device = &ttml::autograd::ctx().get_device();
     const uint32_t N = 2u * C * Bt * kTile;
     const auto ref = make_reference(N, d);
@@ -984,8 +984,9 @@ void check_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32
     const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
         repeat_4d(ref.u_tile, slices), device);
 
-    const auto [grad_query, grad_key, grad_value] =
-        ttml::metal::cyclic_sdpa_bw(query, key, value, grad_output, lse, row_scalar, Bt, use_barrier);
+    const auto [grad_query, grad_key, grad_value] = ttml::metal::cyclic_sdpa_bw(
+        query, key, value, grad_output, lse, row_scalar, Bt, use_barrier, ttml::metal::AttentionMaskType::Causal,
+        /* accumulate */ false, std::nullopt, std::nullopt, std::nullopt, max_groups);
 
     const auto dQ = ttml::core::to_xtensor(grad_query);
     const auto dK = ttml::core::to_xtensor(grad_key);
@@ -1001,7 +1002,7 @@ void check_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32
 // The unmasked schedule, through the same op. C follows from N and Bt as
 // usual; what changes is that the schedule covers every block pair rather
 // than the causal triangle, in 2T timesteps rather than T + 1.
-void check_dense_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32_t d = 64) {
+void check_dense_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32_t d = 64, uint32_t max_groups = 0) {
     auto* device = &ttml::autograd::ctx().get_device();
     const uint32_t N = 2u * C * Bt * kTile;
     const auto ref = make_dense_reference(N, d);
@@ -1016,8 +1017,8 @@ void check_dense_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, 
         repeat_4d(ref.u_tile, slices), device);
 
     const auto [grad_query, grad_key, grad_value] = ttml::metal::cyclic_sdpa_bw(
-        query, key, value, grad_output, lse, row_scalar, Bt, use_barrier,
-        ttml::metal::AttentionMaskType::None);
+        query, key, value, grad_output, lse, row_scalar, Bt, use_barrier, ttml::metal::AttentionMaskType::None,
+        /* accumulate */ false, std::nullopt, std::nullopt, std::nullopt, max_groups);
 
     const auto dQ = ttml::core::to_xtensor(grad_query);
     const auto dK = ttml::core::to_xtensor(grad_key);
@@ -1178,6 +1179,72 @@ TEST(CyclicSdpaBwDenseOpTest, BarrierAndEndpointAgreeBitwise) {
     for (uint32_t k = 0; k < 3u; ++k) {
         EXPECT_TRUE(with_barrier[k] == with_endpoints[k])
             << names[k] << " differs between the barrier and endpoint variants of the dense schedule";
+    }
+}
+
+// ---------------------------------------------------------- the slice loop
+// More slices than groups: the groups run their slices in turn inside one
+// launch. Forced here with max_groups at a size where everything would fit,
+// so the loop itself is what is under test -- slot parity and tags carried
+// across a slice boundary by the global timestep, the previous slice's last
+// column popped at the next slice's start, visited flags reset per slice.
+// Uneven counts (5 slices over 2 groups) put a group on its last slice while
+// its neighbour has one more to run.
+TEST(CyclicSdpaBwOpTest, SlicesLoopWithinAGroup) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 6, /* use_barrier */ false, 64, /* max_groups */ 2);
+}
+
+TEST(CyclicSdpaBwOpTest, SlicesLoopUnevenly) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 5, /* use_barrier */ false, 64, /* max_groups */ 2);
+}
+
+TEST(CyclicSdpaBwOpTest, SlicesLoopOnOneGroup) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 3, /* use_barrier */ false, 64, /* max_groups */ 1);
+}
+
+TEST(CyclicSdpaBwOpTest, SlicesLoopWithTallBlocks) {
+    check_op(/* C */ 4, /* Bt */ 2, /* slices */ 4, /* use_barrier */ false, 64, /* max_groups */ 2);
+}
+
+// The barrier variant loops too: its arrival counter and release value are
+// global timesteps now, and must keep rising across the boundary.
+TEST(CyclicSdpaBwOpTest, SlicesLoopWithTheBarrier) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 4, /* use_barrier */ true, 64, /* max_groups */ 2);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, SlicesLoopWithinAGroup) {
+    check_dense_op(/* C */ 4, /* Bt */ 1, /* slices */ 6, /* use_barrier */ false, 64, /* max_groups */ 2);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, SlicesLoopUnevenly) {
+    check_dense_op(/* C */ 4, /* Bt */ 1, /* slices */ 5, /* use_barrier */ false, 64, /* max_groups */ 2);
+}
+
+// Looping must give the same bits as running the slices side by side: the
+// per-slice arithmetic is identical, only the order in time changes.
+TEST(CyclicSdpaBwOpTest, LoopedSlicesMatchSideBySideBitwise) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    constexpr uint32_t C = 4u, Bt = 1u, d = 64u, slices = 4u;
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto ref = make_reference(N, d);
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, slices), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, slices), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, slices), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, slices), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.lse_tile, slices), device);
+    const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.u_tile, slices), device);
+    const auto run = [&](uint32_t max_groups) {
+        const auto [dq, dk, dv] = ttml::metal::cyclic_sdpa_bw(
+            query, key, value, grad_output, lse, row_scalar, Bt, false, ttml::metal::AttentionMaskType::Causal,
+            false, std::nullopt, std::nullopt, std::nullopt, max_groups);
+        return std::array<xt::xarray<float>, 3>{
+            ttml::core::to_xtensor(dq), ttml::core::to_xtensor(dk), ttml::core::to_xtensor(dv)};
+    };
+    const auto side_by_side = run(0);
+    const auto looped = run(1);
+    const char* names[] = {"dQ", "dK", "dV"};
+    for (uint32_t k = 0; k < 3u; ++k) {
+        EXPECT_TRUE(side_by_side[k] == looped[k]) << names[k] << " differs when the slices are looped";
     }
 }
 

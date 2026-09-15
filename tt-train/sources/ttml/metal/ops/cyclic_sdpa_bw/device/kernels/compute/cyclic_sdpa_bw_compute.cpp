@@ -367,6 +367,9 @@ void grad_scores_and_transposes(uint32_t a, uint32_t b) {
 
 void kernel_main() {
     const uint32_t my_core = get_arg_val<uint32_t>(0);
+    // Slices this group runs in sequence; see the relay reader. This kernel
+    // touches no DRAM, so it needs only the count, not which slices.
+    const uint32_t slice_count = get_arg_val<uint32_t>(1);
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
     constexpr CyclicSchedule sched(kCores, kMaskMode);
@@ -391,8 +394,17 @@ void kernel_main() {
     matmul_init(cb_query, cb_key);
     cb_wait_front(cb_attn_mask, onetile);
 
+    for (uint32_t s = 0; s < slice_count; ++s) {
+#if COLUMN_RESIDENT
+    // A new slice is a new problem: its columns have not been visited, and
+    // its first update to each column gradient writes rather than adds.
+    visited[0] = false;
+    visited[1] = false;
+    column_accumulating = false;
+#endif
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
+        const uint32_t g = s * kTimesteps + t;  // global timestep across slices
         // Dense mode masks nothing, so a pair with i == j is an ordinary
         // full block there and must not take the triangular mask.
         const bool diagonal = (DENSE_MODE == 0) && (pair.i == pair.j);
@@ -404,7 +416,7 @@ void kernel_main() {
         const bool column_ends =
             (t + 1u == kTimesteps) || (sched.pair(my_core, t + 1u).j != pair.j);
         const uint32_t owned_slot = (pair.j == owned.first) ? 0u : 1u;
-        if (column_changed && t > 0u) {
+        if (column_changed && g > 0u) {
             cb_pop_front(cb_key, Bt * qWt);
             cb_pop_front(cb_value, Bt * vWt);
 #if FOLD_SCALE_INTO_KEY
@@ -771,4 +783,5 @@ void kernel_main() {
         cb_push_back(cb_slot_release, 1);
 #endif
     }
+    }  // slices
 }

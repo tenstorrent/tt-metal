@@ -52,7 +52,7 @@ constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
-    const uint32_t bh = get_arg_val<uint32_t>(arg++);  // this group's slice
+    const uint32_t first_slice = get_arg_val<uint32_t>(arg++);  // this group's first slice
     const uint32_t grad_key_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t grad_value_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t coord_noc_x = get_arg_val<uint32_t>(arg++);
@@ -62,6 +62,10 @@ void kernel_main() {
     const uint32_t mcast_x_end = get_arg_val<uint32_t>(arg++);
     const uint32_t mcast_y_end = get_arg_val<uint32_t>(arg++);
     const uint32_t is_coordinator = get_arg_val<uint32_t>(arg++);
+    // Slices this group runs in sequence, and the stride between them; see
+    // the relay reader.
+    const uint32_t slice_count = get_arg_val<uint32_t>(arg++);
+    const uint32_t slice_stride = get_arg_val<uint32_t>(arg++);
 
     constexpr uint32_t kCores = get_compile_time_arg_val(0);
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
@@ -91,8 +95,8 @@ void kernel_main() {
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
     const auto grad_value = TensorAccessor(grad_value_args, grad_value_addr, grad_bytes);
-    const uint32_t row_base = bh * 2u * kCores * row_tiles;
-    const uint32_t val_base = bh * 2u * kCores * val_tiles;
+    uint32_t row_base = 0;  // per slice
+    uint32_t val_base = 0;
 
 #if ENDPOINT_SYNC
     volatile tt_l1_ptr uint32_t* column_progress =
@@ -108,8 +112,15 @@ void kernel_main() {
     const uint64_t release_mcast_addr = get_noc_multicast_addr(
         mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, get_semaphore(release_sem_id));
 
+    for (uint32_t s = 0; s < slice_count; ++s) {
+    const uint32_t bh = first_slice + s * slice_stride;
+    row_base = bh * 2u * kCores * row_tiles;
+    val_base = bh * 2u * kCores * val_tiles;
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
+        // Global timestep across slices; the progress word and the barrier
+        // counter must keep rising across a slice boundary.
+        const uint32_t g = s * kTimesteps + t;
 
         // The column gradients are handed over once per residency interval,
         // at its end -- which the schedule says is a column change or the
@@ -125,7 +136,7 @@ void kernel_main() {
 
 #if ENDPOINT_SYNC
         // This core's own reader is the only thing waiting on these writes.
-        *column_progress = t + 1u;
+        *column_progress = g + 1u;
 #else
         noc_semaphore_inc(arrive_noc_addr, 1u);
 
@@ -133,18 +144,19 @@ void kernel_main() {
             WAYPOINT("ARVW");
             do {
                 invalidate_l1_cache();
-            } while ((*arrive_sem) < kCores * (t + 1u));
+            } while ((*arrive_sem) < kCores * (g + 1u));
             WAYPOINT("ARVD");
             if constexpr (kCores == 1u) {
                 volatile tt_l1_ptr uint32_t* release_local =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(release_sem_id));
-                noc_semaphore_set(release_local, t + 1u);
+                noc_semaphore_set(release_local, g + 1u);
             } else {
-                *scratch = t + 1u;
+                *scratch = g + 1u;
                 noc_semaphore_set_multicast_loopback_src(scratch_l1, release_mcast_addr, kCores);
                 noc_async_write_barrier();
             }
         }
 #endif
     }
+    }  // slices
 }

@@ -6,6 +6,7 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <map>
@@ -45,7 +46,8 @@ CyclicLayout plan_layout(
     const tt::tt_metal::CoreCoord& compute_grid,
     uint32_t sequence_length,
     uint32_t rows_per_block_tiles,
-    uint32_t slices) {
+    uint32_t slices,
+    uint32_t max_groups) {
     const uint32_t block_rows = rows_per_block_tiles * kTile;
     TT_FATAL(
         rows_per_block_tiles >= 1U && rows_per_block_tiles <= 4U,
@@ -64,7 +66,8 @@ CyclicLayout plan_layout(
 
     CyclicLayout layout;
     layout.cores_per_group = sequence_length / (2U * block_rows);
-    layout.groups = slices;
+    layout.slices = slices;
+    TT_FATAL(slices >= 1U, "cyclic_sdpa_bw: at least one (batch x head) slice is needed");
     const uint32_t C = layout.cores_per_group;
     TT_FATAL(C >= 1U, "cyclic_sdpa_bw: the schedule needs at least one core, got {}", C);
 
@@ -107,19 +110,15 @@ CyclicLayout plan_layout(
         C,
         grid_x,
         grid_y);
-    TT_FATAL(
-        slices <= best_capacity,
-        "cyclic_sdpa_bw: {} (batch x head) slices of {} cores each do not fit a {}x{} grid, which "
-        "holds {} such groups. Splitting the batch across invocations is the way round this; the "
-        "kernels run one schedule per group and do not loop over slices.",
-        slices,
-        C,
-        grid_x,
-        grid_y,
-        best_capacity);
+    // As many groups as fit and are useful, capped if asked; the slices they
+    // do not cover side by side, they take in turn.
+    layout.groups = std::min(slices, best_capacity);
+    if (max_groups != 0U) {
+        layout.groups = std::min(layout.groups, max_groups);
+    }
 
     std::vector<tt::tt_metal::CoreRange> ranges;
-    for (uint32_t g = 0; g < slices; ++g) {
+    for (uint32_t g = 0; g < layout.groups; ++g) {
         const tt::tt_metal::CoreCoord origin{
             (g % layout.groups_across) * layout.group_width,
             (g / layout.groups_across) * layout.group_height};
@@ -156,7 +155,8 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     const uint32_t N = static_cast<uint32_t>(shape[2]);
     const uint32_t d = static_cast<uint32_t>(shape[3]);
 
-    const auto layout = plan_layout(device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices);
+    const auto layout = plan_layout(
+        device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, args.max_groups);
     const uint32_t C = layout.cores_per_group;
     const uint32_t Bt = args.rows_per_block_tiles;
     const uint32_t qWt = d / kTile;
@@ -343,6 +343,12 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
                 rt.push_back(static_cast<uint32_t>(rc.x));
                 rt.push_back(static_cast<uint32_t>(rc.y));
             }
+            // The slices this group runs in sequence, and the stride to the
+            // next one. Appended after the coordinates so the address slots
+            // that override_runtime_arguments patches stay where they are.
+            const uint32_t slice_count = slices_of_group(layout, g);
+            rt.push_back(slice_count);
+            rt.push_back(layout.groups);
             SetRuntimeArgs(program, reader, core, rt);
             SetRuntimeArgs(
                 program, writer, core,
@@ -350,8 +356,8 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
                  static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
                  static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
                  static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
-                 c == 1U ? 1U : 0U});
-            SetRuntimeArgs(program, compute, core, {c});
+                 c == 1U ? 1U : 0U, slice_count, layout.groups});
+            SetRuntimeArgs(program, compute, core, {c, slice_count});
         }
     }
 

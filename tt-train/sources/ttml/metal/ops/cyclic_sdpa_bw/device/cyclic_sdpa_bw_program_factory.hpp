@@ -20,17 +20,29 @@ struct CyclicLayout {
     uint32_t cores_per_group{};   // C
     uint32_t group_width{};       // grid_w, with group_width * group_height == C
     uint32_t group_height{};      // grid_h
-    uint32_t groups{};            // one per (batch, head) slice
+    uint32_t slices{};            // (batch, head) slices in the launch
+    uint32_t groups{};            // rectangles running side by side, <= slices
     uint32_t groups_across{};     // how many fit along x before wrapping
     std::vector<tt::tt_metal::CoreCoord> group_origin;
     tt::tt_metal::CoreRangeSet region;  // the union, never the bounding box
 };
 
+// Slices are dealt round-robin to the groups: group g runs slices
+// g, g + groups, g + 2 groups, ... in sequence inside the one launch. So a
+// launch may carry more slices than the grid has rectangles for; the groups
+// simply loop. max_groups caps the number of groups (0 = as many as fit),
+// which is how a test forces the loop at a size where everything would fit.
 CyclicLayout plan_layout(
     const tt::tt_metal::CoreCoord& compute_grid,
     uint32_t sequence_length,
     uint32_t rows_per_block_tiles,
-    uint32_t slices);
+    uint32_t slices,
+    uint32_t max_groups = 0);
+
+//: How many slices group g runs.
+inline uint32_t slices_of_group(const CyclicLayout& layout, uint32_t g) {
+    return g < layout.slices ? (layout.slices - g + layout.groups - 1u) / layout.groups : 0u;
+}
 
 struct CyclicSDPABackwardProgramFactory {
     struct shared_variables_t {

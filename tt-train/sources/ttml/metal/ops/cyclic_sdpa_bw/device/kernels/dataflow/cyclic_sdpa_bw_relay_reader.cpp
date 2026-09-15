@@ -130,7 +130,7 @@ void kernel_main() {
     // holds one independent schedule per group -- the snake never leaves a
     // group, so nothing crosses between them -- and a group touches only its
     // own slice of every tensor.
-    const uint32_t bh = get_arg_val<uint32_t>(arg++);
+    const uint32_t first_slice = get_arg_val<uint32_t>(arg++);
     const uint32_t query_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t key_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t value_addr = get_arg_val<uint32_t>(arg++);
@@ -150,6 +150,12 @@ void kernel_main() {
     const uint32_t core_coords_arg = arg;
 
     constexpr uint32_t kCores = get_compile_time_arg_val(0);
+    // How many (batch, head) slices this group runs, one after another, and
+    // the stride between them: slices are dealt round-robin to groups, so the
+    // group's k-th slice is first_slice + k * stride. This is what lets a
+    // launch carry more slices than the grid has rectangles for.
+    const uint32_t slice_count = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores);
+    const uint32_t slice_stride = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 1u);
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
     constexpr uint32_t vWt = get_compile_time_arg_val(2);
     constexpr uint32_t release_sem_id = get_compile_time_arg_val(3);
@@ -237,9 +243,10 @@ void kernel_main() {
     const uint32_t stride_interm = Bt * interm_bytes;
     const uint32_t stride_grad_query = row_tiles * grad_bytes;
     // T = 2C blocks of Bt tiles each, so a slice is 2 * kCores * Bt tile rows.
-    const uint32_t row_base = bh * 2u * kCores * row_tiles;
-    const uint32_t val_base = bh * 2u * kCores * val_tiles;
-    const uint32_t stat_base = bh * 2u * kCores * Bt;
+    // Per slice; set at the top of each slice below.
+    uint32_t row_base = 0;
+    uint32_t val_base = 0;
+    uint32_t stat_base = 0;
 
     volatile tt_l1_ptr uint32_t* release_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(release_sem_id));
@@ -277,7 +284,7 @@ void kernel_main() {
     // Which columns this core owns, and whether each has been resident.
     const auto owned = sched.owned_columns(my_core);
     const uint32_t owned_column[2] = {owned.first, owned.second};
-    bool visited[2] = {false, false};
+    bool visited[2] = {false, false};  // reset per slice
 
     uint32_t sent_to_prev = 0;
     uint32_t sent_to_next = 0;
@@ -333,6 +340,21 @@ void kernel_main() {
     // release two timesteps before those, so the receivers grant them up
     // front. Increments are atomic and order-independent, so this needs no
     // synchronisation of its own.
+    for (uint32_t s = 0; s < slice_count; ++s) {
+    const uint32_t bh = first_slice + s * slice_stride;
+    row_base = bh * 2u * kCores * row_tiles;
+    val_base = bh * 2u * kCores * val_tiles;
+    stat_base = bh * 2u * kCores * Bt;
+    visited[0] = false;
+    visited[1] = false;
+
+    // Initial permissions for this slice's destination timesteps 0 and 1.
+    // Safe to grant here even though the compute kernel may still be on the
+    // previous slice's last pair: this reader only reaches the top of a
+    // slice after that pair's slot-release token, and pops are in order, so
+    // both slots are free. Credits are monotone counters per (producer,
+    // receiver), and the sequence of grants and forwards between a pair
+    // repeats identically per slice, so the counts stay matched.
     for (uint32_t u = 0; u < 2u && u < kTimesteps; ++u) {
         const auto initial = sched.producer(my_core, u);
         if (initial.internal && initial.core != my_core) {
@@ -346,7 +368,15 @@ void kernel_main() {
         const auto pair = sched.pair(my_core, t);
         const uint32_t i = pair.i;
         const uint32_t j = pair.j;
-        const uint32_t slot = t % 2u;
+        // The global timestep across slices. Everything that must stay
+        // monotone or consistent with a circular buffer's write pointer --
+        // slot parity, readiness tags, endpoint values, progress words --
+        // is derived from it. The schedule itself is per slice and uses t.
+        // With T + 1 odd, a slice boundary would otherwise land two
+        // consecutive uses on the same slot while the receiver's pointer
+        // had moved on.
+        const uint32_t g = s * kTimesteps + t;
+        const uint32_t slot = g % 2u;
 
         // Column state, resident for a whole residency interval: K_j and V_j
         // are read only when the column changes, which the schedule says
@@ -375,11 +405,11 @@ void kernel_main() {
 #if ENDPOINT_SYNC
                 do {
                     invalidate_l1_cache();
-                } while ((*column_progress) < t);
+                } while ((*column_progress) < g);
 #else
                 do {
                     invalidate_l1_cache();
-                } while ((*release_sem) < t);
+                } while ((*release_sem) < g);
 #endif
                 WAYPOINT("COLD");
                 read_tiles_by_row(cb_grad_key_seed, grad_key, row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
@@ -414,7 +444,7 @@ void kernel_main() {
             WAYPOINT("RDYW");
             do {
                 invalidate_l1_cache();
-            } while ((*ready_imm_sem[slot]) < t + 1u);
+            } while ((*ready_imm_sem[slot]) < g + 1u);
             WAYPOINT("RDYD");
         } else {
             // A streak start: load the packet from DRAM. dQ_i must carry
@@ -425,7 +455,7 @@ void kernel_main() {
                 // threshold certifies that actual spill, not the inactive
                 // timestep t - 1.
                 const uint32_t e = sched.spill_endpoint(i, t);
-                const uint32_t want = sched.endpoint_threshold(i, t);
+                const uint32_t want = s * kTimesteps + sched.endpoint_threshold(i, t);
                 const uint32_t endpoint_x = get_arg_val<uint32_t>(core_coords_arg + 2u * (e - 1u));
                 const uint32_t endpoint_y =
                     get_arg_val<uint32_t>(core_coords_arg + 2u * (e - 1u) + 1u);
@@ -475,7 +505,7 @@ void kernel_main() {
         // computed anything: the packet carries them unchanged, so they never
         // depend on the arithmetic. Only dQ does.
         const uint32_t receiver = sched.next_consumer(i, t);
-        const uint32_t u = t + 1u;
+        const uint32_t u = g + 1u;  // destination global timestep
         const uint32_t dst = u % 2u;
         const uint32_t dst_query = base_query + dst * stride_query;
         const uint32_t dst_grad_output = base_grad_output + dst * stride_grad_output;
@@ -531,7 +561,7 @@ void kernel_main() {
             WAYPOINT("DQRW");
             do {
                 invalidate_l1_cache();
-            } while ((*ready_dq_sem[slot]) < t + 1u);
+            } while ((*ready_dq_sem[slot]) < g + 1u);
             WAYPOINT("DQRD");
         } else {
             DeviceZoneScopedN("LOAD-DQ-DRAM");
@@ -581,7 +611,7 @@ void kernel_main() {
             if (sched.has_later_active(i, t)) {
                 // The spill above has completed, so this value certifies it.
                 // One local write: consumers read it from here.
-                noc_semaphore_set(endpoint_sem[my_core - 1u], t + 1u);
+                noc_semaphore_set(endpoint_sem[my_core - 1u], g + 1u);
             }
 #endif
         }
@@ -611,6 +641,7 @@ void kernel_main() {
             }
         }
     }
+    }  // slices
 
     // Drain what is still in flight before the kernel ends: the readiness and
     // endpoint writes are issued without waiting for their acks, and a
