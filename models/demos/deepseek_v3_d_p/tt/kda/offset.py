@@ -22,8 +22,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CHUNK_SIZE
-
 
 @dataclass(frozen=True)
 class OffsetTopology:
@@ -63,32 +61,16 @@ class OffsetTopology:
         return (chip - 1) % self.sp_size
 
 
-def offset_topology(actual_start: int, sp_size: int, local_rows: int) -> OffsetTopology:
-    """Derive the chronological topology for ``actual_start`` on an SP ring.
+def _offset_topology(actual_start: int, sp_size: int, local_rows: int) -> OffsetTopology:
+    """Derive topology from layer-validated inputs for ``actual_start`` on an SP ring.
 
     ``actual_start`` is the absolute global position of the chunk's first token.
     Only ``actual_start`` modulo the global chunk size affects the topology, so
     the result is bounded and safe as a program-cache key.
     """
-    if sp_size <= 0:
-        raise ValueError(f"sp_size must be positive, got {sp_size}")
-    if local_rows <= 0:
-        raise ValueError(f"local_rows must be positive, got {local_rows}")
-    if actual_start < 0:
-        raise ValueError(f"actual_start must be non-negative, got {actual_start}")
-    if actual_start % KDA_CHUNK_SIZE:
-        raise ValueError(f"actual_start must be a multiple of {KDA_CHUNK_SIZE}, got {actual_start}")
-
     start = actual_start % (sp_size * local_rows)
     tail_rows = start % local_rows
     head_rows = local_rows - tail_rows
-    # Only a split constrains the geometry: each segment must hold whole KDA
-    # chunks, so the boundary chip's two pieces must both be chunk-aligned.
-    if tail_rows and (head_rows % KDA_CHUNK_SIZE or tail_rows % KDA_CHUNK_SIZE):
-        raise ValueError(
-            f"actual_start {actual_start} splits chip {(start // local_rows) % sp_size} into "
-            f"{head_rows}+{tail_rows} rows, which are not both multiples of {KDA_CHUNK_SIZE}"
-        )
     return OffsetTopology(
         sp_size=sp_size,
         local_rows=local_rows,

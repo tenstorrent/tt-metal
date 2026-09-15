@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, offset_topology
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, _offset_topology
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -284,7 +284,7 @@ def _distributed_recurrence_case(
         sequence_parallel_axis=sp_axis,
     )
     sp_size = tuple(mesh_device.shape)[sp_axis]
-    topology = offset_topology(0, sp_size, sequence // sp_size)
+    topology = _offset_topology(0, sp_size, sequence // sp_size)
     return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, topology
 
 
