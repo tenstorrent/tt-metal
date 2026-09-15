@@ -4,7 +4,6 @@
 import os
 import time
 from collections import defaultdict
-from dataclasses import dataclass
 
 import torch
 from loguru import logger
@@ -1933,43 +1932,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 # vLLM's speculative_config stays unset -- the platform assert is untouched.
 
 
-@dataclass(frozen=True)
-class SpecPlan:
-    """Model side of the plugin speculative contract (vllm-tt-plugin#110 s.2).
-
-    Returned by ``spec_plan`` at CONFIG time, before any device allocation. The
-    plugin reads it to size its lane and memory budgets and to publish
-    ``effective_k`` back to ``speculative_config.num_speculative_tokens``.
-
-    The plugin does not define these types yet (the runner side of #110 is
-    unimplemented), so they live here and are consumed structurally.
-    """
-
-    effective_k: int
-    lanes_per_request: int
-    extra_bytes_per_seq: int
-    extra_bytes_per_token: int
-    accept_modes: tuple
-    drafter_state: str
-    drafter_target_cache_requires: tuple = ()
-    supports_narrow_decode: bool = False
-
-
-@dataclass(frozen=True)
-class SpecReject:
-    """Speculation unavailable at this ``(max_num_seqs, K)``. See SpecPlan."""
-
-    reason: str
-    supported_k: tuple = ()
-
-
 def dflash_pv_bucket_ladder(max_context, horizon=None, verify=None, max_rungs=None):
     """The ENUMERABLE set of packed-verify buckets a dFlash server can serve.
 
     ``DFlashFusedDecoder.pv_bucket`` keys the fused trace on
     ``round_up_1024(start + horizon + P_v + 64)``, i.e. on the PROMPT LENGTH, so
-    a 256K server has ~258 possible buckets -- far too many to pre-capture. That
-    is why capture is per session today.
+    a 256K server has ~258 possible buckets -- far too many to pre-capture, which
+    is why capture is per session today. Per-session capture is the part that
+    does not conform: section 8 bans a capture that happens during serving, or
+    one whose shape can only be known once a request exists. A FIXED SET of
+    verify widths chosen at config time is conformant -- every width is known
+    before the first request and captured in warmup -- so this ladder is what
+    makes the fused verify admissible, not merely a capture-count optimisation.
 
     The set becomes enumerable because a bucket captured LARGER than a request
     needs is numerically EXACT for it: ``_pv_setup`` caps S_k at capture and
@@ -1980,7 +1954,7 @@ def dflash_pv_bucket_ladder(max_context, horizon=None, verify=None, max_rungs=No
 
     The ladder doubles from the smallest useful rung to the largest a request
     can reach, which bounds the waste at <2x the exact bucket while keeping the
-    rung count logarithmic in the context (10 rungs at 256K).
+    rung count logarithmic in the context (8 rungs at 256K, worst waste 1.50x).
 
     Pure: config-time arithmetic, no device and no model instance. Returns
     ascending 1024-aligned bucket sizes.
@@ -2134,6 +2108,24 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # also be deployed as a plain batched baseline (max_num_seqs>1) for the
         # concurrency>1 / throughput operating point -- see decode_forward.
         "output_tokens_per_step": _SPEC_BLOCK,
+        # -- plugin speculative contract admission (vllm-tt-plugin#125) -----
+        # Master gate. The plugin reads these four only when the launch carries
+        # a speculative_config, and refuses the launch if this is absent.
+        "supports_spec_decode": True,
+        # What this drafter needs of the runner. dFlash drafts ON DEVICE from
+        # the target's hidden state, so device_propose + hidden_feed. It owns no
+        # paged drafter cache (its context cache is a fixed window), so
+        # paged_drafter_cache is deliberately NOT declared -- the plugin refuses
+        # that requirement outright since the TT backend cannot allocate it.
+        "spec_requirements": ("device_propose", "hidden_feed"),
+        # The hidden state never leaves the device: the fused verify hands it to
+        # the drafter in-body. Required whenever hidden_feed is required.
+        "spec_hidden_handoff": ("on_device",),
+        # NOTE output_tokens_per_step below must be 1 for the CONTRACT rail; a
+        # value above 1 selects the block-output rail, which #110 states cannot
+        # be combined with speculation. So the contract rail is reachable only
+        # with GEMMA4_DFLASH_SERVE_BLOCK=1, and the plugin reports the conflict
+        # rather than silently picking a rail.
         # ADAPTIVE block-output: emit the spec block only when decoding ALONE
         # (batch==1); batch>1 decodes as plain baseline (exactly 1 token per
         # request, width-1 row -- the adaptive scheduler reserved exactly one
@@ -2175,6 +2167,14 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         range, and concurrency above one request is not speculable.
         """
         del vllm_config  # nothing here is config-derived yet; see docstring
+
+        # The PLUGIN owns these types (vllm_tt_plugin.spec_decode, merged in
+        # vllm-tt-plugin#120) and its admission path does
+        # ``isinstance(outcome, SpecReject)``. Returning a locally defined
+        # look-alike would make that check False and a reject would be read as
+        # a plan. Imported lazily: tt-metal must not import the plugin at
+        # module scope.
+        from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
         if max_num_seqs > 1:
             return SpecReject(
@@ -2270,6 +2270,14 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # _spec_pt_identity). The session is a single global slot, so a solo
         # decode must refuse taps captured for a different prompt.
         self._spec_pending_owner = None
+        # Identity of the request an ACTIVE session belongs to. _spec_pending_owner
+        # covers only the pre-bootstrap window; once bootstrapped it is cleared,
+        # so without this an active session had NO ownership check at all and a
+        # solo decode step scheduled for a non-owner re-pointed the fused decoder
+        # at that request's page table and emitted a full block speculated from
+        # the owner's residual taps -- wrong tokens against a single reserved
+        # placeholder (review finding on tt-metal#56048 / vllm-tt-plugin#118.1).
+        self._spec_active_owner = None
         self._spec_active = False
         self._spec_horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
         logger.info(
@@ -2352,6 +2360,17 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         falls back to True: that is the pre-existing single-session behaviour,
         and the scheduler's mirror still owns the width contract."""
         owner = self._spec_pending_owner
+        cur = self._spec_pt_identity(page_table)
+        if owner is None or cur is None:
+            return True
+        return owner == cur
+
+    def _spec_active_is_mine(self, page_table):
+        """True when the LIVE session belongs to the request whose page table
+        this is. Unknown identity on either side falls back to True, matching
+        _spec_pending_is_mine: the scheduler's mirror still owns the width
+        contract, and a missing page table is not evidence of a hand-off."""
+        owner = self._spec_active_owner
         cur = self._spec_pt_identity(page_table)
         if owner is None or cur is None:
             return True
@@ -2562,6 +2581,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             self._spec_decoder = dec
             self._spec_decoder_bucket = dec.pv_bucket(int(start), horizon)
         self._spec_active = True
+        self._spec_active_owner = self._spec_pt_identity(page_table)
         self._spec_first_step = True
         self._spec_last_pt = None
         # verify masks/tables were sized for this horizon; past it the packed
@@ -2577,6 +2597,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_decoder = None
         self._spec_decoder_bucket = None
         self._spec_active = False
+        self._spec_active_owner = None
         # Drop the bounded per-layer tables installed for this session so a later
         # BATCHED baseline decode (adaptive fallback) rebuilds its own set instead
         # of reading this request's stale ring tables. Re-installed on next
@@ -2694,6 +2715,20 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 kwargs.get("kv_cache"),
                 page_tables_per_layer=page_tables_per_layer,
             )
+        if self._spec_active and not self._spec_active_is_mine(kwargs.get("page_table")):
+            # A solo decode step for a request that does NOT own the live
+            # session. Reachable under async scheduling: the owner can reach
+            # max_tokens and be skipped by upstream's num_output_placeholders
+            # guard while its session is still armed, leaving another request
+            # alone on the next step. Continuing here would re-point the fused
+            # decoder at this request's page table and speculate from the
+            # OWNER's residual taps -- wrong tokens, and a block width against
+            # the single placeholder the scheduler reserved for a non-owner.
+            logger.warning(
+                "Gemma4DFlash: live spec session belongs to another request; "
+                "releasing it and serving this one as plain baseline"
+            )
+            self._spec_release_decoder()
         if not self._spec_active:
             # Solo decode but no dFlash session -- e.g. a request that prefilled
             # BATCHED (concurrency>1, no tap capture) and is now decoding alone
@@ -2834,6 +2869,11 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         self._spec = None
         self._spec_pending = None  # prompt_len awaiting first decode
         self._spec_pending_owner = None  # request the pending session belongs to
+        # Request a LIVE session belongs to: _spec_pending_owner covers only the
+        # pre-bootstrap window, so without this a solo decode step scheduled for
+        # a non-owner ran the block loop against the owner's session (see the
+        # dFlash class's _spec_active_owner for the async path that reaches it).
+        self._spec_active_owner = None
         self._spec_first_step = True
         self._spec_horizon = int(os.environ.get("GEMMA4_MTP_SERVE_HORIZON", "2048"))
         logger.info(
@@ -2941,6 +2981,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         spec._use_trace = True
         spec.serving_setup(int(anchor_id), int(start), max_new_tokens=self._spec_horizon)
         self._spec = spec
+        self._spec_active_owner = self._spec_pt_identity(page_table)
         self._spec_cur = (int(anchor_id), int(start))
         self._spec_first_step = True
         self._spec_budget_end = int(start) + self._spec_horizon - self._SPEC_N - 1
@@ -2986,6 +3027,18 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
                 kwargs.get("kv_cache"),
                 page_tables_per_layer=page_tables_per_layer,
             )
+        if self._spec is not None and not self._spec_active_is_mine(kwargs.get("page_table")):
+            # Solo decode step for a request that does NOT own the live session
+            # (the owner can be skipped by upstream's num_output_placeholders
+            # guard once it reaches max_tokens, leaving this one alone with the
+            # session still armed). Running the block loop here would emit the
+            # owner's speculation for this request against a single reserved
+            # placeholder.
+            logger.warning(
+                "Gemma4MTP: live spec session belongs to another request; "
+                "releasing it and serving this one as plain baseline"
+            )
+            self._spec_release_session()
         if self._spec is None:
             # No session for this row (batched prefill, or a dropped non-owner
             # session): serve plain baseline, matching the reserved width.
@@ -3063,6 +3116,16 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             return True
         return owner == cur
 
+    def _spec_active_is_mine(self, page_table) -> bool:
+        """True when the LIVE session belongs to the request whose page table
+        this is. Unknown identity on either side falls back to True, matching
+        _spec_pending_is_mine."""
+        owner = self._spec_active_owner
+        cur = self._spec_pt_identity(page_table)
+        if owner is None or cur is None:
+            return True
+        return owner == cur
+
     def _spec_release_session(self) -> None:
         """Drop any pending/active MTP session (batched fallback and lifecycle).
 
@@ -3074,6 +3137,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         """
         self._spec_pending = None
         self._spec_pending_owner = None
+        self._spec_active_owner = None
         if self._spec is not None:
             self._spec.serving_release()
             self._spec = None
