@@ -165,7 +165,9 @@ inline vector<std::uint32_t> run_unary_tiled(
     return result_vec;
 }
 
-// Run a two-input kernel: c_0, c_1 in (reader_binary) -> c_16 out (writer_unary). All tiles Float16_b.
+// Run a two-input kernel: c_0, c_1 in (reader_binary) -> c_16 out (writer_unary).
+// Defaults preserve the Float16_b/16-bit-DST/HiFi4 canonical setup; explicit format, DST mode and
+// fidelity allow host-configuration forwarding tests without overriding kernel defines.
 // out_tiles defaults to num_tiles (elementwise N->N); reducing ops that collapse the block to fewer outputs
 // must pass out_tiles explicitly or writer_unary over-reads c_16 and deadlocks. cb_depth_tiles must be >= any
 // resident block size. compute_defines lets a shipping kernel (e.g. eltwise_binary.cpp) be steered via defines.
@@ -180,14 +182,17 @@ inline vector<std::uint32_t> run_binary(
     const std::map<std::string, std::string>& compute_defines = {},
     std::uint32_t cb_depth_tiles = 1,
     std::uint32_t out_tiles = 0,
-    const vector<std::uint32_t>& extra_compile_args = {}) {
+    const vector<std::uint32_t>& extra_compile_args = {},
+    tt::DataFormat format = tt::DataFormat::Float16_b,
+    bool fp32_dest_acc_en = false,
+    MathFidelity math_fidelity = MathFidelity::HiFi4) {
     if (out_tiles == 0) {
         out_tiles = num_tiles;
     }
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
-    const tt::DataFormat fmt = tt::DataFormat::Float16_b;
+    const tt::DataFormat fmt = format;
     std::uint32_t tile_bytes = tt::tile_size(fmt);
 
     auto make_dram = [&](std::uint32_t ntiles) {
@@ -228,7 +233,11 @@ inline vector<std::uint32_t> run_binary(
         program,
         compute_kernel,
         core,
-        ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compile_args, .defines = compute_defines});
+        ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compile_args,
+            .defines = compute_defines});
 
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);

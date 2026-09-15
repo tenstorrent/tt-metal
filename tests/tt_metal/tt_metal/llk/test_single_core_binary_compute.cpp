@@ -1095,4 +1095,43 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryReuseDestIdFreeGolden) {
     expect_binary_add_matches_golden(result, src0, src1);
 }
 
+namespace {
+void expect_typed_multiply_config_fidelity(distributed::MeshDevice& device, MathFidelity fidelity, float expected) {
+    // The low fraction bits distinguish every hardware multiplication phase count.
+    // All lanes are equal, so physical tile face ordering cannot hide a mismatch.
+    const std::vector<std::uint32_t> a(1024, std::bit_cast<std::uint32_t>(513.0f / 512.0f));
+    const std::vector<std::uint32_t> b(1024, std::bit_cast<std::uint32_t>(257.0f / 256.0f));
+    const auto result = unit_tests::llk::single_core::run_binary(
+        device,
+        a,
+        b,
+        1,
+        "tests/tt_metal/tt_metal/test_kernels/compute/typed_mul_config_fidelity.cpp",
+        {},
+        1,
+        0,
+        {static_cast<std::uint32_t>(fidelity)},
+        tt::DataFormat::Float32,
+        true,
+        fidelity);
+    ASSERT_EQ(result.size(), 1024u);
+    for (std::size_t i = 0; i < result.size(); ++i) {
+        EXPECT_EQ(std::bit_cast<float>(result[i]), expected) << "lane " << i;
+    }
+}
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, ComputeConfigFidelityLoFi) {
+    expect_typed_multiply_config_fidelity(*this->devices_.at(0), MathFidelity::LoFi, 1.0f);
+}
+TEST_F(LLKBlackholeSingleCardFixture, ComputeConfigFidelityHiFi2) {
+    expect_typed_multiply_config_fidelity(*this->devices_.at(0), MathFidelity::HiFi2, 513.0f / 512.0f);
+}
+TEST_F(LLKBlackholeSingleCardFixture, ComputeConfigFidelityHiFi3) {
+    expect_typed_multiply_config_fidelity(*this->devices_.at(0), MathFidelity::HiFi3, 515.0f / 512.0f);
+}
+TEST_F(LLKBlackholeSingleCardFixture, ComputeConfigFidelityHiFi4) {
+    expect_typed_multiply_config_fidelity(*this->devices_.at(0), MathFidelity::HiFi4, 131841.0f / 131072.0f);
+}
+
 }  // namespace tt::tt_metal
