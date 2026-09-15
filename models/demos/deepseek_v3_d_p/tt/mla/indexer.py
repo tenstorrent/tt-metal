@@ -584,6 +584,7 @@ class TtIndexer:
         weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
         interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k)."""
         if self._rope_perm is None:
+            assert x.shape[-1] == self.index_args.index_head_dim, "Indexer input width must match index_head_dim"
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
                 x,
                 rope_tensors["cos_matrix"],

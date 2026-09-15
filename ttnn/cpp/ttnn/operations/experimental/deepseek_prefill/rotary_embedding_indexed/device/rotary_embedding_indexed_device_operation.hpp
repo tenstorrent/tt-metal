@@ -31,6 +31,7 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // `metadata` tensor.
         uint32_t kv_actual_global;  // scalar path only
         uint32_t rotary_dim;
+        bool rotary_dim_explicit;
         uint32_t rotary_offset;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;

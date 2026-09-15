@@ -16,6 +16,8 @@ void kernel_main() {
     const auto batch_end = get_arg(args::batch_end);
     const auto seq_t_start = get_arg(args::seq_t_start);
     const auto seq_t_end = get_arg(args::seq_t_end);
+    const auto head_start = get_arg(args::head_start);
+    const auto head_end = get_arg(args::head_end);
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto input_Wt = get_arg(args::input_Wt);
@@ -29,7 +31,7 @@ void kernel_main() {
     const uint32_t tile_bytes = rotated.get_entry_size();
 
     for (uint32_t batch = batch_start; batch < batch_end; ++batch) {
-        for (uint32_t head = 0; head < n_heads; ++head) {
+        for (uint32_t head = head_start; head < head_end; ++head) {
             for (uint32_t row = seq_t_start; row < seq_t_end; ++row) {
                 const uint32_t row_page = ((batch * n_heads + head) * Ht + row) * input_Wt;
                 constexpr uint32_t copy_tiles = input_Wt - Wt;
