@@ -133,7 +133,7 @@ jobs:
             test_args: "-k 'not fabric_ring'"
           - arch: blackhole
             scenario: tray_reset
-            repeat_count: 80
+            repeat_count: 400
             num_containers: 4
             chips_per_container: 8
             container_prefix: bh_tray_reset
@@ -142,7 +142,7 @@ jobs:
             test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
           - arch: wormhole_b0
             scenario: asic_reset
-            repeat_count: 250
+            repeat_count: 1500
             num_containers: 32
             chips_per_container: 1
             container_prefix: chip_reset
@@ -151,7 +151,7 @@ jobs:
             test_args: "-k test_fill"
           - arch: blackhole
             scenario: asic_reset
-            repeat_count: 250
+            repeat_count: 1500
             num_containers: 32
             chips_per_container: 1
             container_prefix: bh_chip_reset

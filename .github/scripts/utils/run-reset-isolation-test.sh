@@ -45,6 +45,9 @@ mkdir -p "$RESULTS_DIR"
 rm -f "${RESULTS_DIR}"/*.status
 
 container0="${CONTAINER_PREFIX}-0"
+# Survivors whose run ended before the reset finished; their status is forced to
+# a failure at the end, since a pass would only mean "ran, then the reset happened".
+declare -a not_spanned=()
 
 # No -v: with REPEAT_COUNT repetitions across every container, per-test lines
 # swamp the log. Prefix each line so parallel container output stays attributable.
@@ -89,22 +92,12 @@ container0_initial_pid=$!
 echo ">>> Waiting ${RESET_WAIT_SECS}s before reset..."
 sleep "$RESET_WAIT_SECS"
 
-# The reset must land while every container is mid-run, or it interrupts nothing
-# and the survivors never had a workload to protect.
 reset_ok=1
 if ! pytest_running "$container0"; then
     echo ">>> ERROR: ${container0}'s workload is not running ${RESET_WAIT_SECS}s in;"
     echo ">>>        there is nothing for the reset to interrupt. Raise REPEAT_COUNT."
     reset_ok=0
 fi
-for i in $(seq 1 $(( NUM_CONTAINERS - 1 ))); do
-    container="${CONTAINER_PREFIX}-${i}"
-    if ! pytest_running "$container"; then
-        echo ">>> ERROR: ${container}'s workload already finished; it will not span the"
-        echo ">>>        reset. Raise REPEAT_COUNT."
-        reset_ok=0
-    fi
-done
 
 if [ "$reset_ok" = "1" ]; then
     # SIGINT, not the default SIGTERM: CPython installs no SIGTERM handler, so
@@ -141,6 +134,19 @@ if [ "$reset_ok" = "1" ]; then
         # Without this the confirming run can fail on re-enumeration, not ETH state.
         echo ">>> Reset complete. Settling ${POST_RESET_SETTLE_SECS}s..."
         sleep "$POST_RESET_SETTLE_SECS"
+
+        # A survivor that finished before the reset completed never had a
+        # workload running across it, so its exit code proves nothing. Checking
+        # here rather than before the reset catches an undersized REPEAT_COUNT
+        # whatever the suite's runtime turns out to be.
+        for i in $(seq 1 $(( NUM_CONTAINERS - 1 ))); do
+            container="${CONTAINER_PREFIX}-${i}"
+            if ! pytest_running "$container"; then
+                echo ">>> ERROR: ${container}'s workload ended before the reset completed;"
+                echo ">>>        it did not span the reset. Raise REPEAT_COUNT."
+                not_spanned+=("$container")
+            fi
+        done
     fi
 fi
 
@@ -162,6 +168,13 @@ echo ">>> Waiting for all containers to finish..."
 for pid in "${bg_pids[@]}"; do
     wait "$pid" || true
 done
+
+if [ ${#not_spanned[@]} -gt 0 ]; then
+    for container in "${not_spanned[@]}"; do
+        echo 1 > "${RESULTS_DIR}/${container}.status"
+        echo ">>> ${container}: recorded as failed (workload did not span the reset)."
+    done
+fi
 
 echo ">>> All containers finished. Results in ${RESULTS_DIR}/"
 exit 0
