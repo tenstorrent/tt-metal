@@ -156,24 +156,41 @@ def main():
         )
 
     if n_req >= 2:
-        r1_first = reqs[0][-2][1][0][1]
-        r1_span = m_first[0][1] - r1_first
-        print(f"\ncapture cost, request 1 minus request 2 (same process)")
-        print(f"  request 1 span (rank0 start -> rank0 start of request 2): {r1_span:.4f} s")
-        print(f"  request 2 latency                                      : {lat:.4f} s")
-        print(f"  difference (capture + first-chunk compile, upper bound) : {r1_span - lat:+.4f} s")
+        # Request k's end is on the LAST rank, not rank 0. Measuring request 1 as rank0-start to
+        # rank0-start gives only rank 0's slice of it, which on a 4-stage pipeline is smaller than
+        # the whole request -- it made request1 - request2 come out NEGATIVE on a synthetic PP log.
+        # The last rank goes straight from finishing request k's last chunk into request k+1's
+        # first chunk, so its request-boundary stamp is the end of request k.
+        r1_start = reqs[0][-2][1][0][1]
+        r1_end = reqs[last][-1][1][0][1]
+        r1_lat = r1_end - r1_start
+        print("\ncapture cost, request 1 minus request 2 (same process, same slot)")
+        print(f"  request 1 latency (rank0 start -> rank{last} start of request 2): {r1_lat:.4f} s")
+        print(f"  request 2 latency (the reported, warm one)                     : {lat:.4f} s")
+        print(f"  difference = trace capture + first-chunk compile               : {r1_lat - lat:+.4f} s")
+
+        # Per-stage decomposition. Every rank stamps its own E2E_CLOCK_V2, so the measured request's
+        # per-stage time is available for ALL stages -- which is the quantity a saturated pipeline
+        # never reveals (it only shows max_i t[i][c]) and which the estimator had to model.
+        print(f"\n  per-stage, measured request ({n_chunks} chunk(s) each):")
+        print(f"    {'rank':>5} {'warm stage time':>16} {'req1 stage+capture':>19} {'capture':>10}")
         for rk in sorted(reqs):
-            a = reqs[rk][-2][1][0][1]
-            b = reqs[rk][-1][1][0][1]
-            excess = [(y - x) * 1000.0 for (_, x), (_, y) in zip(reqs[rk][-2][1], reqs[rk][-2][1][1:])]
-            excess2 = [(y - x) * 1000.0 for (_, x), (_, y) in zip(reqs[rk][-1][1], reqs[rk][-1][1][1:])]
-            d = (excess[0] - excess2[0]) if excess and excess2 else float("nan")
+            if rk not in v2:
+                print(f"    {rk:>5}   no E2E_CLOCK_V2")
+                continue
+            warm = (v2[rk][1] - reqs[rk][-1][1][0][1]) * 1000.0
+            r1 = (reqs[rk][-1][1][0][1] - reqs[rk][-2][1][0][1]) * 1000.0
+            print(f"    {rk:>5} {warm:15.1f}ms {r1:18.1f}ms {r1 - warm:9.1f}ms")
+        print(
+            "    (warm = last_chunk_end - first chunk start of the measured request; req1 = that "
+            "rank's\n     request-1 span, which for a 1-chunk request is its stage time plus its "
+            "own capture)"
+        )
+        neg = [rk for rk in sorted(reqs) if rk in v2 and reqs[rk][-1][1][0][1] < reqs[rk][-2][1][0][1]]
+        if neg:
             print(
-                f"  rank{rk}: request1 chunk-0 interval {excess[0]:8.1f} ms  request2 {excess2[0]:8.1f} ms  "
-                f"-> capture {d:8.1f} ms"
-                if excess and excess2
-                else f"  rank{rk}: single-chunk requests -- chunk-0 interval unavailable, "
-                f"request-start delta {(b-a)*1000.0:.1f} ms"
+                f"    WARNING ranks {neg}: request 2 starts BEFORE request 1 on that rank, which one "
+                f"slot\n    cannot do -- the request split is wrong, so the capture column is junk."
             )
 
     if last in v1:
