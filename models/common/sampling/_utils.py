@@ -38,3 +38,10 @@ def upper_power_of_2(n: int) -> int:
     if n <= 1:
         return 1
     return 1 << (n - 1).bit_length()
+
+
+def topk_would_route_to_large_indices(x, k) -> bool:
+    """Return the authoritative C++ route decision for the sampling call shape."""
+    import ttnn
+
+    return ttnn._ttnn.operations.reduction._sampling_topk_would_route_to_large_indices(x, k)

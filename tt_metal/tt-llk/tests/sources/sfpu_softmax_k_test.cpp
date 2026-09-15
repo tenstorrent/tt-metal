@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::_init_softmax_k_();
+    ckernel::sfpu::_init_softmax_k_<is_fp32_dest_acc_en>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             0 /* dst_index */, formats.math, formats.math);
 
         // RC_custom: the kernel does its own DEST addressing, so no per-face loop.
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K), 0 /* dst_index */, VectorMode::RC_custom);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K, is_fp32_dest_acc_en), 0 /* dst_index */, VectorMode::RC_custom);
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
     }

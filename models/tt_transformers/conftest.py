@@ -24,8 +24,13 @@ def device_params(request, galaxy_type):
         if is_single_device:
             params["fabric_config"] = None
         elif params["fabric_config"] == True:
-            params["fabric_config"] = (
-                ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
-            )
+            cluster_type = ttnn.cluster.get_cluster_type()
+            if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
+                # The 8x4 decode path uses Ring collectives along both mesh axes.
+                params["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+            else:
+                params["fabric_config"] = (
+                    ttnn.FabricConfig.FABRIC_1D_RING if galaxy_type == "6U" else ttnn.FabricConfig.FABRIC_1D
+                )
 
     return params

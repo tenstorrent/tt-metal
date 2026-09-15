@@ -105,20 +105,33 @@ void kernel_main() {
 
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    // fast_tilize_init reprograms the SrcB tile descriptor's num_faces field; balance it with its uninit so
+    // that field is restored before a later A/B op (tilizeA_B_reduce_init below) validates the unpacker state.
+    fast_tilize_uninit(cb_in2, cb_out0, 1);
 
     transpose_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    unary_op_init_common(cb_in0, cb_out0);
+    // Migrated off unary_op_init_common (now a deprecated compute_kernel_hw_startup + copy_init
+    // forwarder, which is unsafe mid-kernel). The equivalent mid-kernel reconfig sequence produces
+    // the same SrcA/Pack diff the sentinel asserts: SrcA only here (pack already cb_out0).
+    reconfig_data_format_srca(cb_in0);
+    copy_init(cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    unary_op_init_common(cb_in1, cb_out1);
+    // SrcA (cb_in0 -> cb_in1) and Pack (cb_out0 -> cb_out1) both change.
+    reconfig_data_format_srca(cb_in1);
+    pack_reconfig_data_format(cb_out1);
+    // pack_reconfig_data_format is PACK-only and does not reach the sentinel state; record the pack CB
+    // the way lines 50/57 do so m_pack_cb tracks cb_out1 and the assert below sees the PACK change.
+    state_configure<Operand::PACK>(cb_out1, __builtin_LINE());
+    copy_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
     transpose_init(cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    copy_tile_to_dst_init_short(cb_in2);
+    copy_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1);

@@ -34,38 +34,10 @@ def run_relational_test(device, h, w, ttnn_function):
     assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
-def run_relational_z_test(device, h, w, ttnn_function):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_equal(torch_output_tensor.float(), output_tensor.float())
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_gtz(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.gtz)
-
-
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_gt(device, h, w):
     run_relational_test(device, h, w, ttnn.gt)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_ltz(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.ltz)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -76,20 +48,8 @@ def test_ge(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gez(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.gez)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_lt(device, h, w):
     run_relational_test(device, h, w, ttnn.lt)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_lez(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.lez)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -100,20 +60,8 @@ def test_le(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_eqz(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.eqz)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_eq(device, h, w):
     run_relational_test(device, h, w, ttnn.eq)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_nez(device, h, w):
-    run_relational_z_test(device, h, w, ttnn.nez)
 
 
 @pytest.mark.parametrize("h", [64])

@@ -52,8 +52,7 @@ protected:
             return;
         }
         auto mesh_device = devices_.at(0);
-        IDevice* device = mesh_device->get_devices()[0];
-        if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
     }
@@ -67,8 +66,7 @@ protected:
             return;
         }
         auto mesh_device = devices_.at(0);
-        IDevice* device = mesh_device->get_devices()[0];
-        if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
     }
@@ -81,8 +79,7 @@ protected:
         if (this->IsSkipped()) {
             return;
         }
-        IDevice* device = mesh_device_->get_devices().at(0);
-        if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+        if (mesh_device_->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device_->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
     }
@@ -195,8 +192,8 @@ void EnqueueAndCheckScratchpad(
 
 void SetLoopbackArgs(
     distributed::MeshWorkload& workload,
-    const std::shared_ptr<Buffer>& input_buffer,
-    const std::shared_ptr<Buffer>& output_buffer,
+    const std::shared_ptr<distributed::MeshBuffer>& input_buffer,
+    const std::shared_ptr<distributed::MeshBuffer>& output_buffer,
     uint32_t dfb_num_entries) {
     const NodeCoord node{0, 0};
     Program& program = workload.get_programs().begin()->second;
@@ -265,15 +262,20 @@ TEST_F(MeshWorkloadFactorySlowDispatchHWTest, FactoryMethodsSupportSlowDispatch)
 
 TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsDfbResizeBetweenEnqueues) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     // Build a workload with a producer-consumer DFB loopback.
     distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeLoopbackSpec());
 
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = kBufferBytes, .page_size = kBufferBytes, .buffer_type = BufferType::DRAM};
-    auto input_buffer = CreateBuffer(dram_config);
-    auto output_buffer = CreateBuffer(dram_config);
+    auto input_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = kBufferBytes},
+        {.page_size = kBufferBytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+    auto output_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = kBufferBytes},
+        {.page_size = kBufferBytes, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
+
+    auto& cq = mesh_device->mesh_command_queue();
 
     // Resize the DFB between enqueues and verify each loopback result.
     for (uint32_t dfb_num_entries : {2u, 4u, 6u}) {
@@ -283,15 +285,14 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsDfbResizeBetwe
         }
         std::vector<uint32_t> output_data(input_data.size());
 
-        detail::WriteToBuffer(input_buffer, input_data);
-        detail::WriteToBuffer(output_buffer, output_data);
+        distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/true);
+        distributed::EnqueueWriteMeshBuffer(cq, output_buffer, output_data, /*blocking=*/true);
         SetLoopbackArgs(workload, input_buffer, output_buffer, dfb_num_entries);
 
-        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
         output_data.clear();
-        detail::ReadFromBuffer(output_buffer, output_data);
+        distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
         EXPECT_EQ(output_data, input_data);
     }
 }

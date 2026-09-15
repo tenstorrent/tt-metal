@@ -1,30 +1,3 @@
-# Producer manifest: arbitrary any-src -> any-dst KV migration.
-#
-# Migrates via an explicit `migration.pairs` mapping (0->3, 1->2) instead of the uniform src+offset;
-# equivalent CLI: --migrations "0:3,1:2". src and dst sets must be disjoint (overlaps and duplicate
-# destinations are rejected). The runner validates the migrated KV on-device.
-#
-# Requires (a) a running migration_endpoint (launch_migration_endpoints.sh, prefill_endpoint_id 1) and
-# (b) a single-rank REQUEST-mode runner with migration enabled. Start from
-# topology_configuration/pipeline_prefill_request_1rank.yaml and add to its global_env:
-#   PREFILL_NUM_USERS: "4"            # dst slots 2,3 must exist in the table
-#   PREFILL_ENABLE_MIGRATION: "1"     # publish the KV table + reach WORKER_READY
-#   PREFILL_MIGRATION_CMD_QUEUE / _TABLE_QUEUE / _RESP_QUEUE / _TABLE_PATH / _CLIENT_DIR  # match below
-#   PREFILL_MANIFEST + PREFILL_NUM_LAYERS                                    # your model
-#   PREFILL_VALIDATE_MIGRATION: "1"   # optional: on-device PCC of each migrated pair
-#   PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"  # with VALIDATE_MIGRATION: num_users * chunks
-# Run:
-#   python -m models.demos.common.prefill.runners.prefill_producer \
-#     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_arbitrary_migration.yaml
-#
-# MODEL-AGNOSTIC: this file describes the migration SCENARIO only, so it works with any prefill model.
-# The model + wire layout are deliberately NOT set here; they must match the runner you launched. Supply
-# them either by exporting PREFILL_MODEL / PREFILL_NUM_LAYERS / PREFILL_MAX_SEQ_LEN / PREFILL_CHUNK_SIZE,
-# or by adding a `model:` block (see prefill_producer_manifest.example.yaml for the full schema), e.g.
-#   model: {variant: <adapter key>, num_layers: <MATCH RUNNER>, max_seq_len: ..., chunk_size: ...}
-# Left unset they fall back to the adapter defaults, which will NOT match a runner of a different depth
-# — the per-layer ack count is num_layers * chunks, so a mismatch hangs the ack drain.
-
 transport:
   sp: 8
   tp: 4
@@ -32,16 +5,16 @@ transport:
   connect_timeout_s: 60
 
 workload:
-  num_users: 2            # src slots 0,1 (the runner's table has 4 slots, so dst 2,3 are free)
+  num_users: 2
   chunks: "11"
-  max_requests: 2         # one resident request per slot (no recycling)
+  max_requests: 2
   interleave: round_robin
-  check_pcc: false        # the RUNNER validates the migrated KV on-device (VALIDATE_MIGRATION=1)
+  check_pcc: true
 
 migration:
-  issue: true             # attach the Python MigrationLayerClient and migrate
-  dest_endpoint_id: 1     # loopback: the endpoint's own id
-  pairs:                  # ARBITRARY any-src -> any-dst (overrides dst_slot_offset)
+  issue: true
+  dest_endpoint_id: 1
+  pairs:
     - {src: 0, dst: 3}
     - {src: 1, dst: 2}
   timeout_ms: 3600000

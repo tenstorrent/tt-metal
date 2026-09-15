@@ -4404,8 +4404,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -4534,8 +4536,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -4664,8 +4668,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -4712,6 +4718,51 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_EQ(hosts_spanning_blitz_mapped.size(), 8u) << "Mapped Blitz pipeline: should span exactly 8 hosts";
+}
+
+TEST_F(TopologyMapperUtilsTest, SweepConsumer_SolutionSpansExpectedHosts) {
+    // Sweep consumer / workload: launched once per generate_rank_bindings --all-solutions solution by
+    // sweep_rank_binding_solutions.py (via tt-run --rank-binding <that solution>), so the ambient
+    // PhysicalSystemDescriptor reflects the hosts THAT solution occupies. Assert the solution spans exactly the
+    // expected number of distinct hosts (default 8 for the 32-stage 2x4 ring pipeline on the SC36 subtorus:
+    // 256 chips / 32 chips-per-galaxy = 8 galaxies). This checks that the multi-solution host-cap enforcement holds
+    // on every enumerated solution end to end. Override the expectation via SWEEP_EXPECTED_HOSTS.
+    const char* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run via the sweep / tt-run --mock-cluster-rank-binding";
+    }
+
+    std::size_t expected_hosts = 8;
+    if (const char* env = getenv("SWEEP_EXPECTED_HOSTS"); env != nullptr && env[0] != '\0') {
+        expected_hosts = static_cast<std::size_t>(std::stoul(env));
+    }
+
+    // In the mock each rank is a separate "board", so PhysicalSystemDescriptor reports a per-rank host_name
+    // (e.g. "..._bh-glx-120-d05u02_rank_4.yaml"). Reduce each to its physical galaxy tag ("bh-glx-<aisle>-<node>")
+    // so we count distinct galaxies (hosts) -- matching generate_rank_bindings' num_hosts, not the rank count.
+    auto galaxy_tag = [](const std::string& h) -> std::string {
+        auto pos = h.find("bh-glx-");
+        if (pos == std::string::npos) {
+            return h;  // non-bh-glx mock: fall back to the full host name
+        }
+        auto is_tag_char = [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
+        };
+        std::size_t end = pos;
+        while (end < h.size() && is_tag_char(h[end])) {
+            ++end;
+        }
+        return h.substr(pos, end - pos);
+    };
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    std::set<std::string> hosts;
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        (void)asic_id;
+        hosts.insert(galaxy_tag(desc.host_name));
+    }
+    EXPECT_EQ(hosts.size(), expected_hosts)
+        << "each swept solution must span exactly " << expected_hosts << " distinct hosts; got " << hosts.size();
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_BHGalaxy4x4Z) {
@@ -5175,7 +5226,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_VectorOverload_Threa
 
     // Build via the multi-MGD vector overload, threading pins as per_mgd_pinnings[0].
     const std::vector<MeshGraphDescriptor> mgds{mgd};
-    const std::vector<std::optional<std::vector<PinningConstraint>>> per_mgd_pins{pins};
+    const std::vector<std::optional<PinningsByMesh>> per_mgd_pins{pinnings_by_mesh_from_groups(pins)};
     const auto vec_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgds, per_mgd_pins);
 
     ASSERT_EQ(vec_graph.mesh_adjacency_graphs_.size(), 1u);
@@ -5199,7 +5250,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_VectorOverload_Threa
     // (2) Threading must reach the exact same grouping/placement code as the single-MGD overload: same pins in ->
     // same mesh_pgd_pinnings_ out.
     const auto singular_graph =
-        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, std::optional<std::vector<PinningConstraint>>{pins});
+        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, pinnings_by_mesh_from_groups(pins));
     EXPECT_EQ(vec_graph.mesh_pgd_pinnings_, singular_graph.mesh_pgd_pinnings_)
         << "Vector overload with per-MGD pins must match the single-MGD overload with the same pins";
 }

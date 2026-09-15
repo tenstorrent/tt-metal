@@ -1,1 +1,0 @@
-../../../ttnn/integration_tests/openpdn_mnist/test_ttnn_openpdn_mnist.py

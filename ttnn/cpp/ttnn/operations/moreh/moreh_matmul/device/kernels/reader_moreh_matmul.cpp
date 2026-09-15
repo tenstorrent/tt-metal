@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
@@ -33,65 +34,58 @@ inline void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idxes, ui
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t Kt = get_compile_time_arg_val(0);
-    bool transpose_input = (get_compile_time_arg_val(1) == 1);
-    bool transpose_other = (get_compile_time_arg_val(2) == 1);
-    uint32_t input_mask_h = get_compile_time_arg_val(3);
-    uint32_t input_mask_w = get_compile_time_arg_val(4);
-    uint32_t other_mask_h = get_compile_time_arg_val(5);
-    uint32_t other_mask_w = get_compile_time_arg_val(6);
-    constexpr auto input_args = TensorAccessorArgs<7>();
-    constexpr auto other_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr uint32_t Kt = get_arg(args::Kt);
+    bool transpose_input = (get_arg(args::transpose_input) == 1);
+    bool transpose_other = (get_arg(args::transpose_other) == 1);
+    uint32_t input_mask_h = get_arg(args::input_mask_h);
+    uint32_t input_mask_w = get_arg(args::input_mask_w);
+    uint32_t other_mask_h = get_arg(args::other_mask_h);
+    uint32_t other_mask_w = get_arg(args::other_mask_w);
 #ifdef FUSE_BIAS
-    constexpr bool is_scalar_bias = (get_compile_time_arg_val(other_args.next_compile_time_args_offset()) == 1);
-    constexpr auto bias_args = TensorAccessorArgs<other_args.next_compile_time_args_offset() + 1>();
+    constexpr bool is_scalar_bias = (get_arg(args::is_scalar_bias) == 1);
 #endif
 
-    // runtime args
-    ArgFetcher arg_fetcher;
-    uint32_t input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    uint32_t other_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    uint32_t output_tile_start_idx = arg_fetcher.get_next_arg_val<uint32_t>();
-    uint32_t num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
+    // runtime args (named scalars; the input/other/bias base addresses are now supplied by the
+    // tensor bindings, so their address RTAs are gone)
+    uint32_t output_tile_start_idx = get_arg(args::output_tile_start_idx);
+    uint32_t num_output_tiles = get_arg(args::num_output_tiles);
 
+    // The five dimensional arrays are homogeneous, index-addressed collections -> runtime varargs.
     uint32_t input_stride[MAX_NUM_DIMENSIONS];
     uint32_t other_stride[MAX_NUM_DIMENSIONS];
     uint32_t output_stride[MAX_NUM_DIMENSIONS];
     uint32_t input_not_bcast[MAX_NUM_DIMENSIONS];
     uint32_t other_not_bcast[MAX_NUM_DIMENSIONS];
 
+    uint32_t vararg_idx = 0;
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
-        input_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        input_stride[i] = get_vararg(vararg_idx++);
     }
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
-        other_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        other_stride[i] = get_vararg(vararg_idx++);
     }
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
-        output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        output_stride[i] = get_vararg(vararg_idx++);
     }
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
-        input_not_bcast[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        input_not_bcast[i] = get_vararg(vararg_idx++);
     }
     for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
-        other_not_bcast[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        other_not_bcast[i] = get_vararg(vararg_idx++);
     }
 
-#ifdef FUSE_BIAS
-    uint32_t bias_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-#endif
-
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_in2 = 2;
-    constexpr uint32_t cb_id_in3 = 3;
-    constexpr uint32_t cb_id_in4 = 4;
+    constexpr uint32_t cb_id_in0 = dfb::in0;
+    constexpr uint32_t cb_id_in1 = dfb::in1;
+    constexpr uint32_t cb_id_in2 = dfb::in2;
+    constexpr uint32_t cb_id_in3 = dfb::in3;
+    constexpr uint32_t cb_id_in4 = dfb::in4;
     constexpr uint32_t onetile = 1;
 
-    const auto s0 = TensorAccessor(input_args, input_addr);
-    const auto s1 = TensorAccessor(other_args, other_addr);
+    const auto s0 = TensorAccessor(tensor::input);
+    const auto s1 = TensorAccessor(tensor::other);
 
 #ifdef FUSE_BIAS
-    const auto s_bias = TensorAccessor(bias_args, bias_addr);
+    const auto s_bias = TensorAccessor(tensor::bias);
 #endif
 
     // mask
@@ -117,11 +111,11 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_in0(cb_id_in0);
     DataflowBuffer dfb_in1(cb_id_in1);
-    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
-    const auto in1_tile_bytes = get_tile_size(cb_id_in1);
+    const auto in0_tile_bytes = dfb_in0.get_tile_size();
+    const auto in1_tile_bytes = dfb_in1.get_tile_size();
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in4(cb_id_in4);
-    const auto in4_tile_bytes = get_tile_size(cb_id_in4);
+    const auto in4_tile_bytes = dfb_in4.get_tile_size();
 #endif
 
 #ifdef FUSE_BIAS

@@ -6,6 +6,7 @@
 
 #include <fmt/format.h>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -13,6 +14,24 @@
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
+
+namespace {
+// RMSNorm gains and biases are stored as 1-D tensors ({1,1,1,N}); matmul weights and
+// embeddings have >=2 non-unit dims. Decoupled AdamW skips weight decay on the former
+// so normalization scales aren't dragged toward zero.
+bool is_effectively_1d(const ttnn::Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
+    int non_unit_dims = 0;
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        non_unit_dims += static_cast<int>(shape[i] > 1);
+    }
+    return non_unit_dims < 2;
+}
+
+uint32_t draw_stochastic_rounding_seed() {
+    return static_cast<uint32_t>(autograd::ctx().get_generator()());
+}
+}  // namespace
 
 std::string AdamW::get_name() const {
     return "AdamW";
@@ -73,6 +92,11 @@ void AdamW::step() {
             max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
         }
 
+        float weight_decay = m_config.weight_decay;
+        if (m_config.weight_decay_skip_1d && is_effectively_1d(param)) {
+            weight_decay = 0.0F;
+        }
+
         ttml::metal::adamw(
             param,
             gradients,
@@ -85,8 +109,9 @@ void AdamW::step() {
             m_beta1_pow,
             m_beta2_pow,
             m_config.epsilon,
-            m_config.weight_decay,
-            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding));
+            weight_decay,
+            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding),
+            m_config.stochastic_rounding ? std::optional<uint32_t>{draw_stochastic_rounding_seed()} : std::nullopt);
     }
 }
 
@@ -109,13 +134,13 @@ serialization::StateDict AdamW::get_state_dict() const {
 }
 
 void AdamW::set_state_dict(const serialization::StateDict& dict) {
-    set_steps(serialization::get_value_type<size_t>(dict, "steps"));
     set_lr(serialization::get_value_type<float>(dict, "lr"));
-    m_config.beta1 = serialization::get_value_type<float>(dict, "beta1");
-    m_config.beta2 = serialization::get_value_type<float>(dict, "beta2");
+    set_beta1(serialization::get_value_type<float>(dict, "beta1"));
+    set_beta2(serialization::get_value_type<float>(dict, "beta2"));
     m_config.epsilon = serialization::get_value_type<float>(dict, "epsilon");
     m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
     m_config.stochastic_rounding = serialization::get_value_type<bool>(dict, "stochastic_rounding");
+    set_steps(serialization::get_value_type<size_t>(dict, "steps"));
     m_exp_avg = std::get<serialization::NamedParameters>(dict.at("exp_avg"));
     m_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at("exp_avg_sq"));
 
@@ -152,6 +177,9 @@ float AdamW::get_beta1() const {
 
 void AdamW::set_beta1(float beta1) {
     m_config.beta1 = beta1;
+    // Bias correction uses beta^t with the current beta (PyTorch semantics), so the
+    // beta powers must be rebuilt from the new value; set_steps owns that derivation.
+    set_steps(m_steps);
 }
 
 float AdamW::get_beta2() const {
@@ -160,6 +188,7 @@ float AdamW::get_beta2() const {
 
 void AdamW::set_beta2(float beta2) {
     m_config.beta2 = beta2;
+    set_steps(m_steps);
 }
 
 float AdamW::get_epsilon() const {

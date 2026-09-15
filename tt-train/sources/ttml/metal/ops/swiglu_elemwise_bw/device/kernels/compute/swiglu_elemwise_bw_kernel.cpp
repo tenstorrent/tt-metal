@@ -23,9 +23,8 @@ constexpr uint32_t cb_scratch = tt::CBIndex::c_6;
 constexpr uint32_t cb_silu_grad = tt::CBIndex::c_7;
 
 void kernel_main() {
-    init_sfpu(cb_linear1, cb_dL_dlinear1);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_linear1, cb_gate, cb_dL_dlinear1);
+    copy_init(cb_linear1);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         for (uint32_t col = 0; col < Wt; col += block_size) {

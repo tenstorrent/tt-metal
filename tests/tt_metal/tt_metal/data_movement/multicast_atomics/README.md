@@ -8,7 +8,7 @@ The `noc_semaphore_inc_multicast` API allows a single core to atomically increme
 
 ## Mesh Device API Support
 
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 ## Device 2.0 API Support
 

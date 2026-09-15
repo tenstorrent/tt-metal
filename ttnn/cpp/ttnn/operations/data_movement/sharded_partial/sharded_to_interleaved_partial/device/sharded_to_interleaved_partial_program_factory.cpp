@@ -54,74 +54,60 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
     const uint32_t slice_index = operation_attributes.slice_index;
     const bool is_l1_aligned = true;
 
-    uint32_t num_units_per_shard = 0;
-    uint32_t input_unit_size = 0;
-    uint32_t output_unit_size = 0;
-    uint32_t num_units_per_shard_width = 0;
-    uint32_t num_units_per_shard_height = 0;
-    uint32_t num_units_offset = 0;
-    uint32_t num_units_per_row = 0;
-    uint32_t num_units_height = 0;
-    uint32_t num_units_per_shard_height_last = 0;
-    uint32_t num_units_per_shard_width_last = 0;
-
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     auto shard_spec = input.shard_spec().value();
     auto shard_strategy = input.memory_config().memory_layout();
-
+    const bool is_tile = input.layout() == Layout::TILE;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto& all_cores = shard_spec.grid;
-    uint32_t num_cores = all_cores.num_cores();
-    uint32_t num_cores_unpadded = num_cores;
-    const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
 
-    CoreCoord end_core = cores[num_cores - 1];
-    if (output.layout() == Layout::TILE) {
+    // Extents in destination units: tiles for tile layout, sticks x bytes for row-major. A row-major
+    // page is one logical row, so its extent comes from the logical shape, not the padded one.
+    uint32_t input_unit_size = 0;
+    uint32_t output_unit_size = 0;
+    uint32_t tensor_h = 0;
+    uint32_t tensor_w = 0;
+    uint32_t shard_h = 0;
+    uint32_t shard_w = 0;
+    uint32_t num_units_per_shard = 0;
+    if (is_tile) {
         input_unit_size = tt::tile_size(input_cb_data_format);
         output_unit_size = tt::tile_size(output_cb_data_format);
-        num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
-        num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
-        num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
-        num_units_offset = num_units_per_row;
-        num_units_height = (input.physical_volume() / input.padded_shape()[-1]) / TILE_HEIGHT;
-        num_units_per_shard_height_last =
-            num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
-        num_units_per_shard_width_last =
-            num_units_per_shard_width - (round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
+        tensor_h = (input.physical_volume() / input.padded_shape()[-1]) / TILE_HEIGHT;
+        tensor_w = input.padded_shape()[-1] / TILE_WIDTH;
+        shard_h = shard_spec.shape[0] / TILE_HEIGHT;
+        shard_w = shard_spec.shape[1] / TILE_WIDTH;
+        num_units_per_shard = shard_h * shard_w;
     } else {
         input_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * input.element_size());
         output_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * output.element_size());
-        num_units_per_shard_height = shard_spec.shape[0];
-        num_units_per_shard_width = 1;
-        num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = static_cast<uint32_t>(input.logical_shape()[-1] * input.element_size());
-        num_units_offset = 1;
-        num_units_height = static_cast<uint32_t>(input.logical_volume() / input.logical_shape()[-1]);
-        num_units_per_shard_height_last =
-            num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
-        num_units_per_shard_width_last =
-            output_unit_size - (round_up(num_units_per_row, output_unit_size) - num_units_per_row);
+        tensor_h = static_cast<uint32_t>(input.logical_volume() / input.logical_shape()[-1]);
+        tensor_w = static_cast<uint32_t>(input.logical_shape()[-1] * input.element_size());
+        shard_h = shard_spec.shape[0];
+        shard_w = output_unit_size;
+        num_units_per_shard = shard_h;
     }
 
-    // re-calculate end_core in the case shard grid is larger than used grid
-    if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-        num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
-    } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-        if (output.layout() == Layout::TILE) {
-            num_cores_unpadded = div_up(num_units_per_row, num_units_per_shard_width);
-        } else {
-            num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
-        }
-    }
-    end_core = cores[num_cores_unpadded - 1];
+    const uint32_t height_shards = div_up(tensor_h, shard_h);
+    const uint32_t width_shards = div_up(tensor_w, shard_w);
+    const uint32_t num_active_cores = height_shards * width_shards;
 
-    // Create CoreRangeSet for only the cores that will be used (fixes NOC error when grid > data)
-    CoreRangeSet used_cores = num_cores_unpadded < num_cores
-                                  ? select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation)
-                                  : all_cores;
+    // A grid provisioned wider than the data leaves cores holding only padding; leave them out.
+    const CoreCoord grid_origin = all_cores.bounding_box().start_coord;
+    CoreRangeSet used_cores;
+    if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
+        const uint32_t grid_x = rm_orientation ? width_shards : height_shards;
+        const uint32_t grid_y = rm_orientation ? height_shards : width_shards;
+        used_cores =
+            CoreRangeSet(CoreRange(grid_origin, CoreCoord{grid_origin.x + grid_x - 1, grid_origin.y + grid_y - 1}));
+    } else {
+        used_cores = num_active_cores < all_cores.num_cores()
+                         ? select_from_corerangeset(all_cores, 0, num_active_cores - 1, rm_orientation)
+                         : all_cores;
+    }
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
@@ -175,7 +161,7 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    if (input.layout() == Layout::TILE) {
+    if (is_tile) {
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "writer_unary_sharded_blocks_interleaved_start_id.cpp";
@@ -205,106 +191,49 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
 
     uint32_t starting_idx_h =
         operations::data_movement::detail::calculate_starting_idx_h(output, num_slices, slice_index);
-    uint32_t curr_idx_h = 0;
-    uint32_t curr_idx_w = 0;
 
-    for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
-        const auto& core = cores[core_idx];
-        uint32_t shard_height = num_units_per_shard_height;
-        uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
-        if (input.layout() == Layout::TILE) {
-            if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-                if (core.x == end_core.x && core.y == end_core.y) {
-                    shard_height = num_units_per_shard_height_last;
-                }
-            } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-                if (core.x == end_core.x && core.y == end_core.y) {
-                    shard_width = num_units_per_shard_width_last;
-                }
-            } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
-                if (rm_orientation) {
-                    if (core.x == end_core.x) {
-                        shard_width = num_units_per_shard_width_last;
-                    }
-                    if (core.y == end_core.y) {
-                        shard_height = num_units_per_shard_height_last;
-                    }
-                } else {
-                    if (core.y == end_core.y) {
-                        shard_width = num_units_per_shard_width_last;
-                    }
-                    if (core.x == end_core.x) {
-                        shard_height = num_units_per_shard_height_last;
-                    }
-                }
-            }
-            // Writer run-time args: arg 0 is the destination-buffer base address (binding via Buffer*).
+    // Source stride: the shard's row pitch in L1, which stays the full shard width.
+    uint32_t padded_shard_width = tt::align(output_unit_size, dst_buffer->alignment());
+    if (is_blackhole or is_l1_aligned) {
+        if (!dst_is_dram or is_l1_aligned) {
+            padded_shard_width = tt::align(output_unit_size, hal::get_l1_alignment());
+        }
+    }
+
+    for (uint32_t sh = 0; sh < height_shards; sh++) {
+        for (uint32_t sw = 0; sw < width_shards; sw++) {
+            // Height sharding has a single column and width sharding a single row, so one index is 0.
+            const CoreCoord core =
+                shard_strategy == TensorMemoryLayout::BLOCK_SHARDED
+                    ? CoreCoord{grid_origin.x + (rm_orientation ? sw : sh), grid_origin.y + (rm_orientation ? sh : sw)}
+                    : cores[sh + sw];
+            const uint32_t h0 = sh * shard_h;
+            const uint32_t w0 = sw * shard_w;
+            // Clipping to the tensor is what keeps the write inside the destination page.
+            const uint32_t shard_height = std::min(shard_h, tensor_h - h0);
+            const uint32_t shard_width = std::min(shard_w, tensor_w - w0);
+
+            // Arg 0 is the destination-buffer base address (binding via Buffer*).
             KernelDescriptor::RTArgList writer_rt;
             writer_rt.push_back(dst_buffer);
-            writer_rt.push_back(num_units_per_shard_height);
-            writer_rt.push_back(num_units_per_shard_width);
-            writer_rt.push_back(shard_height);
-            writer_rt.push_back(shard_width);
-            writer_rt.push_back(num_units_offset);
-            writer_rt.push_back(num_units_per_shard);
-            writer_rt.push_back(curr_idx_h + curr_idx_w);
-            writer_rt.push_back(starting_idx_h);
+            if (is_tile) {
+                writer_rt.push_back(shard_h);
+                writer_rt.push_back(shard_w);
+                writer_rt.push_back(shard_height);
+                writer_rt.push_back(shard_width);
+                writer_rt.push_back(tensor_w);
+                writer_rt.push_back(num_units_per_shard);
+                writer_rt.push_back(h0 * tensor_w + w0);
+                writer_rt.push_back(starting_idx_h);
+            } else {
+                writer_rt.push_back(tensor_w);
+                writer_rt.push_back(shard_height);
+                writer_rt.push_back(shard_width);
+                writer_rt.push_back(padded_shard_width);
+                writer_rt.push_back(w0);
+                writer_rt.push_back(h0);
+            }
             writer_desc.emplace_runtime_args(core, writer_rt);
-
-            curr_idx_w += num_units_per_shard_width;
-            if (curr_idx_w >= num_units_per_row) {
-                curr_idx_w = 0;
-                curr_idx_h += num_units_per_row * num_units_per_shard_height;
-            }
-        } else {
-            if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
-                if (core.x == end_core.x && core.y == end_core.y) {
-                    shard_height = num_units_per_shard_height_last;
-                }
-            } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
-                if (core.x == end_core.x && core.y == end_core.y) {
-                    shard_width = num_units_per_shard_width_last;
-                }
-            } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
-                if (rm_orientation) {
-                    if (core.x == end_core.x) {
-                        shard_width = num_units_per_shard_width_last;
-                    }
-                    if (core.y == end_core.y) {
-                        shard_height = num_units_per_shard_height_last;
-                    }
-                } else {
-                    if (core.y == end_core.y) {
-                        shard_width = num_units_per_shard_width_last;
-                    }
-                    if (core.x == end_core.x) {
-                        shard_height = num_units_per_shard_height_last;
-                    }
-                }
-            }
-            uint32_t l1_alignment = hal::get_l1_alignment();
-            uint32_t padded_shard_width = tt::align(output_unit_size, dst_buffer->alignment());
-            if (is_blackhole or is_l1_aligned) {
-                if (!dst_is_dram or is_l1_aligned) {
-                    padded_shard_width = tt::align(output_unit_size, l1_alignment);
-                }
-            }
-            // Writer run-time args: arg 0 is the destination-buffer base address (binding via Buffer*).
-            KernelDescriptor::RTArgList writer_rt;
-            writer_rt.push_back(dst_buffer);
-            writer_rt.push_back(num_units_per_row);
-            writer_rt.push_back(shard_height);
-            writer_rt.push_back(shard_width);
-            writer_rt.push_back(padded_shard_width);
-            writer_rt.push_back(curr_idx_w);
-            writer_rt.push_back(curr_idx_h);
-            writer_desc.emplace_runtime_args(core, writer_rt);
-
-            curr_idx_w += output_unit_size;
-            if (curr_idx_w >= num_units_per_row) {
-                curr_idx_w = 0;
-                curr_idx_h += num_units_per_shard_height;
-            }
         }
     }
 

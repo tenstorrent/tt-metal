@@ -25,7 +25,7 @@ constexpr uint32_t cb_silu = tt::CBIndex::c_3;
 // h = silu(gate) * up for one block.
 inline void swiglu_block() {
     tile_regs_acquire();
-    copy_tile_init(cb_gate);
+    copy_init(cb_gate);
     for (uint32_t i = 0; i < block_size; ++i) {
         copy_tile(cb_gate, i, i);
     }
@@ -48,10 +48,8 @@ inline void swiglu_block() {
 }
 
 void kernel_main() {
-    init_sfpu(cb_gate, cb_out);
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call,
-    // but here it follows another engine op (init_sfpu / a prior startup); see the issue.
     compute_kernel_hw_startup(cb_gate, cb_up, cb_out);
+    copy_init(cb_gate);
 
     for (uint32_t block = 0; block < num_blocks_per_core; ++block) {
         cb_wait_front(cb_gate, block_size);

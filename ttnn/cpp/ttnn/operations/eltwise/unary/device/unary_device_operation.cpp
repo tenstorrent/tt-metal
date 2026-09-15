@@ -59,6 +59,31 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // No early exit: beta is per-op, so every SOFTCAP entry in the chain has to be checked.
+    for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::SOFTCAP) {
+            // ckernel_sfpu_softcap.h and the SfpuType registration it needs exist only
+            // under hw/ckernels/blackhole. Without this the kernel reaches JIT and
+            // dies on a missing header, which points nowhere useful.
+            TT_FATAL(
+                input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
+                "Unary: SOFTCAP is implemented for Blackhole only, got arch {}",
+                input_tensor.device()->arch());
+            // The op always runs the Sollya polynomial tanh, whose ~2.3e-3 relative error is
+            // below half a bf16 ULP but far coarser than fp32 would imply. Refuse fp32 rather
+            // than hand back a wide fp32 tensor; tanh_tile is the fp32-grade path.
+            TT_FATAL(
+                input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
+                "Unary: SOFTCAP supports BFLOAT16 and BFLOAT8_B inputs, got dtype {}",
+                input_tensor.dtype());
+            // beta reaches the kernel as (beta, 1/beta), so zero would hand the SFPU inf and
+            // return something that is not beta * tanh(x / beta).
+            const auto beta = op.get_param_if<float>(0);
+            TT_FATAL(beta.has_value(), "Unary: SOFTCAP requires a float beta parameter");
+            TT_FATAL(*beta != 0.0f, "Unary: SOFTCAP requires a non-zero beta");
+        }
+    }
+
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -112,7 +137,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                     tensor_args.input.padded_shape(),
                     padded_out_shape);
             } else {
-                shard_spec_opt = generate_shard_spec_all_cores(tensor_args.input, padded_out_shape, memory_layout);
+                shard_spec_opt = generate_output_shard_spec(tensor_args.input, padded_out_shape, memory_layout);
             }
         }
 

@@ -25,8 +25,8 @@ void kernel_main() {
     // We deliberately recompute the move-chunk size from these base pointers in-kernel rather than
     // receiving the host-computed (output_addr - input_addr) delta via a runtime arg, which would go
     // stale on a cache hit with different storage and silently read/write the wrong addresses.
-    uint32_t src_cb_base_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::input).get_noc_addr(0));
-    uint32_t dst_cb_base_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::output).get_noc_addr(0));
+    uint32_t src_cb_base_addr = noc_address_backend::extract_local_address(TensorAccessor(tensor::input).get_noc_addr(0));
+    uint32_t dst_cb_base_addr = noc_address_backend::extract_local_address(TensorAccessor(tensor::output).get_noc_addr(0));
 
     // The op only takes this (backwards, intra-L1, overlapping) path when the output buffer is at a
     // higher address than the input buffer, so the delta is strictly positive.

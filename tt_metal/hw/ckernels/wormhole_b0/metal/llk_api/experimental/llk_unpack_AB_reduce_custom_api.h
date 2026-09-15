@@ -4,7 +4,6 @@
 
 #pragma once
 #include <cstdint>
-#include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -16,6 +15,7 @@
 #include "llk_param_structs.h"
 #include "experimental/llk_unpack_AB_reduce_custom.h"
 #include "llk_unpack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -46,8 +46,9 @@ using namespace ckernel::unpacker;
  * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
  * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     _llk_unpack_AB_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape);
 }
 
@@ -73,6 +74,7 @@ inline void llk_unpack_AB_reduce_block_max_row_init(const ckernel::TensorShape& 
 template <std::uint32_t block_ct_dim, bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
@@ -105,5 +107,6 @@ inline void llk_unpack_AB_reduce_block_max_row(
  */
 template <bool respect_trigger = false>
 inline void llk_unpack_AB_reduce_block_max_row_uninit() {
+    SAN_HOOK(unsupported());
     _llk_unpack_AB_reduce_block_max_row_uninit_<respect_trigger>();
 }
