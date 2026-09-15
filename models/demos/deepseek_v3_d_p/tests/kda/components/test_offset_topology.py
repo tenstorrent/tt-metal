@@ -9,7 +9,7 @@ order and MLA's actual row placement fails here.
 
 import pytest
 
-from models.demos.deepseek_v3_d_p.tt.kda.offset import offset_topology, segment_owners
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, offset_topology
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 
 SP_SIZE = 8
@@ -17,6 +17,24 @@ LOCAL_ROWS = 640
 GLOBAL_ROWS = SP_SIZE * LOCAL_ROWS
 TILE = 32
 ALL_STARTS = tuple(range(0, GLOBAL_ROWS, TILE))
+
+
+def segment_owners(topology: OffsetTopology) -> tuple[tuple[int, int, int], ...]:
+    """Return the chronological segments as ``(chip, row_start, row_end)`` triples.
+
+    The first segment consumes the caller's entry state and the last segment
+    produces the replacement state. When the topology is not split there are
+    ``sp_size`` segments; otherwise there are ``sp_size + 1`` and the boundary
+    chip appears first and last.
+    """
+    rows = topology.local_rows
+    order = topology.chip_order
+    if not topology.is_split:
+        return tuple((chip, 0, rows) for chip in order)
+    head = (order[0], 0, topology.head_rows)
+    middle = tuple((chip, 0, rows) for chip in order[1:])
+    tail = (order[0], topology.head_rows, rows)
+    return (head, *middle, tail)
 
 
 def _chronological_positions(topology_start: int) -> list[int]:

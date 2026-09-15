@@ -38,7 +38,10 @@ class OffsetTopology:
     local_rows: int
     boundary_chip: int
     head_rows: int
-    tail_rows: int
+
+    @property
+    def tail_rows(self) -> int:
+        return self.local_rows - self.head_rows
 
     @property
     def is_split(self) -> bool:
@@ -91,23 +94,4 @@ def offset_topology(actual_start: int, sp_size: int, local_rows: int) -> OffsetT
         local_rows=local_rows,
         boundary_chip=(start // local_rows) % sp_size,
         head_rows=head_rows,
-        tail_rows=tail_rows,
     )
-
-
-def segment_owners(topology: OffsetTopology) -> tuple[tuple[int, int, int], ...]:
-    """Return the chronological segments as ``(chip, row_start, row_end)`` triples.
-
-    The first segment consumes the caller's entry state and the last segment
-    produces the replacement state. When the topology is not split there are
-    ``sp_size`` segments; otherwise there are ``sp_size + 1`` and the boundary
-    chip appears first and last.
-    """
-    rows = topology.local_rows
-    order = topology.chip_order
-    if not topology.is_split:
-        return tuple((chip, 0, rows) for chip in order)
-    head = (order[0], 0, topology.head_rows)
-    middle = tuple((chip, 0, rows) for chip in order[1:])
-    tail = (order[0], topology.head_rows, rows)
-    return (head, *middle, tail)
