@@ -45,27 +45,6 @@ static CoreCoord logical_dram_endpoint_for_noc(const metal_SocDescriptor& soc_de
     return {};
 }
 
-static uint32_t mpfe_port_for_logical_dram_core(
-    const metal_SocDescriptor& soc_desc, uint32_t dram_view, const CoreCoord& logical_core) {
-    constexpr uint32_t kFirstMpfePort = 1;
-    const CoreCoord physical_core = soc_desc.get_physical_dram_core_from_logical(logical_core);
-    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(dram_view));
-    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    for (uint32_t subchannel = 0; subchannel < num_subchannels; ++subchannel) {
-        const tt::umd::CoreCoord subchannel_core = soc_desc.get_dram_core_for_channel(
-            static_cast<int>(channel), static_cast<int>(subchannel), tt::CoordSystem::TRANSLATED);
-        if (subchannel_core.x == physical_core.x && subchannel_core.y == physical_core.y) {
-            return kFirstMpfePort + subchannel;
-        }
-    }
-    TT_THROW(
-        "Could not map logical DRAM core ({}, {}) in view {} to an MPFE port",
-        logical_core.x,
-        logical_core.y,
-        dram_view);
-    return 0;
-}
-
 // Fixture for DRISC/DRAM-kernel tests
 class DramKernelFixture : public BlackholeSingleCardFixture {
 protected:
