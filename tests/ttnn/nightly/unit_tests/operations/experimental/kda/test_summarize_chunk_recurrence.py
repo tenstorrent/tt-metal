@@ -181,18 +181,6 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
     assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
 
 
-def test_summarize_chunk_recurrence_publishes_wrap_head(device: ttnn.Device) -> None:
-    host_inputs = host_protocol(2, 4, 32, 32, seed=821)
-    inputs = device_protocol(host_inputs, device)
-    indicator = to_device(torch.ones(1, 1, 1), device)
-
-    actual = run_summary(inputs, wrap_indicator=indicator, wrap_chunk=2)
-    expected = summary_oracle(tuple(tensor[:, :2] for tensor in host_inputs))
-
-    for name, expected_tensor, actual_tensor in zip(("affine_a", "affine_b"), expected, actual, strict=True):
-        assert_accurate(expected_tensor, ttnn.to_torch(actual_tensor), name=f"wrap head {name}", pcc_threshold=0.999)
-
-
 def _segmented_summary_oracle(
     host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
 ) -> tuple[torch.Tensor, ...]:
@@ -674,3 +662,36 @@ def test_summarize_chunk_recurrence_does_not_expose_prototype_modes(
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{removed_keyword: True})
+
+
+@pytest.mark.parametrize(
+    "indicator_value,wrap_chunk,emit_tail",
+    [
+        (0, 0, False),
+        (1, 0, False),
+        (0, 2, False),
+        (1, 2, False),
+        (None, 2, False),
+        (None, 2, True),
+        (1, 0, True),
+        (1, 4, True),
+    ],
+)
+def test_summarize_chunk_recurrence_rejects_unsupported_wrap_modes(
+    device: ttnn.Device,
+    indicator_value: int | None,
+    wrap_chunk: int,
+    emit_tail: bool,
+    expect_error,
+) -> None:
+    inputs = device_protocol(host_protocol(2, 4, 32, 32, seed=821), device)
+    indicator = None if indicator_value is None else to_device(torch.tensor([[[float(indicator_value)]]]), device)
+    with expect_error(RuntimeError, "wrap|tail summaries"):
+        run_summary(inputs, wrap_indicator=indicator, wrap_chunk=wrap_chunk, emit_tail_summaries=emit_tail)
+
+
+@pytest.mark.parametrize("keyword", ["chunk_start", "chunk_count"])
+def test_summarize_chunk_recurrence_has_no_range_controls(device: ttnn.Device, keyword: str, expect_error) -> None:
+    inputs = device_protocol(host_protocol(2, 4, 32, 32), device)
+    with expect_error(TypeError, "incompatible function arguments"):
+        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{keyword: 1})
