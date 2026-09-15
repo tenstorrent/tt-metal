@@ -225,7 +225,7 @@ void kernel_main() {
             // Global Q scheduling: sdpa_standard walks the per-core flat range over
             // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head
             // q_chunk from each flat index.
-            sol_attn_standard<
+            sdpa_standard<
                 cb_qk_im,
                 cb_identity_scale_in,
                 cb_attention_sink,
@@ -242,8 +242,7 @@ void kernel_main() {
                 sliding_window_size,
                 use_lightweight_causal_mask,
                 use_windowed_narrowing,
-                cb_windowed_k_range,
-                chunk_keep_every>(
+                cb_windowed_k_range>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,
