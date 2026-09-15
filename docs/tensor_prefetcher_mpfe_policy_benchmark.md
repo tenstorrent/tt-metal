@@ -109,6 +109,20 @@ BENCH_TRACE_REPEATS=50 \
 pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
 ```
 
+Run the complete policy and weight matrix repeatedly with:
+
+```bash
+BENCH_SUITE_ITERATIONS=3 BENCH_TRACE_REPEATS=50 \
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_benchmarks.sh
+```
+
+The runner creates a timestamped directory under `generated/` containing
+`benchmark.log` and `results.jsonl`. Its default matrix covers high weights
+3/5/7, valid medium weights 1/3/5, active weights 1/3/5/7, all named policies,
+the production default, and the forced-sync control. Override
+`MPFE_HIGH_WEIGHTS`, `MPFE_MEDIUM_WEIGHTS`, `MPFE_ACTIVE_WEIGHTS`, or
+`OUTPUT_DIR` as needed.
+
 To isolate the cost of the per-request sender synchronization used by
 `dynamic-000`, compare `static-007` with and without forced synchronization.
 Both runs use identical weights, so their difference measures synchronization

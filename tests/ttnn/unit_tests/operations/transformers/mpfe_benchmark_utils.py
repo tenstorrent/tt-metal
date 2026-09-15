@@ -92,6 +92,12 @@ def append_benchmark_jsonl(result: dict[str, Any]) -> None:
     output_path = os.environ.get("TT_METAL_BENCHMARK_RESULT_JSONL")
     if output_path is None:
         return
+    run_label = os.environ.get("TT_METAL_BENCHMARK_RUN_LABEL")
+    suite_iteration = os.environ.get("TT_METAL_BENCHMARK_SUITE_ITERATION")
+    if run_label is not None:
+        result["run_label"] = run_label
+    if suite_iteration is not None:
+        result["suite_iteration"] = int(suite_iteration)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as output:
