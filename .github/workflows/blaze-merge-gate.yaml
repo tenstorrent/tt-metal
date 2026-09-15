@@ -21,6 +21,15 @@ name: Blaze Merge Gate
 # same commit, so JIT-compiled kernels and the linked libraries come from one
 # tt-metal rather than two.
 #
+# `dev-image` is the dev container this run built for the same commit. tt-blaze
+# JIT-compiles kernels with the SFPI toolchain from the container it runs in, not
+# from the tarball or wheel (the wheel does not bundle SFPI; the tarball's copy is
+# extracted outside the runtime root), so without this input tt-blaze runs in its
+# repo-variable DEV_IMAGE and compiles with whatever SFPI that image carries.
+# 2026-09-15: that image had SFPI 7.73 while this commit's had 7.77, and the gate
+# passed a craq-sim decode failure that every 7.75+ kernel build hits. Passing the
+# image makes the gate compile with the compiler the release actually ships.
+#
 # The release build is tracy=false, so tt-blaze runs against the plain variant
 # (its pin-driven runs are profiler-only). The gate-tier tests that touch tracy at
 # all today do so defensively (an `import tracy` in a try/except, a
@@ -55,6 +64,15 @@ on:
           tenstorrent/tt-metal for as long as the blaze run lasts.
         required: true
         type: string
+      dev-image:
+        description: >-
+          Dev container image built for `metal-ref`, as a full ghcr ref with host
+          (`build-artifact`'s `dev-docker-image` output). tt-blaze runs every test
+          job in it, so its kernels are compiled with this commit's SFPI. Empty
+          leaves tt-blaze on its repo-variable DEV_IMAGE.
+        required: false
+        type: string
+        default: ""
       blaze-ref:
         description: "tt-blaze branch/tag/SHA to run the gate from."
         required: false
@@ -101,6 +119,7 @@ jobs:
           METAL_RUN_ID: ${{ inputs.metal-run-id }}
           METAL_REF: ${{ inputs.metal-ref }}
           BLAZE_REF: ${{ inputs.blaze-ref }}
+          DEV_IMAGE: ${{ inputs.dev-image }}
           TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
         shell: bash
         run: |
@@ -168,12 +187,17 @@ jobs:
           # Dispatching needs actions:WRITE, which neither probe above proves --
           # both are reads. A 403 here (rather than 404) means the token can see
           # Actions but not trigger them.
+          # dev-image is only sent when set, so a caller that leaves it empty keeps
+          # tt-blaze's default image rather than overriding it with "".
+          DEV_IMAGE_ARG=()
+          [ -n "$DEV_IMAGE" ] && DEV_IMAGE_ARG=(-f "dev-image=$DEV_IMAGE")
           if ! gh workflow run "$BLAZE_WORKFLOW" \
             --repo "$BLAZE_REPO" \
             --ref "$BLAZE_REF" \
             -f metal-run-id="$METAL_RUN_ID" \
             -f metal-ref="$METAL_REF" \
-            -f dispatch-id="$DISPATCH_ID"; then
+            -f dispatch-id="$DISPATCH_ID" \
+            "${DEV_IMAGE_ARG[@]}"; then
             echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
             echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -182,6 +206,7 @@ jobs:
           echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (full merge gate)"
           echo "  tt-metal commit:  ${METAL_REF}"
           echo "  tt-metal build:   https://github.com/${GITHUB_REPOSITORY}/actions/runs/${METAL_RUN_ID}"
+          echo "  dev image:        ${DEV_IMAGE:-<tt-blaze default (repo variable DEV_IMAGE)>}"
 
           started=$(date +%s)
           deadline=$(( started + TIMEOUT_MINUTES * 60 ))
