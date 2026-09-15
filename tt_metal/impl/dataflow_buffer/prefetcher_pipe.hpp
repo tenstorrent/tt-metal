@@ -24,37 +24,28 @@ class MeshDevice;
 
 namespace experimental {
 
-class PrefetcherPipe {
+// Implementation of the PrefetcherPipe host object declared in
+// tt-metalium/experimental/prefetcher_pipe.hpp: it owns the persistent L1 allocations, composes
+// each core's config page and stamps those pages onto the device. A PrefetcherPipe holds one of
+// these and forwards to it, and the host runtime records an Attach by pointing at one. That
+// pointer is only as good as the handle: destroying the PrefetcherPipe destroys this object and
+// frees the ring, which is why the handle must outlive every Program attached to it. Moving a
+// handle hands this object to the new owner without relocating it, so destruction is the only
+// way to get there.
+class PrefetcherPipeImpl {
 public:
-    /**
-     * Host object for a durable cross-program remote DFB.
-     *
-     * Lifetime: Create allocates the data ring + config page from persistent L1
-     * pages once. Keep this object alive for the entire time any program Attaches / uses
-     * it, destroying it frees the ring and config. The runtime does not fence peers;
-     * only destroy (or let it go out of scope) after every peer program has Finished.
-     *
-     * Host programming model:
-     *   auto pipe = CreatePrefetcherPipe(device, sender_core, receiver_cores, ring_size);
-     *   AttachPrefetcherPipe(program, pipe, sender_cores, entry_size);  // or all receivers
-     *   // optional: CreatePrefetcherPipeRelayDataflowBuffer(program, receivers, cfg, id);
-     *
-     * Device kernel flows (sender / receiver / relay) are documented on the device API:
-     *   tt_metal/hw/inc/api/dataflow/prefetcher_pipe.h
-     *
-     */
-    PrefetcherPipe(
+    PrefetcherPipeImpl(
         distributed::MeshDevice* device,
         CoreCoord sender_core,
         const CoreRangeSet& receiver_cores,
         uint32_t ring_size,
         BufferType buffer_type = BufferType::L1);
 
-    PrefetcherPipe(const PrefetcherPipe&) = delete;
-    PrefetcherPipe& operator=(const PrefetcherPipe&) = delete;
-    PrefetcherPipe(PrefetcherPipe&&) = delete;
-    PrefetcherPipe& operator=(PrefetcherPipe&&) = delete;
-    ~PrefetcherPipe();
+    PrefetcherPipeImpl(const PrefetcherPipeImpl&) = delete;
+    PrefetcherPipeImpl& operator=(const PrefetcherPipeImpl&) = delete;
+    PrefetcherPipeImpl(PrefetcherPipeImpl&&) = delete;
+    PrefetcherPipeImpl& operator=(PrefetcherPipeImpl&&) = delete;
+    ~PrefetcherPipeImpl();
 
     uint32_t buffer_address() const;
     uint32_t config_address() const;
@@ -94,44 +85,14 @@ private:
 };
 
 /**
- * @brief Create a PrefetcherPipe host object with an arena-backed data ring and config page.
- *
- * Config pages are written to device L1 at Create (safe-point initial write).
- * Caller keeps the object alive for cross-program persistence; Attach wires programs
- * to the same ring/config addresses.
- */
-PrefetcherPipe CreatePrefetcherPipe(
-    distributed::MeshDevice* device,
-    CoreCoord sender_core,
-    const CoreRangeSet& receiver_cores,
-    uint32_t ring_size,
-    BufferType buffer_type = BufferType::L1);
-
-/**
- * @brief Attach a PrefetcherPipe to `program` on the given cores (non-owning).
- *
- * `cores` must be a non-empty role-complete subset of the PrefetcherPipe's mapping
- * cores: the sender role is this pipe's one sender, while the receiver role contains
- * every receiver. This prevents one PrefetcherPipe role from being split across Programs.
- * Returns an independent prefetcher_pipe_id in [0, 255).
- *
- * WH/BH: on each sender core, only one DM (BRISC or NCRISC) may own PrefetcherPipe
- * credit / resize / push for that Attach. Both DMs can run on the same physical
- * core, but dual-DM ownership races on local sent counters and the checkpoint
- * cursor. Host binding / kernel placement should pin a single sender DM owner
- * until Attach can enforce this.
- *
- * @param entry_size Dense entry size for this Program execution epoch.
- */
-uint8_t AttachPrefetcherPipe(
-    Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
-
-/**
  * @brief Create and register the local DFB used to relay a PrefetcherPipe to TRISC.
  *
  * The local DFB borrows the PrefetcherPipe data ring. `prefetcher_pipe_id` must already be
  * Attached on `receiver_core_spec`. Relay entry_size / depth must match this Attach's
  * dense entry_size and `ring_size / entry_size`.
+ *
+ * Declared here rather than alongside the rest of the host API because it takes a DFB config,
+ * which has no public header yet.
  *
  * @return Program-unique host DFB id (distinct from `prefetcher_pipe_id`).
  */
