@@ -34,12 +34,34 @@ void kernel_main() {
     cb_wait_front(4, 1);
     {
         DeviceZoneScopedN("SDPA_FULLCHIP_LOFI");
-        sdpa_standard_v2<q_tiles, 16, 16 * k_chunks, 4, 4, scale,
+        sdpa_standard_v2<
+            q_tiles,
+            16,
+            16 * k_chunks,
+            4,
+            4,
+            scale,
 #ifdef SDPA_FP32_STREAMING
-                         1, 4, 1, 4,
+            1,
+            4,
+            1,
+            4,
 #else
-                         2, 4, 2, 4,
+            2,
+            4,
+            2,
+            4,
 #endif
-                         false, 0, 1, 2, 6, 3, 14, 4, 5, 16, 15>(jobs, k_chunks, 8, 9, 10, 11, 12, 13);
+            false,
+            0,
+            1,
+            2,
+            6,
+            3,
+            14,
+            4,
+            5,
+            16,
+            15>(jobs, k_chunks, 8, 9, 10, 11, 12, 13);
     }
 }

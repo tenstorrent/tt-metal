@@ -4,6 +4,7 @@
 
 One-core TTNN matmuls, not streaming-SDPA timing. No performance claims.
 """
+
 import argparse
 import hashlib
 import importlib.util
@@ -36,9 +37,20 @@ def main():
     device = ttnn.open_device(device_id=0)
     try:
         with path.open("x") as output:
-            output.write(json.dumps(dict(kind="provenance", args=vars(args),
-                contract=__doc__, source_sha256={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                    for p in (Path(__file__).resolve(), HERE / "numerics.py")})) + "\n")
+            output.write(
+                json.dumps(
+                    dict(
+                        kind="provenance",
+                        args=vars(args),
+                        contract=__doc__,
+                        source_sha256={
+                            p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                            for p in (Path(__file__).resolve(), HERE / "numerics.py")
+                        },
+                    )
+                )
+                + "\n"
+            )
             for operation, left, right, transpose in (("QK", q, k, True), ("PV", p, v, False)):
                 original = left.double() @ (right.double().transpose(-2, -1) if transpose else right.double())
                 for representation in ("bf16", "lofi_rne", "bfp8", "bfp4_right"):
@@ -58,17 +70,34 @@ def main():
                     for fidelity in ("LoFi", "HiFi2", "HiFi4"):
                         for fp32_dst in (False, True):
                             config = ttnn.WormholeComputeKernelConfig(
-                                math_fidelity=getattr(ttnn.MathFidelity, fidelity), math_approx_mode=False,
-                                fp32_dest_acc_en=fp32_dst, packer_l1_acc=False)
-                            tensor = ttnn.matmul(ta, tb, transpose_b=transpose, dtype=ttnn.float32,
-                                compute_kernel_config=config, core_grid=ttnn.CoreGrid(y=1, x=1))
+                                math_fidelity=getattr(ttnn.MathFidelity, fidelity),
+                                math_approx_mode=False,
+                                fp32_dest_acc_en=fp32_dst,
+                                packer_l1_acc=False,
+                            )
+                            tensor = ttnn.matmul(
+                                ta,
+                                tb,
+                                transpose_b=transpose,
+                                dtype=ttnn.float32,
+                                compute_kernel_config=config,
+                                core_grid=ttnn.CoreGrid(y=1, x=1),
+                            )
                             actual = ttnn.to_torch(tensor).double()
                             assert torch.isfinite(actual).all()
-                            record = dict(kind="matmul_probe", operation=operation, representation=representation,
-                                fidelity=fidelity, fp32_dst=fp32_dst, output_dtype="FP32", seed=args.seed,
-                                arithmetic=M.metrics(actual, represented), end_to_end=M.metrics(actual, original),
+                            record = dict(
+                                kind="matmul_probe",
+                                operation=operation,
+                                representation=representation,
+                                fidelity=fidelity,
+                                fp32_dst=fp32_dst,
+                                output_dtype="FP32",
+                                seed=args.seed,
+                                arithmetic=M.metrics(actual, represented),
+                                end_to_end=M.metrics(actual, original),
                                 representation_error=M.metrics(represented, original),
-                                output_sha256=hashlib.sha256(actual.float().numpy().tobytes()).hexdigest())
+                                output_sha256=hashlib.sha256(actual.float().numpy().tobytes()).hexdigest(),
+                            )
                             output.write(json.dumps(record, allow_nan=False) + "\n")
                             output.flush()
                             print(json.dumps(record, allow_nan=False), flush=True)

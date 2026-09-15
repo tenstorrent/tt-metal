@@ -14,8 +14,12 @@ ALWI void lofi_safe_mul_bcast_cols_init(uint32_t a, uint32_t b, uint32_t line = 
 }
 template <bool fp32 = DST_ACCUM_MODE>
 ALWI void lofi_safe_mul_tiles_bcast_cols(uint32_t a, uint32_t b, uint32_t ai, uint32_t bi, uint32_t dst) {
-    MATH((llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::COL, fp32,
-                                MathFidelity::HiFi2, EltwiseBinaryReuseDestType::NONE>(a, b, dst, true)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::COL,
+          fp32,
+          MathFidelity::HiFi2,
+          EltwiseBinaryReuseDestType::NONE>(a, b, dst, true)));
     UNPACK((llk_unpack_AB<BroadcastType::COL>(a, b, ai, bi)));
 }
 }  // namespace ckernel

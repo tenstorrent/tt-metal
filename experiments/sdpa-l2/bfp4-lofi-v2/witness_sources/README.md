@@ -6,6 +6,15 @@ digests of their complete original bytes. They are deliberately not `.py`
 files, so ordinary Python/C++ source-formatting passes do not rewrite them.
 Do not format or regenerate them from subsequently changed producers.
 
+The directory's `.source` extension avoids Python/C++ formatters, but does not
+exempt text from generic end-of-file/whitespace fixers. Some historical bytes
+intentionally retain extra final newlines. The local `.gitattributes` setting
+disables Git line-ending normalization and suppresses its blank-at-EOF warning;
+it is not a pre-commit exemption.
+Do not run mutating fixers over these witnesses without an explicit archival
+or exclusion plan. No repository-wide hook configuration was changed for this
+research checkpoint, and a full pre-commit PASS is not claimed.
+
 | Original producer | Snapshot SHA-256 | Why needed |
 |---|---|---|
 | `identity4_streaming.py` | `4e54b83d0f45e0b2b155d2f1783118987b5a1065284f0e8dba8902af05bfa7cf` | Fixed K512 builder assignment omitted from case metadata |

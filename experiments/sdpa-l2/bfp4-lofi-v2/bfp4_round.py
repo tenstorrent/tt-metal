@@ -31,9 +31,9 @@ def validate_input(x):
     magnitude = values.abs()
     assert bool(((magnitude == 0) | (magnitude >= 2.0**-126)).all()), "No BF16 subnormal inputs"
     maximum = magnitude.reshape(-1, 16).amax(-1)
-    assert bool(((maximum == 0) | ((maximum >= 2.0**-124) & (maximum < 2.0**107))).all()), (
-        "Nonzero native-group maximum exponents must be in [-124, 106]"
-    )
+    assert bool(
+        ((maximum == 0) | ((maximum >= 2.0**-124) & (maximum < 2.0**107))).all()
+    ), "Nonzero native-group maximum exponents must be in [-124, 106]"
 
 
 def host_rne_bfp4(x):
@@ -103,9 +103,7 @@ def make_input(length, distribution, seed):
         values[group, group % 16] = 1.75
         exponent = (group % 231 - 124).int()
         # Avoid individual BF16 subnormals in low-exponent groups.
-        values = torch.where(
-            (exponent[:, None] - delta[None, :] < -126), torch.zeros_like(values), values
-        )
+        values = torch.where((exponent[:, None] - delta[None, :] < -126), torch.zeros_like(values), values)
         values[group, group % 16] = 1.75
     else:
         raise ValueError(distribution)
@@ -253,9 +251,9 @@ def main():
             median_ms=median,
             replay_ms=times,
             read_write_GBps=byte_count / (median * 1e6) if median else None,
-            quantization_l2_pct=float(100 * (actual.double() - x.double()).norm() / x.double().norm())
-            if x.double().norm()
-            else 0.0,
+            quantization_l2_pct=(
+                float(100 * (actual.double() - x.double()).norm() / x.double().norm()) if x.double().norm() else 0.0
+            ),
             source_sha256={
                 str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in [Path(__file__).resolve(), *sorted(DIRECTORY.glob("*.cpp"))]

@@ -48,15 +48,19 @@ def evaluate(q, k, v, variant, alpha, reference):
         raw = numerator / denominator
         result = raw.bfloat16().double()
         row_l2 = 100 * (result - reference).norm(dim=-1) / reference.norm(dim=-1).clamp_min(1e-300)
-        rows.append(dict(
-            denominator=name, alpha=alpha, alpha_fp32=alpha32,
-            **MODEL.metrics(result, reference),
-            before_output_rounding_l2_pct=MODEL.metrics(raw, reference)["l2_pct"],
-            row_p95_l2_pct=float(torch.quantile(row_l2, 0.95)),
-            q_representation_l2_pct=MODEL.metrics(qe, q)["l2_pct"],
-            q_gain_error_pct=float(100 * ((qe * q).sum() / q.square().sum() - 1)),
-            p_mass_ratio=float((matched_den / original_den).mean()),
-        ))
+        rows.append(
+            dict(
+                denominator=name,
+                alpha=alpha,
+                alpha_fp32=alpha32,
+                **MODEL.metrics(result, reference),
+                before_output_rounding_l2_pct=MODEL.metrics(raw, reference)["l2_pct"],
+                row_p95_l2_pct=float(torch.quantile(row_l2, 0.95)),
+                q_representation_l2_pct=MODEL.metrics(qe, q)["l2_pct"],
+                q_gain_error_pct=float(100 * ((qe * q).sum() / q.square().sum() - 1)),
+                p_mass_ratio=float((matched_den / original_den).mean()),
+            )
+        )
     return rows
 
 
@@ -87,15 +91,23 @@ def main():
     self_test()
     started = time.monotonic()
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
+
         sources = [Path(__file__), HERE / "numerics.py", MODEL.V1 / "probe.py", MODEL.V1 / "numerics.py"]
-        emit(dict(kind="provenance", args=vars(args), hostname=platform.node(),
-                  contract="CPU Q prescale FP32->RNE7, reciprocal-alpha score adjustment; FP64 subsequent arithmetic; NOT device accuracy/performance",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                hostname=platform.node(),
+                contract="CPU Q prescale FP32->RNE7, reciprocal-alpha score adjustment; FP64 subsequent arithmetic; NOT device accuracy/performance",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+            )
+        )
         for length in args.lengths:
             for seed in args.seeds:
                 for distribution in args.distributions:
@@ -107,8 +119,16 @@ def main():
                         ke, ve = residuals if variant == "residual48_qp7" else (k, v)
                         for alpha in args.alphas:
                             for row in evaluate(q, ke, ve, variant, alpha, reference):
-                                emit(dict(kind="attention_model", length=length, seed=seed,
-                                          distribution=distribution, variant=variant, **row))
+                                emit(
+                                    dict(
+                                        kind="attention_model",
+                                        length=length,
+                                        seed=seed,
+                                        distribution=distribution,
+                                        variant=variant,
+                                        **row,
+                                    )
+                                )
         emit(dict(kind="completed", seconds=time.monotonic() - started))
 
 

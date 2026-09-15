@@ -1,2 +1,2 @@
-# Historical assertion witnesses must retain byte-exact producer EOF spacing.
-witness_sources/*.source whitespace=-blank-at-eof
+# Historical assertion witnesses must retain byte-exact producer line endings and EOF spacing.
+witness_sources/*.source -text whitespace=-blank-at-eof

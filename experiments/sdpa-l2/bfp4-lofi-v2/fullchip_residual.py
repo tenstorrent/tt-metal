@@ -40,9 +40,7 @@ RPREP = module("residual_fullchip_rprep", HERE / "bfp4_residual_preprocess.py")
 
 
 def cb_specs(variant):
-    residual_format, residual_bytes = (
-        (ttnn.bfloat8_b, 1088) if variant == "residual48" else (ttnn.bfloat4_b, 576)
-    )
+    residual_format, residual_bytes = (ttnn.bfloat8_b, 1088) if variant == "residual48" else (ttnn.bfloat4_b, 576)
     # Q has two slots; every K0/K1/V0/V1 CB has one slot, matching FP32
     # streaming. CB7 aliases CB6 and therefore adds no allocation here.
     return [
@@ -116,8 +114,7 @@ def build(device, args, inputs):
             print("PREPROCESS_CHECK", name, mismatch, flush=True)
             assert mismatch == 0, f"{name} preprocessing mismatch"
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, args.heads, args.length, 128]), ttnn.bfloat16,
-        ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, args.heads, args.length, 128]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
     cbs = []
     for index, count, size, fmt in specs:
@@ -126,10 +123,17 @@ def build(device, args, inputs):
             formats.append(ttnn.CBFormatDescriptor(buffer_index=7, data_format=fmt, page_size=size))
         cbs.append(ttnn.CBDescriptor(total_size=count * size, core_ranges=grid, format_descriptors=formats))
     defines = dict(
-        EXP_APPROX_MODE="1", STATS_GRANULARITY="4", SUB_EXP_GRANULARITY="4",
-        MUL_BCAST_GRANULARITY="4", DHT_GRANULARITY="4", REDUCE_GRANULARITY="2",
-        SDPA_FP32_STREAMING="1", SDPA_FP32_STATE="1", SDPA_HIFI2_ROUND="1",
-        SDPA_LOFI_RESIDUALS="1", SDPA_LOFI_DENOM="1",
+        EXP_APPROX_MODE="1",
+        STATS_GRANULARITY="4",
+        SUB_EXP_GRANULARITY="4",
+        MUL_BCAST_GRANULARITY="4",
+        DHT_GRANULARITY="4",
+        REDUCE_GRANULARITY="2",
+        SDPA_FP32_STREAMING="1",
+        SDPA_FP32_STATE="1",
+        SDPA_HIFI2_ROUND="1",
+        SDPA_LOFI_RESIDUALS="1",
+        SDPA_LOFI_DENOM="1",
     )
     # Deliberately no SDPA_MATCH_HIFI2 and no SDPA_LOFI_ROUND_P: these are the
     # qualified streaming.py residual / cheap-exp / no-P-round settings.
@@ -137,8 +141,7 @@ def build(device, args, inputs):
         assert args.variant == "residual44", "Only identical component formats may skip reconfiguration"
         defines["SDPA_LOFI_SAME_FORMAT_RESIDUAL"] = "1"
     config = ttnn.ComputeConfigDescriptor(
-        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
-        dst_full_sync_en=False, math_approx_mode=True
+        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, dst_full_sync_en=False, math_approx_mode=True
     )
     pd = ttnn._ttnn.program_descriptor
     modes = pd.VectorUnpackToDestMode([pd.UnpackToDestMode.Default] * 64)
@@ -158,7 +161,15 @@ def build(device, args, inputs):
         assert 0 <= next_count <= count
         assert offset // jobs_per_head == (offset + count - 1) // jobs_per_head == head
         read_args[core.x][core.y] = [t.buffer_address() for t in tensors] + [
-            offset, count, rank, chain_length, previous.x, previous.y, following.x, following.y, next_count
+            offset,
+            count,
+            rank,
+            chain_length,
+            previous.x,
+            previous.y,
+            following.x,
+            following.y,
+            next_count,
         ]
         write_args[core.x][core.y] = [out.buffer_address(), offset, count]
         compute_args[core.x][core.y] = [count]
@@ -171,22 +182,33 @@ def build(device, args, inputs):
     scale = 1 / math.sqrt(128) / args.q_prescale
     descriptor = ttnn.ProgramDescriptor(
         cbs=cbs,
-        semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=value)
-                    for i, value in enumerate((0, 0, 1))],
+        semaphores=[
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=value) for i, value in enumerate((0, 0, 1))
+        ],
         kernels=[
             ttnn.KernelDescriptor(
-                kernel_source=PREFIX + "reader_chain.cpp", core_ranges=grid,
-                compile_time_args=reader_cta, runtime_args=read_args,
+                kernel_source=PREFIX + "reader_chain.cpp",
+                core_ranges=grid,
+                compile_time_args=reader_cta,
+                runtime_args=read_args,
                 defines=[("SDPA_READER_BARRIER_TILES", str(args.read_barrier_tiles))],
-                config=ttnn.ReaderConfigDescriptor()),
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
             ttnn.KernelDescriptor(
-                kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
                 compile_time_args=[8] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-                runtime_args=write_args, config=ttnn.WriterConfigDescriptor()),
+                runtime_args=write_args,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
             ttnn.KernelDescriptor(
-                kernel_source=PREFIX + "compute.cpp", core_ranges=grid,
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
                 compile_time_args=[chunks, struct.unpack("I", struct.pack("f", scale))[0]],
-                runtime_args=compute_args, defines=list(defines.items()), config=config),
+                runtime_args=compute_args,
+                defines=list(defines.items()),
+                config=config,
+            ),
         ],
     )
 
@@ -200,10 +222,24 @@ def build(device, args, inputs):
     element_count = args.heads * args.length * 128
     component_bytes = 2 * (576 + (1088 if second_format == "b8_rne5" else 576))
     info = dict(
-        **precheck, actual_cores=cores, chain_length=chain_length, q_jobs=jobs,
-        jobs_per_core=counts, assignments=assignments, q_chunk=256, k_chunk=512, dim=128,
-        input_slots=1, q_slots=2, fp32_dst=True, fidelity="LoFi", exp_quality="cheap", p_round=False,
-        executed_qk_pv_matmul_factor=2, defines=defines, preprocessing_cores=[qcores, kcores, vcores],
+        **precheck,
+        actual_cores=cores,
+        chain_length=chain_length,
+        q_jobs=jobs,
+        jobs_per_core=counts,
+        assignments=assignments,
+        q_chunk=256,
+        k_chunk=512,
+        dim=128,
+        input_slots=1,
+        q_slots=2,
+        fp32_dst=True,
+        fidelity="LoFi",
+        exp_quality="cheap",
+        p_round=False,
+        executed_qk_pv_matmul_factor=2,
+        defines=defines,
+        preprocessing_cores=[qcores, kcores, vcores],
         preprocessing_mismatches=preprocess_mismatches,
         cb_specs=[(idx, n, size, str(fmt)) for idx, n, size, fmt in specs],
         resident_dram_tensor_payload_bytes=element_count * 10 + element_count // 1024 * component_bytes,
@@ -278,17 +314,28 @@ def main():
         combined_time = timed(device, combined, args)
         assert torch.equal(actual, ttnn.to_torch(out)), "Trace replay changed output"
         useful_flops = 4 * args.heads * args.length**2 * 128
-        sources = [Path(__file__).resolve(), HERE / "numerics.py", HERE / "streaming/compute_streaming.hpp",
-                   ROOT / "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
-                   *sorted(DIRECTORY.glob("*.cpp"))]
+        sources = [
+            Path(__file__).resolve(),
+            HERE / "numerics.py",
+            HERE / "streaming/compute_streaming.hpp",
+            ROOT
+            / "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+            *sorted(DIRECTORY.glob("*.cpp")),
+        ]
         for name in ("q_prescale", "bfp4_residual_preprocess"):
             sources += [HERE / (name + ".py"), *sorted((HERE / name).glob("*.cpp"))]
         ams, cms = attention_time["median_ms"], combined_time["median_ms"]
         record = dict(
-            **vars(args), **info, accuracy=accuracy, sampled_query_rows=rows.tolist(),
+            **vars(args),
+            **info,
+            accuracy=accuracy,
+            sampled_query_rows=rows.tolist(),
             accuracy_scope="All heads and KV; explicit sampled Q rows; all output elements checked finite",
-            useful_flops=useful_flops, executed_qk_pv_flops=2 * useful_flops,
-            attention=attention_time, preprocessing=preprocessing_time, combined=combined_time,
+            useful_flops=useful_flops,
+            executed_qk_pv_flops=2 * useful_flops,
+            attention=attention_time,
+            preprocessing=preprocessing_time,
+            combined=combined_time,
             attention_tflops=useful_flops / (ams * 1e9) if ams else None,
             combined_tflops=useful_flops / (cms * 1e9) if cms else None,
             trace_equal=True if args.iters else None,

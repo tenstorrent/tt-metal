@@ -25,4 +25,3 @@ void kernel_main() {
         }
     }
 }
-

@@ -9,6 +9,7 @@ signed Hadamard, and attention scale is divided by its block size. V is not
 rotated. Both device rotations and all quantization are included in combined
 timing. No dispatch or frozen-header changes; original BF16 Q/K/V reference.
 """
+
 import argparse
 import hashlib
 import importlib.util
@@ -58,9 +59,9 @@ def transform_metrics(original, actual, block_size):
     a, b = original.reshape(-1, 128), actual.reshape(-1, 128)
     err2, ref2, cross, max_abs, rounded_mismatches = 0.0, 0.0, 0.0, 0.0, 0
     for start in range(0, a.shape[0], 4096):
-        source = a[start:start + 4096].reshape(1, 1, -1, 128)
+        source = a[start : start + 4096].reshape(1, 1, -1, 128)
         reference = HADAMARD.oracle(source, block_size).double().reshape(-1, 128)
-        values = b[start:start + 4096].double()
+        values = b[start : start + 4096].double()
         assert bool(torch.isfinite(values).all()) and bool(torch.isfinite(reference).all())
         delta = values - reference
         err2 += float(delta.square().sum())
@@ -68,10 +69,13 @@ def transform_metrics(original, actual, block_size):
         cross += float((values * reference).sum())
         max_abs = max(max_abs, float(delta.abs().max()))
         rounded_mismatches += int((values.bfloat16() != reference.bfloat16()).sum())
-    return dict(l2_pct=100 * math.sqrt(err2 / ref2) if ref2 else None,
-        gain=cross / ref2 if ref2 else None, max_abs=max_abs,
+    return dict(
+        l2_pct=100 * math.sqrt(err2 / ref2) if ref2 else None,
+        gain=cross / ref2 if ref2 else None,
+        max_abs=max_abs,
         mismatches_vs_fp64_transform_rounded_bf16=rounded_mismatches,
-        scope="all rows; FP64 mathematical signed unnormalized Hadamard; no quantization")
+        scope="all rows; FP64 mathematical signed unnormalized Hadamard; no quantization",
+    )
 
 
 def build(device, args, inputs):
@@ -88,9 +92,9 @@ def build(device, args, inputs):
     hardware_grid = device.compute_with_storage_grid_size()
     # Do not silently select an invalid partial per-head chain.
     cores = min(args.cores, jobs, hardware_grid.x * hardware_grid.y)
-    assert cores >= args.heads and cores % args.heads == 0, (
-        f"Actual cores {cores} must be a positive multiple of heads {args.heads}"
-    )
+    assert (
+        cores >= args.heads and cores % args.heads == 0
+    ), f"Actual cores {cores} must be a positive multiple of heads {args.heads}"
     chain_length = cores // args.heads
     assert chain_length <= jobs_per_head
     coords = [ttnn.CoreCoord(i % hardware_grid.x, i // hardware_grid.x) for i in range(cores)]
@@ -124,9 +128,11 @@ def build(device, args, inputs):
             tensor, invoke, center_cores = CENTER.build(device, src, center_bias, args.cores, center_mode)
             center_quantizers.append(invoke)
             centering_metadata = dict(
-                input="ACTUAL device rotated BF16 K", mean={**mean_invoke.precision,
-                    "input": "ACTUAL device rotated BF16 K"}, actual_center_cores=center_cores,
-                mode=center_mode, host_precomputed_bias=False,
+                input="ACTUAL device rotated BF16 K",
+                mean={**mean_invoke.precision, "input": "ACTUAL device rotated BF16 K"},
+                actual_center_cores=center_cores,
+                mode=center_mode,
+                host_precomputed_bias=False,
                 subtraction="Live FP32 SFPU before quantization; no centered BF16 spill",
                 invariance="Subtract token-constant rotated-K vector; row-constant logits cancel in softmax; no Q correction",
             )
@@ -134,8 +140,12 @@ def build(device, args, inputs):
             tensor, invoke, _ = B4_PREP.build(device, src, ncores=args.cores)
         else:
             tensor, invoke, _ = PREP.build(
-                device, src, bits=7 if i == 0 else 5,
-                output_format=fmt, ncores=args.cores, bfp8_pack_precise=False,
+                device,
+                src,
+                bits=7 if i == 0 else 5,
+                output_format=fmt,
+                ncores=args.cores,
+                bfp8_pack_precise=False,
             )
         if not centered_k:
             plain_quantizers.append(invoke)
@@ -148,7 +158,8 @@ def build(device, args, inputs):
                 exact_mean = actual_source.double().mean(dim=2, keepdim=True)
                 compact_bias = actual_bias[:, :, :1].double()
                 mean_check = dict(
-                    input="ACTUAL device rotated BF16 K", mode=args.center_k_mean_mode,
+                    input="ACTUAL device rotated BF16 K",
+                    mode=args.center_k_mean_mode,
                     l2_pct_vs_fp64=CENTER.l2_percent(compact_bias, exact_mean),
                     max_abs_vs_fp64=float((compact_bias - exact_mean).abs().max()),
                     bf16_mismatches_vs_fp64=int((compact_bias.bfloat16() != exact_mean.bfloat16()).sum()),
@@ -166,9 +177,16 @@ def build(device, args, inputs):
                 expected = ORACLE.native_bfp8_rne5(actual_source)
             actual_input = ttnn.to_torch(tensor).float()
             mismatch = int((actual_input != expected).sum())
-            check = dict(input=("Q", "K", "V")[i], format=fmt, mismatch=mismatch,
-                         quantizer_reference=("actual device rotated BF16 K minus actual device BF16 mean, FP32 subtraction"
-                             if centered_k else "actual device BF16 rotated source" if i < 2 else "original BF16 V"))
+            check = dict(
+                input=("Q", "K", "V")[i],
+                format=fmt,
+                mismatch=mismatch,
+                quantizer_reference=(
+                    "actual device rotated BF16 K minus actual device BF16 mean, FP32 subtraction"
+                    if centered_k
+                    else "actual device BF16 rotated source" if i < 2 else "original BF16 V"
+                ),
+            )
             preprocessing_checks.append(check)
             print("PREPROCESS_CHECK", json.dumps(check), flush=True)
             assert mismatch == 0, f"Preprocessing mismatch: {check}"
@@ -176,19 +194,26 @@ def build(device, args, inputs):
         preprocessing.append(invoke)
 
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, args.heads, args.length, 128]), ttnn.bfloat16,
-        ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.Shape([1, args.heads, args.length, 128]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
     slots = 1 if fp32 else 2
     state_format, state_bytes = (ttnn.float32, 4096) if fp32 else (ttnn.bfloat16, 2048)
     specs = [
         (0, 2 * qt * 4, 2048, ttnn.bfloat16),
-        (1, 64 * slots, k_bytes, k_dtype), (2, 64 * slots, v_bytes, v_dtype),
-        (3, 1, 2048, ttnn.bfloat16), (4, 1, 2048, ttnn.bfloat16),
-        (5, 1, state_bytes, state_format), (6, qt * 16, state_bytes, state_format),
+        (1, 64 * slots, k_bytes, k_dtype),
+        (2, 64 * slots, v_bytes, v_dtype),
+        (3, 1, 2048, ttnn.bfloat16),
+        (4, 1, 2048, ttnn.bfloat16),
+        (5, 1, state_bytes, state_format),
+        (6, qt * 16, state_bytes, state_format),
         (8, qt * 4 * (2 if numerator_compensation else 1), state_bytes, state_format),
         (9, qt * 4 * (2 if numerator_compensation else 1), state_bytes, state_format),
-        (10, qt, 2048, ttnn.bfloat16), (11, qt, 2048, ttnn.bfloat16),
+        (10, qt, 2048, ttnn.bfloat16),
+        (11, qt, 2048, ttnn.bfloat16),
         (12, qt * (2 if fast else 1), state_bytes, state_format),
         (13, qt * (2 if fast else 1), state_bytes, state_format),
         (14, qt, state_bytes, state_format),
@@ -202,21 +227,43 @@ def build(device, args, inputs):
         assert tensors[index].dtype == dtype, f"Input {index} tensor/CB dtype mismatch"
         _, count, cb_size, cb_dtype = specs[index]
         assert cb_size == size and cb_dtype == dtype
-        input_audit.append(dict(
-            input=("Q", "K", "V")[index], cb=index, tensor_dtype=str(tensors[index].dtype),
-            cb_dtype=str(cb_dtype), page_bytes=cb_size, capacity_tiles=count,
-            slot_tiles=32 if index == 0 else 64,
-        ))
+        input_audit.append(
+            dict(
+                input=("Q", "K", "V")[index],
+                cb=index,
+                tensor_dtype=str(tensors[index].dtype),
+                cb_dtype=str(cb_dtype),
+                page_bytes=cb_size,
+                capacity_tiles=count,
+                slot_tiles=32 if index == 0 else 64,
+            )
+        )
     cb_bytes = sum(count * size for _, count, size, _ in specs)
     assert cb_bytes < 1536 * 1024, "CBs alone exceed raw Blackhole worker L1"
-    cb_audit = [dict(cb=index, tiles=count, page_bytes=size, dtype=str(fmt),
-                     total_bytes=count * size, aliases=[7] if index == 6 and fp32 else [])
-                for index, count, size, fmt in specs]
-    print("CB_AUDIT", json.dumps(dict(
-        inputs=input_audit, cbs=cb_audit, cb_bytes_per_core=cb_bytes,
-        raw_l1_headroom_bytes=1536 * 1024 - cb_bytes,
-        warning="Raw L1 headroom excludes firmware, program, semaphores and allocator reservations",
-    )), flush=True)
+    cb_audit = [
+        dict(
+            cb=index,
+            tiles=count,
+            page_bytes=size,
+            dtype=str(fmt),
+            total_bytes=count * size,
+            aliases=[7] if index == 6 and fp32 else [],
+        )
+        for index, count, size, fmt in specs
+    ]
+    print(
+        "CB_AUDIT",
+        json.dumps(
+            dict(
+                inputs=input_audit,
+                cbs=cb_audit,
+                cb_bytes_per_core=cb_bytes,
+                raw_l1_headroom_bytes=1536 * 1024 - cb_bytes,
+                warning="Raw L1 headroom excludes firmware, program, semaphores and allocator reservations",
+            )
+        ),
+        flush=True,
+    )
     cbs = []
     for index, count, size, fmt in specs:
         descriptors = [ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=size)]
@@ -225,31 +272,41 @@ def build(device, args, inputs):
         cbs.append(ttnn.CBDescriptor(total_size=count * size, core_ranges=grid, format_descriptors=descriptors))
 
     defines = dict(
-        EXP_APPROX_MODE="1", STATS_GRANULARITY="4" if fp32 else "8",
-        SUB_EXP_GRANULARITY="4" if fp32 else "8", MUL_BCAST_GRANULARITY="4" if fp32 else "8",
-        DHT_GRANULARITY="4", REDUCE_GRANULARITY="2" if fp32 else "4",
+        EXP_APPROX_MODE="1",
+        STATS_GRANULARITY="4" if fp32 else "8",
+        SUB_EXP_GRANULARITY="4" if fp32 else "8",
+        MUL_BCAST_GRANULARITY="4" if fp32 else "8",
+        DHT_GRANULARITY="4",
+        REDUCE_GRANULARITY="2" if fp32 else "4",
     )
     if args.destination == "main_bf16":
         defines["RESIDENT_MAIN"] = "1"
     if fast:
         defines.update(
-            SDPA_STREAMING_ACCURACY="1", SDPA_STREAMING_NUMERATOR_COMPENSATION="1",
-            SDPA_OUT_A_CB="8", SDPA_OUT_B_CB="9", SDPA_LOFI_FIX_CORRECTION="1",
+            SDPA_STREAMING_ACCURACY="1",
+            SDPA_STREAMING_NUMERATOR_COMPENSATION="1",
+            SDPA_OUT_A_CB="8",
+            SDPA_OUT_B_CB="9",
+            SDPA_LOFI_FIX_CORRECTION="1",
         )
         if args.denom_only:
             defines.pop("SDPA_STREAMING_NUMERATOR_COMPENSATION")
     if fp32:
         defines.update(
-            SDPA_FP32_STREAMING="1", SDPA_FP32_STATE="1",
-            SDPA_HIFI2_ROUND="1", SDPA_MATCH_HIFI2="1",
+            SDPA_FP32_STREAMING="1",
+            SDPA_FP32_STATE="1",
+            SDPA_HIFI2_ROUND="1",
+            SDPA_MATCH_HIFI2="1",
         )
     else:
         # Keep recurrence/rescaling multiplication faithful at alpha=1. The
         # two attention matmuls remain LoFi; this matches qualified controls.
         defines["SDPA_LOFI_SAFE_RESCALE"] = "1"
     config = ttnn.ComputeConfigDescriptor(
-        math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=fp32,
-        dst_full_sync_en=False, math_approx_mode=True,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=fp32,
+        dst_full_sync_en=False,
+        math_approx_mode=True,
     )
     if fp32:
         pd = ttnn._ttnn.program_descriptor
@@ -258,8 +315,9 @@ def build(device, args, inputs):
             modes[cb] = pd.UnpackToDestMode.UnpackToDestFp32
         config.unpack_to_dest_mode = modes
     read_args, write_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=value)
-                  for i, value in enumerate((0, 0, 1))]
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=value) for i, value in enumerate((0, 0, 1))
+    ]
     counts, assignments = [], []
     quotient, remainder = divmod(jobs_per_head, chain_length)
     for i, c in enumerate(coords):
@@ -283,23 +341,39 @@ def build(device, args, inputs):
     # Chain reader always publishes K before V reservation and reads source-
     # linear K with an L1 tile-grid scatter. No legacy reader flags are needed.
     reader_defines = [("SDPA_READER_BARRIER_TILES", str(args.read_barrier_tiles))]
-    desc = ttnn.ProgramDescriptor(cbs=cbs, semaphores=semaphores, kernels=[
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "reader_chain.cpp", core_ranges=grid,
-            compile_time_args=reader_cta, runtime_args=read_args, defines=reader_defines,
-            config=ttnn.ReaderConfigDescriptor(),
-        ),
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
-            compile_time_args=[qt] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-            runtime_args=write_args, config=ttnn.WriterConfigDescriptor(),
-        ),
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "compute.cpp", core_ranges=grid,
-            compile_time_args=[chunks, struct.unpack("I", struct.pack("f", 1 / (math.sqrt(128) * args.hadamard_size)))[0], qt],
-            runtime_args=compute_args, defines=list(defines.items()), config=config,
-        ),
-    ])
+    desc = ttnn.ProgramDescriptor(
+        cbs=cbs,
+        semaphores=semaphores,
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "reader_chain.cpp",
+                core_ranges=grid,
+                compile_time_args=reader_cta,
+                runtime_args=read_args,
+                defines=reader_defines,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
+                compile_time_args=[qt] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                runtime_args=write_args,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
+                compile_time_args=[
+                    chunks,
+                    struct.unpack("I", struct.pack("f", 1 / (math.sqrt(128) * args.hadamard_size)))[0],
+                    qt,
+                ],
+                runtime_args=compute_args,
+                defines=list(defines.items()),
+                config=config,
+            ),
+        ],
+    )
 
     def attention():
         ttnn.generic_op(tensors + [out], desc)
@@ -345,28 +419,54 @@ def build(device, args, inputs):
         attention()
 
     info = dict(
-        actual_cores=cores, q_jobs=jobs, jobs_per_core=counts, chain_length=chain_length,
-        assignments=assignments, input_slots=slots, cb_bytes_per_core=cb_bytes, cb_audit=cb_audit,
-        input_audit=input_audit, raw_l1_headroom_bytes=1536 * 1024 - cb_bytes,
-        defines=defines, fidelity="LoFi", fp32_dst=fp32, q_chunk=256, k_chunk=512, head_dim=128,
-        k_format=k_format, v_format=v_format, q_preprocessing="Per-value RNE7; BF16 storage",
+        actual_cores=cores,
+        q_jobs=jobs,
+        jobs_per_core=counts,
+        chain_length=chain_length,
+        assignments=assignments,
+        input_slots=slots,
+        cb_bytes_per_core=cb_bytes,
+        cb_audit=cb_audit,
+        input_audit=input_audit,
+        raw_l1_headroom_bytes=1536 * 1024 - cb_bytes,
+        defines=defines,
+        fidelity="LoFi",
+        fp32_dst=fp32,
+        q_chunk=256,
+        k_chunk=512,
+        head_dim=128,
+        k_format=k_format,
+        v_format=v_format,
+        q_preprocessing="Per-value RNE7; BF16 storage",
         k_preprocessing="Shared-exponent BFP4 RNE" if k_format == "b4" else "Per-value RNE5 then native BFP8 RNA",
         v_preprocessing="Shared-exponent BFP4 RNE" if v_format == "b4" else "Per-value RNE5 then native BFP8 RNA",
-        device_preprocessing=True, preprocessing_checks=preprocessing_checks,
-        qk_rotation=rotation_metadata, rotation_checks=rotation_checks,
-        k_centering=centering_metadata, k_mean_checks=mean_checks,
+        device_preprocessing=True,
+        preprocessing_checks=preprocessing_checks,
+        qk_rotation=rotation_metadata,
+        rotation_checks=rotation_checks,
+        k_centering=centering_metadata,
+        k_mean_checks=mean_checks,
         transform="same signed unnormalized Hadamard on Q/K; V unchanged",
         attention_scale=1 / (math.sqrt(128) * args.hadamard_size),
         original_attention_scale=1 / math.sqrt(128),
         ideal_butterfly_transform_flops=2 * args.heads * args.length * 128 * int(math.log2(args.hadamard_size)),
         transform_work_warning="Butterfly count is mathematical only; actual primitive is described in qk_rotation metadata",
-        common_mode_warning=("K centering enabled after the real BF16 rotation spill; cannot undo rotation error and does not repair common-Q amplification"
-            if args.center_k else "No K centering: orthogonal rotation need not remove coherent common modes and may concentrate some directions"),
-        timing_accounting=("Disjoint stages: Q rotation, K rotation, K mean, Q/V quantization, fused K subtraction+quantization. qk_rotations and preprocessing are aggregate controls, not additional summands. Combined independently measures the full chain."
-            if args.center_k else "qk_rotations and quantization are disjoint; preprocessing and combined are independently timed aggregates"),
-        bfp8_pack_precise=False, fix_correction=fast, safe_rescale=not fp32,
+        common_mode_warning=(
+            "K centering enabled after the real BF16 rotation spill; cannot undo rotation error and does not repair common-Q amplification"
+            if args.center_k
+            else "No K centering: orthogonal rotation need not remove coherent common modes and may concentrate some directions"
+        ),
+        timing_accounting=(
+            "Disjoint stages: Q rotation, K rotation, K mean, Q/V quantization, fused K subtraction+quantization. qk_rotations and preprocessing are aggregate controls, not additional summands. Combined independently measures the full chain."
+            if args.center_k
+            else "qk_rotations and quantization are disjoint; preprocessing and combined are independently timed aggregates"
+        ),
+        bfp8_pack_precise=False,
+        fix_correction=fast,
+        safe_rescale=not fp32,
         reader="Per-head KV chain; source-linear K; K published before V reservation",
-        executed_matmul_factor=1, output_dtype="BF16",
+        executed_matmul_factor=1,
+        output_dtype="BF16",
     )
     return originals, tensors, out, attention, preprocess, combined, info
 
@@ -391,24 +491,46 @@ def timed(device, invoke, args):
 
 
 def source_files(destination, center_k=False):
-    sources = [Path(__file__).resolve(), HERE / "preprocess.py", HERE / "numerics.py",
-               HERE / "bfp4_round.py", HERE / "bfp4_residual_preprocess.py",
-               HERE / "safe_rescale.hpp", HERE / "fast_correction.hpp", HERE / "exp_refiner.hpp",
-               *(HERE / "preprocess").glob("*.cpp"), *(HERE / "bfp4_round").glob("*.cpp"),
-               *(HERE / "fullchip").glob("*.cpp")]
-    selected = {"main_bf16": "single-core-resident-v1/main", "fast_bf16": "bf16-denom-pair-v3/candidate",
-                "fp32": "hybrid-mixed-v1/candidate"}[destination]
-    headers = ROOT / "experiments/sdpa-l2" / selected / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute"
-    sources += [headers / "compute_common.hpp",
-                HERE / "streaming/compute_streaming.hpp" if destination == "fp32" else headers / "compute_streaming.hpp"]
+    sources = [
+        Path(__file__).resolve(),
+        HERE / "preprocess.py",
+        HERE / "numerics.py",
+        HERE / "bfp4_round.py",
+        HERE / "bfp4_residual_preprocess.py",
+        HERE / "safe_rescale.hpp",
+        HERE / "fast_correction.hpp",
+        HERE / "exp_refiner.hpp",
+        *(HERE / "preprocess").glob("*.cpp"),
+        *(HERE / "bfp4_round").glob("*.cpp"),
+        *(HERE / "fullchip").glob("*.cpp"),
+    ]
+    selected = {
+        "main_bf16": "single-core-resident-v1/main",
+        "fast_bf16": "bf16-denom-pair-v3/candidate",
+        "fp32": "hybrid-mixed-v1/candidate",
+    }[destination]
+    headers = (
+        ROOT / "experiments/sdpa-l2" / selected / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute"
+    )
+    sources += [
+        headers / "compute_common.hpp",
+        HERE / "streaming/compute_streaming.hpp" if destination == "fp32" else headers / "compute_streaming.hpp",
+    ]
     sources.append(ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp")
     sources += HADAMARD.source_files()
     if center_k:
-        sources += [HERE / "center_mean.py", HERE / "center_preprocess.py",
-                    *(HERE / "center_preprocess").glob("*.cpp"),
-                    *(HERE / "center_preprocess").glob("*.hpp")]
-    sources.append(ROOT / "experiments/sdpa-l2" / selected /
-                   "tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h")
+        sources += [
+            HERE / "center_mean.py",
+            HERE / "center_preprocess.py",
+            *(HERE / "center_preprocess").glob("*.cpp"),
+            *(HERE / "center_preprocess").glob("*.hpp"),
+        ]
+    sources.append(
+        ROOT
+        / "experiments/sdpa-l2"
+        / selected
+        / "tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
+    )
     return sorted(set(sources))
 
 
@@ -419,8 +541,11 @@ def main():
     parser.add_argument("--denom-only", action="store_true", help="FAST: compensate denominator only, not output")
     parser.add_argument("--kv-formats", choices=("b8_b8", "b4_b8", "b8_b4", "b4_b4"), default="b8_b8")
     parser.add_argument("--hadamard-size", type=int, choices=(16, 128), default=16)
-    parser.add_argument("--center-k", action="store_true",
-                        help="Device mean of actual rotated BF16 K, then fused FP32 subtraction and K quantization")
+    parser.add_argument(
+        "--center-k",
+        action="store_true",
+        help="Device mean of actual rotated BF16 K, then fused FP32 subtraction and K quantization",
+    )
     parser.add_argument("--center-k-mean-mode", choices=("bf16_fpu", "fp32_sfpu"), default="bf16_fpu")
     parser.add_argument("--length", type=int, default=8192)
     parser.add_argument("--heads", type=int, default=10)
@@ -473,16 +598,27 @@ def main():
         assert torch.equal(actual, ttnn.to_torch(out)), "Trace replay changed output"
         flops = 4 * args.heads * args.length**2 * 128
         attention_ms, combined_ms = attention_time["median_ms"], combined_time["median_ms"]
-        assert all(hashlib.sha256(p.read_bytes()).hexdigest() == source_hashes[str(p.relative_to(ROOT))] for p in sources), (
-            "Pinned source changed during the run"
-        )
+        assert all(
+            hashlib.sha256(p.read_bytes()).hexdigest() == source_hashes[str(p.relative_to(ROOT))] for p in sources
+        ), "Pinned source changed during the run"
         record = dict(
-            **vars(args), **info, accuracy=accuracy, sampled_query_rows=rows.tolist(),
+            **vars(args),
+            **info,
+            accuracy=accuracy,
+            sampled_query_rows=rows.tolist(),
             accuracy_scope="Original BF16 Q/K/V FP64 reference; all heads and KV, explicit sampled Q rows; all output finite",
-            useful_flops=flops, attention=attention_time, preprocessing=preprocessing_time, combined=combined_time,
-            qk_rotations=rotation_time, quantization=quantization_time,
+            useful_flops=flops,
+            attention=attention_time,
+            preprocessing=preprocessing_time,
+            combined=combined_time,
+            qk_rotations=rotation_time,
+            quantization=quantization_time,
             **centering_times,
-            quantization_scope="Q/V quantization only; fused K centering+quantization is separate" if args.center_k else "Q/K/V quantization",
+            quantization_scope=(
+                "Q/V quantization only; fused K centering+quantization is separate"
+                if args.center_k
+                else "Q/K/V quantization"
+            ),
             attention_tflops=flops / (attention_ms * 1e9) if attention_ms else None,
             combined_tflops=flops / (combined_ms * 1e9) if combined_ms else None,
             trace_equal=True if args.iters else None,

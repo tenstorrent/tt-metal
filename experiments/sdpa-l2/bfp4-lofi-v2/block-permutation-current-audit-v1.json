@@ -1,0 +1,37 @@
+{
+  "status": "PASS",
+  "scope": "Current-source record audit and complete-output hash equality to pre-format controls; no new performance claim",
+  "files": [
+    {
+      "file": "block-permutation-current-v1.jsonl",
+      "record_sha256": "7cae2c62857420c987e2b4cb94eaa84cb18fd7a5526718ae68e7bba27dd145de",
+      "baseline": "block-permutation-v1.jsonl",
+      "baseline_sha256": "0c5a2cd68ac6d000ee854cb41d557a21fb236a037bb6b544b694cfe4192620ba",
+      "cases": 24,
+      "current_source_pins": 82,
+      "all_current_source_pins_match": true,
+      "all_input_and_output_hashes_identical": true,
+      "all_accuracy_and_interorder_metrics_identical": true,
+      "all_recorded_gates_pass": true,
+      "preparation_scope": "Exact represented values; signed zeros value-equivalent; zero nonzero-bit mismatches",
+      "sampled_query_rows": 128,
+      "all_kv_referenced": true
+    },
+    {
+      "file": "block-permutation-exp-current-v1.jsonl",
+      "record_sha256": "e2242206cfa213915df49a7d871fe5067f1d4ebf2b83a268f6f45e960e36b898",
+      "baseline": "block-permutation-exp-v1.jsonl",
+      "baseline_sha256": "98190dd4c1dd374a8235b48a04fdf5fb5c874fe809f7433bed3efbc5db7ac75d",
+      "cases": 18,
+      "current_source_pins": 81,
+      "all_current_source_pins_match": true,
+      "all_input_and_output_hashes_identical": true,
+      "all_accuracy_and_interorder_metrics_identical": true,
+      "all_recorded_gates_pass": true,
+      "preparation_scope": "Exact represented values; signed zeros value-equivalent; zero nonzero-bit mismatches",
+      "sampled_query_rows": 128,
+      "all_kv_referenced": true
+    }
+  ],
+  "total_output_hash_comparisons": 42
+}

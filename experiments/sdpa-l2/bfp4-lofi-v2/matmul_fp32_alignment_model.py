@@ -8,13 +8,13 @@ an IEEE FP32 assumption. No ttnn import, device access, or hardware execution.
 Replay the exact random-input construction from matmul_fp32_floor.py and
 compare model output hashes/metrics to its saved device records.
 """
+
 import argparse
 import hashlib
 import json
 from pathlib import Path
 
 import torch
-
 
 # Pinned files inspected when constructing this model. They are not loaded or
 # imported on the CPU runner, where the private simulator checkout is absent.
@@ -56,8 +56,9 @@ def accumulate(groups, group_exponents, dst, group_shift=13):
     shared = torch.maximum(group_exponents.amax(-1), dst_exponent)
     magnitude = align_magnitude(magnitude, shared[..., None] - group_exponents, negative)
     dst_magnitude = align_magnitude(dst_magnitude, shared - dst_exponent)
-    signed_sum = (torch.where(negative, -magnitude, magnitude).sum(-1)
-                  + torch.where(dst_sign.bool(), -dst_magnitude, dst_magnitude))
+    signed_sum = torch.where(negative, -magnitude, magnitude).sum(-1) + torch.where(
+        dst_sign.bool(), -dst_magnitude, dst_magnitude
+    )
     sign, mantissa = (signed_sum < 0).long(), signed_sum.abs()
     # Integer values are <2^31, so float64 log2 safely computes this bit length.
     bit_length = torch.floor(torch.log2(mantissa.clamp_min(1).double())).long() + 1
@@ -106,8 +107,9 @@ def matmul(a, b, fidelity=4, order="tile_phase_half", product_alignment=True):
     assert a.shape[1] % 32 == 0
     dst = torch.zeros((a.shape[0], b.shape[1]), dtype=torch.int64)
     if order == "tile_phase_half":
-        visits = [(tile + half, phase) for tile in range(0, a.shape[1], 32)
-                  for phase in range(fidelity) for half in (0, 16)]
+        visits = [
+            (tile + half, phase) for tile in range(0, a.shape[1], 32) for phase in range(fidelity) for half in (0, 16)
+        ]
     elif order == "half_phase":
         visits = [(start, phase) for start in range(0, a.shape[1], 16) for phase in range(fidelity)]
     elif order == "phase_global":
@@ -115,7 +117,7 @@ def matmul(a, b, fidelity=4, order="tile_phase_half", product_alignment=True):
     else:
         raise ValueError(order)
     for start, phase in visits:
-        dst = dot16(b[start:start + 16].T, a[:, start:start + 16], dst, phase, product_alignment)
+        dst = dot16(b[start : start + 16].T, a[:, start : start + 16], dst, phase, product_alignment)
     return dst.int().view(torch.float32).reshape(1, 1, a.shape[0], b.shape[1])
 
 
@@ -139,18 +141,26 @@ def cases():
 def metrics(actual, expected):
     a, b = actual.double(), expected.double()
     raw = raw32(actual)
-    return dict(l2_pct=float(100 * (a - b).norm() / b.norm()),
-                max_abs=float((a - b).abs().max()), exact=int((a == b).sum()), elements=a.numel(),
-                low_bits_nonzero={str(n): int(((raw & ((1 << n) - 1)) != 0).sum()) for n in (8, 10, 12, 13, 16)},
-                output_sha256=hashlib.sha256(actual.contiguous().numpy().tobytes()).hexdigest())
+    return dict(
+        l2_pct=float(100 * (a - b).norm() / b.norm()),
+        max_abs=float((a - b).abs().max()),
+        exact=int((a == b).sum()),
+        elements=a.numel(),
+        low_bits_nonzero={str(n): int(((raw & ((1 << n) - 1)) != 0).sum()) for n in (8, 10, 12, 13, 16)},
+        output_sha256=hashlib.sha256(actual.contiguous().numpy().tobytes()).hexdigest(),
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True)
     parser.add_argument("--device-records", type=Path, default=Path(__file__).with_name("matmul-fp32-floor-v1.jsonl"))
-    parser.add_argument("--orders", nargs="+", choices=("tile_phase_half", "half_phase", "phase_global"),
-                        default=("tile_phase_half", "half_phase", "phase_global"))
+    parser.add_argument(
+        "--orders",
+        nargs="+",
+        choices=("tile_phase_half", "half_phase", "phase_global"),
+        default=("tile_phase_half", "half_phase", "phase_global"),
+    )
     args = parser.parse_args()
     assert Path(args.label).name == args.label
     path = Path(__file__).with_name(args.label + ".json")
@@ -167,13 +177,18 @@ def main():
                 actual = matmul(a, b, phases, order)
                 measured = lookup[(case, fidelity)]
                 result = dict(case=case, fidelity=fidelity, order=order, **metrics(actual, expected))
-                result.update(device_l2_pct=measured["l2_pct"], device_exact=measured["exact"],
-                              device_hash_match=result["output_sha256"] == measured["output_sha256"],
-                              device_low_bits_match=result["low_bits_nonzero"] == measured["low_bits_nonzero"])
+                result.update(
+                    device_l2_pct=measured["l2_pct"],
+                    device_exact=measured["exact"],
+                    device_hash_match=result["output_sha256"] == measured["output_sha256"],
+                    device_low_bits_match=result["low_bits_nonzero"] == measured["low_bits_nonzero"],
+                )
                 records.append(result)
                 print("ALIGNMENT_MODEL", json.dumps(result), flush=True)
         ablated = matmul(a, b, 4, "tile_phase_half", product_alignment=False)
-        records.append(dict(case=case, fidelity="HiFi4", ablation="extra13_product_alignment_bits", **metrics(ablated, expected)))
+        records.append(
+            dict(case=case, fidelity="HiFi4", ablation="extra13_product_alignment_bits", **metrics(ablated, expected))
+        )
     discriminators = []
     for index in (1, 7, 8, 15, 16):
         a, b = torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16), torch.zeros((1, 1, 32, 64), dtype=torch.bfloat16)
@@ -181,13 +196,18 @@ def main():
         b[..., 0, :], b[..., index, :] = 1, 1
         actual = matmul(a, b, 4)
         discriminators.append(dict(small_term_index=index, actual=float(actual[0, 0, 0, 0]), expected=1 + 2**-12))
-    record = dict(cpu_only=True, threads=4, records=records, discriminators=discriminators,
-                  model_provenance=MODEL_PROVENANCE,
-                  device_provenance=[r for r in device if r.get("kind") == "provenance"],
-                  source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                  device_records_sha256=hashlib.sha256(args.device_records.read_bytes()).hexdigest(),
-                  model_source="Local ttsim-private/src/tensix.cpp; exact public API kernel replay order is inferred, tested by hash",
-                  warning="Internal research model; not an IEEE guarantee or a public ISA precision specification")
+    record = dict(
+        cpu_only=True,
+        threads=4,
+        records=records,
+        discriminators=discriminators,
+        model_provenance=MODEL_PROVENANCE,
+        device_provenance=[r for r in device if r.get("kind") == "provenance"],
+        source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        device_records_sha256=hashlib.sha256(args.device_records.read_bytes()).hexdigest(),
+        model_source="Local ttsim-private/src/tensix.cpp; exact public API kernel replay order is inferred, tested by hash",
+        warning="Internal research model; not an IEEE guarantee or a public ISA precision specification",
+    )
     path.write_text(json.dumps(record, indent=2) + "\n")
     print("ALIGNMENT_DISCRIMINATORS", json.dumps(discriminators), flush=True)
     print("RESULT_PATH", path, flush=True)

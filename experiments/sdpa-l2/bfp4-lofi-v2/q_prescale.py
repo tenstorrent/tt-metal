@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Private Q prescale plus RNE; attention must divide its score scale by alpha."""
+
 import argparse
 import hashlib
 import importlib.util
@@ -31,9 +32,14 @@ def build(device, src, bits=5, output_format="bf16", ncores=1, batch=4, fp32_dst
     ncores = min(ncores, tiles // batch, grid_size.x * grid_size.y)
     coords = [ttnn.CoreCoord(i % grid_size.x, i // grid_size.x) for i in range(ncores)]
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-    cbs = [ttnn.CBDescriptor(total_size=2 * batch * size, core_ranges=grid,
-                            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=size)])
-           for index, fmt, size in ((0, ttnn.bfloat16, 2048), (16, dtype, tile_bytes))]
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=2 * batch * size,
+            core_ranges=grid,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=size)],
+        )
+        for index, fmt, size in ((0, ttnn.bfloat16, 2048), (16, dtype, tile_bytes))
+    ]
     reader, writer, compute = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     offset = 0
     for i, c in enumerate(coords):
@@ -42,17 +48,35 @@ def build(device, src, bits=5, output_format="bf16", ncores=1, batch=4, fp32_dst
         writer[c.x][c.y] = [out.buffer_address(), offset, count]
         compute[c.x][c.y] = [count]
         offset += count
-    desc = ttnn.ProgramDescriptor(cbs=cbs, semaphores=[], kernels=[
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "reader.cpp", core_ranges=grid,
-                              compile_time_args=[batch] + ttnn.TensorAccessorArgs(src).get_compile_time_args(),
-                              runtime_args=reader, config=ttnn.ReaderConfigDescriptor()),
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
-                              compile_time_args=[batch] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-                              runtime_args=writer, config=ttnn.WriterConfigDescriptor()),
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "compute.cpp", core_ranges=grid,
-                              compile_time_args=[bits, batch, struct.unpack("I", struct.pack("f", scale))[0]], runtime_args=compute,
-                              config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi,
-                                                                  fp32_dest_acc_en=fp32_dst, math_approx_mode=False))])
+    desc = ttnn.ProgramDescriptor(
+        cbs=cbs,
+        semaphores=[],
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "reader.cpp",
+                core_ranges=grid,
+                compile_time_args=[batch] + ttnn.TensorAccessorArgs(src).get_compile_time_args(),
+                runtime_args=reader,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
+                compile_time_args=[batch] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                runtime_args=writer,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
+                compile_time_args=[bits, batch, struct.unpack("I", struct.pack("f", scale))[0]],
+                runtime_args=compute,
+                config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=fp32_dst, math_approx_mode=False
+                ),
+            ),
+        ],
+    )
     return out, lambda: ttnn.generic_op([src, out], desc), ncores
 
 
@@ -81,7 +105,9 @@ if __name__ == "__main__":
         # Both signs, all mantissas and ordinary exponents; avoid overflow and subnormals.
         raw = torch.arange(65536, dtype=torch.int32).to(torch.uint16).view(torch.bfloat16)
         raw = raw[(raw.float().abs() >= 2.0**-120) & (raw.float().abs() < 2.0**120)]
-        x = raw.repeat((args.length * 128 + raw.numel() - 1) // raw.numel())[:args.length * 128].reshape(1, 1, args.length, 128)
+        x = raw.repeat((args.length * 128 + raw.numel() - 1) // raw.numel())[: args.length * 128].reshape(
+            1, 1, args.length, 128
+        )
     expected = MODEL.round_significand(x.float() * args.scale, args.bits)
     if args.output_format == "b8":
         # The frozen v1 quantizer deliberately clamps exponents below -100.
@@ -95,7 +121,9 @@ if __name__ == "__main__":
     device = ttnn.open_device(device_id=0, trace_region_size=4194304 if args.iters else 0)
     try:
         src = ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT)
-        out, invoke, cores = build(device, src, args.bits, args.output_format, args.cores, args.batch, not args.bf16_dst, args.scale)
+        out, invoke, cores = build(
+            device, src, args.bits, args.output_format, args.cores, args.batch, not args.bf16_dst, args.scale
+        )
         invoke()
         actual = ttnn.to_torch(out).float()
         mismatch = int((actual != expected).sum())
@@ -120,10 +148,19 @@ if __name__ == "__main__":
             assert torch.equal(actual, ttnn.to_torch(out).float())
         median = statistics.median(times) if times else None
         byte_count = x.numel() * 2 + x.numel() // 1024 * (2048 if args.output_format == "bf16" else 1088)
-        record = dict(**vars(args), actual_cores=cores, mismatch=mismatch, numel=x.numel(),
-                      median_ms=median, replay_ms=times, read_write_GBps=byte_count / (median * 1e6) if median else None,
-                      source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-                                     for p in [Path(__file__).resolve(), *(HERE / "q_prescale").glob("*.cpp")]})
+        record = dict(
+            **vars(args),
+            actual_cores=cores,
+            mismatch=mismatch,
+            numel=x.numel(),
+            median_ms=median,
+            replay_ms=times,
+            read_write_GBps=byte_count / (median * 1e6) if median else None,
+            source_sha256={
+                str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in [Path(__file__).resolve(), *(HERE / "q_prescale").glob("*.cpp")]
+            },
+        )
         path.write_text(json.dumps(record, indent=2) + "\n")
         print(json.dumps(record), flush=True)
     finally:

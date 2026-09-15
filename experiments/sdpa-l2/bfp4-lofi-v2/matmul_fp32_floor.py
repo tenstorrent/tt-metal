@@ -5,6 +5,7 @@
 Exact BF16 upload checks, one-term products, identity copies and dense sums.
 No performance or integrated-attention claims.
 """
+
 import argparse
 import hashlib
 import json
@@ -20,7 +21,8 @@ def metric(actual, expected):
     return dict(
         l2_pct=float(100 * (a - b).norm() / b.norm()),
         max_abs=float((a - b).abs().max()),
-        exact=int((a == b).sum()), elements=a.numel(),
+        exact=int((a == b).sum()),
+        elements=a.numel(),
         low_bits_nonzero={str(n): int(((raw & ((1 << n) - 1)) != 0).sum()) for n in (8, 10, 12, 13, 16)},
         output_sha256=hashlib.sha256(actual.float().numpy().tobytes()).hexdigest(),
     )
@@ -61,11 +63,15 @@ def main():
             assert torch.equal(ttnn.to_torch(da), a) and torch.equal(ttnn.to_torch(db), b)
             for fidelity in ("LoFi", "HiFi2", "HiFi4"):
                 config = ttnn.init_device_compute_kernel_config(
-                    device.arch(), math_fidelity=getattr(ttnn.MathFidelity, fidelity),
-                    math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False,
+                    device.arch(),
+                    math_fidelity=getattr(ttnn.MathFidelity, fidelity),
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
                 )
-                out = ttnn.matmul(da, db, dtype=ttnn.float32, core_grid=ttnn.CoreGrid(y=1, x=1),
-                                  compute_kernel_config=config)
+                out = ttnn.matmul(
+                    da, db, dtype=ttnn.float32, core_grid=ttnn.CoreGrid(y=1, x=1), compute_kernel_config=config
+                )
                 actual = ttnn.to_torch(out).float()
                 record = dict(case=case, fidelity=fidelity, fp32_dst=True, **metric(actual, expected))
                 # Independent post-result truncation comparisons: diagnostic,
@@ -80,8 +86,15 @@ def main():
                 ttnn.deallocate(out)
             ttnn.deallocate(da)
             ttnn.deallocate(db)
-        records.insert(0, dict(kind="provenance", source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                               contract=__doc__, label=args.label))
+        records.insert(
+            0,
+            dict(
+                kind="provenance",
+                source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                contract=__doc__,
+                label=args.label,
+            ),
+        )
         path.write_text("".join(json.dumps(r) + "\n" for r in records))
     finally:
         ttnn.close_device(device)

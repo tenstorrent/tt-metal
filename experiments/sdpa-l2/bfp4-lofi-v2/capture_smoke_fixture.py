@@ -23,16 +23,28 @@ def main():
     parser.add_argument("--length", type=int, default=1024)
     parser.add_argument("--seed", type=int, default=1240)
     args = parser.parse_args()
-    C.require(args.heads > 0 and args.length > 0 and args.length % 512 == 0,
-              "Positive heads and positive length divisible by512 required")
+    C.require(
+        args.heads > 0 and args.length > 0 and args.length % 512 == 0,
+        "Positive heads and positive length divisible by512 required",
+    )
     torch.set_num_threads(4)
     generator = torch.Generator().manual_seed(args.seed)
     artifact = dict(
         schema=C.SCHEMA,
-        metadata=dict(causal=False, mask=None, scale=C.SCALE, provenance=dict(
-            source_kind="synthetic", model_id="synthetic-random-not-a-model", layer_id="0",
-            capture_stage="interface-smoke-only", seed=args.seed, torch_version=str(torch.__version__),
-            fixture_generator_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())),
+        metadata=dict(
+            causal=False,
+            mask=None,
+            scale=C.SCALE,
+            provenance=dict(
+                source_kind="synthetic",
+                model_id="synthetic-random-not-a-model",
+                layer_id="0",
+                capture_stage="interface-smoke-only",
+                seed=args.seed,
+                torch_version=str(torch.__version__),
+                fixture_generator_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            ),
+        ),
     )
     for name in ("q", "k", "v"):
         artifact[name] = torch.randn(1, args.heads, args.length, 128, generator=generator).bfloat16()

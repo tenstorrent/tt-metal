@@ -30,8 +30,8 @@ inline void calculate_lofi_exp_lut2_macro() {
 
     // Backdoor writes instruction templates, NOT programmable L12/13/14.
     // Native unclamped grid does not use template0 or Sequence1/2.
-    TTI_SFPSETEXP(127, 0, 12, 1);             // template0: SETEXP via VC override
-    TTI_SFPLUTFP32(13, 2);                   // template1: FP16 TABLE1 LUT
+    TTI_SFPSETEXP(127, 0, 12, 1);               // template0: SETEXP via VC override
+    TTI_SFPLUTFP32(13, 2);                      // template1: FP16 TABLE1 LUT
     TTI_SFPMUL(3, 0, p_sfpu::LCONST_0, 14, 0);  // template2: L3 * loaded VB
 
     // Sequence1: SETEXP delay0 (0x04), LUT delay1 (0x0d), result in loaded L3.

@@ -44,7 +44,8 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t j = 0; j < batch; ++j) {
             copy_tile(0, j, j);
-            MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, truncate_lofi_significand, (bits, 8), j, VectorMode::RC));
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, truncate_lofi_significand, (bits, 8), j, VectorMode::RC));
         }
         tile_regs_commit();
         cb_pop_front(0, batch);

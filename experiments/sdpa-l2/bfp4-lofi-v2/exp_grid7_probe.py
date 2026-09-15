@@ -8,6 +8,7 @@ sign/pack ReLU, BF16 SFPU-store denormal flush and truncation. SFPMAD is
 partially fused in hardware: any discrepancy at a threshold is a failure,
 not an implicitly excluded sample. No NaN/Inf or BF16 input subnormals.
 """
+
 import argparse
 import hashlib
 import json
@@ -52,10 +53,10 @@ def oracle(src, native=False):
     # one FP32 rounding models the intended SFPU FMA result.
     transformed = (x.double() * a + b).float()
     magnitude = (transformed.double().abs() + 0.5).floor().clamp_max(32767).long()
-    bits = (magnitude << shift) & 0x7fffffff
+    bits = (magnitude << shift) & 0x7FFFFFFF
     # Negative results are zeroed by pack ReLU. SFPSTORE BF16 flushes
     # exponent-zero results (including grid-generated subnormals) first.
-    bits = torch.where((transformed < 0) | ((bits & 0x7f800000) == 0), 0, bits)
+    bits = torch.where((transformed < 0) | ((bits & 0x7F800000) == 0), 0, bits)
     expected = (bits >> 16).to(torch.int16).contiguous().view(torch.bfloat16)
     assert bool(torch.isfinite(expected).all()) and bool((expected >= 0).all())
     return expected, transformed, magnitude
@@ -78,8 +79,7 @@ def input_values(shape, distribution, seed, native=False):
     # Neighboring BF16 representations around each integer-rounding boundary,
     # not FP64 boundaries silently fed to a BF16 kernel.
     bits = threshold.view(torch.int16).int()
-    neighbors = torch.cat([(bits + offset).to(torch.int16).view(torch.bfloat16)
-                           for offset in (-1, 0, 1)])
+    neighbors = torch.cat([(bits + offset).to(torch.int16).view(torch.bfloat16) for offset in (-1, 0, 1)])
     nf = neighbors.float()
     neighbors = neighbors[torch.isfinite(nf) & (nf >= -1000) & (nf <= 0)]
     neighbors = neighbors[(neighbors == 0) | (neighbors.float().abs() >= 2.0**-126)]
@@ -110,27 +110,45 @@ def check(actual, src, native=False):
     ix = mismatch_mask.flatten().nonzero().flatten()[:16]
     tuples = []
     for i in ix.tolist():
-        tuples.append(dict(index=i, input=float(src.flatten()[i]),
-            input_bits=f"0x{int(src.view(torch.int16).flatten()[i]) & 0xffff:04x}",
-            transformed=float(transformed.flatten()[i]),
-            transformed_bits=f"0x{int(transformed.view(torch.int32).flatten()[i]) & 0xffffffff:08x}",
-            rounded_magnitude=int(magnitude.flatten()[i]),
-            expected_bits=f"0x{int(eb.flatten()[i]) & 0xffff:04x}",
-            actual_bits=f"0x{int(ab.flatten()[i]) & 0xffff:04x}"))
+        tuples.append(
+            dict(
+                index=i,
+                input=float(src.flatten()[i]),
+                input_bits=f"0x{int(src.view(torch.int16).flatten()[i]) & 0xffff:04x}",
+                transformed=float(transformed.flatten()[i]),
+                transformed_bits=f"0x{int(transformed.view(torch.int32).flatten()[i]) & 0xffffffff:08x}",
+                rounded_magnitude=int(magnitude.flatten()[i]),
+                expected_bits=f"0x{int(eb.flatten()[i]) & 0xffff:04x}",
+                actual_bits=f"0x{int(ab.flatten()[i]) & 0xffff:04x}",
+            )
+        )
     positive = actual > 0
     ties = transformed.double().abs().frac() == 0.5
-    record = dict(numel=src.numel(), unique_input_bits=int(torch.unique(src.view(torch.int16)).numel()),
-        mismatch=int(mismatch_mask.sum()), mismatch_examples=tuples,
-        finite=bool(torch.isfinite(actual).all()), nonnegative=bool((actual >= 0).all()),
-        positive_count=int(positive.sum()), zero_count=int((actual == 0).sum()),
+    record = dict(
+        numel=src.numel(),
+        unique_input_bits=int(torch.unique(src.view(torch.int16)).numel()),
+        mismatch=int(mismatch_mask.sum()),
+        mismatch_examples=tuples,
+        finite=bool(torch.isfinite(actual).all()),
+        nonnegative=bool((actual >= 0).all()),
+        positive_count=int(positive.sum()),
+        zero_count=int((actual == 0).sum()),
         positive_low_bf16_mantissa_bit_nonzero=int((positive & ((ab.int() & 1) != 0)).sum()),
-        transformed_exact_half_ties=int(ties.sum()), negative_transformed=int((transformed < 0).sum()),
-        pre_store_subnormal_count=int(((magnitude > 0) & (magnitude < (256 if native else 64))
-                                      & (transformed >= 0)).sum()),
-        coefficients=dict(a=coefficients(native)[0], b=coefficients(native)[1],
-                          shift=coefficients(native)[2], scale=SCALE, scale_bits=f"0x{SCALE_BITS:08x}"),
+        transformed_exact_half_ties=int(ties.sum()),
+        negative_transformed=int((transformed < 0).sum()),
+        pre_store_subnormal_count=int(
+            ((magnitude > 0) & (magnitude < (256 if native else 64)) & (transformed >= 0)).sum()
+        ),
+        coefficients=dict(
+            a=coefficients(native)[0],
+            b=coefficients(native)[1],
+            shift=coefficients(native)[2],
+            scale=SCALE,
+            scale_bits=f"0x{SCALE_BITS:08x}",
+        ),
         output_sha256=hashlib.sha256(ab.numpy().tobytes()).hexdigest(),
-        input_sha256=hashlib.sha256(src.view(torch.int16).numpy().tobytes()).hexdigest())
+        input_sha256=hashlib.sha256(src.view(torch.int16).numpy().tobytes()).hexdigest(),
+    )
     print("GRID7_PROBE_CHECK", json.dumps(record), flush=True)
     assert record["finite"] and record["nonnegative"]
     assert record["mismatch"] == 0, "Exact exp-grid bit model mismatch; see pre-assert diagnostic"
@@ -140,16 +158,24 @@ def check(actual, src, native=False):
 
 
 def source_files():
-    return sorted(set([
-        Path(__file__).resolve(), HERE / "exp_grid7.hpp",
-        *sorted((HERE / "exp_grid7_probe").glob("*.cpp")),
-        HERE / "preprocess/reader.cpp", HERE / "preprocess/writer.cpp",
-        ROOT / "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
-        ROOT / "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h",
-        ROOT / "tt_metal/hw/inc/api/compute/eltwise_unary/exp.h",
-        ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h",
-        ROOT / "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_ops.h",
-    ]))
+    return sorted(
+        set(
+            [
+                Path(__file__).resolve(),
+                HERE / "exp_grid7.hpp",
+                *sorted((HERE / "exp_grid7_probe").glob("*.cpp")),
+                HERE / "preprocess/reader.cpp",
+                HERE / "preprocess/writer.cpp",
+                ROOT
+                / "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+                ROOT
+                / "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h",
+                ROOT / "tt_metal/hw/inc/api/compute/eltwise_unary/exp.h",
+                ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h",
+                ROOT / "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_ops.h",
+            ]
+        )
+    )
 
 
 def build(device, src, ncores=1, batch=4, native=False):
@@ -159,15 +185,19 @@ def build(device, src, ncores=1, batch=4, native=False):
     assert batch in (1, 2, 4)
     tiles = src.volume() // 1024
     assert tiles > 0 and tiles % batch == 0
-    out = ttnn.allocate_tensor_on_device(src.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,
-                                         device, ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.allocate_tensor_on_device(src.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     grid_size = device.compute_with_storage_grid_size()
     ncores = min(ncores, tiles // batch, grid_size.x * grid_size.y)
     coords = [ttnn.CoreCoord(i % grid_size.x, i // grid_size.x) for i in range(ncores)]
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
-    cbs = [ttnn.CBDescriptor(total_size=2 * batch * 2048, core_ranges=grid,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=2048)])
-        for index in (0, 16)]
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=2 * batch * 2048,
+            core_ranges=grid,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=2048)],
+        )
+        for index in (0, 16)
+    ]
     reader, writer, compute = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     offset = 0
     for i, c in enumerate(coords):
@@ -177,18 +207,36 @@ def build(device, src, ncores=1, batch=4, native=False):
         compute[c.x][c.y] = [count]
         offset += count
     assert offset == tiles
-    desc = ttnn.ProgramDescriptor(cbs=cbs, semaphores=[], kernels=[
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "reader.cpp", core_ranges=grid,
-            compile_time_args=[batch] + ttnn.TensorAccessorArgs(src).get_compile_time_args(),
-            runtime_args=reader, config=ttnn.ReaderConfigDescriptor()),
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
-            compile_time_args=[batch] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-            runtime_args=writer, config=ttnn.WriterConfigDescriptor()),
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "compute.cpp", core_ranges=grid,
-            compile_time_args=[SCALE_BITS, batch], runtime_args=compute,
-            defines=[("EXP_APPROX_MODE", "1")] + ([] if native else [("SDPA_LOFI_EXP_GRID7", "1")]),
-            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi,
-                fp32_dest_acc_en=False, math_approx_mode=True))])
+    desc = ttnn.ProgramDescriptor(
+        cbs=cbs,
+        semaphores=[],
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "reader.cpp",
+                core_ranges=grid,
+                compile_time_args=[batch] + ttnn.TensorAccessorArgs(src).get_compile_time_args(),
+                runtime_args=reader,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
+                compile_time_args=[batch] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                runtime_args=writer,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
+                compile_time_args=[SCALE_BITS, batch],
+                runtime_args=compute,
+                defines=[("EXP_APPROX_MODE", "1")] + ([] if native else [("SDPA_LOFI_EXP_GRID7", "1")]),
+                config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, math_approx_mode=True
+                ),
+            ),
+        ],
+    )
 
     def invoke():
         ttnn.generic_op([src, out], desc)
@@ -200,7 +248,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True)
     parser.add_argument("--native", action="store_true", help="Unchanged native256-step grid instead of64")
-    parser.add_argument("--distribution", choices=("all", "normal", "thresholds", "underflow", "zeros", "finite_bf16"), default="all")
+    parser.add_argument(
+        "--distribution", choices=("all", "normal", "thresholds", "underflow", "zeros", "finite_bf16"), default="all"
+    )
     parser.add_argument("--length", type=int, default=4096)
     parser.add_argument("--cores", type=int, default=1)
     parser.add_argument("--batch", type=int, choices=(1, 2, 4), default=4)
@@ -242,12 +292,22 @@ def main():
                 ttnn.release_trace(device, trace)
             assert torch.equal(actual.view(torch.int16), ttnn.to_torch(out).view(torch.int16))
         assert pins == {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
-        record = dict(**vars(args), **result, actual_cores=cores, source_sha256=pins,
-                      expected_output_sha256=hashlib.sha256(expected.view(torch.int16).numpy().tobytes()).hexdigest(),
-                      median_ms=statistics.median(times) if times else None, replay_ms=times,
-                      trace_equal=True if times else None, source_unchanged=True,
-                      contract=__doc__, destination="BF16", output_format="BF16",
-                      attention_test=False, denominator_or_pv_test=False)
+        record = dict(
+            **vars(args),
+            **result,
+            actual_cores=cores,
+            source_sha256=pins,
+            expected_output_sha256=hashlib.sha256(expected.view(torch.int16).numpy().tobytes()).hexdigest(),
+            median_ms=statistics.median(times) if times else None,
+            replay_ms=times,
+            trace_equal=True if times else None,
+            source_unchanged=True,
+            contract=__doc__,
+            destination="BF16",
+            output_format="BF16",
+            attention_test=False,
+            denominator_or_pv_test=False,
+        )
         path.write_text(json.dumps(record, indent=2) + "\n")
         print("GRID7_PROBE_RESULT", json.dumps(record), flush=True)
     finally:

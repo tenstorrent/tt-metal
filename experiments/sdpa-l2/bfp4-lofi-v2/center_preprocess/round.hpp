@@ -139,4 +139,3 @@ inline void center_round_face() {
 }
 }  // namespace ckernel::sfpu
 #endif
-

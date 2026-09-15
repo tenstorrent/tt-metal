@@ -73,22 +73,33 @@ def main():
     signs = torch.randint(0, 2, (128,), generator=torch.Generator().manual_seed(SIGN_SEED)).float() * 2 - 1
     probe = torch.randn((32, 128), dtype=torch.float64, generator=torch.Generator().manual_seed(93))
     for width in (16, 128):
-        torch.testing.assert_close(hadamard(hadamard(probe * signs, width), width) * signs / width,
-                                   probe, atol=2e-14, rtol=2e-14)
+        torch.testing.assert_close(
+            hadamard(hadamard(probe * signs, width), width) * signs / width, probe, atol=2e-14, rtol=2e-14
+        )
     previous = [json.loads(x) for x in (HERE / "asymmetric-risk-models-v1.jsonl").read_text().splitlines()]
     started, count = time.monotonic(), 0
     sources = [Path(__file__), Path(RISK.__file__), HERE / "numerics.py", MODEL.V1 / "probe.py", Path(REPRO.__file__)]
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", hostname=platform.node(), threads=4, length=32768, seeds=[1240, 1241],
-                  sign_seed=SIGN_SEED, contract="Original BF16 QKV reference; same signed unnormalized Hadamard on Q and K; FP32 butterflies then BF16 spill (explicit FP32 controls); score scale1/(sqrtD*H); Q RNE7 and K RNE BFP4; V RNE BFP4 or RNE5/nativeBFP8/LoFi5; native FP32 exp grid; P trunc7 matched; FP64 QK/subtraction/online corrections/PV/state; BF16 output",
-                  k_center="After transformed spill, subtract token-column FP64 mean into FP32 before quantization; no extra BF16 spill; mean generation and transform performance unmeasured",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}))
+        emit(
+            dict(
+                kind="provenance",
+                hostname=platform.node(),
+                threads=4,
+                length=32768,
+                seeds=[1240, 1241],
+                sign_seed=SIGN_SEED,
+                contract="Original BF16 QKV reference; same signed unnormalized Hadamard on Q and K; FP32 butterflies then BF16 spill (explicit FP32 controls); score scale1/(sqrtD*H); Q RNE7 and K RNE BFP4; V RNE BFP4 or RNE5/nativeBFP8/LoFi5; native FP32 exp grid; P trunc7 matched; FP64 QK/subtraction/online corrections/PV/state; BF16 output",
+                k_center="After transformed spill, subtract token-column FP64 mean into FP32 before quantization; no extra BF16 spill; mean generation and transform performance unmeasured",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+            )
+        )
         for seed in (1240, 1241):
             for distribution in ("normal", "outliers", "scaled_qk", "common_k", "common_q"):
                 q, k, v = [x.squeeze().float() for x in REPRO.make_inputs(1, 128, 32768, 128, seed, distribution)]
@@ -106,15 +117,43 @@ def main():
                         actual = (normalized @ ve).bfloat16()
                         metrics = REPRO.metrics(actual, reference)
                         if seed == 1240 and width == 1:
-                            old = next(r for r in previous if r.get("kind") == "attention" and r["length"] == 32768 and r["distribution"] == distribution and r["k_format"] == "b4" and r["v_format"] == vfmt and r["exp"] == "native")
+                            old = next(
+                                r
+                                for r in previous
+                                if r.get("kind") == "attention"
+                                and r["length"] == 32768
+                                and r["distribution"] == distribution
+                                and r["k_format"] == "b4"
+                                and r["v_format"] == vfmt
+                                and r["exp"] == "native"
+                            )
                             assert old["l2_pct"] == metrics["l2_pct"], "Native unrotated control must reproduce exactly"
-                        emit(dict(kind="attention", length=32768, seed=seed, distribution=distribution,
-                                  hadamard_width=width, spill=spill, center_k=center, v_format=vfmt,
-                                  **metrics, **details,
-                                  p_entropy_mean=float(-(normalized * normalized.clamp_min(1e-300).log()).sum(-1).mean()),
-                                  p_max_mean=float(normalized.max(-1).values.mean())))
+                        emit(
+                            dict(
+                                kind="attention",
+                                length=32768,
+                                seed=seed,
+                                distribution=distribution,
+                                hadamard_width=width,
+                                spill=spill,
+                                center_k=center,
+                                v_format=vfmt,
+                                **metrics,
+                                **details,
+                                p_entropy_mean=float(-(normalized * normalized.clamp_min(1e-300).log()).sum(-1).mean()),
+                                p_max_mean=float(normalized.max(-1).values.mean()),
+                            )
+                        )
                         count += 1
-                emit(dict(kind="input_completed", seed=seed, distribution=distribution, cases=count, seconds=time.monotonic() - started))
+                emit(
+                    dict(
+                        kind="input_completed",
+                        seed=seed,
+                        distribution=distribution,
+                        cases=count,
+                        seconds=time.monotonic() - started,
+                    )
+                )
         emit(dict(kind="completed", cases=count, seconds=time.monotonic() - started))
 
 

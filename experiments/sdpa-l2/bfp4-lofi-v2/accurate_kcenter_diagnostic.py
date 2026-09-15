@@ -32,8 +32,7 @@ def digest(tensor):
 def source_hashes():
     hashes = QUAL.source_hashes()
     files = [Path(__file__).resolve(), HERE / "center_mean.py"]
-    for relative in ("ttnn/cpp/ttnn/operations/eltwise/binary",
-                     "ttnn/cpp/ttnn/operations/reduction/generic"):
+    for relative in ("ttnn/cpp/ttnn/operations/eltwise/binary", "ttnn/cpp/ttnn/operations/reduction/generic"):
         directory = ROOT / relative
         files.extend(directory.rglob("*.cpp"))
         files.extend(directory.rglob("*.hpp"))
@@ -43,14 +42,28 @@ def source_hashes():
 
 def build(device, inputs, centered, args):
     config = argparse.Namespace(
-        variant="accurate", q_chunk=256, length=inputs[0].shape[2], heads=args.heads,
+        variant="accurate",
+        q_chunk=256,
+        length=inputs[0].shape[2],
+        heads=args.heads,
         cores=min(args.cores, args.heads * inputs[0].shape[2] // 256),
-        q_prescale=1.0, center_k=False, mean_mode="bf16_fpu", b8_rne=False,
-        bfp8_pack_precise=False, check_preprocess=False, fix_correction=False,
-        exp_degree=3, native_exp=False, reader_chain=True, reader_split=False,
-        reader_linear_k=False, read_barrier_tiles=2,
+        q_prescale=1.0,
+        center_k=False,
+        mean_mode="bf16_fpu",
+        b8_rne=False,
+        bfp8_pack_precise=False,
+        check_preprocess=False,
+        fix_correction=False,
+        exp_degree=3,
+        native_exp=False,
+        reader_chain=True,
+        reader_split=False,
+        reader_linear_k=False,
+        read_barrier_tiles=2,
     )
-    private_inputs, prepared, output, attention, unused_preprocess, unused_combined, info = F.build(device, config, inputs)
+    private_inputs, prepared, output, attention, unused_preprocess, unused_combined, info = F.build(
+        device, config, inputs
+    )
     private_k = prepared[1]
     # For accurate mode the builder's "originals" and "prepared" lists alias.
     # They are PRIVATE WORKING COPIES here, not our immutable original input.
@@ -72,8 +85,7 @@ def build(device, inputs, centered, args):
         assert private_k.buffer_address() == address
         # Current binary binding explicitly supports output_tensor and routes
         # BF16 fast_and_approximate_mode=False through SFPU with RNE output.
-        result = ttnn.subtract(original_k, bias, fast_and_approximate_mode=False,
-                               output_tensor=private_k)
+        result = ttnn.subtract(original_k, bias, fast_and_approximate_mode=False, output_tensor=private_k)
         assert result.buffer_address() == address
 
     def preprocess():
@@ -87,10 +99,20 @@ def build(device, inputs, centered, args):
 
     # Retain all captured buffers/mean intermediates until trace release.
     combined.buffers = (private_inputs, prepared, original_k, repeated_bias, mean_invoke)
-    return dict(config=config, kernel=info, original_k=original_k, private_k=private_k,
-                output=output, attention=attention, preprocess=preprocess, combined=combined,
-                mean=mean_invoke, subtract=subtract if centered else None,
-                private_inputs=private_inputs, k_address=address)
+    return dict(
+        config=config,
+        kernel=info,
+        original_k=original_k,
+        private_k=private_k,
+        output=output,
+        attention=attention,
+        preprocess=preprocess,
+        combined=combined,
+        mean=mean_invoke,
+        subtract=subtract if centered else None,
+        private_inputs=private_inputs,
+        k_address=address,
+    )
 
 
 def verify_preprocessing(state, inputs, centered):
@@ -119,12 +141,21 @@ def verify_preprocessing(state, inputs, centered):
     assert mismatches == 0, f"BF16 shifted-K oracle mismatch: {mismatches}"
     for index in (0, 2):
         assert torch.equal(ttnn.to_torch(state["private_inputs"][index]).bfloat16(), inputs[index])
-    return actual, ideal_shift, dict(
-        centered=centered, shifted_bf16_mismatches=mismatches, immutable_original_k_verified=True,
-        original_k_sha256=digest(original), prepared_k_sha256=digest(actual), mean=mean_details,
-        bf16_shift_rounding=F.REPRO.metrics(actual, ideal_shift),
-        original_k_address=state["original_k"].buffer_address(), prepared_k_address=state["k_address"],
-        address_contract="Only private builder K working copy changes; immutable device backup and host inputs unchanged",
+    return (
+        actual,
+        ideal_shift,
+        dict(
+            centered=centered,
+            shifted_bf16_mismatches=mismatches,
+            immutable_original_k_verified=True,
+            original_k_sha256=digest(original),
+            prepared_k_sha256=digest(actual),
+            mean=mean_details,
+            bf16_shift_rounding=F.REPRO.metrics(actual, ideal_shift),
+            original_k_address=state["original_k"].buffer_address(),
+            prepared_k_address=state["k_address"],
+            address_contract="Only private builder K working copy changes; immutable device backup and host inputs unchanged",
+        ),
     )
 
 
@@ -172,10 +203,21 @@ def run_case(device, inputs, reference, rows, centered, args):
     assert [digest(x) for x in inputs] == original_hashes
     flops = 4 * args.heads * inputs[0].shape[2] ** 2 * 128
     return dict(
-        center_k=centered, config=vars(state["config"]), kernel=state["kernel"],
-        preparation=preparation, metrics=diagnostic, timings=timings, useful_attention_flops=flops,
-        trace_equal=True, immutable_inputs_verified=True, output_sha256=digest(actual),
-        mean_implementation="MEAN.build bf16_fpu; compact last_mean consumed; unused repeated-bias materialization is included in mean and combined cost" if centered else None,
+        center_k=centered,
+        config=vars(state["config"]),
+        kernel=state["kernel"],
+        preparation=preparation,
+        metrics=diagnostic,
+        timings=timings,
+        useful_attention_flops=flops,
+        trace_equal=True,
+        immutable_inputs_verified=True,
+        output_sha256=digest(actual),
+        mean_implementation=(
+            "MEAN.build bf16_fpu; compact last_mean consumed; unused repeated-bias materialization is included in mean and combined cost"
+            if centered
+            else None
+        ),
         timing_scope="Device trace replay; immutable input uploads/allocation excluded; combined includes every device mean/subtraction and attention invocation. Mean+subtract are disjoint; preprocessing/combined are aggregate measurements.",
     )
 
@@ -188,7 +230,12 @@ def main():
     parser.add_argument("--seeds", type=int, nargs="+", default=[1240])
     parser.add_argument("--heads", type=int, default=2)
     parser.add_argument("--cores", type=int, default=22)
-    parser.add_argument("--sample-rows", type=int, default=128, help="Lengths <=1024 always check all rows; larger lengths sample this many")
+    parser.add_argument(
+        "--sample-rows",
+        type=int,
+        default=128,
+        help="Lengths <=1024 always check all rows; larger lengths sample this many",
+    )
     parser.add_argument("--iters", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--trace-repeats", type=int, default=5)
@@ -201,15 +248,22 @@ def main():
     torch.set_num_interop_threads(1)
     hashes = source_hashes()
     with (HERE / (args.label + ".jsonl")).open("x") as stream:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             stream.write(line + "\n")
             stream.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", args=vars(args), source_sha256=hashes,
-                  purpose="Hardware-error attribution only; unchanged fullchip accurate control and locked kernels",
-                  reference="Original BF16 Q/K/V, FP64 attention; actual BF16 K-shift and exact-shift references separate"))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                source_sha256=hashes,
+                purpose="Hardware-error attribution only; unchanged fullchip accurate control and locked kernels",
+                reference="Original BF16 Q/K/V, FP64 attention; actual BF16 K-shift and exact-shift references separate",
+            )
+        )
         for length in args.lengths:
             count = length if length <= 1024 else min(args.sample_rows, length)
             rows = torch.linspace(0, length - 1, count).long().unique()
@@ -222,9 +276,18 @@ def main():
                         for centered in (False, True):
                             record = run_case(device, inputs, reference, rows, centered, args)
                             assert source_hashes() == hashes, "Pinned sources changed"
-                            emit(dict(kind="diagnostic", length=length, seed=seed, distribution=distribution,
-                                      sampled_query_rows=rows.tolist(), all_output_finite=True,
-                                      all_query_rows_referenced=len(rows) == length, **record))
+                            emit(
+                                dict(
+                                    kind="diagnostic",
+                                    length=length,
+                                    seed=seed,
+                                    distribution=distribution,
+                                    sampled_query_rows=rows.tolist(),
+                                    all_output_finite=True,
+                                    all_query_rows_referenced=len(rows) == length,
+                                    **record,
+                                )
+                            )
                             gc.collect()
                     finally:
                         ttnn.close_device(device)

@@ -68,7 +68,7 @@ inline void adaptive_candidate() {
     TTI_SFPLOAD(p_sfpu::LREG2, 3, ADDR_MOD_7, BASE + 130);  // 2^E
     TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG4, 1);
     TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_USHORT, 254);
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG4, 6);  // 254 - biased E
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG4, 6);       // 254 - biased E
     TTI_SFPSETEXP(0, p_sfpu::LCONST_1, p_sfpu::LREG4, 0);  // 2^-E
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
     TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);

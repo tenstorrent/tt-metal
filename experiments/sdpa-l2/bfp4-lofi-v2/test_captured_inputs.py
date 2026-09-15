@@ -20,10 +20,22 @@ import captured_fullchip as D
 def synthetic(heads=2, length=512):
     generator = torch.Generator().manual_seed(20260915)
     tensors = [torch.randn((1, heads, length, 128), generator=generator).bfloat16() for _ in range(3)]
-    return dict(schema=C.SCHEMA, **dict(zip(("q", "k", "v"), tensors)), metadata=dict(
-        causal=False, mask=None, scale=C.SCALE,
-        provenance=dict(source_kind="synthetic", model_id="no-model", layer_id="test-layer",
-                        capture_stage="synthetic operator-boundary QKV", notes=[None, True, 1, 0.5])))
+    return dict(
+        schema=C.SCHEMA,
+        **dict(zip(("q", "k", "v"), tensors)),
+        metadata=dict(
+            causal=False,
+            mask=None,
+            scale=C.SCALE,
+            provenance=dict(
+                source_kind="synthetic",
+                model_id="no-model",
+                layer_id="test-layer",
+                capture_stage="synthetic operator-boundary QKV",
+                notes=[None, True, 1, 0.5],
+            ),
+        ),
+    )
 
 
 class ForbiddenObject:
@@ -78,21 +90,27 @@ class CaptureTests(unittest.TestCase):
             torch.save(self.artifact, path)
             torch.save(self.artifact, replacement)
             original_load = torch.load
+
             def replace_after_load(*args, **kwargs):
                 value = original_load(*args, **kwargs)
                 replacement.replace(path)
                 return value
+
             with mock.patch.object(C.torch, "load", side_effect=replace_after_load):
                 with self.assertRaisesRegex(ValueError, "Capture path changed while loading"):
                     C.load_capture(path)
 
     def test_tensor_rejections(self):
-        bad = [self.artifact["q"].float(), self.artifact["q"].transpose(1, 2),
-               self.artifact["q"][:, :, :256, :].contiguous(),
-               self.artifact["q"].repeat(2, 1, 1, 1),
-               self.artifact["q"][:, :, :, :64].contiguous(),
-               self.artifact["q"][:, :1].contiguous(),
-               self.artifact["q"].clone().requires_grad_(), torch.nn.Parameter(self.artifact["q"])]
+        bad = [
+            self.artifact["q"].float(),
+            self.artifact["q"].transpose(1, 2),
+            self.artifact["q"][:, :, :256, :].contiguous(),
+            self.artifact["q"].repeat(2, 1, 1, 1),
+            self.artifact["q"][:, :, :, :64].contiguous(),
+            self.artifact["q"][:, :1].contiguous(),
+            self.artifact["q"].clone().requires_grad_(),
+            torch.nn.Parameter(self.artifact["q"]),
+        ]
         for tensor in bad:
             with self.subTest(shape=tensor.shape, dtype=tensor.dtype), self.assertRaises(ValueError):
                 C.validate_artifact(dict(self.artifact, q=tensor))
@@ -110,9 +128,16 @@ class CaptureTests(unittest.TestCase):
             C.validate_artifact(dict(self.artifact, q=tensor))
 
     def test_metadata_and_semantic_rejections(self):
-        mutations = [("causal", True), ("causal", 0), ("mask", "none"), ("mask", []),
-                     ("scale", 0.125), ("scale", float("nan")), ("provenance", {}),
-                     ("unknown_bias", None)]
+        mutations = [
+            ("causal", True),
+            ("causal", 0),
+            ("mask", "none"),
+            ("mask", []),
+            ("scale", 0.125),
+            ("scale", float("nan")),
+            ("provenance", {}),
+            ("unknown_bias", None),
+        ]
         for key, value in mutations:
             meta = copy.deepcopy(self.artifact["metadata"])
             meta[key] = value

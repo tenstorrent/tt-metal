@@ -25,8 +25,7 @@ template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_final_recip8_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(!legacy_compat && !is_fp32_dest_acc_en);
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, false, calculate_reciprocal,
-        (false, false, 8 /* ITERATIONS */, false), idst, vector_mode));
+        DST_SYNC_MODE, false, calculate_reciprocal, (false, false, 8 /* ITERATIONS */, false), idst, vector_mode));
 }
 
 }  // namespace ckernel

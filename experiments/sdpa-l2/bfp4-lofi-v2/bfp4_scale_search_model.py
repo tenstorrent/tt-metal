@@ -18,7 +18,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-
 POLICIES = ("baseline", "mse_minus", "mse_pm", "uniform_proxy")
 
 
@@ -42,8 +41,12 @@ def metric(actual, reference):
     a, r = actual.double().flatten(), reference.double().flatten()
     error = a - r
     ac, rc = a - a.mean(), r - r.mean()
-    return dict(l2_pct=float(100 * error.norm() / r.norm()), mse=float(error.square().mean()),
-                gain=float((a * r).sum() / r.square().sum()), pcc=float((ac * rc).sum() / (ac.norm() * rc.norm())))
+    return dict(
+        l2_pct=float(100 * error.norm() / r.norm()),
+        mse=float(error.square().mean()),
+        gain=float((a * r).sum() / r.square().sum()),
+        pcc=float((ac * rc).sum() / (ac.norm() * rc.norm())),
+    )
 
 
 def quantizers(x):
@@ -76,8 +79,11 @@ def quantizers(x):
         value = value.reshape_as(x)
         # Every final code has <=3 significant bits. Verify two native pack
         # pipeline possibilities independently rather than assume a raw route.
-        roundtrips = [shared_rna(value, 3), shared_rna(significant(value, 7, "rna"), 3),
-                      shared_rna(significant(value, 3, "rna"), 3)]
+        roundtrips = [
+            shared_rna(value, 3),
+            shared_rna(significant(value, 7, "rna"), 3),
+            shared_rna(significant(value, 3, "rna"), 3),
+        ]
         assert all(torch.equal(value, y) for y in roundtrips)
         actual_exp = torch.frexp(value.reshape(-1, 16).abs().amax(-1, keepdim=True))[1].float() - 1
         mismatch = int((actual_exp != exponent + chosen).sum())
@@ -86,11 +92,17 @@ def quantizers(x):
         if policy.startswith("mse"):
             assert bool((error <= errors[0]).all())
         step = torch.exp2(exponent + chosen - 2)
-        result[policy] = (value, dict(**metric(value, x),
-            mse_improvement_pct=float(100 * (1 - error.sum() / errors[0].sum())),
-            offset_fraction={str(o): float((chosen == o).float().mean()) for o in (-1, 0, 1)},
-            clipped_fraction=float((absolute > 7 * step).float().mean()),
-            canonical_exponent_mismatches=mismatch, pack_roundtrip_mismatches=0))
+        result[policy] = (
+            value,
+            dict(
+                **metric(value, x),
+                mse_improvement_pct=float(100 * (1 - error.sum() / errors[0].sum())),
+                offset_fraction={str(o): float((chosen == o).float().mean()) for o in (-1, 0, 1)},
+                clipped_fraction=float((absolute > 7 * step).float().mean()),
+                canonical_exponent_mismatches=mismatch,
+                pack_roundtrip_mismatches=0,
+            ),
+        )
     return result
 
 
@@ -136,16 +148,25 @@ def main():
     path = Path(__file__).with_name(args.label + ".jsonl")
     completed = 0
     with path.open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", args=vars(args), host=platform.node(), threads=4,
-                  torch_version=torch.__version__, source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                  contract="Original BF16 inputs/reference; Q RNE7; K/V BFP4 RNE with empirical exponent selection; K8 RNE5 then native shared RNA7 and LoFi trunc5; native FP32 exp grid/P trunc7/matched denominator; FP64 QK/subtraction/online alpha/PV/state; BF16 output; no device or throughput claims",
-                  caveats="128 sampled Q rows, H1, N32768, D128, K512; no FPU product alignment, BF16 running max, FP32 state roundoff, or reciprocal approximation; not exact kernel simulation"))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                host=platform.node(),
+                threads=4,
+                torch_version=torch.__version__,
+                source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                contract="Original BF16 inputs/reference; Q RNE7; K/V BFP4 RNE with empirical exponent selection; K8 RNE5 then native shared RNA7 and LoFi trunc5; native FP32 exp grid/P trunc7/matched denominator; FP64 QK/subtraction/online alpha/PV/state; BF16 output; no device or throughput claims",
+                caveats="128 sampled Q rows, H1, N32768, D128, K512; no FPU product alignment, BF16 running max, FP32 state roundoff, or reciprocal approximation; not exact kernel simulation",
+            )
+        )
         for seed in (1240, 1241):
             for distribution in ("normal", "outliers", "scaled_qk", "channel_outlier_k", "channel_outlier_v"):
                 if time.monotonic() - started > args.budget_seconds:
@@ -157,9 +178,27 @@ def main():
                 kchoices, vchoices = quantizers(k), quantizers(v)
                 for name, choices in (("k", kchoices), ("v", vchoices)):
                     for policy, (_, stats) in choices.items():
-                        emit(dict(kind="representation", seed=seed, distribution=distribution, tensor=name, policy=policy, **stats))
+                        emit(
+                            dict(
+                                kind="representation",
+                                seed=seed,
+                                distribution=distribution,
+                                tensor=name,
+                                policy=policy,
+                                **stats,
+                            )
+                        )
                 k8 = significant(shared_rna(significant(k, 5), 7), 5, "trunc")
-                emit(dict(kind="representation", seed=seed, distribution=distribution, tensor="k", policy="b8_rne5", **metric(k8, k)))
+                emit(
+                    dict(
+                        kind="representation",
+                        seed=seed,
+                        distribution=distribution,
+                        tensor="k",
+                        policy="b8_rne5",
+                        **metric(k8, k),
+                    )
+                )
                 for kpolicy in (*POLICIES, "b8_rne5"):
                     ke = k8 if kpolicy == "b8_rne5" else kchoices[kpolicy][0]
                     normalized = weights(qe, ke)
@@ -170,11 +209,26 @@ def main():
                         vpolicies = ("baseline", "mse_pm")
                     for vpolicy in vpolicies:
                         actual = (normalized @ vchoices[vpolicy][0].double()).bfloat16()
-                        emit(dict(kind="attention", seed=seed, distribution=distribution, k_policy=kpolicy,
-                                  v_policy=vpolicy, **metric(actual, ref)))
+                        emit(
+                            dict(
+                                kind="attention",
+                                seed=seed,
+                                distribution=distribution,
+                                k_policy=kpolicy,
+                                v_policy=vpolicy,
+                                **metric(actual, ref),
+                            )
+                        )
                 completed += 1
-                emit(dict(kind="input_completed", seed=seed, distribution=distribution, inputs_completed=completed,
-                          seconds=time.monotonic() - started))
+                emit(
+                    dict(
+                        kind="input_completed",
+                        seed=seed,
+                        distribution=distribution,
+                        inputs_completed=completed,
+                        seconds=time.monotonic() - started,
+                    )
+                )
         emit(dict(kind="completed", inputs_completed=completed, seconds=time.monotonic() - started))
 
 

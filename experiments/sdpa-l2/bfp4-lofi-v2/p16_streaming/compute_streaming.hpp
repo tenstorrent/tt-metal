@@ -26,7 +26,8 @@
 #error "P16 cubic exp requires the unbiased DIAG_EXP_MODE=1 fit"
 #endif
 #ifdef SDPA_P16_OUTPUT
-#if !defined(SDPA_FP32_STREAMING) || defined(SDPA_HYBRID_STATE) || defined(SDPA_LOFI_RESIDUALS) || defined(SDPA_FP32_PIPELINE)
+#if !defined(SDPA_FP32_STREAMING) || defined(SDPA_HYBRID_STATE) || defined(SDPA_LOFI_RESIDUALS) || \
+    defined(SDPA_FP32_PIPELINE)
 #error "P16 prototype supports only plain FP32 streaming without residual/hybrid/pipeline modes"
 #endif
 #if defined(SDPA_DIAG_EXP_MODE) && SDPA_DIAG_EXP_MODE != 1
@@ -523,8 +524,8 @@ void blocked_matmul_and_pack(
     in0_index = in0_index_start;
     in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        matmul_block_no_mop(in0_cb, residual_cb, in0_index, in1_index, dst_index,
-                            transpose, subblock_w, subblock_h, matmul_stride);
+        matmul_block_no_mop(
+            in0_cb, residual_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         ++in0_index;
         in1_index += in1_stride;
     }
@@ -868,8 +869,8 @@ void sub_exp_block_bcast_cols(
 #endif
 #endif
 #ifdef SDPA_LOFI_ROUND_P
-            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_round_p,
-                                  (32 * score_batch), 0, VectorMode::None)));
+            PACK((SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_round_p, (32 * score_batch), 0, VectorMode::None)));
 #endif
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 #ifdef SDPA_FP32_PAIRED_PACK
@@ -1520,13 +1521,15 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_commit();
             tile_regs_wait();
             PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-                DST_SYNC_MODE, DST_ACCUM_MODE,
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
 #ifdef SDPA_LOFI_V_BIAS
                 calculate_lofi_normalize_bias,
 #else
                 calculate_sdpa_fp32_normalize,
 #endif
-                0, VectorMode::None)));
+                0,
+                VectorMode::None)));
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             pack_tile(0, normalized_out_cb);
             tile_regs_release();
@@ -2730,8 +2733,7 @@ static void sdpa_inner_loop_step(
             for (uint32_t row = 0; row < Sq_chunk_t; row += 4) {
                 tile_regs_acquire();
                 for (uint32_t col = 0; col < active_Sk; ++col) {
-                    UNPACK(
-                        (llk_unpack_AB_matmul(cb_p_im, cb_col_identity, row * KT_stride + col, 0, 1, 4, KT_stride)));
+                    UNPACK((llk_unpack_AB_matmul(cb_p_im, cb_col_identity, row * KT_stride + col, 0, 1, 4, KT_stride)));
                     MATH((llk_math_matmul<denom_fidelity, MM_THROTTLE>(0, 1, 4)));
                 }
                 tile_regs_commit();
@@ -2859,8 +2861,7 @@ static void sdpa_inner_loop_step(
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
-                sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_p_im>(
-                    out_cb, out_cb);
+                sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_p_im>(out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_p_im row stride, but the unpacker is configured for the physical layout.
                 mm_no_mop_reinit_short(cb_p_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);

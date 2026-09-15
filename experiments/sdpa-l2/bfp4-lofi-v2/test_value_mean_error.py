@@ -5,10 +5,10 @@
 AST-load the actual driver helpers with fake tensor hashes/trace operations.
 This checks host control flow, NOT numerical correctness or hardware replay.
 """
+
 import ast
 from pathlib import Path
 import unittest
-
 
 DRIVER = Path(__file__).with_name("value_mean_error_fullchip.py")
 
@@ -120,12 +120,16 @@ class ReplayTests(unittest.TestCase):
         main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
         block = next(node for node in main.body if isinstance(node, ast.Try)).body
         qualification = [
-            index for index, node in enumerate(block)
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name) and node.value.func.id == "qualify_trace_replays"
+            index
+            for index, node in enumerate(block)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "qualify_trace_replays"
         ]
         timing = [
-            index for index, node in enumerate(block)
+            index
+            for index, node in enumerate(block)
             if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "timings" for target in node.targets)
         ]

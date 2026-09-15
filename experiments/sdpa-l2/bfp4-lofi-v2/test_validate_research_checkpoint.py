@@ -4,6 +4,7 @@
 
 All corruptions are in-memory copies. No fixtures, source, or records are written.
 """
+
 import ast
 import copy
 import importlib.util
@@ -28,7 +29,9 @@ class CheckpointTests(unittest.TestCase):
     def evaluate(self, family, record, **kwargs):
         e = V.Evidence("in-memory-only", family)
         audit = V.Audit(V.ROOT, HERE)
-        getattr(V, family if not family.startswith("identity4") else "identity4")(audit, e, copy.deepcopy(record), **kwargs)
+        getattr(V, family if not family.startswith("identity4") else "identity4")(
+            audit, e, copy.deepcopy(record), **kwargs
+        )
         return e.export()
 
     def native(self):
@@ -74,8 +77,7 @@ class CheckpointTests(unittest.TestCase):
         e = V.Evidence("memory", "adaptive_primitive")
         r = self.primitive()
         # Isolate omission handling from legitimate historical formatting drift.
-        r["source_sha256"] = {p: V.hashlib.sha256((V.ROOT / p).read_bytes()).hexdigest()
-                              for p in r["source_sha256"]}
+        r["source_sha256"] = {p: V.hashlib.sha256((V.ROOT / p).read_bytes()).hexdigest() for p in r["source_sha256"]}
         name = V.V2 + "adaptive_bfp4_round/compute.cpp"
         del r["source_sha256"][name]
         V.Audit(V.ROOT, HERE).provenance(e, r)
@@ -162,8 +164,12 @@ class CheckpointTests(unittest.TestCase):
     def test_lut_pairs_bit_identity_controls_and_arithmetic(self):
         original = [read(f"lut-macro-{mode}-resident-v1.json") for mode in ("raw", "macro")]
         self.assertEqual(self.evaluate("lut_macro", original, scope="resident")["status"], "PASS")
-        for field, value in (("output_sha256", "0" * 64), ("clock_mhz", 1000),
-                             ("probability_pack_width", 1), ("tflops_per_core", 999)):
+        for field, value in (
+            ("output_sha256", "0" * 64),
+            ("clock_mhz", 1000),
+            ("probability_pack_width", 1),
+            ("tflops_per_core", 999),
+        ):
             changed = copy.deepcopy(original)
             changed[1][field] = value
             self.assertEqual(self.evaluate("lut_macro", changed, scope="resident")["status"], "FAIL")
@@ -184,8 +190,12 @@ class CheckpointTests(unittest.TestCase):
 
     def test_missing_paired_record_is_pending(self):
         audit = V.Audit(V.ROOT, HERE)
-        audit.load_pair(["lut-macro-raw-smoke-v1.json", "intentionally-absent-lut-macro.json"],
-                        "lut_macro", V.lut_macro, scope="smoke")
+        audit.load_pair(
+            ["lut-macro-raw-smoke-v1.json", "intentionally-absent-lut-macro.json"],
+            "lut_macro",
+            V.lut_macro,
+            scope="smoke",
+        )
         self.assertEqual(audit.items[0]["status"], "PENDING")
         self.assertEqual(len(audit.items[0]["summary"]["record_sha256"]), 1)
 
@@ -215,8 +225,15 @@ class CheckpointTests(unittest.TestCase):
         original_is_file = Path.is_file
         with mock.patch.object(Path, "is_file", lambda p: False if p == target else original_is_file(p)):
             audit = V.Audit(V.ROOT, HERE)
-            audit.load(target.name, "adaptive_fullchip", V.adaptive_fullchip,
-                       length=262144, fmt="b8_b4", search="native", distribution="normal")
+            audit.load(
+                target.name,
+                "adaptive_fullchip",
+                V.adaptive_fullchip,
+                length=262144,
+                fmt="b8_b4",
+                search="native",
+                distribution="normal",
+            )
         self.assertEqual(audit.items[0]["status"], "PENDING")
         self.assertFalse(audit.items[0]["optional"])
 
@@ -362,10 +379,21 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual(V.hashlib.sha256(path.read_bytes()).hexdigest(), path.stem)
 
     def test_formatting_drift_uses_historical_witness_without_hiding_drift(self):
-        drivers = {"identity4_streaming.py", "value_centered_fullchip.py", "value_centered_b8_fullchip.py",
-                   "adaptive_fullchip.py", "exp_lut_macro_streaming.py", "exp_lut_macro_resident.py",
-                   "Vtransposed_fullchip.py", "fullchip.py", "hifi2_native_fullchip.py", "hifi2_lut_fullchip.py",
-                   "hifi2_bf16_lut_fullchip.py", "combined_recipe_fullchip.py", "paired_vaxis_timing.py"}
+        drivers = {
+            "identity4_streaming.py",
+            "value_centered_fullchip.py",
+            "value_centered_b8_fullchip.py",
+            "adaptive_fullchip.py",
+            "exp_lut_macro_streaming.py",
+            "exp_lut_macro_resident.py",
+            "Vtransposed_fullchip.py",
+            "fullchip.py",
+            "hifi2_native_fullchip.py",
+            "hifi2_lut_fullchip.py",
+            "hifi2_bf16_lut_fullchip.py",
+            "combined_recipe_fullchip.py",
+            "paired_vaxis_timing.py",
+        }
         paths = {HERE / name for name in drivers}
         read_bytes = Path.read_bytes
 
@@ -381,9 +409,12 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(result["provenance_status"], "WARN")
         self.assertEqual(result["sources_changed_during_audit"], [])
         self.assertEqual(witness["status"], "PASS")
-        self.assertTrue(any(x["source"].endswith("Vtransposed_fullchip.py")
-                            for x in witness["provenance"]["current_source_drift"]))
-        self.assertTrue(all(x["basis"] == "historical_sha256_snapshot" for x in witness["summary"]["producer_witnesses"]))
+        self.assertTrue(
+            any(x["source"].endswith("Vtransposed_fullchip.py") for x in witness["provenance"]["current_source_drift"])
+        )
+        self.assertTrue(
+            all(x["basis"] == "historical_sha256_snapshot" for x in witness["summary"]["producer_witnesses"])
+        )
 
     def test_corrupt_or_wrong_hash_snapshot_rejected_before_ast(self):
         driver = "Vtransposed_fullchip.py"
@@ -393,14 +424,17 @@ class CheckpointTests(unittest.TestCase):
         snapshot = HERE / "witness_sources" / (digest + ".source")
         original_read = Path.read_bytes
         for payload in (b"not Python and not the expected bytes", original_read(HERE / "adaptive_fullchip.py")):
+
             def altered(path):
                 if path == producer:
                     return original_read(path) + b"\n# Formatting simulation\n"
                 return payload if path == snapshot else original_read(path)
+
             with mock.patch.object(Path, "read_bytes", altered), mock.patch.object(V.ast, "parse") as parse:
                 e = V.Evidence("memory", "v_transpose")
                 actual = V.Audit(V.ROOT, HERE).assertion_witness(
-                    e, record, driver, "[tensor_hash(x) for x in inputs] == original_hashes")
+                    e, record, driver, "[tensor_hash(x) for x in inputs] == original_hashes"
+                )
                 self.assertFalse(actual)
                 self.assertEqual(e.export()["status"], "FAIL")
                 self.assertTrue(any("SHA mismatch" in f for f in e.failures))
@@ -416,7 +450,8 @@ class CheckpointTests(unittest.TestCase):
             with mock.patch.object(Path, "is_file", lambda p: False if p in missing else original_is_file(p)):
                 e = V.Evidence("memory", "v_transpose")
                 V.Audit(V.ROOT, HERE).assertion_witness(
-                    e, record, driver, "[tensor_hash(x) for x in inputs] == original_hashes")
+                    e, record, driver, "[tensor_hash(x) for x in inputs] == original_hashes"
+                )
                 self.assertEqual(e.export()["status"], expected)
 
     def test_late_mean_error_gates_and_undefined_uniform(self):
@@ -471,7 +506,9 @@ class CheckpointTests(unittest.TestCase):
         for mutate in (
             lambda r: r[1]["kernel"].update(score_scale=1),
             lambda r: r[1]["kernel"]["qk_rotation_metadata"][1].update(matrix_sha256="0" * 64),
-            lambda r: r[1]["kernel"]["preprocessing_checks"][-1]["adaptive_statistics"].update(induced_exponent_mismatches=1),
+            lambda r: r[1]["kernel"]["preprocessing_checks"][-1]["adaptive_statistics"].update(
+                induced_exponent_mismatches=1
+            ),
             lambda r: r[1]["kernel"]["preprocessing_checks"][1].update(oracle_source="Ideal FP64 input"),
             lambda r: r[1]["preprocessing_stages"].pop("q_rotation"),
         ):
@@ -492,7 +529,9 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(self.evaluate("paired_vaxis", r, length=32768)["status"], "PASS")
         for mutate in (
             lambda r: next(x for x in r if x["kind"] == "qualified").update(exact_preprocessing=False),
-            lambda r: next(x for x in r if x["kind"] == "qualified")["kernel"]["preprocessing_checks"][0].update(mismatch=1),
+            lambda r: next(x for x in r if x["kind"] == "qualified")["kernel"]["preprocessing_checks"][0].update(
+                mismatch=1
+            ),
             lambda r: next(x for x in r if x["kind"] == "round_order")["candidates"].reverse(),
             lambda r: next(x for x in r if x["kind"] == "summary").update(original_inputs_immutable=False),
             lambda r: next(x for x in r if x["kind"] == "summary")["candidates"][0].update(median_combined_ms=999),
@@ -517,7 +556,9 @@ class CheckpointTests(unittest.TestCase):
             if isinstance(node, ast.Import):
                 self.assertFalse({x.name.split(".")[0] for x in node.names} & {"torch", "ttnn", "subprocess"})
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                self.assertNotIn(node.func.attr, {"write_text", "write_bytes", "unlink", "rename", "mkdir", "open_device"})
+                self.assertNotIn(
+                    node.func.attr, {"write_text", "write_bytes", "unlink", "rename", "mkdir", "open_device"}
+                )
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 self.assertNotIn(node.func.id, {"open", "exec", "eval"})
 

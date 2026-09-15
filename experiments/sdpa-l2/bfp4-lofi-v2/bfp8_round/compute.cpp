@@ -116,4 +116,3 @@ void kernel_main() {
         cb_push_back(16, batch);
     }
 }
-

@@ -24,7 +24,10 @@ SPEC = importlib.util.spec_from_file_location("exp_refiner_base", HERE / "hi2_b8
 BASE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BASE)
 MODEL, REPRO = BASE.MODEL, BASE.REPRO
-HEADER = HERE.parent / "hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
+HEADER = (
+    HERE.parent
+    / "hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
+)
 SCALE = np.float32(1 / math.sqrt(128))
 GRID_A = np.float32(np.float32(1024) * np.float32(1.4426950408889634) * SCALE)
 GRID_B = np.float32(31 * 1024 - 4 * (32512 - 32500.818359375))
@@ -56,12 +59,21 @@ def fits():
             assert (np.polyval(realized, negative_m) > 0).all(), "Underflow sign must survive refiner"
             name = f"{target_name}_degree{degree}"
             result[name] = folded.tolist()
-            records.append(dict(kind="fit", name=name, target=target_name, degree=degree,
-                                coefficients_descending=realized.tolist(), folded_fp32_coefficients=folded.tolist(),
-                                relative_rms_pct=float(100 * np.sqrt(np.mean(relative**2))),
-                                relative_max_abs_pct=float(100 * np.max(np.abs(relative))),
-                                refined_mantissa_min=float(approximation.min()), refined_mantissa_max=float(approximation.max()),
-                                negative_mantissa_sign_preserved=True))
+            records.append(
+                dict(
+                    kind="fit",
+                    name=name,
+                    target=target_name,
+                    degree=degree,
+                    coefficients_descending=realized.tolist(),
+                    folded_fp32_coefficients=folded.tolist(),
+                    relative_rms_pct=float(100 * np.sqrt(np.mean(relative**2))),
+                    relative_max_abs_pct=float(100 * np.max(np.abs(relative))),
+                    refined_mantissa_min=float(approximation.min()),
+                    refined_mantissa_max=float(approximation.max()),
+                    negative_mantissa_sign_preserved=True,
+                )
+            )
     return result, records
 
 
@@ -100,11 +112,16 @@ def outputs(scores, v, coefficients):
         consumed = MODEL.round_significand(p, 7, "trunc").double()
         weighted = (consumed * correction).reshape(128, -1)
         out = weighted @ v.double() / weighted.sum(-1, keepdim=True)
-        result[name] = (out, dict(
-            grid_negative_fraction=float((transformed < 0).double().mean()),
-            grid_subnormal_linear_fraction=float(((magnitude < 1024) & (transformed >= 0)).double().mean()),
-            true_mass_below_grid_range=float((exact * correction * (transformed < 0)).sum() / (exact * correction).sum()),
-        ))
+        result[name] = (
+            out,
+            dict(
+                grid_negative_fraction=float((transformed < 0).double().mean()),
+                grid_subnormal_linear_fraction=float(((magnitude < 1024) & (transformed >= 0)).double().mean()),
+                true_mass_below_grid_range=float(
+                    (exact * correction * (transformed < 0)).sum() / (exact * correction).sum()
+                ),
+            ),
+        )
     return result
 
 
@@ -120,10 +137,16 @@ def scalar_grid_checks(coefficients):
     variants.update({name: polynomial(linear, mantissa, coef) for name, coef in coefficients.items()})
     for name, value in variants.items():
         relative = value / truth - 1
-        records.append(dict(kind="grid_check", name=name, logit_range=[-20, 0],
-                            relative_rms_pct=float(100 * relative.square().mean().sqrt()),
-                            relative_max_abs_pct=float(100 * relative.abs().max()),
-                            mean_relative_pct=float(100 * relative.mean())))
+        records.append(
+            dict(
+                kind="grid_check",
+                name=name,
+                logit_range=[-20, 0],
+                relative_rms_pct=float(100 * relative.square().mean().sqrt()),
+                relative_max_abs_pct=float(100 * relative.abs().max()),
+                mean_relative_pct=float(100 * relative.mean()),
+            )
+        )
     return records
 
 
@@ -137,25 +160,51 @@ def main():
     coefficients, fit_records = fits()
     grid_records = scalar_grid_checks(coefficients)
     started, count = time.monotonic(), 0
-    sources = [Path(__file__), HEADER, Path(BASE.__file__), HERE / "numerics.py", MODEL.V1 / "probe.py", Path(REPRO.__file__)]
+    sources = [
+        Path(__file__),
+        HEADER,
+        Path(BASE.__file__),
+        HERE / "numerics.py",
+        MODEL.V1 / "probe.py",
+        Path(REPRO.__file__),
+    ]
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", args=vars(args), hostname=platform.node(), threads=4,
-                  grid_a=float(GRID_A), grid_b=float(GRID_B), common_exp_factor=COMMON,
-                  contract="CPU exact QK/subtraction and online corrections; modeled FP32 exp-grid FMA, signed INT16 nearest-away, bitshift13, folded FP32 Horner FMA/MUL; P trunc7 matched; FP64 PV/state; BF16 output; no device",
-                  caveats="IEEE FP32 rounding model, not bit-accurate SFPU exceptional/denormal arithmetic; no device cheap-subtraction or recurrent BF16 error",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                hostname=platform.node(),
+                threads=4,
+                grid_a=float(GRID_A),
+                grid_b=float(GRID_B),
+                common_exp_factor=COMMON,
+                contract="CPU exact QK/subtraction and online corrections; modeled FP32 exp-grid FMA, signed INT16 nearest-away, bitshift13, folded FP32 Horner FMA/MUL; P trunc7 matched; FP64 PV/state; BF16 output; no device",
+                caveats="IEEE FP32 rounding model, not bit-accurate SFPU exceptional/denormal arithmetic; no device cheap-subtraction or recurrent BF16 error",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+            )
+        )
         for record in fit_records + grid_records:
             emit(record)
         for length in args.lengths:
             for distribution in ("normal", "scaled_qk", "outliers", "common_k_centered"):
-                q, k, v = [x.squeeze().float() for x in REPRO.make_inputs(
-                    1, 128, length, 128, args.seed, "common_k" if distribution == "common_k_centered" else distribution)]
+                q, k, v = [
+                    x.squeeze().float()
+                    for x in REPRO.make_inputs(
+                        1,
+                        128,
+                        length,
+                        128,
+                        args.seed,
+                        "common_k" if distribution == "common_k_centered" else distribution,
+                    )
+                ]
                 reference = REPRO.reference(q, k, v)
                 if distribution == "common_k_centered":
                     k = (k.double() - k.double().mean(0, keepdim=True)).float()
@@ -170,11 +219,21 @@ def main():
                     for name, (raw, details) in result.items():
                         actual = raw.bfloat16()
                         current = result["effective_p7_degree3"][0].bfloat16()
-                        emit(dict(kind="attention", length=length, seed=args.seed, distribution=distribution,
-                                  operands=operands, refiner=name, **BASE.summary(actual, reference), **details,
-                                  before_output_rounding_l2_pct=BASE.summary(raw, reference)["l2_pct"],
-                                  vs_current_compensated_cubic_l2_pct=BASE.summary(actual, current)["l2_pct"],
-                                  vs_exact_exp_l2_pct=BASE.summary(actual, result["exact_exp"][0].bfloat16())["l2_pct"]))
+                        emit(
+                            dict(
+                                kind="attention",
+                                length=length,
+                                seed=args.seed,
+                                distribution=distribution,
+                                operands=operands,
+                                refiner=name,
+                                **BASE.summary(actual, reference),
+                                **details,
+                                before_output_rounding_l2_pct=BASE.summary(raw, reference)["l2_pct"],
+                                vs_current_compensated_cubic_l2_pct=BASE.summary(actual, current)["l2_pct"],
+                                vs_exact_exp_l2_pct=BASE.summary(actual, result["exact_exp"][0].bfloat16())["l2_pct"],
+                            )
+                        )
                         count += 1
             emit(dict(kind="length_completed", length=length, cases=count, seconds=time.monotonic() - started))
         emit(dict(kind="completed", cases=count, seconds=time.monotonic() - started))

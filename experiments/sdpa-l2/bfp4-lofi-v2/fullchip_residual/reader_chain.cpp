@@ -36,15 +36,17 @@
 #endif
 
 template <uint32_t tile_bytes, bool transpose, typename Accessor>
-FORCE_INLINE void read_kv_from_dram(
-    const Noc& noc, const Accessor& tensor, uint32_t first_page, uint32_t write_ptr) {
+FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint32_t first_page, uint32_t write_ptr) {
     // Sequential source requests distribute traffic over the interleaved banks;
     // K scatters the tile grid in L1, without transposing individual tiles.
     for (uint32_t p = 0; p < 64; ++p) {
         const uint32_t dst_tile = transpose ? (p % 4) * 16 + p / 4 : p;
         noc.async_read(
-            tensor, CoreLocalMem<uint32_t>(write_ptr + dst_tile * tile_bytes), tile_bytes,
-            {.page_id = first_page + p}, {});
+            tensor,
+            CoreLocalMem<uint32_t>(write_ptr + dst_tile * tile_bytes),
+            tile_bytes,
+            {.page_id = first_page + p},
+            {});
 #if SDPA_READER_BARRIER_TILES > 0
         if ((p + 1) % SDPA_READER_BARRIER_TILES == 0) {
             noc.async_read_barrier();
@@ -94,16 +96,32 @@ void kernel_main() {
     Noc noc;
     CircularBuffer qcb(0), kcb(1), vcb(2), krcb(17), vrcb(18);
     const ChainLink<false, true> link(
-        chain_length > 1, rank == 0, rank + 1 == chain_length,
-        ready_sem, received_sem, valid_sem,
-        prev_x, prev_y, next_x, next_y,
-        0, 0, 0, 0, 0,  // Multicast rectangle/destination count: unused for unicast.
-        64, kbytes, head, next_jobs);
+        chain_length > 1,
+        rank == 0,
+        rank + 1 == chain_length,
+        ready_sem,
+        received_sem,
+        valid_sem,
+        prev_x,
+        prev_y,
+        next_x,
+        next_y,
+        0,
+        0,
+        0,
+        0,
+        0,  // Multicast rectangle/destination count: unused for unicast.
+        64,
+        kbytes,
+        head,
+        next_jobs);
 
     // Do not locally reinitialize ready/received here: a downstream reader may
     // already have sent readiness. Descriptor initialization precedes all kernels.
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        3, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW,
+        3,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(4), 0x3f803f80);
 

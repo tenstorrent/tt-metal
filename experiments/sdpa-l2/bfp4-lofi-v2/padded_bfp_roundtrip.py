@@ -35,13 +35,12 @@ spec.loader.exec_module(INPUTS)
 def build(device, src, args, page_bytes):
     batch = 4 if args.fp32_dst else 8
     dtype = ttnn.bfloat8_b if args.format == "b8" else ttnn.bfloat4_b
-    out = ttnn.allocate_tensor_on_device(
-        src.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
+    out = ttnn.allocate_tensor_on_device(src.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     cbs = [
         ttnn.CBDescriptor(
-            total_size=tiles * size, core_ranges=grid,
+            total_size=tiles * size,
+            core_ranges=grid,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=size)],
         )
         for index, tiles, fmt, size in (
@@ -55,21 +54,34 @@ def build(device, src, args, page_bytes):
     writer[0][0] = [out.buffer_address()]
     cta = [batch, args.tiles]
     descriptor = ttnn.ProgramDescriptor(
-        cbs=cbs, semaphores=[],
+        cbs=cbs,
+        semaphores=[],
         kernels=[
             ttnn.KernelDescriptor(
-                kernel_source=PREFIX + "reader.cpp", core_ranges=grid,
+                kernel_source=PREFIX + "reader.cpp",
+                core_ranges=grid,
                 compile_time_args=cta + ttnn.TensorAccessorArgs(src).get_compile_time_args(),
-                runtime_args=reader, config=ttnn.ReaderConfigDescriptor()),
+                runtime_args=reader,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
             ttnn.KernelDescriptor(
-                kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
                 compile_time_args=cta + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-                runtime_args=writer, config=ttnn.WriterConfigDescriptor()),
+                runtime_args=writer,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
             ttnn.KernelDescriptor(
-                kernel_source=PREFIX + "compute.cpp", core_ranges=grid, compile_time_args=cta,
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
+                compile_time_args=cta,
                 config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=args.fp32_dst,
-                    dst_full_sync_en=False, math_approx_mode=False)),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=args.fp32_dst,
+                    dst_full_sync_en=False,
+                    math_approx_mode=False,
+                ),
+            ),
         ],
     )
     return out, lambda: ttnn.generic_op([src, out], descriptor), 8 * 2048 + 2 * batch * (page_bytes + 2048)
@@ -129,8 +141,12 @@ def main():
             mismatch = int((actual != x).sum())
             error = actual.double() - x.double()
             case = dict(
-                name=name, page_bytes=page_bytes, native_payload_bytes=native_bytes,
-                cb_bytes_per_core=cb_bytes, finite=finite, mismatch_vs_input=mismatch,
+                name=name,
+                page_bytes=page_bytes,
+                native_payload_bytes=native_bytes,
+                cb_bytes_per_core=cb_bytes,
+                finite=finite,
+                mismatch_vs_input=mismatch,
                 max_absolute_error=float(error.abs().max()) if finite else None,
                 quantization_l2_pct=float(100 * error.norm() / x.double().norm()) if finite else None,
                 output_sha256=hashlib.sha256(actual.contiguous().view(torch.uint16).numpy().tobytes()).hexdigest(),
@@ -157,13 +173,21 @@ def main():
                 )
                 assert torch.equal(matrices[case["name"] + "_output_bf16"], ttnn.to_torch(out))
         record = dict(
-            **vars(args), cores=1, batch=4 if args.fp32_dst else 8, pack_width=1,
-            input_shape=list(x.shape), output_shape=list(compact.shape),
-            resident_input_tiles=8, saved_output_tiles=8,
-            exact_required=exact_required, correctness_pass=bool(correctness_pass),
-            padded_vs_compact_mismatches=control_mismatch, cases=[c[0] for c in cases],
+            **vars(args),
+            cores=1,
+            batch=4 if args.fp32_dst else 8,
+            pack_width=1,
+            input_shape=list(x.shape),
+            output_shape=list(compact.shape),
+            resident_input_tiles=8,
+            saved_output_tiles=8,
+            exact_required=exact_required,
+            correctness_pass=bool(correctness_pass),
+            padded_vs_compact_mismatches=control_mismatch,
+            cases=[c[0] for c in cases],
             matrices_file=str(matrices_path.relative_to(ROOT)),
-            matrix_keys=list(matrices), clock_source="CLI assumption, not measured",
+            matrix_keys=list(matrices),
+            clock_source="CLI assumption, not measured",
             timing_source="Blocking host wall-clock trace replay divided by trace_repeats",
             source_sha256={
                 str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()

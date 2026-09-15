@@ -27,9 +27,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < 4; ++j) {
             copy_tile(1, j, j + 4);
             copy_tile(0, j, j);
-            MATH(SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, center_round_face,
-                (b8_rne5), j, VectorMode::RC));
+            MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, center_round_face, (b8_rne5), j, VectorMode::RC));
         }
         tile_regs_commit();
         cb_pop_front(0, 4);
@@ -44,4 +42,3 @@ void kernel_main() {
         cb_push_back(16, 4);
     }
 }
-

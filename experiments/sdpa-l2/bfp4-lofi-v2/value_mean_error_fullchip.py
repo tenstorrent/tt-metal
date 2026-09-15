@@ -8,6 +8,7 @@ adds delta once after attention. Device means, BFP decode, optional SrcA5
 truncation, subtraction/slice and output epilogue are explicitly timed.
 This cancels only unweighted DC quantization error in ideal arithmetic.
 """
+
 import argparse
 import hashlib
 import json
@@ -36,7 +37,8 @@ def check_input_immutability(originals, inputs, expected_hashes):
     cpu_hashes = [tensor_sha256(x) for x in inputs]
     device_hashes = [tensor_sha256(ttnn.to_torch(x)) for x in originals]
     result = dict(
-        cpu_input_sha256=cpu_hashes, device_input_sha256=device_hashes,
+        cpu_input_sha256=cpu_hashes,
+        device_input_sha256=device_hashes,
         cpu_inputs_unchanged=cpu_hashes == expected_hashes,
         device_inputs_unchanged=device_hashes == expected_hashes,
     )
@@ -66,10 +68,14 @@ def qualify_trace_replays(device, combined, out, expected_hash, originals, input
         ttnn.release_trace(device, trace)
     after = check_input_immutability(originals, inputs, input_hashes)
     return dict(
-        explicit_combined_trace_replays=len(replay_hashes), invocations_per_replay=1,
-        replay_output_sha256=replay_hashes, output_bitwise_equal=True,
-        cpu_inputs_unchanged=True, device_inputs_unchanged=True,
-        before=before, after=after,
+        explicit_combined_trace_replays=len(replay_hashes),
+        invocations_per_replay=1,
+        replay_output_sha256=replay_hashes,
+        output_bitwise_equal=True,
+        cpu_inputs_unchanged=True,
+        device_inputs_unchanged=True,
+        before=before,
+        after=after,
         timing_scope="Mandatory correctness-only capture/replays, excluded from reported timings",
     )
 
@@ -103,12 +109,14 @@ def build_correction(device, original, packed, args):
         if truncate is not None:
             truncate()
         represented_mean()
-        ttnn.subtract(
-            original_bias, represented_bias, output_tensor=delta, fast_and_approximate_mode=False
-        )
+        ttnn.subtract(original_bias, represented_bias, output_tensor=delta, fast_and_approximate_mode=False)
         ttnn.slice(
-            delta, [0, 0, 0, 0], compact_shape, [1, 1, 1, 1],
-            output_tensor=compact, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            delta,
+            [0, 0, 0, 0],
+            compact_shape,
+            [1, 1, 1, 1],
+            output_tensor=compact,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     # Retain every buffer and callable through all trace capture/replay.
@@ -119,10 +127,14 @@ def build_correction(device, original, packed, args):
     invoke.compact = compact
     invoke.keepalive = (original, packed, original_mean, represented_mean, truncate, delta)
     info = dict(
-        mode="mean_error", precenter_v=False,
+        mode="mean_error",
+        precenter_v=False,
         formula="mean(original V) - mean(actual LoFi-consumed quantized ORIGINAL V)",
         original_mean={**original_mean.precision, "input": "Original device BF16 V"},
-        represented_mean={**represented_mean.precision, "input": "Actual decoded V8 truncated to SrcA5" if b8 else "Actual decoded V4 (exact in SrcA5)"},
+        represented_mean={
+            **represented_mean.precision,
+            "input": "Actual decoded V8 truncated to SrcA5" if b8 else "Actual decoded V4 (exact in SrcA5)",
+        },
         effective_value_truncation="toward zero to five significant bits, NOT RNE" if b8 else None,
         effective_truncation_cores=truncate_cores,
         bias_precision="Subtract actual rounded BF16 means, then BF16 RNE delta",
@@ -159,7 +171,8 @@ def check_correction(original, packed, invoke, b8):
     ideal_delta = mu - muq
     error = actual_delta.double() - ideal_delta
     return dict(
-        effective_value_check=effective_check, bias_mismatch=mismatch,
+        effective_value_check=effective_check,
+        bias_mismatch=mismatch,
         quantizer_input="Original V, never precentered",
         ideal_delta_rms=float(ideal_delta.square().mean().sqrt()),
         ideal_delta_max_abs=float(ideal_delta.abs().max()),
@@ -225,9 +238,17 @@ def source_files(destination, kv_formats):
     base = BASE4 if kv_formats == "b8_b4" else BASE8
     # Pin both imported wrappers and the complete BASE8 oracle/reference list,
     # also when BASE4 is selected (historical BASE4 reference pin was omitted).
-    return sorted(set(base.source_files(destination) + BASE8.source_files(destination) + [
-        Path(__file__).resolve(), Path(BASE4.__file__).resolve(), Path(BASE8.__file__).resolve(),
-    ]))
+    return sorted(
+        set(
+            base.source_files(destination)
+            + BASE8.source_files(destination)
+            + [
+                Path(__file__).resolve(),
+                Path(BASE4.__file__).resolve(),
+                Path(BASE8.__file__).resolve(),
+            ]
+        )
+    )
 
 
 def main():
@@ -260,7 +281,9 @@ def main():
     path = HERE / (args.label + ".json")
     assert not path.exists(), "Use a fresh label"
     torch.set_num_threads(8)
-    inputs = REPRO.make_inputs(args.heads, args.length, args.length, 128, args.seed, args.distribution, args.common_mode)
+    inputs = REPRO.make_inputs(
+        args.heads, args.length, args.length, 128, args.seed, args.distribution, args.common_mode
+    )
     original_input_hashes = [tensor_sha256(x) for x in inputs]
     rows = torch.linspace(0, args.length - 1, min(args.sample_rows, args.length)).long().unique()
     reference = REPRO.reference(inputs[0][..., rows, :], inputs[1], inputs[2])
@@ -285,7 +308,11 @@ def main():
         timings = dict(
             attention=BASE8.timed(device, attention, args),
             preprocessing=BASE8.timed(device, preprocess, args),
-            epilogue=BASE8.timed(device, attention.epilogue, args) if attention.epilogue_bias is not None else dict(median_ms=0.0, replay_ms=[]),
+            epilogue=(
+                BASE8.timed(device, attention.epilogue, args)
+                if attention.epilogue_bias is not None
+                else dict(median_ms=0.0, replay_ms=[])
+            ),
             attention_with_epilogue=BASE8.timed(device, attention.with_epilogue, args),
             combined=BASE8.timed(device, combined, args),
         )
@@ -296,24 +323,39 @@ def main():
             core = ttnn.to_torch(attention.core_output).float()
             bias = ttnn.to_torch(attention.epilogue_bias).float()
             expected = (core + bias).bfloat16()
-            epilogue_check = dict(mismatch=int((actual != expected).sum()), oracle="BF16 RNE of actual BF16 core + actual BF16 delta")
+            epilogue_check = dict(
+                mismatch=int((actual != expected).sum()), oracle="BF16 RNE of actual BF16 core + actual BF16 delta"
+            )
             assert epilogue_check["mismatch"] == 0, epilogue_check
         assert all(hashlib.sha256(p.read_bytes()).hexdigest() == pins[str(p.relative_to(ROOT))] for p in sources)
         flops = 4 * args.heads * args.length**2 * 128
         record = dict(
-            **vars(args), **info, **timings, accuracy=accuracy,
-            centered_output_accuracy=centered_accuracy, epilogue_check=epilogue_check,
-            sampled_query_rows=rows.tolist(), useful_flops=flops,
+            **vars(args),
+            **info,
+            **timings,
+            accuracy=accuracy,
+            centered_output_accuracy=centered_accuracy,
+            epilogue_check=epilogue_check,
+            sampled_query_rows=rows.tolist(),
+            useful_flops=flops,
             accuracy_scope="Original BF16 Q/K/V FP64 reference; sampled Q rows, all KV and heads",
-            attention_tflops=flops / (timings["attention"]["median_ms"] * 1e9) if timings["attention"]["median_ms"] else None,
-            combined_tflops=flops / (timings["combined"]["median_ms"] * 1e9) if timings["combined"]["median_ms"] else None,
-            trace_equal=True, all_output_finite=True,
+            attention_tflops=(
+                flops / (timings["attention"]["median_ms"] * 1e9) if timings["attention"]["median_ms"] else None
+            ),
+            combined_tflops=(
+                flops / (timings["combined"]["median_ms"] * 1e9) if timings["combined"]["median_ms"] else None
+            ),
+            trace_equal=True,
+            all_output_finite=True,
             correctness_trace_replays=replay_qualification["explicit_combined_trace_replays"],
             correctness_trace_qualification=replay_qualification,
-            cpu_inputs_unchanged=True, device_inputs_unchanged=True,
+            cpu_inputs_unchanged=True,
+            device_inputs_unchanged=True,
             final_input_immutability=final_immutability,
-            output_sha256=output_hash, original_input_sha256=original_input_hashes,
-            source_sha256=pins, sources_unchanged=True,
+            output_sha256=output_hash,
+            original_input_sha256=original_input_hashes,
+            source_sha256=pins,
+            sources_unchanged=True,
             warning="Combined timing includes original Q/K/V quantization, both device means, decode, optional V8 trunc5, delta formation and BF16 output add; no V precentering and no benefit claim before measurement",
         )
         path.write_text(json.dumps(record, indent=2) + "\n")

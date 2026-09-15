@@ -16,8 +16,7 @@ void kernel_main() {
     cb_wait_front(4, 1);
     {
         DeviceZoneScopedN("SDPA_PADDED_P16_RESIDENT");
-        sdpa_standard_v2<8, 16, 16 * k_chunks, 4, 4, scale,
-                         1, 4, 1, 4, false, 0, 1, 2, 6, 3, 14, 4, 5, 16, 15>(
-                             q_repeats, k_chunks, 8, 9, 10, 11, 12, 13);
+        sdpa_standard_v2<8, 16, 16 * k_chunks, 4, 4, scale, 1, 4, 1, 4, false, 0, 1, 2, 6, 3, 14, 4, 5, 16, 15>(
+            q_repeats, k_chunks, 8, 9, 10, 11, 12, 13);
     }
 }

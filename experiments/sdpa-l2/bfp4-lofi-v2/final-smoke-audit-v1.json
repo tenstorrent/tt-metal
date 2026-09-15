@@ -1,0 +1,1457 @@
+{
+  "schema_version": 1,
+  "evidence_status": "PASS",
+  "checkpoint_status": "PASS",
+  "provenance_status": "PASS",
+  "provenance_warning_files": [],
+  "sources_changed_during_audit": [],
+  "repository_root": "/Users/cglagovich/dev/tt-metal-blackhole",
+  "evidence_directory": "/Users/cglagovich/dev/tt-metal-blackhole/experiments/sdpa-l2/bfp4-lofi-v2",
+  "families": {
+    "b4_final": {
+      "status": "PASS",
+      "files": 4,
+      "counts": {
+        "PASS": 4
+      }
+    },
+    "captured_interface": {
+      "status": "PASS",
+      "files": 1,
+      "counts": {
+        "PASS": 1
+      }
+    },
+    "combined_recipe": {
+      "status": "PASS",
+      "files": 1,
+      "counts": {
+        "PASS": 1
+      }
+    },
+    "hifi2_late": {
+      "status": "PASS",
+      "files": 3,
+      "counts": {
+        "PASS": 3
+      }
+    },
+    "mean_error": {
+      "status": "PASS",
+      "files": 8,
+      "counts": {
+        "PASS": 8
+      }
+    },
+    "native_storage": {
+      "status": "PASS",
+      "files": 1,
+      "counts": {
+        "PASS": 1
+      }
+    },
+    "recip_final": {
+      "status": "PASS",
+      "files": 4,
+      "counts": {
+        "PASS": 4
+      }
+    },
+    "v_transpose": {
+      "status": "PASS",
+      "files": 2,
+      "counts": {
+        "PASS": 2
+      }
+    }
+  },
+  "evidence": [
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-captured-v1.jsonl",
+      "family": "captured_interface",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "Artifact generator metadata describes the historical capture, not runtime code; runtime source pins must all be current."
+      ],
+      "summary": {
+        "record_sha256": "f42e5d9539d41274757dda3a47979fa1b98def02734f9023afb191b6375e92f0",
+        "baseline_file": "captured-interface-smoke-v2.jsonl",
+        "baseline_record_sha256": "3def3944d66ffba581412aa6aa659e2d3e4a42605109699f8ec7950f90bdb5e6",
+        "cases": 6,
+        "expected_cases": 6,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "main",
+            "baseline_output_sha256": "e8ca8f0f2955266d3a807de916fbf152299b09df9e4e2068223e043b88d2efd4",
+            "final_output_sha256": "e8ca8f0f2955266d3a807de916fbf152299b09df9e4e2068223e043b88d2efd4",
+            "identical": true
+          },
+          {
+            "case": "fast",
+            "baseline_output_sha256": "5421944abe76bb0f100c92089d6f0889ecce80240064785fe7862f4d97500ceb",
+            "final_output_sha256": "5421944abe76bb0f100c92089d6f0889ecce80240064785fe7862f4d97500ceb",
+            "identical": true
+          },
+          {
+            "case": "balanced",
+            "baseline_output_sha256": "aae66c2cf529af9b250eab2d25590b60fa9d0f17cec759fb8cd7af828d390eab",
+            "final_output_sha256": "aae66c2cf529af9b250eab2d25590b60fa9d0f17cec759fb8cd7af828d390eab",
+            "identical": true
+          },
+          {
+            "case": "accurate",
+            "baseline_output_sha256": "8e488539e7ce8d242845a67a2d0913c29933bde49fdac5c81fb032284bdf8aac",
+            "final_output_sha256": "8e488539e7ce8d242845a67a2d0913c29933bde49fdac5c81fb032284bdf8aac",
+            "identical": true
+          },
+          {
+            "case": "lofi_fp32_b8",
+            "baseline_output_sha256": "024bc57c68f68c715f350b62ad9dcfd431f1dc6a28e44e12785fd17a06185f2d",
+            "final_output_sha256": "024bc57c68f68c715f350b62ad9dcfd431f1dc6a28e44e12785fd17a06185f2d",
+            "identical": true
+          },
+          {
+            "case": "lofi_fp32_b4",
+            "baseline_output_sha256": "ac94eb0183182263680cccd4f2d5597c4b5744587f2aade334b7f61cf48c21ac",
+            "final_output_sha256": "ac94eb0183182263680cccd4f2d5597c4b5744587f2aade334b7f61cf48c21ac",
+            "identical": true
+          }
+        ],
+        "result_rows": 6,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 63,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-native-v1.json",
+      "family": "hifi2_late",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "Exact preparation uses current pinned builder assertions plus enabled flag; mismatch fields were omitted."
+      ],
+      "summary": {
+        "record_sha256": "2e021942c9b477a4d961cdc45316ea466e13ef247524473e9be45443277d5b8c",
+        "baseline_file": "hi2-native-rne-smoke-v1.json",
+        "baseline_record_sha256": "63a6f95cdd92ddafd97404edcb2ddbf6232354de490abfbd2ba2141863197c16",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_native_fullchip.py",
+            "sha256": "29d97e5849d83438a23724166fd9ffdf5b73aef5741013a793c77d38253abb26",
+            "expression": "mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_native_fullchip.py",
+            "sha256": "29d97e5849d83438a23724166fd9ffdf5b73aef5741013a793c77d38253abb26",
+            "expression": "args.check_preprocess",
+            "node_type": "If",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_native_fullchip.py",
+            "sha256": "29d97e5849d83438a23724166fd9ffdf5b73aef5741013a793c77d38253abb26",
+            "expression": "args.length // 512",
+            "node_type": "Assign",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_native_fullchip.py",
+            "sha256": "29d97e5849d83438a23724166fd9ffdf5b73aef5741013a793c77d38253abb26",
+            "expression": "reference = REPRO.reference(inputs[0][..., rows, :], inputs[1], inputs[2])",
+            "node_type": "Assign",
+            "matched": true
+          }
+        ],
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "hi2_fp32_b8",
+            "baseline_output_sha256": "0d97c9abc9cf31143b7b06e451723bc97941088557cab5973ccf1aa811588ac3",
+            "final_output_sha256": "0d97c9abc9cf31143b7b06e451723bc97941088557cab5973ccf1aa811588ac3",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-lut-v1.json",
+      "family": "hifi2_late",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "Exact preparation uses current pinned builder assertions plus enabled flag; mismatch fields were omitted."
+      ],
+      "summary": {
+        "record_sha256": "72c8b648eefd6590ec3a2dbb518cd845e3981abdf7d0ec666a0a6d7881ddf70d",
+        "baseline_file": "hi2-lut-on-smoke-v1.json",
+        "baseline_record_sha256": "b9a516ab340328dbabee03f42bd8bf1833ae392ced3c803f69c87da587295eec",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_lut_fullchip.py",
+            "sha256": "85147589a25eac5a42acc4ea2082b14a06314a545fc640bc1cf2dd273005c5b1",
+            "expression": "mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_lut_fullchip.py",
+            "sha256": "85147589a25eac5a42acc4ea2082b14a06314a545fc640bc1cf2dd273005c5b1",
+            "expression": "args.check_preprocess",
+            "node_type": "If",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_lut_fullchip.py",
+            "sha256": "85147589a25eac5a42acc4ea2082b14a06314a545fc640bc1cf2dd273005c5b1",
+            "expression": "args.length // 512",
+            "node_type": "Assign",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_lut_fullchip.py",
+            "sha256": "85147589a25eac5a42acc4ea2082b14a06314a545fc640bc1cf2dd273005c5b1",
+            "expression": "reference = REPRO.reference(inputs[0][..., rows, :], inputs[1], inputs[2])",
+            "node_type": "Assign",
+            "matched": true
+          }
+        ],
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "hi2_fp32_b8",
+            "baseline_output_sha256": "e009d1710e2f2287d4aa1d91de03706f9a0fe7c1f87dee392349132995884652",
+            "final_output_sha256": "e009d1710e2f2287d4aa1d91de03706f9a0fe7c1f87dee392349132995884652",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 71,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-bf16-lut-v1.json",
+      "family": "hifi2_late",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "0eed5812ab05f1b9afecfd62ec3052f019417486fdd4b7d0b66c1d86e3948874",
+        "baseline_file": "hi2-bf16-lut-on-1024-v1.json",
+        "baseline_record_sha256": "26d4ecec4c703e14948fde8ad4cebc5f3dcefe579ca099ec20435af742bd2486",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py",
+            "sha256": "59a9747a0bc5aac3f2b5eb16447d1f9aad498ac1a8a82b461a5c25c0cb2ed096",
+            "expression": "args.length // 512",
+            "node_type": "Assign",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py",
+            "sha256": "59a9747a0bc5aac3f2b5eb16447d1f9aad498ac1a8a82b461a5c25c0cb2ed096",
+            "expression": "reference = REPRO.reference(inputs[0][..., rows, :], inputs[1], inputs[2])",
+            "node_type": "Assign",
+            "matched": true
+          }
+        ],
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "hi2_fp32_bf16",
+            "baseline_output_sha256": "ce72382a3de69d6aeaaf1d671ff0f2d777b7eb42980e0fdd6f3aecf01d8b375d",
+            "final_output_sha256": "ce72382a3de69d6aeaaf1d671ff0f2d777b7eb42980e0fdd6f3aecf01d8b375d",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 71,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-native-storage-v1.json",
+      "family": "native_storage",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "Exact preparation uses current pinned builder assertions plus enabled flag; mismatch fields were omitted."
+      ],
+      "summary": {
+        "record_sha256": "f842f9f53eb5bc8e937b9328d93c95b8cc114b0853541312d9e7f1c9e2ada06b",
+        "baseline_file": "native-storage-lofi_fp32-1024-v1.json",
+        "baseline_record_sha256": "8eebea8fc8162b86512b11e36e83137b59c71bca4c8ce8b30b89d8935920afd7",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/native_storage_fullchip.py",
+            "sha256": "62f845400c14afb3618393b10399b9f72d2bb82bd8ac50dcbeb53f63c0181bcb",
+            "expression": "mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/native_storage_fullchip.py",
+            "sha256": "62f845400c14afb3618393b10399b9f72d2bb82bd8ac50dcbeb53f63c0181bcb",
+            "expression": "args.check_preprocess",
+            "node_type": "If",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/native_storage_fullchip.py",
+            "sha256": "62f845400c14afb3618393b10399b9f72d2bb82bd8ac50dcbeb53f63c0181bcb",
+            "expression": "args.length // 512",
+            "node_type": "Assign",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/native_storage_fullchip.py",
+            "sha256": "62f845400c14afb3618393b10399b9f72d2bb82bd8ac50dcbeb53f63c0181bcb",
+            "expression": "reference = REPRO.reference(inputs[0][..., rows, :], inputs[1], inputs[2])",
+            "node_type": "Assign",
+            "matched": true
+          }
+        ],
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "lofi_fp32",
+            "baseline_output_sha256": "251357b6f3dfabbe1095724a314167e2d0482f2257da270086a68cef8444e23c",
+            "final_output_sha256": "251357b6f3dfabbe1095724a314167e2d0482f2257da270086a68cef8444e23c",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-vaxis-D-v1.jsonl",
+      "family": "v_transpose",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean.",
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean.",
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean."
+      ],
+      "summary": {
+        "record_sha256": "ed780fc8a6653ee8596c97fbf96c72c0ead04e53bffdf3fbf9bd437d228d238b",
+        "baseline_file": "vt-smoke-full-D-v1.jsonl",
+        "baseline_record_sha256": "2b0857687c67d9f40a5e3531358231b32caddaa8d8bcabeda8f31ffd835d9a87",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          }
+        ],
+        "cases": 3,
+        "expected_cases": 3,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "4985b6c7953ec20b04ac0f0c450e29ddb73cba45dc64ef19ce53253e14db89df",
+            "final_output_sha256": "4985b6c7953ec20b04ac0f0c450e29ddb73cba45dc64ef19ce53253e14db89df",
+            "identical": true
+          },
+          {
+            "case": "constant_v",
+            "baseline_output_sha256": "a5116589e8634b1703776fef9df6257727beb7ac0e838b4974fa368b42e82b91",
+            "final_output_sha256": "a5116589e8634b1703776fef9df6257727beb7ac0e838b4974fa368b42e82b91",
+            "identical": true
+          },
+          {
+            "case": "channel_v",
+            "baseline_output_sha256": "9fe45acab2a64b5bef2501254c2b785d40091cf2c0a8a1c7cada189fff1fb5ea",
+            "final_output_sha256": "9fe45acab2a64b5bef2501254c2b785d40091cf2c0a8a1c7cada189fff1fb5ea",
+            "identical": true
+          }
+        ],
+        "result_rows": 3,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 59,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-vaxis-N-v1.jsonl",
+      "family": "v_transpose",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean.",
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean.",
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean."
+      ],
+      "summary": {
+        "record_sha256": "0ba2fa02874c9582df891c46276ae4e5ffc8e24939d67809db88d7ca5eedd6c8",
+        "baseline_file": "vt-smoke-full-N-v1.jsonl",
+        "baseline_record_sha256": "a3ae8a7fe9d4c60cdab7cecb2987eb14c7dabbbd8eccd56c4bc789c3f2e233f0",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py",
+            "sha256": "b038f6fc68644ffc2fae560a386a9dd8b6a02792370499fc01a0d3e723344423",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          }
+        ],
+        "cases": 3,
+        "expected_cases": 3,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "720bf571638c261a539fec7a7659cd213bdf3ae61c13934fa83b2ff596c084d5",
+            "final_output_sha256": "720bf571638c261a539fec7a7659cd213bdf3ae61c13934fa83b2ff596c084d5",
+            "identical": true
+          },
+          {
+            "case": "constant_v",
+            "baseline_output_sha256": "a5116589e8634b1703776fef9df6257727beb7ac0e838b4974fa368b42e82b91",
+            "final_output_sha256": "a5116589e8634b1703776fef9df6257727beb7ac0e838b4974fa368b42e82b91",
+            "identical": true
+          },
+          {
+            "case": "channel_v",
+            "baseline_output_sha256": "0cb680b5c411a8d372243c97319da999bea92c5ca82bf2ebdd6fd660641b5f2a",
+            "final_output_sha256": "0cb680b5c411a8d372243c97319da999bea92c5ca82bf2ebdd6fd660641b5f2a",
+            "identical": true
+          }
+        ],
+        "result_rows": 3,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 59,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-recipe-v1.jsonl",
+      "family": "combined_recipe",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean.",
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean.",
+        "Original-input immutability is a CURRENT producer assertion witness, not an explicit record boolean."
+      ],
+      "summary": {
+        "record_sha256": "901b94b4f948ae0cf0c388e87363b3d04bcf16337a410ab3d7fa8ca4d812572e",
+        "baseline_file": "recipe-smoke-h16-vN-pm-v1.jsonl",
+        "baseline_record_sha256": "b9af93d81ac7eed332faeed71367cbe4461f8faf9352133512e4fe783325d817",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/combined_recipe_fullchip.py",
+            "sha256": "0b92dfda0addbcb0ab763235c0261ecf4d5f5931d481439dbcfd06ee9e546244",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/combined_recipe_fullchip.py",
+            "sha256": "0b92dfda0addbcb0ab763235c0261ecf4d5f5931d481439dbcfd06ee9e546244",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/combined_recipe_fullchip.py",
+            "sha256": "0b92dfda0addbcb0ab763235c0261ecf4d5f5931d481439dbcfd06ee9e546244",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/combined_recipe_fullchip.py",
+            "sha256": "0b92dfda0addbcb0ab763235c0261ecf4d5f5931d481439dbcfd06ee9e546244",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/combined_recipe_fullchip.py",
+            "sha256": "0b92dfda0addbcb0ab763235c0261ecf4d5f5931d481439dbcfd06ee9e546244",
+            "expression": "[tensor_hash(x) for x in inputs] == original_hashes",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/combined_recipe_fullchip.py",
+            "sha256": "0b92dfda0addbcb0ab763235c0261ecf4d5f5931d481439dbcfd06ee9e546244",
+            "expression": "all((bf16_bitwise_equal(ttnn.to_torch(t).bfloat16(), x) for t, x in zip(originals, inputs)))",
+            "node_type": "Assert",
+            "matched": true
+          }
+        ],
+        "cases": 3,
+        "expected_cases": 3,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "00c02b5e1be76a787d60ad7d030d5bfdacffa719004e30554d1ae401bf3ec4ec",
+            "final_output_sha256": "00c02b5e1be76a787d60ad7d030d5bfdacffa719004e30554d1ae401bf3ec4ec",
+            "identical": true
+          },
+          {
+            "case": "constant_v",
+            "baseline_output_sha256": "9df2e4740e2fa241c90435efdfafacf91bd847bd69f67d4701a6bb3432bf0664",
+            "final_output_sha256": "9df2e4740e2fa241c90435efdfafacf91bd847bd69f67d4701a6bb3432bf0664",
+            "identical": true
+          },
+          {
+            "case": "k_outliers_channel_v",
+            "baseline_output_sha256": "434595f2caa34811400589ab38ac6a71c9e62619181f582b06dcf2bddb48ea11",
+            "final_output_sha256": "434595f2caa34811400589ab38ac6a71c9e62619181f582b06dcf2bddb48ea11",
+            "identical": true
+          }
+        ],
+        "result_rows": 3,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 79,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-normal-none-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "95a1dfff0e6334f3d28743f6fa6f06171652b36673b7faefe8d9eaf739db631b",
+        "baseline_file": "mean-error-smoke-b8_b4-normal-none-v1.json",
+        "baseline_record_sha256": "5b3953cd5b4e1689c7bf5e8062e05ba274e4fdbb7b299a85ff09db3a6a6413bd",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "4985b6c7953ec20b04ac0f0c450e29ddb73cba45dc64ef19ce53253e14db89df",
+            "final_output_sha256": "4985b6c7953ec20b04ac0f0c450e29ddb73cba45dc64ef19ce53253e14db89df",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-normal-mean_error-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "b4b84f16ff133e2a0bbe0c6df0a0179be4c22223c20320cbf5f25d6210dfcd30",
+        "baseline_file": "mean-error-smoke-b8_b4-normal-mean_error-v1.json",
+        "baseline_record_sha256": "6ea61b9296697df0e2b8cb57308ff0faaed2603f35be4ac3593fc33bad261f7e",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "050a504c0766b854c00da62ae50d2796a96a9295c54fb2c67a352df64852a431",
+            "final_output_sha256": "050a504c0766b854c00da62ae50d2796a96a9295c54fb2c67a352df64852a431",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-uniform-none-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "3edd226085a457b74bb10efa68842795394c5f22d1cd34f2c53adaca24385a22",
+        "baseline_file": "mean-error-smoke-b8_b4-uniform-none-v1.json",
+        "baseline_record_sha256": "a3e093b10e117eac701ccd8b2ddc54430082c7d9f085f9df2ed877cec4b43e0c",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "50c7bb74f91666a955a96a47ad879e8065ce5b991fc395457e5d1e67b2938a57",
+            "final_output_sha256": "50c7bb74f91666a955a96a47ad879e8065ce5b991fc395457e5d1e67b2938a57",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-uniform-mean_error-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "edbf74bd07cc2e0f2edf07ec408387454b1de2e1977b629a579293bcf5d54b12",
+        "baseline_file": "mean-error-smoke-b8_b4-uniform-mean_error-v1.json",
+        "baseline_record_sha256": "57c857a3b7aea9518d67c426d732def97ddb9bd909b1978052af32397dfd80de",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "0f7ecae9a42019c965ce2f078b64095b18bee8cefe5526769f934a795aaeab71",
+            "final_output_sha256": "0f7ecae9a42019c965ce2f078b64095b18bee8cefe5526769f934a795aaeab71",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-normal-none-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "47ede8b4fb5974f7cd659943134394e4ec0db70532e656d4c886c19b05c3b523",
+        "baseline_file": "mean-error-smoke-b8_b8-normal-none-v1.json",
+        "baseline_record_sha256": "c0000f3adc3080d339ed4b1bcbc49a700dbfafc77c8d03dcb15d81055b202590",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "86f450eadc8c0a9e54df221c7c816791b1990fccbde1ed922d7321db9e7df45d",
+            "final_output_sha256": "86f450eadc8c0a9e54df221c7c816791b1990fccbde1ed922d7321db9e7df45d",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-normal-mean_error-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "de6983b3c4287d8aef4c66e8a4a165f02543b072984968ed464718673a1fc8ca",
+        "baseline_file": "mean-error-smoke-b8_b8-normal-mean_error-v1.json",
+        "baseline_record_sha256": "cfa48dcc8a6f90132c644f01ab41d9608e502c469aaa4ffb0a78e40b4cf3f7ce",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "05b866fdab5559f22a795035a2682aff9e62b9cdc5eb61e64d10cb701ecf5748",
+            "final_output_sha256": "05b866fdab5559f22a795035a2682aff9e62b9cdc5eb61e64d10cb701ecf5748",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-uniform-none-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "fade40ffc9a6caab10c5b118afbb0e704f9c6a93ea3f81834d8769ee88f0c330",
+        "baseline_file": "mean-error-smoke-b8_b8-uniform-none-v1.json",
+        "baseline_record_sha256": "4c4a36795b70208d221d511654eefb6b7a69f75e39791ca899dac651fef1eb9e",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "final_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-uniform-mean_error-v1.json",
+      "family": "mean_error",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "2fe874e862c3664a049da7eb599d608456cd295e17c385f11c6289861f83fb70",
+        "baseline_file": "mean-error-smoke-b8_b8-uniform-mean_error-v1.json",
+        "baseline_record_sha256": "111208976bad15e01487df625b6b430fb8d392d7fba3539a48d9f5788920b1fc",
+        "cases": 1,
+        "expected_cases": 1,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "4d36f059b88a90bf93ab67f50650a3f55e18c3154c287405c6f52d951bbb36f9",
+            "final_output_sha256": "4d36f059b88a90bf93ab67f50650a3f55e18c3154c287405c6f52d951bbb36f9",
+            "identical": true
+          }
+        ],
+        "result_rows": 1,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 68,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r0-f0-v1.jsonl",
+      "family": "recip_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "ac6267fdd5affc0b6ac934b57d876c72de70e046dfb3ec4c02049bdd9da43290",
+        "baseline_file": "final-scale-r0-f0-smoke-v1.jsonl",
+        "baseline_record_sha256": "e057fd8bc3d96e1e2e7fc75f8184da84e49a6ff331d76338b89b1582f967b240",
+        "cases": 4,
+        "expected_cases": 4,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "86f450eadc8c0a9e54df221c7c816791b1990fccbde1ed922d7321db9e7df45d",
+            "final_output_sha256": "86f450eadc8c0a9e54df221c7c816791b1990fccbde1ed922d7321db9e7df45d",
+            "identical": true
+          },
+          {
+            "case": "constant_v",
+            "baseline_output_sha256": "a5116589e8634b1703776fef9df6257727beb7ac0e838b4974fa368b42e82b91",
+            "final_output_sha256": "a5116589e8634b1703776fef9df6257727beb7ac0e838b4974fa368b42e82b91",
+            "identical": true
+          },
+          {
+            "case": "uniform_constant_v",
+            "baseline_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "final_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "identical": true
+          },
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "final_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "identical": true
+          }
+        ],
+        "result_rows": 4,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 56,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r0-f1-v1.jsonl",
+      "family": "recip_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "b262777cfc261f97f05f0d8b902fe372fcad73e399799217d139cd70a3fac529",
+        "baseline_file": "final-scale-r0-f1-smoke-v1.jsonl",
+        "baseline_record_sha256": "e93833d03784e1df5638647d954cf99c1f856957bc505713534375c9fe463c5a",
+        "cases": 4,
+        "expected_cases": 4,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "2bbe3710b6cd9596af39aa6b833b77baade1b72022f95091901c8d4614ec68cb",
+            "final_output_sha256": "2bbe3710b6cd9596af39aa6b833b77baade1b72022f95091901c8d4614ec68cb",
+            "identical": true
+          },
+          {
+            "case": "constant_v",
+            "baseline_output_sha256": "821eb5a9e40d908101c85b93f2bfe3a9a49dfde36f91a081397bcceeda1dc7d0",
+            "final_output_sha256": "821eb5a9e40d908101c85b93f2bfe3a9a49dfde36f91a081397bcceeda1dc7d0",
+            "identical": true
+          },
+          {
+            "case": "uniform_constant_v",
+            "baseline_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "final_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "identical": true
+          },
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "final_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "identical": true
+          }
+        ],
+        "result_rows": 4,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 56,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r1-f0-v1.jsonl",
+      "family": "recip_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "5058c6648dfdd956c685a1e97bd2f37edf53266544951db9ce3b9f327e0a9252",
+        "baseline_file": "final-scale-r1-f0-smoke-v1.jsonl",
+        "baseline_record_sha256": "ceb6fa306126ba7466b6bb85a7cb4b3a02d64e3fa434159bddb5f63944709f7b",
+        "cases": 4,
+        "expected_cases": 4,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "c54aff269de190f70e57e07c440d07b33d48cc711386024ce46e7818069a11a1",
+            "final_output_sha256": "c54aff269de190f70e57e07c440d07b33d48cc711386024ce46e7818069a11a1",
+            "identical": true
+          },
+          {
+            "case": "constant_v",
+            "baseline_output_sha256": "942ea006f310853d92d7ba85cb01ec576ab63d7db38aa6071c00b51c61cacd01",
+            "final_output_sha256": "942ea006f310853d92d7ba85cb01ec576ab63d7db38aa6071c00b51c61cacd01",
+            "identical": true
+          },
+          {
+            "case": "uniform_constant_v",
+            "baseline_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "final_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "identical": true
+          },
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "final_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "identical": true
+          }
+        ],
+        "result_rows": 4,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 56,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r1-f1-v1.jsonl",
+      "family": "recip_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [],
+      "summary": {
+        "record_sha256": "2ceb9d9d7125b7cc8eb7971a7a7d55b7e2b643fe91cdadddf7ad4838187916a3",
+        "baseline_file": "final-scale-r1-f1-smoke-v1.jsonl",
+        "baseline_record_sha256": "e0c69b00cf64dd2b975a99edbb3c18a49ad404118967c38e2fe14219e075414c",
+        "cases": 4,
+        "expected_cases": 4,
+        "missing_case_keys": [],
+        "extra_case_keys": [],
+        "baseline_comparisons": [
+          {
+            "case": "normal",
+            "baseline_output_sha256": "212d5ae085bf7a306bf5f65b80aa8a6d3e3b455dae7c28cf7684df690168ff2a",
+            "final_output_sha256": "212d5ae085bf7a306bf5f65b80aa8a6d3e3b455dae7c28cf7684df690168ff2a",
+            "identical": true
+          },
+          {
+            "case": "constant_v",
+            "baseline_output_sha256": "62ebbefa89359862fb196f39245f6f19e3a8b549b181fc7a1b58b3f00ed6eb65",
+            "final_output_sha256": "62ebbefa89359862fb196f39245f6f19e3a8b549b181fc7a1b58b3f00ed6eb65",
+            "identical": true
+          },
+          {
+            "case": "uniform_constant_v",
+            "baseline_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "final_output_sha256": "d6dad89619fae97d56c86ae84734561b284d72ad163f5f957f89b616a54b667e",
+            "identical": true
+          },
+          {
+            "case": "uniform",
+            "baseline_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "final_output_sha256": "6e98bcadded93f148960796fd6d99f1e266b5ac59ca56c20fa0245d2c247c79f",
+            "identical": true
+          }
+        ],
+        "result_rows": 4,
+        "all_query_reference": true,
+        "sequence_length": 1024,
+        "performance_measured": false,
+        "numerical_acceptance_cutoff": null,
+        "model_quality_claim": false
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 56,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-normal-v1.json",
+      "family": "b4_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "B4 has no output hash/replay/source-stability boolean; no such evidence is fabricated. Older controls use N4096/one core, so are not hash-matched baselines."
+      ],
+      "summary": {
+        "record_sha256": "8809ee0435598e27a4beffa593b69889161ba58059958e7ece3b7f98bd97310d",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "oracle_mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "bool(torch.isfinite(values).all())",
+            "node_type": "Assert",
+            "matched": true
+          }
+        ],
+        "exact_oracle": true,
+        "finite_basis": "Exact decoded match to finite validated oracle",
+        "complete_output_hash_comparison": "NOT_AVAILABLE",
+        "trace_replay": "NOT_RUN: iters=0",
+        "during_run_source_stability": "NOT_RECORDED; manifest is collected after computation",
+        "attention_all_query_scope": "NOT_APPLICABLE: quantizer primitive"
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 4,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-thresholds-v1.json",
+      "family": "b4_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "B4 has no output hash/replay/source-stability boolean; no such evidence is fabricated. Older controls use N4096/one core, so are not hash-matched baselines."
+      ],
+      "summary": {
+        "record_sha256": "e4be0e289aa089872923a058589cdb8a279aa4f904d841a99d1b98d12e0b7595",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "oracle_mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "bool(torch.isfinite(values).all())",
+            "node_type": "Assert",
+            "matched": true
+          }
+        ],
+        "exact_oracle": true,
+        "finite_basis": "Exact decoded match to finite validated oracle",
+        "complete_output_hash_comparison": "NOT_AVAILABLE",
+        "trace_replay": "NOT_RUN: iters=0",
+        "during_run_source_stability": "NOT_RECORDED; manifest is collected after computation",
+        "attention_all_query_scope": "NOT_APPLICABLE: quantizer primitive"
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 4,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-wide-v1.json",
+      "family": "b4_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "B4 has no output hash/replay/source-stability boolean; no such evidence is fabricated. Older controls use N4096/one core, so are not hash-matched baselines."
+      ],
+      "summary": {
+        "record_sha256": "bcbc5a49ebc6b05c75e1babd15e621e751fc8ecaa896d05c6b1f6c46ae8014a5",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "oracle_mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "bool(torch.isfinite(values).all())",
+            "node_type": "Assert",
+            "matched": true
+          }
+        ],
+        "exact_oracle": true,
+        "finite_basis": "Exact decoded match to finite validated oracle",
+        "complete_output_hash_comparison": "NOT_AVAILABLE",
+        "trace_replay": "NOT_RUN: iters=0",
+        "during_run_source_stability": "NOT_RECORDED; manifest is collected after computation",
+        "attention_all_query_scope": "NOT_APPLICABLE: quantizer primitive"
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 4,
+        "historical_fallback": false
+      }
+    },
+    {
+      "file": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-zeros-v1.json",
+      "family": "b4_final",
+      "optional": false,
+      "status": "PASS",
+      "failures": [],
+      "pending": [],
+      "notes": [
+        "B4 has no output hash/replay/source-stability boolean; no such evidence is fabricated. Older controls use N4096/one core, so are not hash-matched baselines."
+      ],
+      "summary": {
+        "record_sha256": "144c215e16c56d846b0a8cff88c46af45f96b0d13d89c80bb369c002f6229ca9",
+        "current_producer_witnesses": [
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "oracle_mismatch == 0",
+            "node_type": "Assert",
+            "matched": true
+          },
+          {
+            "source": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py",
+            "sha256": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+            "expression": "bool(torch.isfinite(values).all())",
+            "node_type": "Assert",
+            "matched": true
+          }
+        ],
+        "exact_oracle": true,
+        "finite_basis": "Exact decoded match to finite validated oracle",
+        "complete_output_hash_comparison": "NOT_AVAILABLE",
+        "trace_replay": "NOT_RUN: iters=0",
+        "during_run_source_stability": "NOT_RECORDED; manifest is collected after computation",
+        "attention_all_query_scope": "NOT_APPLICABLE: quantizer primitive"
+      },
+      "provenance": {
+        "status": "PASS",
+        "principal_omissions": [],
+        "current_source_mismatches": [],
+        "manifest_entries": 4,
+        "historical_fallback": false
+      }
+    }
+  ],
+  "limitations": [
+    "Read-only record/source audit, not device execution or tensor recomputation",
+    "No global L2 cutoff, performance qualification or model-quality claim",
+    "B4 primitive has exact-oracle evidence but no output hash, replay, or during-run source-stability field",
+    "Captured fixture provenance may be historical; all runtime manifest sources must match current bytes"
+  ],
+  "schema": "final-current-source-smokes-v1",
+  "plan_sha256": "85e784082b8eaf79c39d114ead9a4686a025be9b1eaed0b1a0f84df4d44b65b4",
+  "plan_failures": [],
+  "final_status": "PASS",
+  "historical_source_fallback": false
+}

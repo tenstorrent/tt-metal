@@ -6,6 +6,7 @@ Reads input once; residual subtraction remains in FP32 SFPU registers. Outputs
 use BFP4, optionally with an RNE5/BFP8 second component. CPU oracles check each
 intermediate residual must satisfy the finite ordinary-range contract.
 """
+
 import argparse
 import hashlib
 import json
@@ -29,9 +30,9 @@ def validate_input(x):
     magnitude = values.abs()
     assert bool(((magnitude == 0) | (magnitude >= 2.0**-126)).all()), "No BF16 subnormal inputs"
     maximum = magnitude.reshape(-1, 16).amax(-1)
-    assert bool(((maximum == 0) | ((maximum >= 2.0**-124) & (maximum < 2.0**107))).all()), (
-        "Nonzero native-group maximum exponents must be in [-124, 106]"
-    )
+    assert bool(
+        ((maximum == 0) | ((maximum >= 2.0**-124) & (maximum < 2.0**107))).all()
+    ), "Nonzero native-group maximum exponents must be in [-124, 106]"
 
 
 def host_rne_bfp4(x):
@@ -130,9 +131,7 @@ def make_input(length, distribution, seed):
         values[group, group % 16] = 1.75
         exponent = (group % 181 - 90).int()
         # Avoid individual BF16 subnormals in low-exponent groups.
-        values = torch.where(
-            (exponent[:, None] - delta[None, :] < -126), torch.zeros_like(values), values
-        )
+        values = torch.where((exponent[:, None] - delta[None, :] < -126), torch.zeros_like(values), values)
         values[group, group % 16] = 1.75
     else:
         raise ValueError(distribution)
@@ -181,8 +180,7 @@ def build(device, src, components=2, ncores=1, batch=None, fp32_dst=False, secon
     tiles = src.volume() // 1024
     assert tiles % batch == 0
     output_formats = [
-        (ttnn.bfloat8_b, 1088) if c == 1 and second_b8 else (ttnn.bfloat4_b, 576)
-        for c in range(components)
+        (ttnn.bfloat8_b, 1088) if c == 1 and second_b8 else (ttnn.bfloat4_b, 576) for c in range(components)
     ]
     outputs = [
         ttnn.allocate_tensor_on_device(src.shape, fmt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
@@ -197,10 +195,9 @@ def build(device, src, components=2, ncores=1, batch=None, fp32_dst=False, secon
     ]
     cbs = [
         ttnn.CBDescriptor(
-            total_size=2 * batch * byte_count, core_ranges=grid,
-            format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=byte_count)
-            ],
+            total_size=2 * batch * byte_count,
+            core_ranges=grid,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=byte_count)],
         )
         for index, fmt, byte_count in formats
     ]
@@ -218,21 +215,35 @@ def build(device, src, components=2, ncores=1, batch=None, fp32_dst=False, secon
     writer_compile_args = [components, batch]
     for tensor in outputs + ([outputs[0]] if components == 2 else []):
         writer_compile_args += ttnn.TensorAccessorArgs(tensor).get_compile_time_args()
-    desc = ttnn.ProgramDescriptor(cbs=cbs, semaphores=[], kernels=[
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "reader.cpp", core_ranges=grid,
-            compile_time_args=[batch] + ttnn.TensorAccessorArgs(src).get_compile_time_args(),
-            runtime_args=reader, config=ttnn.ReaderConfigDescriptor()),
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
-            compile_time_args=writer_compile_args,
-            runtime_args=writer, config=ttnn.WriterConfigDescriptor()),
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "compute.cpp", core_ranges=grid,
-            compile_time_args=[components, batch, int(second_b8)], runtime_args=compute,
-            config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=fp32_dst, math_approx_mode=False)),
-    ])
+    desc = ttnn.ProgramDescriptor(
+        cbs=cbs,
+        semaphores=[],
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "reader.cpp",
+                core_ranges=grid,
+                compile_time_args=[batch] + ttnn.TensorAccessorArgs(src).get_compile_time_args(),
+                runtime_args=reader,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
+                compile_time_args=writer_compile_args,
+                runtime_args=writer,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
+                compile_time_args=[components, batch, int(second_b8)],
+                runtime_args=compute,
+                config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=fp32_dst, math_approx_mode=False
+                ),
+            ),
+        ],
+    )
     return outputs, lambda: ttnn.generic_op([src, *outputs], desc), ncores
 
 
@@ -304,13 +315,17 @@ def main():
             prefix_errors.append(float(100 * (reconstruction - reference).norm() / norm) if norm else 0.0)
         source_files = [Path(__file__).resolve(), *sorted(DIRECTORY.glob("*.cpp")), *sorted(DIRECTORY.glob("*.hpp"))]
         record = dict(
-            **vars(args), actual_cores=cores,
+            **vars(args),
+            actual_cores=cores,
             actual_batch=args.batch or ((4 if args.fp32_dst else 8) // args.components),
-            component_mismatches=mismatches, numel=x.numel(),
+            component_mismatches=mismatches,
+            numel=x.numel(),
             prefix_reconstruction_l2_pct=prefix_errors,
-            median_ms=median, replay_ms=times,
+            median_ms=median,
+            replay_ms=times,
             read_write_GBps=byte_count / (median * 1e6) if median else None,
-            source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files})
+            source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files},
+        )
         path.write_text(json.dumps(record, indent=2) + "\n")
         print(json.dumps(record), flush=True)
     finally:

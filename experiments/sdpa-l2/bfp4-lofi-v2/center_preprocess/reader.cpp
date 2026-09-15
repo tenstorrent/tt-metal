@@ -37,4 +37,3 @@ void kernel_main() {
         in_cb.push_back(4);
     }
 }
-

@@ -23,9 +23,17 @@ HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("sage_qk_v2_numerics", HERE / "numerics.py")
 MODEL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODEL)
-VARIANTS = ["exact", "int4_perrow_ideal", "int4_block128_64_ideal", "int4_block128_512_ideal",
-            "int4_thread32_64", "int8_thread32_64", "int4_shared16_ideal",
-            "bfp4_host_rne", "bfp4_device_biased"]
+VARIANTS = [
+    "exact",
+    "int4_perrow_ideal",
+    "int4_block128_64_ideal",
+    "int4_block128_512_ideal",
+    "int4_thread32_64",
+    "int8_thread32_64",
+    "int4_shared16_ideal",
+    "bfp4_host_rne",
+    "bfp4_device_biased",
+]
 
 
 def scaled_integer(groups, bits=4, code_round=False):
@@ -55,8 +63,7 @@ def encode_pair(q, k, variant):
         return tuple(scaled_integer(x.reshape(-1, 16)).reshape(x.shape) for x in (q, k))
     if variant.startswith("int4_block"):
         kb = 64 if variant == "int4_block128_64_ideal" else 512
-        return tuple(scaled_integer(x.reshape(-1, n * x.shape[-1])).reshape(x.shape)
-                     for x, n in ((q, 128), (k, kb)))
+        return tuple(scaled_integer(x.reshape(-1, n * x.shape[-1])).reshape(x.shape) for x, n in ((q, 128), (k, kb)))
     if variant in ("int4_thread32_64", "int8_thread32_64"):
         bits = 4 if variant.startswith("int4") else 8
         # Q group: rows i, i+8, i+16, i+24, across all head channels.
@@ -91,24 +98,36 @@ def main():
     parser.add_argument("--lengths", nargs="+", type=int, default=[4096, 32768])
     parser.add_argument("--seed", type=int, default=1243)
     parser.add_argument("--distributions", nargs="+", default=["normal", "scaled_down"])
-    parser.add_argument("--preprocessing", nargs="+", choices=["center_k", "center_qk"], default=["center_k", "center_qk"])
+    parser.add_argument(
+        "--preprocessing", nargs="+", choices=["center_k", "center_qk"], default=["center_k", "center_qk"]
+    )
     parser.add_argument("--variants", nargs="+", choices=VARIANTS, default=VARIANTS)
     args = parser.parse_args()
     torch.set_num_threads(4)
     self_test()
     started = time.monotonic()
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
+
         sources = [Path(__file__), HERE / "numerics.py", MODEL.V1 / "probe.py", MODEL.V1 / "numerics.py"]
-        emit(dict(kind="provenance", args=vars(args), hostname=platform.node(),
-                  contract="Simplified CPU QK-quantization simulation; FP64 softmax/PV; original BF16 input/output; NOT measured SageAttention or GPU/device performance",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
-                  primary_sources=["https://arxiv.org/html/2411.10958v7#A1.SS6",
-                                   "https://github.com/thu-ml/SageAttention/blob/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5/sageattention/triton/quant_per_thread.py"]))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                hostname=platform.node(),
+                contract="Simplified CPU QK-quantization simulation; FP64 softmax/PV; original BF16 input/output; NOT measured SageAttention or GPU/device performance",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+                primary_sources=[
+                    "https://arxiv.org/html/2411.10958v7#A1.SS6",
+                    "https://github.com/thu-ml/SageAttention/blob/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5/sageattention/triton/quant_per_thread.py",
+                ],
+            )
+        )
         for length in args.lengths:
             for distribution in args.distributions:
                 inputs = MODEL.V1_NUMERICS.FRONTIER.inputs_for(length, args.seed, distribution)
@@ -125,14 +144,22 @@ def main():
                         row_error = 100 * (result - reference).norm(dim=-1) / reference.norm(dim=-1)
                         score_error = scores - exact_scores
                         score_error -= score_error.mean(-1, keepdim=True)
-                        emit(dict(kind="attention_model", length=length, seed=args.seed,
-                                  distribution=distribution, preprocessing=preprocessing, variant=variant,
-                                  **MODEL.metrics(result, reference),
-                                  before_output_rounding_l2_pct=MODEL.metrics(raw, reference)["l2_pct"],
-                                  row_p95_l2_pct=float(torch.quantile(row_error, 0.95)),
-                                  q_representation_l2_pct=MODEL.metrics(qe, q)["l2_pct"],
-                                  k_representation_l2_pct=MODEL.metrics(ke, k)["l2_pct"],
-                                  row_centered_score_error_rms=float(score_error.square().mean().sqrt())))
+                        emit(
+                            dict(
+                                kind="attention_model",
+                                length=length,
+                                seed=args.seed,
+                                distribution=distribution,
+                                preprocessing=preprocessing,
+                                variant=variant,
+                                **MODEL.metrics(result, reference),
+                                before_output_rounding_l2_pct=MODEL.metrics(raw, reference)["l2_pct"],
+                                row_p95_l2_pct=float(torch.quantile(row_error, 0.95)),
+                                q_representation_l2_pct=MODEL.metrics(qe, q)["l2_pct"],
+                                k_representation_l2_pct=MODEL.metrics(ke, k)["l2_pct"],
+                                row_centered_score_error_rms=float(score_error.square().mean().sqrt()),
+                            )
+                        )
         emit(dict(kind="completed", seconds=time.monotonic() - started))
 
 

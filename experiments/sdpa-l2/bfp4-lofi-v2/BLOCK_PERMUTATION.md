@@ -142,10 +142,10 @@ exact, so its substantial order sensitivity alone is not causal proof against
 accumulation. Conversely, FP32 accumulation cannot restore exp translation
 consistency; a hardware accumulation explanation is not required by the math.
 
-The next controlled prediction is that refining F on the **same native grid**,
+The controlled prediction was that refining F on the **same native grid**,
 with the same LoFi QK/PV and FP32 recurrence, should materially reduce
 inter-order L2 if exp phase ripple is a major contributor. Native versus
-macro-LUT is the strongest pending comparison because it retains the base
+macro-LUT is the strongest comparison because it retains the base
 grid and correction path. A cubic control is also informative, but its wider
 grid/underflow behavior must be disclosed rather than calling it a
 polynomial-only change. Similar residual sensitivity after refinement would
@@ -153,8 +153,113 @@ shift attention toward score/max subtraction, P consumption, rescaling and
 FPU accumulation. A K-RMS ordering is not equivalent to fixing the actual
 query-dependent final maximum.
 
-## Exp-order ablation
+## Completed exp-order ablation
 
-Pending parent-run results. No additional kernels, device jobs, or heavy CPU
-model were created for this report. The initial 24 rows establish sensitivity,
-not an attribution of its magnitude to exp or to FPU accumulation.
+[block-permutation-exp-v1.jsonl](block-permutation-exp-v1.jsonl) contains
+18 completed cases: normal inputs only, both lengths, three orders, and three
+exp implementations. All use LoFi QK/PV, Q7 and identical represented K/V5 in
+BFP8, FP32 numerator/denominator/P storage, BF16 row maxima and BF16 output.
+Q256/K512, one KV slot, original inputs and the accurate online-rescale helper
+are retained. This is an accuracy-only experiment, not a new speed result.
+
+Native and macro-LUT use the **same builder**, differing only by the two LUT
+enable defines. The LUT refines the same native grid. The cubic control uses
+the existing native-storage builder with `native_exp=false`: it changes the
+exp family, including a wider log2 grid (8→10 fraction bits), polynomial,
+effective-P bias treatment and underflow range. It is **not** a
+polynomial-degree-only intervention. Native “8-bit grid” describes its log2
+fraction resolution (nine significant output bits before later consumption),
+not an FP8 or BFP8 datatype claim.
+
+### Independent evidence audit
+
+- The ledger contains all 18 expected result keys and a complete marker, with
+  81 principal source hashes checked unchanged during the run. The prior native
+  evidence file's SHA256 matches the recorded hash, and the completion marker
+  confirms that evidence remained unchanged.
+- All original/ordered input hashes, exact represented preparation hashes,
+  block permutations and sampled reference rows match the original native
+  experiment for the corresponding length/order. All six native outputs
+  reproduce the old native driver's **exact output hashes**. All four recorded
+  cross-driver checks pass: inputs, prepared bits, CB bytes and outputs.
+- Every row passes exact nonzero preparation, all-output finiteness, two
+  bitwise combined trace replays and before/after CPU/device immutability.
+  Signed-zero equivalence remains explicit: 797,616 zero-sign disagreements
+  across preparation checks, no nonzero mismatches.
+- Native/LUT per-CB audit records match. Independently evaluating the two
+  builders' selected CB specification expressions gives identical formats,
+  page sizes and capacities for cubic as well: **1,212,416 bytes/core** and
+  one KV slot. Cubic records total CB bytes rather than a per-CB audit; the
+  finer comparison is source-verified, not an invented logged gate.
+- FP64 permutation-reference agreement passes in all rows; maximum absolute
+  discrepancy is 6.2450e-16. Accuracy still samples 128 Q rows/head, whereas
+  inter-order output difference covers every element. No timing was performed.
+
+The cubic builder spells the matched-denominator flag `SDPA_MATCH_HIFI2`,
+where native/LUT use `SDPA_LOFI_DENOM`; the selected streaming header maps
+both to the same LoFi denominator branch. This is not a denominator-fidelity
+change despite the flag names.
+
+### Measured results
+
+| N | Exp family | Identity L2 % | Reverse L2 % | RMS-sort L2 % | Reverse vs identity % | RMS-sort vs identity % | Identity PCC |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 4,096 | Native | 2.879 | 2.877 | 2.887 | 2.370 | 2.182 | 0.999587 |
+| 4,096 | Native + macro-LUT | 2.227 | 2.227 | 2.224 | 0.791 | 0.731 | 0.999752 |
+| 4,096 | Wider-grid cubic | 2.170 | 2.174 | 2.172 | 0.484 | 0.454 | 0.999765 |
+| 32,768 | Native | 2.820 | 2.804 | 2.819 | 2.551 | 2.162 | 0.999602 |
+| 32,768 | Native + macro-LUT | 2.198 | 2.196 | 2.202 | 0.866 | 0.745 | 0.999758 |
+| 32,768 | Wider-grid cubic | 2.142 | 2.142 | 2.145 | 0.522 | 0.457 | 0.999771 |
+
+The same-grid LUT reduces reverse-order output difference by **66.6% at 4K
+and 66.0% at 32K**. The broader cubic-exp change reduces it by about 79.6%
+at both lengths. Original-reference L2 also improves, but less dramatically:
+32K identity 2.820→2.198→2.142%. These percentages compare observed norms;
+they are not an orthogonal decomposition of error or a statement that exactly
+66% of baseline error was caused by one primitive.
+
+This controlled result establishes that the exp-refinement choice materially
+affects permutation sensitivity and strongly supports the max-history/
+nonmultiplicativity mechanism above. It does not prove the analytic continuous
+ripple is the sole contributor: the changed P values also change downstream
+rounding. The result is stronger than inferring a cause merely from the
+presence of order sensitivity in FP32 state.
+
+The remaining 0.48–0.52% cubic reverse-order discrepancy must **not** be
+labeled pure FP32 accumulation error. Quantized P, BF16 maxima, score/max
+subtraction, rescale evaluation, FPU product alignment and final BF16 output
+rounding remain. This suite covers one normal seed, not common modes,
+block-scaled K, broader distributions or real-model quality.
+
+Engineering implication: permutation sensitivity is a useful additional
+qualification metric, and cheap-exp selection should consider online
+translation consistency as well as standalone exp MSE and aggregate L2/PCC.
+The accuracy/performance cost of refinement must use the separate qualified
+timing records; this experiment does not authorize a dispatch change.
+Numerical work is frozen. No additional kernels, device jobs or heavy CPU
+model were created for this report.
+
+## Independent idealized CPU mechanism check
+
+The subsequently authorized [36-case CPU study](EXP_ORDER_CPU_MECHANISM.md)
+isolates the continuous native exp shape with otherwise FP64 scores, state,
+PV and exact exp rescaling. At 32K its running-max reverse-order discrepancy
+is 2.576%, while a fixed-global-max schedule reduces it to 4.99e-14%.
+Exact and constant-bias exp controls remain order-invariant to FP64 roundoff.
+Fixed maxima do not remove exp approximation error: original-reference L2
+still measures 1.827% in that global-max surrogate.
+
+This establishes the proposed mechanism **within the isolated model** and
+complements the hardware LUT intervention. H1/64-query CPU inputs differ from
+the H2 device suite; no Q7/BFP quantization, native integer grid, BF16 rowmax
+spill or FPU-alignment model is included. The CPU percentages are not a
+quantitative attribution of device error, and the global maximum requires an
+oracle/prepass whose implementation cost is not free or measured. No existing
+numerical producer was changed.
+
+A further [same-input CPU lattice-max study](EXP_ORDER_LATTICE_CPU.md) removes
+the continuous surrogate's order dependence without a global prepass, but
+retains about 1.8% original-reference L2 and introduces 2.6–3.5% output changes
+under mathematically irrelevant common score offsets at 32K. BF16 maximum
+spills also reintroduce order dependence. This is a numerical design tradeoff,
+not a qualified kernel improvement.

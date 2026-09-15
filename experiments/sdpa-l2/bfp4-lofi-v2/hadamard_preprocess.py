@@ -46,19 +46,27 @@ def source_files():
     matmul = ROOT / "ttnn/cpp/ttnn/operations/matmul"
     api = ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api"
     llk = ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib"
-    return [Path(__file__).resolve(), matmul / "matmul.cpp", matmul / "matmul.hpp",
-            matmul / "device/matmul_device_operation.cpp",
-            matmul / "device/matmul_device_operation_types.hpp",
-            matmul / "device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
-            matmul / "device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp",
-            matmul / "device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-            matmul / "device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
-            matmul / "device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
-            matmul / "device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-            ROOT / "tt_metal/hw/inc/api/compute/matmul.h",
-            api / "llk_math_matmul_api.h", api / "llk_unpack_AB_matmul_api.h",
-            api / "llk_pack_tile_api.h", api / "llk_pack_common_api.h",
-            llk / "llk_math_matmul.h", llk / "llk_unpack_AB_matmul.h", llk / "llk_pack.h"]
+    return [
+        Path(__file__).resolve(),
+        matmul / "matmul.cpp",
+        matmul / "matmul.hpp",
+        matmul / "device/matmul_device_operation.cpp",
+        matmul / "device/matmul_device_operation_types.hpp",
+        matmul / "device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp",
+        matmul / "device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp",
+        matmul / "device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+        matmul / "device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        matmul / "device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        matmul / "device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        ROOT / "tt_metal/hw/inc/api/compute/matmul.h",
+        api / "llk_math_matmul_api.h",
+        api / "llk_unpack_AB_matmul_api.h",
+        api / "llk_pack_tile_api.h",
+        api / "llk_pack_common_api.h",
+        llk / "llk_math_matmul.h",
+        llk / "llk_unpack_AB_matmul.h",
+        llk / "llk_pack.h",
+    ]
 
 
 def build(device, src, block_size):
@@ -82,12 +90,12 @@ def build(device, src, block_size):
     # All dimensions are tile-aligned, so these reshapes are storage views.
     flat_shape = [1, 1, shape[1] * shape[2], DIM]
     flat_src = ttnn.reshape(src, flat_shape)
-    out = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,
-                                         device, ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     flat_out = ttnn.reshape(out, flat_shape)
     host_matrix = matrix(block_size).bfloat16().reshape(1, 1, DIM, DIM)
-    transform = ttnn.from_torch(host_matrix, device=device, layout=ttnn.TILE_LAYOUT,
-                                memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    transform = ttnn.from_torch(
+        host_matrix, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     grid = device.compute_with_storage_grid_size()
     grid_size = (grid.x, grid.y)
     cores = grid.x * grid.y
@@ -98,34 +106,60 @@ def build(device, src, block_size):
     per_core_m = math.ceil(mt / (cores * out_block_h)) * out_block_h
     program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        in0_block_w=4, out_subblock_h=1, out_subblock_w=4,
-        out_block_h=out_block_h, out_block_w=4,
-        per_core_M=per_core_m, per_core_N=4,
-        mcast_in0=False, fuse_batch=True, fused_activation=None,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        out_block_h=out_block_h,
+        out_block_w=4,
+        per_core_M=per_core_m,
+        per_core_N=4,
+        mcast_in0=False,
+        fuse_batch=True,
+        fused_activation=None,
     )
     config = ttnn.init_device_compute_kernel_config(
-        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False,
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
     )
 
     def invoke():
-        ttnn.matmul(flat_src, transform, dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=program,
-                    compute_kernel_config=config, optional_output_tensor=flat_out)
+        ttnn.matmul(
+            flat_src,
+            transform,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program,
+            compute_kernel_config=config,
+            optional_output_tensor=flat_out,
+        )
         return out
 
     # Explicit owners document trace lifetime, including source/output aliases.
     invoke.buffers = (src, flat_src, transform, out, flat_out)
     metadata = dict(
-        block_size=block_size, sign_seed=SIGN_SEED, input_shape=shape,
+        block_size=block_size,
+        sign_seed=SIGN_SEED,
+        input_shape=shape,
         transform="T=diag(signs)*block_diag(Sylvester H); src@T; unnormalized",
-        score_scale_divisor=block_size, centering=False,
-        math_fidelity="HiFi4", fp32_dst=True, math_approx_mode=False,
-        packer_l1_acc=False, input_dtype="BF16", output_dtype="BF16",
-        matrix_dtype="BF16 exact +/-1 and0", host_constant_upload_in_invoke=False,
-        device_input_transform=True, grid=list(grid_size),
-        active_cores=math.ceil(mt / per_core_m), per_core_m_tiles=per_core_m,
-        out_block_h_tiles=out_block_h, out_block_w_tiles=4,
+        score_scale_divisor=block_size,
+        centering=False,
+        math_fidelity="HiFi4",
+        fp32_dst=True,
+        math_approx_mode=False,
+        packer_l1_acc=False,
+        input_dtype="BF16",
+        output_dtype="BF16",
+        matrix_dtype="BF16 exact +/-1 and0",
+        host_constant_upload_in_invoke=False,
+        device_input_transform=True,
+        grid=list(grid_size),
+        active_cores=math.ceil(mt / per_core_m),
+        per_core_m_tiles=per_core_m,
+        out_block_h_tiles=out_block_h,
+        out_block_w_tiles=4,
         dense_matmul_flops=2 * shape[1] * shape[2] * DIM * DIM,
         implementation="Dense TTNN 128x128 HiFi4 matmul, including H16 block zeros; NOT a fast butterfly",
         matrix_sha256=hashlib.sha256(host_matrix.view(torch.uint16).numpy().tobytes()).hexdigest(),
@@ -139,10 +173,13 @@ def metrics(actual, expected):
     delta = a - e
     ac, ec = a - a.mean(), e - e.mean()
     denom = ac.norm() * ec.norm()
-    return dict(finite=bool(torch.isfinite(a).all()),
-                l2_pct=float(100 * delta.norm() / e.norm()) if e.norm() else None,
-                max_abs=float(delta.abs().max()), reference_rms=float(e.square().mean().sqrt()),
-                pcc=float(ac.dot(ec) / denom) if denom else None)
+    return dict(
+        finite=bool(torch.isfinite(a).all()),
+        l2_pct=float(100 * delta.norm() / e.norm()) if e.norm() else None,
+        max_abs=float(delta.abs().max()),
+        reference_rms=float(e.square().mean().sqrt()),
+        pcc=float(ac.dot(ec) / denom) if denom else None,
+    )
 
 
 def qk_diagnostic(original_q, original_k, rotated_q, rotated_k, block_size, rows=128, keys=512):
@@ -152,11 +189,20 @@ def qk_diagnostic(original_q, original_k, rotated_q, rotated_k, block_size, rows
     q, k = original_q[..., qi, :], original_k[..., ki, :]
     expected = q.double() @ k.double().transpose(-1, -2) / math.sqrt(DIM)
     ideal = oracle(q, block_size) @ oracle(k, block_size).transpose(-1, -2) / (block_size * math.sqrt(DIM))
-    actual = rotated_q[..., qi, :].double() @ rotated_k[..., ki, :].double().transpose(-1, -2) / (block_size * math.sqrt(DIM))
-    return dict(query_rows=qi.tolist(), key_rows=ki.tolist(),
-                ideal_fp64_identity=metrics(ideal, expected), device_transformed_scores=metrics(actual, expected),
-                device_row_centered_scores=metrics(actual - actual.mean(-1, keepdim=True),
-                                                   expected - expected.mean(-1, keepdim=True)))
+    actual = (
+        rotated_q[..., qi, :].double()
+        @ rotated_k[..., ki, :].double().transpose(-1, -2)
+        / (block_size * math.sqrt(DIM))
+    )
+    return dict(
+        query_rows=qi.tolist(),
+        key_rows=ki.tolist(),
+        ideal_fp64_identity=metrics(ideal, expected),
+        device_transformed_scores=metrics(actual, expected),
+        device_row_centered_scores=metrics(
+            actual - actual.mean(-1, keepdim=True), expected - expected.mean(-1, keepdim=True)
+        ),
+    )
 
 
 def main():
@@ -203,10 +249,12 @@ def main():
         checks = []
         for src, transformed in zip(inputs, actual):
             expected = oracle(src, args.block_size)
-            check = dict(vs_fp64=metrics(transformed, expected),
-                         bf16_rounding_only=metrics(expected.bfloat16(), expected),
-                         vs_ideal_bf16=metrics(transformed, expected.bfloat16()),
-                         ideal_bf16_mismatches=int((transformed != expected.bfloat16()).sum()))
+            check = dict(
+                vs_fp64=metrics(transformed, expected),
+                bf16_rounding_only=metrics(expected.bfloat16(), expected),
+                vs_ideal_bf16=metrics(transformed, expected.bfloat16()),
+                ideal_bf16_mismatches=int((transformed != expected.bfloat16()).sum()),
+            )
             assert check["vs_fp64"]["finite"], "Nonfinite transformed output"
             checks.append(check)
         diagnostics = qk_diagnostic(*inputs, *actual, args.block_size)
@@ -224,12 +272,22 @@ def main():
                         times.append((time.perf_counter() - started) * 1000 / args.trace_repeats)
             finally:
                 ttnn.release_trace(device, trace)
-            assert all(torch.equal(before, ttnn.to_torch(out)) for before, (out, _, _) in zip(actual, built)), "Trace replay changed transform output"
-        record = dict(**vars(args), transforms=[metadata for _, _, metadata in built], checks=checks,
-                      qk_invariance=diagnostics, median_pair_ms=statistics.median(times) if times else None,
-                      pair_replay_ms=times, trace_equal=True if times else None,
-                      timing="Two real device transforms per invocation; blocking trace replay wall-time; constant upload/allocation excluded; no input precomputation",
-                      source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files()})
+            assert all(
+                torch.equal(before, ttnn.to_torch(out)) for before, (out, _, _) in zip(actual, built)
+            ), "Trace replay changed transform output"
+        record = dict(
+            **vars(args),
+            transforms=[metadata for _, _, metadata in built],
+            checks=checks,
+            qk_invariance=diagnostics,
+            median_pair_ms=statistics.median(times) if times else None,
+            pair_replay_ms=times,
+            trace_equal=True if times else None,
+            timing="Two real device transforms per invocation; blocking trace replay wall-time; constant upload/allocation excluded; no input precomputation",
+            source_sha256={
+                str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files()
+            },
+        )
         with path.open("x") as output:
             output.write(json.dumps(record, indent=2) + "\n")
         print(json.dumps(record), flush=True)

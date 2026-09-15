@@ -1,18 +1,18 @@
 # Blackhole low-precision attention research
 
-Research window: 2026-09-15 05:48:43–13:48:43 UTC. **Working report; experiments are still running.**
+Research window: 2026-09-15 05:48:43–13:48:43 UTC. Numerical experiments, controls and qualification are reported below; limitations are explicit.
 
-## Bottom line so far
+## Bottom line
 
 The most promising candidate for broader evaluation is **LoFi with carefully rounded operands and wider recurrent state**, not indiscriminate BFP4. Native BFP4 is useful as a bandwidth/accuracy research point, but it does not currently approach the previously selected accurate modes. Several Sage-inspired transformations help specific failure mechanisms; none is a universal accuracy repair.
 
-The four frozen SDPA choices remain unchanged. These are private experimental kernels and common-reader benchmarks, not a production API, dispatch change, or model-quality qualification. The source/results checkpoint before final cleanup is `d748b3f4e4b`.
+The four frozen SDPA choices remain unchanged. These are private experimental kernels and common-reader benchmarks, not a production API, dispatch change, or model-quality qualification. The raw numerical/evidence checkpoint before final formatting is `52b288a3213`.
 
 ## What transfers from SageAttention
 
-[SageAttention2](https://arxiv.org/abs/2411.10958) combines low-bit QK, higher-precision PV, smoothing, and accumulation improvements. [SageAttention3](https://arxiv.org/abs/2505.11594) uses microscaled FP4 and a hardware-specific implementation. The transferable ideas are separating QK/PV precision, treating outliers explicitly, selecting a suitable block-sharing direction, and protecting recurrent accumulation—not assuming that two formats called “4-bit” have equivalent numerics or throughput.
+[SageAttention2 v7](https://arxiv.org/html/2411.10958v7) combines low-bit QK, higher-precision PV, smoothing, and accumulation improvements. [SageAttention3 v3](https://arxiv.org/html/2505.11594v3) uses microscaled FP4 and a hardware-specific implementation. The transferable ideas are separating QK/PV precision, treating outliers explicitly, selecting a suitable block-sharing direction, and protecting recurrent accumulation—not assuming that two formats called “4-bit” have equivalent numerics or throughput. Published INT4 model results are configuration-dependent; [our Sage-style codec comparison](SAGE_INT4_COMPARISON.md) does not establish Sage model quality.
 
-Blackhole's native BFP4_b has a sign and three magnitude bits with a shared power-of-two exponent across 16 values. It is not NVIDIA's **NVFP4** recipe: E2M1 values with encoded local scales and a global scale. Other E2M1 formats such as MXFP4 use different scaling rules. In addition, Blackhole **LoFi and BFP4 storage are separate choices**: in the tested attention-matmul mapping, LoFi consumes seven significant bits from logical-left Q/P and five from logical-right K/V. Rounding to those observed widths before the multiply reduces one-sided truncation bias. This mapping must not be generalized to differently mapped elementwise operations. We need not throw away useful Q/P bits merely to imitate an FP4 recipe.
+Blackhole's native BFP4_b has a sign and three magnitude bits with a shared power-of-two exponent across 16 values. It is not NVIDIA's **NVFP4** recipe: E2M1 values with per-16 E4M3 local scales and an FP32 tensor scale, as described in [Transformer Engine's format documentation](https://docs.nvidia.com/deeplearning/transformer-engine-releases/release-2.15/user-guide/features/low_precision_training/nvfp4/nvfp4.html). Other E2M1 formats such as MXFP4 use different scaling rules. This generic NVFP4 description does not reproduce Sage3's complete scaling/attention algorithm. In addition, Blackhole **LoFi and BFP4 storage are separate choices**: in the tested attention-matmul mapping, LoFi consumes seven significant bits from logical-left Q/P and five from logical-right K/V. Rounding to those observed widths before the multiply reduces one-sided truncation bias. This mapping must not be generalized to differently mapped elementwise operations. We need not throw away useful Q/P bits merely to imitate an FP4 recipe.
 
 These statements are supported by the silicon probes and primary-source codec discussion in [the v1 report](../bfp4-lofi-v1/REPORT.md), [codec comparisons](CODEC_LIMITS.md), and [numerical findings](NUMERICAL_FINDINGS.md). The codec study is a CPU representation-only comparison, **not an execution of SageAttention or a prediction of NVIDIA kernel error**.
 
@@ -72,6 +72,8 @@ The denominator-only rows are **not generally robust recommendations**. With rep
 
 The native-exp suite contains 82 cases at 32K and 82 at 256K (H2, 22 cores): two seeds, 13 distributions, LoFi B8/B4 and accurate controls, plus K-centering diagnostics. Complete coverage and finite/replay gates pass; **this does not mean every distribution passes a common numerical cutoff**. LoFi B8 normal error stays around 2.8%, but outliers, scaled QK and common modes can be substantially worse. The accurate control also has isolated stress cases above 0.5%. Full tables are in [Numerical findings](NUMERICAL_FINDINGS.md).
 
+Device K centering is a successful targeted repair: the 256K LoFi B8 common-K cases improve from 44.82–45.44% to 2.35–2.36% L2 across two seeds. This is a separate preprocessing intervention, not an effect of LUT exp and not enabled in the uncentered stress tables. It supports a conditional Sage-inspired transformation; its cost and normal-input effects must remain part of any deployment decision.
+
 Signed H16 Q/K rotation helps sparse outliers in coarse K, but does not consistently improve normal or scaled-QK inputs and can amplify common-mode problems. H128 is not uniformly better. V transposition changes shared-exponent groups from 16 channels to 16 tokens at one channel. The N1024/H2/4-core hardware test reduces quiet-channel L2 from 81.6% to 11.8%, with PCC 0.617→0.993; aggregate L2 alone barely exposes that repair.
 
 The full-compensated K8/V4 long-context test confirms quiet-channel improvement: **79.66→12.01% at 32K; 80.58→12.41% at 256K**. Normal-input L2 is essentially unchanged, and aggregate channel-outlier L2 slightly worsens. The real V transpose costs about 0.52 ms and 3.73 ms respectively. Combined throughput is about 191→188 TFLOP/s at 32K. Interleaved 32K timing confirms about 1.6% extra combined time for the N-axis route; read barriers of 2/8/16 tiles show no material tuning win. Small sequential 256K differences remain susceptible to clock variation. A second 32K seed confirms quiet-channel improvement, 81.50→12.15%. See [V-axis results](V_TRANSPOSE_DESIGN.md).
@@ -116,20 +118,41 @@ An 18-case exp-only follow-up preserves the FP32 LoFi inputs, state, chunks and 
 
 This supports a substantial contribution from approximate-exp inconsistency during online maximum updates. Native score exp has input-dependent relative error, while online rescaling uses a more accurate exp; in general `F(x-m_old) * G(m_old-m_new) != F(x-m_new)`. FP32 accumulation cannot repair that identity. The same-grid LUT comparison isolates refinement; the cubic comparison changes the exp grid and approximation family more broadly. Remaining order sensitivity is not uniquely attributed to accumulation: represented P, BF16 row maxima and other arithmetic are still finite precision. See [the evidence and derivation](BLOCK_PERMUTATION.md). No block-reordering performance optimization or model-quality claim is made.
 
+A separate [36-case idealized FP64 online model](EXP_ORDER_CPU_MECHANISM.md) reproduces the mechanism with continuous native exp but exact rescaling, state and PV: at 32K, reverse-order output differs by 2.576%, versus numerical roundoff with exact or constant-bias exp. Fixed global maxima remove order dependence but retain 1.827% original-reference error and require an unpriced prepass. These H1 inputs differ from the device experiment; the model is not a quantitative decomposition of device error.
+
+An [84-case lattice-maximum extension](EXP_ORDER_LATTICE_CPU.md) avoids that prepass in the model by restricting maximum updates to log(2) steps. It removes order dependence but preserves about 1.81% normal error. More importantly, adding a mathematically harmless half-octave common score offset changes its 32K output by 3.49%. BF16 storage also moves snapped maxima off the exact lattice. This is an invariance tradeoff, not a free accuracy fix. The [Blackhole feasibility analysis](LATTICE_MAX_FEASIBILITY.md) identifies integer-code, range and SFPU scheduling requirements; no lattice device kernel or performance claim is made.
+
+## Expanded exp stress qualification
+
+The late-window [native/LUT stress cross-check](EXP_STRESS.md) covers ten distributions at N1024 with all-output references and six at 32K with sampled Q/all K/V, two seeds, four routes and fresh-process repetitions. At 32K, LoFi B8 normal L2 is 2.82–2.83% native and 2.20–2.21% with LUT, but outliers reach about 7% and common K about 46%; LUT does not repair these remaining failures. HiFi2 with BF16 K/V and LUT gives 0.748–0.752% normal L2, but common K remains 1.27–1.32% and common Q is seed-sensitive. These data support separate numerical axes, not a universal accuracy band.
+
+The targeted 256K extension confirms stable normal bands: LoFi native 2.77–2.80%, LoFi LUT 2.20–2.22%, and HiFi2/BF16 LUT 0.750–0.752%. However, LoFi outlier L2 reaches 10.35–15.66% native and 10.38–15.95% with LUT, versus 0.785–1.371% for HiFi2/BF16 LUT. LoFi common K remains about 45%, versus 1.23–1.28% for the HiFi2/BF16 LUT point. The three late-window suites together pass their recorded gates for 304 records and 152 fresh-process complete-output comparisons. Their differing replay/input-hash guarantees are disclosed in the audit; none uses a universal L2 acceptance cutoff.
+
+The [common-V output-floor analysis](COMMON_V_DERIVED_METRICS.md) separates unavoidable BF16 output loss from additional error. At 32K, nearest BF16 output rounding alone gives roughly 126% L2 relative to the small centered signal; the HiFi2 native/LUT records reach that error norm, while LoFi has 13.4–13.6 times the floor error norm. At 1K, LoFi has higher PCC despite about 2.5–2.6 times the BF16-floor error norm, whereas HiFi2 is almost floor-limited. These are algebraically derived residual metrics from recorded error norms and regenerated original references, not new output-tensor verification. Neither PCC alone nor a common-mode-dominated aggregate L2 is adequate qualification.
+
 ## What is not established
 
 No real model activation capture, end-to-end model score, NVIDIA device comparison, production integration, backward pass, masked/causal attention, GQA/MQA, or general head-dimension qualification is claimed. The new [captured-input runner](CAPTURED_INPUTS.md) passes an explicitly synthetic six-variant interface smoke; that is readiness to evaluate supplied captures, not model validation.
 
 Do not promote a BFP4 option on normal L2/PCC alone. The next selection should use representative model layers and include quiet-channel and common-mode diagnostics. The established accurate modes remain the reference/fallback choices while low-bit work is experimental.
 
+## Recommended engineering direction
+
+Separate correctness prerequisites from new numerical choices. First carry the private Q256 correction-address fix into a narrowly scoped integration proposal with distinct-KV/max-update regression tests and explicit dispatch/range contracts. Then qualify wider-storage LoFi and the HiFi2/BF16-LUT intermediate point on the intended inputs. Keep BFP4 focused on a concrete capacity or bandwidth objective, with B8 controls and preprocessing costs included. The [ranked engineering plan](ENGINEERING_NEXT_STEPS.md) spells out candidate disposition, integration gaps and stop/go evidence. No production integration was performed here.
+
 ## Reproduction and audit
 
 Use the exact commands/configuration stored in each record and the linked driver README. Preserve failed or superseded evidence as such; do not relabel it a passing current-source result. The read-only validator separates missing evidence, recorded gates, historical source omissions, and current source drift:
 
+Device work used container `yyzo-bh-08-special-cglagovich-for-reservation-220027`, from `/localdev/cglagovich/tt-metal-blackhole-20260908`. The local worktree is `tt-metal-blackhole`, branch `cglagovich/blackhole-work-20260908`. The four selected variants remain pinned at `637d956c8874d356c9080e467b9a1664133fa780`; the final Git commit containing this report identifies the new research checkpoint.
+
 ```sh
 python3 -B experiments/sdpa-l2/bfp4-lofi-v2/validate_research_checkpoint.py
-python3 -B experiments/sdpa-l2/bfp4-lofi-v2/test_validate_research_checkpoint.py
+python3 -B experiments/sdpa-l2/bfp4-lofi-v2/validate_final_smokes.py
+python3 -B experiments/sdpa-l2/bfp4-lofi-v2/validate_exp_stress.py
+python3 -B experiments/sdpa-l2/bfp4-lofi-v2/validate_exp_stress.py --plan experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-long-plan.json
+python3 -B experiments/sdpa-l2/bfp4-lofi-v2/validate_exp_stress.py --plan experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-256k-plan.json
 python3 -B experiments/sdpa-l2/validate_selected_variants.py
 ```
 
-An evidence PASS is not a universal accuracy acceptance threshold. Historical provenance warnings are disclosed in the audit rather than silently repaired in old records. New final measurements and cleanup status will be added before the research window ends.
+An evidence PASS is not a universal accuracy acceptance threshold. Historical provenance warnings are disclosed in the audit rather than silently repaired in old records. The [final current-source qualification](FINAL_QUALIFICATION.md) records 85 complete attention outputs bit-identical to their pre-format controls, four exact BFP4 primitive checks, and 86 distinct passing tests. Its reference scopes and omitted gates are explicit; it does not requalify historical performance or real model quality.

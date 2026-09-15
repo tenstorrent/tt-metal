@@ -23,8 +23,7 @@ void kernel_main() {
     constexpr auto args0 = TensorAccessorArgs<2>();
     constexpr auto args1 = TensorAccessorArgs<args0.next_compile_time_args_offset()>();
     constexpr auto args2 = TensorAccessorArgs<args1.next_compile_time_args_offset()>();
-    const uint32_t addresses[3] = {
-        get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2)};
+    const uint32_t addresses[3] = {get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2)};
     const uint32_t start = get_arg_val<uint32_t>(3);
     const uint32_t count = get_arg_val<uint32_t>(4);
     const auto dst0 = TensorAccessor(args0, addresses[0]);

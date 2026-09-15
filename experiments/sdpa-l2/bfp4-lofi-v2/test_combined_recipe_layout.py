@@ -1,4 +1,5 @@
 """Stdlib descriptor/preprocessing schedule tests; no TTNN/device execution."""
+
 import ast
 import contextlib
 import io
@@ -42,8 +43,13 @@ def combined_environment():
 
         return out, call, metadata
 
-    scope.update(PREP=NS(build=quantizer), B4_PREP=NS(build=quantizer),
-                 ADAPT=NS(build=quantizer), HADAMARD=NS(build=rotate), build_transpose=transpose)
+    scope.update(
+        PREP=NS(build=quantizer),
+        B4_PREP=NS(build=quantizer),
+        ADAPT=NS(build=quantizer),
+        HADAMARD=NS(build=rotate),
+        build_transpose=transpose,
+    )
     tree = ast.parse((HERE / "combined_recipe_fullchip.py").read_text())
     tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "build"]
     exec(compile(tree, "combined_recipe_fullchip.py", "exec"), scope)
@@ -63,14 +69,22 @@ class CombinedRecipeLayout(unittest.TestCase):
 
         baseline = environment("Vtransposed_fullchip.py")
         hadamard = extract(HERE / "hadamard_preprocess.py", "source_files")
-        adaptive = extract(HERE / "adaptive_bfp4_round.py", "source_pins",
-                           DIRECTORY=HERE / "adaptive_bfp4_round")
-        sources = extract(HERE / "combined_recipe_fullchip.py", "source_files",
-                          BASE=NS(source_files=baseline["source_files"]),
-                          HADAMARD=NS(source_files=hadamard), ADAPT=NS(source_pins=adaptive))("fast_bf16")
+        adaptive = extract(HERE / "adaptive_bfp4_round.py", "source_pins", DIRECTORY=HERE / "adaptive_bfp4_round")
+        sources = extract(
+            HERE / "combined_recipe_fullchip.py",
+            "source_files",
+            BASE=NS(source_files=baseline["source_files"]),
+            HADAMARD=NS(source_files=hadamard),
+            ADAPT=NS(source_pins=adaptive),
+        )("fast_bf16")
         self.assertTrue(all(path.is_file() for path in sources))
-        for path in ("combined_recipe_fullchip.py", "Vtransposed_fullchip.py", "hadamard_preprocess.py",
-                     "adaptive_bfp4_round/compute.cpp", "vtransposed/pv_transpose.hpp"):
+        for path in (
+            "combined_recipe_fullchip.py",
+            "Vtransposed_fullchip.py",
+            "hadamard_preprocess.py",
+            "adaptive_bfp4_round/compute.cpp",
+            "vtransposed/pv_transpose.hpp",
+        ):
             self.assertIn(HERE / path, sources)
         self.assertIn(HERE.parent / "frontier-accuracy-v1/run.py", sources)
 
@@ -83,28 +97,47 @@ class CombinedRecipeLayout(unittest.TestCase):
                     for axis in (False, True):
                         for grid7 in (False, True):
                             scope, events, quantizers = combined_environment()
-                            args = NS(destination="fast_bf16", denom_only=False, kv_formats=formats,
-                                      length=1024, heads=2, cores=4, check_preprocess=False,
-                                      read_barrier_tiles=2, grid7_exp=grid7, v_transposed=axis,
-                                      h16=h16, adaptive_v=adaptive)
+                            args = NS(
+                                destination="fast_bf16",
+                                denom_only=False,
+                                kv_formats=formats,
+                                length=1024,
+                                heads=2,
+                                cores=4,
+                                check_preprocess=False,
+                                read_barrier_tiles=2,
+                                grid7_exp=grid7,
+                                v_transposed=axis,
+                                h16=h16,
+                                adaptive_v=adaptive,
+                            )
                             with contextlib.redirect_stdout(io.StringIO()):
                                 control = baseline["build"](Device(), args, inputs)
                                 result = scope["build"](Device(), args, inputs)
-                            for field in ("cb_audit", "input_slots", "assignments", "q_chunk", "k_chunk", "head_dim", "defines"):
+                            for field in (
+                                "cb_audit",
+                                "input_slots",
+                                "assignments",
+                                "q_chunk",
+                                "k_chunk",
+                                "head_dim",
+                                "defines",
+                            ):
                                 self.assertEqual(control[-1][field], result[-1][field])
                             self.assertEqual(result[-1]["input_slots"], 2)
-                            self.assertEqual(result[-1]["score_scale"], 1/(math.sqrt(128)*(16 if h16 else 1)))
+                            self.assertEqual(result[-1]["score_scale"], 1 / (math.sqrt(128) * (16 if h16 else 1)))
                             self.assertEqual(result[-1]["adaptive_v"], adaptive)
                             self.assertFalse(result[-1]["adaptive_k"])
-                            expected_stages = (["q_rotation", "k_rotation"] if h16 else [])
+                            expected_stages = ["q_rotation", "k_rotation"] if h16 else []
                             expected_stages += ["v_transpose"] if axis else []
                             expected_stages += ["q_quantization", "k_quantization", "v_quantization"]
                             self.assertEqual(list(result[4].stages), expected_stages)
                             events.clear()
                             result[4]()
                             self.assertEqual(events, expected_stages)
-                            self.assertEqual(quantizers[2]["source"].shape,
-                                             (1, 2, 128, 1024) if axis else (1, 2, 1024, 128))
+                            self.assertEqual(
+                                quantizers[2]["source"].shape, (1, 2, 128, 1024) if axis else (1, 2, 1024, 128)
+                            )
                             self.assertNotIn("search", quantizers[0]["options"])
                             self.assertNotIn("search", quantizers[1]["options"])
                             self.assertEqual(quantizers[2]["options"].get("search", "none"), adaptive)

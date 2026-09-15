@@ -44,25 +44,46 @@ def main():
     args = parser.parse_args()
     torch.set_num_threads(4)
     started, count = time.monotonic(), 0
-    distributions = ("normal", "outliers", "scaled_qk", "common_q", "common_k",
-                     "common_k_centered", "common_v", "channel_outlier_v", "constant_v")
+    distributions = (
+        "normal",
+        "outliers",
+        "scaled_qk",
+        "common_q",
+        "common_k",
+        "common_k_centered",
+        "common_v",
+        "channel_outlier_v",
+        "constant_v",
+    )
     sources = [Path(__file__), Path(GRID.__file__), HERE / "numerics.py", MODEL.V1 / "probe.py", Path(REPRO.__file__)]
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", hostname=platform.node(), threads=4, seed=1240,
-                  contract="CPU FP64 QK/subtraction, online correction and state; IEEE FP32 native exp grid or exact exp; Q RNE7; K/V RNE BFP4 or per-value RNE5 then native BFP8 RNA and LoFi trunc5; P trunc7 matched; BF16 final output; original BF16 reference",
-                  inputs="N32K all nine distributions, normal4K control; H1/Q128/D128; channel_outlier_v multiplies every16th V channel by32; common offsets32",
-                  caveats="No device cheap subtraction, BF16 recurrent state/compensation, P BF16 spill or SFPU-specific rounding; one seed, not qualification",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}))
+        emit(
+            dict(
+                kind="provenance",
+                hostname=platform.node(),
+                threads=4,
+                seed=1240,
+                contract="CPU FP64 QK/subtraction, online correction and state; IEEE FP32 native exp grid or exact exp; Q RNE7; K/V RNE BFP4 or per-value RNE5 then native BFP8 RNA and LoFi trunc5; P trunc7 matched; BF16 final output; original BF16 reference",
+                inputs="N32K all nine distributions, normal4K control; H1/Q128/D128; channel_outlier_v multiplies every16th V channel by32; common offsets32",
+                caveats="No device cheap subtraction, BF16 recurrent state/compensation, P BF16 spill or SFPU-specific rounding; one seed, not qualification",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+            )
+        )
         for length in (4096, 32768):
             for distribution in (("normal",) if length == 4096 else distributions):
-                original_distribution = {"common_k_centered": "common_k", "channel_outlier_v": "normal"}.get(distribution, distribution)
-                q, k, v = [x.squeeze().float() for x in REPRO.make_inputs(1, 128, length, 128, 1240, original_distribution)]
+                original_distribution = {"common_k_centered": "common_k", "channel_outlier_v": "normal"}.get(
+                    distribution, distribution
+                )
+                q, k, v = [
+                    x.squeeze().float() for x in REPRO.make_inputs(1, 128, length, 128, 1240, original_distribution)
+                ]
                 if distribution == "channel_outlier_v":
                     v[:, ::16] *= 32
                 reference = REPRO.reference(q, k, v)
@@ -77,17 +98,39 @@ def main():
                         for exp, p in normalized.items():
                             raw = p @ ve
                             actual = raw.bfloat16()
-                            emit(dict(kind="attention", length=length, seed=1240, distribution=distribution,
-                                      k_format=kfmt, v_format=vfmt, exp=exp, **REPRO.metrics(actual, reference),
-                                      k_representation_l2_pct=REPRO.metrics(ke, k)["l2_pct"],
-                                      v_representation_l2_pct=REPRO.metrics(ve, v)["l2_pct"],
-                                      v_mean_error_rms=float(mean_error.square().mean().sqrt()),
-                                      mean_bias_only_l2_pct=float(100 * mean_error.norm() * math.sqrt(128) / reference.norm()),
-                                      diagnostic_v_mean_corrected_l2_pct=REPRO.metrics((raw - mean_error).bfloat16(), reference)["l2_pct"],
-                                      p_entropy_mean=float(-(p * p.clamp_min(1e-300).log()).sum(-1).mean()),
-                                      p_max_mean=float(p.max(-1).values.mean())))
+                            emit(
+                                dict(
+                                    kind="attention",
+                                    length=length,
+                                    seed=1240,
+                                    distribution=distribution,
+                                    k_format=kfmt,
+                                    v_format=vfmt,
+                                    exp=exp,
+                                    **REPRO.metrics(actual, reference),
+                                    k_representation_l2_pct=REPRO.metrics(ke, k)["l2_pct"],
+                                    v_representation_l2_pct=REPRO.metrics(ve, v)["l2_pct"],
+                                    v_mean_error_rms=float(mean_error.square().mean().sqrt()),
+                                    mean_bias_only_l2_pct=float(
+                                        100 * mean_error.norm() * math.sqrt(128) / reference.norm()
+                                    ),
+                                    diagnostic_v_mean_corrected_l2_pct=REPRO.metrics(
+                                        (raw - mean_error).bfloat16(), reference
+                                    )["l2_pct"],
+                                    p_entropy_mean=float(-(p * p.clamp_min(1e-300).log()).sum(-1).mean()),
+                                    p_max_mean=float(p.max(-1).values.mean()),
+                                )
+                            )
                             count += 1
-                emit(dict(kind="input_completed", length=length, distribution=distribution, count=count, seconds=time.monotonic() - started))
+                emit(
+                    dict(
+                        kind="input_completed",
+                        length=length,
+                        distribution=distribution,
+                        count=count,
+                        seconds=time.monotonic() - started,
+                    )
+                )
         emit(dict(kind="completed", cases=count, seconds=time.monotonic() - started))
 
 

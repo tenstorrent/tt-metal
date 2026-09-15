@@ -140,15 +140,19 @@ def evaluate(inputs, variant, preprocessing, route, seed, reference):
     for denom_name, denominator in (("original", exact_den), ("matched", matched_den)):
         output = (numerator / denominator + v0).bfloat16().double()
         row_error = (output - reference).norm(dim=-1) / reference.norm(dim=-1).clamp_min(1e-300) * 100
-        result.append(dict(
-            denominator=denom_name, **metrics(output, reference),
-            row_p95_l2_pct=float(torch.quantile(row_error, 0.95)),
-            k_representation_l2_pct=metrics(ke, k)["l2_pct"],
-            v_representation_l2_pct=metrics(ve, v)["l2_pct"],
-            p_mass_ratio=float((matched_den / exact_den).mean()),
-            p_zero_fraction=float((pe == 0).double().mean()),
-            qk_lofi_matmuls=len(kformats), pv_lofi_matmuls=len(vformats),
-        ))
+        result.append(
+            dict(
+                denominator=denom_name,
+                **metrics(output, reference),
+                row_p95_l2_pct=float(torch.quantile(row_error, 0.95)),
+                k_representation_l2_pct=metrics(ke, k)["l2_pct"],
+                v_representation_l2_pct=metrics(ve, v)["l2_pct"],
+                p_mass_ratio=float((matched_den / exact_den).mean()),
+                p_zero_fraction=float((pe == 0).double().mean()),
+                qk_lofi_matmuls=len(kformats),
+                pv_lofi_matmuls=len(vformats),
+            )
+        )
     return result
 
 
@@ -184,15 +188,25 @@ def main():
     assert not path.exists(), "Use a fresh label"
     start = time.monotonic()
     with path.open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
-        emit(dict(kind="provenance", args=vars(args), hostname=platform.node(),
-                  contract="Quantization and LoFi operand-bit model; FP64 arithmetic; NOT performance",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest()
-                                 for p in (Path(__file__), V1 / "probe.py", V1 / "numerics.py")}))
+
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                hostname=platform.node(),
+                contract="Quantization and LoFi operand-bit model; FP64 arithmetic; NOT performance",
+                source_sha256={
+                    str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in (Path(__file__), V1 / "probe.py", V1 / "numerics.py")
+                },
+            )
+        )
         for length in args.lengths:
             assert length % 512 == 0
             for seed in args.seeds:
@@ -203,8 +217,17 @@ def main():
                     for preprocessing in args.preprocessing:
                         for variant in args.variants:
                             for record in evaluate(inputs, variant, preprocessing, args.qkv_route, seed, reference):
-                                emit(dict(kind="attention_model", length=length, seed=seed, distribution=distribution,
-                                          preprocessing=preprocessing, variant=variant, **record))
+                                emit(
+                                    dict(
+                                        kind="attention_model",
+                                        length=length,
+                                        seed=seed,
+                                        distribution=distribution,
+                                        preprocessing=preprocessing,
+                                        variant=variant,
+                                        **record,
+                                    )
+                                )
         emit(dict(kind="completed", seconds=time.monotonic() - start))
 
 

@@ -1,0 +1,41 @@
+{
+  "raw_checkpoint": "52b288a3213",
+  "archive_sha256": "f702812eae577b0ef18e2c72aa58d0854b2800a78c743d220a3ea076573fd2f6",
+  "python_files": 96,
+  "cpp_files": 129,
+  "python_ast_differences": [],
+  "python_docstring_only_changes": [
+    "experiments/sdpa-l2/bfp4-lofi-v2/b8_pipeline_probe.py"
+  ],
+  "cpp_token_differences": [
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_pack_probe/compute.cpp",
+    "experiments/sdpa-l2/bfp4-lofi-v2/vtransposed/reader_chain.cpp"
+  ],
+  "unchanged_bytes": 72,
+  "reviewed_cpp_brace_insertions": [
+    {
+      "source": "experiments/sdpa-l2/bfp4-lofi-v2/padded_pack_probe/compute.cpp",
+      "added_open_braces": 8,
+      "added_close_braces": 8,
+      "review": "Reviewed complete diff: clang-format InsertBraces wraps single-statement if/for call bodies; no declarations or control-flow changes"
+    },
+    {
+      "source": "experiments/sdpa-l2/bfp4-lofi-v2/vtransposed/reader_chain.cpp",
+      "added_open_braces": 1,
+      "added_close_braces": 1,
+      "review": "Reviewed complete diff: clang-format InsertBraces wraps single-statement if/for call bodies; no declarations or control-flow changes"
+    }
+  ],
+  "passed": true,
+  "later_test_only_change": {
+    "source": "experiments/sdpa-l2/bfp4-lofi-v2/test_recip8_final_scale.py",
+    "reason": "Replaced formatting-sensitive source-line assertions with AST/whitespace-tolerant invariant checks after the comparison above",
+    "numerical_producers_changed": false,
+    "tests_passed": 3
+  },
+  "formatters": {
+    "black": "26.3.1, target py310; repository hook specifies 23.10.1",
+    "clang_format": "19.1.4, repository style including InsertBraces"
+  },
+  "scope": "Python AST comparison (docstrings separately disclosed) and non-comment C++ token comparison; not a substitute for JIT/device qualification"
+}

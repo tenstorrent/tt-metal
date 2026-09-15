@@ -19,8 +19,7 @@ void kernel_main() {
         // four-tile batches when FP32 DST is enabled. No earlier output DM.
         if (tile >= tile_count - 8) {
             for (uint32_t j = 0; j < batch; ++j) {
-                noc.async_write(
-                    cb, out, bytes, {.offset_bytes = j * bytes}, {.page_id = tile - (tile_count - 8) + j});
+                noc.async_write(cb, out, bytes, {.offset_bytes = j * bytes}, {.page_id = tile - (tile_count - 8) + j});
             }
             noc.async_write_barrier();
         }

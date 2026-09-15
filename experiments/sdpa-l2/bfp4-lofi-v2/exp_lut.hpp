@@ -62,8 +62,8 @@ namespace ckernel {
 template <int iterations>
 ALWI void exp_native_packthread_tile(uint32_t idst) {
     exp_grid_only_packthread_tile<iterations>(idst);
-    PACK((SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_exp_lut2, (iterations), idst, VectorMode::None)));
+    PACK((
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_exp_lut2, (iterations), idst, VectorMode::None)));
 }
 }  // namespace ckernel
 #endif

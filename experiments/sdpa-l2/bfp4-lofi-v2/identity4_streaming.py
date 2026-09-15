@@ -3,6 +3,7 @@
 """Isolated identity-rescale batching experiment; native-exp FP32 LoFi only.
 Defaults compare optimization off/on bitwise before timing; no baseline edits.
 """
+
 import argparse
 import hashlib
 import importlib.util
@@ -39,7 +40,7 @@ MEAN = module("fullchip_mean", HERE / "center_mean.py")
 
 
 def build(device, args, inputs):
-    assert args.variant == 'lofi_fp32_b8' and args.native_exp and args.q_chunk == 256
+    assert args.variant == "lofi_fp32_b8" and args.native_exp and args.q_chunk == 256
     assert args.q_prescale == 1.0 and not args.center_k and args.exp_degree == 3
     lofi = args.variant.startswith("lofi_")
     hi2_b8 = args.variant == "hi2_fp32_b8"
@@ -69,19 +70,22 @@ def build(device, args, inputs):
                 mean_invoke()
                 preprocessing.append(mean_invoke)
                 mean_precision = mean_invoke.precision
-                tensor, invoke, _ = CENTER.build(device, src, bias, args.cores,
-                                                  "b4_rne" if bfp4 else "b8_rne5")
+                tensor, invoke, _ = CENTER.build(device, src, bias, args.cores, "b4_rne" if bfp4 else "b8_rne5")
             elif i == 0 and args.q_prescale != 1.0:
-                tensor, invoke, _ = Q_SCALE.build(device, src, 7, "bf16", args.cores,
-                                                   scale=args.q_prescale)
+                tensor, invoke, _ = Q_SCALE.build(device, src, 7, "bf16", args.cores, scale=args.q_prescale)
             elif args.b8_rne and i:
                 tensor, invoke, _ = B8_PREP.build(device, src, ncores=args.cores)
             elif bfp4 and i:
                 tensor, invoke, _ = B4_PREP.build(device, src, ncores=args.cores)
             else:
-                tensor, invoke, _ = PREP.build(device, src, bits,
-                                               "b8" if compressed and i else "bf16", args.cores,
-                                               bfp8_pack_precise=args.bfp8_pack_precise)
+                tensor, invoke, _ = PREP.build(
+                    device,
+                    src,
+                    bits,
+                    "b8" if compressed and i else "bf16",
+                    args.cores,
+                    bfp8_pack_precise=args.bfp8_pack_precise,
+                )
             invoke()
             if args.check_preprocess:
                 expected = PREP.MODEL.round_significand(inputs[i], bits)
@@ -96,8 +100,9 @@ def build(device, args, inputs):
                 if i == 0 and args.q_prescale != 1.0:
                     expected = PREP.MODEL.round_significand(inputs[i].float() * args.q_prescale, 7)
                 if bias is not None:
-                    expected = CENTER.quantize_oracle(CENTER.center_oracle(inputs[i], ttnn.to_torch(bias)),
-                                                       "b4_rne" if bfp4 else "b8_rne5")
+                    expected = CENTER.quantize_oracle(
+                        CENTER.center_oracle(inputs[i], ttnn.to_torch(bias)), "b4_rne" if bfp4 else "b8_rne5"
+                    )
                 actual_input = ttnn.to_torch(tensor).float()
                 mismatch = int((actual_input != expected).sum())
                 print("PREPROCESS_CHECK", i, mismatch, flush=True)
@@ -106,37 +111,51 @@ def build(device, args, inputs):
             preprocessing.append(invoke)
         else:
             tensors.append(src)
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, args.heads, args.length, 128]), ttnn.bfloat16,
-                                         ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, args.heads, args.length, 128]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
     slots = 1 if fp32 else 2
     state_format, state_bytes = (ttnn.float32, 4096) if fp32 else (ttnn.bfloat16, 2048)
     kv_format, kv_bytes = (ttnn.bfloat8_b, 1088) if compressed else (ttnn.bfloat16, 2048)
     if bfp4:
         kv_format, kv_bytes = ttnn.bfloat4_b, 576
-    specs = [(0, 2 * qt * 4, 2048, ttnn.bfloat16), (1, 64 * slots, kv_bytes, kv_format),
-             (2, 64 * slots, kv_bytes, kv_format), (3, 1, 2048, ttnn.bfloat16),
-             (4, 1, 2048, ttnn.bfloat16), (5, 1, state_bytes, state_format),
-             (6, qt * 16, state_bytes, state_format),
-             (8, qt * 4 * (2 if fast else 1), state_bytes, state_format),
-             (9, qt * 4 * (2 if fast else 1), state_bytes, state_format),
-             (10, qt, 2048, ttnn.bfloat16), (11, qt, 2048, ttnn.bfloat16),
-             (12, qt * (2 if fast else 1), state_bytes, state_format),
-             (13, qt * (2 if fast else 1), state_bytes, state_format),
-             (14, qt, state_bytes, state_format), (16, 8 if fp32 else 16, 2048, ttnn.bfloat16)]
+    specs = [
+        (0, 2 * qt * 4, 2048, ttnn.bfloat16),
+        (1, 64 * slots, kv_bytes, kv_format),
+        (2, 64 * slots, kv_bytes, kv_format),
+        (3, 1, 2048, ttnn.bfloat16),
+        (4, 1, 2048, ttnn.bfloat16),
+        (5, 1, state_bytes, state_format),
+        (6, qt * 16, state_bytes, state_format),
+        (8, qt * 4 * (2 if fast else 1), state_bytes, state_format),
+        (9, qt * 4 * (2 if fast else 1), state_bytes, state_format),
+        (10, qt, 2048, ttnn.bfloat16),
+        (11, qt, 2048, ttnn.bfloat16),
+        (12, qt * (2 if fast else 1), state_bytes, state_format),
+        (13, qt * (2 if fast else 1), state_bytes, state_format),
+        (14, qt, state_bytes, state_format),
+        (16, 8 if fp32 else 16, 2048, ttnn.bfloat16),
+    ]
     cbs = []
     for index, count, size, fmt in specs:
         formats = [ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=size)]
         if index == 6 and fp32:
             formats.append(ttnn.CBFormatDescriptor(buffer_index=7, data_format=fmt, page_size=size))
         cbs.append(ttnn.CBDescriptor(total_size=count * size, core_ranges=grid, format_descriptors=formats))
-    defines = dict(EXP_APPROX_MODE="1", STATS_GRANULARITY="4" if fp32 else str(qt),
-                   SUB_EXP_GRANULARITY="4" if fp32 else "8", MUL_BCAST_GRANULARITY="4" if fp32 else "8",
-                   DHT_GRANULARITY="4", REDUCE_GRANULARITY="2" if fp32 else "4")
+    defines = dict(
+        EXP_APPROX_MODE="1",
+        STATS_GRANULARITY="4" if fp32 else str(qt),
+        SUB_EXP_GRANULARITY="4" if fp32 else "8",
+        MUL_BCAST_GRANULARITY="4" if fp32 else "8",
+        DHT_GRANULARITY="4",
+        REDUCE_GRANULARITY="2" if fp32 else "4",
+    )
     if args.variant in ("main", "lofi_main", "lofi_main_b4"):
         defines["RESIDENT_MAIN"] = "1"
     if fast:
-        defines.update(SDPA_STREAMING_ACCURACY="1", SDPA_STREAMING_NUMERATOR_COMPENSATION="1",
-                       SDPA_OUT_A_CB="8", SDPA_OUT_B_CB="9")
+        defines.update(
+            SDPA_STREAMING_ACCURACY="1", SDPA_STREAMING_NUMERATOR_COMPENSATION="1", SDPA_OUT_A_CB="8", SDPA_OUT_B_CB="9"
+        )
         if args.fix_correction:
             defines["SDPA_LOFI_FIX_CORRECTION"] = "1"
     if fp32:
@@ -144,16 +163,32 @@ def build(device, args, inputs):
     if args.variant == "balanced":
         defines["SDPA_QK4"] = "1"
     if args.variant == "accurate":
-        defines.update({key: "1" for key in ("SDPA_FP32_FUSED_EXP", "SDPA_FP32_REUSE_EXP",
-            "SDPA_FP32_EXTRA_CONST", "SDPA_FP32_PAIRED_UNPACK", "SDPA_FP32_PAIRED_PACK",
-            "SDPA_FP32_L1_SUB", "SDPA_FP32_L1_MACRO", "SDPA_FP32_REFINE_MACRO")})
+        defines.update(
+            {
+                key: "1"
+                for key in (
+                    "SDPA_FP32_FUSED_EXP",
+                    "SDPA_FP32_REUSE_EXP",
+                    "SDPA_FP32_EXTRA_CONST",
+                    "SDPA_FP32_PAIRED_UNPACK",
+                    "SDPA_FP32_PAIRED_PACK",
+                    "SDPA_FP32_L1_SUB",
+                    "SDPA_FP32_L1_MACRO",
+                    "SDPA_FP32_REFINE_MACRO",
+                )
+            }
+        )
         defines.update(SDPA_DIAG_EXP_MODE="4", SDPA_FP32_SUB_BATCH="2", SDPA_DENOM_PHASES="2", SDPA_DIAG_SCORE_CB="7")
     if lofi:
         if fp32:
             defines["SDPA_MATCH_HIFI2"] = "1"
         else:
             defines["SDPA_LOFI_SAFE_RESCALE"] = "1"
-    fidelity = ttnn.MathFidelity.LoFi if lofi else (ttnn.MathFidelity.HiFi4 if args.variant == "accurate" else ttnn.MathFidelity.HiFi2)
+    fidelity = (
+        ttnn.MathFidelity.LoFi
+        if lofi
+        else (ttnn.MathFidelity.HiFi4 if args.variant == "accurate" else ttnn.MathFidelity.HiFi2)
+    )
     if args.exp_degree != 3:
         assert lofi and fp32, "Exp refiner is FP32-only; BF16 calls native exp"
         defines["SDPA_LOFI_EXP_DEGREE"] = str(args.exp_degree)
@@ -162,8 +197,9 @@ def build(device, args, inputs):
         defines["SDPA_LOFI_NATIVE_EXP"] = "1"
     if args.identity4:
         defines["SDPA_IDENTITY4"] = "1"
-    config = ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32,
-                                         dst_full_sync_en=False, math_approx_mode=True)
+    config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=fidelity, fp32_dest_acc_en=fp32, dst_full_sync_en=False, math_approx_mode=True
+    )
     if fp32:
         pd = ttnn._ttnn.program_descriptor
         modes = pd.VectorUnpackToDestMode([pd.UnpackToDestMode.Default] * 64)
@@ -178,8 +214,9 @@ def build(device, args, inputs):
         jobs_per_head = args.length // args.q_chunk
         assert chain_length <= jobs_per_head
         physical = [device.worker_core_from_logical_core(c) for c in coords]
-        semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=value)
-                      for i, value in enumerate((0, 0, 1))]
+        semaphores = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=grid, initial_value=value) for i, value in enumerate((0, 0, 1))
+        ]
     offset, counts = 0, []
     for i, c in enumerate(coords):
         count = jobs // cores + (i < jobs % cores)
@@ -187,10 +224,16 @@ def build(device, args, inputs):
         if args.reader_chain:
             head, rank = divmod(i, chain_length)
             count = jobs_per_head // chain_length + (rank < jobs_per_head % chain_length)
-            offset = head * jobs_per_head + rank * (jobs_per_head // chain_length) + min(rank, jobs_per_head % chain_length)
+            offset = (
+                head * jobs_per_head + rank * (jobs_per_head // chain_length) + min(rank, jobs_per_head % chain_length)
+            )
             prev = physical[i - 1] if rank else ttnn.CoreCoord(0, 0)
             following = physical[i + 1] if rank + 1 < chain_length else ttnn.CoreCoord(0, 0)
-            next_count = (jobs_per_head // chain_length + (rank + 1 < jobs_per_head % chain_length)) if rank + 1 < chain_length else 0
+            next_count = (
+                (jobs_per_head // chain_length + (rank + 1 < jobs_per_head % chain_length))
+                if rank + 1 < chain_length
+                else 0
+            )
             chain_args = [rank, chain_length, prev.x, prev.y, following.x, following.y, next_count]
         read_args[c.x][c.y] = [t.buffer_address() for t in tensors] + [offset, count] + chain_args
         write_args[c.x][c.y] = [out.buffer_address(), offset, count]
@@ -206,33 +249,71 @@ def build(device, args, inputs):
     for tensor in tensors:
         reader_cta += ttnn.TensorAccessorArgs(tensor).get_compile_time_args()
     reader_source = "reader_chain.cpp" if args.reader_chain else "reader.cpp"
-    desc = ttnn.ProgramDescriptor(cbs=cbs, semaphores=semaphores, kernels=[
-        ttnn.KernelDescriptor(kernel_source=PREFIX + reader_source, core_ranges=grid,
-                              compile_time_args=reader_cta, runtime_args=read_args,
-                              defines=list(reader_defines.items()), config=ttnn.ReaderConfigDescriptor()),
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
-                              compile_time_args=[qt] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
-                              runtime_args=write_args, config=ttnn.WriterConfigDescriptor()),
-        ttnn.KernelDescriptor(kernel_source=PREFIX + "compute.cpp", core_ranges=grid,
-                              compile_time_args=[chunks, struct.unpack("I", struct.pack("f", 1 / math.sqrt(128) / args.q_prescale))[0], qt],
-                              runtime_args=compute_args, defines=list(defines.items()), config=config)])
+    desc = ttnn.ProgramDescriptor(
+        cbs=cbs,
+        semaphores=semaphores,
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + reader_source,
+                core_ranges=grid,
+                compile_time_args=reader_cta,
+                runtime_args=read_args,
+                defines=list(reader_defines.items()),
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
+                compile_time_args=[qt] + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
+                runtime_args=write_args,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
+                compile_time_args=[
+                    chunks,
+                    struct.unpack("I", struct.pack("f", 1 / math.sqrt(128) / args.q_prescale))[0],
+                    qt,
+                ],
+                runtime_args=compute_args,
+                defines=list(defines.items()),
+                config=config,
+            ),
+        ],
+    )
+
     def attention():
         _keep_original_uploads_alive = originals
         ttnn.generic_op(tensors + [out], desc)
+
     def preprocess():
         for invoke in preprocessing:
             invoke()
+
     def combined():
         preprocess()
         attention()
-    info = dict(actual_cores=cores, q_jobs=jobs, jobs_per_core=counts, input_slots=slots,
-                cb_bytes_per_core=sum(n * size for _, n, size, _ in specs), defines=defines,
-                fidelity=str(fidelity), fp32_dst=fp32, device_preprocessing=lofi or hi2_b8,
-                device_k_mean_precision=mean_precision,
-                input_storage="BF16 Q; BFP4 K/V" if bfp4 else ("BF16 Q; BFP8 K/V" if compressed else "BF16 Q/K/V"))
+
+    info = dict(
+        actual_cores=cores,
+        q_jobs=jobs,
+        jobs_per_core=counts,
+        input_slots=slots,
+        cb_bytes_per_core=sum(n * size for _, n, size, _ in specs),
+        defines=defines,
+        fidelity=str(fidelity),
+        fp32_dst=fp32,
+        device_preprocessing=lofi or hi2_b8,
+        device_k_mean_precision=mean_precision,
+        input_storage="BF16 Q; BFP4 K/V" if bfp4 else ("BF16 Q; BFP8 K/V" if compressed else "BF16 Q/K/V"),
+    )
     assert info["cb_bytes_per_core"] == 1212416
-    info.update(input_slot_counts=dict(q=2, k=1, v=1), reserved_l1_bytes_assumed=111616,
-                estimated_allocator_headroom_bytes=248832)
+    info.update(
+        input_slot_counts=dict(q=2, k=1, v=1),
+        reserved_l1_bytes_assumed=111616,
+        estimated_allocator_headroom_bytes=248832,
+    )
     return originals, tensors, out, attention, preprocess, combined, info
 
 
@@ -255,20 +336,28 @@ def timed(device, invoke, args):
     return dict(median_ms=statistics.median(times), replay_ms=times)
 
 
-
 def source_files():
     candidate = ROOT / "experiments/sdpa-l2/hybrid-mixed-v1/candidate"
-    files = [Path(__file__).resolve(), HERE / "identity4_resident.py",
-             HERE / "numerics.py", HERE / "preprocess.py", HERE / "exp_refiner.hpp", HERE / "exp_native.hpp",
-             HERE.parent / "bfp4-lofi-v1/numerics.py", HERE.parent / "bfp4-lofi-v1/probe.py",
-             ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
-             *DIRECTORY.glob("*.cpp"), *DIRECTORY.glob("*.hpp"),
-             *(HERE / "preprocess").glob("*.cpp"), *(HERE / "fullchip").glob("*.cpp"),
-             *(HERE / "resident").glob("*.cpp"),
-             candidate / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
-             candidate / "tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h",
-             ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
-             ROOT / "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"]
+    files = [
+        Path(__file__).resolve(),
+        HERE / "identity4_resident.py",
+        HERE / "numerics.py",
+        HERE / "preprocess.py",
+        HERE / "exp_refiner.hpp",
+        HERE / "exp_native.hpp",
+        HERE.parent / "bfp4-lofi-v1/numerics.py",
+        HERE.parent / "bfp4-lofi-v1/probe.py",
+        ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+        *DIRECTORY.glob("*.cpp"),
+        *DIRECTORY.glob("*.hpp"),
+        *(HERE / "preprocess").glob("*.cpp"),
+        *(HERE / "fullchip").glob("*.cpp"),
+        *(HERE / "resident").glob("*.cpp"),
+        candidate / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+        candidate / "tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h",
+        ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
+        ROOT / "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp",
+    ]
     return sorted(set(files))
 
 
@@ -290,17 +379,25 @@ def qualify(device, args, builder, flops, resident=False):
         sample = actual if rows is None else actual[..., rows, :]
         finite = bool(torch.isfinite(actual).all())
         accuracy = REPRO.metrics(sample, reference) if finite else {"l2_pct": None, "pcc": None}
-        case = dict(identity4=enabled, **info, accuracy=accuracy, finite=finite,
-                    output_sha256=hashlib.sha256(actual.contiguous().view(torch.uint16).numpy().tobytes()).hexdigest())
+        case = dict(
+            identity4=enabled,
+            **info,
+            accuracy=accuracy,
+            finite=finite,
+            output_sha256=hashlib.sha256(actual.contiguous().view(torch.uint16).numpy().tobytes()).hexdigest(),
+        )
         outputs["on" if enabled else "off"] = actual
         cases.append((case, out, attention, preprocess, combined))
         print("IDENTITY4_CHECK", json.dumps(case), flush=True)
     mismatches = None
     if len(choices) == 2:
         mismatches = int((outputs["off"].view(torch.uint16) != outputs["on"].view(torch.uint16)).sum())
-    numerical_pass = all(c["finite"] and c["accuracy"]["l2_pct"] < args.max_l2 and
-                         (c["accuracy"]["pcc"] is None or c["accuracy"]["pcc"] >= args.min_pcc)
-                         for c, *_ in cases)
+    numerical_pass = all(
+        c["finite"]
+        and c["accuracy"]["l2_pct"] < args.max_l2
+        and (c["accuracy"]["pcc"] is None or c["accuracy"]["pcc"] >= args.min_pcc)
+        for c, *_ in cases
+    )
     passed = numerical_pass and (mismatches is None or mismatches == 0)
     if not passed:
         torch.save(outputs, DIRECTORY / (args.label + ".failure.pt"))
@@ -316,16 +413,25 @@ def qualify(device, args, builder, flops, resident=False):
             expected = outputs["on" if case["identity4"] else "off"]
             case["trace_bitwise_equal"] = bool(torch.equal(actual.view(torch.uint16), expected.view(torch.uint16)))
             assert case["trace_bitwise_equal"], "Trace changed output bits"
-    record = dict(**vars(args), resident=resident, useful_flops=flops,
-                  qualification_pass=passed, bitwise_compared=len(choices) == 2,
-                  off_on_bit_mismatches=mismatches, cases=[c for c, *_ in cases],
-                  source_sha256=before, sources_unchanged=before == hashes(),
-                  warning=("Resident repeats KV; identity branch dominates and does not qualify changing maxima. "
-                           "Distinct-KV all-Q comparison is mandatory. No device branch counters were collected."
-                           if resident else
-                           "Distinct KV and all output bits compared; reference may sample Q rows. "
-                           "No device branch counters; off/on equality is not proof of branch coverage."),
-                  scope="Q256/K512/D128; FP32 P/DST/state; native exp; unchanged input slots and readers")
+    record = dict(
+        **vars(args),
+        resident=resident,
+        useful_flops=flops,
+        qualification_pass=passed,
+        bitwise_compared=len(choices) == 2,
+        off_on_bit_mismatches=mismatches,
+        cases=[c for c, *_ in cases],
+        source_sha256=before,
+        sources_unchanged=before == hashes(),
+        warning=(
+            "Resident repeats KV; identity branch dominates and does not qualify changing maxima. "
+            "Distinct-KV all-Q comparison is mandatory. No device branch counters were collected."
+            if resident
+            else "Distinct KV and all output bits compared; reference may sample Q rows. "
+            "No device branch counters; off/on equality is not proof of branch coverage."
+        ),
+        scope="Q256/K512/D128; FP32 P/DST/state; native exp; unchanged input slots and readers",
+    )
     path = DIRECTORY / (args.label + ".json")
     path.write_text(json.dumps(record, indent=2) + "\n")
     print("RESULT", json.dumps(record), flush=True)
@@ -365,18 +471,33 @@ def main():
     validate_args(args)
     assert args.length >= 512 and args.length % 512 == 0
     assert args.heads > 0 and args.cores > 0 and args.sample_rows > 0
-    vars(args).update(variant="lofi_fp32_b8", q_chunk=256, q_prescale=1.0, center_k=False,
-        b8_rne=False, bfp8_pack_precise=False, exp_degree=3, native_exp=True, mean_mode="bf16_fpu",
-        fix_correction=False, reader_chain=True, reader_split=True, reader_linear_k=True, read_barrier_tiles=2)
+    vars(args).update(
+        variant="lofi_fp32_b8",
+        q_chunk=256,
+        q_prescale=1.0,
+        center_k=False,
+        b8_rne=False,
+        bfp8_pack_precise=False,
+        exp_degree=3,
+        native_exp=True,
+        mean_mode="bf16_fpu",
+        fix_correction=False,
+        reader_chain=True,
+        reader_split=True,
+        reader_linear_k=True,
+        read_barrier_tiles=2,
+    )
     inputs = REPRO.make_inputs(args.heads, args.length, args.length, 128, args.seed, args.distribution)
     rows = torch.linspace(0, args.length - 1, min(args.sample_rows, args.length)).long().unique()
     reference = REPRO.reference(inputs[0][..., rows, :], inputs[1], inputs[2])
     device = ttnn.open_device(device_id=0, trace_region_size=16777216 if args.iters else 0)
     try:
+
         def builder():
             originals, tensors, out, attention, preprocess, combined, info = build(device, args, inputs)
             # Original build closures retain the prepared inputs for device execution.
             return out, attention, preprocess, combined, info, reference, rows
+
         qualify(device, args, builder, 4 * args.heads * args.length**2 * 128)
     finally:
         ttnn.close_device(device)

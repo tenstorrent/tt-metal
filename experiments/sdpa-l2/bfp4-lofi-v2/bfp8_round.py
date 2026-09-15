@@ -33,9 +33,9 @@ def validate_input(x):
     magnitude = values.abs()
     assert bool(((magnitude == 0) | (magnitude >= 2.0**-126)).all()), "No BF16 subnormal inputs"
     maximum = magnitude.reshape(-1, 16).amax(-1)
-    assert bool(((maximum == 0) | ((maximum >= 2.0**-120) & (maximum < 2.0**111))).all()), (
-        "Nonzero native-group maximum exponents must be in [-120, 110]"
-    )
+    assert bool(
+        ((maximum == 0) | ((maximum >= 2.0**-120) & (maximum < 2.0**111))).all()
+    ), "Nonzero native-group maximum exponents must be in [-120, 110]"
 
 
 def host_rne_bfp8(x):
@@ -105,9 +105,7 @@ def make_input(length, distribution, seed):
         values[group, group % 16] = 1.984375
         exponent = (group % 231 - 120).int()
         # Avoid individual BF16 subnormals in low-exponent groups.
-        values = torch.where(
-            (exponent[:, None] - delta[None, :] < -126), torch.zeros_like(values), values
-        )
+        values = torch.where((exponent[:, None] - delta[None, :] < -126), torch.zeros_like(values), values)
         values[group, group % 16] = 1.984375
     else:
         raise ValueError(distribution)
@@ -256,15 +254,17 @@ def main():
             median_ms=median,
             replay_ms=times,
             read_write_GBps=byte_count / (median * 1e6) if median else None,
-            quantization_l2_pct=float(100 * (actual.double() - x.double()).norm() / x.double().norm())
-            if x.double().norm()
-            else 0.0,
-            least_squares_quantized_gain=float((actual.double() * x.double()).sum() / x.double().square().sum())
-            if x.double().square().sum()
-            else 1.0,
-            relative_absolute_magnitude_drift=float(actual.double().abs().sum() / x.double().abs().sum() - 1)
-            if x.double().abs().sum()
-            else 0.0,
+            quantization_l2_pct=(
+                float(100 * (actual.double() - x.double()).norm() / x.double().norm()) if x.double().norm() else 0.0
+            ),
+            least_squares_quantized_gain=(
+                float((actual.double() * x.double()).sum() / x.double().square().sum())
+                if x.double().square().sum()
+                else 1.0
+            ),
+            relative_absolute_magnitude_drift=(
+                float(actual.double().abs().sum() / x.double().abs().sum() - 1) if x.double().abs().sum() else 0.0
+            ),
             source_sha256={
                 str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in [Path(__file__).resolve(), *sorted(DIRECTORY.glob("*.cpp"))]

@@ -1,0 +1,28 @@
+{
+  "label": "final-b4-thresholds-v1",
+  "length": 1024,
+  "cores": 4,
+  "batch": 4,
+  "fp32_dst": false,
+  "output_format": "b4",
+  "distribution": "thresholds",
+  "seed": 1240,
+  "iters": 0,
+  "warmup": 10,
+  "trace_repeats": 10,
+  "host_only": false,
+  "actual_cores": 4,
+  "mismatch": 0,
+  "oracle_mismatch": 0,
+  "numel": 131072,
+  "median_ms": null,
+  "replay_ms": [],
+  "read_write_GBps": null,
+  "quantization_l2_pct": 6.7754176014038485,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py": "3b3d6b7a4323f45bc9fe3948c89c4122ed3c284f7bab6e4c81f3ec50848a8830",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/compute.cpp": "aecc5af269872b6b39162b38561e9d9bc5f9cd098b2939d4248066e175b6392d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11"
+  }
+}

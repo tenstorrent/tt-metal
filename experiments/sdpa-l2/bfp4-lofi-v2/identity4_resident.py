@@ -26,13 +26,13 @@ v2_spec = importlib.util.spec_from_file_location("lofi_model", HERE / "numerics.
 V2 = importlib.util.module_from_spec(v2_spec)
 v2_spec.loader.exec_module(V2)
 # Private Q7/BF16, RNE5/BFP8 K/V point; do not mutate the frozen source file.
-V2.VARIANTS['identity_q7b8'] = ('e7', ('e5_b8',), 'fp32', ('e5_b8',))
+V2.VARIANTS["identity_q7b8"] = ("e7", ("e5_b8",), "fp32", ("e5_b8",))
 
 
 def build(device, args):
     assert not args.distinct_kv, "Use identity4_streaming.py for distinct-KV qualification"
-    assert args.destination == 'fp32' and args.native_exp and args.fidelity == 'LoFi'
-    assert args.variant == 'identity_q7b8' and args.exp_quality == 'cheap'
+    assert args.destination == "fp32" and args.native_exp and args.fidelity == "LoFi"
+    assert args.variant == "identity_q7b8" and args.exp_quality == "cheap"
     accurate = args.mode in (
         "accurate",
         "fp32_hifi2",
@@ -110,8 +110,10 @@ def build(device, args):
         (14, 8, page, fp),
         (16, 8 if accurate else 16, 2048, ttnn.bfloat16),
     ]
-    specs = [(idx, n, input_specs[idx][1], input_specs[idx][0]) if idx < 3 else (idx, n, size, dtype)
-             for idx, n, size, dtype in specs]
+    specs = [
+        (idx, n, input_specs[idx][1], input_specs[idx][0]) if idx < 3 else (idx, n, size, dtype)
+        for idx, n, size, dtype in specs
+    ]
     if residual:
         specs += [(17 + i, 64 * kv_slots, input_specs[3 + i][1], input_specs[3 + i][0]) for i in range(2)]
     cbs = []
@@ -200,13 +202,15 @@ def build(device, args):
         defines.pop("SDPA_MATCH_HIFI2", None)
         defines["SDPA_DENOM_PHASES"] = "2"
     if args.exp_degree != 3:
-        assert args.destination == "fp32" and args.exp_quality == "cheap", "Exp refiner is FP32-only; BF16 calls native exp"
+        assert (
+            args.destination == "fp32" and args.exp_quality == "cheap"
+        ), "Exp refiner is FP32-only; BF16 calls native exp"
         defines["SDPA_LOFI_EXP_DEGREE"] = str(args.exp_degree)
     if args.native_exp:
         assert args.destination == "fp32" and args.exp_quality == "cheap" and args.exp_degree == 3
         defines["SDPA_LOFI_NATIVE_EXP"] = "1"
     if args.identity4:
-        defines['SDPA_IDENTITY4'] = '1'
+        defines["SDPA_IDENTITY4"] = "1"
     config = ttnn.ComputeConfigDescriptor(
         math_fidelity=getattr(ttnn.MathFidelity, args.fidelity),
         fp32_dest_acc_en=accurate,
@@ -260,14 +264,21 @@ def build(device, args):
 
     def invoke():
         ttnn.generic_op(tensors + [out], desc)
+
     info = dict(
-        cores=1, q_chunk=256, k_chunk=512, dim=128, kv_slots=kv_slots,
+        cores=1,
+        q_chunk=256,
+        k_chunk=512,
+        dim=128,
+        kv_slots=kv_slots,
         cb_bytes_per_core=sum(n * size for _, n, size, _ in specs),
         cb_specs=[(idx, n, size, str(fmt)) for idx, n, size, fmt in specs],
-        defines=defines, input_slots=dict(q=2, k=1, v=1),
+        defines=defines,
+        input_slots=dict(q=2, k=1, v=1),
         input_storage="Q7 BF16; K/V RNE5 BFP8; FP32 P/DST/state",
         input_preprocessing="Host; excluded from resident timing",
-        resident_repeated_kv=not args.distinct_kv)
+        resident_repeated_kv=not args.distinct_kv,
+    )
     assert info["cb_bytes_per_core"] == 1212416
     info.update(reserved_l1_bytes_assumed=111616, estimated_allocator_headroom_bytes=248832)
     return out, invoke, None, None, info, ref, None
@@ -281,14 +292,32 @@ def main():
     args = parser.parse_args()
     DRIVER.validate_args(args)
     assert args.q_repeats > 0 and args.k_chunks > 0
-    vars(args).update(variant="identity_q7b8", destination="fp32", mode="fp32_hifi2_cheap",
-        native_exp=True, exp_quality="cheap", exp_degree=3, fidelity="LoFi",
-        qkv_route="host", no_p_round=True, skip_residual_reconfig=False, denom_only=False,
-        fix_correction=False, hybrid_block_pack=False, safe_rescale=False, distinct_kv=False)
+    vars(args).update(
+        variant="identity_q7b8",
+        destination="fp32",
+        mode="fp32_hifi2_cheap",
+        native_exp=True,
+        exp_quality="cheap",
+        exp_degree=3,
+        fidelity="LoFi",
+        qkv_route="host",
+        no_p_round=True,
+        skip_residual_reconfig=False,
+        denom_only=False,
+        fix_correction=False,
+        hybrid_block_pack=False,
+        safe_rescale=False,
+        distinct_kv=False,
+    )
     device = ttnn.open_device(device_id=0, trace_region_size=16777216 if args.iters else 0)
     try:
-        DRIVER.qualify(device, args, lambda: build(device, args),
-                       4 * 256 * 512 * 128 * args.q_repeats * args.k_chunks, resident=True)
+        DRIVER.qualify(
+            device,
+            args,
+            lambda: build(device, args),
+            4 * 256 * 512 * 128 * args.q_repeats * args.k_chunks,
+            resident=True,
+        )
     finally:
         ttnn.close_device(device)
 

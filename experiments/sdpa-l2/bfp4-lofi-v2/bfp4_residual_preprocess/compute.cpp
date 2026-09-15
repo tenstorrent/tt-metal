@@ -31,8 +31,12 @@ void kernel_main() {
             const uint32_t dst = j * components;
             copy_tile(0, j, dst);
             MATH(SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, residual_round_face,
-                (DST_ACCUM_MODE, components, second_b8), dst, VectorMode::RC));
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                residual_round_face,
+                (DST_ACCUM_MODE, components, second_b8),
+                dst,
+                VectorMode::RC));
         }
         tile_regs_commit();
         cb_pop_front(0, batch);

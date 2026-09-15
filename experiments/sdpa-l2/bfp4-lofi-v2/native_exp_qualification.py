@@ -21,9 +21,19 @@ import fullchip as F
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 KNOWN = (
-    "normal", "outliers", "scaled_qk", "scaled_down", "biased_v",
-    "common_q", "common_k", "common_v", "constant_v", "uniform",
-    "uniform_constant_v", "channel_k", "channel_v",
+    "normal",
+    "outliers",
+    "scaled_qk",
+    "scaled_down",
+    "biased_v",
+    "common_q",
+    "common_k",
+    "common_v",
+    "constant_v",
+    "uniform",
+    "uniform_constant_v",
+    "channel_k",
+    "channel_v",
 )
 
 
@@ -40,51 +50,67 @@ def make_inputs(length, heads, seed, distribution):
 
 
 def source_hashes():
-    files = [Path(__file__).resolve(), HERE / "fullchip.py", HERE / "preprocess.py",
-             HERE / "numerics.py", HERE / "bfp4_round.py", HERE / "bfp8_round.py",
-             HERE / "q_prescale.py", HERE / "center_mean.py", HERE / "center_preprocess.py",
-             HERE / "safe_rescale.hpp", HERE / "fast_correction.hpp",
-             HERE / "exp_native.hpp", HERE / "exp_refiner.hpp",
-             HERE / "streaming/compute_streaming.hpp",
-             HERE.parent / "bfp4-lofi-v1/probe.py", HERE.parent / "bfp4-lofi-v1/numerics.py",
-             HERE.parent / "frontier-accuracy-v1/run.py",
-             ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py"]
+    files = [
+        Path(__file__).resolve(),
+        HERE / "fullchip.py",
+        HERE / "preprocess.py",
+        HERE / "numerics.py",
+        HERE / "bfp4_round.py",
+        HERE / "bfp8_round.py",
+        HERE / "q_prescale.py",
+        HERE / "center_mean.py",
+        HERE / "center_preprocess.py",
+        HERE / "safe_rescale.hpp",
+        HERE / "fast_correction.hpp",
+        HERE / "exp_native.hpp",
+        HERE / "exp_refiner.hpp",
+        HERE / "streaming/compute_streaming.hpp",
+        HERE.parent / "bfp4-lofi-v1/probe.py",
+        HERE.parent / "bfp4-lofi-v1/numerics.py",
+        HERE.parent / "frontier-accuracy-v1/run.py",
+        ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+    ]
     for directory in ("fullchip", "preprocess", "bfp4_round", "bfp8_round", "q_prescale", "center_preprocess"):
         files.extend(p for p in (HERE / directory).iterdir() if p.suffix in (".cpp", ".hpp", ".h"))
     frozen = ROOT / "experiments/sdpa-l2/hybrid-mixed-v1/candidate"
     files.extend(p for p in frozen.rglob("*") if p.suffix in (".hpp", ".h"))
-    files.extend([
-        ROOT / "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp",
-        ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_matmul.h",
-        ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h",
-        ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h",
-    ])
+    files.extend(
+        [
+            ROOT / "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp",
+            ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_matmul.h",
+            ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h",
+            ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h",
+        ]
+    )
     # Selected project/API dependencies; not the full compiler/firmware closure.
-    files += [ROOT / path for path in (
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp",
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp",
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp",
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp",
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp",
-        "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp",
-        "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp",
-        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp",
-        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl",
-        "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h",
-        "tt_metal/hw/inc/api/compute/experimental/matmul_custom.h",
-        "tt_metal/hw/inc/api/compute/experimental/sdpa_sub_custom.h",
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
-        "tt_metal/hw/inc/api/compute/eltwise_unary/exp.h",
-        "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h",
-        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp",
-        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl",
-        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp",
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp",
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp",
-        "ttnn/cpp/ttnn/operations/reduction/generic/generic_reductions.cpp",
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp",
-    )]
+    files += [
+        ROOT / path
+        for path in (
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp",
+            "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp",
+            "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp",
+            "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp",
+            "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl",
+            "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h",
+            "tt_metal/hw/inc/api/compute/experimental/matmul_custom.h",
+            "tt_metal/hw/inc/api/compute/experimental/sdpa_sub_custom.h",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
+            "tt_metal/hw/inc/api/compute/eltwise_unary/exp.h",
+            "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h",
+            "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp",
+            "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl",
+            "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp",
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/generic/generic_reductions.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp",
+        )
+    ]
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files))}
 
 
@@ -99,8 +125,11 @@ def metrics(actual, reference, v):
         original=F.REPRO.metrics(actual, reference),
         bf16_output_rounding_floor=F.REPRO.metrics(rounded, reference),
         residual_l2_pct=None if constant or residual_norm == 0 else float(100 * error.norm() / residual_norm),
-        residual_bf16_rounding_floor_l2_pct=None if constant or residual_norm == 0 else
-            float(100 * (rounded.double() - reference).norm() / residual_norm),
+        residual_bf16_rounding_floor_l2_pct=(
+            None
+            if constant or residual_norm == 0
+            else float(100 * (rounded.double() - reference).norm() / residual_norm)
+        ),
         residual_reference_rms=0.0 if constant else float(ref_residual.square().mean().sqrt()),
         absolute_error_rms=float(error.square().mean().sqrt()),
         residual_definition="Subtract same FP64 mean(original V) from both outputs; no gain fitting",
@@ -110,20 +139,36 @@ def metrics(actual, reference, v):
 
 def run_variant(device, inputs, reference, rows, variant, center_k, args):
     config = argparse.Namespace(
-        variant=variant, q_chunk=256, length=inputs[0].shape[2], heads=args.heads,
+        variant=variant,
+        q_chunk=256,
+        length=inputs[0].shape[2],
+        heads=args.heads,
         cores=min(args.cores, args.heads * inputs[0].shape[2] // 256),
-        q_prescale=1.0, center_k=center_k, mean_mode="bf16_fpu", b8_rne=False,
-        bfp8_pack_precise=False, check_preprocess=args.check_preprocess,
-        fix_correction=False, exp_degree=3, native_exp=variant.startswith("lofi_"),
-        reader_chain=True, reader_split=False, reader_linear_k=False, read_barrier_tiles=2,
+        q_prescale=1.0,
+        center_k=center_k,
+        mean_mode="bf16_fpu",
+        b8_rne=False,
+        bfp8_pack_precise=False,
+        check_preprocess=args.check_preprocess,
+        fix_correction=False,
+        exp_degree=3,
+        native_exp=variant.startswith("lofi_"),
+        reader_chain=True,
+        reader_split=False,
+        reader_linear_k=False,
+        read_barrier_tiles=2,
     )
     originals, prepared, output, attention, preprocess, combined, info = F.build(device, config, inputs)
     combined()
     actual = ttnn.to_torch(output).bfloat16()
     finite = bool(torch.isfinite(actual).all())
-    record = dict(config=vars(config), kernel=info, finite=finite,
-                  nonfinite_count=int((~torch.isfinite(actual)).sum()),
-                  output_sha256=hashlib.sha256(actual.view(torch.uint16).numpy().tobytes()).hexdigest())
+    record = dict(
+        config=vars(config),
+        kernel=info,
+        finite=finite,
+        nonfinite_count=int((~torch.isfinite(actual)).sum()),
+        output_sha256=hashlib.sha256(actual.view(torch.uint16).numpy().tobytes()).hexdigest(),
+    )
     if not finite:
         record["status"] = "FAIL_NONFINITE_NO_METRICS_OR_TIMING"
         return record
@@ -147,8 +192,12 @@ def main():
     parser.add_argument("--lengths", type=int, nargs="+", default=[32768])
     parser.add_argument("--seeds", type=int, nargs="+", default=[1240, 1241])
     parser.add_argument("--distributions", nargs="+", choices=KNOWN, default=list(KNOWN))
-    parser.add_argument("--variants", nargs="+", choices=("lofi_fp32_b8", "lofi_fp32_b4", "accurate"),
-                        default=["lofi_fp32_b8", "lofi_fp32_b4", "accurate"])
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        choices=("lofi_fp32_b8", "lofi_fp32_b4", "accurate"),
+        default=["lofi_fp32_b8", "lofi_fp32_b4", "accurate"],
+    )
     parser.add_argument("--heads", type=int, default=2)
     parser.add_argument("--cores", type=int, default=22)
     parser.add_argument("--sample-rows", type=int, default=128)
@@ -164,14 +213,21 @@ def main():
     torch.set_num_interop_threads(1)
     hashes = source_hashes()
     with path.open("x") as stream:
+
         def emit(value):
             stream.write(json.dumps(value, allow_nan=False) + "\n")
             stream.flush()
             print(json.dumps(value, allow_nan=False), flush=True)
 
-        emit(dict(kind="provenance", args=vars(args), source_sha256=hashes,
-                  scope="All heads/all KV, explicitly sampled Q rows; every device output finite/hash checked; no timing",
-                  distributions="scaled_down multiplies BF16 Q and K by0.25; channel_k/v multiplies every16th channel by32; common offsets32"))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                source_sha256=hashes,
+                scope="All heads/all KV, explicitly sampled Q rows; every device output finite/hash checked; no timing",
+                distributions="scaled_down multiplies BF16 Q and K by0.25; channel_k/v multiplies every16th channel by32; common offsets32",
+            )
+        )
         for length in args.lengths:
             rows = torch.linspace(0, length - 1, min(args.sample_rows, length)).long().unique()
             for seed in args.seeds:
@@ -182,12 +238,24 @@ def main():
                     device = ttnn.open_device(device_id=0, trace_region_size=16777216)
                     try:
                         for variant in args.variants:
-                            for centered in ([False, True] if distribution == "common_k" and variant.startswith("lofi_") else [False]):
+                            for centered in (
+                                [False, True] if distribution == "common_k" and variant.startswith("lofi_") else [False]
+                            ):
                                 record = run_variant(device, inputs, reference, rows, variant, centered, args)
                                 assert source_hashes() == hashes, "Suite sources changed during qualification"
-                                emit(dict(kind="qualification", length=length, seed=seed, distribution=distribution,
-                                          variant=variant, center_k=centered, sampled_query_rows=rows.tolist(),
-                                          original_input_sha256=input_hashes, **record))
+                                emit(
+                                    dict(
+                                        kind="qualification",
+                                        length=length,
+                                        seed=seed,
+                                        distribution=distribution,
+                                        variant=variant,
+                                        center_k=centered,
+                                        sampled_query_rows=rows.tolist(),
+                                        original_input_sha256=input_hashes,
+                                        **record,
+                                    )
+                                )
                                 gc.collect()
                     finally:
                         ttnn.close_device(device)

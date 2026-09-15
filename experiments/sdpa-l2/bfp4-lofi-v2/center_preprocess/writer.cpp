@@ -21,4 +21,3 @@ void kernel_main() {
         cb.pop_front(4);
     }
 }
-

@@ -5,6 +5,7 @@
 Independent prototype. No centered-value BF16 spill. Modes are native BFP4
 with direct FP32 RNE pre-rounding, or per-value RNE5 followed by native BFP8.
 """
+
 import argparse
 import hashlib
 import json
@@ -26,9 +27,9 @@ def validate_centered(x):
     magnitude = x.abs()
     assert bool(((magnitude == 0) | (magnitude >= 2.0**-126)).all()), "No subnormal centered values"
     maximum = magnitude.reshape(-1, 16).amax(-1)
-    assert bool(((maximum == 0) | ((maximum >= 2.0**-124) & (maximum < 2.0**107))).all()), (
-        "Nonzero centered group maximum exponents must be in [-124,106]"
-    )
+    assert bool(
+        ((maximum == 0) | ((maximum >= 2.0**-124) & (maximum < 2.0**107))).all()
+    ), "Nonzero centered group maximum exponents must be in [-124,106]"
 
 
 def center_oracle(src, bias):
@@ -141,11 +142,14 @@ def build(device, src, bias, ncores=1, mode="b8_rne5"):
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in coords])
     cbs = [
         ttnn.CBDescriptor(
-            total_size=capacity * byte_count, core_ranges=grid,
+            total_size=capacity * byte_count,
+            core_ranges=grid,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=byte_count)],
         )
         for index, dtype, byte_count, capacity in (
-            (0, ttnn.bfloat16, 2048, 8), (1, ttnn.bfloat16, 2048, 4), (16, fmt, out_bytes, 8)
+            (0, ttnn.bfloat16, 2048, 8),
+            (1, ttnn.bfloat16, 2048, 4),
+            (16, fmt, out_bytes, 8),
         )
     ]
     reader, writer, compute = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -153,22 +157,37 @@ def build(device, src, bias, ncores=1, mode="b8_rne5"):
         reader[core.x][core.y] = [src.buffer_address(), bias.buffer_address(), offset, count]
         writer[core.x][core.y] = [output.buffer_address(), offset, count]
         compute[core.x][core.y] = [offset, count]
-    desc = ttnn.ProgramDescriptor(cbs=cbs, semaphores=[], kernels=[
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "reader.cpp", core_ranges=grid,
-            compile_time_args=[tiles_per_head] + ttnn.TensorAccessorArgs(src).get_compile_time_args()
-            + ttnn.TensorAccessorArgs(bias).get_compile_time_args(),
-            runtime_args=reader, config=ttnn.ReaderConfigDescriptor()),
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "writer.cpp", core_ranges=grid,
-            compile_time_args=ttnn.TensorAccessorArgs(output).get_compile_time_args(),
-            runtime_args=writer, config=ttnn.WriterConfigDescriptor()),
-        ttnn.KernelDescriptor(
-            kernel_source=PREFIX + "compute.cpp", core_ranges=grid,
-            compile_time_args=[int(mode == "b8_rne5"), tiles_per_head], runtime_args=compute,
-            config=ttnn.ComputeConfigDescriptor(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, math_approx_mode=False)),
-    ])
+    desc = ttnn.ProgramDescriptor(
+        cbs=cbs,
+        semaphores=[],
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "reader.cpp",
+                core_ranges=grid,
+                compile_time_args=[tiles_per_head]
+                + ttnn.TensorAccessorArgs(src).get_compile_time_args()
+                + ttnn.TensorAccessorArgs(bias).get_compile_time_args(),
+                runtime_args=reader,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "writer.cpp",
+                core_ranges=grid,
+                compile_time_args=ttnn.TensorAccessorArgs(output).get_compile_time_args(),
+                runtime_args=writer,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=PREFIX + "compute.cpp",
+                core_ranges=grid,
+                compile_time_args=[int(mode == "b8_rne5"), tiles_per_head],
+                runtime_args=compute,
+                config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, math_approx_mode=False
+                ),
+            ),
+        ],
+    )
     return output, lambda: ttnn.generic_op([src, bias, output], desc), ncores
 
 
@@ -185,7 +204,9 @@ def main():
     parser.add_argument("--length", type=int, default=4096)
     parser.add_argument("--heads", type=int, default=3)
     parser.add_argument("--cores", type=int, default=4)
-    parser.add_argument("--distribution", choices=("normal", "common_k", "wide", "zeros", "thresholds"), default="normal")
+    parser.add_argument(
+        "--distribution", choices=("normal", "common_k", "wide", "zeros", "thresholds"), default="normal"
+    )
     parser.add_argument("--seed", type=int, default=1240)
     parser.add_argument("--iters", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=10)
@@ -218,8 +239,10 @@ def main():
         mismatches = int((actual != expected).sum())
         print("CENTER_DEVICE_CHECK", mismatches, flush=True)
         if mismatches:
-            torch.save(dict(input=x, bias=bias, centered=centered, expected=expected, actual=actual),
-                       DIRECTORY / (args.label + ".failure.pt"))
+            torch.save(
+                dict(input=x, bias=bias, centered=centered, expected=expected, actual=actual),
+                DIRECTORY / (args.label + ".failure.pt"),
+            )
         assert not mismatches, f"Centered quantization mismatch count: {mismatches}"
         times = []
         if args.iters:
@@ -238,18 +261,25 @@ def main():
             assert torch.equal(actual, ttnn.to_torch(output).float())
         tiles_per_head, tiles = args.length // 32 * 4, x.numel() // 1024
         segments = core_segments(tiles, cores)
-        bias_loads = sum((start + count - 1) // tiles_per_head - start // tiles_per_head + 1
-                         for start, count in segments)
+        bias_loads = sum(
+            (start + count - 1) // tiles_per_head - start // tiles_per_head + 1 for start, count in segments
+        )
         bytes_moved = tiles * (2048 + (1088 if args.mode == "b8_rne5" else 576)) + bias_loads * 8192
         median = statistics.median(times) if times else None
         files = [Path(__file__).resolve(), *sorted(DIRECTORY.glob("*.cpp")), *sorted(DIRECTORY.glob("*.hpp"))]
         record = dict(
-            **vars(args), actual_cores=cores, actual_batch=4, numel=x.numel(),
-            mismatches=mismatches, centered_quantization_l2_pct=l2_percent(actual, centered),
+            **vars(args),
+            actual_cores=cores,
+            actual_batch=4,
+            numel=x.numel(),
+            mismatches=mismatches,
+            centered_quantization_l2_pct=l2_percent(actual, centered),
             bf16_center_spill_mismatches=spill_mismatches,
             bf16_center_spill_output_l2_pct=l2_percent(spilled, expected),
-            core_segments=segments, bias_head_loads=bias_loads,
-            median_ms=median, replay_ms=times,
+            core_segments=segments,
+            bias_head_loads=bias_loads,
+            median_ms=median,
+            replay_ms=times,
             read_write_GBps=bytes_moved / (median * 1e6) if median else None,
             source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
         )

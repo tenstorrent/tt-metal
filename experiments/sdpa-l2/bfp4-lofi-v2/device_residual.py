@@ -4,6 +4,7 @@
 
 This deliberately is NOT a fused-attention performance measurement.
 """
+
 import argparse
 import hashlib
 import importlib.util
@@ -24,16 +25,23 @@ from probe import unpack, upload
 def run(device, inputs, variant, route, preprocessing, seed):
     q, k, v, correction, v0 = M.V1_NUMERICS.preprocess(inputs, preprocessing, seed)
     qfmt, kfmts, pfmt, vfmts = M.VARIANTS[variant]
-    config = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False)
+    config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
     quantizer_checks = 0
 
     def pack(x, fmt, selected_route):
         nonlocal quantizer_checks
         if fmt in ("e7", "e5", "e5_b8"):
             x = M.round_significand(x, 7 if fmt == "e7" else 5)
-        dtype = {"b4": ttnn.bfloat4_b, "b8": ttnn.bfloat8_b, "e5_b8": ttnn.bfloat8_b,
-                 "e7": ttnn.bfloat16, "e5": ttnn.bfloat16, "fp32": ttnn.float32}[fmt]
+        dtype = {
+            "b4": ttnn.bfloat4_b,
+            "b8": ttnn.bfloat8_b,
+            "e5_b8": ttnn.bfloat8_b,
+            "e7": ttnn.bfloat16,
+            "e5": ttnn.bfloat16,
+            "fp32": ttnn.float32,
+        }[fmt]
         if selected_route == "device" and fmt in ("b4", "b8", "e5_b8"):
             src = upload(x.float(), ttnn.float32, device)
             tensor = ttnn.typecast(src, dtype)
@@ -64,19 +72,25 @@ def run(device, inputs, variant, route, preprocessing, seed):
     maximum = torch.full_like(matched, -torch.inf)
     qk_error_sq = qk_ref_sq = pv_error_sq = pv_ref_sq = 0.0
     for offset in range(0, k.shape[0], 512):
-        tks, dks = residuals(k[offset:offset+512], kfmts)
-        tvs, dvs = residuals(v[offset:offset+512], vfmts)
+        tks, dks = residuals(k[offset : offset + 512], kfmts)
+        tvs, dvs = residuals(v[offset : offset + 512], vfmts)
         scores = torch.zeros((128, 512), dtype=torch.float32)
         for tk, dk in zip(tks, dks):
-            ts = ttnn.matmul(tq, tk, transpose_b=True, dtype=ttnn.float32,
-                             compute_kernel_config=config, core_grid=ttnn.CoreGrid(y=1, x=1))
+            ts = ttnn.matmul(
+                tq,
+                tk,
+                transpose_b=True,
+                dtype=ttnn.float32,
+                compute_kernel_config=config,
+                core_grid=ttnn.CoreGrid(y=1, x=1),
+            )
             actual = unpack(ts)
             reference = dq @ dk.T
             qk_error_sq += float((actual.double() - reference).square().sum())
             qk_ref_sq += float(reference.square().sum())
             scores += actual
             ttnn.deallocate(ts)
-        scores = scores / math.sqrt(128) + correction[:,offset:offset+512].float()
+        scores = scores / math.sqrt(128) + correction[:, offset : offset + 512].float()
         new_max = torch.maximum(maximum, scores.amax(-1, keepdim=True))
         alpha = (maximum - new_max).exp()
         p = (scores - new_max).exp()
@@ -84,8 +98,9 @@ def run(device, inputs, variant, route, preprocessing, seed):
         dp = M.effective(dp, pfmt, "left")
         partial = torch.zeros_like(numerator)
         for tv, dv in zip(tvs, dvs):
-            to = ttnn.matmul(tp, tv, dtype=ttnn.float32, compute_kernel_config=config,
-                             core_grid=ttnn.CoreGrid(y=1, x=1))
+            to = ttnn.matmul(
+                tp, tv, dtype=ttnn.float32, compute_kernel_config=config, core_grid=ttnn.CoreGrid(y=1, x=1)
+            )
             actual = unpack(to)
             reference = dp @ dv
             pv_error_sq += float((actual.double() - reference).square().sum())
@@ -105,11 +120,17 @@ def run(device, inputs, variant, route, preprocessing, seed):
     records = []
     for name, denominator, model in zip(("original", "matched"), (original, matched), simulated):
         actual = (numerator / denominator + v0.float()).bfloat16()
-        records.append(dict(denominator=name, **M.metrics(actual, reference), model_l2_pct=model["l2_pct"],
-                            qk_arithmetic_l2_pct=100 * math.sqrt(qk_error_sq / qk_ref_sq),
-                            pv_arithmetic_l2_pct=100 * math.sqrt(pv_error_sq / pv_ref_sq),
-                            quantizer_exact_checks=quantizer_checks,
-                            output_sha256=hashlib.sha256(actual.view(torch.uint16).numpy().tobytes()).hexdigest()))
+        records.append(
+            dict(
+                denominator=name,
+                **M.metrics(actual, reference),
+                model_l2_pct=model["l2_pct"],
+                qk_arithmetic_l2_pct=100 * math.sqrt(qk_error_sq / qk_ref_sq),
+                pv_arithmetic_l2_pct=100 * math.sqrt(pv_error_sq / pv_ref_sq),
+                quantizer_exact_checks=quantizer_checks,
+                output_sha256=hashlib.sha256(actual.view(torch.uint16).numpy().tobytes()).hexdigest(),
+            )
+        )
     return records
 
 
@@ -129,18 +150,34 @@ if __name__ == "__main__":
     device = ttnn.open_device(device_id=0)
     try:
         with path.open("x") as output:
-            output.write(json.dumps(dict(kind="provenance", args=vars(args),
-                contract="Device LoFi QK/PV, CPU FP32 softmax/state, CPU residual preparation; NOT kernel timing",
-                source_sha256={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                               for p in (Path(__file__).resolve(), HERE / "numerics.py")})) + "\n")
+            output.write(
+                json.dumps(
+                    dict(
+                        kind="provenance",
+                        args=vars(args),
+                        contract="Device LoFi QK/PV, CPU FP32 softmax/state, CPU residual preparation; NOT kernel timing",
+                        source_sha256={
+                            p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                            for p in (Path(__file__).resolve(), HERE / "numerics.py")
+                        },
+                    )
+                )
+                + "\n"
+            )
             for seed in args.seeds:
                 for distribution in args.distributions:
                     inputs = M.V1_NUMERICS.FRONTIER.inputs_for(args.length, seed, distribution)
                     for variant in args.variants:
                         for record in run(device, inputs, variant, args.route, args.preprocessing, seed):
-                            record.update(kind="device_residual", length=args.length, seed=seed,
-                                          distribution=distribution, variant=variant, route=args.route,
-                                          preprocessing=args.preprocessing)
+                            record.update(
+                                kind="device_residual",
+                                length=args.length,
+                                seed=seed,
+                                distribution=distribution,
+                                variant=variant,
+                                route=args.route,
+                                preprocessing=args.preprocessing,
+                            )
                             output.write(json.dumps(record, allow_nan=False) + "\n")
                             output.flush()
                             print(json.dumps(record, allow_nan=False), flush=True)

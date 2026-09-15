@@ -102,8 +102,10 @@ def run(device, args):
         (14, 8, page, fp),
         (16, 8 if accurate else 16, 2048, ttnn.bfloat16),
     ]
-    specs = [(idx, n, input_specs[idx][1], input_specs[idx][0]) if idx < 3 else (idx, n, size, dtype)
-             for idx, n, size, dtype in specs]
+    specs = [
+        (idx, n, input_specs[idx][1], input_specs[idx][0]) if idx < 3 else (idx, n, size, dtype)
+        for idx, n, size, dtype in specs
+    ]
     if residual:
         specs += [(17 + i, 64 * kv_slots, input_specs[3 + i][1], input_specs[3 + i][0]) for i in range(2)]
     cbs = []
@@ -192,7 +194,9 @@ def run(device, args):
         defines.pop("SDPA_MATCH_HIFI2", None)
         defines["SDPA_DENOM_PHASES"] = "2"
     if args.exp_degree != 3:
-        assert args.destination == "fp32" and args.exp_quality == "cheap", "Exp refiner is FP32-only; BF16 calls native exp"
+        assert (
+            args.destination == "fp32" and args.exp_quality == "cheap"
+        ), "Exp refiner is FP32-only; BF16 calls native exp"
         defines["SDPA_LOFI_EXP_DEGREE"] = str(args.exp_degree)
     if args.native_exp:
         assert args.destination == "fp32" and args.exp_quality == "cheap" and args.exp_degree == 3
@@ -251,8 +255,16 @@ def run(device, args):
         list((ROOT / PREFIX).glob("*.cpp"))
         + list((ROOT / PREFIX).glob("**/*.hpp"))
         + list((ROOT / PREFIX).glob("**/*.h"))
-        + [Path(__file__).resolve(), HERE / "streaming/compute_streaming.hpp", HERE / "round_p.hpp",
-           HERE / "safe_rescale.hpp", HERE / "fast_correction.hpp", HERE / "exp_refiner.hpp", HERE / "exp_native.hpp", HERE / "numerics.py"]
+        + [
+            Path(__file__).resolve(),
+            HERE / "streaming/compute_streaming.hpp",
+            HERE / "round_p.hpp",
+            HERE / "safe_rescale.hpp",
+            HERE / "fast_correction.hpp",
+            HERE / "exp_refiner.hpp",
+            HERE / "exp_native.hpp",
+            HERE / "numerics.py",
+        ]
     )
     provenance = dict(
         source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
@@ -315,7 +327,18 @@ def run(device, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--label", required=True)
-    parser.add_argument("--variant", choices=("pervalue_rawp", "pervalue_rne", "b8_rne5_rawp", "q7kv8_rawp", "residual48_pervalue", "residual44_pervalue"), default="pervalue_rawp")
+    parser.add_argument(
+        "--variant",
+        choices=(
+            "pervalue_rawp",
+            "pervalue_rne",
+            "b8_rne5_rawp",
+            "q7kv8_rawp",
+            "residual48_pervalue",
+            "residual44_pervalue",
+        ),
+        default="pervalue_rawp",
+    )
     parser.add_argument("--qkv-route", choices=("host", "device"), default="host")
     parser.add_argument("--no-p-round", action="store_true")
     parser.add_argument("--skip-residual-reconfig", action="store_true")
@@ -336,7 +359,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.distinct_kv = False
     args.hybrid_block_pack = False
-    args.mode = ("accurate" if args.exp_quality == "accurate" else "fp32_hifi2_cheap") if args.destination == "fp32" else ("fast" if args.destination == "fast_bf16" else "main")
+    args.mode = (
+        ("accurate" if args.exp_quality == "accurate" else "fp32_hifi2_cheap")
+        if args.destination == "fp32"
+        else ("fast" if args.destination == "fast_bf16" else "main")
+    )
     if args.destination == "hybrid":
         args.mode, args.hybrid_block_pack = "hybrid", True
     assert args.destination == "fp32" or args.variant in ("pervalue_rawp", "q7kv8_rawp")

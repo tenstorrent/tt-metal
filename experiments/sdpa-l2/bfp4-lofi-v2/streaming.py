@@ -72,8 +72,9 @@ def run(device, args, inputs, ref):
             modules.append(mod)
         prep, residual_prep = modules
         preprocessing_inputs = [ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT) for x in (q, k, v)]
-        tq, iq, _ = prep.build(device, preprocessing_inputs[0], 7, "bf16", 110,
-                              **({"scale": q_prescale} if q_prescale != 1.0 else {}))
+        tq, iq, _ = prep.build(
+            device, preprocessing_inputs[0], 7, "bf16", 110, **({"scale": q_prescale} if q_prescale != 1.0 else {})
+        )
         options = dict(components=2, ncores=110)
         if kfmts[1] == "e5_b8":
             options["second_format"] = "b8_rne5"
@@ -83,7 +84,10 @@ def run(device, args, inputs, ref):
         for call in preprocessing_calls:
             call()
         tensors = [tq, tk[0], tv[0], tk[1], tv[1]]
-        input_specs = [(t.dtype, 2048 if t.dtype == ttnn.bfloat16 else (576 if t.dtype == ttnn.bfloat4_b else 1088)) for t in tensors]
+        input_specs = [
+            (t.dtype, 2048 if t.dtype == ttnn.bfloat16 else (576 if t.dtype == ttnn.bfloat4_b else 1088))
+            for t in tensors
+        ]
     for x, fmt in ([] if device_residual else zip(prepared, formats)):
         device_preprocess = getattr(args, "device_preprocess", False)
         original = x
@@ -100,13 +104,20 @@ def run(device, args, inputs, ref):
         if device_preprocess:
             assert fmt in ("e7", "e5", "e5_b8")
             scale_q = fmt == "e7" and q_prescale != 1.0
-            prep_spec = importlib.util.spec_from_file_location("lofi_preprocess", HERE / ("q_prescale.py" if scale_q else "preprocess.py"))
+            prep_spec = importlib.util.spec_from_file_location(
+                "lofi_preprocess", HERE / ("q_prescale.py" if scale_q else "preprocess.py")
+            )
             prep = importlib.util.module_from_spec(prep_spec)
             prep_spec.loader.exec_module(prep)
             src = ttnn.from_torch(original, device=device, layout=ttnn.TILE_LAYOUT)
-            tensor, preprocess_call, _ = prep.build(device, src, 7 if fmt == "e7" else 5,
-                                                    "b8" if fmt == "e5_b8" else "bf16", 110,
-                                                    **({"scale": q_prescale} if scale_q else {}))
+            tensor, preprocess_call, _ = prep.build(
+                device,
+                src,
+                7 if fmt == "e7" else 5,
+                "b8" if fmt == "e5_b8" else "bf16",
+                110,
+                **({"scale": q_prescale} if scale_q else {}),
+            )
             preprocessing_inputs.append(src)
             preprocessing_calls.append(preprocess_call)
             preprocess_call()
@@ -146,8 +157,10 @@ def run(device, args, inputs, ref):
         (14, 4, page, fp),
         (16, 8 if accurate else 16, 2048, ttnn.bfloat16),
     ]
-    specs = [(idx, n, input_specs[idx][1], input_specs[idx][0]) if idx < 3 else (idx, n, size, dtype)
-             for idx, n, size, dtype in specs]
+    specs = [
+        (idx, n, input_specs[idx][1], input_specs[idx][0]) if idx < 3 else (idx, n, size, dtype)
+        for idx, n, size, dtype in specs
+    ]
     if residual:
         specs += [(17 + i, 64 * kv_slots, input_specs[3 + i][1], input_specs[3 + i][0]) for i in range(2)]
     if getattr(args, "v_mean_correction", False):
@@ -232,7 +245,9 @@ def run(device, args, inputs, ref):
     if getattr(args, "v_mean_correction", False):
         defines["SDPA_LOFI_V_BIAS"] = "1"
     if args.exp_degree != 3:
-        assert args.destination == "fp32" and args.exp_quality == "cheap", "Exp refiner is FP32-only; BF16 calls native exp"
+        assert (
+            args.destination == "fp32" and args.exp_quality == "cheap"
+        ), "Exp refiner is FP32-only; BF16 calls native exp"
         defines["SDPA_LOFI_EXP_DEGREE"] = str(args.exp_degree)
     if args.native_exp:
         assert args.destination == "fp32" and args.exp_quality == "cheap" and args.exp_degree == 3
@@ -294,15 +309,26 @@ def run(device, args, inputs, ref):
         list((ROOT / PREFIX).glob("*.cpp"))
         + list((ROOT / PREFIX).glob("**/*.hpp"))
         + list((ROOT / PREFIX).glob("**/*.h"))
-        + [Path(__file__).resolve(), HERE / "safe_rescale.hpp", HERE / "round_p.hpp", HERE / "v_bias.hpp", HERE / "exp_refiner.hpp", HERE / "exp_native.hpp", HERE / "numerics.py"]
+        + [
+            Path(__file__).resolve(),
+            HERE / "safe_rescale.hpp",
+            HERE / "round_p.hpp",
+            HERE / "v_bias.hpp",
+            HERE / "exp_refiner.hpp",
+            HERE / "exp_native.hpp",
+            HERE / "numerics.py",
+        ]
     )
     if getattr(args, "device_preprocess", False):
         sources += [HERE / "preprocess.py", *sorted((HERE / "preprocess").glob("*.cpp"))]
         if q_prescale != 1.0:
             sources += [HERE / "q_prescale.py", *sorted((HERE / "q_prescale").glob("*.cpp"))]
     if device_residual:
-        sources += [HERE / "bfp4_residual_preprocess.py", *sorted((HERE / "bfp4_residual_preprocess").glob("*.cpp")),
-                    *sorted((HERE / "bfp4_residual_preprocess").glob("*.hpp"))]
+        sources += [
+            HERE / "bfp4_residual_preprocess.py",
+            *sorted((HERE / "bfp4_residual_preprocess").glob("*.cpp")),
+            *sorted((HERE / "bfp4_residual_preprocess").glob("*.hpp")),
+        ]
     provenance = dict(
         source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
         defines=defines,
@@ -375,15 +401,36 @@ spec.loader.exec_module(repro)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--label", required=True)
-    parser.add_argument("--variant", choices=("pervalue_rawp", "pervalue_rne", "kv4_rawp", "b8_rne5_rawp", "q8_only_rawp", "k8_only_rawp", "v8_only_rawp", "q7kv8_rawp", "q7kv8_full", "bf16kv8_full", "residual48_pervalue", "residual44_pervalue"), default="pervalue_rawp")
+    parser.add_argument(
+        "--variant",
+        choices=(
+            "pervalue_rawp",
+            "pervalue_rne",
+            "kv4_rawp",
+            "b8_rne5_rawp",
+            "q8_only_rawp",
+            "k8_only_rawp",
+            "v8_only_rawp",
+            "q7kv8_rawp",
+            "q7kv8_full",
+            "bf16kv8_full",
+            "residual48_pervalue",
+            "residual44_pervalue",
+        ),
+        default="pervalue_rawp",
+    )
     parser.add_argument("--fidelity", choices=("LoFi", "HiFi2"), default="LoFi")
     parser.add_argument("--q-prescale", type=float, default=1.0)
     parser.add_argument("--no-p-round", action="store_true")
-    parser.add_argument("--round-p", action="store_true", help="Explicit RNE7 P with unbiased exp and matched denominator")
+    parser.add_argument(
+        "--round-p", action="store_true", help="Explicit RNE7 P with unbiased exp and matched denominator"
+    )
     parser.add_argument("--skip-residual-reconfig", action="store_true")
     parser.add_argument("--center-k", action="store_true")
     parser.add_argument("--center-v", action="store_true")
-    parser.add_argument("--v-mean-correction", action="store_true", help="CPU-prepared V mean correction, fused FP32 epilogue")
+    parser.add_argument(
+        "--v-mean-correction", action="store_true", help="CPU-prepared V mean correction, fused FP32 epilogue"
+    )
     parser.add_argument("--qkv-route", choices=("host", "device"), default="host")
     parser.add_argument("--length", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=1240)

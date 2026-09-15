@@ -33,10 +33,10 @@ def round_significand7(x, ties):
 def shared_b8(x, ties):
     """Single shared-exponent BFP8 conversion of exactly BF16-representable input.
 
-Groups are 16 adjacent columns. Exponent is selected from the input to THIS
-stage, so preceding per-datum exponent carries are not silently ignored.
-Magnitude codes saturate at127. No exponent clamping or subnormal contract.
-"""
+    Groups are 16 adjacent columns. Exponent is selected from the input to THIS
+    stage, so preceding per-datum exponent carries are not silently ignored.
+    Magnitude codes saturate at127. No exponent clamping or subnormal contract.
+    """
     assert ties in ("even", "away")
     values = x.float()
     assert torch.equal(values.bfloat16().float(), values)
@@ -147,8 +147,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True)
     parser.add_argument("--count", type=int, default=524288)
-    parser.add_argument("--distributions", nargs="+", choices=("normal", "dense_fixed_ties"),
-                        default=["normal", "dense_fixed_ties"])
+    parser.add_argument(
+        "--distributions", nargs="+", choices=("normal", "dense_fixed_ties"), default=["normal", "dense_fixed_ties"]
+    )
     parser.add_argument("--cores", type=int, default=110)
     parser.add_argument("--seed", type=int, default=1252)
     parser.add_argument("--host-only", action="store_true")
@@ -170,7 +171,9 @@ def main():
         for distribution, artifact in zip(args.distributions, artifacts):
             x = make_input(args.count, distribution, args.seed)
             predictions = model_predictions(x)
-            outputs, identities, contracts = device_outputs(device, x, args.cores) if device is not None else ({}, {}, {})
+            outputs, identities, contracts = (
+                device_outputs(device, x, args.cores) if device is not None else ({}, {}, {})
+            )
             identity_checks = {name: metrics(out, x) for name, out in identities.items()}
             sanity_pass &= all(check["finite"] and check["mismatch"] == 0 for check in identity_checks.values())
             routes, mismatch_examples = {}, {}
@@ -179,15 +182,21 @@ def main():
                 comparisons = {name: metrics(actual, expected) for name, expected in predictions.items()}
                 exact_models = [name for name, comparison in comparisons.items() if comparison["mismatch"] == 0]
                 routes[route] = dict(
-                    contract=contracts[route], vs_input=metrics(actual, x), vs_models=comparisons,
+                    contract=contracts[route],
+                    vs_input=metrics(actual, x),
+                    vs_models=comparisons,
                     exact_matching_models=exact_models,
-                    interpretation="No listed model matches exactly" if not exact_models else "Exact on this dataset only",
+                    interpretation=(
+                        "No listed model matches exactly" if not exact_models else "Exact on this dataset only"
+                    ),
                 )
                 mismatch_examples[route] = {}
                 for name, expected in predictions.items():
                     indices = (actual.flatten() != expected.flatten()).nonzero().flatten()[:64]
                     mismatch_examples[route][name] = dict(
-                        flat_index=indices, input=x.flatten()[indices], actual=actual.flatten()[indices],
+                        flat_index=indices,
+                        input=x.flatten()[indices],
+                        actual=actual.flatten()[indices],
                         predicted=expected.flatten()[indices],
                         input_group=x.float().reshape(-1, 16)[indices // 16],
                     )
@@ -197,20 +206,34 @@ def main():
             for i, first in enumerate(names):
                 for second in names[i + 1 :]:
                     pairs[first + "__vs__" + second] = metrics(outputs[first], outputs[second])
-            torch.save(dict(
-                input_bf16=x, downloaded_outputs=outputs, bits8_identity_outputs=identities,
-                predicted_outputs=predictions, mismatch_examples=mismatch_examples,
-            ), artifact)
-            records.append(dict(
-                distribution=distribution, input_shape=list(x.shape), numel=x.numel(),
-                input_sha256=hashlib.sha256(x.contiguous().view(torch.uint16).numpy().tobytes()).hexdigest(),
-                model_vs_input={name: metrics(value, x) for name, value in predictions.items()},
-                routes=routes, route_pairs=pairs, identity_checks=identity_checks,
-                matrices_and_failure_examples=str(artifact.relative_to(ROOT)),
-            ))
+            torch.save(
+                dict(
+                    input_bf16=x,
+                    downloaded_outputs=outputs,
+                    bits8_identity_outputs=identities,
+                    predicted_outputs=predictions,
+                    mismatch_examples=mismatch_examples,
+                ),
+                artifact,
+            )
+            records.append(
+                dict(
+                    distribution=distribution,
+                    input_shape=list(x.shape),
+                    numel=x.numel(),
+                    input_sha256=hashlib.sha256(x.contiguous().view(torch.uint16).numpy().tobytes()).hexdigest(),
+                    model_vs_input={name: metrics(value, x) for name, value in predictions.items()},
+                    routes=routes,
+                    route_pairs=pairs,
+                    identity_checks=identity_checks,
+                    matrices_and_failure_examples=str(artifact.relative_to(ROOT)),
+                )
+            )
         sources = [Path(__file__).resolve(), HERE / "preprocess.py", *sorted((HERE / "preprocess").glob("*.cpp"))]
         result = dict(
-            **vars(args), records=records, identity_and_finite_checks_pass=bool(sanity_pass),
+            **vars(args),
+            records=records,
+            identity_and_finite_checks_pass=bool(sanity_pass),
             source_sha256={str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
             model_contract=(
                 "Independent finite-normal-BF16/zero integer models; native groups16; exponent reselected at each stage; "

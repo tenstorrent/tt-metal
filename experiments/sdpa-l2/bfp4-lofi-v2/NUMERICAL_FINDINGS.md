@@ -283,8 +283,10 @@ epilogue. Small combined-time differences still need interleaved verification.
 All twelve records have replay-identical outputs and exact epilogue checks;
 long-input preprocessing-oracle checks are disabled. Source pins agree
 within each length's comparisons, and these newer V8 records include the
-reference helper. Long constant-V V8 tests are pending and not inferred
-from the common-V results.
+reference helper. These twelve rows are the earlier normal/common-V subset;
+the subsequently completed long constant-V V8 controls are reported in
+[the final value-smoothing note](VALUE_SMOOTHING.md). Their conclusions are
+measured separately, not inferred from common-V results.
 
 ## Why common-V residual error can exceed100% at the best BF16 output
 
@@ -339,7 +341,8 @@ Recommended next steps, without declaring a new production SKU:
    restoration alone. Compare its real cost with numerator compensation and
    V8 using identical inputs and interleaved timings. The V8 follow-up above
    narrows the numerical benefit of matched correction on normal inputs;
-   its long constant-V control remains pending.
+   its completed long constant-V control and final interpretation are in
+   [the value-smoothing note](VALUE_SMOOTHING.md).
 4. Keep original L2 and PCC plus residual/floor diagnostics. Use absolute
    error and the known constant-output identity when residual/PCC are
    undefined. Do not turn the arbitrary0.5% goal into a dtype-impossible

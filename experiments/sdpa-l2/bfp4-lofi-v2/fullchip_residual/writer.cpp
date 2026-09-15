@@ -16,8 +16,8 @@ void kernel_main() {
         for (uint32_t row = 0; row < q_tiles; ++row) {
             cb.wait_front(4);
             for (uint32_t col = 0; col < 4; ++col) {
-                noc.async_write(cb, out, 2048, {.offset_bytes = col * 2048},
-                                {.page_id = job * q_tiles * 4 + row * 4 + col});
+                noc.async_write(
+                    cb, out, 2048, {.offset_bytes = col * 2048}, {.page_id = job * q_tiles * 4 + row * 4 + col});
             }
             noc.async_write_barrier();
             cb.pop_front(4);

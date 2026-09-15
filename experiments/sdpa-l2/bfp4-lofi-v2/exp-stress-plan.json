@@ -1,0 +1,565 @@
+{
+  "scope": "CPU-reference/on-device accuracy-only stress comparison; no universal L2 cutoff, no timing; current existing kernels unchanged",
+  "cases": [
+    {
+      "label": "exp-stress-lofi_native-normal-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-normal-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-normal-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-normal-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-normal-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-normal-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-normal-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-normal-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-normal-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-outliers-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-outliers-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-outliers-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-outliers-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-outliers-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-outliers-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-outliers-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-outliers-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-outliers-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-scaled_qk-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-scaled_qk-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-scaled_qk-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-scaled_qk-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-scaled_qk-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-scaled_qk-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-scaled_qk-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-scaled_qk-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-scaled_qk-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-biased_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-biased_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-biased_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-biased_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-biased_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-biased_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-biased_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-biased_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-biased_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-common_q-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-common_q-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-common_q-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-common_q-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-common_q-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-common_q-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-common_q-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-common_q-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-common_q-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-common_k-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-common_k-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-common_k-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-common_k-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-common_k-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-common_k-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-common_k-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-common_k-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-common_k-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-common_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-common_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-common_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-common_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-common_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-common_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-common_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-common_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-common_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-uniform-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-uniform-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-uniform-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-uniform-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-uniform-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-uniform-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-uniform-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-uniform-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-uniform-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-constant_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-constant_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-constant_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-constant_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-uniform_constant_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-uniform_constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-uniform_constant_v-s1240-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-uniform_constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-uniform_constant_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-uniform_constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-uniform_constant_v-s1240-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-uniform_constant_v-s1240-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-uniform_constant_v-s1240-v1 --length 1024 --heads 2 --cores 4 --seed 1240 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-normal-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-normal-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-normal-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-normal-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-normal-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-normal-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-normal-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-normal-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-normal-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution normal --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-outliers-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-outliers-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-outliers-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-outliers-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-outliers-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-outliers-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-outliers-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-outliers-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-outliers-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution outliers --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-scaled_qk-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-scaled_qk-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-scaled_qk-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-scaled_qk-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-scaled_qk-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-scaled_qk-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-scaled_qk-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-scaled_qk-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-scaled_qk-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution scaled_qk --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-biased_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-biased_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-biased_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-biased_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-biased_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-biased_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-biased_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-biased_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-biased_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution biased_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-common_q-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-common_q-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-common_q-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-common_q-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-common_q-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-common_q-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-common_q-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-common_q-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-common_q-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_q --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-common_k-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-common_k-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-common_k-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-common_k-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-common_k-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-common_k-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-common_k-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-common_k-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-common_k-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_k --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-common_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-common_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-common_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-common_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-common_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-common_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-common_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-common_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-common_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution common_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-uniform-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-uniform-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-uniform-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-uniform-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-uniform-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-uniform-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-uniform-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-uniform-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-uniform-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-constant_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-constant_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-constant_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-constant_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    },
+    {
+      "label": "exp-stress-lofi_native-uniform_constant_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_native-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_native-uniform_constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_native-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 "
+    },
+    {
+      "label": "exp-stress-lofi_lut-uniform_constant_v-s1241-v1",
+      "driver": "exp_lut_macro_streaming.py",
+      "args": "--label exp-stress-lofi_lut-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-lofi_lut-uniform_constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py --label exp-stress-lofi_lut-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --lut-exp"
+    },
+    {
+      "label": "exp-stress-hi2_native-uniform_constant_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_native-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain ",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_native-uniform_constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_native-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain "
+    },
+    {
+      "label": "exp-stress-hi2_lut-uniform_constant_v-s1241-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label exp-stress-hi2_lut-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/exp-stress-hi2_lut-uniform_constant_v-s1241-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label exp-stress-hi2_lut-uniform_constant_v-s1241-v1 --length 1024 --heads 2 --cores 4 --seed 1241 --distribution uniform_constant_v --sample-rows 1024 --check-preprocess --read-barrier-tiles 2 --warmup 0 --iters 0 --max-l2 1000000000 --variant hi2_fp32_bf16 --native-exp --reader-chain --lut-exp"
+    }
+  ]
+}

@@ -23,7 +23,9 @@ void kernel_main() {
     DataflowBuffer qcb(0), kcb(1), vcb(2);
     const uint32_t qbytes = get_tile_size(0), kbytes = get_tile_size(1), vbytes = get_tile_size(2);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        3, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW,
+        3,
+        ckernel::PoolType::MAX,
+        ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(4), 0x3f803f80);
     for (uint32_t job = first_job; job < first_job + jobs; ++job) {

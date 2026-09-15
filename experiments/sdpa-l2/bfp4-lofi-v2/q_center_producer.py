@@ -5,6 +5,7 @@
 Producer qualification/timing, NOT an integrated LoFi attention result.
 No host-generated bias or correction is uploaded. No full N-squared tensor.
 """
+
 import argparse
 import hashlib
 import importlib.util
@@ -38,18 +39,30 @@ def build(device, q, k, ncores=4, mean_mode="bf16_fpu"):
     assert k.shape[2] > 0 and k.shape[2] % 32 == 0 and k.shape[-1] == 128
     bias, mean = center_mean.build(device, q, mean_mode)
     centered, center, actual_cores = CENTER.build(device, q, bias, ncores)
-    correction = ttnn.allocate_tensor_on_device([1, q.shape[1], 32, k.shape[2]], ttnn.float32,
-        ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
-    config = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False)
+    correction = ttnn.allocate_tensor_on_device(
+        [1, q.shape[1], 32, k.shape[2]], ttnn.float32, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
     def correct():
         # Do NOT substitute quantized K here. The omitted Q mean must interact
         # with original BF16 K at high precision; quantized K reintroduces
         # common-Q amplification of its quantization error.
-        ttnn.matmul(bias, k, transpose_b=True, dtype=ttnn.float32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=config,
-            optional_output_tensor=correction)
+        ttnn.matmul(
+            bias,
+            k,
+            transpose_b=True,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=config,
+            optional_output_tensor=correction,
+        )
 
     def invoke():
         mean()
@@ -61,14 +74,17 @@ def build(device, q, k, ncores=4, mean_mode="bf16_fpu"):
     invoke.center = center
     invoke.correct = correct
     info = dict(
-        reference_input="original BF16 Q/K, never overwritten", mean=mean.precision,
+        reference_input="original BF16 Q/K, never overwritten",
+        mean=mean.precision,
         centered_q="FP32 SFPU (Q - actual BF16 bias), RNE7, BF16 storage",
         correction="actual BF16 bias @ original BF16 K^T; HiFi4, FP32 DST/output, unscaled",
-        correction_shape=list(correction.shape), correction_row_repeats=32,
+        correction_shape=list(correction.shape),
+        correction_row_repeats=32,
         correction_storage_bytes=q.shape[1] * 32 * k.shape[2] * 4,
         correction_physical_flops=2 * q.shape[1] * 32 * k.shape[2] * 128,
         correction_unique_row_flops=2 * q.shape[1] * k.shape[2] * 128,
-        center_cores=actual_cores, correction_program="TTNN auto-selection; includes any required transpose",
+        center_cores=actual_cores,
+        correction_program="TTNN auto-selection; includes any required transpose",
         logical_mean_rounding_cancels="same rounded BF16 bias used in subtraction and correction",
     )
     return centered, correction, invoke, info
@@ -77,15 +93,23 @@ def build(device, q, k, ncores=4, mean_mode="bf16_fpu"):
 def metrics(actual, expected):
     delta = actual.double() - expected.double()
     norm = expected.double().norm()
-    return dict(l2_pct=float(100 * delta.norm() / norm) if norm else None,
-                max_abs=float(delta.abs().max()), finite=bool(torch.isfinite(actual).all()))
+    return dict(
+        l2_pct=float(100 * delta.norm() / norm) if norm else None,
+        max_abs=float(delta.abs().max()),
+        finite=bool(torch.isfinite(actual).all()),
+    )
 
 
 def source_files():
-    files = [Path(__file__).resolve(), HERE / "q_center_preprocess.py", HERE / "center_mean.py",
-             HERE / "center_preprocess.py", HERE / "center_preprocess/reader.cpp",
-             HERE / "center_preprocess/writer.cpp",
-             ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py"]
+    files = [
+        Path(__file__).resolve(),
+        HERE / "q_center_preprocess.py",
+        HERE / "center_mean.py",
+        HERE / "center_preprocess.py",
+        HERE / "center_preprocess/reader.cpp",
+        HERE / "center_preprocess/writer.cpp",
+        ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+    ]
     files += sorted((HERE / "q_center_preprocess").glob("*.cpp"))
     files += sorted((HERE / "q_center_preprocess").glob("*.hpp"))
     return files
@@ -112,11 +136,20 @@ def main():
     output_path = HERE / (args.label + ".json")
     assert not output_path.exists(), "Use a fresh label"
     torch.set_num_threads(8)
-    spec = importlib.util.spec_from_file_location("q_center_repro", ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py")
+    spec = importlib.util.spec_from_file_location(
+        "q_center_repro", ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py"
+    )
     repro = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(repro)
-    q, k, v = repro.make_inputs(args.heads, 128, args.length, 128, args.seed,
-                               "common_q" if args.distribution == "common_q" else "normal", args.common_mode)
+    q, k, v = repro.make_inputs(
+        args.heads,
+        128,
+        args.length,
+        128,
+        args.seed,
+        "common_q" if args.distribution == "common_q" else "normal",
+        args.common_mode,
+    )
     if args.distribution == "structured":
         head = torch.arange(args.heads).reshape(1, args.heads, 1, 1)
         column = torch.arange(128).reshape(1, 1, 1, 128)
@@ -139,7 +172,9 @@ def main():
         correction_metrics = metrics(actual_c, expected_c)
         print("CORRECTION_QUALIFICATION", json.dumps(correction_metrics), flush=True)
         assert correction_metrics["finite"]
-        assert correction_metrics["l2_pct"] is not None and correction_metrics["l2_pct"] < args.max_correction_l2, correction_metrics
+        assert (
+            correction_metrics["l2_pct"] is not None and correction_metrics["l2_pct"] < args.max_correction_l2
+        ), correction_metrics
         assert torch.equal(actual_c, actual_c[:, :, :1].expand_as(actual_c)), "Correction rows differ"
         # Host diagnostic ONLY: exact matmul of device-produced centered Q and
         # ORIGINAL K, then device correction; not LoFi QK or integrated SDPA.
@@ -151,18 +186,30 @@ def main():
         score_metrics = metrics(scores, reference_scores)
         bias_metrics = metrics(bias[:, :, :1], q.double().mean(dim=2, keepdim=True))
         timings = {}
-        for name, call in (("mean", invoke.mean), ("center_rne7", invoke.center),
-                           ("correction", invoke.correct), ("producer_total", invoke)):
+        for name, call in (
+            ("mean", invoke.mean),
+            ("center_rne7", invoke.center),
+            ("correction", invoke.correct),
+            ("producer_total", invoke),
+        ):
             times = center_mean.measure(device, call, args)
             timings[name] = dict(ms=times, median_ms=statistics.median(times) if times else None)
         assert torch.equal(actual_q, ttnn.to_torch(centered).float())
         assert torch.equal(actual_c, ttnn.to_torch(correction).float())
         assert all(hashlib.sha256(p.read_bytes()).hexdigest() == hashes[str(p.relative_to(ROOT))] for p in files)
-        result = dict(**vars(args), **info, centered_q_mismatches=q_mismatches,
-            correction_metrics=correction_metrics, bias_metrics=bias_metrics, score_metrics=score_metrics,
+        result = dict(
+            **vars(args),
+            **info,
+            centered_q_mismatches=q_mismatches,
+            correction_metrics=correction_metrics,
+            bias_metrics=bias_metrics,
+            score_metrics=score_metrics,
             host_exact_matmul_attention_diagnostic=diagnostic_metrics,
             diagnostic_warning="CPU exact centered-Q/original-K matmul + device correction; NOT integrated LoFi attention",
-            timings=timings, source_sha256=hashes, trace_equal=True)
+            timings=timings,
+            source_sha256=hashes,
+            trace_equal=True,
+        )
         output_path.write_text(json.dumps(result, indent=2) + "\n")
         print("Q_CENTER_PRODUCER_RESULT", json.dumps(result), flush=True)
     finally:

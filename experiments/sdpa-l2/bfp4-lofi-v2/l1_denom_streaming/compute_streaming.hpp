@@ -9,10 +9,12 @@
 #pragma once
 #include "../exp_native.hpp"
 
-#if !defined(SDPA_FP32_STREAMING) || !defined(SDPA_FP32_STATE) || !defined(SDPA_LOFI_NATIVE_EXP) || !defined(SDPA_LOFI_DENOM)
+#if !defined(SDPA_FP32_STREAMING) || !defined(SDPA_FP32_STATE) || !defined(SDPA_LOFI_NATIVE_EXP) || \
+    !defined(SDPA_LOFI_DENOM)
 #error "Isolated local-denominator experiment requires FP32 streaming/state, native exp and LoFi denominator control"
 #endif
-#if defined(SDPA_DIAG_EXP_MODE) || defined(SDPA_MATCH_HIFI2) || defined(SDPA_LOFI_ROUND_P) || defined(SDPA_LOFI_RESIDUALS) || defined(SDPA_LOFI_V_BIAS)
+#if defined(SDPA_DIAG_EXP_MODE) || defined(SDPA_MATCH_HIFI2) || defined(SDPA_LOFI_ROUND_P) || \
+    defined(SDPA_LOFI_RESIDUALS) || defined(SDPA_LOFI_V_BIAS)
 #error "No alternate exp, matched-HiFi2 scaling, P prerounding, residuals or V bias in this denominator-only experiment"
 #endif
 
@@ -505,8 +507,8 @@ void blocked_matmul_and_pack(
     in0_index = in0_index_start;
     in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        matmul_block_no_mop(in0_cb, residual_cb, in0_index, in1_index, dst_index,
-                            transpose, subblock_w, subblock_h, matmul_stride);
+        matmul_block_no_mop(
+            in0_cb, residual_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         ++in0_index;
         in1_index += in1_stride;
     }
@@ -850,8 +852,8 @@ void sub_exp_block_bcast_cols(
 #endif
 #endif
 #ifdef SDPA_LOFI_ROUND_P
-            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_round_p,
-                                  (32 * score_batch), 0, VectorMode::None)));
+            PACK((SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_round_p, (32 * score_batch), 0, VectorMode::None)));
 #endif
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 #ifdef SDPA_FP32_PAIRED_PACK
@@ -1511,13 +1513,15 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_commit();
             tile_regs_wait();
             PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-                DST_SYNC_MODE, DST_ACCUM_MODE,
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
 #ifdef SDPA_LOFI_V_BIAS
                 calculate_lofi_normalize_bias,
 #else
                 calculate_sdpa_fp32_normalize,
 #endif
-                0, VectorMode::None)));
+                0,
+                VectorMode::None)));
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             pack_tile(0, normalized_out_cb);
             tile_regs_release();
@@ -2663,8 +2667,9 @@ static void sdpa_inner_loop_step(
 #endif
             CircularBuffer(cb_col_identity).wait_front(1);
 #ifdef SDPA_LOCAL_BF16_DENOM
-            static_assert(Sq_chunk_t == 8 && Sk_chunk_t == 16 && KT_stride == 16,
-                          "Local BF16 denominator proof is fixed to Q256/K512");
+            static_assert(
+                Sq_chunk_t == 8 && Sk_chunk_t == 16 && KT_stride == 16,
+                "Local BF16 denominator proof is fixed to Q256/K512");
             constexpr uint32_t local_sum_cb = 20;
             // All8 scratch tiles were completed by sub_exp; publish once per
             // K512 chunk. The existing P drain barrier precedes this handshake.
@@ -2674,8 +2679,7 @@ static void sdpa_inner_loop_step(
             matmul_block_init(local_sum_cb, cb_col_identity, 0, 1, 4, 1);
             // Consume every BF16 scratch bit. Ordinary HiFi2's phase0/1 does
             // not retain SrcB's low bits when SrcA is an exact0/1 identity.
-            MATH((llk_math_matmul_init<MathFidelity::HiFi4, MM_THROTTLE>(
-                local_sum_cb, cb_col_identity, 0, 1, 4)));
+            MATH((llk_math_matmul_init<MathFidelity::HiFi4, MM_THROTTLE>(local_sum_cb, cb_col_identity, 0, 1, 4)));
             configure_single_tile_pack(cur.sum);
             PACK((llk_pack_reconfig_l1_acc(0)));
             for (uint32_t row = 0; row < Sq_chunk_t; row += 4) {
@@ -2712,8 +2716,7 @@ static void sdpa_inner_loop_step(
 #endif
             MATH((llk_math_matmul_init<denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
 #if defined(SDPA_DENOM_PHASES) && SDPA_DENOM_PHASES == 2
-            static_assert(denom_fidelity == MathFidelity::HiFi2,
-                          "Phase-0/2 denominator requires the two-phase MOP");
+            static_assert(denom_fidelity == MathFidelity::HiFi2, "Phase-0/2 denominator requires the two-phase MOP");
             // SrcA is exactly zero/one: its low mantissa is zero. Execute phases
             // 0 and 2, not ordinary HiFi2's 0 and 1, to retain all SrcB bits.
             MATH((addr_mod_t{

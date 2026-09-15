@@ -59,21 +59,41 @@ def main():
     torch.set_num_threads(4)
     signs = torch.randint(0, 2, (128,), generator=torch.Generator().manual_seed(HAD.SIGN_SEED)).float() * 2 - 1
     started, count = time.monotonic(), 0
-    sources = [Path(__file__), Path(DIAG.__file__), Path(HAD.__file__), Path(RISK.__file__),
-               Path(RISK.GRID.__file__), HERE / "numerics.py", MODEL.V1 / "probe.py", Path(REPRO.__file__)]
+    sources = [
+        Path(__file__),
+        Path(DIAG.__file__),
+        Path(HAD.__file__),
+        Path(RISK.__file__),
+        Path(RISK.GRID.__file__),
+        HERE / "numerics.py",
+        MODEL.V1 / "probe.py",
+        Path(REPRO.__file__),
+    ]
     previous = [json.loads(x) for x in (HERE / "qk-hadamard-native-models-v1.jsonl").read_text().splitlines()]
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", hostname=platform.node(), threads=4, length=32768, query_length=128,
-                  heads=1, dim=128, seeds=[1240, 1241], methods=METHODS,
-                  contract="Original BF16 QKV FP64 reference; original Q128 token mean rounded BF16; same bias subtraction and FP64 correction against ORIGINAL K; H16 signed unnormalized with BF16 outputs and additional explicit centered-input BF16 or RNE7 spill; final Q RNE7; K RNE BFP4; V RNE BFP4 or RNE5/nativeRNA BFP8/LoFi5; native exp grid; P trunc7 matched denominator; FP64 matmul/subtraction/correction/recurrence; BF16 output",
-                  caveats="CPU only; no device FPU alignment, mean-generation error, correction matmul error or timing; after-rotation exact transformed-bias diagnostic requires FP32 bias unsupported by current BF16 bias helper",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}))
+        emit(
+            dict(
+                kind="provenance",
+                hostname=platform.node(),
+                threads=4,
+                length=32768,
+                query_length=128,
+                heads=1,
+                dim=128,
+                seeds=[1240, 1241],
+                methods=METHODS,
+                contract="Original BF16 QKV FP64 reference; original Q128 token mean rounded BF16; same bias subtraction and FP64 correction against ORIGINAL K; H16 signed unnormalized with BF16 outputs and additional explicit centered-input BF16 or RNE7 spill; final Q RNE7; K RNE BFP4; V RNE BFP4 or RNE5/nativeRNA BFP8/LoFi5; native exp grid; P trunc7 matched denominator; FP64 matmul/subtraction/correction/recurrence; BF16 output",
+                caveats="CPU only; no device FPU alignment, mean-generation error, correction matmul error or timing; after-rotation exact transformed-bias diagnostic requires FP32 bias unsupported by current BF16 bias helper",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+            )
+        )
         for seed in (1240, 1241):
             for distribution in ("normal", "outliers", "common_q", "structured_balanced_qk"):
                 if distribution == "structured_balanced_qk":
@@ -98,21 +118,52 @@ def main():
                     for vfmt, ve in values.items():
                         metrics = REPRO.metrics((p @ ve).bfloat16(), reference)
                         if distribution != "structured_balanced_qk" and method in ("none", "h16"):
-                            old = next(r for r in previous if r.get("kind") == "attention" and r["distribution"] == distribution
-                                       and r["seed"] == seed and r["v_format"] == vfmt and r["hadamard_width"] == width
-                                       and not r["center_k"] and r["spill"] == ("none" if width == 1 else "bf16"))
+                            old = next(
+                                r
+                                for r in previous
+                                if r.get("kind") == "attention"
+                                and r["distribution"] == distribution
+                                and r["seed"] == seed
+                                and r["v_format"] == vfmt
+                                and r["hadamard_width"] == width
+                                and not r["center_k"]
+                                and r["spill"] == ("none" if width == 1 else "bf16")
+                            )
                             assert metrics["l2_pct"] == old["l2_pct"], "Uncentered controls must reproduce prior study"
-                        emit(dict(kind="attention", distribution=distribution, seed=seed, method=method, v_format=vfmt,
-                                  **metrics,
-                                  preprocessing_centered_score_l2_pct=float(100 * (preprocessing_score - centered_exact).norm() / centered_exact.norm()),
-                                  quantized_centered_score_l2_pct=float(100 * (score - centered_exact).norm() / centered_exact.norm()),
-                                  mean_bf16_rounding_l2_pct=float(100 * (mean - q.double().mean(0, keepdim=True)).norm() / q.double().mean(0, keepdim=True).norm()),
-                                  q_residual_rms=float((q - mean).square().mean().sqrt()),
-                                  p_entropy_mean=float(-(p * p.clamp_min(1e-300).log()).sum(-1).mean()),
-                                  p_max_mean=float(p.max(-1).values.mean())))
+                        emit(
+                            dict(
+                                kind="attention",
+                                distribution=distribution,
+                                seed=seed,
+                                method=method,
+                                v_format=vfmt,
+                                **metrics,
+                                preprocessing_centered_score_l2_pct=float(
+                                    100 * (preprocessing_score - centered_exact).norm() / centered_exact.norm()
+                                ),
+                                quantized_centered_score_l2_pct=float(
+                                    100 * (score - centered_exact).norm() / centered_exact.norm()
+                                ),
+                                mean_bf16_rounding_l2_pct=float(
+                                    100
+                                    * (mean - q.double().mean(0, keepdim=True)).norm()
+                                    / q.double().mean(0, keepdim=True).norm()
+                                ),
+                                q_residual_rms=float((q - mean).square().mean().sqrt()),
+                                p_entropy_mean=float(-(p * p.clamp_min(1e-300).log()).sum(-1).mean()),
+                                p_max_mean=float(p.max(-1).values.mean()),
+                            )
+                        )
                         count += 1
-                emit(dict(kind="input_completed", seed=seed, distribution=distribution, cases=count,
-                          seconds=time.monotonic() - started))
+                emit(
+                    dict(
+                        kind="input_completed",
+                        seed=seed,
+                        distribution=distribution,
+                        cases=count,
+                        seconds=time.monotonic() - started,
+                    )
+                )
         emit(dict(kind="completed", cases=count, seconds=time.monotonic() - started))
 
 

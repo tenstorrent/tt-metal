@@ -27,8 +27,12 @@ template <bool fp32 = DST_ACCUM_MODE>
 ALWI void sdpa_final_scale_mul_tiles_bcast_cols(uint32_t a, uint32_t b, uint32_t ai, uint32_t bi, uint32_t dst) {
     static_assert(!fp32);
     if (b == 5) {
-        MATH((llk_math_eltwise_binary<EltwiseBinaryType::ELWMUL, BroadcastType::COL, fp32,
-                                    MathFidelity::HiFi4, EltwiseBinaryReuseDestType::NONE>(a, b, dst, true)));
+        MATH((llk_math_eltwise_binary<
+              EltwiseBinaryType::ELWMUL,
+              BroadcastType::COL,
+              fp32,
+              MathFidelity::HiFi4,
+              EltwiseBinaryReuseDestType::NONE>(a, b, dst, true)));
         UNPACK((llk_unpack_AB<BroadcastType::COL>(a, b, ai, bi)));
     } else {
         lofi_safe_mul_tiles_bcast_cols<fp32>(a, b, ai, bi, dst);

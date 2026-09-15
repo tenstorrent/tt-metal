@@ -7,6 +7,7 @@ blocks, preserving the represented values and native group boundaries.
 Compare LoFi FP32/B8/native-exp and full-compensated LoFi BF16/B8 using
 unchanged builders/kernels. Reference always uses the ORIGINAL BF16 inputs.
 """
+
 import argparse
 import gc
 import hashlib
@@ -51,21 +52,37 @@ def configuration(variant, length, args):
     common = dict(length=length, heads=2, cores=args.cores, check_preprocess=True, read_barrier_tiles=2)
     if variant == "lofi_fp32_b8":
         return argparse.Namespace(
-            **common, variant=variant, q_chunk=256, q_prescale=1.0, center_k=False,
-            mean_mode="bf16_fpu", b8_rne=False, bfp8_pack_precise=False,
-            fix_correction=False, exp_degree=3, native_exp=True,
-            reader_chain=True, reader_split=False, reader_linear_k=False,
+            **common,
+            variant=variant,
+            q_chunk=256,
+            q_prescale=1.0,
+            center_k=False,
+            mean_mode="bf16_fpu",
+            b8_rne=False,
+            bfp8_pack_precise=False,
+            fix_correction=False,
+            exp_degree=3,
+            native_exp=True,
+            reader_chain=True,
+            reader_split=False,
+            reader_linear_k=False,
         )
     assert variant == "lofi_full_bf16_b8"
     return argparse.Namespace(
-        **common, destination="fast_bf16", denom_only=False, kv_formats="b8_b8", grid7_exp=False,
+        **common,
+        destination="fast_bf16",
+        denom_only=False,
+        kv_formats="b8_b8",
+        grid7_exp=False,
     )
 
 
 def source_hashes():
     pins = FP32.source_hashes()
     paths = BF16.source_files("fast_bf16") + [
-        Path(__file__).resolve(), Path(FP32.__file__).resolve(), Path(BF16.__file__).resolve()
+        Path(__file__).resolve(),
+        Path(FP32.__file__).resolve(),
+        Path(BF16.__file__).resolve(),
     ]
     pins.update({str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths})
     return pins
@@ -82,12 +99,15 @@ def check_prepared(prepared, expected):
         nonzero_mismatch = int((different_bits & ~zero_pair).sum())
         zero_sign_disagreements = int((different_bits & zero_pair).sum())
         assert nonzero_mismatch == 0, f"{name} preparation differs from original-order oracle"
-        records.append(dict(
-            input=name, nonzero_bit_mismatch=nonzero_mismatch,
-            zero_sign_disagreements=zero_sign_disagreements,
-            output_sha256=tensor_hash(actual),
-            contract="Exact represented values, signed zeros value-equivalent; no nonzero tolerance",
-        ))
+        records.append(
+            dict(
+                input=name,
+                nonzero_bit_mismatch=nonzero_mismatch,
+                zero_sign_disagreements=zero_sign_disagreements,
+                output_sha256=tensor_hash(actual),
+                contract="Exact represented values, signed zeros value-equivalent; no nonzero tolerance",
+            )
+        )
     return records
 
 
@@ -96,8 +116,12 @@ def check_inputs(device_originals, ordered, ordered_hashes, originals, original_
     assert [tensor_hash(x) for x in ordered] == ordered_hashes, "Ordered CPU inputs mutated"
     actual = [tensor_hash(ttnn.to_torch(t)) for t in device_originals]
     assert actual == ordered_hashes, "Original device input bits mutated"
-    return dict(original_cpu_unchanged=True, ordered_cpu_unchanged=True,
-                original_device_unchanged=True, device_input_sha256=actual)
+    return dict(
+        original_cpu_unchanged=True,
+        ordered_cpu_unchanged=True,
+        original_device_unchanged=True,
+        device_input_sha256=actual,
+    )
 
 
 def interorder(actual, identity):
@@ -117,31 +141,43 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True)
     parser.add_argument("--lengths", nargs="+", type=int, choices=(4096, 32768), default=[4096, 32768])
-    parser.add_argument("--variants", nargs="+", choices=("lofi_fp32_b8", "lofi_full_bf16_b8"),
-                        default=["lofi_fp32_b8", "lofi_full_bf16_b8"])
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        choices=("lofi_fp32_b8", "lofi_full_bf16_b8"),
+        default=["lofi_fp32_b8", "lofi_full_bf16_b8"],
+    )
     parser.add_argument("--cores", type=int, default=22)
     parser.add_argument("--seed", type=int, default=1240)
     parser.add_argument("--sample-rows", type=int, default=128)
-    parser.add_argument("--block-scaled-k", action="store_true", help="Also test repeating per-block K scales .5,1,2,4; V unchanged")
+    parser.add_argument(
+        "--block-scaled-k", action="store_true", help="Also test repeating per-block K scales .5,1,2,4; V unchanged"
+    )
     args = parser.parse_args()
     assert Path(args.label).name == args.label
     assert args.cores >= 2 and args.cores % 2 == 0 and args.sample_rows > 0
     torch.set_num_threads(4)
     pins = source_hashes()
     with (HERE / (args.label + ".jsonl")).open("x") as stream:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             stream.write(line + "\n")
             stream.flush()
             print(line, flush=True)
 
-        emit(dict(
-            kind="provenance", args=vars(args), source_sha256=pins,
-            scope="Accuracy only; H2 D128 Q256/K512; complete joint512token KV block permutations",
-            max_sorted_definition="Stable descending K block RMS over both heads/tokens/features, NOT actual query-score maxima",
-            reference_rtol=1e-11, reference_atol=1e-12,
-            source_scope="Principal selected experiment and API dependencies, not full compiler/firmware closure",
-        ))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                source_sha256=pins,
+                scope="Accuracy only; H2 D128 Q256/K512; complete joint512token KV block permutations",
+                max_sorted_definition="Stable descending K block RMS over both heads/tokens/features, NOT actual query-score maxima",
+                reference_rtol=1e-11,
+                reference_atol=1e-12,
+                source_scope="Principal selected experiment and API dependencies, not full compiler/firmware closure",
+            )
+        )
         count = 0
         for length in args.lengths:
             distributions = ["normal", "block_scaled_k"] if args.block_scaled_k else ["normal"]
@@ -149,9 +185,12 @@ def main():
                 originals = REPRO.make_inputs(2, length, length, 128, args.seed, "normal")
                 scales = None
                 if distribution == "block_scaled_k":
-                    scales = torch.tensor([0.5, 1.0, 2.0, 4.0]).repeat((length // 512 + 3) // 4)[:length // 512]
-                    originals[1] = (originals[1].reshape(1, 2, length // 512, 512, 128).float()
-                                    * scales.reshape(1, 1, -1, 1, 1)).reshape_as(originals[1]).bfloat16()
+                    scales = torch.tensor([0.5, 1.0, 2.0, 4.0]).repeat((length // 512 + 3) // 4)[: length // 512]
+                    originals[1] = (
+                        (originals[1].reshape(1, 2, length // 512, 512, 128).float() * scales.reshape(1, 1, -1, 1, 1))
+                        .reshape_as(originals[1])
+                        .bfloat16()
+                    )
                 original_hashes = [tensor_hash(x) for x in originals]
                 rows = torch.linspace(0, length - 1, min(args.sample_rows, length)).long().unique()
                 reference = REPRO.reference(originals[0][..., rows, :], originals[1], originals[2])
@@ -163,10 +202,16 @@ def main():
                 agreement = {}
                 for name, indices in order_list:
                     assert sorted(indices.tolist()) == list(range(length // 512))
-                    ordered_ref = REPRO.reference(originals[0][..., rows, :], reorder(originals[1], indices), reorder(originals[2], indices))
-                    assert torch.allclose(ordered_ref, reference, rtol=1e-11, atol=1e-12), "FP64 permutation invariance failed"
+                    ordered_ref = REPRO.reference(
+                        originals[0][..., rows, :], reorder(originals[1], indices), reorder(originals[2], indices)
+                    )
+                    assert torch.allclose(
+                        ordered_ref, reference, rtol=1e-11, atol=1e-12
+                    ), "FP64 permutation invariance failed"
                     agreement[name] = dict(
-                        rtol=1e-11, atol=1e-12, passed=True,
+                        rtol=1e-11,
+                        atol=1e-12,
+                        passed=True,
                         max_abs=float((ordered_ref - reference).abs().max()),
                         l2_pct=float(100 * (ordered_ref - reference).norm() / reference.norm()),
                     )
@@ -175,12 +220,18 @@ def main():
                     for order_name, indices in order_list:
                         ordered = [originals[0], reorder(originals[1], indices), reorder(originals[2], indices)]
                         ordered_hashes = [tensor_hash(x) for x in ordered]
-                        expected = [expected_original[0], reorder(expected_original[1], indices), reorder(expected_original[2], indices)]
+                        expected = [
+                            expected_original[0],
+                            reorder(expected_original[1], indices),
+                            reorder(expected_original[2], indices),
+                        ]
                         config = configuration(variant, length, args)
                         device = ttnn.open_device(device_id=0, trace_region_size=16777216)
                         try:
                             builder = FP32 if variant == "lofi_fp32_b8" else BF16
-                            dev_inputs, prepared, out, attention, preprocess, combined, info = builder.build(device, config, ordered)
+                            dev_inputs, prepared, out, attention, preprocess, combined, info = builder.build(
+                                device, config, ordered
+                            )
                             combined()
                             actual = ttnn.to_torch(out).bfloat16()
                             assert bool(torch.isfinite(actual).all()), "Nonfinite output"
@@ -203,20 +254,37 @@ def main():
                                 assert order_name == "identity"
                                 identity_output = actual.clone()
                             assert source_hashes() == pins, "Selected sources changed during run"
-                            emit(dict(
-                                kind="result", variant=variant, distribution=distribution, length=length,
-                                order=order_name, block_indices=indices.tolist(), k_block_rms=block_rms,
-                                block_k_scales=scales.tolist() if scales is not None else None,
-                                original_input_sha256=original_hashes, ordered_input_sha256=ordered_hashes,
-                                reference_agreement=agreement[order_name], config=vars(config), kernel=info,
-                                sampled_query_rows=rows.tolist(), accuracy=REPRO.metrics(actual[..., rows, :], reference),
-                                interorder_vs_identity=interorder(actual, identity_output),
-                                original_reference_scope="Original unpermuted BF16 Q/K/V; all heads and KV, explicit sampled Q rows",
-                                preprocessing_checks=prep_check, all_output_finite=True,
-                                combined_trace_replays=2, replay_output_sha256=replay_hashes, trace_bitwise_equal=True,
-                                input_immutability_before=before, input_immutability_after=after,
-                                output_sha256=output_hash, sources_unchanged=True, timing_performed=False,
-                            ))
+                            emit(
+                                dict(
+                                    kind="result",
+                                    variant=variant,
+                                    distribution=distribution,
+                                    length=length,
+                                    order=order_name,
+                                    block_indices=indices.tolist(),
+                                    k_block_rms=block_rms,
+                                    block_k_scales=scales.tolist() if scales is not None else None,
+                                    original_input_sha256=original_hashes,
+                                    ordered_input_sha256=ordered_hashes,
+                                    reference_agreement=agreement[order_name],
+                                    config=vars(config),
+                                    kernel=info,
+                                    sampled_query_rows=rows.tolist(),
+                                    accuracy=REPRO.metrics(actual[..., rows, :], reference),
+                                    interorder_vs_identity=interorder(actual, identity_output),
+                                    original_reference_scope="Original unpermuted BF16 Q/K/V; all heads and KV, explicit sampled Q rows",
+                                    preprocessing_checks=prep_check,
+                                    all_output_finite=True,
+                                    combined_trace_replays=2,
+                                    replay_output_sha256=replay_hashes,
+                                    trace_bitwise_equal=True,
+                                    input_immutability_before=before,
+                                    input_immutability_after=after,
+                                    output_sha256=output_hash,
+                                    sources_unchanged=True,
+                                    timing_performed=False,
+                                )
+                            )
                             count += 1
                         finally:
                             ttnn.close_device(device)

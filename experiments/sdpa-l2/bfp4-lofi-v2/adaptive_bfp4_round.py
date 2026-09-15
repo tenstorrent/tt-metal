@@ -31,9 +31,9 @@ DISTRIBUTIONS = ("normal", "thresholds", "ties", "wide", "zeros", "group_outlier
 def validate_input(x):
     QUALIFIED.validate_input(x)
     maximum = x.float().abs().reshape(-1, 16).amax(-1)
-    assert bool(((maximum == 0) | (maximum >= 2.0**-123)).all()), (
-        "E-1 candidate needs E>=-123 so every final B4 quantum is FP32 normal"
-    )
+    assert bool(
+        ((maximum == 0) | (maximum >= 2.0**-123)).all()
+    ), "E-1 candidate needs E>=-123 so every final B4 quantum is FP32 normal"
 
 
 def ftz(x):
@@ -161,8 +161,13 @@ def make_input(length, distribution, seed):
 
 
 def source_pins():
-    paths = [Path(__file__), DIRECTORY / "compute.cpp", HERE / "bfp4_round.py",
-             HERE / "bfp4_round/reader.cpp", HERE / "bfp4_round/writer.cpp"]
+    paths = [
+        Path(__file__),
+        DIRECTORY / "compute.cpp",
+        HERE / "bfp4_round.py",
+        HERE / "bfp4_round/reader.cpp",
+        HERE / "bfp4_round/writer.cpp",
+    ]
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
@@ -219,7 +224,9 @@ def build(device, src, ncores=1, search="pm", output_format="b4"):
                 compile_time_args=[SEARCH[search]],
                 runtime_args=compute,
                 config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False,
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    fp32_dest_acc_en=True,
+                    math_approx_mode=False,
                 ),
             ),
         ],
@@ -270,8 +277,10 @@ def main():
         bit_mismatch = int((actual_bits != expected_bits).sum())
         print("ADAPTIVE_BFP4_CHECK", mismatch, actual.numel(), flush=True)
         if mismatch:
-            torch.save(dict(input=x, actual=actual, expected=expected, oracle_stats=oracle_stats),
-                       DIRECTORY / (args.label + ".failure.pt"))
+            torch.save(
+                dict(input=x, actual=actual, expected=expected, oracle_stats=oracle_stats),
+                DIRECTORY / (args.label + ".failure.pt"),
+            )
         assert mismatch == 0 and bit_mismatch == 0, f"{mismatch} adaptive BFP4 arithmetic-oracle mismatches"
         times = []
         if args.iters:
@@ -293,14 +302,26 @@ def main():
         byte_count = x.numel() * 2 + output_bytes
         assert source_pins() == pins, "Sources changed during measurement"
         record = dict(
-            **vars(args), actual_cores=cores, mismatch=mismatch, decoded_bit_mismatch=bit_mismatch, numel=x.numel(),
-            oracle=oracle_stats, source_sha256=pins,
-            fp32_dst=True, dst_tiles_reserved=3, batch=1, cb_payload_per_core=4096 + 2 * (576 if args.output_format == "b4" else 2048),
-            median_ms=median, replay_ms=times, read_write_GBps=byte_count / (median * 1e6) if median else None,
+            **vars(args),
+            actual_cores=cores,
+            mismatch=mismatch,
+            decoded_bit_mismatch=bit_mismatch,
+            numel=x.numel(),
+            oracle=oracle_stats,
+            source_sha256=pins,
+            fp32_dst=True,
+            dst_tiles_reserved=3,
+            batch=1,
+            cb_payload_per_core=4096 + 2 * (576 if args.output_format == "b4" else 2048),
+            median_ms=median,
+            replay_ms=times,
+            read_write_GBps=byte_count / (median * 1e6) if median else None,
             actual_sha256=hashlib.sha256(actual_bits.numpy().tobytes()).hexdigest(),
             expected_sha256=hashlib.sha256(expected_bits.numpy().tobytes()).hexdigest(),
             hash_contract="Decoded FP32 bits with signed zeros canonicalized, not raw packed DRAM bytes",
-            quantization_l2_pct=float(100 * (actual.double() - x.double()).norm() / x.double().norm()) if x.double().norm() else 0.0,
+            quantization_l2_pct=(
+                float(100 * (actual.double() - x.double()).norm() / x.double().norm()) if x.double().norm() else 0.0
+            ),
         )
         path.write_text(json.dumps(record, indent=2) + "\n")
         print(json.dumps(record), flush=True)

@@ -498,8 +498,8 @@ void blocked_matmul_and_pack(
     in0_index = in0_index_start;
     in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-        matmul_block_no_mop(in0_cb, residual_cb, in0_index, in1_index, dst_index,
-                            transpose, subblock_w, subblock_h, matmul_stride);
+        matmul_block_no_mop(
+            in0_cb, residual_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
         ++in0_index;
         in1_index += in1_stride;
     }
@@ -843,8 +843,8 @@ void sub_exp_block_bcast_cols(
 #endif
 #endif
 #ifdef SDPA_LOFI_ROUND_P
-            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_round_p,
-                                  (32 * score_batch), 0, VectorMode::None)));
+            PACK((SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lofi_round_p, (32 * score_batch), 0, VectorMode::None)));
 #endif
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 #ifdef SDPA_FP32_PAIRED_PACK
@@ -1480,13 +1480,15 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_commit();
             tile_regs_wait();
             PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-                DST_SYNC_MODE, DST_ACCUM_MODE,
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
 #ifdef SDPA_LOFI_V_BIAS
                 calculate_lofi_normalize_bias,
 #else
                 calculate_sdpa_fp32_normalize,
 #endif
-                0, VectorMode::None)));
+                0,
+                VectorMode::None)));
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             pack_tile(0, normalized_out_cb);
             tile_regs_release();
@@ -2648,8 +2650,7 @@ static void sdpa_inner_loop_step(
 #endif
             MATH((llk_math_matmul_init<denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
 #if defined(SDPA_DENOM_PHASES) && SDPA_DENOM_PHASES == 2
-            static_assert(denom_fidelity == MathFidelity::HiFi2,
-                          "Phase-0/2 denominator requires the two-phase MOP");
+            static_assert(denom_fidelity == MathFidelity::HiFi2, "Phase-0/2 denominator requires the two-phase MOP");
             // SrcA is exactly zero/one: its low mantissa is zero. Execute phases
             // 0 and 2, not ordinary HiFi2's 0 and 1, to retain all SrcB bits.
             MATH((addr_mod_t{

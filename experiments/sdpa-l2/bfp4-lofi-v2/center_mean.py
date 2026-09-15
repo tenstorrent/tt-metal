@@ -7,6 +7,7 @@ fp32_sfpu includes device BF16->FP32 conversion and full-FP32 SFPU mean, then
 explicit final BF16 conversion. Both materialize repeated rows with broadcast
 add into a stable preallocated bias consumed by center_preprocess.
 """
+
 import argparse
 import hashlib
 import json
@@ -39,20 +40,25 @@ def build(device, src, mode="bf16_fpu"):
     assert src.shape[2] > 0
     shape = [1, src.shape[1], 32, 128]
     compact_shape = [1, src.shape[1], 1, 128]
-    zeros = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                       device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    bias = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,
-                                          device, ttnn.DRAM_MEMORY_CONFIG)
+    zeros = ttnn.zeros(
+        shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bias = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
     config = ttnn.init_device_compute_kernel_config(
-        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False,
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
     )
     wide_src, narrow_mean = None, None
     if mode == "fp32_sfpu":
-        wide_src = ttnn.allocate_tensor_on_device(src.shape, ttnn.float32, ttnn.TILE_LAYOUT,
-                                                 device, ttnn.DRAM_MEMORY_CONFIG)
-        narrow_mean = ttnn.allocate_tensor_on_device(compact_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT,
-                                                    device, ttnn.DRAM_MEMORY_CONFIG)
+        wide_src = ttnn.allocate_tensor_on_device(
+            src.shape, ttnn.float32, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        narrow_mean = ttnn.allocate_tensor_on_device(
+            compact_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
     keepalive = []
 
     def invoke():
@@ -61,9 +67,14 @@ def build(device, src, mode="bf16_fpu"):
             # Cost belongs to this mean invocation, never a precomputed input.
             ttnn.typecast(src, ttnn.float32, output_tensor=wide_src)
             source = wide_src
-        mean = ttnn.mean(source, dim=2, keepdim=True,
-                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                         compute_kernel_config=config, fast_and_approximate_mode=False)
+        mean = ttnn.mean(
+            source,
+            dim=2,
+            keepdim=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=config,
+            fast_and_approximate_mode=False,
+        )
         keepalive.append(mean)
         invoke.last_mean = mean
         if narrow_mean is not None:
@@ -77,7 +88,8 @@ def build(device, src, mode="bf16_fpu"):
     invoke.last_mean = None
     invoke.intermediates = keepalive
     invoke.precision = dict(
-        input="original BF16 K (device resident)", accumulation="FP32 DST",
+        input="original BF16 K (device resident)",
+        accumulation="FP32 DST",
         reduction="FPU/GMPOOL HiFi4" if mode == "bf16_fpu" else "full FP32 SFPU",
         reciprocal="1/N truncated to BF16 (not RNE)" if mode == "bf16_fpu" else "FP32 post-reduction 1/N",
         final_bias="BF16, explicit repeated column bias",
@@ -148,8 +160,9 @@ def main():
     parser.add_argument("--seed", type=int, default=1240)
     parser.add_argument("--iters", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--trace-repeats", type=int, default=10,
-                        help="0 gives synchronized eager timing, including host overhead")
+    parser.add_argument(
+        "--trace-repeats", type=int, default=10, help="0 gives synchronized eager timing, including host overhead"
+    )
     args = parser.parse_args()
     assert args.length > 0 and args.length % 32 == 0 and args.heads > 0
     assert args.iters >= 0 and args.warmup >= 0 and args.trace_repeats >= 0
@@ -183,8 +196,7 @@ def main():
             reduction_output_l2_pct_before_explicit_narrow=center_preprocess.l2_percent(raw_mean, reference64),
             bf16_truncated_reciprocal_relative_error=float(truncated_reciprocal) * args.length - 1,
         )
-        output, center_invoke, cores = center_preprocess.build(
-            device, src, bias, args.cores, args.quant_mode)
+        output, center_invoke, cores = center_preprocess.build(device, src, bias, args.cores, args.quant_mode)
         center_invoke()
         expected = center_preprocess.quantize_oracle(center_preprocess.center_oracle(x, actual_bias), args.quant_mode)
         actual = ttnn.to_torch(output).float()
@@ -201,16 +213,27 @@ def main():
         if args.iters:
             assert torch.equal(actual_bias, ttnn.to_torch(bias).bfloat16())
             assert torch.equal(actual, ttnn.to_torch(output).float())
-        files = [Path(__file__).resolve(), HERE / "center_preprocess.py",
-                 *sorted((HERE / "center_preprocess").glob("*.cpp")),
-                 *sorted((HERE / "center_preprocess").glob("*.hpp"))]
+        files = [
+            Path(__file__).resolve(),
+            HERE / "center_preprocess.py",
+            *sorted((HERE / "center_preprocess").glob("*.cpp")),
+            *sorted((HERE / "center_preprocess").glob("*.hpp")),
+        ]
         record = dict(
-            **vars(args), actual_center_cores=cores, precision=mean_invoke.precision,
-            mean_metrics=mean_metrics, centered_quantization_mismatches=mismatch,
+            **vars(args),
+            actual_center_cores=cores,
+            precision=mean_invoke.precision,
+            mean_metrics=mean_metrics,
+            centered_quantization_mismatches=mismatch,
             mean_median_ms=statistics.median(mean_times) if mean_times else None,
             mean_plus_center_median_ms=statistics.median(chain_times) if chain_times else None,
-            mean_times_ms=mean_times, mean_plus_center_times_ms=chain_times,
-            timing="trace replay wall-time per invocation" if args.trace_repeats else "synchronized eager, includes host overhead",
+            mean_times_ms=mean_times,
+            mean_plus_center_times_ms=chain_times,
+            timing=(
+                "trace replay wall-time per invocation"
+                if args.trace_repeats
+                else "synchronized eager, includes host overhead"
+            ),
             host_precomputed_bias=False,
             source_sha256={str(p.relative_to(HERE)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
         )

@@ -22,4 +22,3 @@ void kernel_main() {
         cb.push_back(batch);
     }
 }
-

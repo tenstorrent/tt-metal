@@ -13,7 +13,6 @@ void kernel_main() {
     cb_wait_front(3, 1);
     cb_wait_front(4, 1);
     DeviceZoneScopedN("Q_CENTER_STREAMING");
-    sdpa_standard_v2<4, 16, 16 * chunks, 4, 4, scale,
-                     1, 4, 1, 4, false, 0, 1, 2, 6, 3, 14, 4, 5, 16, 15>(
-                         1, chunks, 8, 9, 10, 11, 12, 13);
+    sdpa_standard_v2<4, 16, 16 * chunks, 4, 4, scale, 1, 4, 1, 4, false, 0, 1, 2, 6, 3, 14, 4, 5, 16, 15>(
+        1, chunks, 8, 9, 10, 11, 12, 13);
 }

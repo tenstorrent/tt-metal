@@ -1,4 +1,5 @@
 """CPU/static checks only: no TTNN import and no device execution."""
+
 import ast
 import contextlib
 import io
@@ -47,31 +48,62 @@ class Device:
 
 def environment(filename):
     calls = []
-    ttnn = NS(bfloat16="bf16", bfloat4_b="b4", bfloat8_b="b8", float32="fp32",
-              TILE_LAYOUT="tile", DRAM_MEMORY_CONFIG="dram", Shape=tuple,
-              MathFidelity=NS(LoFi="LoFi", HiFi4="HiFi4"),
-              CoreCoord=lambda x, y: NS(x=x, y=y), CoreRange=lambda a, b: (a, b),
-              CoreRangeSet=list, RuntimeArgs=lambda: defaultdict(lambda: defaultdict(list)),
-              allocate_tensor_on_device=lambda shape, dtype, *args: Tensor(shape, dtype),
-              from_torch=lambda x, **kwargs: Tensor(x.shape, x.dtype),
-              TensorAccessorArgs=lambda t: NS(get_compile_time_args=lambda: [1, t.volume(), t.dtype]),
-              generic_op=lambda tensors, desc: calls.append(desc))
-    for name in ("CBDescriptor", "CBFormatDescriptor", "ComputeConfigDescriptor", "KernelDescriptor",
-                 "ReaderConfigDescriptor", "WriterConfigDescriptor", "ProgramDescriptor", "SemaphoreDescriptor"):
+    ttnn = NS(
+        bfloat16="bf16",
+        bfloat4_b="b4",
+        bfloat8_b="b8",
+        float32="fp32",
+        TILE_LAYOUT="tile",
+        DRAM_MEMORY_CONFIG="dram",
+        Shape=tuple,
+        MathFidelity=NS(LoFi="LoFi", HiFi4="HiFi4"),
+        CoreCoord=lambda x, y: NS(x=x, y=y),
+        CoreRange=lambda a, b: (a, b),
+        CoreRangeSet=list,
+        RuntimeArgs=lambda: defaultdict(lambda: defaultdict(list)),
+        allocate_tensor_on_device=lambda shape, dtype, *args: Tensor(shape, dtype),
+        from_torch=lambda x, **kwargs: Tensor(x.shape, x.dtype),
+        TensorAccessorArgs=lambda t: NS(get_compile_time_args=lambda: [1, t.volume(), t.dtype]),
+        generic_op=lambda tensors, desc: calls.append(desc),
+    )
+    for name in (
+        "CBDescriptor",
+        "CBFormatDescriptor",
+        "ComputeConfigDescriptor",
+        "KernelDescriptor",
+        "ReaderConfigDescriptor",
+        "WriterConfigDescriptor",
+        "ProgramDescriptor",
+        "SemaphoreDescriptor",
+    ):
         setattr(ttnn, name, lambda **kwargs: NS(**kwargs))
 
     def quantizer(device, src, **kwargs):
         return Tensor(src.shape, kwargs.get("output_format", "b4")), lambda: None, {}
 
-    scope = dict(HERE=HERE, ROOT=ROOT, __file__=str(HERE / filename), Path=Path,
-                 math=math, struct=struct, json=json, ttnn=ttnn, calls=calls,
-                 PREFIX="experiments/sdpa-l2/bfp4-lofi-v2/fullchip/",
-                 PRIVATE="experiments/sdpa-l2/bfp4-lofi-v2/vtransposed/",
-                 COMPUTE="experiments/sdpa-l2/bfp4-lofi-v2/vtransposed/compute.cpp",
-                 PREP=NS(build=quantizer), B4_PREP=NS(build=quantizer))
+    scope = dict(
+        HERE=HERE,
+        ROOT=ROOT,
+        __file__=str(HERE / filename),
+        Path=Path,
+        math=math,
+        struct=struct,
+        json=json,
+        ttnn=ttnn,
+        calls=calls,
+        PREFIX="experiments/sdpa-l2/bfp4-lofi-v2/fullchip/",
+        PRIVATE="experiments/sdpa-l2/bfp4-lofi-v2/vtransposed/",
+        COMPUTE="experiments/sdpa-l2/bfp4-lofi-v2/vtransposed/compute.cpp",
+        PREP=NS(build=quantizer),
+        B4_PREP=NS(build=quantizer),
+    )
     source = ast.parse((HERE / filename).read_text())
-    source.body = [node for node in source.body if isinstance(node, ast.FunctionDef)
-                   and node.name in ("format_info", "build_transpose", "build", "source_files")]
+    source.body = [
+        node
+        for node in source.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in ("format_info", "build_transpose", "build", "source_files")
+    ]
     exec(compile(source, str(HERE / filename), "exec"), scope)
     return scope
 
@@ -95,8 +127,7 @@ class VTransposeLayout(unittest.TestCase):
                         for row, col in ((0, 0), (15, 16), (31, 31)):
                             # Physical VT[row=channel,col=token], then PV T.
                             original = ((chunk * 16 + k) * 32 + row, d * 32 + col)
-                            recovered = ((page % nt) * 32 + row,
-                                         ((page % (4 * nt)) // nt) * 32 + col)
+                            recovered = ((page % nt) * 32 + row, ((page % (4 * nt)) // nt) * 32 + col)
                             self.assertEqual(original, recovered)
                     self.assertEqual(slots, set(range(64)))
 
@@ -107,9 +138,18 @@ class VTransposeLayout(unittest.TestCase):
         for destination, denom_only in (("main_bf16", False), ("fast_bf16", False), ("fast_bf16", True)):
             for formats in ("b8_b8", "b4_b8", "b8_b4", "b4_b4"):
                 for grid7 in (False, True):
-                    args = NS(destination=destination, denom_only=denom_only, kv_formats=formats,
-                              length=1024, heads=2, cores=4, check_preprocess=False,
-                              read_barrier_tiles=2, grid7_exp=grid7, v_transposed=False)
+                    args = NS(
+                        destination=destination,
+                        denom_only=denom_only,
+                        kv_formats=formats,
+                        length=1024,
+                        heads=2,
+                        cores=4,
+                        check_preprocess=False,
+                        read_barrier_tiles=2,
+                        grid7_exp=grid7,
+                        v_transposed=False,
+                    )
                     with contextlib.redirect_stdout(io.StringIO()):
                         control = baseline["build"](Device(), args, inputs)
                         ordinary = candidate["build"](Device(), args, inputs)
@@ -128,7 +168,10 @@ class VTransposeLayout(unittest.TestCase):
                     rotated[3]()
                     desc = candidate["calls"][-1]
                     self.assertIn(("SDPA_V_TRANSPOSED", "1"), desc.kernels[0].defines)
-                    self.assertEqual(desc.kernels[2].compile_time_args, [2, struct.unpack("I", struct.pack("f", 1/math.sqrt(128)))[0], 8])
+                    self.assertEqual(
+                        desc.kernels[2].compile_time_args,
+                        [2, struct.unpack("I", struct.pack("f", 1 / math.sqrt(128)))[0], 8],
+                    )
 
     def test_source_paths(self):
         candidate = environment("Vtransposed_fullchip.py")

@@ -51,11 +51,16 @@ def diagonal(q, k, limit):
     qr, kr = (q * scale).bfloat16().float(), (k / scale).bfloat16().float()
     assert torch.equal(qr / scale, q) and torch.equal(kr * scale, k)
     assert torch.equal(MODEL.round_significand(qr, 7) / scale, MODEL.round_significand(q, 7))
-    return qr, kr, scale, dict(
-        scale_exponents=exponent.int().tolist(),
-        clipped_channels=int((raw != exponent).sum()),
-        bf16_roundtrip_exact=True,
-        q7_unscaled_exact=True,
+    return (
+        qr,
+        kr,
+        scale,
+        dict(
+            scale_exponents=exponent.int().tolist(),
+            clipped_channels=int((raw != exponent).sum()),
+            bf16_roundtrip_exact=True,
+            q7_unscaled_exact=True,
+        ),
     )
 
 
@@ -66,23 +71,46 @@ def main():
     torch.set_num_threads(4)
     signs = torch.randint(0, 2, (128,), generator=torch.Generator().manual_seed(HAD.SIGN_SEED)).float() * 2 - 1
     started, count = time.monotonic(), 0
-    sources = [Path(__file__), Path(HAD.__file__), Path(RISK.__file__), HERE / "numerics.py",
-               MODEL.V1 / "probe.py", Path(REPRO.__file__)]
+    sources = [
+        Path(__file__),
+        Path(HAD.__file__),
+        Path(RISK.__file__),
+        HERE / "numerics.py",
+        MODEL.V1 / "probe.py",
+        Path(REPRO.__file__),
+    ]
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", hostname=platform.node(), threads=4, length=32768,
-                  heads=1, query_length=128, dim=128, seeds=[1240, 1241],
-                  contract="Original BF16 reference; Q RNE7; K/V host RNE BFP4 or RNE5/native RNA BFP8/LoFi trunc5; native FP32 exp grid and trunc7 P with matched denominator; FP64 QK, subtraction, online corrections and PV state; BF16 output",
-                  smoothing="K'=K/s, Q'=Q*s, s=2^clip(round(log2(RMS(K)/median_channel_RMS)),-limit,limit); real BF16 transformed spills; no mean subtraction or logit correction; no runtime statistics/transform cost measurement",
-                  hadamard="Shared fixed signs, unnormalized H16, BF16 transformed spills, score scale divided by16; no centering",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}))
+        emit(
+            dict(
+                kind="provenance",
+                hostname=platform.node(),
+                threads=4,
+                length=32768,
+                heads=1,
+                query_length=128,
+                dim=128,
+                seeds=[1240, 1241],
+                contract="Original BF16 reference; Q RNE7; K/V host RNE BFP4 or RNE5/native RNA BFP8/LoFi trunc5; native FP32 exp grid and trunc7 P with matched denominator; FP64 QK, subtraction, online corrections and PV state; BF16 output",
+                smoothing="K'=K/s, Q'=Q*s, s=2^clip(round(log2(RMS(K)/median_channel_RMS)),-limit,limit); real BF16 transformed spills; no mean subtraction or logit correction; no runtime statistics/transform cost measurement",
+                hadamard="Shared fixed signs, unnormalized H16, BF16 transformed spills, score scale divided by16; no centering",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+            )
+        )
         for seed in (1240, 1241):
-            for distribution in ("normal", "channel_outlier_k", "balanced_channel_qk", "joint_channel_qk", "structured_balanced_qk"):
+            for distribution in (
+                "normal",
+                "channel_outlier_k",
+                "balanced_channel_qk",
+                "joint_channel_qk",
+                "structured_balanced_qk",
+            ):
                 q, k, v = inputs(seed, distribution)
                 reference = REPRO.reference(q, k, v)
                 exact_score = q.double() @ k.double().T
@@ -107,15 +135,34 @@ def main():
                         k_l2 = float(100 * (reconstructed - k).norm() / k.norm())
                         normalized = HAD.weights(qe, ke, width)
                         for vfmt, ve in values.items():
-                            emit(dict(kind="attention", seed=seed, distribution=distribution, method=method,
-                                      k_format=kfmt, v_format=vfmt,
-                                      **REPRO.metrics((normalized @ ve).bfloat16(), reference),
-                                      centered_score_l2_pct=score_l2, original_coordinate_k_l2_pct=k_l2,
-                                      p_entropy_mean=float(-(normalized * normalized.clamp_min(1e-300).log()).sum(-1).mean()),
-                                      p_max_mean=float(normalized.max(-1).values.mean()), **details))
+                            emit(
+                                dict(
+                                    kind="attention",
+                                    seed=seed,
+                                    distribution=distribution,
+                                    method=method,
+                                    k_format=kfmt,
+                                    v_format=vfmt,
+                                    **REPRO.metrics((normalized @ ve).bfloat16(), reference),
+                                    centered_score_l2_pct=score_l2,
+                                    original_coordinate_k_l2_pct=k_l2,
+                                    p_entropy_mean=float(
+                                        -(normalized * normalized.clamp_min(1e-300).log()).sum(-1).mean()
+                                    ),
+                                    p_max_mean=float(normalized.max(-1).values.mean()),
+                                    **details,
+                                )
+                            )
                             count += 1
-                emit(dict(kind="input_completed", seed=seed, distribution=distribution, cases=count,
-                          seconds=time.monotonic() - started))
+                emit(
+                    dict(
+                        kind="input_completed",
+                        seed=seed,
+                        distribution=distribution,
+                        cases=count,
+                        seconds=time.monotonic() - started,
+                    )
+                )
         emit(dict(kind="completed", cases=count, seconds=time.monotonic() - started))
 
 

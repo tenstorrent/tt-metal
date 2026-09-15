@@ -74,15 +74,23 @@ def main():
     started = time.monotonic()
     sources = [Path(__file__), HERE / "numerics.py", MODEL.V1 / "probe.py", Path(REPRO.__file__)]
     with (HERE / (args.label + ".jsonl")).open("x") as output:
+
         def emit(record):
             line = json.dumps(record, allow_nan=False)
             output.write(line + "\n")
             output.flush()
             print(line, flush=True)
 
-        emit(dict(kind="provenance", args=vars(args), hostname=platform.node(), threads=4,
-                  contract="CPU-only FP64 matmul/exp/state; Q RNE7; P trunc7 and matched denominator; full BF16/BFP8 K/V; BF16 output; native RNA vs host RNE BFP8 groups16 along D",
-                  source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}))
+        emit(
+            dict(
+                kind="provenance",
+                args=vars(args),
+                hostname=platform.node(),
+                threads=4,
+                contract="CPU-only FP64 matmul/exp/state; Q RNE7; P trunc7 and matched denominator; full BF16/BFP8 K/V; BF16 output; native RNA vs host RNE BFP8 groups16 along D",
+                source_sha256={str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+            )
+        )
         for length in args.lengths:
             q, k, v = [x.squeeze().float() for x in REPRO.make_inputs(1, 128, length, 128, args.seed, "normal")]
             reference = REPRO.reference(q, k, v)
@@ -90,19 +98,42 @@ def main():
             encoded = {"bf16": (k, v)}
             for name, route in (("rna", "device"), ("rne", "host")):
                 encoded[name] = tuple(MODEL.quantize(x, 7, route) for x in (k, v))
-                emit(dict(kind="representation", length=length, rounding=name,
-                          k=summary(encoded[name][0], k), v=summary(encoded[name][1], v)))
+                emit(
+                    dict(
+                        kind="representation",
+                        length=length,
+                        rounding=name,
+                        k=summary(encoded[name][0], k),
+                        v=summary(encoded[name][1], v),
+                    )
+                )
             cases = [("bf16_kv", "bf16", "bf16"), ("rna_kv", "rna", "rna"), ("rne_kv", "rne", "rne")]
             if length == 32768:
-                cases += [(f"{route}_{side}_only", route if side == "k" else "bf16",
-                           route if side == "v" else "bf16") for route in ("rna", "rne") for side in ("k", "v")]
+                cases += [
+                    (f"{route}_{side}_only", route if side == "k" else "bf16", route if side == "v" else "bf16")
+                    for route in ("rna", "rne")
+                    for side in ("k", "v")
+                ]
             for name, kroute, vroute in cases:
                 for p_rule in (["trunc7", "exact"] if length == 32768 else ["trunc7"]):
                     raw, mass = attention(qe, encoded[kroute][0], encoded[vroute][1], p_rule)
-                    emit(dict(kind="attention", length=length, seed=args.seed, heads=1, query_rows=128,
-                              distribution="normal", variant=name, p_rule=p_rule, denominator="matched",
-                              **summary(raw.bfloat16(), reference), before_output_rounding=summary(raw, reference),
-                              p_mass_ratio=mass, q=summary(qe, q)))
+                    emit(
+                        dict(
+                            kind="attention",
+                            length=length,
+                            seed=args.seed,
+                            heads=1,
+                            query_rows=128,
+                            distribution="normal",
+                            variant=name,
+                            p_rule=p_rule,
+                            denominator="matched",
+                            **summary(raw.bfloat16(), reference),
+                            before_output_rounding=summary(raw, reference),
+                            p_mass_ratio=mass,
+                            q=summary(qe, q),
+                        )
+                    )
             emit(dict(kind="length_completed", length=length, elapsed_seconds=time.monotonic() - started))
         emit(dict(kind="completed", seconds=time.monotonic() - started))
 
