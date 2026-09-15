@@ -24,6 +24,7 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
+#include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
@@ -360,6 +361,26 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+    }
+    else if constexpr (OPERATION == SfpuType::floor)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_floor_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::ceil)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_ceil_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::trunc)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_trunc_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::frac)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_frac_, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::round)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_round_, (APPROX, ITERATIONS), dst_index, VectorMode::RC, 0 /* decimals */);
     }
     else
     {
