@@ -7,7 +7,9 @@
 #include "autograd/tensor.hpp"
 #include "metal/ops/ring_cyclic_sdpa_bw/ring_cyclic_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
+#include "metal/ops/ring_zigzag_sdpa/ring_zigzag_sdpa.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
@@ -72,6 +74,14 @@ enum class RingBackwardKind {
 // shift_transport is how every ring shift in the forward and the backward
 // moves its bytes (see ttnn_fixed::distributed::RingShiftTransport). It is
 // orthogonal to backward_kind: both backwards shift the same tensors.
+// layout is how the sequence is dealt to the chips (see ops::RingLayout).
+// Contiguous is the original: chip r holds chunk r of ring_size. Zigzag
+// expects every local tensor to hold two chunks back to back, r and
+// 2 ring_size - 1 - r, of a sequence cut into 2 ring_size chunks; with a
+// causal mask that balances the work across chips, where the contiguous
+// layout leaves the first chip nearly idle and runs at the pace of the last.
+// Zigzag is for the causal mask only and supports TwoPass and the cyclic
+// kinds (Cyclic runs as CyclicInPlace there).
 autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
@@ -80,6 +90,7 @@ autograd::TensorPtr ring_attention_sdpa(
     const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
     RingBackwardKind backward_kind = RingBackwardKind::TwoPass,
     uint32_t rows_per_block_tiles = 1U,
-    ttnn_fixed::distributed::RingShiftTransport shift_transport = ttnn_fixed::distributed::RingShiftTransport::Fifo);
+    ttnn_fixed::distributed::RingShiftTransport shift_transport = ttnn_fixed::distributed::RingShiftTransport::Fifo,
+    ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous);
 
 }  // namespace ttml::ops::distributed
