@@ -21,7 +21,10 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch_fabric2d import _expert_dispatch_table
+from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch_fabric2d import (
+    _expert_dispatch_table,
+    _mc_reach,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config, get_gate_outputs
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 
@@ -35,6 +38,57 @@ NUM_EXPERTS_PER_TOK = 8
 
 # Enough launches that per-op mean is not dominated by the first, which pays program build.
 ITERATIONS = 10
+
+# Routing profiles, as (share of picks landing in this dispatch group, weight on the hot half of its
+# chips). Both knobs matter and both were wrong before:
+#
+# - Drawing every pick from the group's own experts makes ~4x too many picks land in-group, which
+#   makes collisions on one destination chip far more likely than production and OVERSTATES fan-out
+#   by roughly 3x. Production spreads picks over all 256 experts across 4 groups.
+# - Drawing uniformly across chips is fan-out's worst case: one copy per direction saves nothing when
+#   no two of a token's destinations share a direction. It reports ~1.2x, which reads as noise.
+#
+# The interesting configurations are the hot ones, because that is where the layers the perf harness
+# selects actually sit. Calibrate the exact shares on a perf-qualified machine; this host cannot
+# measure and the profiles are only meant to span the range.
+ROUTING_PROFILES = {
+    "uniform": (0.250, 1.0),
+    "hot": (0.372, 2.0),
+    "hottest": (0.473, 3.0),
+}
+
+
+def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weight):
+    """topk distinct experts per token, drawn from ALL experts with a controllable in-group skew.
+
+    How many of a token's picks land in its own dispatch group is drawn FIRST, then that many distinct
+    in-group experts and the rest from the other groups. Weighting the whole expert list and drawing
+    topk distinct picks from it does not work: sampling without replacement pulls the share well above
+    the weight it was solved for (47.3% asked, 63.3% delivered), and a share that drifts up is the
+    measurement trap this generator exists to avoid.
+
+    Within the group, the chips in its hot half are weighted `hot_weight`, which is what concentrates
+    traffic onto one directed link -- the thing multicast is measured on.
+    """
+    experts_per_group = num_routed_experts // G
+    experts_per_chip = experts_per_group // H
+    in_weights = torch.ones(experts_per_group, dtype=torch.float64)
+    in_weights[experts_per_chip * (H // 2) :] = hot_weight
+
+    indices = torch.zeros(G, H, seq, topk, dtype=torch.int64)
+    for g in range(G):
+        base = g * experts_per_group
+        elsewhere = torch.cat([torch.arange(0, base), torch.arange(base + experts_per_group, num_routed_experts)])
+        for h in range(H):
+            for t in range(seq):
+                n_in = int((torch.rand(topk) < in_group_share).sum())
+                picks = torch.empty(0, dtype=torch.int64)
+                if n_in > 0:
+                    picks = base + torch.multinomial(in_weights, n_in, replacement=False)
+                if n_in < topk:
+                    picks = torch.cat([picks, elsewhere[torch.randperm(elsewhere.numel())[: topk - n_in]]])
+                indices[g, h, t] = picks
+    return indices
 
 
 @pytest.mark.parametrize(
@@ -51,8 +105,9 @@ ITERATIONS = 10
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len_per_chip", [CHUNK // DISPATCH_GROUP_SIZE, 64], ids=lambda s: f"seq{s}")
+@pytest.mark.parametrize("routing", list(ROUTING_PROFILES), ids=lambda r: r)
 @pytest.mark.timeout(0)
-def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, seq_len_per_chip):
+def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, seq_len_per_chip, routing):
     cfg = extract_mesh_config(mesh_device)
     sp_axis, H, G = cfg.sp_axis, cfg.dispatch_group_size, cfg.num_dispatch_groups
     assert sp_axis == 0, "this op runs on the dispatch axis, which extract_mesh_config puts at 0"
@@ -70,12 +125,9 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
 
     torch.manual_seed(42)
     table = _expert_dispatch_table(NUM_ROUTED_EXPERTS, H, G)
-    experts_per_group = NUM_ROUTED_EXPERTS // G
-    indices = torch.zeros(G, H, seq_len_per_chip, NUM_EXPERTS_PER_TOK, dtype=torch.int64)
-    for g in range(G):
-        for h in range(H):
-            for t in range(seq_len_per_chip):
-                indices[g, h, t] = g * experts_per_group + torch.randperm(experts_per_group)[:NUM_EXPERTS_PER_TOK]
+    in_group_share, hot_weight = ROUTING_PROFILES[routing]
+    indices = _draw_indices(G, H, seq_len_per_chip, NUM_EXPERTS_PER_TOK, NUM_ROUTED_EXPERTS, in_group_share, hot_weight)
+    realized = float((table[torch.arange(G).view(G, 1, 1, 1), indices] != -1).to(torch.float64).mean())
 
     offs = torch.zeros(G, H, NUM_ROUTED_EXPERTS, dtype=torch.int32)
     counts = torch.zeros(G, H, NUM_ROUTED_EXPERTS, dtype=torch.int32)
@@ -113,11 +165,26 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     tt_offs_own = shard(offs.permute(1, 0, 2).reshape(H, G, NUM_ROUTED_EXPERTS), (0, 1), ttnn.int32)
     tt_counts = shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
     tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
+    # Supplied by the test until masked_bincount emits it; see the note on routing setup.
+    tt_reach = shard(
+        _mc_reach(indices, table, offs, max_dispatch_buffer_token_size, G, H, seq_len_per_chip, NUM_EXPERTS_PER_TOK).to(
+            torch.int32
+        ),
+        (None, 0),
+        ttnn.int32,
+    )
 
     logger.info(
         f"perf worker: mesh={tuple(mesh_device.shape)} seq={seq_len_per_chip} emb={EMB_DIM} "
         f"experts={NUM_ROUTED_EXPERTS} topk={NUM_EXPERTS_PER_TOK} epc={experts_per_chip} "
         f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS}"
+    )
+    logger.info(f"routing profile {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
+    # A drifting share is exactly how this measurement goes wrong without anyone noticing, in either
+    # direction: too low reads as noise, too high overstates fan-out by roughly 3x.
+    assert abs(realized - in_group_share) < 0.02, (
+        f"routing profile {routing} asked for {100 * in_group_share:.1f}% of picks in this dispatch "
+        f"group and drew {100 * realized:.1f}%"
     )
 
     production = TtDispatchModule(
@@ -138,42 +205,16 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
         torch.zeros(H, G, seq_len_per_chip, NUM_EXPERTS_PER_TOK, dtype=torch.bfloat16), (0, 1), ttnn.bfloat16
     )
 
-    # One untimed launch of each so the capture is not dominated by program build.
-    production.forward(tt_x, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
-    ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
-        tt_x,
-        tt_idx_u16,
-        tt_offs_all,
-        tt_table,
-        tt_counts,
-        tt_region,
-        experts_per_chip=experts_per_chip,
-        num_routed_experts=NUM_ROUTED_EXPERTS,
-        num_experts_per_tok=NUM_EXPERTS_PER_TOK,
-        metadata_len=metadata_len,
-        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
-        seq_len_per_chip=seq_len_per_chip,
-        cluster_axis=sp_axis,
-        num_links=num_links,
-        topology=ttnn.Topology.Ring,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    signpost("dispatch_baseline")
-    for _ in range(ITERATIONS):
-        production.forward(tt_x, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
-    ttnn.synchronize_device(mesh_device)
-
-    signpost("dispatch_fabric2d")
-    for _ in range(ITERATIONS):
-        ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
+    def fabric2d(fanout):
+        return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
             tt_x,
             tt_idx_u16,
             tt_offs_all,
             tt_table,
             tt_counts,
             tt_region,
+            fanout_reach=tt_reach if fanout else None,
+            fanout=fanout,
             experts_per_chip=experts_per_chip,
             num_routed_experts=NUM_ROUTED_EXPERTS,
             num_experts_per_tok=NUM_EXPERTS_PER_TOK,
@@ -185,5 +226,27 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    # One untimed launch of each so the capture is not dominated by program build.
+    production.forward(tt_x, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
+    fabric2d(False)
+    fabric2d(True)
+    ttnn.synchronize_device(mesh_device)
+
+    signpost("dispatch_baseline")
+    for _ in range(ITERATIONS):
+        production.forward(tt_x, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
+    ttnn.synchronize_device(mesh_device)
+
+    # Two transports, one routing draw, one board state. Store-and-forward moves the same bytes the
+    # production op does, so it is expected at parity; multicast is where the link bytes come out.
+    signpost("dispatch_fabric2d")
+    for _ in range(ITERATIONS):
+        fabric2d(False)
+    ttnn.synchronize_device(mesh_device)
+
+    signpost("dispatch_fabric2d_multicast")
+    for _ in range(ITERATIONS):
+        fabric2d(True)
     ttnn.synchronize_device(mesh_device)
     signpost("done")
