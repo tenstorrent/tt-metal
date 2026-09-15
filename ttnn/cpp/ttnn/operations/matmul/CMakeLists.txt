@@ -3,6 +3,19 @@ include(sources.cmake)
 add_library(ttnn_op_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 
+set(MATMUL_REGISTRY_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/device/config/registry/checked_in)
+set(MATMUL_REGISTRY_GENERATED_SOURCE ${MATMUL_REGISTRY_GENERATED_DIR}/matmul_registry_data.cpp)
+
+# Registry generation happens in tt-matmul-codegen. TTNN compiles its output.
+set_source_files_properties(
+    ${MATMUL_REGISTRY_GENERATED_SOURCE}
+    PROPERTIES
+        SKIP_LINTING
+            TRUE
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 tt_reuse_precompile_headers(ttnn_op_matmul TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
 set_target_properties(
@@ -33,7 +46,16 @@ target_sources(
         ${TTNN_OP_MATMUL_SRCS}
 )
 
-target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs})
+target_include_directories(
+    ttnn_op_matmul
+    PRIVATE
+        ${FixmeOpIncDirs}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        ${MATMUL_REGISTRY_GENERATED_DIR}
+)
 target_link_libraries(ttnn_op_matmul PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(

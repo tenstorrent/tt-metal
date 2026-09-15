@@ -5,12 +5,14 @@
 #include "ttnn/config.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
@@ -21,6 +23,16 @@
 #include <tt-metalium/experimental/inspector_config.hpp>
 
 namespace ttnn::core {
+
+namespace {
+std::atomic<MatmulRegistryMode> matmul_registry_mode{MatmulRegistryMode::Off};
+}  // namespace
+
+MatmulRegistryMode get_matmul_registry_mode() noexcept { return matmul_registry_mode.load(std::memory_order_relaxed); }
+
+void set_matmul_registry_mode(const MatmulRegistryMode mode) noexcept {
+    matmul_registry_mode.store(mode, std::memory_order_relaxed);
+}
 
 Config CONFIG{};
 
@@ -37,8 +49,29 @@ void Config::apply_json_overrides(const std::string& json_text, bool strict, con
 
     // Apply into a copy so a strict rejection leaves process-wide settings untouched.
     attributes_t next = this->attributes;
+    MatmulRegistryMode next_matmul_registry_mode = get_matmul_registry_mode();
     std::vector<std::string_view> applied;
     for (const auto& [key, value] : json.items()) {
+        if (key == "matmul_registry_mode") {
+            try {
+                const auto mode = value.get<std::string>();
+                if (mode == "off") {
+                    next_matmul_registry_mode = MatmulRegistryMode::Off;
+                } else if (mode == "shadow") {
+                    next_matmul_registry_mode = MatmulRegistryMode::Shadow;
+                } else if (mode == "on") {
+                    next_matmul_registry_mode = MatmulRegistryMode::On;
+                } else {
+                    throw std::invalid_argument("expected off, shadow, or on");
+                }
+            } catch (const std::exception& e) {
+                if (strict) {
+                    TT_THROW("Bad value for configuration key {}: {}{}", key, e.what(), from);
+                }
+                log_warning(tt::LogAlways, "Ignoring configuration key {}: {}{}", key, e.what(), from);
+            }
+            continue;
+        }
         bool known = false;
         reflect::for_each(
             [&](auto I) {
@@ -80,6 +113,7 @@ void Config::apply_json_overrides(const std::string& json_text, bool strict, con
     }
 
     this->attributes = std::move(next);
+    set_matmul_registry_mode(next_matmul_registry_mode);
     for (std::string_view name : applied) {
         this->validate(name);
     }
@@ -88,6 +122,7 @@ void Config::apply_json_overrides(const std::string& json_text, bool strict, con
 std::vector<std::string> Config::keys() {
     std::vector<std::string> names;
     reflect::for_each<attributes_t>([&](auto I) { names.emplace_back(reflect::member_name<I, attributes_t>()); });
+    names.emplace_back("matmul_registry_mode");
     return names;
 }
 
@@ -126,6 +161,7 @@ void Config::save_to_file(const std::filesystem::path& path) const {
             }
         },
         this->attributes);
+    json["matmul_registry_mode"] = std::string(to_string(get_matmul_registry_mode()));
     std::ofstream file(path);
     TT_FATAL(file.is_open(), "Failed to open {} to save the TTNN configuration", path.string());
     file << json.dump(4);
@@ -168,6 +204,7 @@ std::vector<std::pair<std::string, std::string>> Config::get_config_entries() co
                 fmt::format("{}", reflect::get<I>(this->attributes)));
         },
         this->attributes);
+    entries.emplace_back("matmul_registry_mode", fmt::format("{}", get_matmul_registry_mode()));
     return entries;
 }
 
@@ -295,6 +332,7 @@ std::ostream& operator<<(std::ostream& os, const Config& config) {
                << fmt::format("{}", reflect::get<I>(config.attributes)) << ",";
         },
         config.attributes);
+    os << "matmul_registry_mode=" << fmt::format("{}", get_matmul_registry_mode()) << ",";
     os << fmt::format("{}", config.get<"report_path">());
     os << "}";
     return os;
