@@ -369,52 +369,35 @@ def test_binary_left_shift(device, ttnn_function, ttnn_dtype):
     ],
 )
 def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
-    x_torch = torch.tensor(
-        [
-            [
-                19,
-                101,
-                21,
-                47,
-                0,
-                -4,
-                -99,
-                -278,
-                1000,
-                99999,
-                -99999,
-                -7544,
-                1,
-                -1,
-                2**31 - 1,
-                -(2**31),
-                123456789,
-                -123456789,
-            ]
-        ],
-        dtype=torch.int32,
-    )
+    torch.manual_seed(0)
+    if ttnn_dtype == ttnn.uint32:
+        min_value, max_value = 0, 2**32
+        torch_dtype = torch.uint32
+    else:
+        min_value, max_value = -(2**31), 2**31
+        torch_dtype = torch.int32
 
-    y_torch = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
-    if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
-        x_uint32 = x_torch.to(torch.int64) & 0xFFFFFFFF
-        y_uint32 = y_torch.to(torch.int64) & 0xFFFFFFFF
-        x_torch = x_uint32.to(torch.int32)
-        y_torch = y_uint32.to(torch.int32)
+    x_torch = torch.randint(min_value, max_value, (1, 1, 32, 32), dtype=torch.int64).to(torch_dtype)
+    y_torch = torch.randint(0, 32, x_torch.shape, dtype=torch.int64).to(torch_dtype)
+
+    if ttnn_dtype == ttnn.uint32:
+        # Pin values from the regression so the upper half of the UInt32
+        # domain is covered independently of the random input.
+        x_torch.flatten()[:4] = torch.tensor([0x80000000, 0xDEADBEEF, 0xFFFFFFFF, 0x80000001], dtype=torch.uint32)
+        y_torch.flatten()[:4] = torch.tensor([1, 4, 31, 16], dtype=torch.uint32)
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
+    if ttnn_dtype == ttnn.uint32:
+        expected_regression = torch.tensor([0x40000000, 0x0DEADBEE, 1, 0x8000], dtype=torch.uint32)
+        assert torch.equal(z_torch.flatten()[:4], expected_regression)
+
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch_dtype)
 
-    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
-        tt_out = tt_out.to(torch.int64)
-        z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
-        assert torch.equal(tt_out, z_torch_uint64)
-    else:
-        assert torch.equal(tt_out, z_torch)
+    assert torch.equal(tt_out, z_torch)
 
 
 @pytest.mark.parametrize(
