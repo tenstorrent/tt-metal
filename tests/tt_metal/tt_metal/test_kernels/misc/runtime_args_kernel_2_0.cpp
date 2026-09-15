@@ -22,6 +22,14 @@
 #include "defines_generated.h"
 #endif
 
+// Callers that use common runtime args may specify a separate common-arg count; otherwise it matches
+// the unique count, preserving behavior for existing callers.
+#ifdef COMMON_RUNTIME_ARGS
+#ifndef NUM_COMMON_RUNTIME_ARGS
+#define NUM_COMMON_RUNTIME_ARGS NUM_RUNTIME_ARGS
+#endif
+#endif
+
 void kernel_main() {
     // RESULTS_ADDR is the cached L1 address shared with the host (which reads/writes over the NOC and
     // must use the cached address). DM cores must reach that same physical memory through the uncached
@@ -33,7 +41,9 @@ void kernel_main() {
 #endif
     constexpr uint32_t kCommonRTASeparation = 1024;
     uint64_t hartid = 0;
-#ifdef COMPILE_FOR_DM
+    // Per-DM slotting is opt-in via MAX_DMS: callers that run the kernel on several DMs at once need
+    // each DM to own a slot, while callers reading back from a fixed address want the plain offsets.
+#if defined(COMPILE_FOR_DM) && defined(MAX_DMS)
     // Quasar DM only: get the DM processor's hartid (DM2..DM7 on Quasar). Used
     // to index into a MAX_DMS-wide L1 region so each DM writes to its own slot.
     // TODO: Replace with get_thread_idx() kernel API when available.
@@ -43,11 +53,15 @@ void kernel_main() {
     results[kCommonRTASeparation + MAX_DMS * NUM_RUNTIME_ARGS + hartid] = static_cast<uint32_t>(get_common_arg_addr(0));
 #endif
     for (uint32_t i = 0; i < NUM_RUNTIME_ARGS; i++) {
-#ifdef COMMON_RUNTIME_ARGS
-        results[i + kCommonRTASeparation + hartid * NUM_RUNTIME_ARGS] = get_common_vararg(i);
-#endif
         results[i] = get_vararg(i);
     }
+
+#ifdef COMMON_RUNTIME_ARGS
+    // Kept in its own loop: the common count need not match the unique count.
+    for (uint32_t i = 0; i < NUM_COMMON_RUNTIME_ARGS; i++) {
+        results[i + kCommonRTASeparation + hartid * NUM_RUNTIME_ARGS] = get_common_vararg(i);
+    }
+#endif
 
 #ifdef COORDS_ADDR
 #ifdef DATA_MOVEMENT
