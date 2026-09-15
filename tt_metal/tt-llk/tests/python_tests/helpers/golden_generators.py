@@ -1636,7 +1636,11 @@ class BroadcastGolden:
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
 
-        torch_format = format_dict[data_format]
+        # Hold the operand in its own format, not the output's. The hardware unpacks src_B from
+        # its L1 encoding and broadcasts that, so quantizing to the output format here rounds the
+        # value before any of it is picked: a Float16 operand into a bfloat16-backed output --
+        # every MX format among them -- loses three mantissa bits it never loses on the device.
+        torch_format = format_dict[input_format or data_format]
 
         # Convert input to tensor
         if isinstance(operand, torch.Tensor):
@@ -5069,10 +5073,16 @@ class SdpaSfpuGolden:
 class SdpaCorrectionGolden:
     """Golden for calculate_fused_max_sub_exp_add_tile in ckernel_sfpu_sdpa.h."""
 
-    def __call__(self, tiles, scale: float):
-        prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
-            t.to(torch.float32) for t in tiles
-        )
+    def __call__(self, tiles, scale: float, reuse_cur_max_tile: bool = False):
+        if reuse_cur_max_tile:
+            prev_max, worker_max, worker_sum, prev_sum = (
+                t.to(torch.float32) for t in tiles
+            )
+            cur_max_seed = worker_sum
+        else:
+            prev_max, worker_max, cur_max_seed, prev_sum, worker_sum = (
+                t.to(torch.float32) for t in tiles
+            )
 
         cur_max = torch.maximum(prev_max, worker_max)
         exp_prev = torch.exp(scale * (prev_max - cur_max))
@@ -5090,6 +5100,9 @@ class SdpaCorrectionGolden:
 
         cols = torch.tensor(SdpaSfpuGolden.TRANSFORMED_COLS, dtype=torch.long)
         seeds = [prev_max, worker_max, cur_max_seed, prev_sum, worker_sum]
+        if reuse_cur_max_tile:
+            seeds = seeds[:4]
+            computed = computed[:4]
         out = []
         for seed, value in zip(seeds, computed):
             tile = seed.clone()

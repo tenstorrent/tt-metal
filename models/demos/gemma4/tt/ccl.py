@@ -284,7 +284,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered,
             persistent_output_buffer=None,
             dim=3,
-            multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+            # Default async all-gather requires only the first two pre-created semaphores.
+            multi_device_global_semaphore=ccl_manager.get_ag_semaphore()[:2],
             num_links=ccl_manager.num_links,
             cluster_axis=tp_axis,
             topology=topology,
@@ -327,7 +328,8 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
             tensor,
             persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+            # Default async all-gather requires only the first two pre-created semaphores.
+            multi_device_global_semaphore=ccl_manager.get_ag_semaphore()[:2],
             num_links=ccl_manager.num_links,
             cluster_axis=tp_axis,
             topology=topology,
