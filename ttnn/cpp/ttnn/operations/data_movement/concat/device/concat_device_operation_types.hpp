@@ -30,4 +30,26 @@ struct ConcatInputs {
 constexpr bool is_width_concat(uint32_t rank, uint32_t dim) { return dim + 1 == rank; }
 constexpr bool is_height_concat(uint32_t rank, uint32_t dim) { return rank >= 2 && dim + 2 == rank; }
 
+// A sharded tensor of shape (D0, ..., Dn-1) is laid out as the 2D flattening
+// (prod(D0..Dn-2), Dn-1), so its shard rows carry the leading dims folded in. A height concat on
+// dim == rank-2 therefore has to interleave: the output rows for leading index b are input 0's
+// rows at b, then input 1's rows at b, and so on. This returns the number of those leading
+// indices -- the "blocks" the copy has to be split into.
+//
+// It is 1 exactly when every dim before rank-2 is 1, which is the usual rank-4 model case
+// (1, 1, H, W). That is why the factories appending whole shards looked correct for so long
+// (#55342): at one block, appending *is* interleaving.
+//
+// All inputs agree on this value: they differ only in the concat dim, which is not a leading dim.
+inline uint32_t num_leading_blocks(const Tensor& tensor) {
+    const auto& padded_shape = tensor.padded_shape();
+    const uint32_t rank = padded_shape.rank();
+    uint32_t blocks = 1;
+    // Phrased as i + 2 < rank so rank < 2 cannot wrap the unsigned bound.
+    for (uint32_t i = 0; i + 2 < rank; i++) {
+        blocks *= padded_shape[i];
+    }
+    return blocks;
+}
+
 }  // namespace ttnn::prim
