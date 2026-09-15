@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry, exchange_split_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, offset_topology
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, _offset_topology
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -463,7 +463,7 @@ class ttKDA:
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
         self._validate_forward(hidden_states, state, actual_start)
-        topology = offset_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
+        topology = _offset_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
         projected = self._project_inputs(hidden_states)
         qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
