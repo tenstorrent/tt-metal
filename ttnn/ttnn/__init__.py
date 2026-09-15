@@ -509,6 +509,7 @@ from ttnn.operations.matmul import (
     MatmulParams,
     MatmulInputs,
     MatmulDeviceOperation,
+    MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
     matmul_select_program_factory,
 )
