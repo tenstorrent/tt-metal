@@ -152,7 +152,7 @@ void kernel_main() {
 #else
         // TILE: read input a and b (if present) interleaved per block.
         for (auto block : generic::blocks(Wt, block_size)) {
-            const uint32_t flat_offset = curr_tile_row * Wt + block.start();
+            const uint32_t flat_offset = (curr_tile_row * Wt) + block.start();
             layernorm_dataflow_utils::read_block_to_dfb(noc, dfb_in0, src_a, src0_page_bytes, flat_offset, block);
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_dfb(noc, dfb_in1, src_b, src1_tile_bytes, flat_offset, block);

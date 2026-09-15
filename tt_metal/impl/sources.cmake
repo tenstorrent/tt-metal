@@ -4,6 +4,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/umd_dram_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blaze/named_kernel_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_api/temp_quasar_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
@@ -26,6 +27,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/persistent_l1_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/range_lockstep_allocation/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/range_lockstep_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
