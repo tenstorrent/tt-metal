@@ -656,7 +656,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
 
-    if (!is_causal) {
+    if (!is_causal && !use_provided_mask) {
         sender_semaphore_id = 0;
         receiver_semaphore_id = 1;
         valid_semaphore_id = 2;
@@ -951,7 +951,13 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
     // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
     // forwarding did.
-    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed) {
+    //
+    // A provided mask is the same hazard: sol_attn's block mask (S2c) varies which K chunks are
+    // selected per Q chunk, so forwarding's assumption -- every core in the chain reads the SAME K
+    // chunks -- no longer holds. Each core reads its own K/V from DRAM under a mask; the S2c density
+    // sweep found the fixed cost of this fork's forwarding-free skip two orders of magnitude below
+    // vsa_sdpa's floor, so losing the forwarding saving here is expected to stay far ahead of it.
+    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed && !use_provided_mask) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
