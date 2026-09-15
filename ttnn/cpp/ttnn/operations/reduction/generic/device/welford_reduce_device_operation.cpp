@@ -42,6 +42,9 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
     // Tripwire: adding a WelfordReduceParams field must be a deliberate choice -- hash it below, or
     // exclude it like `scalar`, which the kernels read as a runtime arg. `correction` stays hashed:
     // it selects a compile-time-folded divisor, and that constant measurably changes codegen.
+    // `scalar` contributes only whether its post-multiplier (|s| for std, s^2 for var) is an
+    // identity, i.e. s = +-1, which compiles the multiply in or out. Must match use_post_mul in
+    // the program factory. The value itself stays out, so non-identity scalars share a program.
     static_assert(
         reflect::size<operation_attributes_t>() == 9,
         "WelfordReduceParams gained or lost a field: add it to compute_program_hash or document why "
@@ -56,6 +59,7 @@ ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
         operation_attributes.sub_core_grids,
         operation_attributes.correction,
         operation_attributes.reduce_batch_size,
+        operation_attributes.scalar != 1.0f && operation_attributes.scalar != -1.0f,
         tensor_args);
 }
 

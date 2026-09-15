@@ -16,9 +16,10 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#endif
 
 void kernel_main() {
     // Runtime arg: number of independent column-reductions this core must perform.
@@ -32,10 +33,11 @@ void kernel_main() {
     constexpr auto H = get_arg(args::H);
     // Number of elements per tile in the H dimension (typically 32).
     constexpr auto tile_height = get_arg(args::tile_height);
+#ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
     const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
-    const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
+#endif
     // Whether to apply Bessel's correction (divide by N-1 instead of N).
     constexpr bool correction = get_arg(args::correction) != 0;
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
@@ -130,10 +132,10 @@ void kernel_main() {
                 // Apply the user scalar to the reduced output: var(s*x)=s^2 var(x),
                 // std(s*x)=|s| std(x). mul_unary_tile is an SFPU op on DEST at full fp32
                 // precision .
-                if (apply_post_mul) {
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(var_dst, post_mul_scaler_bits);
-                }
+#ifdef WELFORD_POST_MUL
+                binop_with_scalar_tile_init();
+                mul_unary_tile(var_dst, post_mul_scaler_bits);
+#endif
                 tile_regs_commit();
             }
             start_N += tile_height;

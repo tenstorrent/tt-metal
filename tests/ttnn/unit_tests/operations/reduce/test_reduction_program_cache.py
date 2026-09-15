@@ -348,12 +348,13 @@ def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache
 @pytest.mark.parametrize("op", [ttnn.std, ttnn.var])
 @pytest.mark.parametrize("dim", [-1, -2, [-2, -1]], ids=["W", "H", "HW"])
 def test_welford_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
-    """Welford std/var: distinct scalars share one program, per correction setting.
+    """Welford std/var: distinct non-identity scalars share one program.
 
-    compute_program_hash excludes `scalar`, which the kernels read as a runtime arg (#54180), but
-    keeps `correction`: it selects a compile-time-folded divisor (1/N vs 1/(N-1)) and that constant
-    measurably changes codegen, so the two settings stay separate programs. Six configurations
-    therefore cost 2 entries instead of 6. Numerics are covered by
+    compute_program_hash excludes the `scalar` value, which the kernels read as a runtime arg
+    (#54180), and keeps two structural bits: `correction`, selecting a compile-time-folded divisor
+    (1/N vs 1/(N-1)), and whether the post-multiplier is an identity, which compiles the SFPU
+    multiply in or out. +-1.0 are both identities (std uses |s|, var uses s^2), so these eight
+    configurations cost 4 entries instead of 8. Numerics are covered by
     tests/ttnn/nightly/.../test_generic_ops_w_scalar.py.
     """
     torch.manual_seed(0)
@@ -361,8 +362,8 @@ def test_welford_cache_reuse_across_scalars(device, isolate_program_cache, op, d
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
 
     with device.cache_entries_counter.measure():
-        for scalar in [1.0, 0.5, 2.0]:
+        for scalar in [1.0, -1.0, 0.5, 2.0]:
             for correction in [True, False]:
                 op(tt_a, dim=dim, keepdim=True, scalar=scalar, correction=correction)
 
-    assert device.cache_entries_counter.total == 2
+    assert device.cache_entries_counter.total == 4

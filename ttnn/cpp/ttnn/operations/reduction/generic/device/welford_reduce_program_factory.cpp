@@ -269,7 +269,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
 
     // Post-reduction scaling: the reduction always runs unscaled (the precise
     // UnpackToDest path), and the user scalar is applied to the small-magnitude result via
-    // SFPU mul_unary_tile inside the compute kernel, which skips an identity scalar at runtime.
+    // SFPU mul_unary_tile inside the compute kernel, which is compiled out for an identity scalar.
     // Pre-scaling the input (the old do_scale path) read the input via the FPU SrcA operand at TF32
     // precision and collapsed large-offset inputs to a constant before the multiply. The
     // post-multiplier follows var(s*x)=s^2 var(x) and std(s*x)=|s| std(x):
@@ -277,6 +277,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     const float post_mul_scaler =
         is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
     const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(post_mul_scaler);
+    // Identity at scalar = +-1 for both ops. Must match compute_program_hash.
+    const bool use_post_mul = (post_mul_scaler != 1.0f);
 
     // partial: HW-reduce only -- holds per-column mean+var tile pairs
     // from the compute kernel, consumed by the writer kernel.
@@ -464,6 +466,14 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     });
 
     // --- Compute kernels ---
+    // Enables the SFPU post-multiplication of the reduced output by the user scalar (see
+    // post_mul_scaler above). Only the compute kernel reads it, so it stays off reduce_defines
+    // and the reader/writer binaries do not fork on it.
+    std::map<std::string, std::string> compute_defines = reduce_defines;
+    if (use_post_mul) {
+        compute_defines["WELFORD_POST_MUL"] = "1";
+    }
+
     std::string compute_kernel;
     KernelSpec::CompileTimeArgs compute_ct_args;
     std::string compute_rta_name;
@@ -605,7 +615,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             // O3 is legacy ComputeConfig's default; Metal 2.0's CompilerOptions defaults to O2, so
             // the level has to be stated explicitly to keep the compute kernel where it was.
             .compiler_options =
-                {.defines = KernelSpec::CompilerOptions::Defines(reduce_defines),
+                {.defines = KernelSpec::CompilerOptions::Defines(compute_defines),
                  .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(dfb_bindings),
             .compile_time_args = compute_ct_args,
