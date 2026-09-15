@@ -123,7 +123,7 @@ verify:
 
 card:
   description: |
-    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (4 Blackhole chips, 4-way tensor parallel) through vLLM with lossless DFlash2 speculative decoding: 1.4 to 1.9× plain decode for 1 to 8 concurrent users. It is built for coding: 106 tokens/s per user on code prompts at one user (114 on `single-user-dflash2`, 80 with the default thinking mode on) vs 32 plain. For more users or sampled output use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (4 Blackhole chips, 4-way tensor parallel) through vLLM with lossless DFlash2 speculative decoding: 1.4 to 1.9× plain decode for 1 to 8 concurrent users. It is built for coding: 111 tokens/s per user on SPEED-Bench coding prompts at one user (119 on `single-user-dflash2`, 77 with the default thinking mode on) vs 36 plain. For more users or sampled output use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
   quickstart: |
     ### Drafter weights (once, before the first `serve`)
 
@@ -192,16 +192,17 @@ card:
     | 8,192 | 1024 | 1,197 | 17.9 | 52.5 | 31.1 |
     | 10,000 | 1024 | 1,515 | 14.3 | 63.6 | 30.9 |
 
-    ### Code prompts (32 coding tasks: Python, Rust, TypeScript, Go, C++, Java, SQL, shell; greedy, up to 1,024 tokens, requests end at EOS), t/s (t/s/u)
+    ### Code (SPEED-Bench `coding`, 80 prompts; greedy; answers end at EOS), t/s (tok/s per user); speed-up per user
 
     | thinking | users | `batch8-dflash2` | `single-user-dflash2` | plain | speed-up |
     |---|---|---|---|---|---|
-    | off | 1 | 103 (106.4) | 110 (113.6) | 33 (32.5) | 3.4× |
-    | off | 2 | 189 (103.0) | – | 56 (28.9) | 3.4× |
-    | off | 4 | 339 (93.1) | – | 102 (27.0) | 3.3× |
-    | off | 8 | 419 (59.1) | – | 164 (23.9) | 2.6× |
-    | on | 1 | 74 (79.9) | 79 (85.4) | 33 (32.6) | 2.4× |
-    | on | 4 | 238 (76.4) | – | 102 (28.5) | 2.3× |
-    | on | 8 | 373 (53.1) | – | 196 (27.0) | 1.9× |
+    | off | 1 | 84 (111) | 95 (119) | 35 (36) | 3.3× |
+    | off | 2 | 152 (107) | – | – | – |
+    | off | 4 | 247 (102) | – | – | – |
+    | off | 8 | 233 (60) | – | 111 (23) | 2.6× |
+    | on | 1 | 73 (77) | 80 (83) | – | – |
+    | on | 2 | 143 (76) | – | – | – |
+    | on | 4 | 268 (73) | – | – | – |
+    | on | 8 | 397 (55) | – | 218 (29) | 1.9× |
 
-    * `thinking on` is the served default (the chat template's reasoning mode); pass `"chat_template_kwargs": {"enable_thinking": false}` for direct answers. Speed-up = the faster speculative profile over plain decode at the same user count.
+    * Per-user speed = 1000 / mean time per output token (decode only); `t/s` = aggregate output tokens per second over the run, which includes prefill and the gaps between a user's requests. `thinking off` passes `"chat_template_kwargs": {"enable_thinking": false}`; `thinking on` is the served default (the harness's prompts), with answers capped at 4,096 tokens. Speed-up = per-user speed of the faster speculative profile over plain decode at the same user count.
