@@ -58,6 +58,7 @@
 #include "ttnn/operations/experimental/rgb_to_yuv/rgb_to_yuv_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
+#include "ttnn/operations/experimental/fused_msda/fused_msda_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -197,6 +198,7 @@ void py_module(nb::module_& mod) {
 
     broadcast_to::detail::bind_broadcast_to(mod);
     multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
+    fused_msda::detail::bind_fused_msda(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
