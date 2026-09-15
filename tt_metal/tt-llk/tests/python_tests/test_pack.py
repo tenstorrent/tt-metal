@@ -100,6 +100,7 @@ def test_pack(
     run_types=None,
     loop_factor: int = 1,
     relevance=None,
+    relevance_source=None,
 ):
     if (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -230,6 +231,8 @@ def test_pack(
     }
     if is_perf:
         test_config_kwargs["relevance"] = relevance
+        if relevance_source is not None:
+            test_config_kwargs["relevance_source"] = relevance_source
 
     configuration = create_test_or_perf_config(
         is_perf=is_perf,

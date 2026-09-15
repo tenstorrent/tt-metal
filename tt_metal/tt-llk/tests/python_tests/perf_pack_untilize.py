@@ -10,13 +10,35 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.perf.core import PerfConfig
-from helpers.perf.relevance import PACK_UNTILIZE_RELEVANCE
+from helpers.perf.relevance import PerfRelevance
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     TILE_COUNT,
     generate_input_dim,
 )
+
+
+class PackUntilizeRelevance(PerfRelevance):
+    """``perf_pack_untilize`` / ``pack_untilize_perf.cpp``: no unpack or math mode.
+
+    Every runtime slot stays ``KEEP_ALL``; the reuse here comes from the format
+    axis, where an input-format change misses L1_TO_L1 but hits PACK_ISOLATE.
+    ``run_types`` is also what ``perf_pack_untilize.py`` passes as the test's
+    ``run_types``, so this tuple defines the sweep, not just the reuse policy.
+    """
+
+    run_types = (
+        PerfRunType.L1_TO_L1,
+        PerfRunType.PACK_ISOLATE,
+        PerfRunType.L1_CONGESTION,
+    )
+    # INPUT_DIMENSIONS is not in _PINNABLE_TEMPLATES, so it stays in the execute
+    # key regardless of spec.templates. Layouts that share tile_cnt (4x5 vs 5x4)
+    # therefore miss without KEEP_ALL on cong_templates / pack_templates.
+
+
+PACK_UNTILIZE_RELEVANCE = PackUntilizeRelevance()
 
 assert PACK_UNTILIZE_RELEVANCE.run_types == (
     PerfRunType.L1_TO_L1,
@@ -99,6 +121,7 @@ def test_perf_pack_untilize(
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
         relevance=PACK_UNTILIZE_RELEVANCE,
+        relevance_source=__name__,
     )
 
     configuration.run(perf_report)

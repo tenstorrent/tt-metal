@@ -69,19 +69,32 @@ _DEFAULT_EXECUTE_CACHE_MAX = 16384
 
 
 def _relevance_caller() -> str:
-    """Pytest module that constructed PerfConfig, for execute_key namespacing."""
-    for frame_info in inspect.stack()[1:]:
-        path = Path(frame_info.filename)
-        if "helpers" in path.parts:
-            continue
-        return path.name
-    return ""
+    """Pytest module stem that constructed PerfConfig, for execute_key namespacing.
+
+    Walks ``f_back`` so we never pay ``inspect.stack``'s ``findsource``. Skips
+    frames under ``helpers/`` (``create_test_or_perf_config``). Prefers
+    ``Path.stem`` so the value matches ``__name__`` at an entry point. Callers
+    that wrap a shared driver should pass ``relevance_source=__name__`` instead.
+    """
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back if frame is not None else None
+        while caller is not None:
+            path = Path(caller.f_code.co_filename)
+            nxt = caller.f_back
+            if "helpers" not in path.parts:
+                return path.stem
+            caller = nxt
+        return ""
+    finally:
+        del frame
 
 
-def _tile_loop_only(df: pd.DataFrame | None) -> pd.DataFrame | None:
-    if df is None or df.empty or MARKER not in df.columns:
-        return df
-    return df[df[MARKER] == TILE_LOOP_MARKER].copy()
+def _cached_report_frame(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Store ``None`` rather than an empty frame so a cache hit skips the merge."""
+    if df is None or df.empty:
+        return None
+    return df
 
 
 def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
@@ -779,11 +792,11 @@ class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
-    # Process-local isolate results keyed by execute_key. A hit copies TILE_LOOP
-    # rows only (INIT is not reused). MATH keeps DEST_SYNC so miss INIT matches
-    # the labeled sweep. Pytest builds a new PerfConfig per case, so hits only
-    # happen across cases in the same worker. Full-fidelity specs (L1_TO_L1)
-    # are never stored. Bounded by LLK_PERF_EXECUTE_CACHE_MAX.
+    # Process-local isolate results keyed by execute_key (TILE_LOOP-observable
+    # fields). A hit copies the full profiler frame — INIT, KERNEL, TILE_LOOP —
+    # as one unit and skips the device. Pytest builds a new PerfConfig per case,
+    # so hits only happen across cases in the same worker. Full-fidelity specs
+    # (L1_TO_L1) are never stored. Bounded by LLK_PERF_EXECUTE_CACHE_MAX.
     EXECUTE_CACHE: ClassVar[OrderedDict[tuple, dict[str, Any]]] = OrderedDict()
     CACHE_HITS: ClassVar[int] = 0
     CACHE_MISSES: ClassVar[int] = 0
@@ -805,6 +818,7 @@ class PerfConfig(TestConfig):
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         relevance: dict[PerfRunType, RunTypeRelevance] | PerfRelevance | None = None,
+        relevance_source: str | None = None,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -866,7 +880,9 @@ class PerfConfig(TestConfig):
         self.passed_stimuli = (
             copy(self.variant_stimuli) if self.variant_stimuli is not None else None
         )
-        self.relevance_source = _relevance_caller()
+        self.relevance_source = (
+            relevance_source if relevance_source is not None else _relevance_caller()
+        )
 
     @staticmethod
     def _dataclass_name_and_values(obj):
@@ -1016,9 +1032,20 @@ class PerfConfig(TestConfig):
     @classmethod
     def execute_cache_max(cls) -> int:
         raw = os.environ.get(EXECUTE_CACHE_MAX_ENV)
-        if raw:
-            return max(int(raw), 1)
-        return _DEFAULT_EXECUTE_CACHE_MAX
+        if raw is None or raw.strip() == "":
+            return _DEFAULT_EXECUTE_CACHE_MAX
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"{EXECUTE_CACHE_MAX_ENV}={raw!r} is not an integer"
+            ) from exc
+        if value < 1:
+            raise ValueError(
+                f"{EXECUTE_CACHE_MAX_ENV}={raw!r} must be >= 1 "
+                f"(unset it to use the default {_DEFAULT_EXECUTE_CACHE_MAX})"
+            )
+        return value
 
     @classmethod
     def _execute_cache_put(cls, key: tuple, value: dict[str, Any]) -> None:
@@ -1056,15 +1083,6 @@ class PerfConfig(TestConfig):
     def _cacheable_spec(self, run_type: PerfRunType) -> bool:
         if self.relevance is None or spec_is_full_fidelity(
             self._relevance_spec(run_type)
-        ):
-            return False
-        # pack_test.cpp MATH_ISOLATE TILE_LOOP is empty when unpack_to_dest.
-        # Caching that zone clones ~50-cycle profiler overhead onto every later
-        # case that shares the MATH key (scan 26.8% at 0.89 consistency).
-        if (
-            run_type == PerfRunType.MATH_ISOLATE
-            and self.unpack_to_dest
-            and Path(self.test_name).name == "pack_test.cpp"
         ):
             return False
         return True
@@ -1236,18 +1254,8 @@ class PerfConfig(TestConfig):
             metrics_df = None
             counter_df = None
             stats_appended = False
-            replay_isolates = (
-                self.relevance is not None and run_type != PerfRunType.L1_TO_L1
-            )
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
-                if replay_isolates:
-                    stats_df = _tile_loop_only(stats_df)
-                    if stats_df is None or stats_df.empty:
-                        raise ValueError(
-                            f"Profiler statistics for requested run type "
-                            f"{run_type.name} contain no {TILE_LOOP_MARKER} row"
-                        )
                 results.append(stats_df)
                 stats_appended = True
 
@@ -1268,9 +1276,8 @@ class PerfConfig(TestConfig):
                     zone_names=zone_names,
                 )
                 if not csv_df.empty:
-                    metrics_df = _tile_loop_only(csv_df) if replay_isolates else csv_df
-                    if metrics_df is not None and not metrics_df.empty:
-                        results.append(metrics_df)
+                    metrics_df = csv_df
+                    results.append(metrics_df)
 
                 # Export raw counter values to the separate counters CSV
                 if (
@@ -1283,30 +1290,28 @@ class PerfConfig(TestConfig):
                         zone_names=zone_names,
                     )
                     if not counter_csv_df.empty:
-                        counter_df = (
-                            _tile_loop_only(counter_csv_df)
-                            if replay_isolates
-                            else counter_csv_df
-                        )
-                        if counter_df is not None and not counter_df.empty:
-                            counter_results_list.append(counter_df)
+                        counter_df = counter_csv_df
+                        counter_results_list.append(counter_df)
 
-            if cache_key is not None:
-                if stats_appended and (stats_df is None or stats_df.empty):
+            if cache_key is not None and stats_appended:
+                assert stats_df is not None and not stats_df.empty
+                if (
+                    MARKER not in stats_df.columns
+                    or not (stats_df[MARKER] == TILE_LOOP_MARKER).any()
+                ):
                     raise ValueError(
                         f"{run_type.name} produced stats but no {TILE_LOOP_MARKER} "
                         "row to cache"
                     )
-                if stats_appended:
-                    PerfConfig._execute_cache_put(
-                        cache_key,
-                        {
-                            "stats_df": stats_df,
-                            "stats_appended": True,
-                            "metrics_df": _tile_loop_only(metrics_df),
-                            "counter_df": _tile_loop_only(counter_df),
-                        },
-                    )
+                PerfConfig._execute_cache_put(
+                    cache_key,
+                    {
+                        "stats_df": stats_df,
+                        "stats_appended": True,
+                        "metrics_df": _cached_report_frame(metrics_df),
+                        "counter_df": _cached_report_frame(counter_df),
+                    },
+                )
 
         if self.passed_formats_config is not None:
             self.formats_config = self.passed_formats_config

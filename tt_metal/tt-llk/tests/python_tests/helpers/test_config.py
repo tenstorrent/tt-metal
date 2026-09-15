@@ -1018,10 +1018,9 @@ class TestConfig:
                 # FormatConfig (doesn't); fall back to None for the latter.
                 register_format_hint=getattr(formats, "register_format_hint", None),
             )
-            self._refresh_tile_sizes()
         else:
             self.formats_config = None
-            self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
+        self._refresh_tile_sizes()
 
         # SrcS MX slice geometry follows unpack_S_dst width (same as _is_srcs_32bit_mode_), not dest_acc.
         if self.variant_stimuli:
@@ -1186,19 +1185,25 @@ class TestConfig:
         return f"#include  <{source}>\n"
 
     def _refresh_tile_sizes(self, params: list | None = None) -> None:
-        """Recompute L1 tile sizes from the current formats_config.
+        """Recompute L1 tile sizes from formats_config, then narrow-tile rescale.
+
+        ``TILE_SIZES.get`` needs a FormatConfig. Without one the sizes stay 128,
+        matching the historical falsy-formats arm. The IN_TILE_DIMS / NUM_FACES
+        rescale still runs on both arms so a stimuli-only config does not keep
+        the 128-byte default when those parameters are present.
 
         Under SPEED_OF_LIGHT, projected runtimes live on ``self.templates``
         (``self.runtimes`` is emptied). Pass ``params`` to look up IN_TILE_DIMS /
         NUM_FACES from a specific list, e.g. ``passed_templates + passed_runtimes``
         after restoring original formats.
         """
-        if not self.formats_config:
-            return
-        fmt = self.formats_config[0]
-        self.pack_size = TestConfig.TILE_SIZES.get(fmt.output_format, 128)
-        self.unpack_size_a = TestConfig.TILE_SIZES.get(fmt.input_format, 128)
-        self.unpack_size_b = TestConfig.TILE_SIZES.get(fmt.input_format_B, 128)
+        if self.formats_config:
+            fmt = self.formats_config[0]
+            self.pack_size = TestConfig.TILE_SIZES.get(fmt.output_format, 128)
+            self.unpack_size_a = TestConfig.TILE_SIZES.get(fmt.input_format, 128)
+            self.unpack_size_b = TestConfig.TILE_SIZES.get(fmt.input_format_B, 128)
+        else:
+            self.pack_size = self.unpack_size_a = self.unpack_size_b = 128
         if self.variant_stimuli is None:
             return
         search = (

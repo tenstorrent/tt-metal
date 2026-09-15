@@ -26,8 +26,8 @@ The three mechanisms
                    what makes two different pytest cases hash to the same
                    ``variant_id`` and therefore share one compiled ELF.
 ``execute_key``    Hashable identity of one measurement. Equal keys mean
-                   ``PerfConfig.EXECUTE_CACHE`` can replay the TILE_LOOP rows
-                   instead of touching the device at all.
+                   ``PerfConfig.EXECUTE_CACHE`` can replay the profiler frame
+                   (INIT, KERNEL, TILE_LOOP) instead of touching the device.
 ``PerfRelevance``  The per-test policy. A class whose attributes name, for each
                    run type, the template types / runtime types / runtime field
                    names / FormatConfig fields that TILE_LOOP observes.
@@ -37,7 +37,7 @@ Flow for one pytest case, as ``PerfConfig.run()`` drives it::
     for templates, runtimes, run_type in run_configs:
         spec = relevance[run_type]                   # a RunTypeRelevance
         if execute_key(..., spec=spec) in EXECUTE_CACHE:
-            replay the cached TILE_LOOP rows, skip the device entirely
+            replay the cached profiler frame, skip the device entirely
         else:
             templates = project_templates(templates, spec)   # pin invisibles
             if SPEED_OF_LIGHT:              # runtimes become constexpr, so
@@ -66,6 +66,12 @@ Two invariants that are easy to get wrong
   default*. If any thread still reads it before the isolate returns -- including
   an ``LLK_ASSERT`` -- the kernel ebreaks. ``UnpackTilizeRelevance`` keeps
   ``INPUT_DIMENSIONS`` on PACK for exactly that reason.
+
+Layout
+------
+Spec types and ``PerfRelevance`` first, then the ``project_*`` helpers
+(templates, runtimes, formats, stimuli), then ``execute_key``. Constants sit
+with the functions that use them.
 """
 
 import copy
@@ -79,22 +85,16 @@ from ..format_config import DataFormat
 from ..llk_params import DestSync, MathFidelity, PerfRunType
 from ..test_variant_parameters import (
     CRK_TILE_DIMM,
-    DEST_INDEX,
     DEST_SYNC,
-    IN_TILE_DIMS,
     INPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
-    PARTIAL_FACE,
     PERF_RUN_TYPE,
-    RELU_CONFIG,
     THROTTLE_LEVEL,
     TILE_COUNT,
-    UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHIN_FACE,
     RuntimeParameter,
     TemplateParameter,
 )
@@ -107,10 +107,10 @@ PIN_ALL = frozenset()  # keep none (pin templates / drop runtimes+formats)
 class RunTypeRelevance:
     """TILE_LOOP-observable fields for one PerfRunType.
 
-    EXECUTE_CACHE replays TILE_LOOP rows only. INIT still runs on a miss but
-    isolate reports drop it, so pinned MATH_FIDELITY/THROTTLE_LEVEL cannot
-    mislabel a reused INIT row. MATH keeps DEST_SYNC so that miss INIT matches
-    the labeled sweep; UNPACK still pins it.
+    EXECUTE_CACHE keys off TILE_LOOP-observable fields, then stores and
+    replays the full profiler frame (INIT, KERNEL, TILE_LOOP) as one unit.
+    A hit therefore copies the donor's INIT/KERNEL as well. MATH and UNPACK
+    keep DEST_SYNC so miss INIT matches the labeled dest_sync.
 
     ``KEEP_ALL`` (None) keeps every value. ``PIN_ALL`` (empty frozenset) keeps
     none of that slot (pin templates / drop runtimes and formats).
@@ -171,64 +171,6 @@ ALL_PERF_RUN_TYPES = (
     PerfRunType.PACK_ISOLATE,
     PerfRunType.L1_CONGESTION,
 )
-
-_PACK_BLOCK_RUNTIMES = frozenset(
-    {NUM_BLOCKS, NUM_TILES_IN_BLOCK, LOOP_FACTOR, NUM_FACES}
-)
-
-# pin_template only rewrites these. Any other template stays in the header, so
-# execute_key must keep it even when spec.templates omits the type.
-_PINNABLE_TEMPLATES = frozenset({MATH_FIDELITY, DEST_SYNC, THROTTLE_LEVEL})
-
-# SPEED_OF_LIGHT inlines every FormatConfig field; TILE_LOOP-unused pack/SFPU
-# fields pin to this. Unpack and math stay original (see _INIT_LIVE_FORMATS).
-_PINNED_FORMAT = DataFormat.Float16
-_FORMAT_FIELDS = (
-    "unpack_A_src",
-    "unpack_B_src",
-    "unpack_A_dst",
-    "unpack_B_dst",
-    "unpack_S_src",
-    "unpack_S_dst",
-    "pack_src",
-    "pack_dst",
-    "pack_S_src",
-    "pack_S_dst",
-    "math",
-    "sfpu_src",
-    "sfpu_dst",
-)
-_ALL_FORMATS = frozenset(_FORMAT_FIELDS)
-# INIT of idle isolate threads still runs. Pinning these to Float16 while L1 is
-# Float32 (unpack_to_dest + dest_acc=Yes) deadlocks Math and Unpacker.
-_INIT_LIVE_FORMATS = frozenset(
-    {
-        "unpack_A_src",
-        "unpack_B_src",
-        "unpack_A_dst",
-        "unpack_B_dst",
-        "unpack_S_src",
-        "unpack_S_dst",
-        "math",
-    }
-)
-
-
-def _runtime_fields(*types: type, drop: Iterable[str] = ()) -> frozenset[str]:
-    """Every field name declared by ``types``, minus ``drop``.
-
-    Convenience for the ``*_runtime_fields`` slots: name the runtime types the
-    run type keeps, then subtract the individual fields it cannot see. Writing
-    the surviving names out by hand rots as soon as a dataclass gains a field.
-
-    Example:
-    PACK keeps LOOP_FACTOR and CRK_TILE_DIMM, but pack iterates RT x CT and so
-    never observes the K dimension:
-    >>> _runtime_fields(LOOP_FACTOR, CRK_TILE_DIMM, drop={"k_dimm"})
-    frozenset({'loop_factor', 'c_dimm', 'r_dimm'})
-    """
-    names = {f.name for cls in types for f in fields(cls)}
-    return frozenset(names - set(drop))
 
 
 def assert_unique_runtime_field_names(spec: RunTypeRelevance) -> None:
@@ -322,9 +264,10 @@ class PerfRelevance:
     ``RunTypeRelevance()``, which keeps everything.
 
     Subclass only what your kernel differs on. The base class already encodes
-    what is true of every LLK perf kernel: UNPACK's TILE_LOOP sees no pinnable
-    template at all, MATH sees fidelity and throttle, PACK and L1_CONGESTION
-    see dest_sync, and each mode sees the formats on its own side of the pipe.
+    what is true of every LLK perf kernel: UNPACK keeps DEST_SYNC (INIT replay)
+    and pins fidelity/throttle, MATH sees fidelity, throttle, and dest_sync,
+    PACK and L1_CONGESTION see dest_sync, and each mode sees the formats on
+    its own side of the pipe.
 
     Example:
     A kernel whose pack TILE_LOOP is driven only by the loop factor, and which
@@ -345,7 +288,7 @@ class PerfRelevance:
 
     run_types: tuple[PerfRunType, ...] = ALL_PERF_RUN_TYPES
 
-    unpack_templates: frozenset[type] | None = PIN_ALL
+    unpack_templates: frozenset[type] | None = frozenset({DEST_SYNC})
     # INIT runs _llk_math_pack_sync_init_<dest_sync>; keep DEST_SYNC so that
     # miss INIT matches the labeled sweep. TILE_LOOP does not reuse across it.
     math_templates: frozenset[type] | None = frozenset(
@@ -433,106 +376,29 @@ class PerfRelevance:
         return self.as_map[run_type]
 
 
-class MatmulRelevance(PerfRelevance):
-    """``perf_matmul`` / ``matmul_test.cpp``.
+# Helpers for per-test PerfRelevance subclasses.
 
-    Unpack's MOP walks faces and the CRK dims; math walks the same minus
-    ``NUM_FACES``; pack iterates RT x CT and so is blind to ``k_dimm`` --
-    which is the single biggest win here, because ``KT_DIMS`` is swept over
-    ``[1, 4, 32]``. L1_CONGESTION runs both halves, so it keeps unpack's set.
+
+def _runtime_fields(*types: type, drop: Iterable[str] = ()) -> frozenset[str]:
+    """Every field name declared by ``types``, minus ``drop``.
+
+    Convenience for the ``*_runtime_fields`` slots: name the runtime types the
+    run type keeps, then subtract the individual fields it cannot see. Writing
+    the surviving names out by hand rots as soon as a dataclass gains a field.
+
+    Example:
+    PACK keeps LOOP_FACTOR and CRK_TILE_DIMM, but pack iterates RT x CT and so
+    never observes the K dimension:
+    >>> _runtime_fields(LOOP_FACTOR, CRK_TILE_DIMM, drop={"k_dimm"})
+    frozenset({'loop_factor', 'c_dimm', 'r_dimm'})
     """
-
-    unpack_runtimes = frozenset(
-        {UNPACK_TRANS_FACES, NUM_FACES, LOOP_FACTOR, CRK_TILE_DIMM}
-    )
-    math_runtimes = frozenset({UNPACK_TRANS_FACES, LOOP_FACTOR, CRK_TILE_DIMM})
-    pack_runtimes = frozenset({LOOP_FACTOR, CRK_TILE_DIMM})
-    cong_runtimes = unpack_runtimes
-    pack_runtime_fields = _runtime_fields(*pack_runtimes, drop={"k_dimm"})
+    names = {f.name for cls in types for f in fields(cls)}
+    return frozenset(names - set(drop))
 
 
-class MathMatmulRelevance(MatmulRelevance):
-    """``perf_math_matmul`` / ``math_matmul_test.cpp``: blocked, face-aware.
-
-    Same shape as ``MatmulRelevance`` plus the blocking and face-layout knobs
-    this kernel adds. PACK gets its own set rather than the shared ``_EXTRA``
-    because pack INIT consumes faces / partial-face / tile rows while pack
-    TILE_LOOP consumes ``DST_INDEX``; ``k_dimm`` stays dropped as above.
-    """
-
-    _EXTRA = frozenset(
-        {NUM_BLOCKS, PARTIAL_FACE, IN_TILE_DIMS, UNPACK_TRANS_WITHIN_FACE}
-    )
-    # PACK INIT uses faces / partial / tile rows; TILE_LOOP uses DST_INDEX.
-    _PACK_EXTRA = frozenset(
-        {NUM_BLOCKS, NUM_FACES, PARTIAL_FACE, IN_TILE_DIMS, DEST_INDEX}
-    )
-    unpack_runtimes = MatmulRelevance.unpack_runtimes | _EXTRA
-    math_runtimes = MatmulRelevance.math_runtimes | _EXTRA | frozenset({DEST_INDEX})
-    pack_runtimes = MatmulRelevance.pack_runtimes | _PACK_EXTRA
-    cong_runtimes = MatmulRelevance.cong_runtimes | _EXTRA | frozenset({DEST_INDEX})
-    pack_runtime_fields = _runtime_fields(*pack_runtimes, drop={"k_dimm"})
-
-
-class PackRelevance(PerfRelevance):
-    """``perf_pack`` / ``pack_test.cpp``, reached through ``test_pack``.
-
-    The block geometry is shared by every mode. ``RELU_CONFIG`` is a packer
-    register, so only PACK and L1_CONGESTION observe it -- a ReLU sweep
-    therefore reuses UNPACK and MATH outright.
-    """
-
-    # MATH_ISOLATE TILE_LOOP is empty when unpack_to_dest; PerfConfig does not
-    # cache that zone (profiler overhead, not math). DEST_SYNC stays visible.
-    math_templates = frozenset({DEST_SYNC})
-    unpack_runtimes = _PACK_BLOCK_RUNTIMES
-    math_runtimes = _PACK_BLOCK_RUNTIMES | frozenset({DEST_INDEX})
-    pack_runtimes = _PACK_BLOCK_RUNTIMES | frozenset({RELU_CONFIG, DEST_INDEX})
-    cong_runtimes = _PACK_BLOCK_RUNTIMES | frozenset({RELU_CONFIG, DEST_INDEX})
-
-
-class PackUntilizeRelevance(PerfRelevance):
-    """``perf_pack_untilize`` / ``pack_untilize_perf.cpp``: no unpack or math mode.
-
-    Every runtime slot stays ``KEEP_ALL``; the reuse here comes from the format
-    axis, where an input-format change misses L1_TO_L1 but hits PACK_ISOLATE.
-    ``run_types`` is also what ``perf_pack_untilize.py`` passes as the test's
-    ``run_types``, so this tuple defines the sweep, not just the reuse policy.
-    """
-
-    run_types = (
-        PerfRunType.L1_TO_L1,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    )
-    # INPUT_DIMENSIONS is not in _PINNABLE_TEMPLATES, so it stays in the execute
-    # key regardless of spec.templates. Layouts that share tile_cnt (4x5 vs 5x4)
-    # therefore miss without KEEP_ALL on cong_templates / pack_templates.
-
-
-class UnpackTilizeRelevance(PerfRelevance):
-    """``perf_unpack_tilize`` / ``unpack_tilize_perf.cpp``: no math mode.
-
-    All three remaining modes key off the same dimension triple. The two
-    comments below are both scars from real failures, so change either set only
-    with the kernel source open.
-    """
-
-    run_types = (
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    )
-    _DIM_RUNTIMES = frozenset({INPUT_DIMENSIONS, TILE_COUNT, LOOP_FACTOR})
-    unpack_runtimes = _DIM_RUNTIMES
-    pack_templates = PIN_ALL
-    # Unpack asserts FULL_RT_DIM * FULL_CT_DIM == TILE_CNT before PACK returns.
-    # SPEED_OF_LIGHT inlines runtimes, so PACK must keep those values.
-    pack_runtimes = _DIM_RUNTIMES
-    cong_runtimes = _DIM_RUNTIMES
-    # Blackhole tilize workaround keys off unpack_A_src, not only pack_src/pack_dst.
-    pack_formats = _PACK_FORMATS | frozenset({"unpack_A_src"})
+_PACK_BLOCK_RUNTIMES = frozenset(
+    {NUM_BLOCKS, NUM_TILES_IN_BLOCK, LOOP_FACTOR, NUM_FACES}
+)
 
 
 LLK_DISABLE_PERF_RELEVANCE = "LLK_DISABLE_PERF_RELEVANCE"
@@ -563,11 +429,11 @@ def maybe_relevance(
     return relevance
 
 
-MATMUL_RELEVANCE = MatmulRelevance()
-MATH_MATMUL_RELEVANCE = MathMatmulRelevance()
-PACK_RELEVANCE = PackRelevance()
-PACK_UNTILIZE_RELEVANCE = PackUntilizeRelevance()
-UNPACK_TILIZE_RELEVANCE = UnpackTilizeRelevance()
+# -- project_templates -------------------------------------------------------
+
+# pin_template only rewrites these. Any other template stays in the header, so
+# execute_key must keep it even when spec.templates omits the type.
+_PINNABLE_TEMPLATES = frozenset({MATH_FIDELITY, DEST_SYNC, THROTTLE_LEVEL})
 
 
 def pin_template(param: TemplateParameter) -> TemplateParameter:
@@ -616,7 +482,7 @@ def _template_visible(param: TemplateParameter, spec: RunTypeRelevance | None) -
     ``INPUT_DIMENSIONS``.
 
     Example:
-    >>> unpack = MATMUL_RELEVANCE[PerfRunType.UNPACK_ISOLATE]  # templates=PIN_ALL
+    >>> unpack = MATMUL_RELEVANCE[PerfRunType.UNPACK_ISOLATE]  # DEST_SYNC only
     >>> _template_visible(MATH_FIDELITY(MathFidelity.HiFi4), unpack)
     False
     >>> _template_visible(MATH_FIDELITY(MathFidelity.HiFi4),
@@ -661,6 +527,9 @@ def project_templates(
         else:
             projected.append(pin_template(param))
     return projected
+
+
+# -- project_runtimes --------------------------------------------------------
 
 
 def _default_runtime(param: RuntimeParameter) -> RuntimeParameter:
@@ -739,6 +608,42 @@ def _default_field_value(value: Any) -> Any:
     )
 
 
+def _runtime_type_visible(cls: type, spec: RunTypeRelevance | None) -> bool:
+    """Whether the spec keeps this runtime dataclass at all.
+
+    ``KEEP_ALL`` (``runtime_types is None``) keeps every type, so an absent
+    spec and a permissive spec answer the same.
+
+    Example:
+    >>> pack = MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    >>> _runtime_type_visible(CRK_TILE_DIMM, pack)
+    True
+    >>> _runtime_type_visible(TILE_COUNT, pack)
+    False
+    """
+    if spec is None or spec.runtime_types is None:
+        return True
+    return cls in spec.runtime_types
+
+
+def _runtime_field_visible(name: str, spec: RunTypeRelevance | None) -> bool:
+    """Whether the spec keeps this runtime field name.
+
+    Flat across types by design -- see ``RunTypeRelevance.runtime_fields`` and
+    ``assert_unique_runtime_field_names``.
+
+    Example:
+    >>> pack = MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    >>> _runtime_field_visible("r_dimm", pack)
+    True
+    >>> _runtime_field_visible("k_dimm", pack)
+    False
+    """
+    if spec is None or spec.runtime_fields is None:
+        return True
+    return name in spec.runtime_fields
+
+
 def project_runtimes(
     runtimes: Iterable[RuntimeParameter],
     spec: RunTypeRelevance | None,
@@ -787,6 +692,42 @@ def project_runtimes(
     return projected
 
 
+# -- project_formats ---------------------------------------------------------
+
+# SPEED_OF_LIGHT inlines every FormatConfig field; TILE_LOOP-unused pack/SFPU
+# fields pin to this. Unpack and math stay original (see _INIT_LIVE_FORMATS).
+_PINNED_FORMAT = DataFormat.Float16
+_FORMAT_FIELDS = (
+    "unpack_A_src",
+    "unpack_B_src",
+    "unpack_A_dst",
+    "unpack_B_dst",
+    "unpack_S_src",
+    "unpack_S_dst",
+    "pack_src",
+    "pack_dst",
+    "pack_S_src",
+    "pack_S_dst",
+    "math",
+    "sfpu_src",
+    "sfpu_dst",
+)
+_ALL_FORMATS = frozenset(_FORMAT_FIELDS)
+# INIT of idle isolate threads still runs. Pinning these to Float16 while L1 is
+# Float32 (unpack_to_dest + dest_acc=Yes) deadlocks Math and Unpacker.
+_INIT_LIVE_FORMATS = frozenset(
+    {
+        "unpack_A_src",
+        "unpack_B_src",
+        "unpack_A_dst",
+        "unpack_B_dst",
+        "unpack_S_src",
+        "unpack_S_dst",
+        "math",
+    }
+)
+
+
 def project_formats(formats: Any, spec: RunTypeRelevance | None) -> Any:
     """Pin TILE_LOOP-unused pack/SFPU fields when SPEED_OF_LIGHT inlines formats.
 
@@ -831,42 +772,6 @@ def project_formats(formats: Any, spec: RunTypeRelevance | None) -> Any:
     return projected
 
 
-def _runtime_type_visible(cls: type, spec: RunTypeRelevance | None) -> bool:
-    """Whether the spec keeps this runtime dataclass at all.
-
-    ``KEEP_ALL`` (``runtime_types is None``) keeps every type, so an absent
-    spec and a permissive spec answer the same.
-
-    Example:
-    >>> pack = MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
-    >>> _runtime_type_visible(CRK_TILE_DIMM, pack)
-    True
-    >>> _runtime_type_visible(TILE_COUNT, pack)
-    False
-    """
-    if spec is None or spec.runtime_types is None:
-        return True
-    return cls in spec.runtime_types
-
-
-def _runtime_field_visible(name: str, spec: RunTypeRelevance | None) -> bool:
-    """Whether the spec keeps this runtime field name.
-
-    Flat across types by design -- see ``RunTypeRelevance.runtime_fields`` and
-    ``assert_unique_runtime_field_names``.
-
-    Example:
-    >>> pack = MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
-    >>> _runtime_field_visible("r_dimm", pack)
-    True
-    >>> _runtime_field_visible("k_dimm", pack)
-    False
-    """
-    if spec is None or spec.runtime_fields is None:
-        return True
-    return name in spec.runtime_fields
-
-
 def _format_field_pinned(name: str, spec: RunTypeRelevance) -> bool:
     """Whether ``project_formats`` would rewrite this FormatConfig field.
 
@@ -890,6 +795,8 @@ def _format_field_pinned(name: str, spec: RunTypeRelevance) -> bool:
     return name not in spec.format_fields
 
 
+# -- project_stimuli ---------------------------------------------------------
+
 # Stimuli format attrs hashed into variant_id under SoL. Pin them when every
 # matching FormatConfig field would be pinned, so pack-output sweeps still
 # reuse UNPACK_ISOLATE compiles.
@@ -900,6 +807,34 @@ _STIMULI_FORMAT_FIELDS = (
     ("stimuli_T_format", ("pack_S_src", "pack_S_dst")),
     ("stimuli_res_format", ("pack_src", "pack_dst")),
 )
+
+_STIMULI_TILE_ATTRS = (
+    "tile_count_A",
+    "tile_count_B",
+    "tile_count_res",
+    "tile_count_S",
+    "tile_count_T",
+    "tile_count_C",
+)
+
+
+def _as_int(value: Any) -> int:
+    """Read a dimension as a plain int, unwrapping ctypes / enum wrappers.
+
+    Runtime dataclasses annotate some dims as ``c_uint32``, and callers pass
+    either the wrapper or a bare int, so every arithmetic site would otherwise
+    need the same two-line dance.
+
+    Example:
+    >>> _as_int(32)
+    32
+    >>> _as_int(ctypes.c_uint32(32))
+    32
+    """
+    raw = getattr(value, "value", None)
+    if isinstance(raw, int):
+        return raw
+    return int(value)
 
 
 def _project_stimuli_formats(stimuli: Any, spec: RunTypeRelevance) -> None:
@@ -928,58 +863,31 @@ def _project_stimuli_formats(stimuli: Any, spec: RunTypeRelevance) -> None:
             setattr(stimuli, attr, _PINNED_FORMAT)
 
 
-def _as_int(value: Any) -> int:
-    """Read a dimension as a plain int, unwrapping ctypes / enum wrappers.
+def _set_stimuli_tile_count(stimuli: Any, attr: str, count: int) -> None:
+    """Clamp one operand tile count. ``attr`` is a closed set of field names.
 
-    Runtime dataclasses annotate some dims as ``c_uint32``, and callers pass
-    either the wrapper or a bare int, so every arithmetic site would otherwise
-    need the same two-line dance.
-
-    Example:
-    >>> _as_int(32)
-    32
-    >>> _as_int(ctypes.c_uint32(32))
-    32
+    ``project_stimuli`` must not ``setattr`` a computed name: Cycode treats that
+    as unsanitized input into code generation, and ``stimuli_config`` writes
+    these counts into the kernel header as operand base addresses.
     """
-    raw = getattr(value, "value", None)
-    if isinstance(raw, int):
-        return raw
-    return int(value)
-
-
-_STIMULI_TILE_ATTRS = (
-    "tile_count_A",
-    "tile_count_B",
-    "tile_count_res",
-    "tile_count_S",
-    "tile_count_T",
-    "tile_count_C",
-)
-
-
-def stimuli_key(stimuli: Any) -> tuple:
-    """Hashable L1 tile-count fingerprint for ``execute_key``.
-
-    The L1 layout is not otherwise reconstructible from the key's template and
-    runtime items -- callers derive tile counts with their own clamps (matmul
-    caps at ``PERF_RING_TILES``) -- so without this two cases with different L1
-    footprints could share a measurement. Absent operands contribute nothing
-    rather than a placeholder, so the tuple length varies by test.
-
-    Example:
-    >>> stimuli_key(None)
-    ()
-    >>> stimuli_key(stimuli)   # A, B and Res present, 16 tiles each
-    (('tile_count_A', 16), ('tile_count_B', 16), ('tile_count_res', 16))
-    """
-    if stimuli is None:
-        return ()
-    items = []
-    for attr in _STIMULI_TILE_ATTRS:
-        value = getattr(stimuli, attr, None)
-        if value is not None:
-            items.append((attr, _as_int(value)))
-    return tuple(items)
+    if attr not in _STIMULI_TILE_ATTRS:
+        raise ValueError(f"unknown stimuli tile attr {attr!r}")
+    original = getattr(stimuli, attr, None)
+    if original is None:
+        return
+    clamped = min(count, _as_int(original))
+    if attr == "tile_count_A":
+        stimuli.tile_count_A = clamped
+    elif attr == "tile_count_B":
+        stimuli.tile_count_B = clamped
+    elif attr == "tile_count_res":
+        stimuli.tile_count_res = clamped
+    elif attr == "tile_count_S":
+        stimuli.tile_count_S = clamped
+    elif attr == "tile_count_T":
+        stimuli.tile_count_T = clamped
+    else:
+        stimuli.tile_count_C = clamped
 
 
 def _operand_tile_counts(
@@ -1102,12 +1010,12 @@ def project_stimuli(
         counts = _operand_tile_counts(runtimes, spec)
         if counts is not None:
             for attr in _STIMULI_TILE_ATTRS:
-                original = getattr(projected, attr, None)
-                if original is None:
-                    continue
-                setattr(projected, attr, min(counts[attr], _as_int(original)))
+                _set_stimuli_tile_count(projected, attr, counts[attr])
     projected._calculate_tile_sizes()
     return projected
+
+
+# -- execute_key -------------------------------------------------------------
 
 
 def _hashable(value: Any) -> Any:
@@ -1156,6 +1064,31 @@ def _dataclass_items(param: Any) -> list[tuple[str, Any]]:
     [('c_dimm', 4), ('r_dimm', 2), ('k_dimm', 32)]
     """
     return [(f.name, _hashable(getattr(param, f.name))) for f in fields(param)]
+
+
+def stimuli_key(stimuli: Any) -> tuple:
+    """Hashable L1 tile-count fingerprint for ``execute_key``.
+
+    The L1 layout is not otherwise reconstructible from the key's template and
+    runtime items -- callers derive tile counts with their own clamps (matmul
+    caps at ``PERF_RING_TILES``) -- so without this two cases with different L1
+    footprints could share a measurement. Absent operands contribute nothing
+    rather than a placeholder, so the tuple length varies by test.
+
+    Example:
+    >>> stimuli_key(None)
+    ()
+    >>> stimuli_key(stimuli)   # A, B and Res present, 16 tiles each
+    (('tile_count_A', 16), ('tile_count_B', 16), ('tile_count_res', 16))
+    """
+    if stimuli is None:
+        return ()
+    items = []
+    for attr in _STIMULI_TILE_ATTRS:
+        value = getattr(stimuli, attr, None)
+        if value is not None:
+            items.append((attr, _as_int(value)))
+    return tuple(items)
 
 
 def execute_key(
