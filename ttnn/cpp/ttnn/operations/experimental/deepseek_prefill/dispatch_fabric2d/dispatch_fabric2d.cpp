@@ -24,6 +24,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t cluster_axis,
     uint32_t num_links,
+    bool fanout,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
     // Resolve the caller's topology against how this axis is actually wired, the way every other CCL
@@ -54,6 +55,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         seq_len_per_chip,
         cluster_axis,
         num_links,
+        fanout,
         usable,
         memory_config);
 }
