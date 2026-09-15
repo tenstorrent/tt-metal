@@ -6,9 +6,6 @@
 //
 // A copy rather than a shared edit: block-sparse routing and the pooled-summary residual change
 // the chunk loop, and that loop is shared by sdpa, vsa_sdpa, sparse_sdpa and the dense ring op.
-// Everything lives in `sol_ring_kernel` because compute_common.hpp pulls the original into the
-// same translation unit, so the two would otherwise collide.
-//
 // Divergence from the original is the point; do not re-sync it wholesale.
 
 #pragma once
@@ -27,8 +24,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
-
-namespace sol_ring_kernel {
 
 // reduce_trigger uses a packer->unpacker semaphore handshake to start the reduce early and skip the
 // input CB wait. Quasar has no such handshake, so it stays disabled there and the normal CB
@@ -2904,5 +2899,3 @@ void sdpa_ring_v2(
         }
     }
 }
-
-}  // namespace sol_ring_kernel

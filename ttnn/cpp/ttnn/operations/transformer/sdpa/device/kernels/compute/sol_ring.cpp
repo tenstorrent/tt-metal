@@ -193,7 +193,7 @@ void kernel_main() {
         // cb_q_in (q_base_tiles) and which L1 FIFO entry it merges (handled inside sdpa_ring_v2).
         for (uint32_t pass = 0; pass < q_count; ++pass) {
             const uint32_t global_q_chunk = q_base + pass * q_stride;
-            sol_ring_kernel::sdpa_ring_v2<
+            sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
                 0,  // Skt — not used for ring
