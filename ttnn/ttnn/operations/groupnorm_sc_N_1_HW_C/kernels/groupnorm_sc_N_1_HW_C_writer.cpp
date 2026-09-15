@@ -11,7 +11,9 @@
 //                        root's gather semaphore, waits for the totals multicast.
 //   IDLE   (p >= P_used) increments the gather semaphore (so the root knows its ReceiverPipe exists) and
 //                        receives the totals multicast.
-// Then every non-idle core streams cb_out tiles of its own block to DRAM.
+// Then every non-idle core streams cb_out tiles of its own block to DRAM. Blocks are ragged (op_design.md ->
+// Work Distribution): compute pushes the nominal `chunk` pages per block with the valid_rows x valid_cols output
+// tiles dense at the front; the writer drains the nominal count and stores only the valid tiles.
 //
 // Why no gather-ready signal / pre-handshake: records only ever touch rows p < P_used and the root only
 // ever zeroes rows >= P_used, so the two never overlap and need no ordering. The totals flag cannot be
@@ -33,6 +35,7 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "groupnorm_sc_N_1_HW_C_ragged.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -52,15 +55,13 @@ void kernel_main() {
     constexpr uint32_t Kg = get_compile_time_arg_val(5);
     constexpr uint32_t cols = get_compile_time_arg_val(6);
     constexpr uint32_t chunk_rows = get_compile_time_arg_val(7);
-    constexpr uint32_t num_col_groups = get_compile_time_arg_val(8);
-    constexpr uint32_t num_row_chunks = get_compile_time_arg_val(9);
-    constexpr uint32_t Ht = get_compile_time_arg_val(10);
-    constexpr uint32_t Ct = get_compile_time_arg_val(11);
-    constexpr uint32_t gather_tiles_per_stat = get_compile_time_arg_val(12);
-    constexpr uint32_t sem_gather_id = get_compile_time_arg_val(13);
-    constexpr uint32_t out_block = get_compile_time_arg_val(14);  // tiles per store barrier (divides chunk)
-    constexpr uint32_t MC_CT = 15;
-    constexpr uint32_t MC_RT = 12;
+    constexpr uint32_t Ht = get_compile_time_arg_val(8);
+    constexpr uint32_t Ct = get_compile_time_arg_val(9);
+    constexpr uint32_t gather_tiles_per_stat = get_compile_time_arg_val(10);
+    constexpr uint32_t sem_gather_id = get_compile_time_arg_val(11);
+    constexpr uint32_t out_block = get_compile_time_arg_val(12);  // tiles per store barrier (divides chunk)
+    constexpr uint32_t MC_CT = 13;
+    constexpr uint32_t MC_RT = 14;
     constexpr auto mc = McastArgs<MC_CT, MC_RT>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
@@ -77,6 +78,8 @@ void kernel_main() {
     const uint32_t root_x = get_arg_val<uint32_t>(9);
     const uint32_t root_y = get_arg_val<uint32_t>(10);
     const uint32_t num_participants = get_arg_val<uint32_t>(11);  // every core of the rectangle (incl. idle)
+    const uint32_t Ht_core = get_arg_val<uint32_t>(12);
+    const uint32_t Ct_core = get_arg_val<uint32_t>(13);
 
     constexpr uint32_t num_stats = 2 * Kg;
     constexpr uint32_t chunk = chunk_rows * cols;
@@ -97,6 +100,12 @@ void kernel_main() {
     // to their per-image quantum, so their write pointers return to the base after every image.
     const uint32_t gather_base = gather.get_write_ptr();
     const uint32_t totals_recv_base = get_write_ptr(cb_totals_recv);
+
+    // Ragged accounting (idle cores have Ht_core = Ct_core = 0 and never store).
+    const auto row_axis = groupnorm_ragged::split(Ht_core, chunk_rows);
+    const auto col_axis = groupnorm_ragged::split(Ct_core, cols);
+    const uint32_t num_row_chunks = row_axis.count;
+    const uint32_t num_col_groups = col_axis.count;
 
     // Row 0 of each of this core's 2*Kg partial tiles -> row p of gather tile (p / 32) of the same statistic.
     auto send_partial_record = [&]() {
@@ -123,16 +132,24 @@ void kernel_main() {
     // per tile); the writer drains it in `out_block`-tile groups with ONE barrier per group, so the number of
     // tiles in flight per barrier is a host knob (OUT_BLOCK_TILES_TARGET) and not an accident of `cols`
     // (which is 1 whenever the ct split gives a core a single tile-column).
+    // Ragged blocks: the valid_rows x valid_cols output tiles sit dense at the front of the block's nominal
+    // `chunk` pages (idx = r * valid_cols + c); pages idx >= valid carry no data and are only drained.
     auto store_image = [&](uint32_t n) {
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
+            const uint32_t valid_cols = col_axis.valid(cg, cols);
             for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
+                const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
+                const uint32_t valid = valid_rows * valid_cols;
                 for (uint32_t b = 0; b < out_blocks_per_chunk; ++b) {
                     cb_wait_front(cb_out, out_block);
                     const uint32_t l1 = get_read_ptr(cb_out);
                     for (uint32_t k = 0; k < out_block; ++k) {
                         const uint32_t idx = b * out_block + k;  // linear tile index inside the chunk
-                        const uint32_t r = row_begin + rc * chunk_rows + idx / cols;
-                        const uint32_t t = col_begin + cg * cols + idx % cols;
+                        if (idx >= valid) {
+                            break;
+                        }
+                        const uint32_t r = row_begin + rc * chunk_rows + idx / valid_cols;
+                        const uint32_t t = col_begin + cg * cols + idx % valid_cols;
                         const uint32_t page = n * Ht * Ct + r * Ct + t;
                         noc_async_write(l1 + k * y_tile_bytes, out_acc.get_noc_addr(page), y_tile_bytes);
                     }

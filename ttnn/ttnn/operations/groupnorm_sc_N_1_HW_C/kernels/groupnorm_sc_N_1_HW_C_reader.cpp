@@ -12,6 +12,10 @@
 //
 // Constant tiles: the reduce scaler (once per kernel). Membership / affine-row pages are zeroed over the NoC
 // (DM engine) before the few real lanes are written by the RISC.
+//
+// Ragged blocks (op_design.md -> Work Distribution): this core's `Ht_core x Ct_core` extents are RT args; the
+// last row chunk / column group may be short. Every CB quantum stays nominal (`chunk`, `cols`, `cols*Kg`); the
+// valid tiles are laid out densely (row-major valid_rows x valid_cols) and only they are read from DRAM.
 
 #include <stdint.h>
 
@@ -20,6 +24,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#include "groupnorm_sc_N_1_HW_C_ragged.hpp"
 
 namespace {
 
@@ -48,21 +53,19 @@ void kernel_main() {
     constexpr uint32_t chunk_rows = get_compile_time_arg_val(11);
     constexpr uint32_t cols = get_compile_time_arg_val(12);
     constexpr uint32_t Kg = get_compile_time_arg_val(13);
-    constexpr uint32_t num_col_groups = get_compile_time_arg_val(14);
-    constexpr uint32_t num_row_chunks = get_compile_time_arg_val(15);
-    constexpr uint32_t x_tile_bytes = get_compile_time_arg_val(16);
-    constexpr uint32_t x_elem_size = get_compile_time_arg_val(17);
-    constexpr uint32_t x_page_bytes = get_compile_time_arg_val(18);
-    constexpr uint32_t g_elem_size = get_compile_time_arg_val(19);
-    constexpr bool g_is_tile = get_compile_time_arg_val(20) != 0;
-    constexpr bool g_is_bfp = get_compile_time_arg_val(21) != 0;  // bfloat8_b affine: whole-page reads
-    [[maybe_unused]] constexpr uint32_t g_page_bytes = get_compile_time_arg_val(22);
-    constexpr uint32_t C = get_compile_time_arg_val(23);
-    constexpr uint32_t G = get_compile_time_arg_val(24);
-    constexpr uint32_t HW = get_compile_time_arg_val(25);
-    constexpr uint32_t Ht = get_compile_time_arg_val(26);
-    constexpr uint32_t Ct = get_compile_time_arg_val(27);
-    constexpr uint32_t TA_BASE = 28;
+    constexpr uint32_t x_tile_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t x_elem_size = get_compile_time_arg_val(15);
+    constexpr uint32_t x_page_bytes = get_compile_time_arg_val(16);
+    constexpr uint32_t g_elem_size = get_compile_time_arg_val(17);
+    constexpr bool g_is_tile = get_compile_time_arg_val(18) != 0;
+    constexpr bool g_is_bfp = get_compile_time_arg_val(19) != 0;  // bfloat8_b affine: whole-page reads
+    [[maybe_unused]] constexpr uint32_t g_page_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t C = get_compile_time_arg_val(21);
+    constexpr uint32_t G = get_compile_time_arg_val(22);
+    constexpr uint32_t HW = get_compile_time_arg_val(23);
+    constexpr uint32_t Ht = get_compile_time_arg_val(24);
+    constexpr uint32_t Ct = get_compile_time_arg_val(25);
+    constexpr uint32_t TA_BASE = 26;
 
     constexpr auto x_args = TensorAccessorArgs<TA_BASE>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -78,10 +81,18 @@ void kernel_main() {
     const uint32_t row_begin = get_arg_val<uint32_t>(6);
     const uint32_t col_begin = get_arg_val<uint32_t>(7);
     const uint32_t active = get_arg_val<uint32_t>(8);
+    const uint32_t Ht_core = get_arg_val<uint32_t>(9);
+    const uint32_t Ct_core = get_arg_val<uint32_t>(10);
 
     if (active == 0) {
         return;  // idle core inside an image rectangle: no reads, no records
     }
+
+    // Ragged accounting: blocks along each axis of this core's extent and the valid units of the last one.
+    const auto row_axis = groupnorm_ragged::split(Ht_core, chunk_rows);
+    const auto col_axis = groupnorm_ragged::split(Ct_core, cols);
+    const uint32_t num_row_chunks = row_axis.count;
+    const uint32_t num_col_groups = col_axis.count;
 
     constexpr uint32_t Cg = C / G;
     constexpr uint32_t chunk = chunk_rows * cols;
@@ -99,12 +110,14 @@ void kernel_main() {
 
     // E^T (pass 1, transposed = true) or E (pass 2) for column group cg: cols x Kg Float32 0/1 tiles,
     // tile index T_local * Kg + kg. E_T[g', c] = 1 iff channel 32T + c belongs to group 32kg + g'.
+    // Tiles tl >= valid_cols of a ragged last group stay zero (they are the K pad of the membership matmul).
     auto fill_membership = [&](uint32_t cg, bool transposed) {
+        const uint32_t valid_cols = col_axis.valid(cg, cols);
         cb_reserve_back(cb_membership, membership_tiles);
         noc.async_write_zeros(membership_cb, membership_tiles * f32_tile_bytes);
         noc.write_zeros_l1_barrier();
         const uint32_t base = get_write_ptr(cb_membership);
-        for (uint32_t tl = 0; tl < cols; ++tl) {
+        for (uint32_t tl = 0; tl < valid_cols; ++tl) {
             const uint32_t T = col_begin + cg * cols + tl;
             for (uint32_t c = 0; c < 32; ++c) {
                 const uint32_t ch = T * 32 + c;
@@ -123,17 +136,20 @@ void kernel_main() {
         cb_push_back(cb_membership, membership_tiles);
     };
 
-    // TILE input: chunk_rows x cols tiles of image n, block (cg, rc), row-major within the chunk.
+    // TILE input: the valid_rows x valid_cols tiles of image n, block (cg, rc), dense row-major from the block's
+    // first page; the push stays the nominal `chunk`.
     auto load_x_chunk_tiles = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {
         const uint32_t cb_id = pass2 ? cb_x_pass2 : cb_x_pass1;
+        const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
+        const uint32_t valid_cols = col_axis.valid(cg, cols);
         cb_reserve_back(cb_id, chunk);
         if constexpr (resident) {
             cb_reserve_back(cb_x_pass2, chunk);  // aliased region: pass-2 credits move in lockstep
         }
         uint32_t l1 = get_write_ptr(cb_id);
-        for (uint32_t i = 0; i < chunk_rows; ++i) {
+        for (uint32_t i = 0; i < valid_rows; ++i) {
             const uint32_t r = row_begin + rc * chunk_rows + i;
-            for (uint32_t j = 0; j < cols; ++j) {
+            for (uint32_t j = 0; j < valid_cols; ++j) {
                 const uint32_t t = col_begin + cg * cols + j;
                 const uint32_t page = n * Ht * Ct + r * Ct + t;
                 noc_async_read(x_acc.get_noc_addr(page), l1, x_tile_bytes);
@@ -147,15 +163,27 @@ void kernel_main() {
         }
     };
 
-    // RM input: 32*chunk_rows sticks, cols*32 elements wide, into cb_x_rm (cols tile pages per tile-row).
+    // RM input: 32*valid_rows sticks, valid_cols*32 elements wide, into cb_x_rm (valid_cols tile pages per
+    // tile-row). A ragged column group keeps the tile-row quantum at `cols` pages: each tile-row's valid_cols
+    // data pages are followed by a data-less pad push, and compute tilizes that group one tile-row at a time,
+    // popping the pad after each (keeps the 2*cols ring aligned to tile-row starts).
     auto load_x_chunk_sticks = [&](uint32_t n, uint32_t cg, uint32_t rc) {
         if constexpr (is_rm) {
-            dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
-                x_acc,
-                32 * chunk_rows,
-                cols * 32 * x_elem_size,
-                n * HW + 32 * (row_begin + rc * chunk_rows),
-                (col_begin + cg * cols) * 32 * x_elem_size);
+            const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
+            const uint32_t valid_cols = col_axis.valid(cg, cols);
+            const uint32_t stick0 = n * HW + 32 * (row_begin + rc * chunk_rows);
+            const uint32_t col_off = (col_begin + cg * cols) * 32 * x_elem_size;
+            const uint32_t row_bytes = valid_cols * 32 * x_elem_size;
+            if (valid_cols == cols) {
+                dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
+                    x_acc, 32 * valid_rows, row_bytes, stick0, col_off);
+            } else {
+                for (uint32_t i = 0; i < valid_rows; ++i) {
+                    dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
+                        x_acc, 32, row_bytes, stick0 + 32 * i, col_off);
+                    groupnorm_ragged::pad_push(cb_x_rm, cols - valid_cols, cols - valid_cols);
+                }
+            }
         }
     };
 
@@ -173,17 +201,19 @@ void kernel_main() {
     // source and destination residues modulo the DRAM alignment (64 B on Blackhole) equal, so the second
     // half cannot be read straight into face 1 (+32 B source vs +face_bytes destination). Read the whole
     // aligned run into face 0 rows 0..1, then move row 1 to face 1 row 0 with a few word stores and re-zero it.
+    // Tiles tl >= valid_cols of a ragged last group stay zero and are never consumed (compute pad-pops them).
     auto fill_affine_rows = [&](uint32_t cb_row, const auto& acc, uint32_t cg) {
         constexpr uint32_t half_row_bytes = 16 * g_elem_size;
         constexpr uint32_t face_bytes = 256 * g_elem_size;
         const uint32_t g_tile_bytes = get_tile_size(cb_row);
+        const uint32_t valid_cols = col_axis.valid(cg, cols);
         CircularBuffer row_cb(cb_row);
         cb_reserve_back(cb_row, cols);
         noc.async_write_zeros(row_cb, cols * g_tile_bytes);
         noc.write_zeros_l1_barrier();
         const uint32_t l1_base = get_write_ptr(cb_row);
         uint32_t l1 = l1_base;
-        for (uint32_t tl = 0; tl < cols; ++tl) {
+        for (uint32_t tl = 0; tl < valid_cols; ++tl) {
             const uint32_t T = col_begin + cg * cols + tl;
             if constexpr (g_is_tile && g_is_bfp) {
                 // bfloat8_b TILE affine: a block format has no addressable row 0 (shared-exponent header +
@@ -202,7 +232,7 @@ void kernel_main() {
         noc_async_read_barrier();
         if constexpr (!g_is_tile) {
             l1 = l1_base;
-            for (uint32_t tl = 0; tl < cols; ++tl) {
+            for (uint32_t tl = 0; tl < valid_cols; ++tl) {
                 volatile tt_l1_ptr uint32_t* row1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + half_row_bytes);
                 volatile tt_l1_ptr uint32_t* face1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + face_bytes);
                 for (uint32_t w = 0; w < half_row_bytes / 4; ++w) {
@@ -222,7 +252,7 @@ void kernel_main() {
             if (c_tail != 0) {
                 const uint32_t T_last = Ct - 1;
                 const uint32_t T_first = col_begin + cg * cols;
-                if (T_last >= T_first && T_last < T_first + cols) {
+                if (T_last >= T_first && T_last < T_first + valid_cols) {
                     const uint32_t tile_l1 = l1_base + (T_last - T_first) * g_tile_bytes;
                     for (uint32_t lane = c_tail; lane < 32; ++lane) {
                         const uint32_t off = (lane < 16) ? lane * g_elem_size : face_bytes + (lane - 16) * g_elem_size;

@@ -5,10 +5,12 @@
 
 Realises op_design.md's Blocking Model:
 
-* one **rectangle of P_n cores per image**, cut 2-D along ``hw`` (Pr) and ``ct`` (Pc);
+* one **rectangle of P_n cores per image**, cut 2-D along ``hw`` (Pr) and ``ct`` (Pc) with the
+  design's ceil/floor-balanced ragged split (``rows [i*Ht // Pr, (i+1)*Ht // Pr)``, same for cols);
   ``N >= num_cores`` degenerates to one core per image (P_n = 1, images looped);
-* per core, ``chunk_rows x cols_per_group`` tile blocks; ``resident_2d`` keeps the whole
-  per-core block in an aliased ring across both passes, ``streaming_2d`` re-reads it;
+* per core, ``chunk_rows x cols_per_group`` tile blocks (the last row chunk / column group of a core
+  may be ragged: nominal CB quanta, narrowed work); ``resident_2d`` keeps the whole per-core block in
+  an aliased ring across both passes, ``streaming_2d`` re-reads it;
 * per-(image, group) statistics in lane form (Kg = ceil(G/32) tiles per statistic), built by
   a membership-matrix matmul, combined at an image root through a NoC gather + multicast.
 
@@ -163,15 +165,31 @@ class ImageGroup:
 
 
 def _split_2d(Ht, Ct, p_target):
-    """Pr | Ht, Pc | Ct, Pr*Pc <= p_target, maximising Pr*Pc (tie → larger Pr)."""
+    """op_design.md -> In-image split: Pr <= min(P_n, Ht), Pc = min(P_n // Pr, Ct), maximising the used
+    core count Pr*Pc (tie -> taller Pr: each core's gamma/beta slice is the narrower Ct_core). No divisor
+    constraint — per-core extents are ceil/floor balanced (see _axis_range)."""
     best = (1, 1)
-    for pr in _divisors(Ht):
-        if pr > p_target:
-            break
-        pc = _largest_divisor_leq(Ct, p_target // pr)
+    for pr in range(1, min(p_target, Ht) + 1):
+        pc = min(p_target // pr, Ct)
         if pr * pc > best[0] * best[1] or (pr * pc == best[0] * best[1] and pr > best[0]):
             best = (pr, pc)
     return best
+
+
+def _axis_range(extent, parts, i):
+    """Balanced split of `extent` units over `parts`: part i owns [i*extent // parts, (i+1)*extent // parts)."""
+    begin = (i * extent) // parts
+    end = ((i + 1) * extent) // parts
+    return begin, end - begin
+
+
+def _balanced_block(extent_max, target):
+    """Block size <= target that covers `extent_max` with the fewest blocks and the least nominal padding:
+    ceil(extent_max / ceil(extent_max / target)). Every smaller per-core extent then needs <= the same
+    number of blocks, so CBs sized on `extent_max` hold every core's nominal block count."""
+    target = max(1, min(target, extent_max))
+    num_blocks = math.ceil(extent_max / target)
+    return math.ceil(extent_max / num_blocks)
 
 
 def _tight_rect(p_used, w, h):
@@ -268,20 +286,22 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     groups = _assign_images(N, Gx, Gy, Ht, Ct)
     pr, pc = groups[0].pr, groups[0].pc
     assert all(g.pr == pr and g.pc == pc for g in groups), "uniform split across image rectangles"
-    Ht_core = Ht // pr
-    Ct_core = Ct // pc
+    # Ragged split: per-core extents are ceil/floor balanced (RT args); CBs size to the largest.
+    Ht_core_max = math.ceil(Ht / pr)
+    Ct_core_max = math.ceil(Ct / pc)
     p_max = max(g.p_used for g in groups)
     gather_tiles_per_stat = math.ceil(p_max / TILE)
 
-    # ---- block knobs (derived once) ------------------------------------------------------
-    cols = _largest_divisor_leq(Ct_core, dest_limit)  # cols_per_group
-    chunk_rows = _largest_divisor_leq(Ht_core, max(1, CHUNK_TILES_TARGET // cols))
-    num_col_groups = Ct_core // cols
-    num_row_chunks = Ht_core // chunk_rows
+    # ---- block knobs (derived once, on the max per-core extents) --------------------------
+    cols = _balanced_block(Ct_core_max, dest_limit)  # cols_per_group (<= DEST cap of the REDUCE_COL block)
+    chunk_rows = _balanced_block(Ht_core_max, max(1, CHUNK_TILES_TARGET // cols))
+    num_col_groups_max = math.ceil(Ct_core_max / cols)
+    num_row_chunks_max = math.ceil(Ht_core_max / chunk_rows)
     chunk = chunk_rows * cols
     # writer store block: tiles per NoC barrier, independent of cols (cols can be 1 on wide grids)
     out_block = _largest_divisor_leq(chunk, OUT_BLOCK_TILES_TARGET)
-    blk = Ht_core * Ct_core  # == num_col_groups * num_row_chunks * chunk (no ragged blocks)
+    # nominal pages of the largest per-core block (ragged last chunk / group pushes its full quantum)
+    blk_max = num_col_groups_max * num_row_chunks_max * chunk
     in1_num_subblocks = math.ceil(Kg / dest_limit)
     out_subblock_w = min(Kg, dest_limit)
 
@@ -338,12 +358,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
 
     # ---- regime: resident_2d vs streaming_2d (host-side, exact) -----------------------------
     l1_budget = _l1_budget_bytes_override if _l1_budget_bytes_override is not None else L1_BUDGET_BYTES_DEFAULT
-    resident = (fixed_bytes + blk * x_tile_bytes) <= l1_budget
+    resident = (fixed_bytes + blk_max * x_tile_bytes) <= l1_budget
     if resident:
         # one L1 region, two credit counters (pass 1 / pass 2)
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=blk * x_tile_bytes,
+                total_size=blk_max * x_tile_bytes,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -390,8 +410,6 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         chunk_rows,
         cols,
         Kg,
-        num_col_groups,
-        num_row_chunks,
         x_tile_bytes,
         x_elem_size,
         x_page_bytes,
@@ -404,8 +422,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         HW,
         Ht,
         Ct,
-    ]  # 28 scalars, then the accessors (TA_BASE = 28 in the reader)
-    assert len(reader_ct) == 28
+    ]  # 26 scalars, then the accessors (TA_BASE = 26 in the reader)
+    assert len(reader_ct) == 26
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -427,19 +445,17 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         Kg,
         cols,
         chunk_rows,
-        num_col_groups,
-        num_row_chunks,
         Ht,
         Ct,
         gather_tiles_per_stat,
         SEM_GATHER,
         out_block,
-    ]  # 15 scalars → McastArgs CT base = 15
+    ]  # 13 scalars → McastArgs CT base = 13
     writer_mc_ct_base = len(writer_ct)
     writer_ct.extend(mcast_ct)
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    writer_rt_scalars = 12  # McastArgs RT base (MC_RT in the writer)
-    assert writer_mc_ct_base == 15
+    writer_rt_scalars = 14  # McastArgs RT base (MC_RT in the writer)
+    assert writer_mc_ct_base == 13
 
     compute_ct = [
         CB_X_PASS1,
@@ -470,11 +486,10 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         chunk_rows,
         cols,
         Kg,
-        num_col_groups,
-        num_row_chunks,
         gather_tiles_per_stat,
         in1_num_subblocks,
         out_subblock_w,
+        out_block,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -491,12 +506,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         for p, (x, y) in enumerate(group.cores):
             core = ttnn.CoreCoord(x, y)
             if p >= group.p_used:
-                role, i, j = ROLE_IDLE, 0, 0
+                role = ROLE_IDLE
+                row_begin, Ht_core, col_begin, Ct_core = 0, 0, 0, 0  # idle: no block at all
             else:
                 role = ROLE_ROOT if p == 0 else ROLE_MEMBER
                 i, j = p // group.pc, p % group.pc
-            row_begin = i * Ht_core
-            col_begin = j * Ct_core
+                row_begin, Ht_core = _axis_range(Ht, group.pr, i)  # rows [i*Ht // Pr, (i+1)*Ht // Pr)
+                col_begin, Ct_core = _axis_range(Ct, group.pc, j)  # cols [j*Ct // Pc, (j+1)*Ct // Pc)
             active = int(role != ROLE_IDLE)
             reader_rt[x][y] = [
                 input_tensor.buffer_address(),
@@ -508,6 +524,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                 row_begin,
                 col_begin,
                 active,
+                Ht_core,
+                Ct_core,
             ]
             writer_rt[x][y] = [
                 output_tensor.buffer_address(),
@@ -522,10 +540,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                 root_virtual.x,
                 root_virtual.y,
                 len(group.cores),  # num_participants: every rectangle core increments the gather semaphore
+                Ht_core,
+                Ct_core,
             ]
             assert len(writer_rt[x][y]) == writer_rt_scalars
             writer_rt[x][y] = list(writer_rt[x][y]) + list(helper.runtime_args(core))
-            compute_rt[x][y] = [image_count, role, inv_n_bits, eps_bits]
+            compute_rt[x][y] = [image_count, role, inv_n_bits, eps_bits, Ht_core, Ct_core]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_reader.cpp"),

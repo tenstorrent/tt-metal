@@ -18,6 +18,17 @@
 //    cannot satisfy; WaitUpfrontNoPop indexes the same row-major block and leaves the pop to us.
 //  * cb_totals_recv / cb_stats_row / cb_x_pass2 (resident) are read with caller-managed (None, None) chain
 //    policies + TileAddressing::Offset because their windows are random-access, multi-tile, or whole-block.
+//
+// Ragged blocks (op_design.md -> Work Distribution: "ragged last group/chunk keeps nominal push/pop counts and
+// narrows only the work"): this core's Ht_core x Ct_core extents are RT args. Every CB quantum stays nominal
+// (`chunk`, `cols`, `cols*Kg`) so no ring ever straddles its wrap point; the valid tiles of a block sit dense
+// (row-major valid_rows x valid_cols) at the front of the quantum and only they are reduced / applied:
+//  * x / xsq: dense valid tiles, `chunk` push/pop; the pad pages carry no data.
+//  * colsum ring [S(cols) ; Q(cols)]: the reduce writes valid_cols tiles per statistic; the cols - valid_cols pad
+//    slots are ZERO-filled (FillScalar chain) so the K = cols membership matmul (whose E^T pad rows are zero)
+//    never multiplies 0 by uninitialised L1.
+//  * membership / affine rows / a_full / b_full: valid_cols consumed or produced, the rest pad-popped / -pushed.
+//  * RM input, ragged column group: tilize one tile-row at a time with the valid width, pad-pop the rest.
 
 #include <stdint.h>
 
@@ -33,12 +44,41 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
+#include "groupnorm_sc_N_1_HW_C_ragged.hpp"
 
 namespace ckl = compute_kernel_lib;
 
 namespace {
 constexpr uint32_t ROLE_IDLE = 0;
 constexpr uint32_t ROLE_ROOT = 2;
+
+// tilize<W> with a runtime width w <= W_MAX (the tilize helper's block width is a template parameter).
+template <uint32_t W_MAX, uint32_t cb_in, uint32_t cb_out>
+FORCE_INLINE void tilize_width(uint32_t w, uint32_t num_blocks) {
+    if constexpr (W_MAX > 1) {
+        if (w != W_MAX) {
+            tilize_width<W_MAX - 1, cb_in, cb_out>(w, num_blocks);
+            return;
+        }
+    }
+    ckl::tilize<W_MAX, cb_in, cb_out>(num_blocks);
+}
+
+// RM sticks of one (possibly ragged) block -> dense valid_rows x valid_cols tiles. A full-width group is the
+// helper's multi-block call; a ragged column group is tilized one tile-row at a time (the reader pushes each
+// tile-row as valid_cols data pages + a cols - valid_cols pad, keeping the cb_in ring aligned to tile-rows).
+template <uint32_t cols, uint32_t cb_in, uint32_t cb_out>
+FORCE_INLINE void tilize_ragged_block(uint32_t valid_rows, uint32_t valid_cols) {
+    if (valid_cols == cols) {
+        ckl::tilize<cols, cb_in, cb_out>(valid_rows);
+        return;
+    }
+    for (uint32_t r = 0; r < valid_rows; ++r) {
+        tilize_width<cols, cb_in, cb_out>(valid_cols, 1);
+        groupnorm_ragged::pad_pop(cb_in, cols - valid_cols, cols - valid_cols);
+    }
+}
 }  // namespace
 
 void kernel_main() {
@@ -71,27 +111,34 @@ void kernel_main() {
     constexpr uint32_t chunk_rows = get_compile_time_arg_val(25);
     constexpr uint32_t cols = get_compile_time_arg_val(26);
     constexpr uint32_t Kg = get_compile_time_arg_val(27);
-    constexpr uint32_t num_col_groups = get_compile_time_arg_val(28);
-    constexpr uint32_t num_row_chunks = get_compile_time_arg_val(29);
-    constexpr uint32_t gather_rows = get_compile_time_arg_val(30);
-    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(31);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(32);
+    constexpr uint32_t gather_rows = get_compile_time_arg_val(28);
+    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(29);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(30);
+    constexpr uint32_t out_block = get_compile_time_arg_val(31);  // writer store block (divides chunk)
 
     // ---------------- runtime args ----------------
     const uint32_t image_count = get_arg_val<uint32_t>(0);
     const uint32_t role = get_arg_val<uint32_t>(1);
     const uint32_t inv_n_bits = get_arg_val<uint32_t>(2);
     const uint32_t eps_bits = get_arg_val<uint32_t>(3);
+    const uint32_t Ht_core = get_arg_val<uint32_t>(4);
+    const uint32_t Ct_core = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t chunk = chunk_rows * cols;
     constexpr uint32_t num_stats = 2 * Kg;
-    constexpr uint32_t blk = num_col_groups * num_row_chunks * chunk;
 
     compute_kernel_hw_startup(cb_x_pass1, cb_scaler, cb_out);
 
     if (role == ROLE_IDLE) {
         return;
     }
+
+    // Ragged accounting: blocks along each axis of this core's extent and the valid units of the last one.
+    const auto row_axis = groupnorm_ragged::split(Ht_core, chunk_rows);
+    const auto col_axis = groupnorm_ragged::split(Ct_core, cols);
+    const uint32_t num_row_chunks = row_axis.count;
+    const uint32_t num_col_groups = col_axis.count;
+    const uint32_t blk = num_col_groups * num_row_chunks * chunk;  // nominal pages of the resident block
 
     using ckl::BinaryFpuOp;
     using ckl::BroadcastDim;
@@ -115,21 +162,46 @@ void kernel_main() {
     CircularBuffer stats_g_full_buf(cb_stats_g_full);
     CircularBuffer stats_T_buf(cb_stats_T);
 
+    // Ragged column group: keep the colsum ring at its nominal [S(cols) ; Q(cols)] layout. After a statistic's
+    // valid_cols tiles were pushed, drop the previous chunk's pad tiles from the front (rc > 0) and push
+    // cols - valid_cols ZERO tiles behind the new ones, so the K = cols membership matmul reads finite pads.
+    auto pad_colsum_statistic = [&](uint32_t rc, uint32_t valid_cols) {
+        const uint32_t pad = cols - valid_cols;
+        if (pad == 0) {
+            return;
+        }
+        if (rc > 0) {
+            groupnorm_ragged::pad_pop(cb_colsum, pad, pad);
+        }
+        cb_reserve_back(cb_colsum, pad);
+        ckl::eltwise_chain(
+            IterationShape::tiles(pad),
+            ckl::FillScalar<Dst::D0>{0.0f},
+            ckl::PackTile<output(cb_colsum, ReservePolicy::None, PushPolicy::None), Dst::D0>{});
+        cb_push_back(cb_colsum, pad);
+    };
+
     // ---- pass-1 row-chunk work: ops 2..5 of the block schedule for column group cg ----
-    auto colsum_column_group = [&](uint32_t /*cg*/, uint32_t /*num_k_blocks*/, bool /*is_last*/) {
+    auto colsum_column_group = [&](uint32_t cg, uint32_t /*num_k_blocks*/, bool /*is_last*/) {
+        const uint32_t valid_cols = col_axis.valid(cg, cols);
         for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
+            const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
+            const uint32_t valid = valid_rows * valid_cols;
             if constexpr (is_rm) {
-                ckl::tilize<cols, cb_x_rm, cb_x_pass1>(chunk_rows);
+                tilize_ragged_block<cols, cb_x_rm, cb_x_pass1>(valid_rows, valid_cols);
+                groupnorm_ragged::pad_push(cb_x_pass1, chunk - valid, chunk);  // nominal chunk quantum
                 if constexpr (resident) {
                     cb_reserve_back(cb_x_pass2, chunk);  // pass-2 credit over the same (aliased) bytes
                     cb_push_back(cb_x_pass2, chunk);
                 }
             }
-            // x^2 for the chunk (x stays fronted for the column sum)
+            // x^2 for the valid tiles (x stays fronted for the column sum); xsq keeps the nominal chunk quantum
+            cb_reserve_back(cb_xsq, chunk);
             ckl::square<
                 input(cb_x_pass1, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
-                output(cb_xsq)>(IterationShape::tiles(chunk));
-            // column sums of x and x^2 over chunk_rows, accumulated across row chunks in cb_colsum = [S..; Q..]
+                output(cb_xsq, ReservePolicy::None, PushPolicy::None)>(IterationShape::tiles(valid));
+            cb_push_back(cb_xsq, chunk);
+            // column sums of x and x^2 over valid_rows, accumulated across row chunks in cb_colsum = [S..; Q..]
             ckl::reduce<
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_COL,
@@ -137,9 +209,10 @@ void kernel_main() {
                 cb_scaler,
                 cb_colsum,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
-                ckl::ReduceInputBlockShape::of(chunk_rows, cols),
+                ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
                 ckl::ReduceInputMemoryLayout::contiguous(),
                 ckl::Accumulate::at(cb_colsum, rc));
+            pad_colsum_statistic(rc, valid_cols);
             cb_pop_front(cb_x_pass1, chunk);
             ckl::reduce<
                 ckernel::PoolType::SUM,
@@ -148,9 +221,10 @@ void kernel_main() {
                 cb_scaler,
                 cb_colsum,
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
-                ckl::ReduceInputBlockShape::of(chunk_rows, cols),
+                ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
                 ckl::ReduceInputMemoryLayout::contiguous(),
                 ckl::Accumulate::at(cb_colsum, rc));
+            pad_colsum_statistic(rc, valid_cols);
             cb_pop_front(cb_xsq, chunk);
         }
     };
@@ -232,8 +306,9 @@ void kernel_main() {
             cb_wait_front(cb_x_pass2, blk);
         }
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
+            const uint32_t valid_cols = col_axis.valid(cg, cols);
             // ---- build_affine_block: per channel tile T of this column group ----
-            for (uint32_t tl = 0; tl < cols; ++tl) {
+            for (uint32_t tl = 0; tl < valid_cols; ++tl) {
                 // [mean_full; rstd_full] (2 x Kg) x E_T (Kg x 1) -> cb_stats_T = [mean_T_full; rstd_T_full]
                 ckl::matmul_block<
                     false,
@@ -348,18 +423,35 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_stats_T, 2);
             }
+            // Ragged last group: the reader pushed the nominal cols tiles of E / gamma / beta; drain the unused
+            // pad tiles and pad a_full / b_full up to their nominal cols quantum (no data behind the pads).
+            {
+                const uint32_t pad = cols - valid_cols;
+                groupnorm_ragged::pad_pop(cb_membership, pad * Kg, Kg);
+                if constexpr (has_gamma) {
+                    groupnorm_ragged::pad_pop(cb_gamma_row, pad, pad);
+                }
+                if constexpr (has_beta) {
+                    groupnorm_ragged::pad_pop(cb_beta_row, pad, pad);
+                }
+                groupnorm_ragged::pad_push(cb_a_full, pad, pad);
+                groupnorm_ragged::pad_push(cb_b_full, pad, pad);
+            }
 
             // ---- apply_block: y = x * a_T + b_T over every row chunk of this column group ----
             for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
+                const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
+                const uint32_t valid = valid_rows * valid_cols;
                 if constexpr (!resident) {
                     if constexpr (is_rm) {
-                        ckl::tilize<cols, cb_x_rm, cb_x_pass2>(chunk_rows);
+                        tilize_ragged_block<cols, cb_x_rm, cb_x_pass2>(valid_rows, valid_cols);
+                        groupnorm_ragged::pad_push(cb_x_pass2, chunk - valid, chunk);
                     }
                     cb_wait_front(cb_x_pass2, chunk);
                 }
                 const uint32_t x_base = resident ? (cg * num_row_chunks + rc) * chunk : 0u;
                 ckl::eltwise_chain(
-                    IterationShape::grid(chunk_rows, cols),
+                    IterationShape::grid(valid_rows, valid_cols),
                     ckl::BinaryFpu<
                         BinaryFpuOp::Mul,
                         input(
@@ -382,6 +474,8 @@ void kernel_main() {
                         DestReuseType::DEST_TO_SRCB,
                         Dst::D0>{},
                     ckl::PackTile<output(cb_out), Dst::D0>{});
+                // the writer drains the nominal chunk per block in out_block groups; pad the unused pages
+                groupnorm_ragged::pad_push(cb_out, chunk - valid, out_block);
                 if constexpr (!resident) {
                     cb_pop_front(cb_x_pass2, chunk);
                 }
