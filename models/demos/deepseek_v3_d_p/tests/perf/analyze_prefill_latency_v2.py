@@ -26,12 +26,17 @@ Gates (handoff section 4). Any failure exits non-zero with GATE FAIL on stderr.
     2  JIT cache stats 100% hits present
     3  no rank-level Python failure in the log
     5  interval closure: sum(per-chunk intervals) == last_chunk_end - first_chunk_start
+   10  tail sanity: the last chunk is not wildly out of line with the others. `last_chunk_end` is
+        stamped on SENTINEL RECEIPT, so on a pipeline it is max(own completion, sentinel arrival)
+        and every upstream `_forward_shutdown` delays it. Warm that is noise; cold it over-reported
+        a 1-chunk PP=4 latency by 48x with every other gate green.
 
 Usage: analyze_prefill_latency_v2.py <runner.log> [--min-request N] [--json]
 """
 
 import json
 import re
+import statistics
 import sys
 
 CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([0-9.]+) slot=(-?\d+) \[(\d+),(\d+)\)")
@@ -138,6 +143,36 @@ def main():
         abs(closure) < 5.0,
         f"interval closure: {len(ivs)} intervals for {n_chunks} chunks, "
         f"sum {sum(ivs):.1f} ms vs span {(end - starts[0])*1000.0:.1f} ms, delta {closure:+.3f} ms",
+    )
+
+    # GATE 10 -- the tail the metric is still exposed to, and the reason it must be asserted.
+    #
+    # `last_chunk_end` is stamped when a rank RECEIVES the shutdown sentinel, because that is the
+    # only moment the loop learns the stream has ended. On a pipeline the sentinel reaches rank i
+    # only after every upstream rank ran `_forward_shutdown`, so the last rank's stamp is really
+    # max(its own completion, sentinel arrival) -- and `_forward_shutdown` is not prefill work.
+    #
+    # Warm it is milliseconds and this is noise. Cold it is not: measured 2026-09-15 on a
+    # 40%-warm kernel cache, rank 0's `_forward_shutdown` cost 12,849 ms, so ranks 1-3 each stamped
+    # ~12.8 s late and the 1-chunk PP=4 latency read 13.32 s against a true ~0.25 s -- a 48x
+    # over-report that every other gate passed. Assert it, because it is silent and it is enormous.
+    others = ivs[:-1] if len(ivs) > 1 else [(m_last[0][1] - reqs[last][-2][1][0][1]) * 1000.0]
+    ref = statistics.median([x for x in others if x > 0]) if any(x > 0 for x in others) else float("nan")
+    tail_ratio = ivs[-1] / ref if ref and ref == ref else float("inf")
+    upstream = {rk: g for rk, g in gaps.items() if rk != last}
+    worst = max(upstream.values()) if upstream else 0.0
+    gate(
+        10,
+        tail_ratio <= 3.0,
+        f"tail sanity: last chunk {ivs[-1]:.1f} ms vs {ref:.1f} ms reference "
+        f"({'1-chunk request, so the reference is request 1 on that rank' if len(ivs) == 1 else 'median of the other intervals'})"
+        f" -> {tail_ratio:.1f}x"
+        + (
+            f"; worst upstream _forward_shutdown is {worst:.1f} ms, which delays the sentinel and "
+            f"therefore this stamp"
+            if worst > 50.0
+            else ""
+        ),
     )
 
     lat = end - m_first[0][1]
