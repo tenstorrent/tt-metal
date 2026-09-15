@@ -725,7 +725,7 @@ tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates
 
     // Keeping the old behavior, although UMD does define translation for other cores as well.
     if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH &&
-        core_type != CoreType::DISPATCH) {
+        core_type != CoreType::DISPATCH && core_type != CoreType::SMC) {
         TT_THROW("Undefined conversion for core type.");
     }
 
@@ -739,6 +739,14 @@ tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates
             soc_desc.get_physical_dispatch_engine_core_from_logical(logical_coord);
         tt::umd::CoreCoord translated_coord = soc_desc.translate_coord_to(
             {noc0_coord, CoreType::DISPATCH, CoordSystem::NOC0}, CoordSystem::TRANSLATED);
+        return {translated_coord.x, translated_coord.y};
+    }
+
+    // SMC cores are irregular management cores and do not have a logical grid. Public host APIs
+    // identify them by their descriptor (NOC0) coordinate.
+    if (core_type == CoreType::SMC) {
+        tt::umd::CoreCoord translated_coord =
+            soc_desc.translate_coord_to({logical_coord, CoreType::SMC, CoordSystem::NOC0}, CoordSystem::TRANSLATED);
         return {translated_coord.x, translated_coord.y};
     }
 
