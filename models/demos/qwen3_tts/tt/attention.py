@@ -1221,6 +1221,25 @@ class Attention(LightweightModule):
                 # the in-flight bf16 K/V used by the prefill SDPA below).
                 k_to_write = k if k.dtype == k_cache.dtype else ttnn.typecast(k, dtype=k_cache.dtype)
                 v_to_write = v if v.dtype == v_cache.dtype else ttnn.typecast(v, dtype=v_cache.dtype)
+                # Blackhole workaround for a ttnn.fill_cache defect: a PARTIAL fill
+                # (input rows < cache rows) silently corrupts the first 32-64 positions
+                # of some kv heads. Deterministic, and it needs enough heads to spread
+                # over cores — [1,8,1024,128] into a 1088-row cache loses heads 1 and 2,
+                # while 1, 2 or 4 heads are clean and a full-length fill is always clean.
+                # Repro is 20 lines of pure ttnn, no model involved. Padding the source
+                # out to the cache length restores an exact write; the extra rows are
+                # masked off by decode_attn_mask, so they never reach a result.
+                # Wormhole is unaffected and keeps the plain write.
+                _cache_rows = int(k_cache.shape[2])
+                if not self._wormhole and int(k_to_write.shape[2]) < _cache_rows:
+                    _pad = _cache_rows - int(k_to_write.shape[2])
+                    _kp = ttnn.pad(k_to_write, padding=[(0, 0), (0, 0), (0, _pad), (0, 0)], value=0.0)
+                    _vp = ttnn.pad(v_to_write, padding=[(0, 0), (0, 0), (0, _pad), (0, 0)], value=0.0)
+                    if k_to_write is not k:
+                        ttnn.deallocate(k_to_write)
+                    if v_to_write is not v:
+                        ttnn.deallocate(v_to_write)
+                    k_to_write, v_to_write = _kp, _vp
                 ttnn.fill_cache(k_cache, k_to_write, 0)
                 ttnn.fill_cache(v_cache, v_to_write, 0)
                 if k_to_write is not k:
