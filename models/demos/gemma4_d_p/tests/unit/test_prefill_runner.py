@@ -66,7 +66,9 @@ def test_producer_interleaves_slots_and_pads_only_the_tail():
     prompts = [[11] * 8193, [22] * 8193]
     chunks = list(iter_chunks(prompts, pad_token_id=0))
     assert [chunk[:3] for chunk in chunks] == [(0, 0, 8192), (1, 0, 8192), (0, 8192, 8193), (1, 8192, 8193)]
-    final_chunk = np.frombuffer(chunks[-1][3], dtype="<u4").reshape(8, 1, 1024)
+    final_chunk = chunks[-1][3]
+    assert final_chunk.shape == (8, 1, 1024)
+    assert final_chunk.dtype == np.uint32
     assert final_chunk[0, 0, 0] == 22
     assert np.count_nonzero(final_chunk) == 1
 

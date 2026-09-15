@@ -54,7 +54,7 @@ def iter_chunks(prompts, pad_token_id):
             end = min(start + chunk_size, len(tokens))
             chunk = tokens[start:end] + [pad_token_id] * (start + chunk_size - end)
             payload = np.asarray(chunk, dtype="<u4").reshape(8, 1, chunk_size // 8)
-            yield slot, start, end, payload.tobytes()
+            yield slot, start, end, payload
 
 
 def wait_for_layers(channel, timeout_s):
@@ -122,9 +122,10 @@ def main():
     logger.info(f"PASS: {args.slots} slots, {len(chunks)} chunks, {sum(map(len, prompts))} tokens in {elapsed:.1f}s")
     if not args.keep_serving:
         service.forward_to_tensor_bytes(
-            bytes(Gemma4ServiceConfig.CHUNK_SIZE * 4),
+            np.zeros((8, 1, Gemma4ServiceConfig.CHUNK_SIZE // 8), dtype="<u4"),
             metadata=struct.pack("<iii", -1, -1, -1),
         )
+        service.barrier()
         logger.info("Sent shutdown sentinel")
 
 
