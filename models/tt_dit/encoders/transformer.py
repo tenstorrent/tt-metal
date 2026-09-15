@@ -223,6 +223,9 @@ class TransformerEncoder(Module):
         if deepstack_embeds and vision_mask is None:
             msg = "deepstack_embeds needs vision_mask"
             raise ValueError(msg)
+        if len(deepstack_embeds) > len(self.layers):
+            msg = f"got {len(deepstack_embeds)} deepstack_embeds for {len(self.layers)} layers"
+            raise ValueError(msg)
         if vision_mask is not None and batch_size != 1:
             msg = "vision tokens are supported for a single sequence only"
             raise ValueError(msg)
