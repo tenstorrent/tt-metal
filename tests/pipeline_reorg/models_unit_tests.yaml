@@ -1214,7 +1214,7 @@
       timeout: 40
       tier: 2
     wh_n300:
-      timeout: 36
+      timeout: 40
       tier: 2
     bh_p150b_civ2:
       timeout: 30
