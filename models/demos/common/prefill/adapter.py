@@ -137,6 +137,10 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # How the runtime reports layer completion to the migration layer-ack channel. True: it can ship D2H
+    # device records (``set_d2h_ack_service``), so the runner may run with PREFILL_LAYER_ACK_D2H=1. False:
+    # host ``on_layer_complete`` callback only (``set_layer_completion_sink``); the runner refuses D2H mode.
+    supports_d2h_layer_ack: bool = True
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
