@@ -36,9 +36,9 @@
 //  - the coordinate-patching inline-write variant (update_addr_hi): its
 //    contract writes the XY coordinate register and cannot be expressed over
 //    ATT operands;
-//  - the inline-write and atomic multicast variants trap at runtime until
-//    their register flows are validated on the emulator; the write multicast
-//    decodes its worker rectangle through the active map below.
+//  - every multicast (write, inline write, atomic increment) decodes its
+//    worker rectangle through the active map below into the flat start
+//    operand plus the DEST_COORD extent and MCAST_DESTS count.
 //
 // Shared RoCC command-buffer definitions (register wrappers, MISC/VC values,
 // counters, init, barriers) come from noc_cmd_buf_common.h.
@@ -379,11 +379,22 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-    // The inline-write multicast register flow is not validated on the
-    // emulator yet; use ncrisc_noc_fast_write for multicast. Unimplemented
-    // capability, not a debug invariant: trap unconditionally.
+    // A multicast dest_addr is the packed software rectangle descriptor; decode
+    // it through the active map exactly as ncrisc_noc_fast_write does. The
+    // decoded rectangle count is the destination count the hardware acks.
+    uint32_t num_dests = 1;
+    uint32_t mcast_extent_xy = 0;
     if (mcast) {
-        __builtin_trap();
+        const noc_att::NocMulticastAddress mcast_target =
+            noc_att::resolve_worker_multicast<ACTIVE_ATT_MAP>(dest_addr, sizeof(uint32_t));
+        if (mcast_target.rectangle_count == 0) {
+            // Invalid descriptor: trap unconditionally rather than issue a
+            // transaction with an unresolved operand.
+            __builtin_trap();
+        }
+        dest_addr = mcast_target.start_address;
+        num_dests = mcast_target.rectangle_count;
+        mcast_extent_xy = mcast_target.extent_xy;
     }
 
     uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
@@ -395,9 +406,19 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
         mcast ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
 
+    // The decoded operand keeps the local address bits, so the byte-enable
+    // position is the same under ATT as under XY.
     uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    if (mcast) {
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, mcast_extent_xy);
+        // HW needs MCAST_DESTS to match the number of cores in the rectangle
+        // so it can track per-destination acks for the multicast.
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
+    }
     __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
 
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
@@ -405,7 +426,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
             noc_posted_writes_num_issued[noc] += 1;
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
         }
     }
 }
@@ -423,9 +444,48 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     uint32_t customized_src_addr = 0,
     uint32_t num_dests = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-    // This multicast register flow is not validated on the emulator yet.
-    // Unimplemented capability, not a debug invariant: trap unconditionally.
-    __builtin_trap();
+    // Same flow as noc_fast_write_dw_inline with mcast; the caller's num_dests
+    // must agree with the decoded rectangle (checked builds).
+    uint32_t mcast_extent_xy = 0;
+    if (mcast) {
+        const noc_att::NocMulticastAddress mcast_target =
+            noc_att::resolve_worker_multicast<ACTIVE_ATT_MAP>(dest_addr, sizeof(uint32_t));
+        if (mcast_target.rectangle_count == 0) {
+            __builtin_trap();
+        }
+        ASSERT(num_dests == mcast_target.rectangle_count);
+        dest_addr = mcast_target.start_address;
+        mcast_extent_xy = mcast_target.extent_xy;
+    }
+
+    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
+                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
+        mcast ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
+
+    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
+    if (mcast) {
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, mcast_extent_xy);
+        // HW needs MCAST_DESTS to match the number of cores in the rectangle
+        // so it can track per-destination acks for the multicast.
+        __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
+    }
+    __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
+
+    if (posted) {
+        noc_posted_writes_num_issued[noc] += 1;
+    } else {
+        noc_nonposted_writes_num_issued[noc] += 1;
+        noc_nonposted_writes_acked[noc] += num_dests;
+    }
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
@@ -509,9 +569,39 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-    // This multicast register flow is not validated on the emulator yet.
-    // Unimplemented capability, not a debug invariant: trap unconditionally.
-    __builtin_trap();
+    // Rectangle decode as for the multicast writes; the atomic return goes to
+    // the default return slot, which the ATT-aware init_at_cmd_buf programs as
+    // this initiator's local-window operand.
+    const noc_att::NocMulticastAddress mcast_target =
+        noc_att::resolve_worker_multicast<ACTIVE_ATT_MAP>(addr, sizeof(uint32_t));
+    if (mcast_target.rectangle_count == 0) {
+        __builtin_trap();
+    }
+    ASSERT(num_dests == mcast_target.rectangle_count);
+    addr = mcast_target.start_address;
+
+    uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE | CMD_BUF_MISC_MULTICAST |
+                    (posted ? CMD_BUF_MISC_POSTED : 0) | (linked ? CMD_BUF_MISC_LINKED : 0);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_MCAST_RESP_VC);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, addr);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, mcast_target.extent_xy);
+    uint64_t at_len =
+        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, at_len);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)incr);
+    // HW needs MCAST_DESTS to match the number of cores in the rectangle so
+    // it can track per-destination acks for the multicast atomic.
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
+    __builtin_riscv_ttrocc_scmdbuf_issue_trans();
+
+    if (!posted) {
+        noc_nonposted_atomics_acked[noc] += num_dests;
+    }
 }
 
 // Transaction-id read against the latched read state: the remote base comes
