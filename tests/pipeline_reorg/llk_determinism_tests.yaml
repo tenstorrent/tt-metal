@@ -1,18 +1,18 @@
-# LLK bit-exactness (hardware determinism) sweep.
+# LLK determinism (run-to-run hardware reproducibility) sweep.
 #
 # Same python_tests selection as the PR gate, but every variant is executed
 # BIT_EXACT_RUNS times on device and the result buffer must come back
 # byte-identical each time. PYTEST_MARKERS and BIT_EXACT_RUNS are set by
-# llk-bit-exact-impl.yaml / workflow_call inputs.
-# For max allowed timeout refer to .github/time_budget.yaml (llk -> bit_exact).
+# llk-determinism-impl.yaml / workflow_call inputs.
+# For max allowed timeout refer to .github/time_budget.yaml (llk -> determinism).
 #
 # Deliberately no -x: this is a nightly report, so it should list every
 # non-deterministic variant rather than stop at the first one.
 
-- name: llk_bit_exact_wormhole
+- name: llk_determinism_wormhole
   split_group: 1
   team: llk
-  budget_type: bit_exact
+  budget_type: determinism
   coverage: false
   cmd: |
     set -euo pipefail
@@ -27,10 +27,10 @@
       timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_bit_exact_blackhole group 1/2
+- name: llk_determinism_blackhole group 1/2
   split_group: 1
   team: llk
-  budget_type: bit_exact
+  budget_type: determinism
   coverage: false
   cmd: |
     set -euo pipefail
@@ -46,10 +46,10 @@
       timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_bit_exact_blackhole group 2/2
+- name: llk_determinism_blackhole group 2/2
   split_group: 2
   team: llk
-  budget_type: bit_exact
+  budget_type: determinism
   coverage: false
   cmd: |
     set -euo pipefail

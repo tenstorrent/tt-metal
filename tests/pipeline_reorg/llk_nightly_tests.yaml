@@ -1,15 +1,15 @@
-# LLK e2e — python_tests, no speed-of-light.
-# PYTEST_MARKERS is set by llk-e2e-impl from workflow_call inputs. ci-quiet log mode is hard-coded.
-# The junitxml name must end in -<split_group>.xml: llk-e2e-impl collects reports with
+# LLK nightly — python_tests, PR-gate selection plus tests marked nightly.
+# PYTEST_MARKERS is set by llk-nightly-impl from workflow_call inputs. ci-quiet log mode is hard-coded.
+# The junitxml name must end in -<split_group>.xml: llk-nightly-impl collects reports with
 # the glob pytest-report-*-<split_group>.xml.
 # Coverage is off: re-enabling needs `--coverage` on the pytest legs plus a copy of
 # /tmp/tt-llk-build/merged_coverage.info to code-coverage-<arch>-<split_group>.info,
-# and `coverage: true` both here and on the llk-e2e-impl call.
+# and `coverage: true` both here and on the llk-nightly-impl call.
 
-- name: llk_e2e_wormhole group 1/2
+- name: llk_nightly_wormhole group 1/2
   split_group: 1
   team: llk
-  budget_type: e2e
+  budget_type: nightly
   coverage: false
   cmd: |
     set -euo pipefail
@@ -24,10 +24,10 @@
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_e2e_wormhole group 2/2
+- name: llk_nightly_wormhole group 2/2
   split_group: 2
   team: llk
-  budget_type: e2e
+  budget_type: nightly
   coverage: false
   cmd: |
     set -euo pipefail
@@ -42,10 +42,10 @@
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_e2e_blackhole group 1/2
+- name: llk_nightly_blackhole group 1/2
   split_group: 1
   team: llk
-  budget_type: e2e
+  budget_type: nightly
   coverage: false
   cmd: |
     set -euo pipefail
@@ -60,10 +60,10 @@
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_e2e_blackhole group 2/2
+- name: llk_nightly_blackhole group 2/2
   split_group: 2
   team: llk
-  budget_type: e2e
+  budget_type: nightly
   coverage: false
   cmd: |
     set -euo pipefail

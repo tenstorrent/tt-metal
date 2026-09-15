@@ -1,4 +1,4 @@
-name: "LLK e2e Tests"
+name: "LLK nightly"
 
 on:
   schedule:
@@ -18,22 +18,22 @@ permissions:
   packages: write
 
 jobs:
-  llk-e2e-tests:
-    name: "LLK e2e Tests"
-    uses: ./.github/workflows/llk-e2e-impl.yaml
+  llk-nightly-tests:
+    name: "LLK nightly tests"
+    uses: ./.github/workflows/llk-nightly-impl.yaml
     secrets: inherit
     with:
       pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar and not accuracy' }}
       coverage: false
 
-  llk-e2e-summary:
-    name: "LLK e2e summary"
+  llk-nightly-summary:
+    name: "LLK nightly summary"
     if: always()
     needs:
-      - llk-e2e-tests
+      - llk-nightly-tests
     runs-on: ubuntu-slim
     steps:
-      - name: Check e2e test results
+      - name: Check nightly test results
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
@@ -42,7 +42,7 @@ jobs:
     name: "Report status"
     runs-on: ubuntu-slim
     if: always()
-    needs: llk-e2e-summary
+    needs: llk-nightly-summary
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,7 +52,7 @@ jobs:
       - name: Report status
         uses: ./.github/actions/report-failure
         with:
-          test_name: "LLK e2e tests"
+          test_name: "LLK nightly tests"
           slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.llk-e2e-summary.result }}
+          status: ${{ needs.llk-nightly-summary.result }}
