@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import torch
@@ -67,6 +68,54 @@ DEFAULT_NEGATIVE_PROMPT = (
     "pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, "
     "inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
 )
+
+
+def _ltx_temporal_chunk_plan(
+    num_latent_frames: int, chunk_latents: int, overlap_latents: int
+) -> tuple[tuple[int, int], ...]:
+    """Reference-compatible latent windows for temporal VAE decode.
+
+    Each full window carries ``chunk_latents + 1`` frames and advances by
+    ``chunk_latents - overlap_latents``. The extra frame supplies the causal boundary context used
+    by diffusers' LTX temporal tiled decoder.
+    """
+    if num_latent_frames < 1:
+        raise ValueError(f"num_latent_frames must be positive, got {num_latent_frames}")
+    if chunk_latents < 1:
+        raise ValueError(f"chunk_latents must be positive, got {chunk_latents}")
+    if not 0 <= overlap_latents < chunk_latents:
+        raise ValueError(f"overlap_latents must be in [0, chunk_latents), got {overlap_latents} for {chunk_latents}")
+    stride = chunk_latents - overlap_latents
+    return tuple(
+        (start, min(num_latent_frames, start + chunk_latents + 1)) for start in range(0, num_latent_frames, stride)
+    )
+
+
+def _stitch_ltx_temporal_chunks(
+    decoded_chunks: Iterable[torch.Tensor],
+    *,
+    num_sample_frames: int,
+    chunk_latents: int,
+    overlap_latents: int,
+) -> torch.Tensor:
+    """Blend and stitch BCTHW chunks like diffusers' LTX temporal tiled decoder."""
+    stride_samples = (chunk_latents - overlap_latents) * TEMPORAL_COMPRESSION
+    blend_samples = overlap_latents * TEMPORAL_COMPRESSION
+    pieces = []
+    previous = None
+    for index, decoded in enumerate(decoded_chunks):
+        current = decoded if index == 0 else decoded[:, :, :-1]
+        if previous is not None and blend_samples:
+            extent = min(previous.shape[2], current.shape[2], blend_samples)
+            alpha = torch.arange(extent, dtype=current.dtype, device=current.device) / extent
+            alpha = alpha.view(1, 1, extent, 1, 1)
+            current[:, :, :extent] = previous[:, :, -extent:] * (1.0 - alpha) + current[:, :, :extent] * alpha
+        keep = stride_samples + (1 if index == 0 else 0)
+        pieces.append(current[:, :, :keep].clone())
+        previous = current
+    if not pieces:
+        raise ValueError("decoded_chunks must not be empty")
+    return torch.cat(pieces, dim=2)[:, :, :num_sample_frames]
 
 
 @dataclass
@@ -215,6 +264,10 @@ class LTXPipeline:
     DEFERS_ENCODE_TRACE: bool = False
     # Bucketed distilled routing binds FPS into RoPE and audio length during construction warmup.
     WARMUP_USES_FPS: bool = False
+    # Concrete pipelines can opt into reference-compatible temporal VAE tiling. Zero/None disables.
+    VAE_TEMPORAL_CHUNK_LATENTS: int | None = None
+    VAE_TEMPORAL_OVERLAP_LATENTS: int = 4
+    SHARED_TRACE_IO_NAMES: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -256,6 +309,7 @@ class LTXPipeline:
         self._traced = traced
         # Keyed by bucket rung (int) for the bucketed distilled pipeline, by stage name otherwise.
         self._trace_state: dict[int | str, LTXTransformerState] = {}
+        self._reset_shared_trace_io()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
         if ccl_manager.topology == ttnn.Topology.Linear:
@@ -363,8 +417,21 @@ class LTXPipeline:
         if self.vae_decoder is not None:
             self.vae_decoder.release_trace()
         self._trace_state.clear()
+        self._reset_shared_trace_io()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+
+    def _reset_shared_trace_io(self) -> None:
+        """Create the deployment-wide trace inputs selected by the concrete pipeline."""
+        self._shared_trace_io = {name: StateTensor() for name in self.SHARED_TRACE_IO_NAMES}
+
+    def _new_trace_state(self, *, share_deployment_io: bool = False) -> LTXTransformerState:
+        state = LTXTransformerState()
+        if share_deployment_io:
+            for name, shared in self._shared_trace_io.items():
+                setattr(state, f"_{name}", shared)
+            state._shares_deployment_io = True
+        return state
 
     @property
     def vae_decoder(self):
@@ -550,13 +617,23 @@ class LTXPipeline:
         ``_prime_caches`` (next) attaches them."""
         # VAE adapter first: it parses the VAE config that the transformer's ``image_conditioning``
         # flag depends on (whether encoder blocks exist).
+        configured_chunk = os.environ.get("LTX_VAE_TEMPORAL_CHUNK_LATENTS")
+        vae_chunk_latents = (
+            int(configured_chunk) if configured_chunk is not None else int(self.VAE_TEMPORAL_CHUNK_LATENTS or 0)
+        )
+        # A chunked deployment always executes the same decoder shape. Besides bounding activation
+        # memory, this compiles the exact chunk blocking before DiT trace capture; short tail chunks
+        # are repeat-padded to this shape in decode_latents.
+        vae_num_frames = (
+            vae_chunk_latents * TEMPORAL_COMPRESSION + 1 if vae_chunk_latents > 0 else self._init_num_frames
+        )
         self.vae = LTXVideoVAEAdapter(
             self.checkpoint_name,
             mesh_device=self.mesh_device,
             vae_parallel_config=self.vae_parallel_config,
             vae_ccl_manager=self.vae_ccl_manager,
             dit_parallel_config=self.parallel_config,
-            num_frames=self._init_num_frames,
+            num_frames=vae_num_frames,
             height=self._init_height,
             width=self._init_width,
         )
@@ -834,8 +911,40 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
+        configured_chunk = os.environ.get("LTX_VAE_TEMPORAL_CHUNK_LATENTS")
+        chunk_latents = (
+            int(configured_chunk) if configured_chunk is not None else int(self.VAE_TEMPORAL_CHUNK_LATENTS or 0)
+        )
+        overlap_latents = int(os.environ.get("LTX_VAE_TEMPORAL_OVERLAP_LATENTS", self.VAE_TEMPORAL_OVERLAP_LATENTS))
+        chunked = chunk_latents > 0
+        if chunked and output_type != "float":
+            raise ValueError(f"temporal VAE chunking currently requires output_type='float', got {output_type!r}")
+
         with Watchdog("vae decode"):
-            video = self.vae_decoder(latent_spatial, output_type=output_type)
+            if chunked:
+                plan = _ltx_temporal_chunk_plan(latent_frames, chunk_latents, overlap_latents)
+                logger.info(
+                    f"VAE temporal decode: {latent_frames} latent frames -> {len(plan)} chunks "
+                    f"(chunk={chunk_latents}+1, overlap={overlap_latents})"
+                )
+
+                def _decode_chunk(start: int, end: int) -> torch.Tensor:
+                    chunk = latent_spatial[:, :, start:end]
+                    target = chunk_latents + 1
+                    if chunk.shape[2] < target:
+                        tail = chunk[:, :, -1:].repeat(1, 1, target - chunk.shape[2], 1, 1)
+                        chunk = torch.cat([chunk, tail], dim=2)
+                    return self.vae_decoder(chunk, output_type="float")
+
+                decoded = (_decode_chunk(start, end) for start, end in plan)
+                video = _stitch_ltx_temporal_chunks(
+                    decoded,
+                    num_sample_frames=(latent_frames - 1) * TEMPORAL_COMPRESSION + 1,
+                    chunk_latents=chunk_latents,
+                    overlap_latents=overlap_latents,
+                )
+            else:
+                video = self.vae_decoder(latent_spatial, output_type=output_type)
         if output_type == "yuv":
             return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
         if output_type != "float":
@@ -1352,12 +1461,15 @@ class LTXPipeline:
 
                 ttnn.synchronize_device(self.mesh_device)
                 _t0 = _t.perf_counter()
+                logger.info("audio stage: mel-VAE start")
                 mel = self._decode_mel(audio_spatial)
                 ttnn.synchronize_device(self.mesh_device)
                 _t_vae = _t.perf_counter()
+                logger.info(f"audio stage: mel-VAE done in {(_t_vae - _t0) * 1000:.1f}ms; vocoder+BWE start")
                 waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
                 ttnn.synchronize_device(self.mesh_device)
                 _t_voc = _t.perf_counter()
+                logger.info(f"audio stage: vocoder+BWE done in {(_t_voc - _t_vae) * 1000:.1f}ms")
                 logger.info(
                     f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms "
                     f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
