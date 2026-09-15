@@ -34,10 +34,11 @@ sfpi_inline sfpi::vFloat _sfpu_logaddexp_max_(const sfpi::vFloat& a, const sfpi:
 // Replaces a with |a - b|, or with zero when the operands are bit-identical. Equal
 // infinities are why the clause exists: inf - inf is NaN, and that NaN would swallow a
 // result the composed form gets right, while a zero gap keeps both signs correct because
-// max(+/-inf, +/-inf) plus a finite correction is +/-inf. SFPU float equality does not
-// reliably match either infinity sign on device, so the operands are compared as bit
-// patterns. For any other bit-identical pair the substitution changes nothing: a finite
-// difference is already +0.0, and a NaN pair was already copied into the result.
+// max(+/-inf, +/-inf) plus a finite correction is +/-inf. The comparison goes through
+// as<vInt>, so the clause is bit identity by construction rather than depending on how
+// vFloat equality lowers. For any other bit-identical pair the substitution changes
+// nothing: a finite difference is already +0.0, and a NaN pair was already copied into
+// the result.
 sfpi_inline void _sfpu_logaddexp_gap_(sfpi::vFloat& a, const sfpi::vFloat& b) {
     v_if(sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) { a = 0.0f; }
     v_else { a = sfpi::abs(a - b); }

@@ -711,12 +711,16 @@ _LOGADDEXP_SPECIAL_PAIRS = [
     (-_INF, 2.5),
     (2.5, -_INF),
     (-_INF, 150.0),
+    (150.0, -_INF),
     (-150.0, -_INF),
+    (-_INF, -150.0),
     (_NAN, 1.0),
     (1.0, _NAN),
     (_NAN, _NAN),
     (_NAN, _INF),
+    (_INF, _NAN),
     (-_INF, _NAN),
+    (_NAN, -_INF),
     # A negative NaN: max() orders a NaN by its sign, so this is the case where the NaN
     # would lose to the finite operand if the kernel did not propagate it explicitly.
     (-_NAN, 1.0),
