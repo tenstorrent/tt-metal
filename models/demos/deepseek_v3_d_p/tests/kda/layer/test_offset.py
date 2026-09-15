@@ -342,9 +342,11 @@ def test_zero_offset_is_deterministic_and_matches_reference(
     layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
 
+    starts = iter(((), (0,), (0,)))
+
     def run():
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), 0)
+            output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), *next(starts))
         return output_tt, state.recurrent, state.convolution
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
