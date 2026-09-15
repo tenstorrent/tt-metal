@@ -2684,10 +2684,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        workload.add_program(device_range_, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range_);
-        this->create_kernel(program_, CoreType::WORKER, true);
+        workload.add_program(device_range_, this->create_program_with_simple_kernel(CoreType::WORKER));
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 

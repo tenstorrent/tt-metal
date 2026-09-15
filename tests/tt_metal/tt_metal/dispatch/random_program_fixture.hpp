@@ -17,6 +17,9 @@
 #include "impl/kernels/kernel.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 namespace tt::tt_metal {
 
@@ -84,6 +87,47 @@ protected:
         log_info(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
     }
+    // Gen2 programs are built from a ProgramSpec rather than having kernels added to an existing
+    // Program, so callers that support both take the whole program from here.
+    Program create_program_with_simple_kernel(const CoreType kernel_core_type) {
+        if (device_->arch() != ARCH::QUASAR) {
+            Program program = CreateProgram();
+            this->create_kernel(program, kernel_core_type, true);
+            return program;
+        }
+
+        TT_FATAL(kernel_core_type == CoreType::WORKER, "Only worker cores are ported to Metal 2.0");
+        const CoreRangeSet cores = this->get_cores(kernel_core_type);
+        const uint32_t kernel_size_bytes = this->generate_random_num(MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_BYTES);
+        const uint32_t kernel_runtime_microseconds =
+            this->generate_random_num(MIN_KERNEL_RUNTIME_MICROSECONDS, MAX_KERNEL_RUNTIME_MICROSECONDS);
+
+        experimental::KernelSpec::CompilerOptions::Defines defines;
+        defines.emplace("KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes));
+        defines.emplace("KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds));
+
+        const experimental::KernelSpecName name{"dispatcher_kernel_size_and_runtime"};
+        experimental::KernelSpec kernel_spec{
+            .unique_id = name,
+            .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
+                                            "dispatcher_kernel_size_and_runtime_2_0.cpp"},
+            .num_threads = 1,
+            .compiler_options = {.defines = std::move(defines)},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+
+        experimental::ProgramSpec spec{
+            .name = "random_program",
+            .kernels = {kernel_spec},
+            .work_units = {experimental::WorkUnitSpec{
+                .name = "work_unit",
+                .kernels = {name},
+                .target_nodes = cores,
+            }},
+        };
+        return experimental::MakeProgramFromSpec(*device_, spec);
+    }
+
     void create_kernel(
         Program& program,
         const CoreType kernel_core_type,
