@@ -28,11 +28,13 @@ def bf16_spacing(x):
     return 2.0 ** (binade - BF16_MANTISSA_BITS)
 
 
-def bf16_ulp_error(got, expected) -> tuple[float, float]:
+def bf16_ulp_error(got, expected, p99_floor_binades: int | None = None) -> tuple[float, float]:
     """``|got - expected|`` in bf16 ULP.
 
     Returns ``(peak_ulp, p99_ulp)``: the max error in ULP at ``max |expected|``, then the p99 of
-    the per-element errors, each in ULP at its own element.
+    the per-element errors, each in ULP at its own element. With ``p99_floor_binades``, elements
+    more than that many binades below the peak are measured at the spacing that far down instead,
+    an absolute bound where cancellation makes the relative one unattainable.
     """
     got, expected = np.asarray(got, np.float64), np.asarray(expected, np.float64)
     if got.shape != expected.shape:
@@ -41,23 +43,31 @@ def bf16_ulp_error(got, expected) -> tuple[float, float]:
         raise AssertionError("expected is empty")
     if not np.isfinite(expected).all():
         raise AssertionError("expected has non-finite elements")
-    spacing = bf16_spacing(expected)
+    if p99_floor_binades is not None and p99_floor_binades < 0:
+        raise ValueError(f"p99_floor_binades must be >= 0, got {p99_floor_binades}")
+    magnitude = np.abs(expected)
+    if p99_floor_binades is not None:
+        magnitude = np.maximum(magnitude, magnitude.max() * 2.0**-p99_floor_binades)
+    spacing = bf16_spacing(magnitude)  # the floor never lifts the peak, so spacing.max() is unchanged
     err = np.abs(got - expected)
     return float(err.max() / spacing.max()), float(np.percentile(err / spacing, 99))
 
 
-def assert_within_bf16_ulp(got, expected, label: str, max_ulp: float, max_ulp_p99: float = np.inf) -> None:
+def assert_within_bf16_ulp(
+    got, expected, label: str, max_ulp: float, max_ulp_p99: float = np.inf, p99_floor_binades: int | None = None
+) -> None:
     """Assert ``got`` matches ``expected`` to ``max_ulp`` bf16 ULP at the peak and, if given, to
     ``max_ulp_p99`` at the 99th percentile of the per-element errors.
 
-    Per-element errors are relative: each is measured at its own ``expected`` value's spacing.
-    Where a correct result passes through zero by cancellation (a gradient near an activation's
-    root, masked or padded positions), the absolute error left by the intermediates dwarfs that
-    spacing, and once such elements exceed 1% of the tensor the p99 measures the problem's
-    conditioning, not the kernel. Loosen ``max_ulp_p99`` for those outputs, or omit it.
+    Per-element errors are relative, measured at each ``expected`` value's own spacing.
+    A correct result that cancels to near zero cannot meet that:
+    its absolute error comes from the intermediates, and once such
+    elements make up more than 1% of the tensor the p99 reflects the problem's conditioning, not
+    the kernel. ``p99_floor_binades`` then holds elements more than that many binades below the
+    peak to the spacing at the floor, an absolute bound; elements above it are unaffected.
     """
     try:
-        ulp, ulp_p99 = bf16_ulp_error(got, expected)
+        ulp, ulp_p99 = bf16_ulp_error(got, expected, p99_floor_binades)
     except AssertionError as e:
         raise AssertionError(f"{label}: {e}") from None
     detail = f"{label}: ulp={ulp:.2f} (limit {max_ulp}), ulp_p99={ulp_p99:.2f} (limit {max_ulp_p99})"

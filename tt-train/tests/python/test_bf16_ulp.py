@@ -129,6 +129,44 @@ class TestBf16UlpError:
         with expect_error(AssertionError, "finite"):
             bf16_ulp_error(np.array([1.0, -np.inf]), np.array([1.0, -np.inf]))
 
+    def test_rejects_a_negative_floor(self, expect_error):
+        with expect_error(ValueError, "binades"):
+            bf16_ulp_error(np.ones(4), np.ones(4), p99_floor_binades=-1)
+
+
+class TestP99Floor:
+    @staticmethod
+    def populations(small_magnitude=2.0**-10, shift=2.0**-12):
+        expected = np.concatenate([np.ones(1000), np.full(1000, small_magnitude)])
+        return expected + shift, expected
+
+    def test_measures_elements_below_the_floor_at_the_floor_spacing(self):
+        got, expected = self.populations()
+        assert bf16_ulp_error(got, expected)[1] == 32.0  # 2**-12 / spacing(2**-10)
+        assert bf16_ulp_error(got, expected, p99_floor_binades=7)[1] == 4.0  # 2**-12 / spacing(2**-7)
+
+    def test_leaves_the_peak_and_elements_above_the_floor_alone(self):
+        got, expected = self.populations(small_magnitude=2.0**-5)  # above a 7-binade floor
+        assert bf16_ulp_error(got, expected, p99_floor_binades=7) == bf16_ulp_error(got, expected)
+
+    def test_zero_binades_measures_everything_at_the_peak(self):
+        got, expected = self.populations()
+        peak, p99 = bf16_ulp_error(got, expected, p99_floor_binades=0)
+        assert p99 == peak == 2.0**-12 / 2.0**-7
+
+    def test_is_passed_through_by_the_assertion(self, expect_error):
+        got, expected = self.populations()
+        with expect_error(AssertionError, "ulp_p99="):
+            assert_within_bf16_ulp(got, expected, "lbl", max_ulp=1.0, max_ulp_p99=5.0)
+        assert_within_bf16_ulp(got, expected, "lbl", max_ulp=1.0, max_ulp_p99=5.0, p99_floor_binades=7)
+
+    def test_hides_an_element_zeroed_far_below_the_floor(self, expect_error):
+        expected = np.concatenate([np.ones(1000), np.full(1000, 2.0**-14)])
+        got = np.where(expected == 1.0, expected, 0.0)
+        with expect_error(AssertionError, "ulp_p99="):
+            assert_within_bf16_ulp(got, expected, "lbl", max_ulp=1.0, max_ulp_p99=2.5)
+        assert_within_bf16_ulp(got, expected, "lbl", max_ulp=1.0, max_ulp_p99=2.5, p99_floor_binades=7)
+
 
 class TestAssertWithinBf16Ulp:
     def test_reports_both_numbers_and_limits_on_failure(self, expect_error):
