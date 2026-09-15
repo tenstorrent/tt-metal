@@ -545,9 +545,6 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     const DFBSpecName CHUNK_START_IDX_WRITER{"chunk_start_idx_writer"};
     const DFBSpecName ATTENTION_SINK{"attention_sink"};
     const DFBSpecName RECIP_SCRATCH{"recip_scratch"};
-    // K^T staging: compute physically transposes the K-chunk here (Quasar's matmul unpacker cannot
-    // transpose SrcA), then matmul_blocks(transpose=false) reads it. Same size/format as k_in.
-    const DFBSpecName KT{"kt"};
     const DFBSpecName QK_IM{"qk_im"};
     const DFBSpecName OUT_IM_A{"out_im_A"};
     const DFBSpecName OUT_IM_B{"out_im_B"};
@@ -661,8 +658,6 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             .num_entries = qk_tiles,
             .data_format_metadata = qk_im_df},
         DataflowBufferSpec{
-            .unique_id = KT, .entry_size = k_tile_size, .num_entries = k_tiles, .data_format_metadata = k_df},
-        DataflowBufferSpec{
             .unique_id = OUT_IM_A,
             .entry_size = im_tile_size,
             .num_entries = out_im_tiles,
@@ -704,8 +699,9 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     // SUM_B) into a single 2-deep DFB bound to SUM_A (depth 2*statistics_tiles): the kernel keeps prev
     // at the ring front [0,statistics_tiles) and appends cur behind it, reading both from that
     // contiguous layout (fma_block_merged_sum) and re-basing the running sum to the front. SUM_B is
-    // dropped, reclaiming one self-loop counter — which is what lets the op (incl. the kt transpose
-    // DFB) fit inside Quasar's 8 compute self-loop DFB budget. Merging sum (not max) avoids the
+    // dropped, reclaiming one self-loop counter. (Since the native SrcA-transpose QK^T removed the kt
+    // DFB, the op now fits Quasar's 8-DFB budget without this merge too; the merge is kept as-is.)
+    // Merging sum (not max) avoids the
     // reduce_c prev==out in-place hazard. This runs on WH too so WH exercises the same merged code
     // path. The streaming path and the attention-sink block keep two separate sum DFBs. See
     // compute_common.hpp sdpa_inner_loop (merged_sum).
@@ -1652,8 +1648,6 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         // Compute-only intermediates: self-loop.
         DFBBinding{.dfb_spec_name = QK_IM, .accessor_name = "qk_im", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = QK_IM, .accessor_name = "qk_im", .endpoint_type = DFBEndpointType::CONSUMER},
-        DFBBinding{.dfb_spec_name = KT, .accessor_name = "kt", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = KT, .accessor_name = "kt", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = OUT_IM_A, .accessor_name = "out_im_A", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = OUT_IM_A, .accessor_name = "out_im_A", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = OUT_IM_B, .accessor_name = "out_im_B", .endpoint_type = DFBEndpointType::PRODUCER},
