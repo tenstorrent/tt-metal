@@ -4,6 +4,7 @@
 """Construct the standalone Gemma4 Galaxy prefill model."""
 
 import os
+from pathlib import Path
 
 from loguru import logger
 
@@ -36,6 +37,7 @@ def create_tt_model(
     model_path=None,
     ring_kv_caches=None,
     force_rebuild=False,
+    weight_cache_path=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -56,7 +58,11 @@ def create_tt_model(
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)
-    model_args.model_cache_path = model_args.resolve_model_cache_path(model_path)
+    model_args.model_cache_path = (
+        Path(weight_cache_path).parent
+        if weight_cache_path is not None
+        else model_args.resolve_model_cache_path(model_path)
+    )
     # Store the real HF text config for RoPE creation (Gemma4TextRotaryEmbedding needs it)
     hf_text_config = getattr(hf_config, "text_config", hf_config)
     model_args._hf_text_config = hf_text_config
@@ -69,7 +75,7 @@ def create_tt_model(
     # Reuse cached device weights; load embeddings and layer scalars from the host weight cache.
     _worker_mesh = tuple(mesh_device.shape)
     model_args.cluster_shape = _worker_mesh
-    cache_dir = model_args.weight_cache_path(dtype)
+    cache_dir = Path(weight_cache_path) if weight_cache_path is not None else model_args.weight_cache_path(dtype)
     _precision_for_variant = Gemma4Precision.load(model_path)
     cache_identity = dict(
         model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
