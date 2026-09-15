@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <chrono>
 #include <set>
 #include <string>
@@ -475,35 +474,6 @@ void Devices::reserve_spool() {
     spool_bytes_ = bytes;
 }
 
-namespace {
-
-// Host FIFO sizing. d2h_socket.cpp carves every socket a 2 MiB-aligned region out of the host channel,
-// starting at chan_sz/2 and bumping per socket. Handing each socket the full requested size overruns the
-// part of that window the relay can actually reach once there are several relays: the carve still passes
-// the channel-bounds check in the socket, but the relay's socket barrier then never completes and quiesce
-// aborts with "relay N did not finish within 10 s of its stop", leaving the relays wedged for the next run.
-// Measured on a p100a (1 GiB channel, 7 relays): 7 x 64 MiB failed 3/3, 7 x 32 MiB passed 3/3. So budget the
-// window across the sockets rather than per socket, and never raise what was asked for. The receiver
-// requires a power-of-two byte size, hence bit_floor.
-uint32_t host_fifo_bytes(const tt::Cluster& cluster, uint32_t chip, uint32_t n_relays, uint32_t requested_mb) {
-    constexpr uint64_t kRegionAlign = 2ull << 20;  // the carve's per-socket alignment, so budget for it
-    const uint64_t requested = static_cast<uint64_t>(requested_mb) << 20;
-    const uint64_t share = cluster.get_host_channel_size(chip, 0) / 4 / std::max(n_relays, 1u);
-    const uint64_t usable = share > kRegionAlign ? std::bit_floor(share - kRegionAlign) : 0;
-    if (usable == 0 || usable >= requested) {
-        return static_cast<uint32_t>(requested / kPageSize * kPageSize);
-    }
-    log_warning(
-        tt::LogMetal,
-        "[streaming profiler] host FIFO {} MiB x {} relays does not fit the reachable host-channel window; "
-        "using {} MiB per relay. Raise TT_METAL_STREAMING_PROFILER_FIFO_MB only with fewer relays.",
-        requested_mb,
-        n_relays,
-        usable >> 20);
-    return static_cast<uint32_t>(usable / kPageSize * kPageSize);
-}
-
-}  // namespace
 
 bool Devices::launch_relay(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -552,7 +522,7 @@ bool Devices::launch_relay(
         auto socket = std::make_unique<distributed::D2HSocket>(
             mesh_device,
             distributed::MeshCoreCoord{coord, CoreCoord(phys.x, phys.y)},
-            host_fifo_bytes(cluster, chip, ctx.n_relays, rtopts.get_streaming_profiler_fifo_mb()),
+            (rtopts.get_streaming_profiler_fifo_mb() << 20) / kPageSize * kPageSize,
             distributed::D2HSocket::ExternalConfigBuffer{
                 .address = l1_.cfg, .sender_core_type = HalProgrammableCoreType::DRAM},
             distributed::D2HSocket::ProcessScope::InProcess);
