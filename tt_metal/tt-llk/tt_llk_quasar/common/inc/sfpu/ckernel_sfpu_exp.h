@@ -35,8 +35,7 @@ inline void _exp_init_loadmacro_(
 
     // LOADMACRO CONTROL: DEFAULT_STORE_INSMOD = store_sfpmem. With
     // STORE_INHERITS_INSMOD=0 this register, not the captured SFPSTORE, sets the store format.
-    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, store_sfpmem);
-    TTI_SFPCONFIG(0x0000, p_sfpconfig::MACRO_CTRL, 0x0);
+    TT_SFPCONFIG(store_sfpmem, p_sfpconfig::MACRO_CTRL, 0x1);
     TTI_SFPNOP(0, 0, 0); // SFPCONFIG hazard: no instr may issue the cycle after SFPCONFIG
 
     // Instr reg 4: STG <- EXP[LREG]  (captured via the MACRO_CAPTURE backdoor, not executed)
