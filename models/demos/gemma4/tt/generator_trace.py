@@ -99,7 +99,7 @@ def maybe_auto_enable_chunked_prefill_trace(
     prefill_chunk: int,
     bounded_sliding: bool,
 ) -> bool:
-    """Auto-enable multi-chunk trace replay for unbounded batch-1 demos.
+    """Auto-enable multi-chunk trace replay for unbounded demos at the 4k ceiling.
 
     Without this, a run whose ``max_seq_len`` equals GEMMA4_PREFILL_TRACE_MAX_SEQ
     (4096 by default) prefills UNTRACED, because the demo gate reads
@@ -116,17 +116,23 @@ def maybe_auto_enable_chunked_prefill_trace(
     clean on both arms.
 
     An explicit GEMMA4_CHUNKED_PREFILL_TRACE always wins, so this only fills in
-    a default. Restricted to unbounded batch-1: bounded sliding caps the prefix
-    at the window (the replayed buckets stop matching), and batch>1 scales the
-    trace buffers by batch.
+    a default. Still restricted to unbounded: bounded sliding caps the prefix at
+    the window, so the replayed buckets stop matching.
+
+    Batch is NOT restricted. Prefill here is microbatched per user and
+    ``_record_trace_prefill`` is keyed on the per-call batch
+    (``{seq_len}_{model_id}_{batch_size}_{use_start_pos}``), so a capture is
+    replayed across every user rather than one being taken per user. The trace
+    buffers therefore do not scale with demo batch, which is what the batch-1
+    restriction here was originally guarding against.
     """
     if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
         return chunked_prefill_trace_enabled()
-    if batch_size == 1 and not bounded_sliding and max_seq_len > int(prefill_chunk):
+    if not bounded_sliding and max_seq_len > int(prefill_chunk):
         os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
         logger.info(
             "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
-            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded batch-1)"
+            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded, batch={batch_size})"
         )
         return True
     return False
