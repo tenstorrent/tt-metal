@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Review an issue-solver diff against LLK review knowledge without posting to a PR.
+description: Review issue-solver correctness and requirement completeness against LLK review knowledge without posting to a PR.
 tools: Bash, Read, Write, Glob, Grep
 ---
 

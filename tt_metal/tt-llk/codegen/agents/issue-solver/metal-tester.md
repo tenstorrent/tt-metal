@@ -81,10 +81,9 @@ mkdir -p "$LOG_DIR"
    `MISSING_TEST_COVERAGE: <specific evidence>`. `METAL_TARGET=none` is valid
    only when verification is not required and must not reach this agent.
    Also require the checksummed `REQUIRED_VERIFICATION_MANIFEST` from run state
-   to contain exactly one `suite=metal` leaf for each architecture covered by
-   `metal_verification.architectures`,
-   with `selector.test` exactly equal to `METAL_FILTER`. Export its `run_id`,
-   `attempt_id`, and leaf `requirement_id` as `CODEGEN_RUN_ID`,
+   to contain at least one `suite=metal` leaf and exactly one per selected
+   architecture, with `selector.test` exactly equal to `METAL_FILTER`. Export
+   its `run_id`, `attempt_id`, and leaf `requirement_id` as `CODEGEN_RUN_ID`,
    `CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for local or queued
    execution. A missing or ambiguous leaf is an environment error; do not run.
 2. Execute only the architectures with a sealed Metal leaf. Other suites
@@ -127,6 +126,9 @@ This is the early compile gate for every backend, including queued silicon. Do
 not submit a hardware job when it fails. The queue intentionally rebuilds in an
 isolated workspace; both paths must use the narrow target and warm caches below.
 
+Require `dashboard.hw_test.builder` from the companion `llk_code_gen` checkout
+to be importable by `python`. Preserve the `PYTHONPATH` supplied by the dashboard;
+for standalone runs, add the `llk_code_gen` checkout root to `PYTHONPATH`.
 Pick the strategy that matches what the environment provides.
 
 Install one cleanup trap before either local strategy. It preserves the warm
@@ -191,7 +193,8 @@ git -C "$METAL_VERIFY_HOME" apply --check "$FIX_PATCH" ||
 git -C "$METAL_VERIFY_HOME" apply "$FIX_PATCH"
 cd "$METAL_VERIFY_HOME"
 python -m dashboard.hw_test.builder --prepare-workspace "$METAL_VERIFY_HOME" --kind metal \
-  2>&1 | tee -a "$LOG_DIR/metal_build.log"
+  2>&1 | tee -a "$LOG_DIR/metal_build.log" \
+  || { echo "ENV_ERROR: workspace preparation failed"; exit 3; }
 
 # Incremental build. Fast/no-op for a pure Compute-API (JIT-side) header change; a real
 # rebuild only when host-compiled metal code changed. Build failure => COMPILE_FAILED.
@@ -216,7 +219,8 @@ Use when no suitable warm tree exists or the fix adds files:
 set -euo pipefail
 cd "$WORKTREE_DIR"
 python -m dashboard.hw_test.builder --prepare-workspace "$WORKTREE_DIR" --kind metal \
-  2>&1 | tee -a "$LOG_DIR/metal_build.log"
+  2>&1 | tee -a "$LOG_DIR/metal_build.log" \
+  || { echo "ENV_ERROR: workspace preparation failed"; exit 3; }
 CACHE_USER="${USER:-$(id -un)}"
 export CCACHE_DIR="${CCACHE_DIR:-/localdev/$CACHE_USER/ccache}"
 export CCACHE_BASEDIR="$WORKTREE_DIR"

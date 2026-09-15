@@ -66,30 +66,19 @@ case "$QSR_SIM_BACKEND" in
 esac
 [[ -d "$SIM_PATH" ]] || { echo "ERROR: missing Quasar simulator path: $SIM_PATH" >&2; exit 3; }
 
-export NNG_SOCKET_LOCAL_PORT="${NNG_SOCKET_LOCAL_PORT:-5555}"
-if [[ -z "${NNG_SOCKET_ADDR:-}" ]]; then
-  callback_host="$(hostname)"
-  callback_port="$NNG_SOCKET_LOCAL_PORT"
-  if [[ -f /.dockerenv ]]; then
-    callback_host="${callback_host%%-special-*}"
-    callback_port="${P_USER_DBD_PORT:-}"
-    [[ -n "$callback_port" ]] ||
-      callback_port="$(bash -lc 'printf "%s" "${P_USER_DBD_PORT:-}"' 2>/dev/null)"
-    [[ "$callback_port" =~ ^[0-9]+$ ]] || {
-      echo "ERROR: NNG_SOCKET_ADDR is unset and IRD did not provide a valid P_USER_DBD_PORT" >&2
-      exit 3
-    }
-  fi
-  export NNG_SOCKET_ADDR="tcp://${callback_host}:${callback_port}"
-fi
-export NNG_SOCKET_NAME="${NNG_SOCKET_NAME:-qsr-metal-$(hostname)-$$}"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# shellcheck source=../../codegen/scripts/nng_channel.sh
+source "$LLK_ROOT/codegen/scripts/nng_channel.sh"
+_resolve_nng_channel || exit $?
+export NNG_SOCKET_LOCAL_PORT="$NNG_LOCAL" NNG_SOCKET_ADDR="$NNG_ADDR"
+export NNG_SOCKET_NAME="${NNG_SOCKET_NAME:-qsr-metal-${NNG_HOST}-$$}"
+ARCH=quasar
+
 REAP="$LLK_ROOT/codegen/scripts/reap_stale_emu.sh"
 LOCKFILE="${QSR_AETHER_LOCK:-/tmp/tt-llk-test.lock}"
 if [[ -n "${QSR_AETHER_LOCK:-}" && "${QSR_AETHER_LOCK_SCOPE:-host}" != global ]]; then
-  LOCKFILE="${LOCKFILE}.$(hostname)"
+  LOCKFILE="${LOCKFILE}.${NNG_HOST}"
 fi
 EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 
@@ -105,16 +94,18 @@ echo "[qsr-metal] acquired Aether lock (backend=$QSR_SIM_BACKEND)" >&2
 cleanup_needed=true
 cleanup() {
   if [[ "$cleanup_needed" == true && -x "$REAP" ]]; then
-    bash "$REAP" --arch quasar --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    bash "$REAP" --arch quasar --emu-host "$EMU_HOST" --lock "$LOCKFILE" \
+      --tag "$NNG_SOCKET_NAME" --force >&2 2>&1 || true
   fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Cleanup only this run's NNG tag; other reservations may be running.
-[[ -x "$REAP" ]] &&
-  bash "$REAP" --arch quasar --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+# Reap only the previous owner of this reservation lock, then record our tag.
+_reap_previous_nng_job "$NNG_SOCKET_NAME" || {
+  echo "ERROR: cannot record NNG ownership in $LOCKFILE" >&2; exit 3;
+}
 
 run_log="${LOG_DIR:+$LOG_DIR/metal_run_quasar.log}"
 set +e

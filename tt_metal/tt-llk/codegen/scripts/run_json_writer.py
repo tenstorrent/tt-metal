@@ -1436,11 +1436,14 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     ttnn_test = _markdown_scalar(ttnn, "test")
     ttnn_dispatch = _markdown_scalar(ttnn, "dispatch")
 
-    def suite_arches(section: str) -> list[str]:
+    def suite_arches(section: str, suite: str) -> list[str]:
         value = _markdown_scalar(section, "architectures")
         if not value:
             return arches
-        selected = json.loads(value)
+        try:
+            selected = json.loads(value)
+        except ValueError as exc:
+            raise ValueError(f"{suite} architectures must be a JSON list") from exc
         if (
             not isinstance(selected, list)
             or not selected
@@ -1448,7 +1451,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             or len(set(selected)) != len(selected)
         ):
             raise ValueError(
-                "suite architectures must be a nonempty subset of issue scope"
+                f"{suite} architectures must be a nonempty subset of issue scope"
             )
         return selected
 
@@ -1575,7 +1578,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             raise ValueError(
                 f"Metal selector names a missing file: {worktree / metal_path}"
             )
-        for arch in suite_arches(metal):
+        for arch in suite_arches(metal, "metal_verification"):
             add_requirement(
                 arch,
                 "metal",
@@ -1589,7 +1592,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         if ttnn_dispatch not in {"slow", "fast"}:
             raise ValueError("TTNN verification dispatch must be slow|fast")
         selector = _normalize_ttnn_pytest_selector(ttnn_test, worktree)
-        for arch in suite_arches(ttnn):
+        for arch in suite_arches(ttnn, "ttnn_verification"):
             add_requirement(
                 arch,
                 "ttnn",
@@ -1662,7 +1665,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                 measurements,
             )
 
-    if verify_required == "yes":
+    if not args.performance_only and verify_required == "yes":
         uncovered = set(arches) - {r["architecture"] for r in requirements}
         if uncovered:
             raise ValueError(

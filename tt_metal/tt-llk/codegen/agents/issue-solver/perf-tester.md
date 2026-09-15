@@ -52,11 +52,12 @@ leaf for `TARGET_ARCH`, require exactly one and take `PERF_TEST`, its optional
 `-k` filter, minimum execution count, and required measurements from that leaf.
 Export its run, attempt, and requirement IDs as `CODEGEN_RUN_ID`,
 `CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for every local or queued
-invocation. With no perf leaf, write `PERF_NOT_APPLICABLE` and return without
-submitting a job. An explicitly requested measurement missing from the manifest
-is `PERF_ENV_ERROR`; return it to the worker to correct the plan before resealing. Never drop a leaf because a hypothesis
-was refuted; a refuted run remains failed until the orchestrator reducer handles
-the unexecuted requirement.
+invocation. With no perf leaf, run the applicability and coverage checks below
+before returning a result. Return `PERF_PLAN_ERROR` when an applicable selector
+or an explicitly requested measurement is missing, and include the exact
+selector and measurements for the worker to seal. Do not submit a job without
+a sealed leaf. Never drop a leaf because a hypothesis was refuted; retain its
+unexecuted requirement for the orchestrator reducer.
 
 Optional environment:
 
@@ -75,7 +76,7 @@ Every result includes:
 ```json
 {
   "measured": false,
-  "outcome": "PERF_NOT_APPLICABLE|PERF_ENV_ERROR|PERF_TEST_FAILED|PERF_OK|PERF_REGRESSED|PERF_NOT_IMPROVED",
+  "outcome": "PERF_NOT_APPLICABLE|PERF_ENV_ERROR|PERF_PLAN_ERROR|PERF_TEST_FAILED|PERF_OK|PERF_REGRESSED|PERF_NOT_IMPROVED",
   "verdict": "not_measured|neutral|improved|regressed|not_improved",
   "arch": "blackhole|wormhole",
   "goal": "no_regress|improve",
@@ -109,8 +110,8 @@ when queued silicon was used.
 
 ## Applicability Gate
 
-Create `LOG_DIR`, then return `PERF_NOT_APPLICABLE` without running commands
-when any of these is true:
+Create `LOG_DIR`. With no sealed perf leaf or explicitly requested measurement,
+return `PERF_NOT_APPLICABLE` with evidence when any of these is true:
 
 - `TEST_BACKEND != local`;
 - `TARGET_ARCH` is not `blackhole` or `wormhole`;
@@ -118,10 +119,11 @@ when any of these is true:
 
 ## Select the Perf Test
 
-Use the sealed leaf's selector unchanged. Read the fix plan to confirm its
-coverage; the table below is a planning reference, not permission to replace
-the selector after sealing. If it is unsuitable, return `PERF_ENV_ERROR` with
-the coverage mismatch so the worker can correct the plan.
+Read the fix plan and inspect the changed operation against the candidate
+modules below. Use the sealed leaf's selector unchanged. If it is missing or
+unsuitable, return `PERF_PLAN_ERROR` with the coverage mismatch and an exact
+applicable selector for the worker to add or correct before resealing. Record
+an unavailable backend as `PERF_ENV_ERROR` without a worker retry.
 
 | Changed operation | Candidate module |
 |---|---|
@@ -154,8 +156,9 @@ CSV `mathop` value.
 Confirm the module exists and the selector collects at least one test. If a
 shared change affects multiple operations, choose one only when the fix plan
 identifies a primary operation or the selected case exercises the same changed
-path. Otherwise return `PERF_NOT_APPLICABLE` with the uncovered scope; do not
-claim that an arbitrary representative proves no regression.
+path. Otherwise return `PERF_PLAN_ERROR` with the uncovered scope when a leaf
+is sealed or measurement was explicitly requested; return `PERF_NOT_APPLICABLE`
+with the coverage evidence for an optional check with no suitable selector.
 
 ## Measurement Paths
 

@@ -301,6 +301,7 @@ If empty, call `execute_step_perf_not_measured` and finalize. Otherwise call
 |---|---|
 | `PERF_OK` | finalize |
 | `PERF_NOT_APPLICABLE`, `PERF_ENV_ERROR` | preserve the functional outcome; do not retry the worker |
+| `PERF_PLAN_ERROR` | retry with `FAILURE_CLASS=PERF_PLAN_ERROR` to correct selectors or measurements and reseal |
 | `PERF_TEST_FAILED` | retry the worker with its concrete compile/test/hang failure class |
 | `PERF_REGRESSED` | retry with `FAILURE_CLASS=PERF_REGRESSION` |
 | `PERF_NOT_IMPROVED` | retry with `FAILURE_CLASS=PERF_NOT_IMPROVED` when the goal is `improve` |
@@ -312,8 +313,8 @@ verification, review, and performance.
 
 When the performance budget is exhausted:
 
-- `PERF_TEST_FAILED` or a `no_regress` regression fails the run and records the
-  obstacle.
+- `PERF_PLAN_ERROR`, `PERF_TEST_FAILED`, or a `no_regress` regression fails the
+  run and records the concrete planning or measurement obstacle.
 - `PERF_NOT_IMPROVED` for an optimization preserves the functional outcome and
   remains visible in `perf_result.json`.
 

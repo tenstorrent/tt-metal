@@ -165,9 +165,9 @@ summaries and CSV paths into one worker invocation. On `FIX_UPDATED`, rerun
 functional verification and review for all in-scope architectures, then
 remeasure every eligible architecture affected by the change.
 
-Use the shared performance outcome rules. A `no_regress` regression or
-`PERF_TEST_FAILED` on any architecture fails the run when retries are
-exhausted. `PERF_NOT_IMPROVED` preserves the functional result for an
+Use the shared performance outcome rules. Fail the run when retries are
+exhausted for a `no_regress` regression, `PERF_PLAN_ERROR`, or `PERF_TEST_FAILED`
+on any architecture. `PERF_NOT_IMPROVED` preserves the functional result for an
 optimization issue.
 
 ## Finalize

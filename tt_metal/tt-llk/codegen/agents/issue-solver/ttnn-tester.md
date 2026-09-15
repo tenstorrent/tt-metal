@@ -32,7 +32,7 @@ Read `ISSUE_NUMBER`, `RUN_MODE`, `TARGET_ARCH` or `TARGET_ARCHES_JSON`,
 Require:
 
 - `TTNN_TARGET=ttnn` and `TTNN_COVERAGE=existing|added`;
-- one `suite=ttnn` leaf per architecture covered by `ttnn_verification.architectures`;
+- at least one `suite=ttnn` leaf and exactly one per selected architecture;
 - the leaf backend to match the selected execution route;
 - the leaf selector to name an existing repository-relative `.py` file under
   `tests/ttnn`, `tests/sweep_framework`, a model `tests` directory, or TTNN's
@@ -59,9 +59,12 @@ on exit. Otherwise build the issue worktree directly. Follow the same clean
 tree/base checks as `metal-tester.md`; never apply a patch to an unrelated or
 dirty warm tree. Keep the cleanup trap active through local execution so the
 candidate is still present when TTNN JIT-compiles its device kernels.
-Prepare the selected tree with the same helper as the hardware builder.
-`TTNN_PYTHON` selects the interpreter for creating its private `python_env`;
-dependencies come from the selected tree.
+Require `dashboard.hw_test.builder` from the companion `llk_code_gen` checkout
+to be importable by `python`. Preserve the dashboard-provided `PYTHONPATH`;
+for standalone runs, add the `llk_code_gen` checkout root to `PYTHONPATH`.
+Prepare the selected tree with the hardware builder helper. Export `TTNN_PYTHON`
+to choose the interpreter when creating a missing private `python_env`. After
+preparation, use the private environment and its selected-tree dependencies.
 
 ```bash
 set -euo pipefail
@@ -126,7 +129,8 @@ fi
 export CCACHE_BASEDIR="$(realpath "$HOME_TREE")"
 cd "$HOME_TREE"
 python -m dashboard.hw_test.builder --prepare-workspace "$HOME_TREE" --kind ttnn \
-  2>&1 | tee -a "$LOG_DIR/ttnn_build.log"
+  2>&1 | tee -a "$LOG_DIR/ttnn_build.log" \
+  || { echo "ENV_ERROR: workspace preparation failed"; exit 3; }
 TTNN_PYTHON="$HOME_TREE/python_env/bin/python3"
 export PATH="$HOME_TREE/python_env/bin:$PATH"
 export VIRTUAL_ENV="$HOME_TREE/python_env"

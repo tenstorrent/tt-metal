@@ -195,6 +195,7 @@ runnable regression can be added inside the tt-metal worktree, return
    | `DATA_MISMATCH` | wrong values/PCC/allclose | compare algorithm, face/order/addressing, init/uninit |
    | `RECONFIG_ESCAPE` | passes alone, fails after another test | inspect init/uninit symmetry; do not reset |
    | `MISSING_TEST_COVERAGE` | no applicable test or zero tests selected | add and register a focused runnable regression, then update analysis routing |
+   | `PERF_PLAN_ERROR` | required performance selector or measurement is missing or unsuitable | correct the Test Strategy using the perf artifact, then reseal through route verification |
    | `PERF_REGRESSION` | fixed tree is slower | localize added work from the perf artifact without weakening correctness |
    | `PERF_NOT_IMPROVED` | optimization goal missed | optimize the evidenced thread or refute the hypothesis |
    | `REVIEW_FINDINGS` | `review_result.json` has blockers | fix blocking findings only |
