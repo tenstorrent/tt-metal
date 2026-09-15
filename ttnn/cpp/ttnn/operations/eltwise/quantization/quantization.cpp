@@ -164,6 +164,12 @@ ttnn::Tensor reshape_per_channel_vector_args(
 // reshape the 1D per-channel vectors into a form that broadcasts against the input and let the
 // per-tensor dispatch handle both. Scalars pass through untouched.
 //
+// A per-tensor Tensor argument keeps its caller-supplied shape (reshape_per_channel_vector_args is
+// only needed to broadcast a 1D per-channel vector), but it must still be cast to out_dtype here:
+// downstream (binary_ng for scale, the composite paths for zero-point) assumes operand B already
+// has the dtype it validated against, and casting there instead would have to be duplicated across
+// every call site and dtype combination.
+//
 // The caller picks out_dtype because the two ops want different things: quantize casts the
 // zero-point to the input's (floating-point) dtype, while dequantize must never cast a scale to
 // the input's dtype, which is integral there.
@@ -173,11 +179,14 @@ std::variant<ttnn::Tensor, T> reshape_per_channel_arg(
     const ttnn::Shape& input_shape,
     const std::optional<int32_t> axis,
     const ttnn::DataType out_dtype) {
-    const ttnn::Tensor* tensor_p = axis.has_value() ? std::get_if<ttnn::Tensor>(&arg) : nullptr;
+    const ttnn::Tensor* tensor_p = std::get_if<ttnn::Tensor>(&arg);
     if (tensor_p == nullptr) {
         return arg;
     }
-    return reshape_per_channel_vector_args(*tensor_p, input_shape, axis.value(), out_dtype);
+    if (axis.has_value()) {
+        return reshape_per_channel_vector_args(*tensor_p, input_shape, axis.value(), out_dtype);
+    }
+    return tensor_p->dtype() == out_dtype ? *tensor_p : ttnn::typecast(*tensor_p, out_dtype);
 }
 
 // Widen quantized input to f32 for the composite paths. Use dequantize as the widening step
