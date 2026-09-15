@@ -46,6 +46,19 @@ BENCH_TRACE_REPEATS=50 \
 pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
 ```
 
+After building, run the compact sanity matrix before collecting performance
+numbers:
+
+```bash
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_sanity.sh
+```
+
+It runs the production default and every named policy in separate processes,
+including custom high, medium, and active weights. Each case performs initial
+and final byte validation and verifies that the Tensor Prefetcher stops cleanly.
+Set `BENCH_TRACE_REPEATS` to change the default two replays, or append pytest
+arguments such as `--timeout=60`.
+
 Sweep the most useful comparison matrix:
 
 ```bash
