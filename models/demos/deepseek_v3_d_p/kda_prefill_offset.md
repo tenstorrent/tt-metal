@@ -4,7 +4,44 @@ Historical performance measurements: Blackhole, 2026-09-15.
 Current cleanup and validation: `tt-metal_tracker-mf3`.
 Tracking: `tt-metal_tracker-ea6` and children `.5`, `.6`, `.7`, `.13`
 
-## Verdict
+## Cleanup validation
+
+`tt-metal_tracker-mf3` passed 952 final test executions on eight Blackhole devices
+at implementation revision `693a0ecc8541b400eb530d9b0ea943e8b8972ac5`, with zero
+failures or skips. The matching isolated host build/install passed. All device
+runs used `scripts/run_safe_pytest.sh` and reconciled JUnit outcomes.
+
+| Suite | Passed | Pytest seconds |
+| --- | ---: | ---: |
+| Topology oracle and layer contracts | 506 | 123.426 |
+| Public operations and numerical-policy utilities | 329 | 100.083 |
+| Local recurrence and stateful layer | 24 | 16.579 |
+| Multi-device components and all offset tests | 39 | 112.275 |
+| Synthetic/real-weight acceptance and checkpoint loading | 9 | 169.488 |
+| Isolated cold / warm specialization | 18 / 18 | 18.890 / 4.085 |
+| Performance and policy | 8 + 1 | 70.819 + 0.247 |
+
+The offset suite includes all 160 aligned starts at C2560/G4, both SP axes,
+nonzero-carry continuation, and trace replay. Production acceptance retained the
+PCC ≥0.9995 gate; the lowest reported PCC was 0.999758. The cold run had 0/48
+persistent JIT cache hits, and the identical warm selection had 48/48.
+
+Real-weight median trace wall times at T5120 were 9.629093 ms (SP1xTP8),
+9.564964 ms (SP2xTP4), and 9.988273 ms (SP4xTP2). Synthetic SP2xTP4 measured
+9.585874 ms. All existing two-sided ±3% performance gates passed unchanged.
+Actual operation dispatch retained one summary, one affine scan, and one
+recurrent scan, with G4 at T5120 and G1 at T1280 for baseline and split.
+
+The final paired offset run showed approximately 19–21% T5120 wall-time spread;
+its sub-percent paired deltas do not establish a precise cost. T1280 split
+cost was approximately 2.9%, consistent with the earlier measurements below.
+Named device-program measurements remain separate from trace wall time.
+
+SP8xTP4 Galaxy requires 32 devices and was explicitly excluded locally. Its CI
+selection and host performance-policy test are covered; no local Galaxy
+hardware result or completed upstream CI run is claimed.
+
+## Historical performance verdict
 
 The split-specific single-group fallback is gone. At production `C=2560`,
 baseline, rotation, and every split now retain four 20-chunk recurrence groups
