@@ -30,13 +30,14 @@ Normally each tt-metal process compiles its own kernels with its own local compi
 processes, caching the results under `TT_METAL_CACHE`. The JIT compile server moves that
 compilation to one or more separate server processes:
 
-1. The client computes the kernel hash and generates the kernel's source/header files as usual.
-2. If a valid ELF already exists in the client's local `TT_METAL_CACHE`, **nothing is sent** —
-   the local cache always wins.
-3. Otherwise the client sends a compile request (compiler path, flags, defines, include
-   string, source list, and the generated files' contents) to a server and waits.
-4. The server compiles and links into its own on-disk cache, then returns the ELF bytes.
-5. The client writes the ELF into its local cache and loads it normally.
+1. The client computes the kernel hash. If a valid ELF already exists in its local
+   `TT_METAL_CACHE`, **nothing is sent** — the local cache always wins (unless
+   `TT_METAL_FORCE_JIT_COMPILE` is set; see §5c).
+2. Otherwise it generates the kernel's JIT files and sends a compile request (compiler
+   path, flags, defines, include string, source list, and the contents of those JIT-generated
+   files) to a server and waits.
+3. The server compiles and links into its own on-disk cache, then returns the ELF bytes.
+4. The client writes the ELF into its local cache and loads it normally.
 
 Two layers of deduplication make this worthwhile:
 
@@ -45,7 +46,7 @@ Two layers of deduplication make this worthwhile:
 - **Global, in-flight (server side):** concurrent requests for the same
   `build_key` + kernel hash — *even from different processes on different hosts* — collapse
   into a single compile. Late arrivals wait on the first one's result rather than
-  recompiling. This is the layer a local on-disk cache cannot give you.
+  recompiling. This is the in-flight layer a local on-disk cache cannot give you.
 
 Plus the server's own on-disk cache, which serves repeat requests after the fact.
 
@@ -66,8 +67,8 @@ instead of once per process. That needs the same kernel hash on more than one pr
 more than once over time. This is the usual win for §4a and §4b: the compile still runs on
 the workload hosts' CPUs, but overlapping kernels are not compiled N times. A shared
 on-disk `TT_METAL_CACHE` can reuse *finished* ELFs across processes on one host, but it is
-lock-free: there is no in-flight dedup, so near-simultaneous misses can all compile. It
-also cannot share across hosts.
+lock-free: there is no in-flight dedup, so near-simultaneous misses can all compile. A
+host-local cache also cannot share across hosts.
 
 **Scale-out.** A farm with *more* compile CPU than the application hosts, given a large
 unique kernel list. Kernels hash-shard across endpoints
@@ -244,7 +245,9 @@ export TT_METAL_JIT_SERVER_ENDPOINTS=$(seq -s, -f 'cpu%g:9876' 0 15)
 python warm_all_kernels.py
 ```
 
-This is the pattern most likely to hit the source-visibility problem in §5.
+This is the pattern most likely to hit the source-visibility problem in §5: the farm has
+the tt-metal tree, but not necessarily the kernel sources the application generated at
+runtime.
 
 ---
 
@@ -254,8 +257,10 @@ This is the pattern most likely to hit the source-visibility problem in §5.
 
 The request carries the *recipe*, not the world. Include paths, compiler flags, the linker
 script path, and the compiler path itself are all sent as **absolute paths that the server
-resolves on its own filesystem**. Only the per-kernel generated files (the `.cpp`/`.h`/`.hpp`
-the client generated into that kernel's build directory) travel over the wire.
+resolves on its own filesystem**. What travels over the wire as file *contents* is only the
+JIT-generated files in that kernel's build directory (`.cpp`/`.h`/`.hpp` wrappers). The
+original kernel source is not sent; if it is referenced by absolute path, the server must
+be able to open that path itself (see §5b).
 
 Consequently the server must have, at the same absolute paths as the client:
 
@@ -273,11 +278,11 @@ How this plays out per pattern:
 
 ### 5b. Application-generated kernel sources must be visible to the server
 
-A direct consequence of 5a. When a kernel is registered by file path, the generated
+A direct consequence of 5a. When a kernel is registered by file path, the JIT-generated
 `kernel_includes.hpp` contains literally `#include "<absolute path to the kernel source>"`,
-and the server opens that path on its own filesystem. If your framework **generates** kernel
-source into a scratch/temp directory at runtime, the server needs to be able to read that
-directory.
+and the server opens that path on its own filesystem. If your framework **generates** that
+kernel source into a scratch/temp directory at runtime, the server needs to be able to read
+that directory.
 
 - On a shared filesystem (NFS scratch), this works with no extra configuration.
 - Without a shared filesystem — the typical CPU-farm case — the server cannot see the
@@ -296,11 +301,10 @@ In this mode the client runs `-E` with the exact compile flags and ships a self-
 `.ii` (headers and defines inlined). The server then needs only the toolchain — no include
 tree, no source files, no shared filesystem.
 
-**Do not enable it otherwise.** Preprocessing runs on the *client* (the CPU you were trying
-to free), payloads get larger, and `.ii` units have no include tree so the server cannot
-write an object dephash and conservatively recompiles next time. Client-side reuse still
-works via a `.fulldephash` sidecar next to the ELF. Use this only when the farm cannot see
-your sources.
+**Do not enable it otherwise.** Preprocessing runs on the *client*, payloads get larger, and
+`.ii` units have no include tree so the server cannot write an object dephash and
+conservatively recompiles next time. Client-side reuse still works via a `.fulldephash`
+sidecar next to the ELF. Use this only when the farm cannot see your sources.
 
 ### 5c. Other limitations and gotchas
 
