@@ -21,7 +21,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import GU_SHARD_KROWS, TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SILU,
     ACTIVATION_SITU,
@@ -177,19 +177,18 @@ def run_moe_fused_swiglu(
         # The placement the MODEL ships (TtRoutedExpert.dram_nd_shard_spec), not one chosen here:
         # this op reads whatever width it is handed, so a test-local spec would measure a layout
         # nothing runs. Built interleaved and resharded, which is also the model's order.
-        def reshard(tensor, k_rows):
+        def reshard(tensor):
             return ttnn.to_memory_config(
                 tensor,
                 ttnn.MemoryConfig(
                     buffer_type=ttnn.BufferType.DRAM,
-                    nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(device, tensor.shape[-1], k_rows=k_rows),
+                    nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(device, tensor.shape[-1]),
                 ),
             )
 
-        # Height is gate/up-only, matching the model: down is left one tile-row tall.
-        w_gate = reshard(w_gate, GU_SHARD_KROWS)
-        w_up = reshard(w_up, GU_SHARD_KROWS)
-        w_down = reshard(w_down, 1)
+        w_gate = reshard(w_gate)
+        w_up = reshard(w_up)
+        w_down = reshard(w_down)
 
     # ROW_MAJOR x is bf16 and tilized inside the op (the Blackhole production fast path); TILE x is
     # consumed directly as bf8. Pair dtype with layout so each variant drives its real device path.

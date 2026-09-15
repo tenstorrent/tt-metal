@@ -12,7 +12,6 @@ Unlike TtSharedExpert, this module:
 - Each device holds weights for `experts_per_chip` local experts
 """
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -52,11 +51,6 @@ ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "situ": ttnn.RoutedExpertActivation.SituGlu,
     "clamped_silu_glu": ttnn.RoutedExpertActivation.ClampedSiluGlu,
 }
-
-# Height, in tile-rows, of the gate/up DRAM ND shards built by dram_nd_shard_spec. 1 is the value to
-# ship: height sets how many DRAM banks one K-block touches, and coverage beats request count. The
-# env override exists to re-measure that trade-off on another shape or bank count.
-GU_SHARD_KROWS = int(os.environ.get("DS_SHARD_KROWS", "1"))
 
 # Activations allowed to carry expert biases. ClampedSiluGlu is excluded because
 # DeepSeek-V4's experts are bias-free, not because the kernel lacks a bias branch.
@@ -266,25 +260,19 @@ class TtRoutedExpert(LightweightModule):
                 # rather than by handing as_tensor an ND memory config: the mesh-mapper path
                 # rank-squeezes the 4D weight and ND-sharded tensors reject that view. It also keeps
                 # the on-disk cache layout-independent, so switching layouts needs no cache rebuild.
-                # The height knob is gate/up-only: down is left at one tile-row because nothing has
-                # been measured for it, not because a taller shard would be wrong.
                 if dram_sharded:
                     gate_tt = ttnn.to_memory_config(
                         gate_tt,
                         ttnn.MemoryConfig(
                             buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(
-                                mesh_device, gate_tt.shape[-1], k_rows=GU_SHARD_KROWS
-                            ),
+                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, gate_tt.shape[-1]),
                         ),
                     )
                     up_tt = ttnn.to_memory_config(
                         up_tt,
                         ttnn.MemoryConfig(
                             buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(
-                                mesh_device, up_tt.shape[-1], k_rows=GU_SHARD_KROWS
-                            ),
+                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, up_tt.shape[-1]),
                         ),
                     )
                     down_tt = ttnn.to_memory_config(
