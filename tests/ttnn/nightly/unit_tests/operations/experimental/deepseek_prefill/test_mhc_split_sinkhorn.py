@@ -88,9 +88,11 @@ def test_mhc_split_sinkhorn(device, scale_val):
 
 # Sharded input (#40720): mixes L1 height-sharded across cores; the op aliases input/output
 # CBs to the shards (zero-copy, no DRAM round-trip). Outputs come back sharded on the same grid.
-# TOKENS is 20 tiles, so only a grid that divides 20 keeps every shard tile-aligned.
-@pytest.mark.parametrize("cores_x", [4, 5], ids=["x4", "x5"])
-def test_mhc_split_sinkhorn_sharded(device, cores_x):
+# TOKENS is 20 tiles, so the grid has to divide 20 to keep every shard tile-aligned: 20 cores
+# hold a tile each (the per-core minimum, and 20 only fits as 5x4 on an 8-wide Wormhole grid),
+# 4 cores hold five. The op walks the shard grid as a CoreRangeSet, so its shape is free.
+@pytest.mark.parametrize("cores_x, cores_y", [(5, 4), (4, 1)], ids=["c20_tpc1", "c4_tpc5"])
+def test_mhc_split_sinkhorn_sharded(device, cores_x, cores_y):
     torch.manual_seed(0)
     cfg = MHCConfig(dim=64, n=4)
     T = TOKENS
@@ -103,7 +105,7 @@ def test_mhc_split_sinkhorn_sharded(device, cores_x):
     mixes32 = torch.zeros(T, 32)
     mixes32[:, : cfg.mix_hc] = mixes
     mem = ttnn.create_sharded_memory_config(
-        [T, 32], ttnn.CoreGrid(y=1, x=cores_x), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+        [T, 32], ttnn.CoreGrid(y=cores_y, x=cores_x), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
     )
     mt = ttnn.from_torch(mixes32, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32, memory_config=mem)
     ct = ttnn.from_torch(build_consts(cfg, scale, base), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
