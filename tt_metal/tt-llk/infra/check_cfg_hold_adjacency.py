@@ -77,8 +77,8 @@ import sys
 
 # --- hold inducers -----------------------------------------------------------------------------
 # Only rules confirmed on silicon are encoded. A broader rule ("1 cycle after any ALU instruction")
-# exists in the hazard database but is contradicted by measurement, so it is deliberately omitted:
-# including it flags shipped sequences that demonstrably do not fail.
+# is contradicted by measurement, so it is deliberately omitted: including it flags shipped
+# sequences that demonstrably do not fail.
 MOVE_TO_SRCA = r"MOVD2A|MOVB2A"
 # The post-move hold's held class is every arithmetic instruction that reads Dest, plus the two
 # moves out of Dest. ELWADD and ELWSUB are NOT in it: the hardware declares them as not needing
