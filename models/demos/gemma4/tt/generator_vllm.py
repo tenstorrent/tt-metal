@@ -1997,6 +1997,35 @@ def dflash_bucket_for(start, ladder):
     return None
 
 
+def dflash_width_set(max_context, num_blocks, horizon=None, verify=None, max_rungs=None, block_size=64):
+    """The verify WIDTH SET a dFlash server can actually capture.
+
+    ``dflash_pv_bucket_ladder`` gives the widths the CONTEXT needs; this bounds
+    them by what the KV POOL can address. The verify page table is
+    ``pv_sk // block_size`` entries wide and ``paged_update_cache`` requires
+    ``max_num_blocks_per_seq < max_num_blocks``, so a width past the per-request
+    block budget kills the engine during warmup:
+
+        max_num_blocks_per_seq must be less than max_num_blocks:
+        max_num_blocks_per_seq=4144, max_num_blocks=4128
+
+    which is the ladder's top rung (265216 = round_up_1024(262144 + 2118)) on a
+    262144-token server. The top width is therefore the block budget, not the
+    rounded-up context, and the last ``P_v + 64`` positions of the context are
+    served by it.
+
+    Pure: config-time arithmetic, no device and no model instance.
+    """
+    ladder = dflash_pv_bucket_ladder(max_context, horizon=horizon, verify=verify, max_rungs=max_rungs)
+    cap = ((int(num_blocks) * int(block_size)) // 1024) * 1024 if num_blocks else 0
+    if not cap:
+        return ladder
+    ladder = [w for w in ladder if w <= cap]
+    if not ladder or ladder[-1] != cap:
+        ladder.append(cap)
+    return ladder
+
+
 def _dflash_drafter_config(snapshot):
     """Read the drafter checkpoint's HF config. Pure: file read, no device."""
     import json as _json
@@ -2280,6 +2309,20 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_active_owner = None
         self._spec_active = False
         self._spec_horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
+        # WIDTH SET (vllm-tt-plugin#110 s.8, tt-metal#56048 review step 3): the
+        # verify widths are derived from max_model_len at CONFIG time and every
+        # one is captured in warmup, so serving never captures and no captured
+        # shape depends on a request. It also removes the reason _spec_budget_end
+        # exists: the largest width covers max_model_len, so a request migrates
+        # to a wider trace instead of being ended with an EOS at the horizon.
+        # DEFAULT ON. Validated on a P150x8 31B server at 262144 max_model_len
+        # with bounded sliding: mid-generation migration coherent, needle
+        # retrieved at 121k and 238k, 32/32 needles at conc-32, and decode rate
+        # within noise of the per-session path at both 4k and 121k (see the
+        # commit message for the numbers). GEMMA4_DFLASH_WIDTH_SET=0 restores
+        # per-session capture -- and with it the horizon generation cap.
+        self._spec_width_set = os.environ.get("GEMMA4_DFLASH_WIDTH_SET", "1").lower() in ("1", "true", "yes")
+        self._spec_width_ladder = None
         logger.info(
             f"Gemma4DFlash serving: V={self._SPEC_V} (N={self._SPEC_N}/step), "
             f"horizon={self._spec_horizon} new tokens/request, B=1 sessions"
@@ -2352,7 +2395,65 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             logger.info("Gemma4DFlash: batched decode warmup disabled by env")
             return None
         logger.info("Gemma4DFlash: warming batched baseline decode buckets")
-        return super().warmup_model_decode(*args, **kwargs)
+        out = super().warmup_model_decode(*args, **kwargs)
+        # Phase 2 (enable_trace) is where the plugin captures decode traces, and
+        # where the verify width set belongs: it is the last point before
+        # serving at which a capture is allowed.
+        if self._spec_width_set and kwargs.get("enable_trace"):
+            self._spec_capture_width_set(kwargs.get("kv_cache"), kwargs.get("num_blocks"))
+        return out
+
+    def _spec_capture_width_set(self, kv_cache, num_blocks):
+        """Capture one fused verify trace per width, before the first request.
+
+        The decoder built here is PERSISTENT for the life of the server: the
+        traces belong to its buffers, so every request reseeds this one instance
+        rather than constructing its own. That is the cross-request reuse path
+        (GEMMA4_DFLASH_DECODER_REUSE), re-measured byte-identical to per-request
+        capture on a 31B server -- same acceptance, same replies -- so making it
+        the only path costs nothing and saves the per-request capture.
+
+        The scratch page table is all zeros (block 0) at the FULL per-request
+        width, which is what sizes v_pt at its maximum; every request refreshes
+        the contents. Writing a handful of verify rows into block 0 at positions
+        [0, P_v) during capture is harmless: any request that later owns that
+        block overwrites those positions with its own prefill before it decodes.
+        """
+        import time as _time
+
+        from models.demos.gemma4.tt.dflash_drafter import DFlashFusedDecoder
+
+        if self._SPEC_BLOCK <= 1 or kv_cache is None:
+            return
+        max_seq_len = int(getattr(self.model_args[0], "max_seq_len", 0))
+        ladder = dflash_width_set(
+            max_seq_len,
+            num_blocks,
+            horizon=self._spec_horizon,
+            verify=self._SPEC_V,
+            max_rungs=int(os.environ.get("GEMMA4_DFLASH_WIDTH_RUNGS", "0")) or None,
+        )
+        kv_layers = kv_cache
+        if (
+            isinstance(kv_layers, (list, tuple))
+            and kv_layers
+            and isinstance(kv_layers[0], (list, tuple))
+            and kv_layers[0]
+            and isinstance(kv_layers[0][0], (list, tuple))
+        ):
+            kv_layers = kv_layers[0]
+        blocks = int(num_blocks) if num_blocks else max(1, max_seq_len // 64)
+        scratch_pt = torch.zeros(1, blocks, dtype=torch.int32)
+        t0 = _time.time()
+        self._spec_release_decoder()
+        dec = DFlashFusedDecoder(self.model[0], self._spec_get_drafter(), kv_layers, scratch_pt)
+        cost = dec.capture_widths(ladder)
+        self._spec_decoder = dec
+        self._spec_width_ladder = ladder
+        logger.info(
+            f"Gemma4DFlash: captured {len(cost)} verify widths in {_time.time()-t0:.1f}s "
+            f"(max_model_len={max_seq_len}, widths={ladder}, per-width={ {k: round(v, 2) for k, v in cost.items()} })"
+        )
 
     def _spec_pending_is_mine(self, page_table):
         """True when the pending session was captured for the request whose
@@ -2560,6 +2661,41 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # stay inside one packed-verify width bucket; it is not the default only
         # because bucket churn re-captures anyway and the DRAM-fragmentation
         # question for long-lived servers has not been measured.
+        # With the WIDTH SET every width is already captured on the persistent
+        # decoder, so a request never captures: it selects its width, refreshes
+        # the page tables and reseeds. A width the set does not cover would be a
+        # configuration error (the largest rung covers max_model_len), so fall
+        # through to a capture rather than serve a wrong width.
+        if self._spec_width_set and dec is not None and pt is not None:
+            w = dec.width_for(int(start))
+            if w is not None:
+                dec.refresh_page_tables(pt)
+                dec.select_width(int(start))
+                dec.prefill_ingest(taps, n)
+                dec.reseed(int(anchor_id), int(start))
+                self._spec_decoder_bucket = w
+                self._spec_active = True
+                self._spec_active_owner = self._spec_pt_identity(page_table)
+                self._spec_first_step = True
+                self._spec_last_pt = None
+                # The largest captured width bounds the generation, not the
+                # horizon: vLLM's own max_model_len stop arrives first.
+                self._spec_budget_end = max(self._spec_width_ladder or [w]) - self._SPEC_N - 64
+                logger.info(
+                    f"Gemma4DFlash session: width-set reseed {_time.time()-t0:.2f}s "
+                    f"(anchor={int(anchor_id)}, start={start}, width={w})"
+                )
+                return
+            # Should be unreachable: the largest rung covers max_model_len.
+            # Fall back to per-session capture, and turn the width set OFF for
+            # the rest of the process rather than leaving a decoder whose traces
+            # nothing will release (the capture below replaces it).
+            logger.warning(
+                f"Gemma4DFlash: no captured verify width covers start={int(start)}; "
+                "capturing one for this session and disabling the width set"
+            )
+            self._spec_width_set = False
+            self._spec_width_ladder = None
         _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "0").lower() in ("1", "true", "yes")
         reused = (
             _reuse_ok
@@ -2594,6 +2730,28 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
 
     def _spec_release_decoder(self, drop_page_tables=True):
         dec = self._spec_decoder
+        if self._spec_width_set and getattr(dec, "_pv_widths", None):
+            # The captured WIDTH SET lives on this decoder, and its traces are
+            # the whole point: tearing it down here would push every later
+            # request back onto a per-session capture, which is the behaviour
+            # the width set exists to remove. End the SESSION instead -- the
+            # per-layer page tables still go, so a batched baseline step rebuilds
+            # its own set. This holds for capture teardown too: the width set is
+            # a WARMUP artifact, not a per-session capture, so the hook that
+            # exists to free per-session captures has nothing to free here.
+            # Freeing it anyway would leave the process with no captured widths
+            # and no way to recapture them (warmup is over), silently restoring
+            # the per-session capture AND the horizon generation cap.
+            self._spec_active = False
+            self._spec_active_owner = None
+            self._spec_decoder_bucket = None
+            if drop_page_tables:
+                try:
+                    if hasattr(self.model[0], "_active_page_tables_per_layer"):
+                        del self.model[0]._active_page_tables_per_layer
+                except Exception:
+                    pass
+            return
         self._spec_decoder = None
         self._spec_decoder_bucket = None
         self._spec_active = False
@@ -2618,17 +2776,28 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 pass
         if dec is None:
             return
-        try:
-            if getattr(dec, "trace", None) is not None:
-                ttnn.release_trace(self.mesh_device, dec.trace)
-        except Exception as e:
-            logger.warning(f"Gemma4DFlash: trace release failed: {e!r}")
+        tids = {id(t): t for t in [getattr(dec, "trace", None)] if t is not None}
+        for _rec in (getattr(dec, "_pv_widths", None) or {}).values():
+            if _rec.get("trace") is not None:
+                tids.setdefault(id(_rec["trace"]), _rec["trace"])
+        for _tid in tids.values():
+            try:
+                ttnn.release_trace(self.mesh_device, _tid)
+            except Exception as e:
+                logger.warning(f"Gemma4DFlash: trace release failed: {e!r}")
         for attr in ("ctx_k", "ctx_v"):
             for t in getattr(dec, attr, None) or []:
                 try:
                     t.deallocate(True)
                 except Exception:
                     pass
+        for _rec in (getattr(dec, "_pv_widths", None) or {}).values():
+            for _t in (_rec.get("pv_iota"), *(_rec.get("cache_by_type") or {}).values()):
+                if _t is not None:
+                    try:
+                        _t.deallocate(True)
+                    except Exception:
+                        pass
         for attr in (
             "ctx_dev",
             "fc_prev",
@@ -2767,7 +2936,21 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         vocab = dec.drafter.vocab
         block = []
         while len(block) < self._SPEC_BLOCK:
-            if dec.start >= self._spec_budget_end:
+            if self._spec_width_set:
+                # Select the narrowest captured width that covers this position.
+                # A request that has grown past its current width MOVES to the
+                # next one; nothing but the active buffer set and trace changes,
+                # because every width shares the drafter mirror, ctx cache and
+                # commit state. This is what stops a captured width from acting
+                # as a generation budget (review finding on tt-metal#56048).
+                if dec.select_width(dec.start) is None:
+                    logger.warning(
+                        f"Gemma4DFlash: position {dec.start} past the widest captured "
+                        "verify width; ending the request"
+                    )
+                    block.append(min(eos_set))
+                    break
+            elif dec.start >= self._spec_budget_end:
                 block.append(min(eos_set))
                 break
             accepted, bonus, produced = dec.step(first=self._spec_first_step)
