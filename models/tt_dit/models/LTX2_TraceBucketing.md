@@ -16,17 +16,19 @@ a resolution/duration change to be a trace *replay*.
 The same idea MiniMax-H3 uses for variable-length prefill, ported to LTX:
 
 1. **Pad the video sequence to a bucket rung.** `LTX_BUCKET_LADDER` in `models/tt_dit/utils/ltx.py`
-   is 11 rungs, `8704 .. 261120`, each a multiple of 256 (`32 * SP`) and ~1.4x the previous one.
+   is 6 rungs, `8704 .. 261120`, each a multiple of 256 (`32 * SP`) and ~2x the previous one.
    A request's stage-1 and stage-2 token counts each round up to the smallest rung that fits.
 2. **Mask the padded tail on-device.** Ring joint SDPA accepts `logical_n` as either an `int` or
-   a one-element `uint32` device tensor (`LogicalLength`). The pipeline holds one such tensor per
-   rung, writes the real token count into it before each request (`ttnn.copy`, address unchanged),
+   a one-element `uint32` device tensor (`LogicalLength`). The pipeline holds one deployment-wide
+   tensor, writes the real token count into it before each stage (`ttnn.copy`, address unchanged),
    and the kernels' reader/writer NoC-read it on replay. Self-attention and the V2A cross
-   attention (`is_cross=True`) both use it. Padded key positions get no weight; padded query
-   rows are zeroed by the existing padding masks.
+   attention (`is_cross=True`) both use it. Dynamic fixed-shape audio/scalar inputs use shared
+   deployment arenas; configuration metadata (RoPE, cross-PE and masks) remains per-rung so an
+   S1 -> S2 transition does not invalidate the other rung's binding. Padded key positions get no
+   weight; padded query rows are zeroed by the existing padding masks.
 3. **One trace per rung, all captured at startup.** A trace is stage-agnostic (only the token
    count matters), so the served grid of 128 `(canvas, fps, duration)` configs collapses to 52
-   distinct token shapes and 11 rungs. Warmup preallocates every rung's persistent I/O *before*
+   distinct token shapes and 6 rungs. Warmup preallocates every rung's persistent I/O *before*
    the first capture, then per rung runs an eager compile pass at the rung's exact shapes and a
    capture. After that, `generate()` only ever replays; a request that would need an unwarmed
    rung raises `ValueError` instead of capturing under live traces.
@@ -35,8 +37,8 @@ The same idea MiniMax-H3 uses for variable-length prefill, ported to LTX:
 
 | Canvas (name -> HxW)                    | fps            | duration (s) |
 | --------------------------------------- | -------------- | ------------ |
-| `720p-landscape` 704x1280, `720p-portrait` 1280x704   | 24, 25, 48, 50 | 6 .. 20 |
-| `1080p-landscape` 1088x1920, `1080p-portrait` 1920x1088 | 24, 25, 48, 50 | 6 .. 20 |
+| `720p-landscape` 768x1280 -> 720x1280 crop, `720p-portrait` 1280x768 -> 1280x720 | 24, 25, 48, 50 | 6 .. 20 |
+| `1080p-landscape` 1088x1920 -> 1080x1920 crop, `1080p-portrait` 1920x1088 -> 1920x1080 | 24, 25, 48, 50 | 6 .. 20 |
 
 `1440p-*` and `4k-*` canvases are defined in `LTX_CANVASES` but rejected in traced mode
 (`LTX_SERVED_CANVASES`). Frame counts follow LTX's `8k+1` rule: `ceil((fps*s - 1)/8)*8 + 1`.
@@ -50,7 +52,7 @@ waveform cropped to the clip duration.
 | SDPA kernel API (C++) | `ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.cpp`, `device/ring_joint_sdpa_device_operation.cpp`, `device/ring_joint_sdpa_program_factory.cpp`, `device/kernels/dataflow/ring_joint_writer.cpp`, `device/kernels/ring_joint_derived_slots.hpp` | H3's `LogicalLength = int \| Tensor` cherry-picked onto main (merged with main's `kv_actual_isl` metadata path); tensor `logical_n` allowed on the `is_cross` path. |
 | Routing utilities | `models/tt_dit/utils/ltx.py` | `LTX_BUCKET_LADDER`, `LTX_CANVASES`, `LTX_SERVED_CANVASES`, `LTX_AUDIO_N_BUCKET`, `route_ltx_request` / `route_ltx_config` -> `LTXBucketRoute`, `ltx_served_configs`, `validate_bucket_ladder`. |
 | Transformer | `models/tt_dit/models/transformers/ltx/{attention_ltx,transformer_ltx,rope_ltx}.py` | `video_logical_n_tensor` threaded to `inner_step`; ring SDPA called with `logical_n=<tensor>`; program configs keyed by the physical (padded) N with entries for every rung; RoPE built at the padded length. |
-| Pipeline | `models/tt_dit/pipelines/ltx/{pipeline_ltx,pipeline_ltx_distilled}.py` | Trace state keyed by rung; per-rung `video_logical_n` StateTensor; statics refreshed in place; `warmup_buffers(served_configs=..., exact_hot_rungs=True)` with prealloc -> compile pass -> capture per rung; routing in `generate()`. |
+| Pipeline | `models/tt_dit/pipelines/ltx/{pipeline_ltx,pipeline_ltx_distilled}.py` | Trace state keyed by rung; dynamic fixed-shape arenas shared across rungs; configuration statics owned per-rung and refreshed in place only when that rung's request shape changes; all served upsampler/VAE program shapes warm before six-rung capture; routing in `generate()`. |
 | Matmul configs | `models/tt_dit/utils/matmul.py` | Fused MM+RS entries for per-device M = 11872 / 16640 / 23296 / 32640 (K=N=4096). |
 | Device params | `models/tt_dit/tests/models/ltx/ltx_mesh_params.py` | `trace_region_size` 500 MB -> 1.6 GB. |
 | Tests | `models/tt_dit/tests/models/ltx/{test_bucket_ltx,test_transformer_ltx,test_pipeline_ltx_distilled}.py`, `models/tt_dit/tests/unit/test_ring_joint_attention.py` | See below. |
@@ -58,19 +60,26 @@ waveform cropped to the clip duration.
 ### Knobs
 
 - `LTX_SERVED_CONFIGS` (env) / `served_configs=` (`warmup_buffers`): `"hot"` (default: only
-  the warmup shape), `"all"` (every rung, ~1 min and ~110 MB of trace region each on the 4x8),
+  the warmup shape), `"all"` (every rung and every distinct post-processing program shape),
   or `"canvas:fps:dur,canvas:fps:dur,..."`. Use `"hot"` while validating one configuration;
-  opt into `"all"` for the final console startup once every rung is validated.
-- `exact_hot_rungs` (default on): the warmup shape's own SP-padded lengths are added to the
-  ladder as rungs, so the primary config pays nothing for bucketing.
+  opt into `"all"` for the final console startup once every rung is validated. Full serving
+  startup is intentionally longer because upsampler/VAE compilation can no longer occur after
+  traces become live.
+- `exact_hot_rungs` (default off): optionally add the warmup shape's own SP-padded lengths as
+  private rungs. Leave this off for serving so startup keeps exactly six resident traces.
 - `trace_region_size`: ~108 MB per resident rung trace (5 rungs measured 543 MB). The traced
-  device params now carry 1.6 GB, enough for the 11 ladder rungs plus the 2 hot-exact rungs.
+  device params currently carry 1.6 GB; this should be remeasured after six-rung validation.
 
 ### What is *not* bucketed
 
-- Latent upsampler: pinned to the warmup shape (DRAM GroupNorm grid). A non-hot request rebuilds
-  it eagerly for that request and drops its weights afterwards.
-- VAE decode: traced only at the hot shape; other shapes decode eagerly.
+- Latent upsampler: still exact-shape because its DRAM GroupNorm grid is shape-pinned. Warmup
+  constructs and compiles one module shell per served shape before capture. Serving selects a
+  cached shell and moves the single resident weight copy; it never constructs a new shell under
+  live traces.
+- VAE decode: eager full-shape decode by default, but every served exact shape is compiled before
+  capture and an uninitialized post-processing shape is rejected. Temporal chunks remain available through
+  `LTX_VAE_TEMPORAL_CHUNK_LATENTS`, but are diagnostic-only because this checkpoint's non-causal
+  decoder loses quality when independently decoding windows.
 - Audio decode: always at the 512 bucket, so one shape covers everything (first warmup at 512
   compiles a large set of new conv kernels, ~20 min cold; cached on disk afterwards).
 
@@ -89,7 +98,7 @@ cd ~/tt-metal && source python_env/bin/activate
 pytest models/tt_dit/tests/models/ltx/test_bucket_ltx.py
 ```
 
-Ladder alignment, routing of the full served grid (128 configs -> 52 shapes -> 11 rungs),
+Ladder alignment, routing of the full served grid (128 configs -> 52 shapes -> 6 rungs),
 extremes, rejections (unserved canvas / fps / SP != 8 / above ladder), RoPE padding.
 
 ### 2. SDPA kernel: tensor `logical_n` is bit-exact and replay-safe (~5 min)
@@ -216,10 +225,10 @@ and the fused matmul reduce-scatter buffers add ~N x 1 KB x 2 per rung. This is 
   checks every tile-aligned M up to 40k. The four explicit LTX rung entries in `utils/matmul.py`
   remain and are unswept (they reuse the swept stage-2 blocking); tune with
   `sweep_mm_block_sizes.py`.
-- **Upsampler / VAE decode for non-hot shapes run eagerly.** Correct, but this is now the
-  dominant per-request cost for non-hot configs (600 s for 1080p/25/8 vs 11.9 s for the hot
-  shape) and the 1001-frame decode does not fit in DRAM (see "DRAM budget"). A per-canvas
-  upsampler cache, a chunked VAE decode and single-buffered CCL buffers are the next steps.
+- **Upsampler / VAE decode remain eager.** Their complete served program envelope is now warmed
+  before trace capture, and upsampler shells are cached, eliminating request-time construction and
+  compilation. Exact-shape execution can still be the dominant request cost, and the 1001-frame
+  decode may not fit in DRAM (see "DRAM budget").
 - **1440p / 4k.** The ladder already covers 4k at 24 fps up to ~10 s (stage 2 -> rung 186368) and
   1440p further; enabling them is adding the canvas to `LTX_SERVED_CANVASES`. Expect the eager
   4k VAE decode and the upsampler rebuild to be the memory problems, not the transformer.
