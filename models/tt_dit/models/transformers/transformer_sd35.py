@@ -63,6 +63,9 @@ class SD35TransformerBlock(Module):
             quant_config.mm_compute_config(mesh_device.arch()) if quant_config is not None else None
         )
         _ffn_q = quant_config.ffn_kwargs() if quant_config is not None else {}
+        # When activations are quantized, narrow the TP activation gathers to bf8 so the collective
+        # moves half the bytes (bf8 tiles are 1088 B vs bf16's 2048 B). None => gather stays bf16.
+        self._ag_dtype = quant_config.activation_dtype if quant_config is not None else None
 
         # TODO: Shuffle norm linear weights to match tensor parallelism
         self.norm1_linear = ColParallelLinear(
@@ -183,6 +186,29 @@ class SD35TransformerBlock(Module):
             chunks=2 if self.context_pre_only else 6,
         )
 
+    def _ag_tp(self, x):
+        """All-gather ``x`` on the TP feature axis (dim=3).
+
+        If activations are quantized (``self._ag_dtype`` set), narrow ``x`` to bf8 first so the
+        collective moves half the bytes; the ping-pong buffer is allocated at the same dtype. A None
+        ``_ag_dtype`` reproduces the original bf16 gather exactly.
+        """
+        axis = self.parallel_config.tensor_parallel.mesh_axis
+        if self._ag_dtype is not None:
+            x = ttnn.typecast(x, self._ag_dtype)
+        return ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, 3, axis, dtype=self._ag_dtype or ttnn.bfloat16
+            ),
+            dim=3,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(axis),
+            num_links=self.ccl_manager.num_links,
+            topology=self.ccl_manager.topology,
+            cluster_axis=axis,
+            **self.ccl_manager.get_ag_hyperparams(x.shape),
+        )
+
     def forward(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N):
         """
         spatial_1BND: fractured N on SP, fractured D on TP
@@ -229,34 +255,8 @@ class SD35TransformerBlock(Module):
 
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial, prompt before attention
-            spatial_normed_1BND = ttnn.experimental.all_gather_async(
-                spatial_normed_1BND,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
-            )
-            prompt_normed_1BLD = ttnn.experimental.all_gather_async(
-                prompt_normed_1BLD,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    prompt_normed_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
-            )
+            spatial_normed_1BND = self._ag_tp(spatial_normed_1BND)
+            prompt_normed_1BLD = self._ag_tp(prompt_normed_1BLD)
 
         spatial_attn_1BLD, prompt_attn_1BLD = self.attn(spatial_normed_1BND, prompt_normed_1BLD, N)
         spatial_attn_1BLD = spatial_attn_1BLD * spatial_gate_attn
@@ -270,20 +270,7 @@ class SD35TransformerBlock(Module):
         )
 
         if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_normed_1BND = ttnn.experimental.all_gather_async(
-                spatial_normed_1BND,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
-            )
+            spatial_normed_1BND = self._ag_tp(spatial_normed_1BND)
 
         spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self._ff_compute_config)
         spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
@@ -300,20 +287,7 @@ class SD35TransformerBlock(Module):
         )
 
         if self.parallel_config.tensor_parallel.factor > 1:
-            prompt_normed_1BLD = ttnn.experimental.all_gather_async(
-                prompt_normed_1BLD,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    prompt_normed_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
-            )
+            prompt_normed_1BLD = self._ag_tp(prompt_normed_1BLD)
 
         prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD, compute_kernel_config=self._ff_compute_config)
         prompt_ff_1BLD = prompt_ff_1BLD * prompt_gate_ff
