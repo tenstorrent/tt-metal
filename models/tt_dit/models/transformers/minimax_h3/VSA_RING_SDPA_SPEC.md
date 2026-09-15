@@ -523,10 +523,26 @@ step, least at 5 s where the gather is a larger share of the block; the fused ga
 the helper (its bandwidth and hop latency are what they are); on the compute side the only lever is L1 for a longer
 pass 0, which does not help once the gather is contention-bound.
 
-Would a multi-worker (MUX) stock gather recover the gap? Measured directly: the fused gather (2 workers per link,
-signalling each slice the moment its last packet group has landed, before its own relay re-read) driven through the
-SAME per-shard gate runs 26.4 ms in the block -- identical to the stock gather's 26.4 -- against 23.5 with its per-block
-gate. Under per-shard signalling the gather's worker count is irrelevant; the gain comes from consuming a shard while
-it lands, which needs per-chunk landed counters the stock protocol does not expose. Adding a MUX to the stock helper
-would therefore not close the gap by itself; it would also need per-chunk signalling (its out_ready increments are
-per slice), i.e. the fused gather's protocol.
+Would a multi-worker (MUX) stock gather recover the gap? YES -- and an earlier paragraph here said the opposite on the
+strength of a mis-run experiment (the block test ignored `VSA_RING_GATHER`, so the "fused gather + per-shard gate" run
+was in fact the stock gather again; the older fused per-shard number carried the reader's signal-after-relay lag).
+Re-run properly (fused MUX gather signalling each slice at landing, 15 s block, tracy per-core kernel end times on
+the slowest device, sender cores = the gather):
+
+| variant | gather end (ms) | VSA cores end min / median / max (ms) | op (ms) |
+|---|---|---|---|
+| stock gather, per-shard gate (default) | 13.8 | 21.4 / 23.3 / 25.0 | 26.4 |
+| stock gather, gate held open | 13.9 | 18.1 / 18.8 / 20.1 | 21.25 |
+| fused gather, per-shard gate | 11.1 | 18.6 / 20.5 / 21.8 | 23.4 |
+| fused gather, per-block gate | 11.2 | 18.5 / 20.2 / 21.8 | 23.3 |
+
+Standalone (15 s, 4 dense rows): stock per-shard 22.70, fused per-shard 20.07, fused per-block 19.89. So the gate
+granularity is worth ~0.1-0.2 ms and the gather's bandwidth ~3 ms; the ring is not contention-bound (the stock
+gather's senders finish at 13.8 ms whether or not the VSA runs). What the per-core data also shows: every head
+group's cores end within 0.05 ms of each other (lockstep), but groups end 3.6 ms apart under the per-shard gate
+and 2 ms apart with the gate open. Under per-shard gating every group's pass 0 stretches to the last arrival plus
+one shard of work (~15.7 ms) however fast the group is, and the 7-consumer groups (32 rows per consumer, 14 in
+pass 1, vs 28 / 10 for 8-consumer groups) then finish their pass 1 last. A faster gather shortens that stretch for
+everyone. Conclusion for the merge: adding MUX multi-worker support to the stock helper (default one worker, so
+existing callers are unchanged) would recover most of the fused gather's gain; per-chunk signalling and the
+token-major walk are worth only the last ~0.2 ms.
