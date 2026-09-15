@@ -80,10 +80,10 @@ ttnn:
   sanity:
     # wh_n300_civ2 and bh_p150b_civ2 carry the llk helper library group, whose measured runtime is
     # ~38 min on blackhole and ~50 min on wormhole; it holds a 75-min timeout where the other groups
-    # sit at 40. bh_p100 does not run that group, so its budget is unchanged.
-    wh_n300_civ2: 665
-    bh_p100: 545
-    bh_p150b_civ2: 605
+    # sit at 60 or 65. bh_p100 does not run the helper group.
+    wh_n300_civ2: 685
+    bh_p100: 585
+    bh_p150b_civ2: 645
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
