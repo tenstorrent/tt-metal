@@ -446,9 +446,9 @@ git branch --show-current
 git log --oneline -3
 ```
 
-The model work sits on `mvlahovic/roofline_model_topk` (current HEAD `7dfe278`, "annotate the topk
+The model work sits on `mvlahovic/roofline_model_topk` (current HEAD `af1fa38`, "annotate the topk
 roofline for mypy", PR 530) with `mvlahovic/roofline_model_sdpa` as the SDPA-only predecessor
-(`7a705554`, PR 493). Both are pushed, so `git ls-remote --heads origin` shows both at those shas.
+(`35bf95de`, PR 493). Both are pushed, so `git ls-remote --heads origin` shows both at those shas.
 Other campaign branches that exist in the development clone and are not needed to reproduce anything
 here: `mvlahovic/sdpa_revamp`, `mvlahovic/sdpa_revamp_topk`, `mvlahovic/sdpa_revamp_topk2`,
 `mvlahovic/sdpa_wall_recast`, `mvlahovic/topk_roofline`.
