@@ -48,17 +48,17 @@ def _hb() -> heartbeat.Writer:
     return _writer
 
 
-def _hang_closes_case(nodeid: str, variant: str, skip_family: bool = True) -> None:
+def _hang_closes_case(nodeid: str, variant: str) -> None:
     """Close a case out on a hang, and ask to be moved off the core it cost us."""
     global _parked
-    # Done, not retried: a case that just hung a core mostly hangs the next one,
-    # and anything resuming from the done-log has to step over it. The red pytest
-    # reports is what carries the result.
-    _hb().mark_done(nodeid)
-    _hb().request_recovery(nodeid, variant, skip_family=skip_family)
+    writer = _hb()
+    # Save a result before done/recovery: the supervisor may kill us immediately.
+    writer.record_result(nodeid, "failed", message=f"hang: {variant}")
+    writer.mark_done(nodeid)
+    writer.request_recovery(nodeid, variant)
     # Nobody is watching an unsupervised run, so there is no recovery coming and
     # nothing to wait for.
-    _parked = _hb().enabled
+    _parked = writer.enabled
 
 
 def _park() -> None:
@@ -290,8 +290,8 @@ class Perturber:
                 self.config,
                 variants,
                 self,
-                lambda variant, fails, tags, error: self._record(
-                    item, variant, fails, tags, error
+                lambda variant, runs, fails, tags, error: self._record(
+                    item, variant, runs, fails, tags, error
                 ),
             )
         finally:
@@ -307,7 +307,7 @@ class Perturber:
                 pass
             self.backend.finish()
 
-    def _record(self, item, variant, fails, tags, error) -> None:
+    def _record(self, item, variant, runs, fails, tags, error) -> None:
         scan = self.scans[variant.thread]
         report.append(
             self.config.report_dir,
@@ -327,7 +327,7 @@ class Perturber:
                 # Plan position, so a log several workers appended to can still be
                 # read in sweep order.
                 "seq": variant.seq,
-                "runs": self.config.repeats,
+                "runs": runs,
                 "fails": fails,
                 "tag": ",".join(sorted(tags)),
                 # First line only: a mismatch drags the whole offending tensor
@@ -366,6 +366,19 @@ def pytest_runtest_setup(item):
     root = heartbeat.state_dir()
     if root is not None and item.nodeid in heartbeat.completed(root):
         pytest.skip("already recorded")
+    marker = item.get_closest_marker("xfail")
+    if marker is not None:
+        reason = marker.kwargs.get("reason", "pre-marked xfail")
+        pytest.xfail(f"ttnop does not execute xfailed tests: {reason}")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_pyfunc_call(pyfuncitem):
+    # A fixture can add an xfail marker during setup, after pytest_runtest_setup.
+    marker = pyfuncitem.get_closest_marker("xfail")
+    if marker is not None:
+        reason = marker.kwargs.get("reason", "pre-marked xfail")
+        pytest.xfail(f"ttnop does not execute xfailed tests: {reason}")
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -383,24 +396,26 @@ def pytest_runtest_call(item):
 
         # A test that was already red tells us nothing about timing.
         if outcome.excinfo is not None:
-            _hb().mark_done(item.nodeid)
+            error = outcome.excinfo[1]
+            if isinstance(error, TimeoutError):
+                _hang_closes_case(item.nodeid, str(error))
             return
         if not perturber.backend.ready(item.nodeid):
-            _hb().mark_done(item.nodeid)
             return
         try:
             findings = perturber.sweep(item)
+        except DetourError as err:
+            # The clean test passed, but this ELF cannot hold the requested
+            # detour.
+            outcome.force_exception(pytest.skip.Exception(f"ttnop skipped: {err}"))
+            return
         except sweep_module.DeviceWedged as err:
-            # The hang is both the finding and the end of the case; clearing the
-            # core is the supervisor's job, so all this does is say so.
+            # Record the hang and let the supervisor clear the core.
             _hang_closes_case(item.nodeid, str(err))
             outcome.force_exception(
-                AssertionError(f"hang: {err} wedged the core; recovery requested")
+                AssertionError(f"hang: {err} wedged the core. Recovery requested")
             )
             return
-        # After sweep(), not in a finally: a case that died with the device
-        # must stay on the resume list, not be recorded as covered.
-        _hb().mark_done(item.nodeid)
         # Drift is report-only: the variant still passed the test's own golden, so
         # the case stays green and the record lives in report.md.
         failures = [label for label, tags in findings if tags - {"drift"}]
@@ -415,11 +430,6 @@ def pytest_runtest_call(item):
             outcome.force_exception(
                 AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
             )
-            # A mismatch race still dirties dest/semaphores. The next case on this
-            # core then fails its clean baseline (860 LoFi matmuls after one
-            # moe_gate race). Same spare-core eviction as a hang; siblings stay
-            # queued because they are another window, not another wedge.
-            _hang_closes_case(item.nodeid, failures[0], skip_family=False)
     finally:
         unwatch()
 
@@ -437,12 +447,19 @@ def pytest_runtest_logreport(report):
         or (report.when == "setup" and report.outcome == "skipped")
     ):
         return
+    result_outcome = (
+        "xfailed"
+        if report.outcome == "skipped" and getattr(report, "wasxfail", None)
+        else report.outcome
+    )
     _hb().record_result(
         report.nodeid,
-        report.outcome,
+        result_outcome,
         getattr(report, "duration", 0.0),
         str(report.longrepr or ""),
     )
+    # Result first: a killed worker must never leave a done case missing from JUnit.
+    _hb().mark_done(report.nodeid)
 
 
 def pytest_runtest_logfinish(nodeid, location):

@@ -178,7 +178,7 @@ def reproduce_command(record: dict, delays=()) -> str:
         env["TTNOP_FILLER"] = record["filler"]
     assignments = " ".join(f"{key}={value}" for key, value in env.items())
     # A finding from a ttnn op test only reproduces through the Metal backend.
-    metal = " --metal" if os.environ.get("TTNOP_METAL", "") not in ("", "0") else ""
+    metal = " --metal" if record.get("backend") == "metal" else ""
     return f"{assignments} ./focus.sh{metal} {shlex.quote(record['case'])}"
 
 
