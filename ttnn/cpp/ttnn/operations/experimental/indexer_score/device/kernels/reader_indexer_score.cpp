@@ -627,7 +627,8 @@ void kernel_main() {
     const auto run = [&](const FusedRingGate* gate) {
         build_mask_tiles(noc);
         if constexpr (block_pool) {
-            using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<bc_ct_base + 9>;
+            using Auxiliary =
+                ttnn::kernel_lib::ReduceAuxiliaryArgs<decltype(slot_meta_args)::next_compile_time_args_offset()>;
             dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
         }
 

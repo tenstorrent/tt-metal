@@ -355,9 +355,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.insert(reader_ct.end(), 6, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     // Cache-slot metadata, same reasoning and the same fixed-width discipline: flag, rt base,
-    // pages-per-slot, mailbox CB, then a placeholder accessor.
+    // pages-per-slot, mailbox CB, cache extent, then a placeholder accessor.
     reader_ct.push_back(0u);
-    reader_ct.insert(reader_ct.end(), 3, 0u);
+    reader_ct.insert(reader_ct.end(), 4, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;

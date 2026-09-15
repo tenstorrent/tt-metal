@@ -677,7 +677,7 @@ void kernel_main() {
                     if constexpr (blocks_per_unit <= 8) {
                         block_max_pool_batched<cb_acc_strip, cb_scaler, cb_out_strip>(unit_strip);
                     } else {
-                        using Call = ttnn::kernel_lib::ReduceCallArgs<num_common_ct_args + 7>;
+                        using Call = ttnn::kernel_lib::ReduceCallArgs<num_common_ct_args + 13>;
                         compute_kernel_lib::reduce<Call>();
                     }
                 } else {
