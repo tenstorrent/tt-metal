@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include "impl/program/program_impl.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -194,6 +195,10 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src2_dram_buffer, src2_vec, /*blocking=*/true);
+    // Phase A dprint check: the compute kernel DPRINTs each input's tile0 word0 straight from L1;
+    // these are the host-placed values it must match (compare against the kernel's word0=... lines).
+    log_info(
+        LogTest, "HOST tile0 word0: in0={:#010x} in1={:#010x} in2={:#010x}", src0_vec[0], src1_vec[0], src2_vec[0]);
 
     auto reader_run_args = [&](const std::shared_ptr<distributed::MeshBuffer>& buf) {
         return experimental::MakeRuntimeArgsForSingleNode(
@@ -248,5 +253,264 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     auto comparison_function = [](float a, float b) { return a == b; };  // datacopy is bit-exact
     int argfail = -1;
     bool pass = packed_uint32_t_vector_comparison(result_vec, golden, comparison_function, &argfail);
+    EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+// Phase B: DEST-register dprint validation. A deliberately SIMPLE datacopy -- one input, DEST_PRINT_TILES
+// tiles, no BFD wrap -- that copies the tiles to DEST, reads each DEST tile via dprint_tensix_dest_reg
+// (the Quasar RISC memory-mapped DEST read), then packs to L1. The compute kernel is phase-separated
+// (copy all -> read all -> commit -> pack all). The output L1 is bit-exact-checked against the host
+// input; with DPRINT enabled the DEST prints (0:0-0:N0TR1 "Tile ID"/rows) can be compared by eye
+// against "HOST tile0 word0".
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopyDestPrint) {
+    constexpr std::uint32_t DEST_PRINT_TILES = 1;
+
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device = this->devices_.at(0);
+    auto& cq = mesh_device->mesh_command_queue();
+    const experimental::NodeCoord node{0, 0};
+
+    const std::uint32_t single_tile_size = 2 * 1024;  // Float16_b 32x32 tile
+
+    distributed::ReplicatedBufferConfig src_global_config{.size = single_tile_size * DEST_PRINT_TILES};
+    distributed::DeviceLocalBufferConfig src_local_config{
+        .page_size = single_tile_size * DEST_PRINT_TILES, .buffer_type = BufferType::DRAM};
+    auto src_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
+
+    const experimental::DFBSpecName IN0_DFB{"dp_in0_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"dp_out_dfb"};
+    const experimental::KernelSpecName READER0{"dp_reader0"};
+    const experimental::KernelSpecName WRITER{"dp_writer"};
+    const experimental::KernelSpecName COMPUTE{"dp_compute"};
+
+    experimental::DataflowBufferSpec in0_dfb_spec{
+        .unique_id = IN0_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    experimental::KernelSpec reader0_spec{
+        .unique_id = READER0,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ProducerOf(IN0_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/datacopy_dest_print_quasar.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args = {{"num_tiles", DEST_PRINT_TILES}},
+        .hw_config = experimental::ComputeGen2Config{},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER0, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+    experimental::ProgramSpec spec{
+        .name = "bfd_datacopy_dest_print",
+        .kernels = {reader0_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {in0_dfb_spec, out_dfb_spec},
+        .work_units = {wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    std::vector<std::uint32_t> src_vec =
+        create_random_vector_of_bfloat16(single_tile_size * DEST_PRINT_TILES, 1.0f, 0xC0FFEE);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
+    log_info(LogTest, "HOST tile0 word0: in0={:#010x}", src_vec[0]);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER0,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_buffer->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", DEST_PRINT_TILES},
+                 {"dram_page_stride", single_tile_size}})},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_dram_buffer->address()},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", DEST_PRINT_TILES},
+                 {"dram_page_stride", single_tile_size}})},
+    };
+    experimental::SetProgramRunArgs(program, params);
+
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+
+    auto comparison_function = [](float a, float b) { return a == b; };  // datacopy is bit-exact
+    int argfail = -1;
+    bool pass = packed_uint32_t_vector_comparison(result_vec, src_vec, comparison_function, &argfail);
+    EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+// Phase B (mid-pipeline): LIVE DEST-register read validation. Same one-input datacopy as
+// QuasarBfdDatacopyDestPrint, but the compute kernel reads DEST from inside a running, tile-at-a-time
+// pipeline -- BETWEEN copy_tile and pack_tile, with LIVE_TILES > 1 so the pipeline overlaps across
+// iterations. This is the pattern that faults (TILE_COUNTERS) with an unbracketed live DEST read; it
+// passes here because dprint_tensix_dest_reg now brackets the read with the ported dbg_halt/dbg_unhalt
+// mailbox rendezvous, which quiesces unpack + pack. Positive proof the rendezvous enables mid-pipeline
+// DEST inspection: validation is the bit-exact L1 check plus clean completion (no TILE_COUNTERS device
+// fault) in the default functional env. NOTE: running this variant with DPRINT enabled (--debug)
+// currently trips a separate, unrelated Quasar DPRINT-server host-side bug (bad wpos read); the
+// device-side rendezvous is unaffected (this functional run confirms it), and the phase-separated
+// QuasarBfdDatacopyDestPrint above still shows the actual DEST prints under --debug.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopyDestPrintLive) {
+    constexpr std::uint32_t LIVE_TILES = 4;
+
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device = this->devices_.at(0);
+    auto& cq = mesh_device->mesh_command_queue();
+    const experimental::NodeCoord node{0, 0};
+
+    const std::uint32_t single_tile_size = 2 * 1024;  // Float16_b 32x32 tile
+
+    distributed::ReplicatedBufferConfig src_global_config{.size = single_tile_size * LIVE_TILES};
+    distributed::DeviceLocalBufferConfig src_local_config{
+        .page_size = single_tile_size * LIVE_TILES, .buffer_type = BufferType::DRAM};
+    auto src_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
+
+    const experimental::DFBSpecName IN0_DFB{"dpl_in0_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"dpl_out_dfb"};
+    const experimental::KernelSpecName READER0{"dpl_reader0"};
+    const experimental::KernelSpecName WRITER{"dpl_writer"};
+    const experimental::KernelSpecName COMPUTE{"dpl_compute"};
+
+    experimental::DataflowBufferSpec in0_dfb_spec{
+        .unique_id = IN0_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    experimental::DataflowBufferSpec out_dfb_spec{
+        .unique_id = OUT_DFB,
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    experimental::KernelSpec reader0_spec{
+        .unique_id = READER0,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ProducerOf(IN0_DFB, "out")},
+        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/datacopy_dest_print_live_quasar.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = IN0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args = {{"num_tiles", LIVE_TILES}},
+        .hw_config = experimental::ComputeGen2Config{},
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER0, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+    experimental::ProgramSpec spec{
+        .name = "bfd_datacopy_dest_print_live",
+        .kernels = {reader0_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {in0_dfb_spec, out_dfb_spec},
+        .work_units = {wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    std::vector<std::uint32_t> src_vec =
+        create_random_vector_of_bfloat16(single_tile_size * LIVE_TILES, 1.0f, 0xC0FFEE);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
+    log_info(LogTest, "HOST tile0 word0: in0={:#010x}", src_vec[0]);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER0,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_buffer->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", LIVE_TILES},
+                 {"dram_page_stride", single_tile_size}})},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_dram_buffer->address()},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", LIVE_TILES},
+                 {"dram_page_stride", single_tile_size}})},
+    };
+    experimental::SetProgramRunArgs(program, params);
+
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+
+    auto comparison_function = [](float a, float b) { return a == b; };  // datacopy is bit-exact
+    int argfail = -1;
+    bool pass = packed_uint32_t_vector_comparison(result_vec, src_vec, comparison_function, &argfail);
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
 }

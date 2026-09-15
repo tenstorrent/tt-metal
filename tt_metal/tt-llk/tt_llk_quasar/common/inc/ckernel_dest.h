@@ -11,6 +11,7 @@
 
 #include "cfg_defines.h"
 #include "ckernel.h"
+#include "ckernel_defs.h" // ThreadId (for configure_dest_access)
 #include "ckernel_vector.h"
 #include "tensix_types.h"
 #include "tt_t6_trisc_map.h"
@@ -583,6 +584,27 @@ mk_dest_meta_type(fp16b, DataFormat::Float16_b, false);
 
 #define dest_type_to_fmt(T) (meta_from_dest_type<T>::fmt)
 #define dest_type_is_32b(T) (meta_from_dest_type<T>::is_32b)
+
+inline bool dest_fmt_is_signed(DataFormat fmt)
+{
+    // Quasar's unsigned integer DEST formats (no UInt32 in the Quasar DataFormat enum).
+    return fmt != DataFormat::UInt8 && fmt != DataFormat::UInt16 && fmt != DataFormat::UInt4;
+}
+
+// Program a RISC's RISC_DEST_ACCESS_CTRL section for memory-mapped (MMIO) DEST access. Quasar has
+// no debug bus, so a RISC reads DEST through RISCV_DEST_START_ADDR after this configuration. The
+// Quasar ThreadId enum values map directly onto the section indices (UnpackThreadId=0 -> SEC0,
+// MathThreadId=1 -> SEC1, PackThreadId=2 -> SEC2), matching the RISC that issues the read.
+template <ThreadId thread_id>
+inline void configure_dest_access(DataFormat fmt, bool enable_swizzle = true)
+{
+    static_assert(
+        thread_id == UnpackThreadId || thread_id == MathThreadId || thread_id == PackThreadId, "configure_dest_access: thread must be Unpack, Math or Pack");
+    constexpr int t = static_cast<int>(thread_id);
+    set_dest_fmt<t>(fmt);
+    set_dest_enable_swizzling<t>(enable_swizzle);
+    set_dest_int8_int16_signed<t>(dest_fmt_is_signed(fmt));
+}
 
 } // namespace ckernel
 
