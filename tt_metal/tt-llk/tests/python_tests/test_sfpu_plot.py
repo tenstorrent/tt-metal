@@ -123,7 +123,7 @@ _LOW_HIGH_BOUNDED = {
 }
 
 
-def _allowed_intervals_for(
+def allowed_intervals_for(
     spec: StimuliSpec,
     x: np.ndarray,
 ) -> List[Tuple[float, float]]:
@@ -351,7 +351,7 @@ def _visible_ulp_thresholds(max_val: float) -> List[Tuple[int, str]]:
     ]
 
 
-def _plot_and_print(
+def plot_and_print(
     mathop: MathOperation,
     fmt: DataFormat,
     x: np.ndarray,
@@ -1280,7 +1280,7 @@ def _plot_and_print(
 #       fmt=FP32   float32  in/out   (auto-runs the fp32 dest-accumulator path;
 #                                     judge accuracy in abs/rel error — fp32 ULP
 #                                     is not meaningful, see the notes inside
-#                                     _plot_and_print)
+#                                     plot_and_print)
 #
 #   Run one op:   pytest test_sfpu_plot.py -k Exp -s
 #   Run all:      pytest test_sfpu_plot.py -s
@@ -1304,7 +1304,7 @@ BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 FP16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
 FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
 
-_FMT_SHORT = {
+FMT_SHORT = {
     DataFormat.Float16_b: "bf16",
     DataFormat.Float16: "fp16",
     DataFormat.Float32: "fp32",
@@ -1362,7 +1362,7 @@ class Case:
     def test_id(self) -> str:
         if self.name:
             return self.name
-        short = _FMT_SHORT.get(self.fmt.output_format, self.fmt.output_format.name)
+        short = FMT_SHORT.get(self.fmt.output_format, self.fmt.output_format.name)
         return f"{self.op.name}-{short}"
 
 
@@ -1423,7 +1423,7 @@ _PLOT_KEEP_WORST = 2000
 _MAX_ULP_SWEEP_VALUES = 2**25
 
 
-def _downsample_for_plot(
+def downsample_for_plot(
     x: np.ndarray,
     y_golden: np.ndarray,
     y_hw: np.ndarray,
@@ -1490,7 +1490,7 @@ def run_case(case: Case) -> bool:
     """Run one Case end-to-end: stimuli -> golden -> hardware -> plot + stats.
 
     Returns whether the hardware result matched golden (passed_test) and writes
-    _plot_output/<arch>/sfpu_<id>.png. This only assembles inputs for _plot_and_print;
+    _plot_output/<arch>/sfpu_<id>.png. This only assembles inputs for plot_and_print;
     it does not alter any metric or plotting behavior.
     """
     formats = case.fmt
@@ -1657,7 +1657,7 @@ def run_case(case: Case) -> bool:
     y_golden = golden_tensor.to(torch.float32)[sort_idx].numpy()
     y_hw = res_tensor.to(torch.float32)[sort_idx].numpy()
 
-    allowed_intervals = _allowed_intervals_for(spec, x)
+    allowed_intervals = allowed_intervals_for(spec, x)
     # extra_undefined_ranges, when supplied (even as an empty list), fully
     # overrides the registry — letting callers inject custom asymptote bands or
     # suppress the registry's red shading entirely.
@@ -1670,7 +1670,7 @@ def run_case(case: Case) -> bool:
 
     # Downsample the arrays for the plot only (too many points to draw);
     # passed_test and the max ULP below still use the full result.
-    x_plot, golden_plot, hw_plot, downsampled = _downsample_for_plot(x, y_golden, y_hw)
+    x_plot, golden_plot, hw_plot, downsampled = downsample_for_plot(x, y_golden, y_hw)
     if downsampled:
         logger.info(
             "plot downsampled {} -> {} points (even sample + worst cases)",
@@ -1678,7 +1678,7 @@ def run_case(case: Case) -> bool:
             x_plot.size,
         )
 
-    # ULP/eps spacing in _plot_and_print is taken from this format, so it must
+    # ULP/eps spacing in plot_and_print is taken from this format, so it must
     # match the format the compared values live in: golden and hw are produced
     # in output_format, so pass output_format (not input_format). Identical for
     # symmetric cases; for a mixed case like (Float32, Float16_b), using the
@@ -1690,7 +1690,7 @@ def run_case(case: Case) -> bool:
         f"clamp_negative={case.clamp_negative}  |  "
         f"{spec.distribution.name.lower()}, {x.size} points"
     )
-    _plot_and_print(
+    plot_and_print(
         mathop,
         formats.output_format,
         x_plot,

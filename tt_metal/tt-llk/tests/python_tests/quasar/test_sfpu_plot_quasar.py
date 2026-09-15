@@ -5,7 +5,7 @@
 Table-driven single-op SFPU accuracy harness with result plotting — Quasar.
 
 Sibling of test_sfpu_plot.py (the WH/BH harness). It reuses that file's
-plotting / stats code (_plot_and_print and friends) unchanged and only swaps
+plotting / stats code (plot_and_print and friends) unchanged and only swaps
 the device side: each Case runs through the same Quasar kernel the functional
 suite drives (sources/quasar/eltwise_unary_sfpu_quasar_test.cpp), with the
 data route (Dest / SFPU / packer formats, unpack-to-Dest vs FPU datacopy)
@@ -84,11 +84,11 @@ from helpers.utils import passed_test
 # Plotting, stats, interval shading and downsampling are shared with the WH/BH
 # harness so both archs produce identical figures for the same data.
 from test_sfpu_plot import (
-    _FMT_SHORT,
-    _allowed_intervals_for,
-    _downsample_for_plot,
-    _plot_and_print,
+    FMT_SHORT,
+    allowed_intervals_for,
     arch_title_suffix,
+    downsample_for_plot,
+    plot_and_print,
     plot_output_dir,
 )
 
@@ -131,7 +131,7 @@ QUASAR_APPROX_CAPABLE_OPS = (
 #       fmt=FP32   float32  in/out   (auto-selects the fp32 Dest route;
 #                                     judge accuracy in abs/rel error — fp32 ULP
 #                                     is not meaningful, see the notes inside
-#                                     _plot_and_print)
+#                                     plot_and_print)
 #
 #   Any InputOutputFormat works as long as Quasar can execute it: the route
 #   (Dest width, unpack-to-Dest vs FPU datacopy, packer conversion) is picked by
@@ -188,7 +188,7 @@ class Case:
     def test_id(self) -> str:
         if self.name:
             return self.name
-        short = _FMT_SHORT.get(self.fmt.output_format, self.fmt.output_format.name)
+        short = FMT_SHORT.get(self.fmt.output_format, self.fmt.output_format.name)
         approx = "-approx" if self.approx_mode == ApproximationMode.Yes else ""
         return f"{self.op.name}-{short}{approx}"
 
@@ -517,7 +517,7 @@ def run_case(case: Case) -> bool:
     y_golden = golden_tensor.to(torch.float32)[sort_idx].numpy()
     y_hw = res_tensor.to(torch.float32)[sort_idx].numpy()
 
-    allowed_intervals = _allowed_intervals_for(spec, x)
+    allowed_intervals = allowed_intervals_for(spec, x)
     # extra_undefined_ranges, when supplied (even as an empty list), fully
     # overrides the registry — letting callers inject custom asymptote bands or
     # suppress the registry's red shading entirely.
@@ -530,7 +530,7 @@ def run_case(case: Case) -> bool:
 
     # Downsample the arrays for the plot only (too many points to draw);
     # passed_test and the max ULP below still use the full result.
-    x_plot, golden_plot, hw_plot, downsampled = _downsample_for_plot(x, y_golden, y_hw)
+    x_plot, golden_plot, hw_plot, downsampled = downsample_for_plot(x, y_golden, y_hw)
     if downsampled:
         logger.info(
             "plot downsampled {} -> {} points (even sample + worst cases)",
@@ -538,7 +538,7 @@ def run_case(case: Case) -> bool:
             x_plot.size,
         )
 
-    # ULP/eps spacing in _plot_and_print is taken from the format the compared
+    # ULP/eps spacing in plot_and_print is taken from the format the compared
     # values live in: golden and hw are produced in output_format.
     title_suffix = arch_title_suffix(ChipArchitecture.QUASAR)
     if case.approx_mode == ApproximationMode.Yes:
@@ -553,7 +553,7 @@ def run_case(case: Case) -> bool:
         f"{case.dest_sync.name}  |  implied_math_format={case.implied_math_format.name}"
         f"  |  {spec.distribution.name.lower()}, {x.size} points"
     )
-    _plot_and_print(
+    plot_and_print(
         mathop,
         formats.output_format,
         x_plot,
