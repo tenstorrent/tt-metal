@@ -7,6 +7,10 @@ if(TT_METAL_USE_EMULE)
     set(TT_UMD_BUILD_EMULE ON CACHE BOOL "Enable SWEmuleChip (forwarded from TT_METAL_USE_EMULE)" FORCE)
 endif()
 
+if(TT_UMD_BUILD_GRENDEL_JTAG)
+    set(TT_UMD_BUILD_GRENDEL_JTAG ON CACHE BOOL "Enable UMD Grendel emulation/JTAG support through chippy" FORCE)
+endif()
+
 add_subdirectory(umd)
 
 # Propagate ENABLE_TRACY into Tracy's option before add_subdirectory(tracy).

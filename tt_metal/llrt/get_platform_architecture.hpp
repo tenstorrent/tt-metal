@@ -90,6 +90,8 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         auto soc_desc =
             umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+    } else if (rtoptions.get_target_device() == tt::TargetDevice::EmuAxi) {
+        arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(rtoptions.get_emu_soc_desc_path());
     } else {
         arch = get_physical_architecture();
     }
