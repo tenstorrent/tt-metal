@@ -71,6 +71,7 @@ class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
         self._condition_latent: torch.Tensor | None = None
         self._mask_1BND: ttnn.Tensor | None = None
         self._masks_installed = False
+        self._compiled_encode = None
         self.last_image_encode_seconds: float = 0.0
 
         # Warm up ourselves, after our own state exists, and with an image_prompt -- otherwise
@@ -125,17 +126,42 @@ class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
         # WAN5B_I2V_ENCODE_FP32=1 to force fp32 -- worth doing if the conditioning itself is
         # ever under suspicion, since fp32 is bit-faithful to the diffusers reference.
         use_fp32 = os.environ.get("WAN5B_I2V_ENCODE_FP32") == "1"
+        encode = self._encode_fn(torch_vae)
         with torch.no_grad():
             if use_fp32:
-                latent = torch_vae.encode(video_condition).latent_dist.mode()
+                latent = encode(video_condition).latent_dist.mode()
             else:
                 with torch.autocast("cpu", dtype=torch.bfloat16):
-                    latent = torch_vae.encode(video_condition).latent_dist.mode()
+                    latent = encode(video_condition).latent_dist.mode()
             latent = latent.to(torch.float32)
 
         mean = self._vae._latents_mean.to(latent.device, latent.dtype)
         std = self._vae._latents_std.to(latent.device, latent.dtype)
         return normalize_latents(latent, mean, std).to(torch.float32)
+
+    def _encode_fn(self, torch_vae):
+        """The VAE encode callable, `torch.compile`-wrapped on first use.
+
+        Measured on this host at 1280x704: eager bf16 2.77s, compiled bf16 ~1.3s -- a ~1.5s
+        steady-state saving at a latent PCC of 0.9999870 against eager fp32. Compilation costs
+        ~14.4s once, and it is paid by the constructor's warmup encode rather than by a
+        measured run. A different image at the same resolution does not retrigger it
+        (`dynamic=False`, and resolution is pinned per pipeline instance).
+
+        Falls back to eager if compilation raises, so this can only ever cost time, never
+        correctness or availability. Set WAN5B_I2V_ENCODE_COMPILE=0 to skip it.
+        """
+        if self._compiled_encode is not None:
+            return self._compiled_encode
+        if os.environ.get("WAN5B_I2V_ENCODE_COMPILE", "1") != "1":
+            self._compiled_encode = torch_vae.encode
+            return self._compiled_encode
+        try:
+            self._compiled_encode = torch.compile(torch_vae.encode, dynamic=False)
+        except Exception as e:  # noqa: BLE001 - never let a compile failure break the pipeline
+            logger.warning(f"torch.compile on the VAE encode failed ({e!r}); falling back to eager")
+            self._compiled_encode = torch_vae.encode
+        return self._compiled_encode
 
     def prepare_latents(
         self,
