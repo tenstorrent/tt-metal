@@ -366,9 +366,31 @@
   model_family: Qwen
   skus:
     wh_n150:
-      timeout: 8
+      # The pre-WER runs already spent 372 s (n150) / 435 s (n300) just reaching the
+      # scorer load, and the 8 min this used to carry was only ever seen to be enough
+      # for a job that died there. A run that actually transcribes -- whisper-large-v3
+      # is 2.9 GB off the shared mount, on CPU -- needs more, and 480 s is exactly where
+      # both SKUs were killed. Trim this once a green run reports its real duration.
+      timeout: 20
       tier: 3
       release_ready: false
+  team: models
+  budget_type: e2e
+
+# Blackhole runs the DEMO only, and deliberately: models/e2e_tier3/bh_p150 is a 39 min
+# allowance already spent to the minute by the other three models on that SKU, so the
+# 20 min a WER run needs is 12 min this team does not have there. The demo still exits
+# nonzero on any exception, which is the functional signal; SIM/WER are scored on the
+# two Wormhole jobs above. Raise models.e2e_tier3.bh_p150 in .github/time_budget.yaml
+# and fold this back into the entry above if the gate is wanted on Blackhole too.
+- name: Qwen3-TTS-1.7B e2e tests (demo only)
+  cmd: |
+    set -e
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --text "Good morning. Today is a beautiful day for a walk in the park."
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
     bh_p150:
       timeout: 8
       tier: 3
@@ -404,7 +426,7 @@
   model_family: Qwen
   skus:
     wh_n300:
-      timeout: 8
+      timeout: 20
       tier: 3
       release_ready: false
   team: models
