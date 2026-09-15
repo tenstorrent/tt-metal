@@ -93,12 +93,29 @@ class PagedGroup:
                 f"for layer type {self.layer_type}"
             )
 
+    def axis_rows_for(self, max_seq: int) -> int:
+        """Rows of the logical KV axis used at a given context length: the ring, plus
+        one row per compressed entry for the compressor groups."""
+        entries = 0 if self.compress_rate is None else max_seq // self.compress_rate
+        return self.sliding_window + entries
+
+    def logical_blocks_for(self, max_seq: int) -> int:
+        """Page-table row width in blocks for a context of ``max_seq``."""
+        return math.ceil(self.axis_rows_for(max_seq) / self.block_size)
+
+    def kv_len_for(self, max_seq: int) -> int:
+        """Addressable KV-axis length in rows for a context of ``max_seq``.
+
+        Rounded up to whole blocks: the tail past ``axis_rows_for(max_seq)`` is
+        unmapped (zero block) and every mask marks it invalid.
+        """
+        return self.logical_blocks_for(max_seq) * self.block_size
+
     @property
     def axis_rows(self) -> int:
         """Rows of the logical KV axis actually used: the ring, plus one row per
         compressed entry for the compressor groups."""
-        entries = 0 if self.compress_rate is None else self.max_seq // self.compress_rate
-        return self.sliding_window + entries
+        return self.axis_rows_for(self.max_seq)
 
     @property
     def ring_blocks(self) -> int:
@@ -119,7 +136,7 @@ class PagedGroup:
     @property
     def logical_blocks(self) -> int:
         """Page-table row width == the layer's logical KV axis in blocks."""
-        return math.ceil(self.axis_rows / self.block_size)
+        return self.logical_blocks_for(self.max_seq)
 
     @property
     def kv_len(self) -> int:
@@ -130,7 +147,7 @@ class PagedGroup:
         ``axis_rows`` are unmapped (they resolve through the zero block) and every
         mask marks them invalid, so they are never read as data.
         """
-        return self.logical_blocks * self.block_size
+        return self.kv_len_for(self.max_seq)
 
     @property
     def position_modulo(self) -> int | None:
