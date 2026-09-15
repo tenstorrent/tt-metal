@@ -310,6 +310,8 @@ class RunTimeOptions {
     bool noc_att_specified_ = false;
 
     std::filesystem::path simulator_path = "";
+    std::string emu_server;
+    std::string emu_soc_desc_path;
 
     bool fast_dispatch = true;
 
@@ -844,6 +846,8 @@ public:
         return std::filesystem::path(simulator).filename().string();
     }
     bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
+    const std::string& get_emu_server() const { return emu_server; }
+    const std::string& get_emu_soc_desc_path() const { return emu_soc_desc_path; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
