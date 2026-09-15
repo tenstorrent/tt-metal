@@ -916,6 +916,17 @@ void kernel_main() {
         // ARE the tensor.
         cb_wait_front(cb_output_tiles, num_rows * WT_CHUNK);
     }
+
+    // EXIT FENCE.  The combine's ships and multicast fence on DEPARTED, not ACKED (PERF 1
+    // below, and mcast_pipe's own send_data_), which is safe between rounds but not at
+    // kernel exit: the next kernel on this core snapshots NIU_MST_WR_ACK_RECEIVED in
+    // noc_local_state_init, our late ACKs then push the register past that snapshot, and
+    // noc_async_write_barrier compares for EQUALITY -- so the next kernel's barrier can
+    // never be satisfied.  Firmware does not cover this: brisck.cc's end-of-kernel ASSERT
+    // checks writes SENT, not ACKED, and is compiled out of a release build anyway.
+    // Free wherever write_block already took an acked barrier; the NATIVE zero-copy plan
+    // is the one where it did not.
+    noc_async_write_barrier();
 }
 
 // =====================================================================================
