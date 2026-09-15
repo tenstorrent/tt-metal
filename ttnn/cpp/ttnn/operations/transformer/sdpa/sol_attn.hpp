@@ -26,7 +26,7 @@ ttnn::Tensor sol_attn(
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
-    bool is_causal = false,
+    bool is_causal = true,  // mirrors the parent's binding default
     std::optional<float> scale = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,

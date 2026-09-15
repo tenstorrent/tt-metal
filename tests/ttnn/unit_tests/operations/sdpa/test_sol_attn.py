@@ -32,9 +32,11 @@ def _run_both(device, b, nh, seq, d, program_config=None, attn_mask=None, is_cau
     tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
     tt_mask = dev(attn_mask) if attn_mask is not None else None
 
-    kwargs = dict(is_causal=is_causal, program_config=program_config)
-    parent = ttnn.to_torch(ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, tt_mask, **kwargs))
-    fork = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, tt_mask, **kwargs))
+    # attn_mask is keyword-only on both ops, and is_causal defaults to True -- pass both explicitly
+    # so the two calls cannot differ by a default.
+    kwargs = dict(attn_mask=tt_mask, is_causal=is_causal, program_config=program_config)
+    parent = ttnn.to_torch(ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, **kwargs))
+    fork = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, **kwargs))
     return q, k, v, parent, fork
 
 
@@ -86,6 +88,6 @@ def test_sol_attn_is_deterministic(device):
     q, k, v = _qkv(1, 2, 1024, 128, seed=9)
     dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
-    outs = [ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v)) for _ in range(3)]
+    outs = [ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False)) for _ in range(3)]
     for i, o in enumerate(outs[1:], start=1):
         assert torch.equal(outs[0], o), f"launch {i} differs from launch 0"
