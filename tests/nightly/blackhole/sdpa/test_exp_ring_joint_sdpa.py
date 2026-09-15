@@ -186,6 +186,7 @@ def run_exp_ring_joint_sdpa_nightly(
     max_payload_size=8192,
     mesh_device=None,
     op=None,
+    op_kwargs=None,
 ):
     """
     Run exp_ring_joint_scaled_dot_product_attention and verify accuracy or determinism.
@@ -431,6 +432,7 @@ def run_exp_ring_joint_sdpa_nightly(
                 logger.info(f"[cache-hit iter {i}] semaphore addresses: {iter_sem_addrs}")
 
             attention_op = op if op is not None else ttnn.transformer.exp_ring_joint_scaled_dot_product_attention
+            extra_kwargs = op_kwargs or {}
             tt_out, _tt_joint_out, _tt_lse = attention_op(
                 tt_Q,
                 tt_K,
@@ -453,6 +455,7 @@ def run_exp_ring_joint_sdpa_nightly(
                 subdevice_id=worker_sub_device_id,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
+                **extra_kwargs,
             )
 
             tt_out_list.append(tt_out)
@@ -711,6 +714,38 @@ def test_sol_ring_determinism(b, nh, total_seq, d, q_chunk_size, k_chunk_size, d
         do_check=False,
         num_iterations=3,
         op=ttnn.transformer.sol_ring,
+    )
+
+
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS[:1], ids=TEST_CONFIG_IDS[:1])
+def test_sol_ring_keep_every_one_is_dense(
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, test_global_mask, max_payload_size, reset_seeds
+):
+    """`chunk_keep_every=1` must reproduce dense exactly.
+
+    The skip machinery is live -- the template branch is instantiated, the pre-scan runs the
+    predicate -- but the predicate returns false for every chunk. So this separates "the loop still
+    works" from "skipping works", and it is the cheap way to catch the failure mode that matters: the
+    pre-scan and the main loop disagreeing about which chunk is last, which corrupts the
+    normalization silently rather than crashing.
+    """
+    if test_global_mask:
+        total_seq = total_seq - 31
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        max_mse=DEFAULT_MAX_MSE,
+        max_payload_size=max_payload_size,
+        op=ttnn.transformer.sol_ring,
+        op_kwargs={"chunk_keep_every": 1},
     )
 
 
