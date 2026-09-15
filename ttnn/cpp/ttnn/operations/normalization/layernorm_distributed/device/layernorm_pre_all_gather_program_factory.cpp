@@ -5,6 +5,7 @@
 #include "layernorm_pre_all_gather_device_operation.hpp"
 #include "layernorm_distributed_metal2_helpers.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
