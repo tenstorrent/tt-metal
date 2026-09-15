@@ -48,6 +48,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # bh_p300 runs in LFC mode: per-job impl yaml mounts the host's local-disk
 # cache (/localdev/blackhole_demos/huggingface_data) onto /mnt/MLPerf/huggingface
@@ -75,6 +76,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests
@@ -97,6 +99,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests (Galaxy)
@@ -112,6 +115,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
+  budget_type: e2e
 
 - name: Llama 3.2-1B e2e tests
   cmd: |
@@ -126,6 +130,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Llama 3.2-3B e2e tests
   cmd: |
@@ -142,6 +147,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Llama 3.2-11B Vision e2e tests
   cmd: |
@@ -156,6 +162,7 @@
       release_ready: false
   owner_id: U06UEFWB4P9 # Colman Glagovich
   team: models
+  budget_type: e2e
 
 - name: Llama 3.2-90B-Vision e2e tests
   cmd: |
@@ -170,6 +177,7 @@
       release_ready: false
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: e2e
 
 # Not running on wh_llmbox_perf: performance-ci-eval-32 fails there with
 # "RuntimeError: Timeout waiting for Ethernet core service remote IO request"
@@ -188,6 +196,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # Issue: The test below is showing bad outputs after some iterations. Need to further investigate. https://github.com/tenstorrent/tt-metal/issues/42469
 # pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32"
@@ -205,6 +214,7 @@
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: e2e
 
 # TODO: Move DP tests to sweep pipelines when those come online
 # Disabled: failing with "Could not find any forwarding direction from src (M0, D0) to dst (M0, D19)" — under investigation in https://github.com/tenstorrent/tt-metal/issues/42553
@@ -241,6 +251,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen3-32B e2e tests (Blackhole)
   # The TTTv2 qwen3_32b demo is T3K-only, so the Blackhole (bh_quietbox_2) SKU keeps its TTTv1
@@ -258,6 +269,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen3-32B e2e tests (Galaxy)
   cmd: |
@@ -277,6 +289,7 @@
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: e2e
 
 - name: Qwen3-0.6B e2e tests
   cmd: |
@@ -295,6 +308,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen3-1.7B e2e tests
   cmd: |
@@ -313,6 +327,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen2.5-32B e2e tests
   cmd: |
@@ -332,6 +347,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen2.5-Coder-32B e2e tests
   cmd: |
@@ -347,6 +363,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen2.5-Coder-32B e2e tests (Blackhole)
   cmd: |
@@ -362,6 +379,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen2.5-7B e2e tests
   cmd: |
@@ -376,6 +394,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # Qwen2.5-72B e2e: still DISABLED. The original TTTv1 leg was disabled because ci-token-matching hung on
 # CI. The TTTv2 qwen25_72b demo below is the staged replacement (T3K parity-verified locally) but stays
@@ -401,12 +420,12 @@
   cmd: |
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 900 models/demos/qwen25_vl/demo/demo.py
+    pytest --timeout 1200 models/demos/qwen25_vl/demo/demo.py
   model: qwen2.5-vl-72b
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 25
       tier: 2
       release_ready: false
     bh_quietbox_2:
@@ -415,6 +434,7 @@
       release_ready: false
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: e2e
 
 - name: Qwen2.5-VL-32B e2e tests
   cmd: |
@@ -434,6 +454,7 @@
       release_ready: false
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: e2e
 
 - name: Qwen3-VL-32B e2e tests
   cmd: |
@@ -449,6 +470,7 @@
       release_ready: false
   owner_id: U08H31YMN4Q # Sanjay Sanjay
   team: models
+  budget_type: e2e
 
 # TODO Top-1/Top-5 test failing with segfaulting.
 # pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
@@ -465,6 +487,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Qwen3.6-27B e2e tests
   cmd: |
@@ -481,6 +504,7 @@
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: e2e
 
 # ── Gemma ──────────────────────────────────────────────────────────
 
@@ -502,6 +526,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Gemma-2-9B e2e tests
   cmd: |
@@ -515,6 +540,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Gemma-3-4B e2e tests
   cmd: |
@@ -530,6 +556,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Gemma-3-27B e2e tests
   cmd: |
@@ -545,6 +572,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # Gemma-4 e2e tests: one entry per model variant, multiple SKUs per entry.
 # parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
@@ -581,11 +609,19 @@
       release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: e2e
 
 - name: Gemma-4-E4B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    # The legacy tensor_cache_bf16/ dirs for E4B on bh_p300 / bh_quietbox_2 hold placeholder-derived
+    # tensorbins written after #50648 renamed the cache files (#54831). Build into the mesh-qualified
+    # dir instead of falling back to legacy; E4B is small enough to cold-build inside the budget.
+    export GEMMA4_WEIGHT_CACHE_MESH_ONLY=1
+    # Warm as_tensor cache loads hang forever on bh_quietbox_2 when the mmapped tensorbin is fed to
+    # the pinned host-memory write path (#55957); use the memcpy path until that is fixed.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -602,7 +638,7 @@
     # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
     # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
     bh_p300:
-      timeout: 5
+      timeout: 10
       tier: 3
       release_ready: false
     bh_quietbox_2:
@@ -611,6 +647,7 @@
       release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: e2e
 
 - name: Gemma-4-26B-A4B e2e tests
   cmd: |
@@ -645,6 +682,7 @@
     #   tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: e2e
 
 - name: Gemma-4-31B e2e tests
   cmd: |
@@ -676,6 +714,7 @@
     #   tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: e2e
 
 - name: Gemma-4-12B e2e tests
   cmd: |
@@ -700,9 +739,10 @@
     bh_quietbox_2:
       timeout: 22
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
+  budget_type: e2e
 
 # ── Mistral / Mixtral ──────────────────────────────────────────────
 
@@ -715,11 +755,12 @@
   model_family: Mistral
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 9
       tier: 2
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Mistral-Small-3.1-24B e2e tests
   cmd: |
@@ -736,6 +777,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 - name: Mixtral-8x7B e2e tests
   cmd: |
@@ -751,6 +793,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # ── Falcon ─────────────────────────────────────────────────────────
 
@@ -766,6 +809,7 @@
       release_ready: false
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: e2e
 
 - name: Falcon-40B e2e tests
   cmd: |
@@ -779,6 +823,7 @@
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: e2e
 
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
@@ -803,6 +848,7 @@
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: e2e
 
 - name: GPT-OSS 120B e2e tests
   cmd: |
@@ -829,6 +875,7 @@
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: e2e
 
 # ── Whisper ────────────────────────────────────────────────────────
 
@@ -852,6 +899,7 @@
     #   tier: 1
   owner_id: U0491KT8MNY # Mohamed Bahnas
   team: models
+  budget_type: e2e
 
 # ── Phi ────────────────────────────────────────────────────────────
 
@@ -868,6 +916,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
 # - name: Phi-4-mini e2e tests
@@ -900,6 +949,7 @@
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: e2e
 
 # ── UNet ───────────────────────────────────────────────────────────
 
@@ -917,6 +967,7 @@
       release_ready: false
   owner_id: U088DBNUKGR # Evan Smal
   team: models
+  budget_type: e2e
 
 - name: TT-DiT Flux.1 schnell e2e tests
   cmd: |
@@ -929,9 +980,10 @@
     bh_quietbox_2:
       timeout: 20
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT Flux.1 dev e2e tests
   cmd: |
@@ -947,6 +999,55 @@
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
+
+# ── FLUX.2 (TT-DiT) ────────────────────────────────────────────────
+- name: TT-DiT Flux.2-dev e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    status=0
+    pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+      -k "bh_qb and 1024x1024" || status=1
+    # smoke test only.
+    pytest --timeout 1800 -rs models/tt_dit/tests/models/flux2/test_pipeline_flux2.py -k 2x2 || status=1
+    exit $status
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_quietbox_2:
+      timeout: 75
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
+
+- name: TT-DiT Flux.2-dev multihost e2e tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest --timeout 4200 -rs models/tt_dit/tests/models/flux2/test_performance_flux2.py \
+        -k "bh_glx_ring_sp0tp1_nofsdp and 1024x1024"
+  model: flux.2-dev
+  model_family: Flux
+  skus:
+    bh_sc1:
+      timeout: 75
+      tier: 1
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
 
 # ── Z-Image ────────────────────────────────────────────────────────
 
@@ -962,6 +1063,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 # ── Stable Diffusion XL ────────────────────────────────────────────
 
@@ -982,6 +1084,7 @@
       release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: e2e
 
 # tensor parralel requires 2 chips, so it is split out to a separate test
 - name: Stable Diffusion XL (base tensor-parallel) e2e tests
@@ -997,6 +1100,7 @@
       release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: e2e
 
 - name: Stable Diffusion XL (lora) e2e tests
   cmd: |
@@ -1011,6 +1115,7 @@
       release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: e2e
 
 - name: Stable Diffusion XL (base + refiner) e2e tests
   cmd: |
@@ -1029,6 +1134,7 @@
       release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: e2e
 
 - name: Stable Diffusion XL (img2img + inpainting) e2e tests
   cmd: |
@@ -1050,6 +1156,7 @@
       release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: e2e
 
 # ── Stable Diffusion 3.5 Large (TT-DiT) ────────────────────────────
 
@@ -1068,6 +1175,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 # ── Mochi (TT-DiT) ─────────────────────────────────────────────────
 # test_tt_mochi_pipeline is named explicitly to keep the CPU-only diffusers
@@ -1091,6 +1199,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 # ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
 - name: TT-DiT Qwen-Image e2e tests
@@ -1108,6 +1217,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT Motif-Image-6B e2e tests
   cmd: |
@@ -1124,6 +1234,34 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
+
+# ── XTTS-v2 ────────────────────────────────────────────────────────
+# End-to-end voice-cloning TTS: the demo renders the default text with the default reference voice
+# (auto-downloaded) through the fully-traced path and writes generated/xtts_demo/xtts_demo.wav.
+# Blackhole P150 only. Paired with the gated perf baseline, which asserts setup / decode ms-per-code
+# / vocoder ms-per-code / RTF against the measured P150 numbers (see the model's README).
+- name: xtts-v2 e2e tests
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/xtts/requirements.txt
+    pytest models/experimental/xtts/tests/perf/test_e2e_perf.py --timeout=900
+    # Empty-generation regressions live here, after the perf test has compiled the pipeline they
+    # share: 118 s here against 294 s in the unit job.
+    pytest models/experimental/xtts/tests/pcc/test_empty_generation.py --timeout=900
+    python models/experimental/xtts/demo/xtts_demo.py
+  model: xtts-v2
+  model_family: XTTS
+  skus:
+    bh_p150b_civ2:
+      # Measured 9m20s / 9m08s / 9m00s across runs 34453045104, 34444464755, 34450411323.
+      # 15 min leaves ~5.5 min for a first-run 1.9 GB weight download on a fresh runner.
+      timeout: 15
+      tier: 3
+      release_ready: false
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: shield
+  budget_type: e2e
 
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
@@ -1137,6 +1275,7 @@
       release_ready: false
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
+  budget_type: e2e
 
 # ── ViT ────────────────────────────────────────────────────────────
 
@@ -1161,6 +1300,7 @@
       tier: 2
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
+  budget_type: e2e
 
 - name: VGGNet e2e tests
   cmd: |
@@ -1173,6 +1313,7 @@
       tier: 3
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
+  budget_type: e2e
 
 - name: BERT-Tiny e2e tests
   cmd: |
@@ -1186,6 +1327,7 @@
       tier: 3
   owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
+  budget_type: e2e
 
 - name: BERT-Large e2e tests
   cmd: |
@@ -1199,6 +1341,7 @@
       tier: 3
   owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
+  budget_type: e2e
 
 - name: DistilBERT e2e tests
   cmd: |
@@ -1212,6 +1355,7 @@
       tier: 3
   owner_id: U087S3K319A # Austin Ho (CODEOWNERS models/**/distilbert/ @tt-aho)
   team: ttnn
+  budget_type: e2e
 
 - name: SqueezeBERT e2e tests
   cmd: |
@@ -1225,6 +1369,7 @@
       tier: 3
   owner_id: U07D5N7QL4U # Joseph Chu
   team: ttnn
+  budget_type: e2e
 
 - name: MNIST MLP e2e tests
   cmd: |
@@ -1237,6 +1382,7 @@
       tier: 3
   owner_id: U088DBNUKGR # Evan Smal
   team: models
+  budget_type: e2e
 
 - name: EfficientDet-D0 e2e tests
   cmd: |
@@ -1249,6 +1395,7 @@
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
+  budget_type: e2e
 
 - name: MobileNetV3 e2e tests
   cmd: |
@@ -1261,6 +1408,7 @@
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
+  budget_type: e2e
 
 - name: SSD512 e2e tests
   cmd: |
@@ -1273,6 +1421,7 @@
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
+  budget_type: e2e
 
 - name: YuNet e2e tests
   cmd: |
@@ -1285,6 +1434,7 @@
       tier: 3
   owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
   team: models
+  budget_type: e2e
 
 - name: ResNet-50 e2e tests
   cmd: |
@@ -1303,28 +1453,25 @@
       tier: 1
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: e2e
 
 - name: TT-DiT Wan2.2-T2V-A14B e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     fail=0
-    # 2x2 and the 2x4 family skip on a Galaxy by device count; ring_bh_4x8 now skips on the
-    # fabric payload guard in conftest.py. wh_4x8 at 480p is still excluded: it misses its
-    # encoder tolerance (0.105-0.111 measured against 0.1), which is a separate question.
-    # TODO: Remove these filters on wh_4x8. they shouldn't be here.
-    pytest --timeout 3000 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v and not wh_4x8" || fail=1
-    pytest --timeout 1500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
-      -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" || fail=1
-    pytest --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+    pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "resolution_480p and t2v" || fail=1
+    pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+      -k "(4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p)" || fail=1
+    pytest --timeout 1700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
       -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || fail=1
     exit $fail
   model: wan-2.2-t2v
   model_family: Wan
   skus:
     bh_quietbox_2:
-      timeout: 55
+      timeout: 115
       tier: 1
       release_ready: true
     wh_galaxy_perf:
@@ -1333,6 +1480,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 # ── WAN 2.2 (Black Hole quad galaxy, bh_sc4 / exabox-multihost-ci-sc4) ──
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
@@ -1371,11 +1519,12 @@
   model_family: Wan
   skus:
     bh_sc4:
-      timeout: 40
+      timeout: 80
       tier: 1
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT Wan2.2-I2V-A14B multihost quad e2e tests
   cmd: |
@@ -1418,6 +1567,70 @@
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
+
+# ── WAN 2.2 (Black Hole single galaxy, bh_sc1) ───────────────────
+- name: TT-DiT Wan2.2-T2V-A14B single galaxy e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    fail=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || fail=1; }
+    run --timeout 1800 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "ring_bh_4x8_sp1tp0 and t2v"
+    run --timeout 2100 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+      -k "4x8sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
+    exit $fail
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 45
+      tier: 1
+      release_ready: true
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
+
+- name: TT-DiT Wan2.2-I2V-A14B single galaxy e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export NO_PROMPT=1
+    export HF_HOME=/mnt/models/huggingface
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    # Single-galaxy counterparts of the bh_sc4 quad legs above, on one rank instead of tt-run:
+    # ring_bh_4x8 for perf (it requests a Blackhole-sized fabric packet payload, so it self-skips
+    # on Wormhole only, not here), and the 4x8 linear pipeline case, which is the only 4x8 config
+    # test_pipeline_wan_i2v.py defines for Blackhole -- there is no 4x8 ring case for I2V.
+    fail=0
+    run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || fail=1; }
+    run --timeout 1200 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "ring_bh_4x8_sp1tp0 and resolution_720p and i2v"
+    run --timeout 3000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py \
+      -k "4x8sp1tp0nl2_linear_is_fsdp0 and resolution_720p"
+    exit $fail
+  model: wan-2.2-i2v
+  model_family: Wan
+  skus:
+    bh_sc1:
+      timeout: 75
+      tier: 1
+      release_ready: true
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: e2e
 
 # ── LTX-2.3 (Black Hole single galaxy, bh_sc1) ───────────────────
 - name: TT-DiT LTX-2.3 Pro T2V e2e tests
@@ -1441,6 +1654,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT LTX-2.3 Fast T2V e2e tests
   cmd: |
@@ -1463,6 +1677,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT LTX-2.3 Pro I2V e2e tests
   cmd: |
@@ -1486,6 +1701,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT LTX-2.3 Fast I2V e2e tests
   cmd: |
@@ -1512,6 +1728,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 # ── DeepSeek V3 (Wormhole Galaxy / TG) ──
 - name: DeepSeek-V3 decode stress e2e tests (Galaxy)
@@ -1527,6 +1744,7 @@
       release_ready: false
   owner_id: U08H32XUS9W # Yousef Al Rawwash
   team: models
+  budget_type: e2e
 
 # ── DeepSeek V3 B1 (Black Hole supercluster, bh_sc4 / bh_sc16) ──
 # Migrated from demo_sp_multihost_tests.yaml. Launch from empty NFS cwd
@@ -1601,6 +1819,7 @@
       release_ready: true
   owner_id: U08E1JCMAJF
   team: scaleout
+  budget_type: e2e
 
 # TODO: re-enable after SC4 Stress Test when it is fixed
 # - name: Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)
@@ -1707,6 +1926,7 @@
       release_ready: true
   owner_id: U08E1JCMAJF
   team: scaleout
+  budget_type: e2e
 # TODO: re-enable after SC16 Stress Test when it is fixed
 # - name: Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)
 #   cmd: |
@@ -1751,10 +1971,14 @@
   model: bge_m3
   skus:
     wh_n150:
-      timeout: 4
+      # #54669 (2026-08-31) grew the benchmark from 5 to 10 parametrisations (5 single-request
+      # ISLs + a batch-25 sweep of 50 requests each). Model download + the first 5 cases already
+      # take ~4 min on N150, so the job was wall-clock killed every day from 2026-09-01.
+      timeout: 10
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models
+  budget_type: e2e
 
 # ── TT-Train (Blackhole Galaxy) ───────────────────────────────────
 
@@ -1773,6 +1997,7 @@
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: e2e
 
 # Hanging on bh_sc1, disable until issue is resolved. Maybe related to: https://github.com/tenstorrent/tt-metal/issues/49557
 # - name: Galaxy Llama 8B TP=8 DDP=4 train e2e tests
@@ -1806,6 +2031,7 @@
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: e2e
 
 - name: Galaxy Tiny Deepseek v3 DDP=32 train e2e tests
   cmd: |
@@ -1821,6 +2047,7 @@
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: e2e
 
 # Unstable on bh_sc1, disable until issue is resolved. Maybe related to: https://github.com/tenstorrent/tt-metal/issues/49557
 # - name: Galaxy Llama 70B TP=8 FSDP=4 train e2e tests

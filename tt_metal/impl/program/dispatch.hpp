@@ -121,7 +121,10 @@ uint32_t finalize_cross_node_dfbs(
     uint32_t base_offset);
 
 uint32_t finalize_prefetcher_pipes(
-    uint32_t programmable_core_type_index, ttsl::Span<detail::ProgramImpl*> programs, uint32_t base_offset);
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
 
 // Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
 // Each rectangle in `cores` can be covered by a single multicast.

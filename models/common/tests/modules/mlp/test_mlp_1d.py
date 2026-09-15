@@ -12,6 +12,8 @@ This test suite verifies:
 
 import math
 import os
+import time
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -581,9 +583,14 @@ def test_mlp_1d_vs_reference(
         # Use default prefill_len_cutoff, take the happy path of MLP1D
         tt_model = MLP1D(w1=lazy_w1, w2=lazy_w2, w3=lazy_w3)
     else:
-        # Use custom config with prefill_len_cutoff override
-        mlp_config = MLP1DConfig(w1=lazy_w1, w2=lazy_w2, w3=lazy_w3, prefill_len_cutoff=prefill_len_cutoff)
-        tt_model = MLP1D.from_config(mlp_config)
+        tt_model = MLP1D.from_config(
+            MLP1DConfig(
+                w1=lazy_w1,
+                w2=lazy_w2,
+                w3=lazy_w3,
+                prefill_len_cutoff=prefill_len_cutoff,
+            )
+        )
 
     # Run TT model with the same input -- torch_input -- converted to ttnn tensor lazily on the fly
     # [INFO] we use LazyWeight on input for the benefit of faster testing (cached input); in production, the input is already a ttnn tensor.
@@ -608,6 +615,244 @@ def test_mlp_1d_vs_reference(
 
     assert passing, f"MLP1D output does not meet PCC requirement {pcc}: {pcc_message}."
     logger.info(f"MLP1D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
+
+
+def _blackhole_mlp_kernel(*, fidelity: ttnn.MathFidelity) -> ttnn.DeviceComputeKernelConfig:
+    """Materialize one TTTv1 Qwen3-32B performance MLP operation slot on BH."""
+    return ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.BLACKHOLE,
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device,mode,input_rows",
+    [
+        pytest.param((1, 1), "decode", 32, id="p150-1x1-decode-batch32"),
+        pytest.param((1, 1), "prefill", 512, id="p150-1x1-prefill-seq512-minimal-ff2"),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            "decode",
+            32,
+            id="p150x4-1x4-ring-decode-batch32",
+        ),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            "prefill",
+            512,
+            id="p150x4-1x4-ring-prefill-seq512-minimal-ff2",
+        ),
+    ],
+    indirect=["ttnn_mesh_device"],
+)
+def test_mlp_1d_blackhole_common_config_correctness_cache_and_timing(
+    request, ttnn_mesh_device, require_blackhole_mesh_device, mode, input_rows
+):
+    """Focused BH correctness/cache gate; synchronized timings are evidence, not a threshold."""
+    torch.manual_seed(2026)
+
+    # A reduced Qwen-shaped 1:5 MLP keeps the P150x4 production 8x5 grids legal
+    # while avoiding three full 32B-model weight allocations in this module gate.
+    dim = 1280
+    hidden_dim = 6400
+    num_devices = ttnn_mesh_device.get_num_devices()
+    assert num_devices in (1, 4)
+    assert ttnn_mesh_device.dram_grid_size().x == 8, "This gate requires a P150 DRAM grid"
+
+    w1 = torch.randn(dim, hidden_dim, dtype=torch.bfloat16) * 0.02
+    w2 = torch.randn(hidden_dim, dim, dtype=torch.bfloat16) * 0.02
+    w3 = torch.randn(dim, hidden_dim, dtype=torch.bfloat16) * 0.02
+    torch_input = torch.randn(1, 1, input_rows, dim, dtype=torch.bfloat16)
+    with torch.no_grad():
+        reference = (torch.nn.functional.silu(torch_input @ w1) * (torch_input @ w3)) @ w2
+
+    common = MLP1DConfig(
+        w1=LazyWeight(source=w1, dtype=ttnn.bfloat8_b),
+        w2=LazyWeight(source=w2, dtype=ttnn.bfloat8_b),
+        w3=LazyWeight(source=w3, dtype=ttnn.bfloat8_b),
+        mesh_device=ttnn_mesh_device,
+        dim=dim,
+        hidden_dim=hidden_dim,
+        max_batch_size=32,
+        topology=ttnn.Topology.Ring if num_devices == 4 else None,
+        prefill_w2_minimal_matmul=True,
+    )
+    # TTTv1 Qwen3-32B performance recipe: FF1/FF3 use LoFi while FF2 uses
+    # HiFi2 FP16 accumulation. Spell out all four operation slots so the gate
+    # proves mode-specific wrapper routing rather than relying on defaults.
+    common = replace(
+        common,
+        ff1_3_compute_kernel_cfg=_blackhole_mlp_kernel(fidelity=ttnn.MathFidelity.LoFi),
+        ff2_compute_kernel_cfg=_blackhole_mlp_kernel(fidelity=ttnn.MathFidelity.HiFi2),
+        decode_ff1_3_compute_kernel_cfg=_blackhole_mlp_kernel(fidelity=ttnn.MathFidelity.LoFi),
+        decode_ff2_compute_kernel_cfg=_blackhole_mlp_kernel(fidelity=ttnn.MathFidelity.HiFi2),
+        prefill_len_cutoff=512,
+        prefill_dram_shard_grid_width=8,
+        prefill_ff1_ff3_grid=(8, 5),
+        prefill_ff2_grid=(8, 5),
+    )
+    model = MLP1D.from_config(common)
+    assert not hasattr(model, "arch_config")
+    assert model.config.prefill_len_cutoff == 512
+    assert model.config.prefill_ff1_ff3_grid == (8, 5)
+    assert model.config.prefill_ff2_grid == (8, 5)
+    assert (
+        model.config.ff1_3_compute_kernel_cfg.math_fidelity,
+        model.config.ff2_compute_kernel_cfg.math_fidelity,
+        model.config.decode_ff1_3_compute_kernel_cfg.math_fidelity,
+        model.config.decode_ff2_compute_kernel_cfg.math_fidelity,
+    ) == (
+        ttnn.MathFidelity.LoFi,
+        ttnn.MathFidelity.HiFi2,
+        ttnn.MathFidelity.LoFi,
+        ttnn.MathFidelity.HiFi2,
+    )
+    assert model.config.use_minimal_w2_matmul(input_rows) is (mode == "prefill")
+
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+
+    def run_once():
+        # MLP1D consumes and deallocates its device input. A fresh LazyWeight
+        # prevents a warm replay from reusing a deallocated device tensor.
+        fresh_input = LazyWeight(source=torch_input, dtype=ttnn.bfloat16)
+        output = model.forward(fresh_input, mode=mode)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        return output
+
+    output = run_once()
+    actual = to_torch_auto_compose(output)
+    output.deallocate(True)
+    passing, pcc_message = comp_pcc(reference, actual, 0.97)
+    assert passing, f"Blackhole MLP1D PCC failed: {pcc_message}"
+
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+    timings_ms = []
+    for _ in range(3):
+        start = time.perf_counter()
+        output = run_once()
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+        output.deallocate(True)
+
+    logger.info(
+        "BH MLP1D measurement mode={} mesh={} dim={} hidden_dim={}: warm-cache mean={:.3f} ms, samples={}",
+        mode,
+        tuple(ttnn_mesh_device.shape),
+        dim,
+        hidden_dim,
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device,mode,input_rows",
+    [
+        pytest.param((1, 1), "prefill", 512, id="n150-1x1-prefill-seq512-minimal-ff2"),
+        pytest.param((1, 1), "decode", 32, id="n150-1x1-decode-batch32"),
+    ],
+    indirect=["ttnn_mesh_device"],
+)
+def test_mlp_1d_wormhole_common_config_correctness_cache_and_timing(request, ttnn_mesh_device, mode, input_rows):
+    """Focused WH correctness/cache gate using explicit common-config requests."""
+    torch.manual_seed(2026)
+    dim = 1280
+    hidden_dim = 6400
+    w1 = torch.randn(dim, hidden_dim, dtype=torch.bfloat16) * 0.02
+    w2 = torch.randn(hidden_dim, dim, dtype=torch.bfloat16) * 0.02
+    w3 = torch.randn(dim, hidden_dim, dtype=torch.bfloat16) * 0.02
+    torch_input = torch.randn(1, 1, input_rows, dim, dtype=torch.bfloat16)
+    with torch.no_grad():
+        reference = (torch.nn.functional.silu(torch_input @ w1) * (torch_input @ w3)) @ w2
+
+    common = MLP1DConfig(
+        w1=LazyWeight(source=w1, dtype=ttnn.bfloat8_b),
+        w2=LazyWeight(source=w2, dtype=ttnn.bfloat8_b),
+        w3=LazyWeight(source=w3, dtype=ttnn.bfloat8_b),
+        mesh_device=ttnn_mesh_device,
+        dim=dim,
+        hidden_dim=hidden_dim,
+        max_batch_size=32,
+        topology=None,
+        prefill_w2_minimal_matmul=True,
+    )
+    kernel = lambda: ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.WORMHOLE_B0,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    common = replace(
+        common,
+        ff1_3_compute_kernel_cfg=kernel(),
+        ff2_compute_kernel_cfg=kernel(),
+        decode_ff1_3_compute_kernel_cfg=kernel(),
+        decode_ff2_compute_kernel_cfg=kernel(),
+        prefill_len_cutoff=1024,
+        prefill_dram_shard_grid_width=8,
+        prefill_ff1_ff3_grid=(8, 5),
+        prefill_ff2_grid=(8, 5),
+    )
+    model = MLP1D.from_config(common)
+    assert not hasattr(model, "arch_config")
+    assert model.config.prefill_len_cutoff == 1024
+    assert (
+        len(
+            {
+                id(getattr(model.config, name))
+                for name in (
+                    "ff1_3_compute_kernel_cfg",
+                    "ff2_compute_kernel_cfg",
+                    "decode_ff1_3_compute_kernel_cfg",
+                    "decode_ff2_compute_kernel_cfg",
+                )
+            }
+        )
+        == 4
+    )
+    assert model.config.use_minimal_w2_matmul(input_rows) is (mode == "prefill")
+
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+
+    def run_once():
+        fresh_input = LazyWeight(source=torch_input, dtype=ttnn.bfloat16)
+        output = model.forward(fresh_input, mode=mode)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        return output
+
+    output = run_once()
+    actual = to_torch_auto_compose(output)
+    output.deallocate(True)
+    passing, pcc_message = comp_pcc(reference, actual, 0.97)
+    assert passing, f"Wormhole MLP1D PCC failed: {pcc_message}"
+
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+    timings_ms = []
+    for _ in range(3):
+        start = time.perf_counter()
+        output = run_once()
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+        output.deallocate(True)
+    logger.info(
+        "WH MLP1D measurement mode={} mesh={} dim={} hidden_dim={}: warm-cache mean={:.3f} ms, samples={}",
+        mode,
+        tuple(ttnn_mesh_device.shape),
+        dim,
+        hidden_dim,
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
+    )
 
 
 @pytest.mark.parametrize(
@@ -659,7 +904,7 @@ def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
     dim = cfg.dim
     hidden_dim = cfg.hidden_dim
     tile_size = TILE_SIZE
-    prefill_len_cutoff = cfg.prefill_len_cutoff
+    prefill_len_cutoff = tt_model.config.prefill_len_cutoff
 
     @lru_cache
     def custom_prefill_w2_prg_config(seq_len: int):

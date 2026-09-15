@@ -218,9 +218,7 @@ class TestConfig:
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
-    DUMP_RAW_COUNTERS: ClassVar[bool] = False
-    DUMP_RAW_METRICS: ClassVar[bool] = False
-    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+    DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
@@ -416,13 +414,9 @@ class TestConfig:
 
     @staticmethod
     def perf_run_tag() -> str:
-        """Directory name for this run's reports. Unique per invocation.
+        """Name for this run's reports: the directory, the Parquet, and its run_id.
 
-        Purely a filesystem concern: it never reaches the published table. The
-        Parquet's ``run_id`` cannot serve here because every shard of one CI
-        workflow shares it by design (it is a ROW_KEY column, and the data team's
-        notion of "one run" spans all shards) — naming directories after it would
-        make two shards collide the moment their artefacts are unzipped together.
+        Unique per invocation, which is the one property all three need.
 
         Seeded into the environment on first use so xdist workers and the
         controller agree; the pytest plugin sets it before workers spawn.
@@ -566,6 +560,7 @@ class TestConfig:
                     )
                 ],
                 "-I../common",
+                "-I../tools/include",
                 "-I../../hw/inc",
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",

@@ -23,7 +23,12 @@ from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU, TorchExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
+    ACTIVATION_SILU,
+    ACTIVATION_SITU,
+    ACTIVATION_SWIGLUOAI,
+    TorchExpert,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
@@ -39,10 +44,10 @@ SINGLE_CHIP_MESH_PARAMS = [
 
 # Device activation -> the TorchExpert reference that must match it. Keeping the pairing
 # in one place stops a case from measuring one activation against another's golden.
-# SwiGluOai is absent on purpose: its reference lives in test_swigluoai_routed_expert.py.
 _TORCH_ACTIVATION = {
     ttnn.RoutedExpertActivation.Silu: ACTIVATION_SILU,
     ttnn.RoutedExpertActivation.SituGlu: ACTIVATION_SITU,
+    ttnn.RoutedExpertActivation.SwiGluOai: ACTIVATION_SWIGLUOAI,
 }
 
 # Kimi K3 SiTU-GLU betas. The device kernel bakes SituGluConfigKimi; these must match it,
@@ -360,6 +365,7 @@ def test_single_routed_expert_isl_sweep(
 _K3_TOKEN_SWEEP = [32, 64, 128, 256, 512, 1024, 2048, 5120]
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.extended_model

@@ -21,6 +21,12 @@ import torch.nn.functional as F
 # Activation selectors accepted by TorchExpert / apply_glu_activation.
 ACTIVATION_SILU = "silu"
 ACTIVATION_SITU = "situ"
+ACTIVATION_SWIGLUOAI = "swiglu_oai"
+
+# The device kernel bakes SwiGLUConfigGPTOSS rather than taking these as arguments, so a reference
+# that let callers vary them could grade against an activation the kernel cannot run.
+SWIGLUOAI_ALPHA = 1.702
+SWIGLUOAI_LIMIT = 7.0
 
 
 def apply_glu_activation(
@@ -55,7 +61,14 @@ def apply_glu_activation(
         if situ_linear_beta is not None:
             up = situ_linear_beta * torch.tanh(up / situ_linear_beta)
         return (situ_a * up).to(gate_out.dtype)
-    raise ValueError(f"unknown activation {activation!r}; expected {ACTIVATION_SILU!r} or {ACTIVATION_SITU!r}")
+    if activation == ACTIVATION_SWIGLUOAI:
+        gate = gate_out.float().clamp(max=SWIGLUOAI_LIMIT)
+        up = up_out.float().clamp(min=-SWIGLUOAI_LIMIT, max=SWIGLUOAI_LIMIT)
+        return ((up + 1.0) * gate * torch.sigmoid(SWIGLUOAI_ALPHA * gate)).to(gate_out.dtype)
+    raise ValueError(
+        f"unknown activation {activation!r}; expected {ACTIVATION_SILU!r}, {ACTIVATION_SITU!r} "
+        f"or {ACTIVATION_SWIGLUOAI!r}"
+    )
 
 
 class TorchExpert(nn.Module):

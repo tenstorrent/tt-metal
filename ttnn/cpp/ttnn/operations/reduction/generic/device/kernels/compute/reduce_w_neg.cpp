@@ -23,9 +23,9 @@
 #endif
 
 void kernel_main() {
-    uint32_t Ht = get_arg(args::Ht);
-    uint32_t Wt = get_arg(args::Wt);
-    uint32_t NC = get_arg(args::NC);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t NC = get_arg(args::NC);
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
     constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
@@ -48,7 +48,7 @@ void kernel_main() {
 
     dfb_scaler.wait_front(1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
-        int dst_idx = 0;
+        const int dst_idx = 0;
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
@@ -57,14 +57,14 @@ void kernel_main() {
                 dfb_input.wait_front(onetile);
                 tile_regs_acquire();
                 copy_init(dfb::in0);
-                copy_tile(dfb::in0, 0, dst_idx);
+                copy_tile(dfb::in0, 0, static_cast<uint32_t>(dst_idx));
                 negative_tile_init();
-                negative_tile(dst_idx);
+                negative_tile(static_cast<uint32_t>(dst_idx));
                 tile_regs_wait();
                 dfb_input.pop_front(onetile);
                 dfb_ineg.reserve_back(onetile);
                 tile_regs_commit();
-                pack_tile(dst_idx, dfb::ineg);
+                pack_tile(static_cast<uint32_t>(dst_idx), dfb::ineg);
                 tile_regs_release();
                 dfb_ineg.push_back(onetile);
 
@@ -72,7 +72,7 @@ void kernel_main() {
                 if (wt > 0) {
                     dfb_acc.wait_front(onetile);
                     copy_init(dfb::acc);
-                    copy_tile(dfb::acc, 0, dst_idx);
+                    copy_tile(dfb::acc, 0, static_cast<uint32_t>(dst_idx));
                 }
 
                 dfb_ineg.wait_front(onetile);
@@ -81,7 +81,7 @@ void kernel_main() {
                     reconfig_data_format(dfb::scaler, dfb::ineg);
                 }
                 reduce_init<REDUCE_OP, REDUCE_DIM>(dfb::ineg, dfb::scaler, dfb::acc);
-                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb::ineg, dfb::scaler, 0, 0, dst_idx);
+                reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb::ineg, dfb::scaler, 0, 0, static_cast<uint32_t>(dst_idx));
                 reduce_uninit();
                 tile_regs_wait();
                 dfb_ineg.pop_front(onetile);
@@ -90,7 +90,7 @@ void kernel_main() {
                 }
                 dfb_acc.reserve_back(onetile);
                 tile_regs_commit();
-                pack_tile(dst_idx, dfb::acc);
+                pack_tile(static_cast<uint32_t>(dst_idx), dfb::acc);
                 tile_regs_release();
                 dfb_acc.push_back(onetile);
             }  // wt
@@ -98,9 +98,9 @@ void kernel_main() {
             dfb_acc.wait_front(onetile);
             tile_regs_acquire();
             copy_init(dfb::acc);
-            copy_tile(dfb::acc, 0, dst_idx);
+            copy_tile(dfb::acc, 0, static_cast<uint32_t>(dst_idx));
             negative_tile_init();
-            negative_tile(dst_idx);
+            negative_tile(static_cast<uint32_t>(dst_idx));
 #ifdef REDUCE_POST_MUL
             // GMPOOL only respects the scaler's exponent for MAX/MIN, so the host requests reduction
             // with scaler=1.0 and then applies the user scalar via mul_unary_tile (SFPU) on each
@@ -112,7 +112,7 @@ void kernel_main() {
             dfb_acc.pop_front(onetile);
             dfb_output.reserve_back(onetile);
             tile_regs_commit();
-            pack_tile(dst_idx, dfb::out);
+            pack_tile(static_cast<uint32_t>(dst_idx), dfb::out);
             tile_regs_release();
             dfb_output.push_back(onetile);
         }  // ht
