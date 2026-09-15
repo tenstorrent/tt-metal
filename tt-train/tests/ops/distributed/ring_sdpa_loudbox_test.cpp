@@ -900,6 +900,12 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareTheTwoBackwards) {
              {1, 4, 512, 64, 2},
              {1, 4, 512, 64, 4},
              {1, 4, 256, 128, 2},
+             // Larger chunks: where the per-step kernel is a visible share of
+             // the whole backward, and the ring shift moves real data.
+             {1, 4, 1024, 64, 2},
+             {1, 4, 2048, 64, 2},
+             {1, 4, 2048, 64, 4},
+             {1, 4, 4096, 64, 4},
          }) {
         const size_t rows_per_chip = cfg[2];
         const auto Bt = static_cast<uint32_t>(cfg[4]);
@@ -1058,6 +1064,15 @@ TEST_F(LoudboxRingSDPATest, DISABLED_SweepTheStepOps) {
              {8, 1024, 64},
              {16, 1024, 64},
              {4, 1024, 128},
+             // Larger chunks, where the kernel is most of the step. At 4096
+             // rows Bt = 1 wants 64 cores per slice (one 8x8 group, four
+             // slices looped); at 8192 rows Bt = 1 wants 128 cores, which no
+             // rectangle of the 11x10 grid has, and the op says so.
+             {4, 4096, 64},
+             {8, 4096, 64},
+             {4, 8192, 64},
+             {1, 8192, 64},
+             {1, 16384, 64},
          }) {
         const size_t heads = cfg[0], rows = cfg[1], d = cfg[2];
         const std::array<std::size_t, 4> shape{1UL, heads, rows * cp_size, d};
