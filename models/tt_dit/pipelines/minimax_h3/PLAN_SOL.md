@@ -322,6 +322,95 @@ Steps 3-4 alone buy fidelity at +4.9 ms/block (~+1.2 s). They are worth doing on
 whether the math can be hidden under the delivery floor -- if it can, Sol's routing is close to free
 and the pair improves both axes.
 
+## S2b - `sol_ring`: bringing the device kernel to the oracle, step by step
+
+The device path is now a fork of the dense ring SDPA (`ttnn/.../sdpa/sol_ring*`), not a graft onto
+`vsa_sdpa`. Rationale in `sol_ring.hpp`: at full density `vsa_sdpa` spends 103.7 ms on the attention
+the dense op does in 51.4 ms, so its streaming design carries a ~2x structural penalty a consumer
+inherits, and the ring hands each shard's K/V over contiguously as it rotates -- which is what a
+scattered DRAM gather pays ~9.6 ms of k-independent cost to emulate.
+
+The target is `sol_attn_oracle.sol_attention`. Mapping its five stages onto the fork:
+
+| oracle stage | oracle code | where it lands in `sol_ring` |
+|---|---|---|
+| block summaries `kc` (mean K), `vc` (sum V) | `block_summaries` | coarse stage, host-side ttnn -- already exists for VSA, needs `vc` as a **sum** rather than a mean |
+| query centroids `q_bar` | `query_centroids` | coarse stage; VSA already pools Q |
+| threshold `mu + tau*sigma` | `routing_threshold` | coarse stage, new. `diag` only -- the oracle measured `exact` agreeing to 0.02 pp, so no `D x D` second moment |
+| routing: threshold OR local window OR sink | `route` | per-ring-iteration block mask, consumed by `use_provided_mask` |
+| one softmax over exact blocks + pooled residual | the `p_exact`/`p_approx` merge | `sdpa_inner_loop_step`, with the pooled tokens as one extra chunk sharing the row max |
+
+### Step 0 -- the fork is a clone (done)
+
+`sol_ring` builds, binds to Python with the parent's signature, and is held to the parent's own
+accuracy and determinism gates (`test_exp_ring_joint_sdpa.py -k sol_ring`). Anything failing there is
+a forking mistake, not an algorithm difference. This also pins what the dense path costs, so every
+step below has a baseline.
+
+### Step 1 -- accept a block mask, prove it against dense
+
+Add a `[1, H, n_q_blocks, n_kv_blocks]` bool/bitmask input; per ring iteration the reader stamps the
+rows for that shard into `cb_mask_in` and the driver sets `use_provided_mask`. **No new math**: the
+machinery is already in `sdpa_inner_loop_step` (`use_provided_mask`, `cb_mask_in`,
+`apply_provided_mask_streaming`, `active_Sk`).
+
+Gate: an all-ones mask must reproduce Step 0 bit-for-bit. A mask matching VSA's top-k selection must
+match `vsa_sdpa` on the same indices to the bf16 floor. That second one is the cheap way to find out
+whether the ring's contiguous delivery beats the 9.6 ms scattered floor -- **the open question that
+caps this whole line**, and it is answerable here with no Sol-specific code.
+
+### Step 2 -- skip fully-masked chunks
+
+A mask alone still walks every chunk. The driver must skip chunks with no selected block, which is
+where the sparsity actually turns into time. Rows differ in which chunks they need, so the skip is
+per (q chunk, ring iteration).
+
+Gate: time scales with density. Compare against the `vsa_sdpa` sweep (job 248: 16.09 ms at 10.9%,
+20.98 ms at 16.0%, 103.73 ms dense) at matched densities. **This is the step that decides whether the
+fork was worth it.** If it does not beat those numbers, stop and reconsider -- the 2x argument came
+from a dense-vs-dense comparison and would have failed to transfer.
+
+### Step 3 -- the pooled residual
+
+Append the `n_kv_blocks` pooled summaries as one extra KV chunk per ring iteration, masked to the
+blocks this query row did *not* select. Two details the oracle makes explicit and a naive port gets
+wrong:
+
+* `vc` is the block **sum**, not the mean, and the denominator accumulates `p * block_len` rather
+  than `p` (`_block_lengths` in the oracle). That is what makes a pooled token stand in for its
+  whole block.
+* Both branches **share one row max** (`row_max = max(dense, pooled)` in the oracle). They share a
+  denominator, so they must share the shift. Running the pooled branch with its own max and merging
+  afterwards is the `vsa_sdpa` design this fork exists to avoid.
+
+Gate: `tau -> -inf` routes everything exact, the residual empties, and the result must equal Step 0.
+That is the oracle's own load-bearing invariant (`test_tau_minus_inf_is_dense`) and it pins the
+arithmetic end to end.
+
+### Step 4 -- threshold routing on device
+
+Move `routing_threshold` + `route` into the coarse stage: `kc` population mean and per-dim variance
+per (batch, head), then `mu + tau*sigma` per (query block, head), then a compare. `topk_large_indices`
+goes away. Fixed width plus a count: the oracle measured 289 +- 12% at the 15 s shard, so a fixed
+width at the max wastes ~13%.
+
+Gate: device routing must select the same blocks as `route` on the same inputs -- an exact set
+comparison, not a PCC. Selection is discrete, so it either matches or it does not.
+
+### Step 5 -- the end-to-end gate
+
+Device `sol_ring` against `sol_attention` at **PCC >= 0.9996**, the bf16 floor `vsa_sdpa` already
+demonstrates. Plus bit-exact determinism across launches and the `tau -> -inf` dense reduction.
+A tighter PCC is not available against a mathematical reference: the emulated-bf16 tier in the oracle
+lands ~20x tighter than the real kernel because it models the rounding points but not the per-visit
+accumulation chain, so it cannot support a 99.999 % target.
+
+### What this retires
+
+`vsa_sdpa`'s `lse_out` export and its `[1,H,S,64]` state tensor exist only to let an *external* merge
+reconstruct what a one-pass kernel never loses. Step 3 makes them dead code; strip them then, not
+before. The rail-cap fix (`grid_x`/`grid_y`) is independent and stays.
+
 ## S3 - Fuse the coarse-stage setup
 
 Sol fuses K/V summaries, block statistics and the threshold into one preprocessing kernel:
