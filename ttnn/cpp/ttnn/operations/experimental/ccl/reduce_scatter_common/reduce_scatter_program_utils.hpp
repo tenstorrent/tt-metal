@@ -57,6 +57,16 @@ uint32_t reduce_scatter_default_chunks_per_sync(
 // exempt. Sweep data: PR #55543.
 constexpr uint32_t RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC = 4;
 
+// A step of at most this many chunks syncs on every chunk instead: the receiver then starts on the
+// first chunk, which on such a short step is worth more than the semaphore traffic it costs. Applies
+// where RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC does. Sweep data: PR #55543.
+constexpr uint32_t RING_UNIT_STEP_SHORT_STEP_CHUNKS = 4;
+
+// Chunks a worker issues per ring step: each repeat (a unit for dims 1-3, a batch for dim 0) is
+// chunked on its own, so a repeat holding fewer than tile_granularity tiles still costs a whole chunk.
+uint32_t reduce_scatter_chunks_per_step(
+    uint32_t tiles_per_worker_per_repeat, uint32_t num_repeats, uint32_t tile_granularity);
+
 // Sizing for the chunk-paged "contiguous" intermediate used by the ring reduce-scatter fast path.
 //
 // The contiguous path replaces scatter-writes to the intermediate with a single contiguous

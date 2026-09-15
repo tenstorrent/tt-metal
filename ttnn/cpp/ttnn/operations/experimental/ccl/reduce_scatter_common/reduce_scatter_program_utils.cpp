@@ -112,13 +112,17 @@ uint32_t reduce_scatter_default_chunks_per_sync(
     constexpr uint32_t LINEAR_DEFAULT_CHUNKS_PER_SYNC = 20;
     uint32_t default_value =
         topology == ttnn::ccl::Topology::Ring ? RING_DEFAULT_CHUNKS_PER_SYNC : LINEAR_DEFAULT_CHUNKS_PER_SYNC;
-    // Count chunks the way the kernels issue them. Each repeat (a channel for dims 1-3, a batch for
-    // dim 0) is chunked on its own, so a repeat holding fewer than tile_granularity tiles still costs
-    // one whole chunk -- and one semaphore wait on the receiving side.
-    const uint32_t chunks_per_repeat = tt::div_up(tiles_per_worker_per_repeat, tile_granularity);
-    const uint32_t chunks_per_step = num_repeats * chunks_per_repeat;
+    // Count chunks the way the kernels issue them; a partial repeat still costs one whole chunk -- and
+    // one semaphore wait on the receiving side.
+    const uint32_t chunks_per_step =
+        reduce_scatter_chunks_per_step(tiles_per_worker_per_repeat, num_repeats, tile_granularity);
     uint32_t total_chunks = std::max(chunks_per_step / 2, (uint32_t)1);
     return std::min(default_value, total_chunks);
+}
+
+uint32_t reduce_scatter_chunks_per_step(
+    uint32_t tiles_per_worker_per_repeat, uint32_t num_repeats, uint32_t tile_granularity) {
+    return num_repeats * tt::div_up(tiles_per_worker_per_repeat, tile_granularity);
 }
 
 RingIntermStagingParams reduce_scatter_ring_interm_staging_params(

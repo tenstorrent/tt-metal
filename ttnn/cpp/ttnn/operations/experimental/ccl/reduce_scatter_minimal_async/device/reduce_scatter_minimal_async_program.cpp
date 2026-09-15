@@ -852,10 +852,15 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         topology, tiles_per_worker_per_repeat, num_repeats, tile_granularity));
                 if (!chunks_per_sync.has_value() && normalized_dim != 0 && !fuse_op) {
                     // The dims 1-3 kernels carry the worker's whole share of the slice per step; see the
-                    // constant's comment for why their default interval is capped and dim 0's and the fused
-                    // path's are not.
+                    // constants' comments for why their default interval is capped, why a short step syncs
+                    // on every chunk, and why dim 0 and the fused path are exempt.
+                    const uint32_t chunks_per_step = ttnn::experimental::ccl::reduce_scatter_chunks_per_step(
+                        tiles_per_worker_per_repeat, num_repeats, tile_granularity);
                     chunks_per_sync_val =
-                        std::min(chunks_per_sync_val, ttnn::experimental::ccl::RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC);
+                        chunks_per_step <= ttnn::experimental::ccl::RING_UNIT_STEP_SHORT_STEP_CHUNKS
+                            ? 1
+                            : std::min(
+                                  chunks_per_sync_val, ttnn::experimental::ccl::RING_UNIT_STEP_MAX_CHUNKS_PER_SYNC);
                 }
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
