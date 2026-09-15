@@ -5,7 +5,9 @@
 
 import json
 import os
+import queue
 import signal
+import threading
 import time
 from typing import Optional
 
@@ -93,6 +95,9 @@ assert not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv, (
     f"params.tp_shard_kv to the cache allocators, so writes would be TP-sharded into TP-replicated caches."
 )
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
+# Per-chunk end-of-compute stamps via ttnn events, on a watcher thread. Unlike SYNC_PER_CHUNK this
+# does NOT synchronize the loop -- see _ChunkEndWatcher. Default on; set 0 to get the old behaviour.
+CHUNK_END_EVENTS = os.environ.get("PREFILL_CHUNK_END_EVENTS", "1") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
@@ -302,8 +307,91 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         pass
 
 
+class _ChunkEndWatcher:
+    """Stamps when each chunk's compute ACTUALLY completed on device, without blocking the loop.
+
+    The problem this exists to solve: an unbounded serving loop only learns a chunk was the LAST one
+    when the shutdown sentinel arrives, which on a pipeline is after every upstream rank has run
+    `_forward_shutdown`. Stamping at that moment therefore measures
+    `max(own completion, sentinel arrival)`. Measured on Mistral Small 4 with a 100%-warm kernel
+    cache: rank 0's `_forward_shutdown` cost 516 ms, so the last rank's stamp was 451 ms late and a
+    one-chunk PP=4 request read 0.949 s against a true ~0.497 s.
+
+    So don't stamp at the end -- stamp continuously. `record_event` is a cheap host-side enqueue on
+    the compute CQ, and `event_synchronize` releases the GIL, so a watcher thread can block on each
+    chunk's completion and record the time it happened while the main loop keeps issuing work. The
+    last stamp is then the honest end of compute no matter how late the sentinel is.
+
+    It is also what finally makes per-chunk intervals MEASURED rather than reconstructed: every
+    chunk gets a real end, so N chunks give N durations instead of N-1 differences of start stamps.
+
+    Degrades safely: any failure disables it and the caller falls back to the sentinel-time stamp.
+    """
+
+    def __init__(self, mesh_device, rank: int):
+        self._mesh_device = mesh_device
+        self._rank = rank
+        self._q: "queue.Queue" = queue.Queue()
+        self.last_end: Optional[float] = None
+        self.failed: Optional[str] = None
+        self._thread = threading.Thread(target=self._run, name=f"chunk-end-watcher-{rank}", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            item = self._q.get()
+            if item is None:
+                self._q.task_done()
+                return
+            c, ev = item
+            try:
+                ttnn.event_synchronize(ev)
+                now = time.time()
+                self.last_end = now
+                logger.info(f"[pp rank {self._rank}] CHUNK_END c={c} compute_end={now:.6f}")
+            except Exception as e:  # never let instrumentation kill a run
+                self.failed = f"{type(e).__name__}: {e}"
+                logger.warning(f"[pp rank {self._rank}] chunk-end watcher disabled: {self.failed}")
+            finally:
+                self._q.task_done()
+
+    def record(self, c: int) -> None:
+        """Enqueue an event marking completion of everything issued so far on the compute CQ."""
+        if self.failed:
+            return
+        try:
+            self._q.put((c, ttnn.record_event(self._mesh_device)))
+        except Exception as e:
+            self.failed = f"{type(e).__name__}: {e}"
+            logger.warning(f"[pp rank {self._rank}] chunk-end watcher disabled at record: {self.failed}")
+
+    def drain(self, timeout_s: float = 300.0) -> Optional[float]:
+        """Block until every queued chunk has been stamped, then return the last end time.
+
+        This DOES wait on the device -- but only for work that was already issued, which is exactly
+        the thing being measured. It is not the sentinel, and it is not shutdown.
+        """
+        if self.failed:
+            return None
+        self._q.put(None)
+        self._thread.join(timeout=timeout_s)
+        if self._thread.is_alive():
+            logger.warning(f"[pp rank {self._rank}] chunk-end watcher did not drain in {timeout_s}s")
+            return None
+        return self.last_end
+
+
 def _compute_and_send(
-    runtime, kv_caches, rank: int, c: int, inp, meta: Optional[dict], d2d_out, d2h_service=None, metadata_msg=None
+    runtime,
+    kv_caches,
+    rank: int,
+    c: int,
+    inp,
+    meta: Optional[dict],
+    d2d_out,
+    d2h_service=None,
+    metadata_msg=None,
+    chunk_end_watcher=None,
 ) -> float:
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
@@ -321,6 +409,10 @@ def _compute_and_send(
         d2h_service=d2h_service,
         metadata_msg=metadata_msg,
     )
+    if chunk_end_watcher is not None:
+        # Immediately after the chunk's compute is issued and before the D2D forward, so the event
+        # marks END OF COMPUTE -- which is what E2E_CLOCK was documented to mean in #48351.
+        chunk_end_watcher.record(c)
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
@@ -344,12 +436,56 @@ def _compute_and_send(
     return t_start
 
 
-def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:
+def _stamp_last_chunk_end(runtime, rank: int, first_compute_start, n_done: int, watcher=None) -> float:
+    """Device-synchronised end of the last chunk's compute, stamped BEFORE shutdown and drain.
+
+    `_drain_and_log_e2e` runs after `_forward_shutdown` and after the fabric drain, so the
+    `last_compute_end` it stamps is not the end of compute -- it absorbs the shutdown sentinel's
+    D2D forward plus the drain. That is also why the last chunk's duration is otherwise
+    unobtainable: `_compute_and_send` returns the chunk's START, and `_record_chunk_timing` only
+    fires under SYNC_PER_CHUNK (which perf runs must not set, as it removes the overlap being
+    measured), so differencing CHUNK_START stamps gives N-1 intervals for N chunks -- and none at
+    all for a single-chunk request.
+
+    One synchronize, once per run, at a point where there is no more work to overlap.
+    """
+    watched = watcher.drain() if watcher is not None else None
+    ttnn.synchronize_device(runtime.mesh_device)
+    stamped_now = time.time()
+    # Prefer the watcher's stamp: it is WHEN the last chunk finished. `stamped_now` is only ever
+    # "by now", and on a pipeline it is inflated by however long the sentinel took to walk the
+    # ranks -- which is not this rank's work. Fall back when the watcher is unavailable.
+    source = "event" if watched is not None else "sentinel"
+    last_chunk_end = watched if watched is not None else stamped_now
+    fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
+    logger.info(
+        f"[pp rank {rank}] E2E_CLOCK_V2 first_compute_start={fcs} "
+        f"last_chunk_end={last_chunk_end:.6f} chunks={n_done} source={source}"
+    )
+    if watched is not None:
+        logger.info(
+            f"[pp rank {rank}] E2E_SENTINEL_LAG lag_ms={(stamped_now - watched) * 1000.0:.3f} "
+            f"(sentinel-time stamp minus true end of compute; not this rank's work)"
+        )
+    return last_chunk_end
+
+
+def _drain_and_log_e2e(
+    runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, last_chunk_end: Optional[float] = None
+) -> None:
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
-    logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
+    drain_end = time.time()
+    # Emitted unchanged so existing logs and analyzers stay comparable. It is a post-drain stamp,
+    # not the end of compute -- E2E_CLOCK_V2 above is. The gap between them is logged below.
+    logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={drain_end:.6f}")
+    if last_chunk_end is not None:
+        logger.info(
+            f"[pp rank {rank}] E2E_DRAIN_GAP gap_ms={(drain_end - last_chunk_end) * 1000.0:.3f} "
+            f"(E2E_CLOCK last_compute_end - E2E_CLOCK_V2 last_chunk_end)"
+        )
     logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
 
 
@@ -375,6 +511,13 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    last_chunk_end = None
+    watcher = None
+    if CHUNK_END_EVENTS:
+        try:
+            watcher = _ChunkEndWatcher(runtime.mesh_device, rank)
+        except Exception as e:
+            logger.warning(f"[pp rank {rank}] could not start the chunk-end watcher: {e}")
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -383,18 +526,28 @@ def run_request_loop(
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
+            last_chunk_end = _stamp_last_chunk_end(runtime, rank, first, c, watcher=watcher)
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
         t = _compute_and_send(
-            runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, metadata_msg=metadata_msg
+            runtime,
+            kv_caches,
+            rank,
+            c,
+            inp,
+            meta,
+            d2d_out,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            chunk_end_watcher=watcher,
         )
         if first is None:
             first = t
         c += 1
-    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, last_chunk_end)
 
 
 def _print_config() -> None:
@@ -408,6 +561,7 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
+        ("PREFILL_CHUNK_END_EVENTS", str(CHUNK_END_EVENTS)),
         (
             "DFLASH_ENABLED",
             f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
