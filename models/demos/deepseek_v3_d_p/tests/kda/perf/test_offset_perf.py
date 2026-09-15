@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Offset-handling cost at production K3 dimensions.
 
-Reports warm trace wall time per offset against the S=0 baseline so the two
-offset prototypes can be compared on identical measurements.
+Reports paired warm trace wall time per offset against the S=0 baseline.
 
 Timing is interleaved, not sequential. Measuring offsets one after another gave
 a 13.5% gap between two runs of the identical baseline, which is larger than
@@ -52,7 +51,7 @@ def _offset_sweep(local_rows: int) -> dict[str, int]:
 @pytest.mark.parametrize(
     "sequence",
     [
-        # 2560 rows per chip: LoudBox's own shape, where a split pins 4 groups to 1.
+        # 2560 rows per chip: LoudBox retains four groups, including across a split.
         pytest.param(_SEQUENCE, id="T5120-4groups"),
         # 640 rows per chip: one group natively, i.e. Galaxy SP8's per-chip geometry.
         pytest.param(_SEQUENCE // 4, id="T1280-1group"),
