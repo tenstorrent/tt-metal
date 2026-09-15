@@ -36,7 +36,9 @@ Or let it generate one through the demo pipeline first (needs a device)::
 
 Knobs: ``QWEN3_TTS_QA_SV``, ``QWEN3_TTS_QA_ASR`` (checkpoints),
 ``QWEN3_TTS_QA_SIM_MIN``, ``QWEN3_TTS_QA_WER_MAX`` (gates),
-``QWEN3_TTS_QA_REF`` (reference clip), ``QWEN3_TTS_QA_SEED``.
+``QWEN3_TTS_QA_REF`` (reference clip), ``QWEN3_TTS_QA_SEED``,
+``QWEN3_TTS_QA_METRICS`` (default ``sim,wer``; a metric's model is loaded only when
+that metric is asked for, so CI can run one without staging the other's checkpoint).
 
 On the gates
 ------------
@@ -121,46 +123,73 @@ class _Transcriber:
         return self.asr({"raw": wav, "sampling_rate": _SV_SR})["text"]
 
 
+def selected_metrics() -> set:
+    """Which of ``sim`` / ``wer`` to compute. Default both; CI narrows it.
+
+    The two are independent — SIM is WavLM, WER is Whisper, neither reads the other's
+    model — but they used to be coupled anyway, because ``score_clip`` built BOTH
+    scorers before using either. A checkpoint missing from the cache therefore took out
+    the other metric too: `microsoft/wavlm-base-plus-sv` failing to load meant WER never
+    ran, despite needing nothing from WavLM. Each is now built only if it is asked for.
+    """
+    raw = os.environ.get("QWEN3_TTS_QA_METRICS", "sim,wer")
+    want = {m.strip().lower() for m in raw.split(",") if m.strip()}
+    unknown = want - {"sim", "wer"}
+    if unknown or not want:
+        raise ValueError(f"QWEN3_TTS_QA_METRICS={raw!r}: expected a subset of 'sim,wer'")
+    return want
+
+
 def score_clip(generated_wav, target_text: str, reference_wav=DEFAULT_REF) -> Dict[str, object]:
-    """SIM + WER for one generated clip, plus the anchors that make SIM readable.
+    """SIM and/or WER for one clip, plus the anchors that make SIM readable.
 
     The anchors are the point: a bare cosine says nothing without knowing what this
     checkpoint gives for a true same-speaker pair and for a known non-match, so both
     are measured here on the caller's own reference clip.
+
+    Only the metrics in ``selected_metrics()`` are computed, and a metric's model is
+    loaded only when that metric is wanted — so one uncached checkpoint costs its own
+    number and nothing else. Keys for a metric that was not run are absent.
     """
-    import jiwer
-
-    sv = _SpeakerVerifier(os.environ.get("QWEN3_TTS_QA_SV", "microsoft/wavlm-base-plus-sv"))
-    asr = _Transcriber(os.environ.get("QWEN3_TTS_QA_ASR", "openai/whisper-large-v3"))
-
+    want = selected_metrics()
     ref, gen = _load(reference_wav), _load(generated_wav)
-    sim = sv.similarity(gen, ref)
-
-    hyp = _normalize(asr(gen))
-    ref_text = _normalize(target_text)
-    words = jiwer.process_words(ref_text, hyp)
-
-    half = len(ref) // 2
-    import librosa
-
-    anchors = {
-        "same speaker (reference, 1st vs 2nd half)": sv.similarity(ref[:half], ref[half:]),
-        "non-match (reference pitched +4 semitones)": sv.similarity(
-            librosa.effects.pitch_shift(ref, sr=_SV_SR, n_steps=4), ref
-        ),
-    }
-    return {
-        "sim": sim,
-        "wer": words.wer,
-        "substitutions": words.substitutions,
-        "deletions": words.deletions,
-        "insertions": words.insertions,
-        "hypothesis": hyp,
-        "reference_text": ref_text,
+    r: Dict[str, object] = {
+        "metrics": want,
         "duration_s": len(gen) / _SV_SR,
-        "words_per_s": len(hyp.split()) / (len(gen) / _SV_SR),
-        "anchors": anchors,
     }
+
+    if "sim" in want:
+        import librosa
+
+        sv = _SpeakerVerifier(os.environ.get("QWEN3_TTS_QA_SV", "microsoft/wavlm-base-plus-sv"))
+        half = len(ref) // 2
+        r["sim"] = sv.similarity(gen, ref)
+        r["anchors"] = {
+            "same speaker (reference, 1st vs 2nd half)": sv.similarity(ref[:half], ref[half:]),
+            "non-match (reference pitched +4 semitones)": sv.similarity(
+                librosa.effects.pitch_shift(ref, sr=_SV_SR, n_steps=4), ref
+            ),
+        }
+
+    if "wer" in want:
+        import jiwer
+
+        asr = _Transcriber(os.environ.get("QWEN3_TTS_QA_ASR", "openai/whisper-large-v3"))
+        hyp = _normalize(asr(gen))
+        ref_text = _normalize(target_text)
+        words = jiwer.process_words(ref_text, hyp)
+        r.update(
+            {
+                "wer": words.wer,
+                "substitutions": words.substitutions,
+                "deletions": words.deletions,
+                "insertions": words.insertions,
+                "hypothesis": hyp,
+                "reference_text": ref_text,
+                "words_per_s": len(hyp.split()) / (len(gen) / _SV_SR),
+            }
+        )
+    return r
 
 
 def _generate(tmp_path) -> tuple:
@@ -195,23 +224,32 @@ def test_voice_quality(tmp_path):
 
     print(f"\n  clip        {wav}")
     print(f"  reference   {reference}")
-    print(f"  duration    {r['duration_s']:.2f} s   {r['words_per_s']:.2f} words/s")
-    print(f"  SIM         {r['sim']:.4f}   (gate > {sim_min:.2f})")
-    for label, v in r["anchors"].items():
-        print(f"                {v:.4f}   {label}")
-    print(
-        f"  WER         {r['wer']*100:.1f} %   (gate < {wer_max*100:.0f} %)   "
-        f"sub {r['substitutions']} del {r['deletions']} ins {r['insertions']}"
-    )
-    print(f"  asked for   {r['reference_text']}")
-    print(f"  heard       {r['hypothesis']}")
+    print(f"  duration    {r['duration_s']:.2f} s", end="")
+    print(f"   {r['words_per_s']:.2f} words/s" if "wer" in r["metrics"] else "")
+    if "sim" in r["metrics"]:
+        print(f"  SIM         {r['sim']:.4f}   (gate > {sim_min:.2f})")
+        for label, v in r["anchors"].items():
+            print(f"                {v:.4f}   {label}")
+    else:
+        print("  SIM         not requested (QWEN3_TTS_QA_METRICS)")
+    if "wer" in r["metrics"]:
+        print(
+            f"  WER         {r['wer']*100:.1f} %   (gate < {wer_max*100:.0f} %)   "
+            f"sub {r['substitutions']} del {r['deletions']} ins {r['insertions']}"
+        )
+        print(f"  asked for   {r['reference_text']}")
+        print(f"  heard       {r['hypothesis']}")
+    else:
+        print("  WER         not requested (QWEN3_TTS_QA_METRICS)")
 
-    assert r["sim"] > sim_min, (
-        f"speaker similarity {r['sim']:.4f} <= {sim_min:.2f}: the generated voice no longer "
-        f"matches the reference speaker (non-match anchor "
-        f"{r['anchors']['non-match (reference pitched +4 semitones)']:.4f})"
-    )
-    assert r["wer"] < wer_max, (
-        f"WER {r['wer']*100:.1f}% >= {wer_max*100:.0f}%: words are being dropped or garbled.\n"
-        f"  asked for: {r['reference_text']}\n  heard    : {r['hypothesis']}"
-    )
+    if "sim" in r["metrics"]:
+        assert r["sim"] > sim_min, (
+            f"speaker similarity {r['sim']:.4f} <= {sim_min:.2f}: the generated voice no longer "
+            f"matches the reference speaker (non-match anchor "
+            f"{r['anchors']['non-match (reference pitched +4 semitones)']:.4f})"
+        )
+    if "wer" in r["metrics"]:
+        assert r["wer"] < wer_max, (
+            f"WER {r['wer']*100:.1f}% >= {wer_max*100:.0f}%: words are being dropped or garbled.\n"
+            f"  asked for: {r['reference_text']}\n  heard    : {r['hypothesis']}"
+        )

@@ -345,7 +345,23 @@
     set -e
     export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
     python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --text "Good morning. Today is a beautiful day for a walk in the park."
-    pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
+    # Score the wav the demo just produced, and pass the SAME text: unset, the gate
+    # regenerates its own clip on the device (a second full render) and scores it
+    # against the longer DEFAULT_TEXT, so the text must be handed over with the wav or
+    # WER is measured against words nobody asked for.
+    #
+    # WER only here. Both metrics run by default (and do locally), but they are scored
+    # by two CPU HuggingFace checkpoints that are NOT the TTS weights and are read from
+    # the SHARED cache above like everything else -- no HF_HOME redirect, no
+    # HF_HUB_OFFLINE override, nothing downloaded on a runner. WER needs only
+    # openai/whisper-large-v3, which this repo's Whisper demos already pull; SIM needs
+    # microsoft/wavlm-base-plus-sv (772 MB), which is not staged yet. Asking for `wer`
+    # loads Whisper alone, so the missing WavLM costs SIM and not the whole gate. Drop
+    # QWEN3_TTS_QA_METRICS once WavLM is staged in /mnt/MLPerf/huggingface.
+    QWEN3_TTS_QA_WAV=/tmp/qwen3_tts_ci.wav \
+    QWEN3_TTS_QA_TEXT="Good morning. Today is a beautiful day for a walk in the park." \
+    QWEN3_TTS_QA_METRICS=wer \
+      pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
   model: qwen3-tts-1.7b
   model_family: Qwen
   skus:
@@ -367,7 +383,23 @@
     set -e
     export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base MESH_DEVICE=N300
     python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --text "Good morning. Today is a beautiful day for a walk in the park."
-    pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
+    # Score the wav the demo just produced, and pass the SAME text: unset, the gate
+    # regenerates its own clip on the device (a second full render) and scores it
+    # against the longer DEFAULT_TEXT, so the text must be handed over with the wav or
+    # WER is measured against words nobody asked for.
+    #
+    # WER only here. Both metrics run by default (and do locally), but they are scored
+    # by two CPU HuggingFace checkpoints that are NOT the TTS weights and are read from
+    # the SHARED cache above like everything else -- no HF_HOME redirect, no
+    # HF_HUB_OFFLINE override, nothing downloaded on a runner. WER needs only
+    # openai/whisper-large-v3, which this repo's Whisper demos already pull; SIM needs
+    # microsoft/wavlm-base-plus-sv (772 MB), which is not staged yet. Asking for `wer`
+    # loads Whisper alone, so the missing WavLM costs SIM and not the whole gate. Drop
+    # QWEN3_TTS_QA_METRICS once WavLM is staged in /mnt/MLPerf/huggingface.
+    QWEN3_TTS_QA_WAV=/tmp/qwen3_tts_ci.wav \
+    QWEN3_TTS_QA_TEXT="Good morning. Today is a beautiful day for a walk in the park." \
+    QWEN3_TTS_QA_METRICS=wer \
+      pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
   model: qwen3-tts-1.7b
   model_family: Qwen
   skus:
@@ -568,10 +600,10 @@
   model_family: Gemma
   skus:
     wh_n150:
-      timeout: 20
+      timeout: 8
       tier: 3
     wh_n300:
-      timeout: 20
+      timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
