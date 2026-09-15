@@ -11,11 +11,85 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <utility>
+#include <vector>
 
 #include "metal/common/const_utils.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::metal::ops {
+
+// How the sequence is dealt to the chips of a ring.
+//
+// Contiguous: chip r holds chunk r of d. Natural for unmasked attention;
+// under a causal mask the work is skewed -- chip r meets d - 1 - r earlier
+// chunks and skips the later ones -- and every step runs at the pace of the
+// last chip, which does 2d - 1 times the work of the first.
+//
+// Zigzag: the sequence is 2d chunks and chip r holds chunks r and 2d - 1 - r,
+// stored back to back as its local sequence [chunk r | chunk 2d - 1 - r].
+// At every step exactly two of the four (local chunk, visiting chunk) pairs
+// are live on every chip, so the work is balanced and no chip ever skips.
+enum class RingLayout {
+    Contiguous,
+    Zigzag,
+};
+
+// The live chunk pairs of one zigzag step on one chip, for one mask mode.
+//
+// Local chunk 0 is r (the earlier one), local chunk 1 is 2d - 1 - r; the
+// visiting chunks are the source chip's, in the same order. With src the
+// source chip of this step (Backward direction: (r + step) mod d):
+//
+//   src == r:  (0, 0) and (1, 1) are causal triangles, (1, 0) a full block;
+//   src <  r:  (0, 0) and (1, 0) are full blocks;
+//   src >  r:  (1, 0) and (1, 1) are full blocks.
+//
+// A launch runs one mask mode, so the caller asks for the Causal pairs (only
+// the diagonal step has any) or the None pairs. `execute` is false when the
+// launch has nothing to do on this chip.
+struct ZigzagSubProblems {
+    bool execute{false};
+    std::vector<uint32_t> row_chunks{};
+    std::vector<uint32_t> col_chunks{};
+};
+
+inline ZigzagSubProblems zigzag_sub_problems(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    AttentionMaskType launch_mask,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction) {
+    const uint32_t r = device_ring_id;
+    uint32_t src = 0;
+    if (ring_direction == ttnn_fixed::distributed::RingShiftDirection::Backward) {
+        src = (r + step) % ring_size;
+    } else {
+        src = (r + ring_size - (step % ring_size)) % ring_size;
+    }
+    ZigzagSubProblems out;
+    const auto add = [&](uint32_t row, uint32_t col) {
+        out.execute = true;
+        out.row_chunks.push_back(row);
+        out.col_chunks.push_back(col);
+    };
+    if (launch_mask == AttentionMaskType::Causal) {
+        if (src == r) {
+            add(0, 0);
+            add(1, 1);
+        }
+        return out;
+    }
+    if (src == r) {
+        add(1, 0);
+    } else if (src < r) {
+        add(0, 0);
+        add(1, 0);
+    } else {
+        add(1, 0);
+        add(1, 1);
+    }
+    return out;
+}
 
 // Determine if a device should execute at this ring step and which mask type to use.
 // Shared by the ring_sdpa_fw and ring_sdpa_bw program factories, which must agree on

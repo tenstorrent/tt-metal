@@ -4,6 +4,8 @@
 
 #include "cyclic_sdpa_bw_device_operation.hpp"
 
+#include <algorithm>
+
 #include <enchantum/enchantum.hpp>
 
 #include "core/tt_tensor_utils.hpp"
@@ -83,15 +85,60 @@ void CyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(t->dtype()));
     }
 
+    const uint32_t chunks = args.sequence_chunks;
+    TT_FATAL(chunks >= 1U, "cyclic_sdpa_bw: sequence_chunks must be at least 1, got {}", chunks);
+    TT_FATAL(
+        N % chunks == 0U,
+        "cyclic_sdpa_bw: the sequence of {} rows must split into {} equal chunks",
+        N,
+        chunks);
+    TT_FATAL(
+        args.row_chunks.size() == args.col_chunks.size(),
+        "cyclic_sdpa_bw: row_chunks and col_chunks name the sub-problems pairwise and must have the same "
+        "length; got {} and {}",
+        args.row_chunks.size(),
+        args.col_chunks.size());
+    for (size_t p = 0; p < args.row_chunks.size(); ++p) {
+        TT_FATAL(
+            args.row_chunks[p] < chunks && args.col_chunks[p] < chunks,
+            "cyclic_sdpa_bw: sub-problem {} names chunks ({}, {}) of {}",
+            p,
+            args.row_chunks[p],
+            args.col_chunks[p],
+            chunks);
+    }
+    // Two sub-problems of one launch must not share a chunk on either side.
+    // They run as independent slices, side by side on different groups or
+    // one after the other on the same one, and nothing orders one slice's
+    // final dQ spills or dK, dV write-backs before another slice's reads of
+    // the same rows: the two would race, or the second would start from the
+    // first's result where the caller expected a sum. The caller issues such
+    // pairs as separate launches instead.
+    for (size_t p = 0; p < args.row_chunks.size(); ++p) {
+        for (size_t q = p + 1; q < args.row_chunks.size(); ++q) {
+            TT_FATAL(
+                args.row_chunks[p] != args.row_chunks[q] && args.col_chunks[p] != args.col_chunks[q],
+                "cyclic_sdpa_bw: sub-problems {} ({}, {}) and {} ({}, {}) share a chunk; slices of one launch "
+                "run independently and would race on it. Issue them as separate launches.",
+                p,
+                args.row_chunks[p],
+                args.col_chunks[p],
+                q,
+                args.row_chunks[q],
+                args.col_chunks[q]);
+        }
+    }
+    const auto pairs = static_cast<uint32_t>(std::max<size_t>(1, args.row_chunks.size()));
+
     // The layout planner carries the rest of the constraints -- that the
-    // sequence length divides into whole cores, that a rectangle of that area
+    // chunk length divides into whole cores, that a rectangle of that area
     // embeds the parity snake, and that the slices fit the grid -- and reports
     // each with the arithmetic that produced it.
     (void)plan_layout(
         query.device()->compute_with_storage_grid_size(),
-        N,
+        N / chunks,
         args.rows_per_block_tiles,
-        static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]),
+        static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]) * pairs,
         args.max_groups);
 }
 
@@ -165,7 +212,10 @@ ttml_cyclic_sdpa_bw(
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value,
-    uint32_t max_groups) {
+    uint32_t max_groups,
+    uint32_t sequence_chunks,
+    const std::vector<uint32_t>& row_chunks,
+    const std::vector<uint32_t>& col_chunks) {
     using OperationType = ttml::metal::ops::cyclic_sdpa_bw::device::CyclicSDPABackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -173,7 +223,10 @@ ttml_cyclic_sdpa_bw(
         .mask_type = mask_type,
         .use_barrier = use_barrier,
         .accumulate_into_outputs = accumulate_into_outputs,
-        .max_groups = max_groups};
+        .max_groups = max_groups,
+        .sequence_chunks = sequence_chunks,
+        .row_chunks = row_chunks,
+        .col_chunks = col_chunks};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,
         .key = key,

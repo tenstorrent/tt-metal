@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 #include "ring_cyclic_sdpa_bw_device_operation_types.hpp"
 #include "ring_cyclic_sdpa_bw_program_factory.hpp"
@@ -50,6 +51,7 @@ ttml_ring_cyclic_sdpa_bw(
     bool accumulate_into_outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
+    ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous);
 
 }  // namespace ttnn::prim

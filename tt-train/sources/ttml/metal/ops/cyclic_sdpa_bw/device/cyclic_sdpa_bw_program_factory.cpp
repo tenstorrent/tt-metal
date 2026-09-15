@@ -151,12 +151,24 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
 
     auto* device = query.device();
     const auto shape = query.logical_shape();
-    const uint32_t slices = static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]);
-    const uint32_t N = static_cast<uint32_t>(shape[2]);
+    // Sub-problems: chunk pairs of the local sequence, each one slice. The
+    // schedule's N is a chunk, not the whole sequence.
+    const uint32_t chunks = std::max(1U, args.sequence_chunks);
+    const uint32_t pairs = static_cast<uint32_t>(std::max<size_t>(1, args.row_chunks.size()));
+    const uint32_t slices = static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]) * pairs;
+    const uint32_t N = static_cast<uint32_t>(shape[2]) / chunks;
     const uint32_t d = static_cast<uint32_t>(shape[3]);
 
     const auto layout = plan_layout(
         device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, args.max_groups);
+    // The pair table the kernels decode a slice with: pairs x (row chunk,
+    // column chunk). Appended after everything else so the address slots
+    // that override_runtime_arguments patches stay where they are.
+    std::vector<uint32_t> pair_table = {chunks, pairs};
+    for (uint32_t p = 0; p < pairs; ++p) {
+        pair_table.push_back(args.row_chunks.empty() ? 0U : args.row_chunks[p]);
+        pair_table.push_back(args.col_chunks.empty() ? 0U : args.col_chunks[p]);
+    }
     const uint32_t C = layout.cores_per_group;
     const uint32_t Bt = args.rows_per_block_tiles;
     const uint32_t qWt = d / kTile;
@@ -349,14 +361,16 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
             const uint32_t slice_count = slices_of_group(layout, g);
             rt.push_back(slice_count);
             rt.push_back(layout.groups);
+            rt.insert(rt.end(), pair_table.begin(), pair_table.end());
             SetRuntimeArgs(program, reader, core, rt);
-            SetRuntimeArgs(
-                program, writer, core,
-                {c, g, grad_key.buffer()->address(), grad_value.buffer()->address(),
-                 static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
-                 static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
-                 static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
-                 c == 1U ? 1U : 0U, slice_count, layout.groups});
+            std::vector<uint32_t> wt = {
+                c, g, grad_key.buffer()->address(), grad_value.buffer()->address(),
+                static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
+                static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
+                static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
+                c == 1U ? 1U : 0U, slice_count, layout.groups};
+            wt.insert(wt.end(), pair_table.begin(), pair_table.end());
+            SetRuntimeArgs(program, writer, core, wt);
             SetRuntimeArgs(program, compute, core, {c, slice_count});
         }
     }

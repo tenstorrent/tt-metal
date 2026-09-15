@@ -156,6 +156,14 @@ void kernel_main() {
     // launch carry more slices than the grid has rectangles for.
     const uint32_t slice_count = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores);
     const uint32_t slice_stride = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 1u);
+    // Sub-problems as chunk pairs. Every tensor's sequence is `chunks` equal
+    // chunks of T = 2C blocks, and slice sl is (batch x head) sl / pairs
+    // running pair sl % pairs: its query-side tensors (Q, dO, L, D, dQ) come
+    // from chunk row_chunk, its key-side ones (K, V, dK, dV) from col_chunk.
+    // With one chunk and one pair this is the op as it was.
+    const uint32_t chunks = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 2u);
+    const uint32_t pairs = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 3u);
+    const uint32_t pair_table_arg = core_coords_arg + 2u * kCores + 4u;
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
     constexpr uint32_t vWt = get_compile_time_arg_val(2);
     constexpr uint32_t release_sem_id = get_compile_time_arg_val(3);
@@ -242,11 +250,14 @@ void kernel_main() {
     const uint32_t stride_grad_output = val_tiles * tile_bytes;
     const uint32_t stride_interm = Bt * interm_bytes;
     const uint32_t stride_grad_query = row_tiles * grad_bytes;
-    // T = 2C blocks of Bt tiles each, so a slice is 2 * kCores * Bt tile rows.
-    // Per slice; set at the top of each slice below.
+    // T = 2C blocks of Bt tiles each, so a chunk is 2 * kCores * Bt tile rows.
+    // Per slice; set at the top of each slice below. The row bases address
+    // the query-side tensors, the column bases the key-side ones.
     uint32_t row_base = 0;
     uint32_t val_base = 0;
     uint32_t stat_base = 0;
+    uint32_t col_row_base = 0;
+    uint32_t col_val_base = 0;
 
     volatile tt_l1_ptr uint32_t* release_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(release_sem_id));
@@ -341,10 +352,16 @@ void kernel_main() {
     // front. Increments are atomic and order-independent, so this needs no
     // synchronisation of its own.
     for (uint32_t s = 0; s < slice_count; ++s) {
-    const uint32_t bh = first_slice + s * slice_stride;
-    row_base = bh * 2u * kCores * row_tiles;
-    val_base = bh * 2u * kCores * val_tiles;
-    stat_base = bh * 2u * kCores * Bt;
+    const uint32_t sl = first_slice + s * slice_stride;
+    const uint32_t bh = sl / pairs;
+    const uint32_t pair = sl % pairs;
+    const uint32_t row_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * pair);
+    const uint32_t col_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * pair + 1u);
+    row_base = (bh * chunks + row_chunk) * 2u * kCores * row_tiles;
+    val_base = (bh * chunks + row_chunk) * 2u * kCores * val_tiles;
+    stat_base = (bh * chunks + row_chunk) * 2u * kCores * Bt;
+    col_row_base = (bh * chunks + col_chunk) * 2u * kCores * row_tiles;
+    col_val_base = (bh * chunks + col_chunk) * 2u * kCores * val_tiles;
     visited[0] = false;
     visited[1] = false;
 
@@ -386,8 +403,8 @@ void kernel_main() {
         // operations using that storage complete before it is reused.
         const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != j);
         if (column_changed) {
-            read_tiles_by_row(cb_key, key, row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
-            read_tiles_by_row(cb_value, value, val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
+            read_tiles_by_row(cb_key, key, col_row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
+            read_tiles_by_row(cb_value, value, col_val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
         }
 
         // Accumulated column gradients are needed only where an interval
@@ -412,9 +429,11 @@ void kernel_main() {
                 } while ((*release_sem) < g);
 #endif
                 WAYPOINT("COLD");
-                read_tiles_by_row(cb_grad_key_seed, grad_key, row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
                 read_tiles_by_row(
-                    cb_grad_value_seed, grad_value, val_base + (j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
+                    cb_grad_key_seed, grad_key, col_row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+                read_tiles_by_row(
+                    cb_grad_value_seed, grad_value, col_val_base + (j - 1u) * val_tiles, val_tiles, grad_bytes,
+                    val_tiles);
             }
             visited[owned_slot] = true;
         }

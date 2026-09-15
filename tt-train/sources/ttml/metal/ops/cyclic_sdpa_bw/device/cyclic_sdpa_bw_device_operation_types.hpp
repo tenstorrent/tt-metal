@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
@@ -41,6 +43,23 @@ struct CyclicSDPABackwardParams {
     // The groups run the remaining slices in turn either way; the cap exists
     // so a test can force that loop at a size where every slice would fit.
     uint32_t max_groups{0U};
+
+    // Sub-problems within the local sequence. The sequence of every tensor is
+    // read as `sequence_chunks` equal chunks, and sub-problem p attends the
+    // query rows (with dO, lse, D and dQ) of chunk row_chunks[p] to the key
+    // rows (with V, dK and dV) of chunk col_chunks[p]. Every sub-problem runs
+    // the launch's mask mode, and each is one more slice for the planner to
+    // deal out, so a launch carries batch x heads x pairs slices. Empty means
+    // the one pair (0, 0) on a single chunk, which is the op as it was. Two
+    // pairs of one launch may not share a chunk on either side: slices run
+    // independently and nothing orders one's writes before another's reads.
+    //
+    // This is what a zigzag ring step needs: a chip holding two chunks of the
+    // sequence meets two visiting chunks, and exactly two of the four chunk
+    // pairs are live -- which two depends on the chip.
+    uint32_t sequence_chunks{1U};
+    std::vector<uint32_t> row_chunks{};
+    std::vector<uint32_t> col_chunks{};
 };
 
 struct CyclicSDPABackwardInputs {

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <optional>
 #include <tuple>
 
@@ -43,7 +45,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
-    uint32_t max_groups = 0U);
+    uint32_t max_groups = 0U,
+    // Sub-problems as chunk pairs; see CyclicSDPABackwardParams. The default
+    // is the whole sequence against itself.
+    uint32_t sequence_chunks = 1U,
+    const std::vector<uint32_t>& row_chunks = {},
+    const std::vector<uint32_t>& col_chunks = {});
 
 // The same thing, taking what a forward pass actually hands back.
 //
