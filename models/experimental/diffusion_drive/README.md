@@ -415,41 +415,45 @@ failing if it does not match.
 
 ## 8. Usage
 
+Both assets below come from `scripts/prepare_assets.py`. Load the pretrained
+checkpoint — constructing `DiffusionDriveModel(cfg)` directly gives **random
+weights**, which still produce a well-formed trajectory that is meaningless.
+
 ```python
 import torch
 import ttnn
-from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, DiffusionDriveModel
 from models.experimental.diffusion_drive.tt.config import ModelConfig
 from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
+
+DATA = "models/experimental/diffusion_drive/data"
 
 # Open device (l1_small_size required for ttnn.conv2d)
 device = ttnn.open_device(device_id=0, l1_small_size=32768)
 
-# Build reference model (requires prepare_assets.py)
-cfg = DiffusionDriveConfig(
-    plan_anchor_path="models/experimental/diffusion_drive/data/kmeans_navsim_traj_20.npy"
+# Load pretrained weights and install the full on-device stack in one call.
+# from_checkpoint raises if the checkpoint is missing; build=True (the default)
+# runs build_all, so every weight-bearing op is on TTNN when this returns.
+model_config = ModelConfig(plan_anchor_path=f"{DATA}/kmeans_navsim_traj_20.npy")
+ttnn_model = TtnnDiffusionDriveModel.from_checkpoint(
+    f"{DATA}/diffusiondrive_navsim.pth", model_config, device, latent=False
 )
-ref_model = DiffusionDriveModel(cfg).eval()
 
-# Build the full on-device model (every weight-bearing op on TTNN)
-model_config = ModelConfig()
-ttnn_model = (
-    TtnnDiffusionDriveModel(ref_model, model_config, device)
-    .build_stage2(device)      # ResNet-34 BasicBlocks
-    .build_stage3(device)      # + FPN
-    .build_stage3_4(device)    # + perception head
-    .build_stage3_5(device)    # + DDIM denoiser
-    .build_stage3_6(device)    # + ResNet stems + GPT fusion (needs production resolution)
-    .build_stage3_7(device)    # + agent-head MLPs
-    .build_stage4(device)      # consolidate perception + decoder on-device
-)
+# build_all is the chain below; call the stages yourself only to stop part-way:
+#   .build_stage2(device)      # ResNet-34 BasicBlocks
+#   .build_stage3(device)      # + FPN
+#   .build_stage3_4(device)    # + perception head
+#   .build_stage3_5(device)    # + DDIM denoiser
+#   .build_stage3_6(device)    # + ResNet stems + GPT fusion (needs production resolution)
+#   .build_stage3_7(device)    # + agent-head MLPs
+#   .build_stage4(device)      # consolidate perception + decoder on-device
+
 # Traced fast path: open the device with trace_region_size=256*1024*1024, then call
 # model.compile() once and model.execute_compiled(features) per call (see §5).
 
 # Inference — reset seed before each call so DDIM noise is reproducible
 features = {
     "camera_feature": torch.randn(1, 3, 256, 1024),
-    "lidar_feature":  torch.zeros(1, 1, 256, 256),
+    "lidar_feature":  torch.randn(1, 1, 256, 256),   # real BEV in production
     "status_feature": torch.zeros(1, 8),
 }
 torch.manual_seed(1234)
