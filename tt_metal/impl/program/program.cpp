@@ -121,8 +121,8 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type =
-        resolve_dispatch_core_type(MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
+    tt::CoreType dispatch_core_type = resolve_dispatch_core_type(
+        MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -163,7 +163,7 @@ void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
     const auto& env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
-    jit_build_genfiles_descriptors(env, build_options);
+    jit_build_genfiles_descriptors(env, build_options, *kernel);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
     } else {
@@ -324,7 +324,7 @@ std::string ensure_kernel_binaries(
 
     jit_build_once(kernel_hash, [&] {
         try {
-            jit_build_genfiles_descriptors(build_env.build_env, build_options);
+            jit_build_genfiles_descriptors(build_env.build_env, build_options, *kernel);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error& ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
@@ -2256,10 +2256,9 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
@@ -2297,10 +2296,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
 void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(mesh_device))
-            .get_device_build_env(mesh_device->build_id())
-            .build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+                               .get_device_build_env(mesh_device->build_id())
+                               .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }

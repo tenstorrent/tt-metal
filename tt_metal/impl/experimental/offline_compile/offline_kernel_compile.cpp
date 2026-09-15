@@ -112,7 +112,7 @@ void generate_kernel_binaries_offline(
     const uint32_t processor_class_idx =
         static_cast<std::underlying_type_t<HalProcessorClassType>>(kernel->get_kernel_processor_class());
 
-    jit_build_genfiles_descriptors(device_build_env.build_env, build_options);
+    jit_build_genfiles_descriptors(device_build_env.build_env, build_options, *kernel);
 
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(device_build_env.build_env, *kernel, kernel->kernel_source());

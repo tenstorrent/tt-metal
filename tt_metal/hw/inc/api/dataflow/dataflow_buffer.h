@@ -162,9 +162,15 @@ public:
 #endif
 
 #ifdef DFB_DESCRIPTORS_DEFINED
+#if defined(TTLANG_RUNTIME_DFB_RECONFIGURATION)
+#define TTLANG_DFB_DESCRIPTOR_GETTER
+#else
+#define TTLANG_DFB_DESCRIPTOR_GETTER constexpr
+#endif
+
     // JIT descriptor values from chlkc_descriptors.h (indexed by logical_dfb_id_).
     // PACK TRISC uses pack_* arrays; UNPACK/MATH TRISC and DM use unpack_*.
-    constexpr uint32_t get_tile_size() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_tile_size() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_tile_size[logical_dfb_id_];
 #else
@@ -172,7 +178,7 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_tile_r_dim() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_tile_r_dim() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_tile_r_dim[logical_dfb_id_];
 #else
@@ -180,7 +186,7 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_tile_c_dim() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_tile_c_dim() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_tile_c_dim[logical_dfb_id_];
 #else
@@ -188,9 +194,9 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_tile_hw() const { return get_tile_r_dim() * get_tile_c_dim(); }
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_tile_hw() const { return get_tile_r_dim() * get_tile_c_dim(); }
 
-    constexpr uint32_t get_tile_num_faces() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_tile_num_faces() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_tile_num_faces[logical_dfb_id_];
 #else
@@ -198,7 +204,7 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_face_r_dim() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_face_r_dim() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_tile_face_r_dim[logical_dfb_id_];
 #else
@@ -206,7 +212,7 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_partial_face() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_partial_face() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_partial_face[logical_dfb_id_];
 #else
@@ -214,7 +220,7 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_narrow_tile() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_narrow_tile() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_narrow_tile[logical_dfb_id_];
 #else
@@ -222,7 +228,7 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_num_faces_r_dim() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_num_faces_r_dim() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_num_faces_r_dim[logical_dfb_id_];
 #else
@@ -230,7 +236,7 @@ public:
 #endif
     }
 
-    constexpr uint32_t get_num_faces_c_dim() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_num_faces_c_dim() const {
 #if defined(UCK_CHLKC_PACK)
         return pack_num_faces_c_dim[logical_dfb_id_];
 #else
@@ -238,7 +244,7 @@ public:
 #endif
     }
 
-    constexpr DataFormat get_dataformat() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER DataFormat get_dataformat() const {
 #if defined(UCK_CHLKC_PACK)
         return static_cast<DataFormat>(pack_dst_format[logical_dfb_id_]);
 #else
@@ -247,25 +253,26 @@ public:
     }
 
 #if !defined(UCK_CHLKC_PACK)
-    constexpr DataFormat get_unpack_dst_format() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER DataFormat get_unpack_dst_format() const {
         return static_cast<DataFormat>(unpack_dst_format[logical_dfb_id_]);
     }
 #endif
 
 // pack_* format arrays are only emitted for PACK TRISC and DM (see genfiles.cpp).
 #if defined(UCK_CHLKC_PACK) || (!defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK))
-    constexpr DataFormat get_pack_src_format() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER DataFormat get_pack_src_format() const {
         return static_cast<DataFormat>(pack_src_format[logical_dfb_id_]);
     }
 #endif
 
 #if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)
-    constexpr DataFormat get_pack_dst_format() const {
+    TTLANG_DFB_DESCRIPTOR_GETTER DataFormat get_pack_dst_format() const {
         return static_cast<DataFormat>(pack_dst_format[logical_dfb_id_]);
     }
 #endif
 
-#endif // DFB_DESCRIPTORS_DEFINED
+#undef TTLANG_DFB_DESCRIPTOR_GETTER
+#endif  // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
 // This can be enabled on Quasar once GH issue #49608 is resolved.
@@ -284,9 +291,9 @@ public:
     void finish() { finish_impl(); }
 
 #ifndef COMPILE_FOR_TRISC
-    // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transaction ids are not tracked.
-    // Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
-    void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
+    // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the
+    // transaction ids are not tracked. Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
+    void write_barrier(const Noc& noc) const { write_barrier_impl(noc); }
 #endif
 
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
@@ -313,9 +320,9 @@ private:
     void pop_front_impl(uint16_t num_entries);
     void finish_impl();
     uint32_t get_write_ptr_impl() const;
-    uint32_t get_read_ptr_impl()  const;
+    uint32_t get_read_ptr_impl() const;
 #ifndef COMPILE_FOR_TRISC
-    void write_barrier_impl(const Noc &noc) const;
+    void write_barrier_impl(const Noc& noc) const;
 #endif
 
 #ifdef ARCH_QUASAR
@@ -330,16 +337,14 @@ private:
 
     uint32_t prepare_implicit_write();
     void commit_implicit_write();
-#endif // !COMPILE_FOR_TRISC
-#endif // ARCH_QUASAR
+#endif  // !COMPILE_FOR_TRISC
+#endif  // ARCH_QUASAR
 
     void release_scoped_lock() {
         // TODO: Unregister with the debugger
     }
 
-    constexpr uint32_t address_units_to_bytes(uint32_t units) const {
-        return units << cb_addr_shift;
-    }
+    constexpr uint32_t address_units_to_bytes(uint32_t units) const { return units << cb_addr_shift; }
 
     uint16_t logical_dfb_id_;
 
@@ -366,7 +371,6 @@ private:
 
 template <>
 struct noc_traits_t<DataflowBuffer> {
-
     // Alias the struct defined in noc.h so that noc_traits_t<DataflowBuffer>::src/dst_args_type
     // stays consistent with the DFB-specific Noc overload signatures.
     using src_args_type = DataflowBufferArgs;

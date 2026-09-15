@@ -275,9 +275,15 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
 
 #ifdef DATA_FORMATS_DEFINED
 
+#if defined(TTLANG_RUNTIME_DFB_RECONFIGURATION)
+#define TTLANG_DFB_DESCRIPTOR_GETTER inline
+#else
+#define TTLANG_DFB_DESCRIPTOR_GETTER constexpr inline
+#endif
+
 // this API is used by both the reader and writer side of the CB
 // it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
-constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
+TTLANG_DFB_DESCRIPTOR_GETTER std::int32_t get_tile_size(const std::int32_t operand) {
     std::uint32_t input = operand;
 
     // L1 16B words
@@ -287,20 +293,21 @@ constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
     return num_words;
 }
 
-constexpr inline uint32_t get_tile_hw(const std::int32_t operand) {
+TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_tile_hw(const std::int32_t operand) {
     std::uint32_t input = operand;
     return (uint32_t)unpack_tile_r_dim[input] * (uint32_t)unpack_tile_c_dim[input];
 }
 
-constexpr inline uint32_t get_tile_num_faces(const std::int32_t operand) {
+TTLANG_DFB_DESCRIPTOR_GETTER uint32_t get_tile_num_faces(const std::int32_t operand) {
     std::uint32_t input = operand;
     return (uint32_t)unpack_tile_num_faces[input];
 }
 
-constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
+TTLANG_DFB_DESCRIPTOR_GETTER DataFormat get_dataformat(const std::int32_t operand) {
     return static_cast<DataFormat>((uint)unpack_src_format[operand]);
 }
 
+#undef TTLANG_DFB_DESCRIPTOR_GETTER
 #endif
 
 // clang-format off
