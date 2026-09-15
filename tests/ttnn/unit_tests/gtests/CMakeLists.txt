@@ -1,5 +1,47 @@
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
 
+# TTNN test PCH: TTNN::PCHFull's content plus gtest/gmock and the heavy tensor/distributed
+# headers every ttnn gtest TU parses. Compiled once, reused by the test targets below.
+add_library(ttnn_test_pch STATIC)
+add_library(TTNN::TestPCH ALIAS ttnn_test_pch)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_test_pch.cpp CONTENT "/*dummy ttnn test pch file*/\n")
+target_sources(ttnn_test_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_test_pch.cpp)
+target_precompile_headers(
+    ttnn_test_pch
+    PUBLIC
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <algorithm>
+        <cstddef>
+        <cstdint>
+        <functional>
+        <map>
+        <memory>
+        <optional>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+        <gtest/gtest.h>
+        <gmock/gmock.h>
+        <tt-metalium/host_api.hpp>
+        <tt-metalium/distributed.hpp>
+        <ttnn/device_operation.hpp>
+        <ttnn/operation.hpp>
+        <ttnn/tensor/tensor.hpp>
+        <ttnn/types.hpp>
+)
+target_link_libraries(
+    ttnn_test_pch
+    PUBLIC
+        test_common_libs
+        TTNN::CPP
+)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(ttnn_test_pch)
+endif()
+
 add_library(test_common_utils STATIC)
 # PRIVATE so consumers that link `test_common_utils` do not also recompile this
 # source file into their own OBJECT library (which would produce duplicate
@@ -12,7 +54,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(test_common_utils TTNN::PCHFull)
+tt_reuse_precompile_headers(test_common_utils TTNN::TestPCH)
 
 function(setup_ttnn_test_target target_name)
     target_link_libraries(
@@ -27,7 +69,7 @@ function(setup_ttnn_test_target target_name)
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    tt_reuse_precompile_headers(${target_name} TTNN::PCHFull)
+    tt_reuse_precompile_headers(${target_name} TTNN::TestPCH)
 endfunction()
 
 # unit_tests_ttnn
@@ -52,7 +94,7 @@ target_link_libraries(
         test_common_utils
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_smoke TTNN::PCHFull)
+tt_reuse_precompile_headers(unit_tests_ttnn_smoke TTNN::TestPCH)
 
 add_library(unit_tests_ttnn_basic OBJECT)
 add_library(TTNN::Test::Basic ALIAS unit_tests_ttnn_basic)
@@ -66,7 +108,7 @@ target_link_libraries(
         test_common_utils
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::PCHFull)
+tt_reuse_precompile_headers(unit_tests_ttnn_basic TTNN::TestPCH)
 
 add_executable(unit_tests_ttnn)
 target_link_libraries(
@@ -88,7 +130,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_ccl_lib TTNN::PCHFull)
+tt_reuse_precompile_headers(unit_tests_ttnn_ccl_lib TTNN::TestPCH)
 
 add_executable(unit_tests_ttnn_ccl)
 target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
@@ -110,7 +152,7 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
-tt_reuse_precompile_headers(unit_tests_ttnn_ccl_ops_lib TTNN::PCHFull)
+tt_reuse_precompile_headers(unit_tests_ttnn_ccl_ops_lib TTNN::TestPCH)
 
 add_executable(unit_tests_ttnn_ccl_ops)
 target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)

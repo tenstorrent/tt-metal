@@ -97,6 +97,11 @@ struct dp_typed_array_t {
     dp_typed_array_t(uint16_t type, uint32_t* ptr) : ptr(ptr), type(type) {}
 };
 
+// Prints T's fully-qualified name, resolved at compile time. Tag type: the name string is allocated
+// in .device_print_strings by the serializer, so nothing is carried here.
+template <typename T>
+struct dp_type_name_t {};
+
 struct dp_top_callstack_t {
     std::uintptr_t pc;
     std::uintptr_t ra;
@@ -257,10 +262,12 @@ void device_print_dispatcher_execute_hook();
 
 namespace device_print_detail {
 
-// Forward declarations needed by register_string_info.
+// Forward declarations needed by register_string_info and register_type_name_string.
 namespace formatting {
 template <std::size_t N, typename... Args>
 constexpr auto update_format_string(const char (&format)[N]);
+template <typename T>
+constexpr auto get_type_name_string();
 }
 
 // Helper to invoke a callable with arguments copied by value.
@@ -302,6 +309,15 @@ static std::uintptr_t register_string_info() {
         __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {
             allocated_string.data(), allocated_file_string.data(), Tag::line()};
     return reinterpret_cast<std::uintptr_t>(&allocated_string_info);
+}
+
+// Allocates T's name in .device_print_strings and returns the pointer. `static` for the same
+// internal-linkage reason as register_string_info.
+template <typename T>
+static const char* register_type_name_string() {
+    static constexpr auto kTypeName = formatting::get_type_name_string<T>().to_array();
+    static const auto allocated_type_name __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = kTypeName;
+    return allocated_type_name.data();
 }
 
 template <typename BufferType>
@@ -363,15 +379,6 @@ struct static_string {
         arr[size] = '\0';
         return arr;
     }
-
-    // Helper to create a compact array of the actual used size
-    template <std::size_t... Is>
-    constexpr std::array<char, sizeof...(Is)> to_compact_array_impl(std::index_sequence<Is...>) const {
-        return {{data[Is]...}};
-    }
-
-    // Returns an array sized exactly to fit the string content (size + 1 for null terminator)
-    constexpr auto to_compact_array() const { return to_compact_array_impl(std::make_index_sequence<size + 1>{}); }
 
     template <std::size_t M>
     constexpr bool check(const char (&expected)[M]) const {
@@ -1004,6 +1011,14 @@ struct device_print_type<dp_typed_array_t<len>> {
     }
 };
 
+template <typename T>
+struct device_print_type<dp_type_name_t<T>> {
+    static constexpr device_print_type_info value = device_print_type<ct_string>::value;
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, dp_type_name_t<T>) {
+        device_print_type<ct_string>::serialize(device_print_buffer, offset, ct_string{register_type_name_string<T>()});
+    }
+};
+
 template <>
 struct device_print_type<dp_top_callstack_t> {
     static_assert(
@@ -1094,34 +1109,46 @@ constexpr std::array<uint32_t, sizeof...(Args)> get_arg_offsets() {
     return arg_offset;
 }
 
-// Extracts the fully-qualified type name from __PRETTY_FUNCTION__ at compile time.
-// GCC format: "... [with T = test::deep::Enum1]"
+// Extracts the fully-qualified type name from __PRETTY_FUNCTION__ at compile time. The result is
+// sized exactly to the name, so to_array() yields a compact copy.
 template <typename T>
 constexpr auto get_type_name_string() {
-#if defined(__GNUC__)
-    constexpr const char* fn = __PRETTY_FUNCTION__;
-#else
+#if !defined(__GNUC__)
     static_assert(false, "get_type_name_string requires __PRETTY_FUNCTION__ (GCC/Clang)");
 #endif
-    std::size_t fn_len = 0;
-    while (fn[fn_len] != '\0') {
-        fn_len++;
-    }
-
-    // Search for "T = " in "[with T = TypeName]"
-    std::size_t name_start = 0;
-    for (std::size_t i = 0; i + 3 < fn_len; i++) {
-        if (fn[i] == 'T' && fn[i + 1] == ' ' && fn[i + 2] == '=' && fn[i + 3] == ' ') {
-            name_start = i + 4;
-            break;
+    // Locates the type name in a __PRETTY_FUNCTION__ of the form "... [with T = test::deep::Enum1]",
+    // returning it as {start, length}.
+    constexpr auto find_type_name = [](const char* fn) {
+        std::size_t fn_len = 0;
+        while (fn[fn_len] != '\0') {
+            fn_len++;
         }
-    }
-    // End is at ']' (last char before null, or ';' for multiple template params)
-    std::size_t name_end = fn_len - 1;
 
-    helpers::static_string<1024> result;
-    for (std::size_t i = name_start; i < name_end; i++) {
-        result.push_back(fn[i]);
+        // Search for "T = " in "[with T = TypeName]"
+        std::size_t start = 0;
+        for (std::size_t i = 0; i + 3 < fn_len; i++) {
+            if (fn[i] == 'T' && fn[i + 1] == ' ' && fn[i + 2] == '=' && fn[i + 3] == ' ') {
+                start = i + 4;
+                break;
+            }
+        }
+
+        // The name ends at the first ';' — GCC appends "; other = ..." when the signature names further
+        // template params or typedefs — or, when there is none, at the trailing ']'.
+        std::size_t end = start;
+        while (end < fn_len && fn[end] != ';') {
+            end++;
+        }
+        return std::tuple<std::size_t, std::size_t>{start, (end == fn_len ? fn_len - 1 : end) - start};
+    };
+
+    constexpr auto type_name = find_type_name(__PRETTY_FUNCTION__);
+    constexpr std::size_t start = std::get<0>(type_name);
+    constexpr std::size_t length = std::get<1>(type_name);
+
+    helpers::static_string<length> result;
+    for (std::size_t i = 0; i < length; i++) {
+        result.push_back(__PRETTY_FUNCTION__[start + i]);
     }
     return result;
 }
@@ -1571,6 +1598,13 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
         return 0;
     }
 
+    // Check if we should reset buffer (happening usually during startup).
+    if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+        device_print_buffer->aux.wpos = 0;
+        device_print_buffer->aux.rpos = 0;
+        return 0;
+    }
+
     // Check if there is enough space for the message until end of the buffer.
     if (write_position + message_size > sizeof(device_print_buffer->data)) {
         // It is important not to perform wrap around while reader position is at the beginning of the buffer,
@@ -1671,7 +1705,7 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
     }
 
     // Check if there is enough space between wpos and rpos
-    if (write_position < read_position) {
+    if (write_position < read_position && write_position + message_size >= read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
         // Mark that we are in stall waiting for reader

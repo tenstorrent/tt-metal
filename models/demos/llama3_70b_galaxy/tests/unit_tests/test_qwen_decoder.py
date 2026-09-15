@@ -25,7 +25,6 @@ from models.common.utility_functions import (
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
-    IS_BLACKHOLE as _IS_BLACKHOLE,
     DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
 )
 
@@ -83,14 +82,13 @@ def test_llama_decoder_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    if _IS_BLACKHOLE:
-        # Blackhole bring-up runs the unit test without the runtime prefetcher.
-        model_args.use_prefetcher = False
     model_args.n_layers = 1
+    # Prefetcher is on for Wormhole; on Blackhole it is opt-in (CI yamls export QWEN_BH_PREFETCHER=1).
+    use_prefetcher = model_args.use_prefetcher
 
     state_dict = model_args.load_state_dict()
 
-    if _IS_BLACKHOLE:
+    if not use_prefetcher:
         prefetcher_setup = None
         worker_sub_device_id = None
     else:
@@ -199,7 +197,7 @@ def test_llama_decoder_inference(
         ),
     )
     # Explicitly allocate global CB to avoid memory fragmentation
-    if not _IS_BLACKHOLE:
+    if use_prefetcher:
         prefetcher_setup.create_global_cb()
 
     for i in range(generation_length):
@@ -216,7 +214,7 @@ def test_llama_decoder_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rm_rot_mats(current_pos)
-        if not _IS_BLACKHOLE:
+        if use_prefetcher:
             tt_pf = prefetcher_setup.get_input_tensors()
             ttnn.dram_prefetcher(
                 tt_pf,

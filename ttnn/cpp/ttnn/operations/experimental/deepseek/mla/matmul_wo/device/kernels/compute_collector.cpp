@@ -38,9 +38,9 @@ void kernel_main() {
     reconfig_data_format_srcb(cb_s2c_in2_id);
     pack_reconfig_data_format(cb_s2c_out_id);
 
-    binary_op_init_common(cb_s2c_in2_id, cb_s2c_in2_id, cb_s2c_out_id);
+    compute_kernel_hw_startup(cb_s2c_in2_id, cb_s2c_in2_id, cb_s2c_out_id);
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id);
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id);
 
     cb_s2c_out.reserve_back(num_iters);
 
@@ -49,7 +49,7 @@ void kernel_main() {
 
         tile_regs_acquire();
         for (uint32_t k = 0; k < num_cores; ++k) {
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                 cb_s2c_in2_id, k, 0 /*dst_tile_index*/);
         }
         tile_regs_commit();

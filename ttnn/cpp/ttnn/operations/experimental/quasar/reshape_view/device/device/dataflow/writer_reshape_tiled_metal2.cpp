@@ -21,7 +21,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
-#include "api/debug/dprint.h"  // [#48552 DEBUG] reshape_tiled DM->DM root-cause
 #include "experimental/kernel_args.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -50,8 +49,6 @@ void kernel_main() {
 
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
-    uint32_t dbg_waits = 0, dbg_pops = 0;                                  // [#48552 DEBUG]
-    DPRINT("RWR start op=[{},{})\n", start_output_page, end_output_page);  // [#48552 DEBUG]
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
         mapping_cb.wait_front(1);
         const uint32_t map_addr = mapping_cb.get_read_ptr();
@@ -67,28 +64,12 @@ void kernel_main() {
                 input_base_addr = input_cb.get_read_ptr();
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
                 first = false;
-                DPRINT(
-                    "RWR op={} wait#{} in_pg={} raddr={} (first)\n",
-                    output_page_idx,
-                    dbg_waits,
-                    previous_input_page_idx,
-                    input_base_addr);
-                dbg_waits++;  // [#48552 DEBUG]
-
             } else if (map_ptr[seg_idx].input_page_index != previous_input_page_idx) {
                 noc.async_write_barrier();
                 input_cb.pop_front(1);
-                dbg_pops++;  // [#48552 DEBUG]
                 input_cb.wait_front(1);
                 input_base_addr = input_cb.get_read_ptr();
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
-                DPRINT(
-                    "RWR op={} wait#{} in_pg={} raddr={} (chg)\n",
-                    output_page_idx,
-                    dbg_waits,
-                    previous_input_page_idx,
-                    input_base_addr);
-                dbg_waits++;  // [#48552 DEBUG]
             }
             // TODO (maybe) pre calculate size and offsets in bytes on host
             const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
@@ -110,7 +91,5 @@ void kernel_main() {
     if (!first) {
         noc.async_write_barrier();
         input_cb.pop_front(1);
-        dbg_pops++;  // [#48552 DEBUG]
     }
-    DPRINT("RWR END waits={} pops={}\n", dbg_waits, dbg_pops);  // [#48552 DEBUG]
 }

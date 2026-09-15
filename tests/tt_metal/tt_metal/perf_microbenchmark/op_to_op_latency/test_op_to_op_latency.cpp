@@ -679,7 +679,7 @@ BuiltProgram build_program(
         core_list.assign(full_order.begin() + off, full_order.begin() + off + want);
     }
     if (cfg.log_core_map) {
-        const auto did = mesh_device->get_devices()[0]->id();
+        const auto did = mesh_device->get_device_ids()[0];
         const auto& sd = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(did);
         for (const auto& c : core_list) {
             const auto p = sd.get_physical_tensix_core_from_logical(c);  // matches profiler core_x/core_y
@@ -1086,7 +1086,6 @@ int main(int argc, char** argv) {
 
         const bool rt_profiler_active = tt::tt_metal::experimental::IsProgramRealtimeProfilerActive();
 
-        constexpr uint8_t kCqId = 0;
         long long elapsed_us = 0;
         const char* mode_label = nullptr;
 
@@ -1106,21 +1105,18 @@ int main(int argc, char** argv) {
             // it's a one-time setup cost that is amortised when the same
             // trace is replayed many times in real workloads.
             //
-            // Note: BeginTraceCapture is the only trace API exposed as a free
-            // distributed:: function; end / replay / release are MeshDevice
-            // member methods.
-            const distributed::MeshTraceId tid = distributed::BeginTraceCapture(mesh_device.get(), kCqId);
+            const distributed::MeshTraceId tid = mesh_device->begin_mesh_trace(cq);
             for (uint32_t i = 0; i < cfg.num_programs; ++i) {
                 const uint32_t program_index = i + 1;
                 launch(program_index, program_index);
                 distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
             }
-            mesh_device->end_mesh_trace(kCqId, tid);
+            mesh_device->end_mesh_trace(cq, tid);
             distributed::Finish(cq);  // make sure capture is fully committed before timing
 
             // Untimed replays warm up the trace path; we measure the steady-state replay.
             for (uint32_t replay = 0; replay < cfg.trace_warmup_replays; ++replay) {
-                mesh_device->replay_mesh_trace(kCqId, tid, /*blocking=*/false);
+                mesh_device->replay_mesh_trace(cq, tid, /*blocking=*/false);
                 distributed::Finish(cq);
                 if (cfg.use_device_profiler) {
                     // Flush device profiler so warmup markers do not pollute the timed replay.
@@ -1135,7 +1131,7 @@ int main(int argc, char** argv) {
             {
                 RealtimeProfilerDrainGuard rt_guard(mesh_device.get(), cfg.use_realtime_profiler, rt_profiler_active);
                 const auto t_begin = std::chrono::steady_clock::now();
-                mesh_device->replay_mesh_trace(kCqId, tid, /*blocking=*/false);
+                mesh_device->replay_mesh_trace(cq, tid, /*blocking=*/false);
                 distributed::Finish(cq);
                 const auto t_end = std::chrono::steady_clock::now();
                 elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_begin).count();

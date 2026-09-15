@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,14 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 #include <numeric>
@@ -64,12 +67,27 @@ Tensor pre_sort_transform_tensor(
     Tensor padded_tensor = transformed_tensor;
     const bool is_row_major = (transformed_tensor.layout() == Layout::ROW_MAJOR);
 
+    // UINT16 cannot represent ±inf.  Use UINT16_MAX (65535) as the sentinel for ascending
+    // (sorts past all real values) and 0 for descending (sorts after all real values).
+    // For all other dtypes use ±inf as before.
+    //
+    // Known limitation: 0 and 65535 are valid UINT16 values, so these sentinels
+    // can collide with real input data.  If the input contains 65535 (ascending)
+    // or 0 (descending) and the last dimension needs W-padding to the next power
+    // of two, a padded element with the same sentinel value could sort into the
+    // sliced result, producing an index that points outside the original
+    // sort dimension.  In practice the primary use case (position indices
+    // bounded well below 65535) is not affected, but full-range UINT16 inputs
+    // may see incorrect indices for tied values at the boundary.
+    const bool is_uint16_input = (input_tensor.dtype() == DataType::UINT16);
+    const float pad_ascending = is_uint16_input ? 65535.0f : std::numeric_limits<float>::infinity();
+    const float pad_descending = is_uint16_input ? 0.0f : -std::numeric_limits<float>::infinity();
+    const float pad_fill = descending ? pad_descending : pad_ascending;
+
     if (!is_row_major) {
         // TILE layout: fill the implicit tile-row padding so the bitonic sort
-        // ignores it (pads with ±inf).
-        padded_tensor = ttnn::fill_implicit_tile_padding(
-            transformed_tensor,
-            descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity());
+        // ignores it (pads with ±inf or UINT16 sentinel).
+        padded_tensor = ttnn::fill_implicit_tile_padding(transformed_tensor, pad_fill);
     } else {
         // ROW_MAJOR: the kernel processes rows in groups of TILE_HEIGHT (32).
         // If combined_h (= shape[0]*shape[1]*shape[2]) is not a multiple of
@@ -87,7 +105,7 @@ Tensor pre_sort_transform_tensor(
                 padded_tensor,
                 ttnn::Array4D({lshape_4d[0], lshape_4d[1], new_h, lshape_4d[3]}),
                 ttnn::Array4D({0, 0, 0, 0}),
-                descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
+                pad_fill,
                 /*use_multicore=*/true);
         }
     }
@@ -110,7 +128,7 @@ Tensor pre_sort_transform_tensor(
         padded_tensor,
         ttnn::Array4D({padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
         ttnn::Array4D({0, 0, 0, 0}),
-        descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
+        pad_fill,
         /*use_multicore=*/true);
 }
 
@@ -203,16 +221,60 @@ std::vector<Tensor> post_sort_transform_tensor(
     return result;
 }
 
-bool validate_optional_output_tensors_for_early_exit(
-    const std::optional<std::tuple<Tensor, Tensor>>& optional_output_tensors, const Shape& original_lshape) {
+// Follows the preallocated-output rules in sort_device_operation.cpp, so the
+// composite early exits enforce the same contract as the dispatched path.
+void validate_preallocated_output_tensors(
+    const std::optional<std::tuple<Tensor&, Tensor&>>& optional_output_tensors,
+    const Shape& original_lshape,
+    const DataType input_dtype) {
     if (!optional_output_tensors.has_value()) {
-        return false;
+        return;
     }
 
-    auto output_tensor_0 = std::get<0>(optional_output_tensors.value());
-    auto output_tensor_1 = std::get<1>(optional_output_tensors.value());
+    const auto& values = std::get<0>(*optional_output_tensors);
+    const auto& indices = std::get<1>(*optional_output_tensors);
 
-    return output_tensor_0.logical_shape() == original_lshape && output_tensor_1.logical_shape() == original_lshape;
+    TT_FATAL(ttnn::is_device_tensor(values), "Preallocated sort values tensor must be on device");
+    TT_FATAL(ttnn::is_device_tensor(indices), "Preallocated sort indices tensor must be on device");
+
+    TT_FATAL(
+        values.logical_shape() == original_lshape,
+        "Preallocated sort output tensors must match the input shape {}, got values shape {}",
+        original_lshape,
+        values.logical_shape());
+    TT_FATAL(
+        indices.logical_shape() == original_lshape,
+        "Preallocated sort output tensors must match the input shape {}, got indices shape {}",
+        original_lshape,
+        indices.logical_shape());
+
+    TT_FATAL(
+        values.dtype() == input_dtype,
+        "Preallocated sort values tensor dtype must match the input dtype {}, got {}",
+        input_dtype,
+        values.dtype());
+    TT_FATAL(
+        indices.dtype() == DataType::UINT16 || indices.dtype() == DataType::UINT32,
+        "Preallocated sort indices tensor dtype must be UINT16 or UINT32, got {}",
+        indices.dtype());
+    if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT16) {
+        TT_FATAL(
+            indices.dtype() == DataType::UINT32,
+            "Preallocated sort indices tensor dtype must be UINT32 when input dtype is FLOAT32 or UINT16, got {}",
+            indices.dtype());
+    }
+}
+
+std::vector<Tensor> fill_preallocated_early_exit_outputs(
+    const Tensor& input_tensor, std::optional<std::tuple<Tensor&, Tensor&>>& optional_output_tensors) {
+    auto& values = std::get<0>(*optional_output_tensors);
+    auto& indices = std::get<1>(*optional_output_tensors);
+    // ttnn::copy requires matching layouts.
+    const Tensor source =
+        input_tensor.layout() == values.layout() ? input_tensor : ttnn::to_layout(input_tensor, values.layout());
+    ttnn::copy(source, values);
+    ttnn::zeros_like(input_tensor, indices.dtype(), indices.layout(), std::nullopt, indices.memory_config(), indices);
+    return {values, indices};
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -229,43 +291,62 @@ std::vector<Tensor> sort(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
-    TT_FATAL(!stable, "ttnn::sort: stable=True is not yet implemented.");
-
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     const auto rank = input_tensor.logical_shape().rank();
 
-    // FLOAT32 inputs require UINT32 indices (device-side validation enforces this for the
-    // non-early-exit path; keep early exits consistent).
-    const DataType index_dtype = (input_tensor.dtype() == DataType::FLOAT32) ? DataType::UINT32 : DataType::UINT16;
+    // FLOAT32 and UINT16 inputs require UINT32 indices: both run with
+    // fp32_dest_acc_en=true in the sort kernel (device-side validation enforces
+    // this for the non-early-exit path; keep early exits consistent).
+    const bool idx_is_uint32 = (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16);
+    const DataType index_dtype = idx_is_uint32 ? DataType::UINT32 : DataType::UINT16;
 
-    // Check for early exit for scalar or empty tensors tensors
-    if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
-        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
-        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
-                optional_output_tensors, original_lshape)) {
-            std::get<0>(*optional_output_tensors) = input_tensor;
-            std::get<1>(*optional_output_tensors) = indices;
-            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
-        }
-        return {input_tensor, indices};
-    }
+    operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_preallocated_output_tensors(
+        optional_output_tensors, original_lshape, input_tensor.dtype());
 
     TT_FATAL(
-        dim >= -static_cast<int8_t>(rank) && dim < static_cast<int8_t>(rank),
+        (dim >= -static_cast<int8_t>(rank) && dim < static_cast<int8_t>(rank)) ||
+            (rank == 0 && (dim == 0 || dim == -1)),
         "Sort dim {} is out of range for rank-{} tensor",
         dim,
         rank);
 
-    const int32_t normalized_dim = dim < 0 ? static_cast<int32_t>(rank) + dim : dim;
-    if (original_lshape[normalized_dim] == 1) {
-        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
-        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
-                optional_output_tensors, original_lshape)) {
-            std::get<0>(*optional_output_tensors) = input_tensor;
-            std::get<1>(*optional_output_tensors) = indices;
-            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
+    // Check for early exit for scalar tensors
+    if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
+        if (optional_output_tensors.has_value()) {
+            return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::fill_preallocated_early_exit_outputs(
+                input_tensor, optional_output_tensors);
         }
-        return {input_tensor, indices};
+        return {
+            ttnn::clone(input_tensor, std::nullopt, memory_config, std::nullopt),
+            ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config)};
+    }
+
+    const int32_t normalized_dim = dim < 0 ? static_cast<int32_t>(rank) + dim : dim;
+
+    // Zero-size tensors: torch.sort returns empty values/indices of the input
+    // shape, so early-exit with empty tensors here. The prim's validate rejects
+    // empty tensors (its program factories cannot build zero-work programs) —
+    // that TT_FATAL stays as the backstop for direct prim callers. Checked
+    // after the dim-range validation above so an out-of-range dim still
+    // raises, matching torch.
+    if (original_lshape.volume() == 0) {
+        // Zero volume: nothing to write into a preallocated pair.
+        if (optional_output_tensors.has_value()) {
+            return {std::get<0>(*optional_output_tensors), std::get<1>(*optional_output_tensors)};
+        }
+        return {
+            ttnn::clone(input_tensor, std::nullopt, memory_config, std::nullopt),
+            ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config)};
+    }
+
+    if (original_lshape[normalized_dim] == 1) {
+        if (optional_output_tensors.has_value()) {
+            return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::fill_preallocated_early_exit_outputs(
+                input_tensor, optional_output_tensors);
+        }
+        return {
+            ttnn::clone(input_tensor, std::nullopt, memory_config, std::nullopt),
+            ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config)};
     }
 
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);

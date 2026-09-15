@@ -3,18 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Ahead-of-model probe: does the Option-B two-program split (UnpackToDestEn tilize + matmul) scale to the
-layer2/layer3 conv2 CHANNEL COUNTS, i.e. to larger K, ahead of running the full model?
+Ahead-of-model probe: does the two-program split (tilize + matmul) scale to the layer2/layer3 conv2
+CHANNEL COUNTS, i.e. to larger K, ahead of running the full model?
 
 The stem conv is in_ch=32 (K = 32*3*3-ish / for the folded 4x4 stem K = 32*4*4 = 16 tiles). The bottleneck
 conv2's are 3x3 at growing widths:
   layer1 conv2: 64 -> 64   (K = 64*3*3  = 576  = 18 tiles)
   layer2 conv2: 128 -> 128 (K = 128*3*3 = 1152 = 36 tiles)
   layer3 conv2: 256 -> 256 (K = 256*3*3 = 2304 = 72 tiles)
-Bigger K => more tilize blocks (the split's Program A tilizes M x full_K, num_blocks scaled by filter_h), which
-is exactly what stresses the UNPACK_TO_DEST dvalid ring in the unpack-to-dest tilize. This probe runs those K
-sizes through the split at a SMALL spatial size (out 8x8) so they fit the emulator, isolating K/channel scaling
-from the spatial-size / L1 pressure.
+Bigger K => more tilize blocks (the split's Program A tilizes M x full_K, num_blocks scaled by filter_h).
+This probe runs those K sizes through the split at a SMALL spatial size (out 8x8) so they fit the emulator,
+isolating K/channel scaling from the spatial-size / L1 pressure.
 
 ALL cases here are HEIGHT_SHARDED + full_inner_dim so they route to the split path (the factory
 split_program_tilize_only gate needs height_sharded + in0_num_blocks_w==1). NOTE the model runs layer3/4 conv2
@@ -22,11 +21,10 @@ BLOCK_SHARDED — the split path does NOT cover block-sharding yet, so this prob
 height-sharding to test the tilize/matmul K-scaling independently of that separate block-sharded gap.
 
 DEPENDENCY: needs the split fix actually working end-to-end first (test_conv2d_split_program_e2e.py::..._pure
-green). While that is blocked (e.g. the UNPACK_TO_DEST 0x19), these will fault too — they are the "does the fix
-hold as K grows" gate, expected to come online right after the stem e2e passes.
+green).
 
-Run (both split flags):
-  TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 TT_METAL_QSR_TILIZE_UNPACK_TO_DEST=1 \
+Run:
+  TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 \
   TT_METAL_SIMULATOR=~/sim/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
     pytest -s models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_split_program_layers.py
   # -k 128to128  (layer2) or -k 256to256 (layer3) to isolate one.
@@ -87,9 +85,8 @@ def _run_split_conv(mesh_device, *, in_channels, out_channels):
         device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True
     )
 
-    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST")}
+    saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM",)}
     os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
-    os.environ["TT_METAL_QSR_TILIZE_UNPACK_TO_DEST"] = "1"
     try:
         out, [oh, ow], _wb = ttnn.experimental.quasar.conv2d(
             input_tensor=tt_input,

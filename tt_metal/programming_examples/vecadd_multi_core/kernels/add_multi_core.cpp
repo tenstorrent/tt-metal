@@ -30,11 +30,11 @@ void kernel_main() {
 
     // Tell the SFPU that we will be using circular buffers c_in0, c_in1 and
     // c_out0 to perform the computation.
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
     // And we are going to add tiles. This function is only called if we ever
     // need to switch operation to something else. Since we are only adding
     // tiles, this function is only called once before the loop.
-    add_tiles_init(cb_in0, cb_in1);
+    add_init(cb_in0, cb_in1);
 
     // Calculate the range of tiles this core should process
     const uint32_t end_tile_id = start_tile_id + n_tiles;

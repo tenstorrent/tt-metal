@@ -90,7 +90,8 @@ ALWI void process_tile(
         // packer for llk_post, so this is belt-and-suspenders.)
         pack_init(dfb_llk_post_id);
 #endif
-        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id, dfb_llk_post_id);
+        reconfig_data_format(dfb_raw_row_id, dfb_raw_row_id);
+        unary_bcast_init<BroadcastType::ROW>(dfb_raw_row_id);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_raw_row_id, 0, 0);
@@ -108,11 +109,6 @@ ALWI void process_tile(
         // the gasket-only pack_reconfig above leaves the ring on llk_post and pack_tile(0, out) writes the
         // wrong buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.
         pack_init(dfb_out_id);
-#endif
-#if defined(ARCH_BLACKHOLE)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #endif
 
         // ROW operand's activation chain (reads the expanded llk_post tile). No-op (post aliases llk_post)
@@ -179,9 +175,9 @@ void kernel_main() {
     constexpr auto dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    binary_op_init_common(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     // freq/tile_start reuse loop: freq = Wt tiles per COL broadcast, tile_start is the per-core column

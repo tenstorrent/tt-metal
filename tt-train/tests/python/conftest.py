@@ -4,7 +4,14 @@
 
 """Pytest configuration for TTML Python tests."""
 
+import os
+import pathlib
+from typing import Optional
+
 import pytest
+
+import ttnn
+import ttml
 
 
 def pytest_configure(config):
@@ -17,8 +24,6 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     """Skip device-requiring tests if no device is available."""
-    import pathlib
-
     device_available = (
         any(pathlib.Path("/dev/tenstorrent/").iterdir()) if pathlib.Path("/dev/tenstorrent/").exists() else False
     )
@@ -28,3 +33,110 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "requires_device" in item.keywords:
                 item.add_marker(skip_device)
+
+
+# ---------------------------------------------------------------------------
+# Shared [1, 2] tensor-parallel mesh
+# ---------------------------------------------------------------------------
+#
+# One definition for every module that wants this shape, instead of the copy that used
+# to sit in each of them.
+#
+# Deliberately module-scoped, not session-scoped. Holding the mesh open for the whole
+# session is much faster -- closing it invalidates the JIT cache, so a reopen costs a
+# full recompile (measured at 23 minutes for two modules that take ~20 seconds warm) --
+# but it also means the mesh outlives the module that asked for it, and sibling modules
+# that open a plain single device via ``AutoContext.open_device`` then fail with
+# "open_device was called after the device was created". Correctness first: release the
+# mesh at module teardown and pay the reopen.
+#
+# Making this session-scoped requires first teaching the single-device fixtures to
+# cooperate with an already-open mesh.
+
+TP_MESH_SHAPE = (1, 2)
+
+_TTML_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_MGD_FOR_ARCH_AND_SHAPE = {
+    ("blackhole", TP_MESH_SHAPE): os.path.join(_TTML_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
+    ("wormhole_b0", TP_MESH_SHAPE): os.path.join(_TTML_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
+}
+
+
+def _detect_arch() -> Optional[str]:
+    try:
+        name = ttnn.get_arch_name().lower()
+    except Exception:  # noqa: BLE001
+        return None
+    if "blackhole" in name:
+        return "blackhole"
+    if "wormhole_b0" in name:
+        return "wormhole_b0"
+    return None
+
+
+def _ensure_mgd_path(shape) -> Optional[str]:
+    """Point TT_MESH_GRAPH_DESC_PATH at a bundled descriptor unless the caller set one."""
+    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
+    if previous:
+        return previous
+    arch = _detect_arch()
+    if arch is None:
+        return previous
+    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
+    if candidate and os.path.isfile(candidate):
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
+    return previous
+
+
+def _restore_mgd_path(previous: Optional[str]) -> None:
+    if previous is None:
+        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
+    else:
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
+
+
+def _close_device_mesh_quietly() -> None:
+    try:
+        ttml.close_device_mesh()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@pytest.fixture(scope="module")
+def tp_mesh():
+    """A ``[1, 2]`` mesh with axes ``("dp", "tp")``, per requesting module.
+
+    Skips the requesting tests if two devices on the ``"tp"`` axis are unavailable.
+    The parallelism context is initialised here too, since the qwen3 model paths
+    resolve their TP size through it.
+    """
+    dp_expected, tp_expected = TP_MESH_SHAPE
+    previous_mgd = _ensure_mgd_path(TP_MESH_SHAPE)
+    _close_device_mesh_quietly()
+    try:
+        ttml.open_device_mesh(ttml.Mesh(TP_MESH_SHAPE, ("dp", "tp")))
+        ctx = ttml.autograd.AutoContext.get_instance()
+        if ctx.is_parallelism_context_initialized():
+            # ParallelismContext is a one-shot singleton with no reset hook, so an
+            # earlier module's may still be installed. It is only usable here if it
+            # describes this same shape -- reusing a mismatched one (a dp-enabled GRPO
+            # context, say) silently shards the model for the wrong device count
+            # instead of failing.
+            pctx = ctx.get_parallelism_context()
+            actual = (pctx.get_ddp_size(), pctx.get_tp_size())
+            if actual != (dp_expected, tp_expected):
+                raise RuntimeError(
+                    f"this process already installed a ParallelismContext for DP={actual[0]}, "
+                    f"TP={actual[1]} and it cannot be reset; needed DP={dp_expected}, TP={tp_expected}"
+                )
+        else:
+            ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
+    except Exception as e:  # noqa: BLE001
+        _close_device_mesh_quietly()
+        _restore_mgd_path(previous_mgd)
+        pytest.skip(f"needs a [{dp_expected}, {tp_expected}] 'tp' mesh: {e}")
+
+    yield ttml.mesh()
+
+    _close_device_mesh_quietly()
+    _restore_mgd_path(previous_mgd)

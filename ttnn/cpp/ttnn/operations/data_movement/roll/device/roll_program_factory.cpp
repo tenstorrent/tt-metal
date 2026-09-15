@@ -7,12 +7,14 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
 
 // Why ROW_MAJOR sharded roll needs a dedicated kernel instead of the slice + concat composite
 // used for interleaved roll:
@@ -421,7 +423,9 @@ RollPlan compute_roll_plan(
     // Per core: [dst_bank_id, dst_bank_base, num_src, (src0_bank_id, src0_addr)..., num_xfers,
     //            (src_slot, src_off, dst_off, copy_size, src_stride, dst_stride, num_rows) x N]
     auto build_runtime_args_dram_rm = [&](uint32_t dst_core_idx, const std::vector<RollTransferDesc>& descs) {
-        // Collect unique source shards (at most 2) and assign them to staging slots 0/1.
+        // Reader hard-codes 2 staging CBs (src0/src1) and `src_base[2]`; higher-dim rolls whose
+        // shard band straddles an outer-dim period can need 3+ sources. `roll.cpp` filters those
+        // via `dram_rm_roll_needs_extra_source_shards` before dispatch — assert as belt-and-braces.
         std::vector<uint32_t> src_shards;
         std::unordered_map<uint32_t, uint32_t> src_to_slot;
         for (const auto& td : descs) {
@@ -430,6 +434,12 @@ RollPlan compute_roll_plan(
                 src_shards.push_back(td.src_dram_shard_idx);
             }
         }
+        TT_ASSERT(
+            src_shards.size() <= 2,
+            "Native sharded roll DRAM RM: dst core {} needs {} src shards; caller should have filtered via "
+            "dram_rm_roll_needs_extra_source_shards.",
+            dst_core_idx,
+            src_shards.size());
         KernelDescriptor::CoreRuntimeArgs args;
         args.push_back(dram_bank_id(dst_core_idx));
         // dst bank base = output buffer address + shard offset, from the current buffer.
@@ -559,16 +569,107 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-void RollDeviceOperation::override_runtime_arguments(
+void RollShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const RollParams& operation_attributes,
+    const RollInputs& tensor_args,
+    Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Re-derive all per-dispatch state from the single source of truth (create_descriptor) for the
-    // current tensors and re-apply to the cached program -- no rebuild, still a cache hit.
-    auto desc = RollShardedProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+    // Buffer addresses and bank ids move per dispatch, so re-run the planner -- create_descriptor's own
+    // source of truth -- and write its args into the cached program instead of rebuilding it.
+    const RollPlan plan = compute_roll_plan(operation_attributes, tensor_args, tensor_return_value);
+    for (const auto& [core, args] : plan.per_core_args) {
+        auto& a = tt::tt_metal::GetRuntimeArgs(program, 0, core);
+        // The arg count encodes the transfer count, which padded_shape fixes and the hash keys on, so a
+        // mismatch means the key stopped matching the program -- never silently write a prefix.
+        TT_FATAL(
+            a.size() == args.size(),
+            "roll cache hit on core ({}, {}) expected {} runtime args, cached program has {}",
+            core.x,
+            core.y,
+            args.size(),
+            a.size());
+        for (uint32_t i = 0; i < args.size(); ++i) {
+            a[i] = args[i];
+        }
+    }
+
+    // L1 mode addresses data through the input/output-backed CBs; DRAM mode carries bank ids in the
+    // args above. CBs are matched positionally, and create_descriptor pushes input then output first.
+    if (!plan.is_dram) {
+        tt::tt_metal::ProgramDescriptor cb_addr_only;
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.input_buffer});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.output_buffer});
+        tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+    }
+}
+
+bool dram_rm_roll_needs_extra_source_shards(const Tensor& input, uint32_t shift, int32_t dim) {
+    // Only DRAM ROW_MAJOR sharded input can hit the reader's `src_base[2]` limit. Everything
+    // else routes through kernels that don't have this shape-dependent staging cap.
+    if (!input.is_sharded() || input.memory_config().buffer_type() != BufferType::DRAM ||
+        input.layout() != Layout::ROW_MAJOR || !input.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shape = input.padded_shape();
+    const uint32_t rank = shape.rank();
+    if (dim < 0 || static_cast<uint32_t>(dim) >= rank) {
+        return false;
+    }
+    // Last-dim rolls rotate columns within a fixed row → at most 2 src column-shards, never 3+.
+    if (static_cast<uint32_t>(dim) == rank - 1) {
+        return false;
+    }
+
+    const auto& ss = input.shard_spec().value();
+    const uint32_t shard_cells_h = ss.shape[0];
+    const uint32_t shard_cells_w = ss.shape[1];
+    const uint32_t W_cells = shape[rank - 1];
+    std::vector<uint32_t> rd(rank, 1);
+    uint32_t H_cells = 1;
+    for (uint32_t i = 0; i + 1 < rank; i++) {
+        rd[i] = shape[i];
+        H_cells *= rd[i];
+    }
+    // Not a valid native shape; the real fatal will fire in compute_roll_plan.
+    if (shard_cells_w == 0 || shard_cells_h == 0 || W_cells % shard_cells_w != 0 ||
+        H_cells % shard_cells_h != 0) {
+        return false;
+    }
+
+    std::vector<uint32_t> row_stride(rank, 0);
+    {
+        uint32_t s = 1;
+        for (int32_t k = static_cast<int32_t>(rank) - 2; k >= 0; k--) {
+            row_stride[k] = s;
+            s *= rd[k];
+        }
+    }
+    const uint32_t dim_size_cells = (static_cast<uint32_t>(dim) == rank - 2) ? rd[dim] : shape[dim];
+    if (dim_size_cells == 0 || (shift % dim_size_cells) == 0) {
+        return false;  // No-op roll: every dst row's source is itself → 1 src shard per dst core.
+    }
+    const uint32_t shift_cells = shift;  // cell_h == 1 for RM.
+    auto rolled_src_row = [&](uint32_t r) -> uint32_t {
+        const uint32_t coord_d = (r / row_stride[dim]) % dim_size_cells;
+        const uint32_t src_coord_d = (coord_d + dim_size_cells - (shift_cells % dim_size_cells)) % dim_size_cells;
+        return r + (src_coord_d - coord_d) * row_stride[dim];
+    };
+
+    // Higher-dim roll: src_col == dst_col, so a dst shard's src shards differ only in row.
+    // Walk cell-rows within each dst shard row-band, count unique src shard rows.
+    const uint32_t n_shard_rows = H_cells / shard_cells_h;
+    for (uint32_t dst_sr = 0; dst_sr < n_shard_rows; ++dst_sr) {
+        std::unordered_set<uint32_t> unique_src_shard_rows;
+        for (uint32_t r_local = 0; r_local < shard_cells_h; ++r_local) {
+            const uint32_t r = dst_sr * shard_cells_h + r_local;
+            unique_src_shard_rows.insert(rolled_src_row(r) / shard_cells_h);
+            if (unique_src_shard_rows.size() > 2) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 }  // namespace ttnn::prim

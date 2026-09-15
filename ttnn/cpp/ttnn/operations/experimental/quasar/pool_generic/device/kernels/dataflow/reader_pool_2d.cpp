@@ -6,11 +6,12 @@
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/kernel_thread_globals.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include <ttnn/cpp/ttnn/operations/experimental/quasar/pool_generic/device/kernels/pool_kernels_common.hpp>
 
-#define ENABLE_DEBUG_PRINT 0  // [DEBUG] test DM-core DPRINT capture (remove after)
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "api/debug/dprint.h"
@@ -41,15 +42,11 @@ template <
     bool zero_pages,
     uint32_t in_cb_sz,
     uint32_t bf16_init_value,
-    bool force_max_tiles_per_reduction_4>
+    uint32_t MAX_TILES_PER_REDUCTION>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time.
-    constexpr uint32_t MAX_TILES_PER_REDUCTION =
-        (force_max_tiles_per_reduction_4 || (is_avg_pool && is_large_kernel)) ? 4 : 8;
-    constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
+    constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t num_tilized_rows =
         wide_reduction ? (in_cb_sz / (MAX_TILES_PER_REDUCTION * TILE_WIDTH)) : (in_cb_sz / (in_ntiles_c * TILE_WIDTH));
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
@@ -105,31 +102,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-#ifdef ARCH_QUASAR
-                // [DIAG cache-vs-data RESULT] The invalidate above proved coherency is NOT the cause: with the
-                // invalidate before this DPRINT, POOLSRC still shows 0.4375 -> the data at base is genuinely
-                // wrong (stick ~447 / row13), not stale cache. Reverted the read invalidate; the real bug is
-                // the input base / data-layout (in_shard_cb.get_read_ptr() misaligned with the input's stick0).
-                // [DIAG 64c reconfig escape] Dump the SOURCE the reader gathers for the first few windows:
-                // base + stick_offset + the actual read address + the source values. golden out_stick0 ~0.032
-                // (input row1); if src[] here already reads ~0.44 (row13) the reader/base is wrong; if src[]
-                // is correct (~0.03) but the output is 0.4375, the bug is downstream (compute reduce).
-                if (c_i == 0 && h == 0 && w_offset == 0 && ind <= 8) {
-                    volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(read_offset);
-                    DPRINT(
-                        "POOLSRC ind={} soff={} roff={} base={} sw={} inwp={} src0={} src1={} src2={} src3={}\n",
-                        (uint32_t)ind,
-                        (uint32_t)stick_offset,
-                        (uint32_t)read_offset,
-                        (uint32_t)in_l1_read_base_addr,
-                        (uint32_t)shard_width_bytes,
-                        (uint32_t)in_w_padded,
-                        bf16_t(sv[0]),
-                        bf16_t(sv[1]),
-                        bf16_t(sv[2]),
-                        bf16_t(sv[3]));
-                }
-#endif
 #ifdef ARCH_QUASAR
                 // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
                 // data / reads stale SRAM. The window gather is a same-core L1->L1 copy, so do it with a direct
@@ -223,7 +195,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
  */
 void kernel_main() {
 #if ENABLE_DEBUG_PRINT == 1
-    DPRINT("READER_ENTER (data-movement kernel_main reached)\n");
 #endif
     constexpr uint32_t reader_nindices = get_arg(args::reader_nindices);
     constexpr uint32_t kernel_h = get_arg(args::kernel_h);
@@ -239,15 +210,19 @@ void kernel_main() {
 
     constexpr uint32_t in_c = get_arg(args::in_c);
 
-    constexpr uint32_t split_reader = get_arg(args::split_reader);
     constexpr uint32_t reader_id = get_arg(args::reader_id);
 
     constexpr uint32_t bf16_scalar = get_arg(args::bf16_scalar);
+    // Lane identity: reader thread i and compute thread i form a private (DM, NEO) lane — symmetric
+    // STRIDED pairs producer thread i with consumer thread i, so this thread's pushes feed NEO i only.
+    const uint32_t my_lane = get_my_thread_id();
+    const uint32_t num_lanes = get_num_threads();
     constexpr uint32_t bf16_init_value = get_arg(args::bf16_init_value);
 
     constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
     constexpr uint32_t in_cb_sz = get_arg(args::in_cb_sz);
     constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
+    constexpr uint32_t max_tiles_per_reduction = get_arg(args::max_tiles_per_reduction);
     constexpr uint32_t ceil_pad_w = get_arg(args::ceil_pad_w);
 
     // CB ids now come from Metal 2.0 DFB bindings. Split-reader uses per-reader input/scalar
@@ -265,8 +240,6 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id = dfb::in_scalar_cb;
     constexpr uint32_t clear_value_cb_id = dfb::clear_value_cb;
     constexpr bool is_avg_pool = (bool)get_arg(args::pool_type_is_avg);
-    // QSR: cap tiles-per-pack to 4 (matches compute + host in_nblocks_c); see factory comment (PACR0 bounds).
-    constexpr bool force_max_tiles_per_reduction_4 = (bool)get_arg(args::force_max_tiles_per_reduction_4);
     constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
     // The avg-pool scalar config DFB + tensor::config only exist when !one_scalar_per_core; the
     // host emits HAS_CONFIG to this kernel's defines exactly then. Gate every dfb::config_cb /
@@ -285,8 +258,6 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_arg(args::zero_pages);
     constexpr uint32_t config_in_dram = get_arg(args::config_in_dram);
     constexpr uint32_t reader_page_size = get_arg(args::reader_page_size);
-
-    constexpr bool use_split_reader = split_reader;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
@@ -329,99 +300,69 @@ void kernel_main() {
     // so pre-clearing can never change a correct max; the once-at-init clear persists across the in_cb ring
     // because the reader never overwrites those rows. (Real fix: make the quasar reduce respect face_r_dim.)
     constexpr bool force_max_clear = !is_avg_pool;
-    // fill the clear cb
+    // fill the clear cb (every reader thread fills and reads back its own lane's copy at its write
+    // cursor; no push — compute's census binding never waits)
     if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
-        if constexpr (reader_id == 0) {
-            fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            clear_value_cb.push_back(1);
-        }
-        if constexpr (reader_id == 1) {
-            clear_value_cb.wait_front(1);
-        }
-        // for average pool clear out tiles runs in loop, no need to initialize here
-        if constexpr (!is_avg_pool || !is_large_kernel) {
-            if constexpr (is_avg_pool) {
-                // QSR avg_pool coherency fix (same class as the MAX fix below): the original pre-clear
-                // (clear_out_tiles) copies clear_value_cb -> in_cb via a NoC self-loopback read, which is
-                // UNRELIABLE on the Quasar sim (drops / reads stale SRAM) and HANGS the small-kernel avg
-                // path. 0 is the avg additive (sum) identity -- padding rows must contribute nothing to the
-                // sum -- so the SRAM-coherent NoC zero-write produces the identical clear without the
-                // loopback. Once-at-init persists across the in_cb ring because the reader only overwrites
-                // the window rows (the unwritten tail rows stay 0 and reduce to a no-op in the sum).
-                DataflowBuffer icb_clear(in_cb_id);
-                Noc clear_noc;
-                clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
-                clear_noc.write_zeros_l1_barrier();
-            } else {
-                // QSR max_pool coherency fix: the pre-clear above (clear_out_tiles) uses a NoC
-                // self-loopback read from clear_value_cb into in_cb. On the Quasar sim that self-loopback
-                // read is unreliable (drops / reads stale SRAM), so in_cb's rows beyond the window are
-                // left holding stale L1. The compute reduces the FULL 4-face (32-row) tile, so that stale
-                // L1 leaks into the MAX (e.g. one reader's output pinned to a spurious max). Clear in_cb
-                // with the SRAM-coherent NoC zero-write instead (the same primitive FIX #1 / the halo pad
-                // use). Compute the region from the DFB object (get_local_cb_interface / get_tile_size are
-                // stale for Metal-2.0 DFBs). For MAX the reduce identity must be <= every real window
-                // element; the pooled inputs here are non-negative (resnet stem maxpool is post-ReLU), so 0
-                // is a safe identity and the once-at-init clear persists across the in_cb ring (the reader
-                // only overwrites the window rows). The unwritten tail rows then reduce to a no-op.
-                DataflowBuffer icb_clear(in_cb_id);
-                Noc clear_noc;
+        fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
 #ifdef ARCH_QUASAR
-                // [DIAG — clear-overrun / stale-wr_ptr probe, revert after]: this once-at-init clear writes
-                // clrsz = esz*mbf bytes starting at get_write_ptr() (= the DM wr_ptr). It overruns adjacent L1
-                // if clrsz > alloc (mbf > nent) OR if wr_ptr is stale from a prior op (not reset to the ring
-                // base per launch -- the suspected Bug-1 reconfig escape). Compare across a lone 64c run vs a
-                // 64c-after-32c run: wr changing => stale wr_ptr; clrsz>alloc => size overrun. (The 0xDEADBEEF
-                // poison was reverted -- a bf16 value can't fault the RISC; the poison fault was this overrun
-                // clobbering a control region with garbage instead of benign zeros.)
-                DPRINT(
-                    "POOLCLR wr={} esz={} mbf={} clrsz={} nent={} alloc={}\n",
-                    (uint32_t)icb_clear.get_write_ptr(),
-                    (uint32_t)icb_clear.get_entry_size(),
-                    (uint32_t)multi_buffering_factor,
-                    (uint32_t)(icb_clear.get_entry_size() * multi_buffering_factor),
-                    (uint32_t)icb_clear.get_total_num_entries(),
-                    (uint32_t)(icb_clear.get_total_num_entries() * icb_clear.get_entry_size()));
+        // CPU-store fill; clear_out_tiles later NoC-reads this tile from SRAM — write it back
+        // (same as the scalar init below).
+        flush_l2_cache_range(
+            static_cast<uintptr_t>(clear_value_cb.get_write_ptr()), static_cast<size_t>(TILE_HEIGHT * TILE_WIDTH) * 2);
 #endif
-                clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
-                clear_noc.write_zeros_l1_barrier();
-            }
+        // for average pool the boundary fill in the large-kernel loop covers it, no need to initialize here
+        if constexpr (!is_avg_pool || !is_large_kernel) {
+            // Clear the WHOLE in_cb ring with the pool identity (-inf for max, 0 for avg — a zero
+            // fill is only valid for non-negative inputs). A thread's ring entries are strided, so
+            // every thread recovers the ring base and idempotently fills it all. Direct CPU fill +
+            // flush: clear_out_tiles' NoC self-loopback read is unreliable on the Quasar sim.
+            DataflowBuffer icb_clear(in_cb_id);
+            const uint32_t icb_base = icb_clear.get_write_ptr() - get_my_thread_id() * icb_clear.get_entry_size();
+            const uint32_t clear_bytes = icb_clear.get_entry_size() * multi_buffering_factor * get_num_threads();
+            fill_with_val(icb_base, clear_bytes / 2, bf16_init_value);
+#ifdef ARCH_QUASAR
+            flush_l2_cache_range(static_cast<uintptr_t>(icb_base), static_cast<size_t>(clear_bytes));
+#endif
         }
     }
 
-    // initialize the scalar CB
-    if constexpr (reader_id == 0 && one_scalar_per_core) {
-        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
-        // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
-        // between the first and second face.
+    // initialize the scalar CB: each reader thread pushes one copy into its lane (feeds its NEO).
+    if constexpr (one_scalar_per_core) {
+        // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the
+        // values for the remaining faces will be reused from the first one. This is safe here because there’s no
+        // difference between the first and second face.
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
 #ifdef ARCH_QUASAR
         // Quasar sim coherency: the reduce scalar is a CPU-store fill through the DM L1/L2 cache, but the
-        // compute reduce reads it directly from TL1. Without write-back compute multiplies by a STALE scalar
-        // -> wrong reduce magnitude (the /TILE_HEIGHT scale on the const-channel test) and, if the stale value
-        // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
+        // compute reduce reads it directly from TL1; write back so compute doesn't multiply by a STALE scalar.
         flush_l2_cache_range(static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
 #endif
         in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
 
-    const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
+    // Shared raw views (reader holds the PRODUCER face only; compute closes the census): each
+    // thread's STRIDED accessor is staggered by lane*entry_size; undo it to recover the ring base
+    // (no-op at num_threads == 1).
+    const uint32_t in_l1_read_base_addr = in_shard_cb.get_write_ptr() - my_lane * in_shard_cb.get_entry_size();
     if constexpr (config_in_dram) {
-        if (reader_id == 0) {
-            // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
-            // Metal 2.0 TensorBinding (tensor::reader_indices) instead of a CTA-baked DRAM address.
+        {
+            // Inlined load_config_tensor_if_in_dram: each thread stages the page into its own lane
+            // (the Metal 2.0 TensorBinding tensor::reader_indices replaces a CTA-baked DRAM address).
             Noc cfg_noc;
             const auto reader_indices_accessor = TensorAccessor(tensor::reader_indices);
             cfg_noc.async_read(
                 reader_indices_accessor, reader_indices_cb, reader_page_size, {.page_id = core_nhw_index}, {});
             cfg_noc.async_read_barrier();
-            reader_indices_cb.push_back(1);
-        } else {
-            reader_indices_cb.wait_front(1);
+            // No push: census-only (nothing waits); read back at this thread's write cursor.
         }
     }
-    uint32_t reader_indices_l1_addr = reader_indices_cb.get_read_ptr();
+    // DRAM path: this thread's lane holds its own staged copy at its write cursor. L1 path: shared
+    // raw view — undo the lane stagger to recover the table base.
+    uint32_t reader_indices_l1_addr = reader_indices_cb.get_write_ptr();
+    if constexpr (!config_in_dram) {
+        reader_indices_l1_addr -= my_lane * reader_indices_cb.get_entry_size();
+    }
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
 
@@ -433,24 +374,25 @@ void kernel_main() {
     uint32_t scalar_start;
     uint32_t scalar_value;
     uint32_t scalar_end;
-    uint32_t counter = reader_id;
     // HAS_CONFIG <=> !one_scalar_per_core (host-emitted). Gated rather than `if constexpr` because
     // the body references dfb::config_cb / tensor::config, which are only declared when HAS_CONFIG.
 #ifdef HAS_CONFIG
     {
-        uint32_t config_l1_addr = config_cb.get_read_ptr();
+        uint32_t config_l1_addr = config_cb.get_write_ptr();  // producer face
         if constexpr (config_in_dram) {
-            if (reader_id == 0) {
+            {
                 // Inlined load_config_tensor_if_in_dram: the scalar config tensor flows in via its
-                // Metal 2.0 TensorBinding (tensor::config) instead of a CTA-baked DRAM address.
+                // Metal 2.0 TensorBinding (tensor::config) instead of a CTA-baked DRAM address. The
+                // DFB has one full-page slot per reader thread, so this lane stages and reads back its
+                // own copy at its write cursor.
                 Noc cfg_noc;
                 const auto config_accessor = TensorAccessor(tensor::config);
                 cfg_noc.async_read(config_accessor, config_cb, config_page_size, {.page_id = core_nhw_index}, {});
                 cfg_noc.async_read_barrier();
-                config_cb.push_back(1);
-            } else {
-                config_cb.wait_front(1);
             }
+        } else {
+            // L1 path: shared raw view -- undo the lane stagger (same pattern as reader_indices).
+            config_l1_addr -= my_lane * config_cb.get_entry_size();
         }
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
         scalar_start = config_ptr[0];
@@ -460,44 +402,29 @@ void kernel_main() {
 #endif
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
-    bool first_row_value = reader_id == 0 || !use_split_reader;
 
     // [#47797 DEBUG] If POOL hangs at waypoint R, dump the loop-control values. A garbage num_segments
     // (e.g. unwritten reader_indices config) or stride_w==0 makes while(num_segments--)/the inner stride
     // loop spin forever. Compare these against the host sliding-window config for this pool.
-    DPRINT(
-        "POOL rdr id={} nseg={} strW={} kH={} kW={}\n",
-        (uint32_t)reader_id,
-        (uint32_t)num_segments,
-        (uint32_t)stride_w,
-        (uint32_t)kernel_h,
-        (uint32_t)kernel_w);
 
-    // This reader's output-stick counter. With split reader, reader0 writes even output rows, reader1
-    // writes odd, so global row = 2*counter + reader_id.
-    uint32_t out_stick_counter = 0;
+    // Global output-stick index on this core, in segment order. Sticks are dealt whole to lanes:
+    // this thread gathers and writes only sticks where stick_idx % num_lanes == my_lane, and its
+    // in-order lane pushes deliver exactly those sticks to its paired NEO.
+    uint32_t stick_idx = 0;
 
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
         uint16_t end = start_end_segment >> 16;
-        DPRINT("POOL seg start={} end={}\n", (uint32_t)start, (uint32_t)end);  // [#47797 DEBUG]
 
-        if (!first_row_value) {
-            start += stride_w;
-            first_row_value = true;
-        }
-
-        constexpr uint32_t stride_multiple = use_split_reader ? 2 : 1;
-        for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
+        for (uint16_t ind = start; ind <= end; ind += stride_w) {
+            if (stick_idx % num_lanes != my_lane) {
+                stick_idx++;
+                continue;
+            }
             if constexpr (!one_scalar_per_core) {
-                fill_scalar<
-                    one_scalar_per_core,
-                    in_scalar_cb_id,
-                    reader_nindices,
-                    use_split_reader,
-                    multi_buffering_factor>(
-                    in_scalar_cb, scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
+                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices>(
+                    in_scalar_cb, scalar_start, scalar_end, scalar_value, scalar_index, stick_idx, config_ptr);
             }
             read_kernel_with_top_left_index<
                 in_nblocks_c,
@@ -522,29 +449,22 @@ void kernel_main() {
                 zero_pages,
                 in_cb_sz,
                 bf16_init_value,
-                force_max_tiles_per_reduction_4>(ind, in_l1_read_base_addr);
+                max_tiles_per_reduction>(ind, in_l1_read_base_addr);
 #if ENABLE_DEBUG_PRINT == 1
             // [DIAG] Peek THIS reader's just-filled input CB (reader is producer; on DM get_read_ptr still
             // points at the base page it filled, before compute pops). Tilized face0 row0 = first 16
             // channels of the window's first row -> should read 1..16 for the deterministic input. If
             // reader1's in_cb_1 reads 0 while reader0's in_cb_0 reads 1..16, the split reader1 input feed
             // is the bug (not the pack). Only the first stick is reliable (rd_ptr stays at base after).
-            if (out_stick_counter == 0) {
+            if (stick_idx == my_lane) {
                 DataflowBuffer in_cb_peek(in_cb_id);
                 volatile tt_l1_ptr uint16_t* ip =
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_cb_peek.get_read_ptr());
                 // face0 = tilized rows 0..15, each row = 16 channels; ip[r*16+0] = row r channel 0.
                 // Window rows (the 9 sticks) should read the input value (channel 0 -> 1); cleared/tail
                 // rows read the pool identity (-inf). Shows whether reader1 fills its window rows at all.
-                DPRINT(
-                    "INCB rdr={} ind={} in_cb_base={} face0 col0 rows0..15: ",
-                    (uint32_t)reader_id,
-                    (uint32_t)ind,
-                    in_cb_peek.get_read_ptr());
                 for (uint32_t r = 0; r < 16; ++r) {
-                    DPRINT("{} ", bf16_t(ip[r * 16]));
                 }
-                DPRINT("\n");
             }
 #endif
             // [DEBUG scratch->out workaround] We just fed the input for this output stick; compute reduces
@@ -560,10 +480,9 @@ void kernel_main() {
             // ROW_MAJOR path's broken narrow pack, so it must be skipped here -- otherwise this wait_front
             // blocks forever on a push that will never come (the actual bug behind this fix).
 #ifndef OUTPUT_TILED
-            scratch_cb.wait_front(scratch_npages);
+            scratch_cb.wait_front(1);
             {
-                const uint32_t global_stick =
-                    use_split_reader ? (2u * out_stick_counter + reader_id) : out_stick_counter;
+                const uint32_t global_stick = stick_idx;
                 const uint32_t scratch_row0_addr = scratch_cb.get_read_ptr();  // untilized row 0 = the result
                 // Scratch and the borrowed output shard are BOTH local L1 on this core, so the reduced row 0
                 // -> output-stick copy is a local L1->L1 move. Do it with a direct pointer copy rather than a
@@ -585,7 +504,8 @@ void kernel_main() {
 #else
                 invalidate_l1_cache();
 #endif
-                const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() + global_stick * out_row_bytes;
+                const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() - my_lane * out_shard_cb.get_entry_size() +
+                                              global_stick * out_row_bytes;
                 volatile tt_l1_ptr uint32_t* src_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_row0_addr);
                 volatile tt_l1_ptr uint32_t* dst_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_dst_addr);
                 for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
@@ -599,34 +519,20 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                 flush_l2_cache_range(reinterpret_cast<uintptr_t>(dst_w), static_cast<size_t>(out_row_bytes));
 #endif
-                // DEBUG (compute-vs-read locator): dump the scratch row-0 (reduced result) the reader sees,
                 // limited to the first few global sticks to avoid flooding/crashing the dprint server.
                 // Distinct sensible values per stick => compute/reduce/pack is fine and the bug is in the
                 // out-copy/assembly; constant/garbage (e.g. 2.0) => compute-side or a fixed/stale read.
                 if (global_stick < 4u) {
                     volatile tt_l1_ptr uint16_t* rp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_row0_addr);
-                    DPRINT(
-                        "SCRATCH2OUT rdr={} gstick={} rdptr={} npages={} row0[0..7]: ",
-                        (uint32_t)reader_id,
-                        global_stick,
-                        scratch_row0_addr,
-                        (uint32_t)scratch_npages);
                     for (uint32_t j = 0; j < 8; ++j) {
-                        DPRINT("{} ", bf16_t(rp[j]));
                     }
-                    DPRINT(" [60..63]: ");
                     for (uint32_t j = 60; j < 64; ++j) {
-                        DPRINT("{} ", bf16_t(rp[j]));
                     }
-                    DPRINT("\n");
                 }
             }
-            scratch_cb.pop_front(scratch_npages);
+            scratch_cb.pop_front(1);
 #endif  // !OUTPUT_TILED
-            out_stick_counter++;
-            if (use_split_reader && ind == end) {
-                first_row_value = false;
-            }
+            stick_idx++;
         }
     }
 }  // kernel_main()

@@ -749,6 +749,78 @@ def test_transpose_hc_sharded_cache_hit_new_input(device, n, c, h, w, grid_size)
             ), "transpose must reuse the cached program on a hit"
 
 
+def _run_transpose_sharded_override_addr_change(
+    device, dim0, dim1, n, c, h, w, grid_size, orientation, pass_output_mem_config
+):
+    """Buffer addresses are excluded from the transpose hash, so a second identical-shape transpose at
+    DIFFERENT addresses must hit the cache and still be correct (override re-patches the sharded CB bases)."""
+    torch.manual_seed(47828)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (n * c * h // (grid_size.x * grid_size.y), w), orientation)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    def _make():
+        torch_input = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return torch_input, ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    def _to_torch(tt_tensor):
+        return ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(tt_tensor, ttnn.L1_MEMORY_CONFIG)))
+
+    out_mem_config = sharded_mem_config if pass_output_mem_config else None
+
+    torch_a, tt_a = _make()
+    out_a = ttnn.transpose(tt_a, dim0, dim1, memory_config=out_mem_config)
+    assert_with_pcc(torch_a.transpose(dim0, dim1), _to_torch(out_a), 0.9999)
+
+    # Keep A alive so B is forced to a different buffer address; the second transpose must be a cache HIT.
+    torch_b, tt_b = _make()
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    entries_before_second = device.num_program_cache_entries()
+    out_b = ttnn.transpose(tt_b, dim0, dim1, memory_config=out_mem_config)
+    assert device.num_program_cache_entries() == entries_before_second, "identical-shape transpose must be a cache hit"
+    assert out_b.buffer_address() != out_a.buffer_address(), "second output must land at a different address"
+    assert_with_pcc(torch_b.transpose(dim0, dim1), _to_torch(out_b), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "n, c, h, w, grid_size",
+    [
+        # generic path: shard height 288 is neither a multiple nor a divisor of H=224
+        (24, 3, 224, 224, ttnn.CoreGrid(y=8, x=7)),
+        # special case path, one H block per core: shard height 224 == H
+        (16, 4, 224, 224, ttnn.CoreGrid(y=8, x=8)),
+        # special case path, multiple H blocks per core: shard height 4096 == 32 * H
+        (16, 128, 128, 16, ttnn.CoreGrid(y=8, x=8)),
+    ],
+    ids=["generic", "special_case_single_h_block", "special_case_multi_h_block"],
+)
+def test_transpose_hc_sharded_override_addr_change(device, n, c, h, w, grid_size):
+    if grid_size.y > device.core_grid.y:
+        pytest.skip("grid size not for N300")
+    _run_transpose_sharded_override_addr_change(
+        device, 1, 2, n, c, h, w, grid_size, ttnn.ShardOrientation.ROW_MAJOR, pass_output_mem_config=True
+    )
+
+
+@pytest.mark.parametrize("n, c, h, w, grid_size", [(2, 128, 128, 16, ttnn.CoreGrid(y=4, x=8))])
+def test_transpose_wh_sharded_rm_override_addr_change(device, n, c, h, w, grid_size):
+    if grid_size.y > device.core_grid.y:
+        pytest.skip("grid size not for N300")
+    _run_transpose_sharded_override_addr_change(
+        device, 2, 3, n, c, h, w, grid_size, ttnn.ShardOrientation.COL_MAJOR, pass_output_mem_config=False
+    )
+
+
 @pytest.mark.parametrize(
     "shape, swap_dims",
     [

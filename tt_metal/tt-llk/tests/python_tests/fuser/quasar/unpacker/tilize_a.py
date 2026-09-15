@@ -5,18 +5,39 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
-from helpers.tilize_untilize import tilize_block
+from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
+from fuser.tile_loop import LoopBlockRow, TileLoop
+from helpers.llk_params import DestAccumulation
 
 
 class UnpackerTilizeA(Unpacker):
-    loop: FusedLoop = LoopBlockRow()
+    loop: TileLoop = LoopBlockRow()
     per_block_init = True
+
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        set_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
+        return f"_perf_unpack_loop_set_valid<true, {set_b}>({block.block_tiles_x});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        clear_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
+        return f"_perf_math_loop_clear_valid<true, {clear_b}>({block.block_tiles_x});\n"
 
     def get_headers(self) -> List[str]:
         return [
@@ -28,60 +49,54 @@ class UnpackerTilizeA(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tilized_a = tilize_block(
-            tensor_a,
-            compute_unit.src_a.dimensions,
-            compute_unit.src_a.data_format,
-            compute_unit.src_a.tile_shape.total_num_faces(),
-            tile_dimensions=[
-                compute_unit.src_a.tile_shape.total_row_dim(),
-                compute_unit.src_a.tile_shape.total_col_dim(),
-            ],
-            face_r_dim=compute_unit.src_a.tile_shape.face_r_dim,
+        return (
+            self.tilize_golden(tensor_a, config, operation, compute_unit),
+            None,
         )
-
-        return tilized_a, None
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id = compute_unit.src_a.buf_desc_id
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(BfdResource.UNP0)
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         full_ct_dim = compute_unit.src_a.tile_count_x
         block_ct_dim = block.block_tiles_x
 
         return (
-            f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
-            f"({buf_desc_id}, {full_ct_dim}, {block_ct_dim}, {tensor_shape});\n"
+            bfd_program + f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
+            f"({bfd_current(BfdResource.UNP0)}, {full_ct_dim}, {block_ct_dim}, {tensor_shape});\n"
         )
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         num_faces_r_dim = compute_unit.src_a.tile_shape.num_faces_r_dim
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        l1_row_idx = f"{block.tile_id_global} * {num_faces_r_dim} * {face_r_dim}"
 
         return (
-            f"_llk_unpack_tilize_<p_unpacr::UNP_A>"
-            f"({block.tile_id_global} * {num_faces_r_dim} * {face_r_dim});\n"
+            f"_llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>"
+            f"({tensor_shape}, {l1_row_idx});\n"
+            f"_llk_unpack_tilize_<p_unpacr::UNP_A>(0);\n"
         )
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

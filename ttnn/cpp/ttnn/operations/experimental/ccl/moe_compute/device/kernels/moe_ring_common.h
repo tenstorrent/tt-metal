@@ -78,6 +78,11 @@ constexpr ShardLUT<n_cores> make_shard_lut() {
     return lut;
 }
 
+constexpr uint32_t even_stride_at_least_a2a_width(uint32_t tiles) {
+    const uint32_t even_tiles = (tiles + 1) & ~1u;
+    return even_tiles < W2_TILES_PER_A2A_ITER_W ? W2_TILES_PER_A2A_ITER_W : even_tiles;
+}
+
 template <uint32_t Ht, uint32_t Nt, uint32_t n_cores>
 constexpr ShardLUT<n_cores> make_w2_shard_lut() {
     ShardLUT<n_cores> lut{};
@@ -117,7 +122,7 @@ struct MoeRingConfig {
     static constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
     static constexpr uint32_t w0_w1_blocks_per_col =
         (w0_w1_dram_tiles_h + W0_W1_BLOCK_TILES_H - 1) / W0_W1_BLOCK_TILES_H;
-    static constexpr uint32_t in2_tiles_per_step = (((Nt + num_cores - 1) / num_cores) + 1) & ~1u;
+    static constexpr uint32_t in2_tiles_per_step = even_stride_at_least_a2a_width((Nt + num_cores - 1) / num_cores);
     static constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_col * in2_tiles_per_step / 2;
 
     // Shared-expert (TpNt) variants: the intermediate dim is TP-split to TpNt = ceil(Nt/tp).
@@ -126,7 +131,8 @@ struct MoeRingConfig {
     // core) and zero-fills the remainder of the full stride; the full W2 walk then contracts
     // real×real in the prefix and zero×zero past it.
     static constexpr uint32_t TpNt = detail::div_up<Nt, SharedExpertTp>();
-    static constexpr uint32_t in2_tiles_per_step_shared = (((TpNt + num_cores - 1) / num_cores) + 1) & ~1u;
+    static constexpr uint32_t in2_tiles_per_step_shared =
+        even_stride_at_least_a2a_width((TpNt + num_cores - 1) / num_cores);
     static constexpr uint32_t w0_w1_blocks_per_shared_expert = w0_w1_blocks_per_col * in2_tiles_per_step_shared / 2;
 
     // W2

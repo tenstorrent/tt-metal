@@ -13,14 +13,9 @@ Llama 3.2 1B has no QKV bias and no Q/K norm.
 
 from __future__ import annotations
 
-import math
-from pathlib import Path
 from typing import Any
 
 import torch
-
-import ttnn
-from models.common.modules.lazy_weight import LazyWeight
 
 
 def reverse_permute(tensor: torch.Tensor, n_heads: int, dim1: int, dim2: int) -> torch.Tensor:
@@ -109,70 +104,3 @@ def rms_weight_torch(layernorm: Any) -> torch.Tensor:
 def embed_tokens_torch(embed: Any) -> torch.Tensor:
     w = embed.weight.detach().float().clone()
     return w.unsqueeze(0).unsqueeze(0)
-
-
-def build_lm_head_lazy_weights(
-    mesh_device: ttnn.MeshDevice,
-    lm_head_weight: torch.Tensor,
-    *,
-    dim: int,
-    vocab_size: int,
-    max_columns_per_device: int = 8192,
-    dtype: ttnn.DataType = ttnn.bfloat8_b,
-    cache_dir: Path | None = None,
-) -> tuple[list[LazyWeight], list[int], list[ttnn.MemoryConfig]]:
-    """Column-split LM head for ``LMHead1D`` (DRAM-sharded matmul chunks per device).
-
-    ``lm_head_weight`` shape: ``[vocab_size, dim]`` (HF). Returns
-    ``(lazy_weights, split_sizes, weights_memcfgs)`` for ``LMHead1DConfig``.
-    """
-    num_devices = mesh_device.get_num_devices()
-    torch_w = lm_head_weight.T.contiguous().to(torch.bfloat16)
-    padded_vocab_size = math.ceil(vocab_size / 32) * 32
-    if vocab_size < padded_vocab_size:
-        pad = padded_vocab_size - vocab_size
-        torch_w = torch.cat([torch_w, torch.zeros(torch_w.shape[0], pad, dtype=torch_w.dtype)], dim=-1)
-
-    size_per_device = padded_vocab_size // num_devices
-    num_splits = math.ceil(size_per_device / max_columns_per_device)
-    split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
-    split_sizes.append(size_per_device - sum(split_sizes))
-
-    dram_size = mesh_device.dram_grid_size()
-    dram_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_size.x - 1, dram_size.y - 1))}
-    )
-    tile = ttnn.TILE_SIZE
-
-    def dram_sharded_memcfg(k: int, n: int) -> ttnn.MemoryConfig:
-        padded_n = math.ceil(n / (tile * dram_size.x)) * (tile * dram_size.x)
-        shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_n // dram_size.x), ttnn.ShardOrientation.ROW_MAJOR)
-        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
-
-    output_weights: list[LazyWeight] = []
-    weights_memcfgs: list[ttnn.MemoryConfig] = []
-    for i, split_size in enumerate(split_sizes):
-        device_splits = []
-        for device_idx in range(num_devices):
-            start = device_idx * size_per_device + sum(split_sizes[:i])
-            end = start + split_size
-            device_splits.append(torch_w[:, start:end])
-        combined = torch.cat(device_splits, dim=-1)
-        mem_cfg = dram_sharded_memcfg(dim, math.ceil(combined.shape[-1] / num_devices))
-        weights_memcfgs.append(mem_cfg)
-        name = f"lm_head_split_{i}_{combined.shape[-1]}"
-        output_weights.append(
-            LazyWeight(
-                source=combined,
-                dtype=dtype,
-                device=mesh_device,
-                mesh_mapper_config=ttnn.MeshMapperConfig(
-                    placements=[ttnn.PlacementShard(-1)],
-                    mesh_shape_override=ttnn.MeshShape([mesh_device.get_num_devices()]),
-                ),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem_cfg,
-                cache_dir_weight_name=(cache_dir, name) if cache_dir else None,
-            )
-        )
-    return output_weights, split_sizes, weights_memcfgs

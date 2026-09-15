@@ -10,9 +10,9 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg(args::num_tiles);
-    constexpr uint32_t old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
-    constexpr uint32_t old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    constexpr bool old_running_mean_has_value = get_arg(args::old_running_mean_has_value) == 1;
+    constexpr bool old_running_var_has_value = get_arg(args::old_running_var_has_value) == 1;
     static_assert(
         old_running_mean_has_value || old_running_var_has_value,
         "running_statistics requires at least one of running_mean / running_var");
@@ -22,7 +22,7 @@ void kernel_main() {
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
     DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
 
-    binary_op_init_common(dfb::batch_mean, dfb::batch_var, dfb::out);
+    compute_kernel_hw_startup(dfb::batch_mean, dfb::batch_var, dfb::out);
     constexpr uint32_t onetile = 1;
 
     dfb_one_obj.wait_front(1);

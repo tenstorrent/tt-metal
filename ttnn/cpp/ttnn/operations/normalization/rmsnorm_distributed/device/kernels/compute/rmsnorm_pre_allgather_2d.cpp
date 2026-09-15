@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr uint32_t cb_x2_idx = tt::CBIndex::c_6;  // x**2
     constexpr uint32_t cb_zero_idx = tt::CBIndex::c_13;
 
-    binary_op_init_common(cb_inp_idx, cb_reduce_idx, cb_x2_idx);
+    compute_kernel_hw_startup(cb_inp_idx, cb_reduce_idx, cb_x2_idx);
 
     CircularBuffer cb_inp(cb_inp_idx);
     CircularBuffer cb_reduce(cb_reduce_idx);
@@ -57,7 +57,7 @@ void kernel_main() {
          */
         reconfig_data_format(cb_inp_idx, cb_inp_idx);
         pack_reconfig_data_format(cb_x2_idx);
-        mul_tiles_init(cb_inp_idx, cb_inp_idx);
+        mul_init(cb_inp_idx, cb_inp_idx);
 
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_inp.wait_front(wt + blk);  // cumulative wait
@@ -107,10 +107,11 @@ void kernel_main() {
         cb_out_final.reserve_back(onetile);
 
         // Initialize accumulation
-        binary_op_init_common(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
         reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
         pack_reconfig_data_format(cb_out_final_idx);
-        add_tiles_init(cb_x2_merge_idx, cb_zero_idx, true);
+        add_init(cb_x2_merge_idx, cb_zero_idx, true);
 
         // Acquire registers
         ACQ();

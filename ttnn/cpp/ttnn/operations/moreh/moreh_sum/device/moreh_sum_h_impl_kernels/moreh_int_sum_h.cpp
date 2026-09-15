@@ -5,24 +5,23 @@
 #include "api/compute/eltwise_unary/sfpu_int_sum.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t num_cols = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t origin_H = get_compile_time_arg_val(2);
+    // Carries the per-core work-split count (the host's num_cols_per_core_group_N).
+    constexpr uint32_t num_cols = get_arg(args::num_cols);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t origin_H = get_arg(args::origin_H);
 
-    auto cb_in0 = tt::CBIndex::c_0;
-    DataflowBuffer dfb_in0_obj(cb_in0);
-    constexpr auto cb_mask_h = tt::CBIndex::c_1;
-    DataflowBuffer dfb_mask_h_obj(cb_mask_h);
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    DataflowBuffer dfb_out0_obj(cb_out0);
-    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
-    DataflowBuffer dfb_intermed0_obj(cb_intermed0);
+    DataflowBuffer dfb_in0_obj(dfb::input);
+    DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
+    DataflowBuffer dfb_out0_obj(dfb::out);
+    DataflowBuffer dfb_intermed0_obj(dfb::intermed0);
     constexpr uint32_t TILE_H = 32;
     constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
 
-    unary_op_init_common(cb_in0, cb_out0);
+    compute_kernel_hw_startup(dfb::input, dfb::out);
+    copy_init(dfb::input);
 
     constexpr int onetile = 1;
     constexpr int idx0 = 0;

@@ -18,7 +18,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -26,6 +25,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -273,6 +273,10 @@ struct CommonPlan {
     uint32_t tensor_page_size;
     uint32_t fabric_max_payload_size;
     uint32_t metadata_size_bytes;
+    // Bytes actually staged + shipped for the metadata blob: metadata_size_bytes
+    // rounded up to the L1 alignment (0 when metadata is disabled). Sized off the
+    // metadata itself, NOT off socket_page_size — see derive_common_plan.
+    uint32_t metadata_span_bytes;
     bool metadata_enabled;
     uint32_t l1_alignment;
 };
@@ -294,7 +298,11 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const Tensor& backing)
         tensor_page_size,
         l1_alignment);
 
-    const auto plan = derive_chunk_plan(tensor_page_size, tensor_num_pages, cfg.socket_mem_config.fifo_size);
+    // Socket page is flow control only -- payload bypasses the FIFO (see "no L1 FIFO copy" above) -- so
+    // it is sized to the write alignment, not to a tensor page. Page as both args => pages_per_chunk 1.
+    constexpr uint32_t kSocketPageSizeBytes = 64;
+    const uint32_t socket_page_size = tt::align(kSocketPageSizeBytes, l1_alignment);
+    const auto plan = derive_chunk_plan(socket_page_size, tensor_num_pages, socket_page_size);
 
     const auto fabric_max_payload_size = static_cast<uint32_t>(
         tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), static_cast<size_t>(l1_alignment)));
@@ -302,17 +310,32 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const Tensor& backing)
 
     const uint32_t metadata_size_bytes = cfg.metadata_size_bytes;
     const bool metadata_enabled = metadata_size_bytes > 0;
+    // Metadata capacity is bounded by fifo_size, NOT by socket_page_size. The blob is
+    // staged in sender service-core L1 and fabric-written to the receiver's FIFO base
+    // (the receiver never pops, so its read_ptr stays at that base), so the FIFO is the
+    // only region it has to fit in — the 64 B flow-control page is independent of how
+    // much metadata a transfer carries. The shipped span is L1-aligned so both the
+    // staging allocation and the fabric write stay alignment-legal; the padding tail is
+    // zero-init (see the staging buffer below) and the receiver mcasts only the
+    // un-padded metadata_size_bytes.
+    const uint32_t metadata_span_bytes = metadata_enabled ? tt::align(metadata_size_bytes, l1_alignment) : 0u;
+    const uint32_t min_fifo_size = std::max(socket_page_size, metadata_span_bytes);
     TT_FATAL(
-        !metadata_enabled || metadata_size_bytes <= plan.socket_page_size,
-        "D2DStreamService: metadata_size_bytes ({}) exceeds socket_page_size ({}); metadata must fit one socket page",
-        metadata_size_bytes,
-        plan.socket_page_size);
+        cfg.socket_mem_config.fifo_size >= min_fifo_size,
+        "D2DStreamService: fifo_size ({} B) must be >= {} B — max of socket_page_size ({} B) and the L1-aligned "
+        "metadata span ({} B, for metadata_size_bytes={})",
+        cfg.socket_mem_config.fifo_size,
+        min_fifo_size,
+        socket_page_size,
+        metadata_span_bytes,
+        metadata_size_bytes);
 
     return CommonPlan{
         .plan = plan,
         .tensor_page_size = tensor_page_size,
         .fabric_max_payload_size = fabric_max_payload_size,
         .metadata_size_bytes = metadata_size_bytes,
+        .metadata_span_bytes = metadata_span_bytes,
         .metadata_enabled = metadata_enabled,
         .l1_alignment = l1_alignment,
     };
@@ -839,7 +862,7 @@ Program build_sender_program(
     tt::tt_metal::DataType dtype,
     const WorkerSyncArgs& ws,
     bool metadata_enabled,
-    uint32_t metadata_size_bytes,
+    uint32_t metadata_span_bytes,
     uint32_t sender_metadata_l1_addr,
     bool share_fabric_links,
     uint32_t link_grant_addr,
@@ -902,7 +925,7 @@ Program build_sender_program(
             ws.mcast_noc_y_end,
             ws.num_workers,
             metadata_enabled ? 1u : 0u,    // [18]
-            metadata_size_bytes,           // [19]
+            metadata_span_bytes,           // [19] L1-aligned bytes shipped from the staging buffer
             sender_metadata_l1_addr,       // [20] sender service-core L1 (per-coord)
             share_fabric_links ? 1u : 0u,  // [21] fabric-link lease mode
             link_grant_addr,               // [22] service-core L1 (lease ping-pong word)
@@ -1050,17 +1073,14 @@ SenderSideResources build_sender_side(
 
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
     if (common.metadata_enabled) {
-        // Size the metadata L1 buffer to a full socket page, not just
-        // metadata_size_bytes. The sender kernel ships the metadata as one
-        // trailing socket page and fabric_write_socket_page() always reads
-        // socket_page_size bytes from this address; a buffer sized only to the
-        // metadata would make it over-read adjacent service-core L1 (counters /
-        // reserved socket region) and ship those bytes over fabric. The worker
-        // writes metadata_size_bytes into the front; the zero-init keeps the
-        // padding tail clean. socket_page_size is already L1-aligned (it is a
-        // multiple of the L1-aligned tensor page), so the align() is a no-op
-        // guard.
-        const uint32_t aligned_md = tt::align(common.plan.socket_page_size, common.l1_alignment);
+        // Size the metadata L1 buffer to the shipped span (metadata_size_bytes rounded
+        // up to the L1 alignment), NOT to a socket page: the sender kernel fabric-writes
+        // exactly metadata_span_bytes from this address, so the allocation must cover the
+        // span or the write would over-read adjacent service-core L1 (counters /
+        // reserved socket region) and ship those bytes over fabric. The worker writes
+        // metadata_size_bytes into the front; the zero-init keeps the alignment padding
+        // tail clean.
+        const uint32_t aligned_md = common.metadata_span_bytes;
         std::vector<uint32_t> zero(aligned_md / sizeof(uint32_t), 0u);
         for (const auto& coord : coords) {
             auto* d = mesh->get_device(coord);
@@ -1118,7 +1138,7 @@ SenderSideResources build_sender_side(
                 backing.dtype(),
                 ws,
                 common.metadata_enabled,
-                common.metadata_size_bytes,
+                common.metadata_span_bytes,
                 common.metadata_enabled ? static_cast<uint32_t>(metadata_addrs.at(coord)) : 0u,
                 cfg.share_fabric_links,
                 cfg.share_fabric_links ? static_cast<uint32_t>(link_grant_addrs.at(coord)) : 0u,

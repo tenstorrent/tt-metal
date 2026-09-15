@@ -4,14 +4,18 @@
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
 #include <map>
 #include <optional>
+#include <vector>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -55,18 +59,18 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
     return chunks;
 }
 
+// input_cores lists the cores of the input tensor's shard grid in shard order, so input_cores[k] is the
+// logical coordinate of the core holding input shard k. Every NOC coordinate written into an argument
+// list is converted from an input_cores entry. num_padded_sticks is how many rows the input holds.
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
+    const std::vector<CoreCoord>& input_cores,
     uint32_t num_cores_unpadded,
-    bool row_major,
-    uint32_t num_cores_x_unpadded,
-    uint32_t num_cores_y_unpadded,
     uint32_t shard_height_unpadded,
     uint32_t shard_height_padded,
-    uint32_t num_cores_x_padded,
-    uint32_t num_cores_y_padded) {
+    uint32_t num_padded_sticks) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
@@ -96,18 +100,26 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_unpadded);
 
+    // The input's shards have to cover the input's rows, so every row id inside the input maps to a shard
+    // index inside input_cores. Sharded TensorSpec construction rejects a shard height and grid that cannot
+    // cover the tensor, so a failure here means the three values passed in do not describe one tensor.
+    TT_FATAL(
+        static_cast<uint64_t>(shard_height_padded) * input_cores.size() >= num_padded_sticks,
+        "SliceRmShardedProgramFactory: the input's {} shards of {} rows cannot hold its {} rows.",
+        input_cores.size(),
+        shard_height_padded,
+        num_padded_sticks);
+
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_unpadded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
-        } else {
-            core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
-        }
         uint32_t num_sticks_per_core_unpadded = shard_height_unpadded;
         uint32_t num_sticks_per_core_padded = shard_height_padded;
 
-        // figure out the start read stick id for each core, and the start id for each dim
+        // Reducing num_sticks_written modulo the output dimensions gives this core's first source row,
+        // and the start id for each dimension that the walk below advances from. A core whose slots all lie
+        // past the final output row enters here with num_sticks_written already past the output row count,
+        // so the reduction wraps and its first source row lands back inside the input. Such a core copies
+        // rows into slots that lie outside the output and are never read back.
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_written / num_unpadded_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
@@ -138,51 +150,48 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             }
         }
 
-        // figure out the stick id in a shard, and the core id for the stick.
-        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
+        // Group this core's source rows by the input shard holding them. Keying on the shard index puts the
+        // groups in increasing shard index order, which is what the reader needs: it fills the output shard
+        // front to back, one source core at a time in the order listed, and within a source core the rows
+        // in the order listed. Row ids only grow as stick_ids_per_core is built above, so increasing shard
+        // index order is also increasing output row order.
+        std::map<uint32_t, std::vector<uint32_t>> shard_stick_map;
         for (uint32_t i = 0; i < num_sticks_per_core_unpadded; ++i) {
             uint32_t stick_id = stick_ids_per_core[i];
             uint32_t shard_id = stick_id / num_sticks_per_core_padded;
             uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_padded);
 
-            uint32_t shard_grid_inner_dim = row_major ? num_cores_x_padded : num_cores_y_padded;
-            uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-            uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-            uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
-            uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
-
-            if (worker_x_logical < num_cores_x_padded and worker_y_logical < num_cores_y_padded) {
-                auto core_physical =
-                    device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
-                // save stick id in a shard, and core coord into a map
-                std::pair<uint32_t, uint32_t> xy_pair = row_major ? std::make_pair(core_physical.y, core_physical.x)
-                                                                  : std::make_pair(core_physical.x, core_physical.y);
-                core_stick_map[xy_pair].push_back(stick_id_in_shard);
+            // When the core count does not divide the output row count, the output shards together have
+            // room for more rows than the output holds, so a core that holds real rows can hold surplus
+            // slots past the final output row as well. The walk above reaches those surplus slots by
+            // running off the end of the input, returning ids at or past num_padded_sticks that name rows
+            // the input does not have. Row ids only rise, so the ids at or past num_padded_sticks are the
+            // tail of this core's list and stopping drops exactly them. The num_padded_sticks bound is
+            // what keeps the reads of a core that holds both real rows and surplus slots inside the
+            // input. A core whose slots all lie past the final output row is the separate case described
+            // where start_id is derived above.
+            if (stick_id >= num_padded_sticks) {
+                break;
             }
+            shard_stick_map[shard_id].push_back(stick_id_in_shard);
         }
 
         // reader rt args
         std::vector<uint32_t> reader_kernel_args;
-        reader_kernel_args.reserve(1 + 3 * core_stick_map.size() + 2 * num_sticks_per_core_unpadded);
-        reader_kernel_args.push_back(core_stick_map.size());  // num_cores
+        reader_kernel_args.reserve(1 + 3 * shard_stick_map.size() + 2 * num_sticks_per_core_unpadded);
+        reader_kernel_args.push_back(shard_stick_map.size());  // num_cores
 
-        for (const auto& core_stick_pair : core_stick_map) {
-            auto xy_pair = core_stick_pair.first;
-            if (row_major) {
-                reader_kernel_args.push_back(xy_pair.second);  // noc x
-                reader_kernel_args.push_back(xy_pair.first);   // noc y
-            } else {
-                reader_kernel_args.push_back(xy_pair.first);   // noc x
-                reader_kernel_args.push_back(xy_pair.second);  // noc y
-            }
+        for (const auto& shard_stick_pair : shard_stick_map) {
+            auto core_physical = device->worker_core_from_logical_core(input_cores[shard_stick_pair.first]);
+            reader_kernel_args.push_back(core_physical.x);  // noc x
+            reader_kernel_args.push_back(core_physical.y);  // noc y
         }
 
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
-        stick_chunks_per_core.reserve(core_stick_map.size());
-        for (auto core_stick_pair : core_stick_map) {
-            auto stick_chunks = group_contiguous_values(core_stick_pair.second);
+        stick_chunks_per_core.reserve(shard_stick_map.size());
+        for (auto shard_stick_pair : shard_stick_map) {
+            auto stick_chunks = group_contiguous_values(shard_stick_pair.second);
             reader_kernel_args.push_back(stick_chunks.size());  // num_chunks for current core
 
             stick_chunks_per_core.push_back(std::move(stick_chunks));
@@ -212,7 +221,7 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     const auto& input = tensor_args.input;
     ProgramDescriptor desc;
 
-    [[maybe_unused]] uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
+    uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
     [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     uint32_t W_unpadded = output.logical_shape()[-1];
@@ -222,12 +231,16 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     auto shard_spec_padded = input.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
 
-    [[maybe_unused]] auto& all_cores_padded = shard_spec_padded.grid;
+    auto& all_cores_padded = shard_spec_padded.grid;
     [[maybe_unused]] uint32_t num_cores_padded = shard_spec_padded.num_cores();
-    auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y + 1};
-    uint32_t num_cores_x_padded = grid_size_padded.x;
-    uint32_t num_cores_y_padded = grid_size_padded.y;
+    // Which core holds which shard follows from a tensor's shard grid and its shard orientation, and the
+    // input and the output each carry their own. The input's shard grid and orientation are read here; the
+    // output's are read further down. corerange_to_cores walks the shard grid itself instead of the bounding
+    // box around it, so a grid of several rectangles, or one placed away from core (0, 0), is listed
+    // correctly. A sharded buffer builds its page mapping with the same call, so input_cores holds the input
+    // buffer's own shard-to-core assignment.
+    const bool row_major_padded = shard_spec_padded.orientation == ShardOrientation::ROW_MAJOR;
+    const std::vector<CoreCoord> input_cores = corerange_to_cores(all_cores_padded, std::nullopt, row_major_padded);
 
     if (args.sub_core_grids.has_value()) {
         log_warning(tt::LogOp, "sub_core_grids is not used when input tensor is sharded");
@@ -241,14 +254,12 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     // output shard spec
     auto shard_spec_unpadded = output.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
-    bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
+    const bool row_major_unpadded = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
     auto& all_cores_unpadded = shard_spec_unpadded.grid;
     uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
-    auto bbox_unpadded = all_cores_unpadded.bounding_box();
-    CoreCoord grid_size_unpadded = {bbox_unpadded.end_coord.x + 1, bbox_unpadded.end_coord.y + 1};
-    uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
-    uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
+    const std::vector<CoreCoord> output_cores =
+        corerange_to_cores(all_cores_unpadded, std::nullopt, row_major_unpadded);
 
     log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
@@ -311,14 +322,11 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
         input,
         output,
         args.slice_start,
+        input_cores,
         num_cores_unpadded,
-        row_major,
-        num_cores_x_unpadded,
-        num_cores_y_unpadded,
         shard_height_unpadded,
         shard_height_padded,
-        num_cores_x_padded,
-        num_cores_y_padded);
+        num_padded_sticks);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -329,15 +337,12 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_ct_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
+    // The reader runs on all_cores_unpadded, so every argument list must go to a core of that set.
+    // get_slice_runtime_args_rm_sharded builds list i for output shard i, and output_cores[i] is the core
+    // holding that shard.
     reader_desc.runtime_args.reserve(num_cores_unpadded);
     for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
-        } else {
-            core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
-        }
-        reader_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].first));
+        reader_desc.runtime_args.emplace_back(output_cores[i], std::move(all_runtime_args[i].first));
     }
 
     desc.kernels.push_back(std::move(reader_desc));
@@ -345,32 +350,78 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-void SliceDeviceOperation::override_runtime_arguments(
+// Re-point every per-dispatch address in a cached slice program, for the factory that built it.
+// Shared with MeshPartition, which drives these same factories directly, so the slot layout has one
+// home. Every shape-derived arg is keyed (both tensor specs, the slice params and factory.index() are
+// folded into compute_program_hash), so addresses are all that move on a hit.
+void patch_slice_program_addresses(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const auto factory = select_program_factory(operation_attributes, tensor_args);
-
-    // Height-sharded RM reader args depend only on shapes/slice_start/shard specs, all cache-keyed, so
-    // on a hit the only thing that changes is the two CB addresses. Patch those in O(1) instead of
-    // rebuilding all per-core args (which scaled host cost with the core grid). CBs: src0, then c_16.
+    const SliceDeviceOperation::program_factory_t& factory,
+    const SliceParams& operation_attributes,
+    const SliceInputs& tensor_args,
+    Tensor& output) {
+    // Height-sharded RM is CB-bound: the reader args are all keyed, so only the two sharded CB
+    // addresses move. CBs are matched positionally -- src0, then c_16.
     if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
         tt::tt_metal::ProgramDescriptor cb_addr_only;
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
-        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_return_value.buffer()});
+        cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = output.buffer()});
         tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
         return;
     }
 
-    // Other factories bake buffer addresses into their runtime args, so re-derive and re-apply.
-    auto desc = std::visit(
+    // A slot holding 0 belongs to a core create_descriptor left zero-filled; leave those alone.
+    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
+    const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
+        for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+            for (auto& a : col) {
+                if (a.size() > 0 && a[0] != 0) {
+                    a[0] = addr;
+                }
+            }
+        }
+    };
+    patch_slot0(kWriterKernelIdx, output.buffer()->address());
+
+    std::visit(
         [&](auto&& f) {
-            return std::decay_t<decltype(f)>::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+            using Factory = std::decay_t<decltype(f)>;
+            if constexpr (
+                std::is_same_v<Factory, SliceRmProgramFactory> ||
+                std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
+                patch_slot0(kReaderKernelIdx, tensor_args.input.buffer()->address());
+            } else if constexpr (
+                std::is_same_v<Factory, SliceTileProgramFactory> ||
+                std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
+                // Divergent-partition hit leaves writer num_pages=0 -> all-zero output (#52651).
+                std::vector<tt::tt_metal::DynamicRuntimeArg> dyn{
+                    {kReaderKernelIdx, {}, 0, tensor_args.input.buffer()->address(), true}};
+                if constexpr (std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
+                    dyn.push_back(
+                        {kReaderKernelIdx, {}, 1, tensor_args.start_tensor.value().buffer()->address(), true});
+                    dyn.push_back({kReaderKernelIdx, {}, 2, tensor_args.end_tensor.value().buffer()->address(), true});
+                }
+                tt::tt_metal::apply_dynamic_runtime_args(program, dyn);
+
+                const uint32_t start_offset = std::is_same_v<Factory, SliceTileProgramFactory>
+                                                  ? ttnn::operations::data_movement::get_tiled_start_offset(
+                                                        tensor_args.input, operation_attributes.slice_start)
+                                                  : 0u;
+                const auto per_core = slice_tile_dynamic_args(
+                    operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
+                tt::tt_metal::apply_dynamic_runtime_args(program, per_core);
+            }
         },
         factory);
-    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+}
+
+void SliceRmShardedProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    patch_slice_program_addresses(program, SliceRmShardedProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

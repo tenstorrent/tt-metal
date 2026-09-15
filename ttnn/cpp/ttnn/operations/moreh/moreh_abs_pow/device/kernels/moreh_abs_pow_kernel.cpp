@@ -18,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t dst1 = 1;
 
     // Input/output roles map to the c_in0 / c_out0 DFBs (input == x, output == y).
-    binary_op_init_common(dfb::x, dfb::x, dfb::y);
+    compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
     DataflowBuffer dfb_x_obj(dfb::x);                // input
     DataflowBuffer dfb_one_obj(dfb::one);            // one

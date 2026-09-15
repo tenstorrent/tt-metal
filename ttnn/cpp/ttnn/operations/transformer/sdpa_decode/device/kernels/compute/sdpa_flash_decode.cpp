@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This kernel reconfigs ~30x; force the Src zero-flag DEFAULT configurator out-of-line (one shared copy
+// reached by a call at each reconfig/init site, instead of an inlined fast path at every one) to reclaim
+// kernel-config-buffer space. Must be defined before the compute API includes. Perf-neutral (init-time only).
+#define LLK_ZEROFLAG_OUTLINE 1
+
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)
@@ -231,7 +236,7 @@ void kernel_main() {
         // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
         // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
         // re-assert of num_faces=4.)
-        reconfig_data_format<SrcOrder::Regular, /*is_tile_dim_reconfig_en=*/true>(cb_k_in, cb_q_in);
+        reconfig_full_operand(cb_k_in, cb_q_in);
     } else {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
         matmul_init(cb_q_in, cb_k_in);

@@ -55,7 +55,8 @@ void kernel_main() {
     uint32_t decay_factor = get_arg_val<uint32_t>(args_idx++);
     [[maybe_unused]] uint32_t seed = get_arg_val<uint32_t>(args_idx++);
 
-    init_sfpu(cb_param_idx, cb_output_idx);
+    compute_kernel_hw_startup(cb_param_idx, cb_output_idx);
+    copy_init(cb_param_idx);
 #if STOCH_ROUND
     init_prng_seed(seed);
 #endif
@@ -63,7 +64,8 @@ void kernel_main() {
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
         // momentum_t calculation
         cb_wait_front(cb_exp_avg_idx, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_param_idx, cb_exp_avg_idx);
+        reconfig_data_format_srca(cb_param_idx, cb_exp_avg_idx);
+        copy_init(cb_exp_avg_idx);
         binop_with_scalar_tile_init();
         tile_regs_acquire();
         // beta_1 * m_{t-1}
@@ -73,7 +75,8 @@ void kernel_main() {
         }
         cb_pop_front(cb_exp_avg_idx, block_size);
         cb_wait_front(cb_grad_idx, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_exp_avg_idx, cb_grad_idx);
+        reconfig_data_format_srca(cb_exp_avg_idx, cb_grad_idx);
+        copy_init(cb_grad_idx);
         binop_with_scalar_tile_init();
         // beta_1 * m_{t-1} + (1 - beta_1) * g
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -86,7 +89,8 @@ void kernel_main() {
 
         // variance_t calculation
         cb_wait_front(cb_exp_avg_sq_idx, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_grad_idx, cb_exp_avg_sq_idx);
+        reconfig_data_format_srca(cb_grad_idx, cb_exp_avg_sq_idx);
+        copy_init(cb_exp_avg_sq_idx);
         binop_with_scalar_tile_init();
         tile_regs_acquire();
         // beta_2 * v_{t-1}
@@ -95,7 +99,8 @@ void kernel_main() {
             mul_unary_tile(block_idx, beta2);
         }
         cb_pop_front(cb_exp_avg_sq_idx, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_exp_avg_sq_idx, cb_grad_idx);
+        reconfig_data_format_srca(cb_exp_avg_sq_idx, cb_grad_idx);
+        copy_init(cb_grad_idx);
         square_tile_init();
         // binop_with_scalar_tile_init(); this and square_tile_init() are the same
         // add_binary_tile_init(); same with this init
@@ -111,7 +116,8 @@ void kernel_main() {
         pack_and_push_two_blocks(cb_v_t, cb_exp_avg_sq_out_idx, block_size);
 
         cb_wait_front(cb_v_t, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_grad_idx, cb_v_t);
+        reconfig_data_format_srca(cb_grad_idx, cb_v_t);
+        copy_init(cb_v_t);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_v_t, block_idx, block_idx);
@@ -121,7 +127,8 @@ void kernel_main() {
 #if AMSGRAD
         // AMSGrad: use max of past squared gradients
         cb_wait_front(cb_max_exp_avg_sq_in_idx, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_v_t, cb_max_exp_avg_sq_in_idx);
+        reconfig_data_format_srca(cb_v_t, cb_max_exp_avg_sq_in_idx);
+        copy_init(cb_max_exp_avg_sq_in_idx);
         binary_max_tile_init();
         // v_t = max(v_max_t, v_t)
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -133,7 +140,8 @@ void kernel_main() {
         pack_and_push_two_blocks(cb_max_exp_avg_sq_out_idx, cb_max_exp_avg_sq_idx, block_size);
 
         cb_wait_front(cb_max_exp_avg_sq_idx, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_idx);
+        reconfig_data_format_srca(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_idx);
+        copy_init(cb_max_exp_avg_sq_idx);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_max_exp_avg_sq_idx, block_idx, block_idx);
@@ -149,7 +157,7 @@ void kernel_main() {
             add_unary_tile(block_idx, epsilon);
         }
         cb_wait_front(cb_m_t, block_size);
-        copy_tile_init(cb_m_t);
+        copy_init(cb_m_t);
         div_binary_tile_init();
         // m_t / (sqrt(v_hat_t) + epsilon)
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -159,7 +167,8 @@ void kernel_main() {
         cb_pop_front(cb_m_t, block_size);
 
         cb_wait_front(cb_param_idx, block_size);
-        copy_tile_to_dst_init_short_with_dt(cb_m_t, cb_param_idx);
+        reconfig_data_format_srca(cb_m_t, cb_param_idx);
+        copy_init(cb_param_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
         }
