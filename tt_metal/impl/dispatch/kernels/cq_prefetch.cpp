@@ -30,8 +30,7 @@
 // FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
 // Quasar FD assumes prefetcher and dispatcher share a Tensix. A split build must resolve:
 //   - Payload-before-credit ordering: fabric relay does not honour the NoC packet flush tag this file uses.
-//   - Credit return: fd_upstream_sem_scope is not gated on the variant, so a split build must force
-//     LOCAL_NONATOMIC, route the release through the NoC, and drop the fd_seed_upstream_sem calls.
+//   - Credit return: NocReleasePolicy::release uses a local store, which reaches only a co-resident DM.
 //   - DispatchSRelayInlineState shares cmd buf 0 with DispatchRelayInlineState, so both inherit one
 //     DEST_COORD; valid only while dispatch_s is co-resident.
 //   - Sub-command copies pass first_line_invalidated=!cmddat_wrap_enable, which is only free because the
@@ -285,8 +284,7 @@ struct DispatchRelayInlineState {
         downstream_cb_sem,
         downstream_cb_base,
         downstream_cb_end,
-        downstream_cb_page_size,
-        fd_upstream_sem_scope>
+        downstream_cb_page_size>
         cb_writer{};
 };
 
@@ -312,8 +310,7 @@ struct DispatchSRelayInlineState {
         downstream_dispatch_s_cb_sem_id,
         dispatch_s_buffer_base,
         dispatch_s_buffer_end,
-        dispatch_s_cb_page_size,
-        fd_upstream_sem_scope>
+        dispatch_s_cb_page_size>
         cb_writer{};
 };
 
@@ -2088,12 +2085,13 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
     count++;
 
     WAYPOINT("PSW");
-    // Not Semaphore::wait(): the target is a local running total, and the heartbeat must run in the spin.
-    auto sync_sem = fd_semaphore<my_downstream_sync_sem_id, fd_upstream_sem_scope>();
+    volatile tt_l1_ptr uint32_t* sem_addr =
+        uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(my_downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     do {
+        invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
-    } while (sync_sem.value() != count);
+    } while (*sem_addr != count);
     WAYPOINT("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -3523,11 +3521,6 @@ void kernel_main_hd() {
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
-
-    // Must precede any downstream traffic.
-    fd_seed_upstream_sem<my_downstream_cb_sem_id>();
-    fd_seed_upstream_sem<my_downstream_sync_sem_id>();
-    fd_seed_upstream_sem<my_dispatch_s_cb_sem_id>();
 
     asm volatile("csrw 0x323, %0" ::"r"(STALL_DCACHE));
     asm volatile("csrw 0x324, %0" ::"r"(STALL_ICACHE));
