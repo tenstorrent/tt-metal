@@ -17,7 +17,7 @@ from helpers.llk_params import (
     PerfRunType,
     Transpose,
 )
-from helpers.perf.core import PerfConfig, PerfReport
+from helpers.perf.core import PerfConfig, PerfReport, _tile_loop_only
 from helpers.perf.relevance import (
     LLK_DISABLE_PERF_RELEVANCE,
     MATH_MATMUL_RELEVANCE,
@@ -26,12 +26,15 @@ from helpers.perf.relevance import (
     PACK_UNTILIZE_RELEVANCE,
     UNPACK_TILIZE_RELEVANCE,
     RunTypeRelevance,
+    _hashable,
     execute_key,
     maybe_relevance,
     pin_template,
     project_formats,
     project_runtimes,
+    project_stimuli,
     project_templates,
+    spec_is_full_fidelity,
 )
 from helpers.perf.schema import MARKER, MEAN, stat_column
 from helpers.profiler import Profiler, ProfilerData
@@ -109,9 +112,9 @@ def _one_run_events(seed: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _stub_hw(monkeypatch, cfg, elf_calls, get_data_calls):
+def _patch_hwfree_classvars(monkeypatch, *, speed_of_light=False):
     monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
-    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False)
+    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", speed_of_light)
     monkeypatch.setattr(TestConfig, "ENABLE_PERF_COUNTERS", False)
     monkeypatch.setattr(TestConfig, "ARTEFACTS_DIR", Path("/tmp/hwfree"), raising=False)
     monkeypatch.setattr(TestConfig, "TENSIX_LOCATION", None, raising=False)
@@ -119,6 +122,10 @@ def _stub_hw(monkeypatch, cfg, elf_calls, get_data_calls):
         TestConfig, "get_elf_text_size", staticmethod(lambda path: 4096)
     )
     monkeypatch.setattr(PerfConfig, "TEST_COUNTER", PerfConfig.TEST_COUNTER)
+
+
+def _stub_hw(monkeypatch, cfg, elf_calls, get_data_calls, *, speed_of_light=False):
+    _patch_hwfree_classvars(monkeypatch, speed_of_light=speed_of_light)
 
     def fake_get_data(test_name, variant_id, location):
         df = _one_run_events(get_data_calls["n"])
@@ -159,16 +166,7 @@ def _run_matmul_cfg(
     kt=1,
     relevance=MATMUL_RELEVANCE,
 ):
-    monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
-    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", False)
-    monkeypatch.setattr(TestConfig, "ENABLE_PERF_COUNTERS", False)
-    monkeypatch.setattr(TestConfig, "ARTEFACTS_DIR", Path("/tmp/hwfree"), raising=False)
-    monkeypatch.setattr(TestConfig, "TENSIX_LOCATION", None, raising=False)
-    monkeypatch.setattr(
-        TestConfig, "get_elf_text_size", staticmethod(lambda path: 4096)
-    )
-    monkeypatch.setattr(PerfConfig, "TEST_COUNTER", PerfConfig.TEST_COUNTER)
-
+    _patch_hwfree_classvars(monkeypatch)
     templates, runtimes = _matmul_params(fidelity, kt=kt)
     cfg = PerfConfig(
         test_name="perf_relevance",
@@ -363,7 +361,9 @@ def test_fidelity_change_reuses_unpack_and_pack(monkeypatch):
     tile_lo = frame_lo[frame_lo[MARKER] == "TILE_LOOP"]
     tile_hi = frame_hi[frame_hi[MARKER] == "TILE_LOOP"]
     assert tile_lo[unpack_col].tolist() == tile_hi[unpack_col].tolist()
+    init_lo = frame_lo[frame_lo[MARKER] == "INIT"]
     init_hi = frame_hi[frame_hi[MARKER] == "INIT"]
+    assert init_lo[unpack_col].isna().all()
     assert init_hi[unpack_col].isna().all()
     assert frame_lo["math_fidelity"].iloc[0] == MathFidelity.LoFi
     assert frame_hi["math_fidelity"].iloc[0] == MathFidelity.HiFi4
@@ -674,7 +674,7 @@ def _math_matmul_runtimes(
             partial_b=partial,
             partial_face_math=partial,
         ),
-        IN_TILE_DIMS(in0_r, 32, 32, 32),
+        IN_TILE_DIMS(in0_r_dim=in0_r),
         DEST_INDEX(dest_index),
     ]
 
@@ -1032,14 +1032,7 @@ def _stimuli(tile_count, res_count=None, **kwargs):
 def test_sol_run_with_formats_reuses_unpack(monkeypatch):
     elf_calls = []
     seeds = {"n": 0}
-    monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
-    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", True)
-    monkeypatch.setattr(TestConfig, "ENABLE_PERF_COUNTERS", False)
-    monkeypatch.setattr(TestConfig, "ARTEFACTS_DIR", Path("/tmp/hwfree"), raising=False)
-    monkeypatch.setattr(TestConfig, "TENSIX_LOCATION", None, raising=False)
-    monkeypatch.setattr(
-        TestConfig, "get_elf_text_size", staticmethod(lambda path: 4096)
-    )
+    _patch_hwfree_classvars(monkeypatch, speed_of_light=True)
 
     def _cfg(fidelity):
         templates, runtimes = _matmul_params(fidelity)
@@ -1053,8 +1046,7 @@ def test_sol_run_with_formats_reuses_unpack(monkeypatch):
             disable_format_inference=True,
             relevance=MATMUL_RELEVANCE,
         )
-        _stub_hw(monkeypatch, cfg, elf_calls, seeds)
-        monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", True)
+        _stub_hw(monkeypatch, cfg, elf_calls, seeds, speed_of_light=True)
         report = PerfReport()
         cfg.run(report, run_count=1)
         return report._frames[-1]
@@ -1186,3 +1178,269 @@ def test_sol_refresh_tile_sizes_keeps_narrow_tile_rescale(monkeypatch):
     cfg._refresh_tile_sizes(cfg.passed_templates + cfg.passed_runtimes)
     assert cfg.pack_size == expected
     assert cfg.unpack_size_a == expected
+
+
+def test_project_stimuli_never_raises_caller_clamp():
+    spec = MATMUL_RELEVANCE[PerfRunType.UNPACK_ISOLATE]
+    runtimes = [CRK_TILE_DIMM(c_dimm=16, r_dimm=1, k_dimm=32)]
+    original = _stimuli(16, res_count=16)
+    projected = project_stimuli(original, runtimes, spec)
+    assert projected.tile_count_A == 16
+    assert projected.tile_count_B == 16
+    assert projected.tile_count_res == 16
+
+
+def test_project_stimuli_pack_uses_per_operand_counts():
+    spec = MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    runtimes = [CRK_TILE_DIMM(c_dimm=16, r_dimm=1, k_dimm=32)]
+    original = _stimuli(16, res_count=16)
+    projected = project_stimuli(original, runtimes, spec)
+    # k_dimm is dropped: A=r×1, B=1×c, Res=r×c, then clamped to the original.
+    assert projected.tile_count_A == 1
+    assert projected.tile_count_B == 16
+    assert projected.tile_count_res == 16
+
+
+def test_project_stimuli_pack_relevance_keeps_block_layout():
+    runtimes = [NUM_BLOCKS(2), NUM_TILES_IN_BLOCK(2)]
+    original = _stimuli(4)
+    for run_type in (PerfRunType.UNPACK_ISOLATE, PerfRunType.L1_CONGESTION):
+        projected = project_stimuli(original, runtimes, PACK_RELEVANCE[run_type])
+        assert projected.tile_count_A == 4
+        assert projected.tile_count_B == 4
+        assert projected.tile_count_res == 4
+
+
+def test_hashable_raises_instead_of_repr():
+    class _Addr:
+        pass
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        TypeError, match="Cannot hash"
+    ):
+        _hashable(_Addr())
+
+
+def test_execute_key_includes_run_count_and_source():
+    templates, runtimes = _matmul_params(MathFidelity.LoFi)
+    spec = MATMUL_RELEVANCE[PerfRunType.UNPACK_ISOLATE]
+    base = _execute_kwargs("perf_matmul", templates, runtimes)
+    assert_key_miss(
+        PerfRunType.UNPACK_ISOLATE,
+        spec,
+        {**base, "run_count": 1},
+        {**base, "run_count": 2},
+    )
+    assert_key_miss(
+        PerfRunType.UNPACK_ISOLATE,
+        spec,
+        {**base, "source": "perf_matmul.py"},
+        {**base, "source": "perf_math_matmul.py"},
+    )
+
+
+def test_execute_key_includes_stimuli_fingerprint():
+    templates, runtimes = _matmul_params(MathFidelity.LoFi)
+    spec = MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    base = _execute_kwargs("perf_matmul", templates, runtimes)
+    assert_key_miss(
+        PerfRunType.PACK_ISOLATE,
+        spec,
+        {**base, "stimuli": _stimuli(4)},
+        {**base, "stimuli": _stimuli(16)},
+    )
+
+
+def test_l1_to_l1_spec_is_full_fidelity():
+    assert spec_is_full_fidelity(MATMUL_RELEVANCE[PerfRunType.L1_TO_L1])
+    assert not spec_is_full_fidelity(MATMUL_RELEVANCE[PerfRunType.UNPACK_ISOLATE])
+
+
+def test_l1_to_l1_is_not_cached(monkeypatch):
+    elf_calls = []
+    seeds = {"n": 0}
+    _run_matmul_cfg(monkeypatch, MathFidelity.LoFi, elf_calls, seeds)
+    cached_types = {key[2] for key in PerfConfig.EXECUTE_CACHE}
+    assert PerfRunType.L1_TO_L1 not in cached_types
+    assert PerfRunType.UNPACK_ISOLATE in cached_types
+
+
+def _run_pack_cfg(monkeypatch, elf_calls, get_data_calls, *, unpack_to_dest, relu=0):
+    _patch_hwfree_classvars(monkeypatch)
+    templates = [DEST_SYNC(DestSync.Half)]
+    runtimes = [
+        NUM_BLOCKS(1),
+        NUM_TILES_IN_BLOCK(1),
+        LOOP_FACTOR(32),
+        NUM_FACES(),
+        RELU_CONFIG(relu),
+        DEST_INDEX(0),
+    ]
+    cfg = PerfConfig(
+        test_name="sources/pack_test.cpp",
+        formats=_format(DataFormat.Float32, DataFormat.Float32),
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+        ],
+        templates=templates,
+        runtimes=runtimes,
+        dest_acc=DestAccumulation.Yes if unpack_to_dest else DestAccumulation.No,
+        unpack_to_dest=unpack_to_dest,
+        disable_format_inference=True,
+        relevance=PACK_RELEVANCE,
+    )
+    _stub_hw(monkeypatch, cfg, elf_calls, get_data_calls)
+    cfg.run(PerfReport(), run_count=1)
+    return cfg
+
+
+def test_pack_empty_math_isolate_is_not_cached(monkeypatch):
+    """unpack_to_dest MATH_ISOLATE TILE_LOOP is a no-op; do not clone it."""
+    elf_calls = []
+    seeds = {"n": 0}
+    _run_pack_cfg(monkeypatch, elf_calls, seeds, unpack_to_dest=True, relu=0)
+    _run_pack_cfg(monkeypatch, elf_calls, seeds, unpack_to_dest=True, relu=1)
+    cached_types = {key[2] for key in PerfConfig.EXECUTE_CACHE}
+    assert PerfRunType.MATH_ISOLATE not in cached_types
+    assert PerfRunType.PACK_ISOLATE in cached_types
+    assert elf_calls.count(PerfRunType.MATH_ISOLATE) == 2
+
+
+def test_pack_real_math_isolate_is_cached(monkeypatch):
+    elf_calls = []
+    seeds = {"n": 0}
+    _run_pack_cfg(monkeypatch, elf_calls, seeds, unpack_to_dest=False, relu=0)
+    _run_pack_cfg(monkeypatch, elf_calls, seeds, unpack_to_dest=False, relu=1)
+    cached_types = {key[2] for key in PerfConfig.EXECUTE_CACHE}
+    assert PerfRunType.MATH_ISOLATE in cached_types
+    assert elf_calls.count(PerfRunType.MATH_ISOLATE) == 1
+
+
+def test_relevance_map_requires_every_run_type():
+    templates, runtimes = _matmul_params(MathFidelity.LoFi)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="SFPU_ISOLATE"
+    ):
+        PerfConfig(
+            test_name="perf_relevance",
+            formats=None,
+            run_types=[PerfRunType.L1_TO_L1, PerfRunType.SFPU_ISOLATE],
+            templates=templates,
+            runtimes=runtimes,
+            dest_acc=DestAccumulation.No,
+            relevance=PACK_RELEVANCE,
+        )
+
+
+def test_execute_cache_evicts_at_max(monkeypatch):
+    monkeypatch.setenv("LLK_PERF_EXECUTE_CACHE_MAX", "2")
+    elf_calls = []
+    seeds = {"n": 0}
+    _run_matmul_cfg(monkeypatch, MathFidelity.LoFi, elf_calls, seeds, kt=1)
+    _run_matmul_cfg(monkeypatch, MathFidelity.LoFi, elf_calls, seeds, kt=2)
+    _run_matmul_cfg(monkeypatch, MathFidelity.LoFi, elf_calls, seeds, kt=3)
+    assert len(PerfConfig.EXECUTE_CACHE) <= 2
+    assert PerfConfig.CACHE_EVICTIONS >= 1
+
+
+def test_cache_hit_recomputes_code_size(monkeypatch):
+    sizes = {"n": 0}
+
+    def fake_size(path):
+        sizes["n"] += 1
+        return 1000 + sizes["n"]
+
+    elf_calls = []
+    seeds = {"n": 0}
+    frame_lo = _run_matmul_cfg(monkeypatch, MathFidelity.LoFi, elf_calls, seeds)
+    monkeypatch.setattr(TestConfig, "get_elf_text_size", staticmethod(fake_size))
+    templates, runtimes = _matmul_params(MathFidelity.HiFi4)
+    cfg = PerfConfig(
+        test_name="perf_relevance",
+        formats=None,
+        run_types=_MATMUL_RUN_TYPES,
+        templates=templates,
+        runtimes=runtimes,
+        dest_acc=DestAccumulation.No,
+        relevance=MATMUL_RELEVANCE,
+    )
+    _stub_hw(monkeypatch, cfg, elf_calls, seeds)
+    monkeypatch.setattr(TestConfig, "get_elf_text_size", staticmethod(fake_size))
+    report = PerfReport()
+    cfg.run(report, run_count=1)
+    frame_hi = report._frames[-1]
+    unpack_col = "TEXT_SIZE(UNPACK_ISOLATE)"
+    assert int(frame_lo[unpack_col].iloc[0]) == 4096
+    assert int(frame_hi[unpack_col].iloc[0]) != 4096
+
+
+def test_tile_loop_only_drops_init_counter_rows():
+    frame = pd.DataFrame(
+        {
+            MARKER: ["INIT", "TILE_LOOP"],
+            "UNPACK_ISOLATE_unpack_busy_pct": [10.0, 90.0],
+        }
+    )
+    filtered = _tile_loop_only(frame)
+    assert filtered[MARKER].tolist() == ["TILE_LOOP"]
+    assert filtered["UNPACK_ISOLATE_unpack_busy_pct"].tolist() == [90.0]
+
+
+def test_sol_unpack_variant_hash_reuses_stimuli_res_format(monkeypatch):
+    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", True)
+    monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
+    templates = [DEST_SYNC(DestSync.Half)]
+    runtimes = [
+        NUM_BLOCKS(1),
+        NUM_TILES_IN_BLOCK(1),
+        LOOP_FACTOR(32),
+        NUM_FACES(),
+        RELU_CONFIG(0),
+    ]
+
+    def _cfg(out_fmt):
+        return PerfConfig(
+            test_name="perf_pack",
+            formats=_format(DataFormat.Float16, out_fmt),
+            run_types=[PerfRunType.UNPACK_ISOLATE, PerfRunType.PACK_ISOLATE],
+            templates=templates,
+            runtimes=runtimes,
+            variant_stimuli=StimuliConfig(
+                None,
+                DataFormat.Float16,
+                None,
+                DataFormat.Float16,
+                out_fmt,
+                tile_count_A=4,
+                tile_count_B=4,
+                tile_count_res=4,
+            ),
+            dest_acc=DestAccumulation.No,
+            disable_format_inference=True,
+            relevance=PACK_RELEVANCE,
+        )
+
+    cfg_f16 = _cfg(DataFormat.Float16)
+    cfg_f32 = _cfg(DataFormat.Float32)
+    unpack_f16 = next(
+        c for c in cfg_f16.run_configs if c[2] == PerfRunType.UNPACK_ISOLATE
+    )
+    unpack_f32 = next(
+        c for c in cfg_f32.run_configs if c[2] == PerfRunType.UNPACK_ISOLATE
+    )
+    cfg_f16._apply_run_config(*unpack_f16)
+    cfg_f32._apply_run_config(*unpack_f32)
+    assert cfg_f16.variant_stimuli.stimuli_res_format == DataFormat.Float16
+    assert cfg_f32.variant_stimuli.stimuli_res_format == DataFormat.Float16
+    assert cfg_f16.variant_id == cfg_f32.variant_id
+
+    pack_f16 = next(c for c in cfg_f16.run_configs if c[2] == PerfRunType.PACK_ISOLATE)
+    pack_f32 = next(c for c in cfg_f32.run_configs if c[2] == PerfRunType.PACK_ISOLATE)
+    cfg_f16._apply_run_config(*pack_f16)
+    cfg_f32._apply_run_config(*pack_f32)
+    assert cfg_f16.variant_stimuli.stimuli_res_format == DataFormat.Float16
+    assert cfg_f32.variant_stimuli.stimuli_res_format == DataFormat.Float32
+    assert cfg_f16.variant_id != cfg_f32.variant_id

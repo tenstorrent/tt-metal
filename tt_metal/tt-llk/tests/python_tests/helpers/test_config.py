@@ -541,9 +541,7 @@ class TestConfig:
         # With asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
         # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel.
         llk_assert_define = (
-            ""
-            if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
-            else "-DENABLE_LLK_ASSERT "
+            "" if not TestConfig.llk_asserts_enabled() else "-DENABLE_LLK_ASSERT "
         )
         TestConfig.INITIAL_OPTIONS_COMPILE = (
             "-Wall -Werror -Wno-error=deprecated-declarations "
@@ -892,6 +890,17 @@ class TestConfig:
         TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
         TestConfig._PENDING_WORKER_INDEX = None
 
+    @staticmethod
+    def llk_asserts_enabled() -> bool:
+        """True when LLK_ASSERT is compiled in (TT_LLK_DISABLE_ASSERTS is not 1).
+
+        Stored on each instance as ``llk_asserts`` so ``generate_variant_hash``
+        and the perf report column see the same flag. Class compile options
+        read this too; they cannot live only in ``INITIAL_OPTIONS_COMPILE``
+        because that is class state ``self.__dict__`` cannot hash.
+        """
+        return os.environ.get("TT_LLK_DISABLE_ASSERTS") != "1"
+
     # === Instance fields and methods ===
     def __init__(
         self,
@@ -926,6 +935,7 @@ class TestConfig:
             )
 
         self._prepared = False
+        self.llk_asserts = TestConfig.llk_asserts_enabled()
 
         # This instance owns its parameter lists: copy on the way in, and never
         # mutate a caller's list or a default in place. The speed-of-light
@@ -1231,6 +1241,8 @@ class TestConfig:
             "passed_formats_config",
             # Original stimuli; SoL compile uses the projected variant_stimuli.
             "passed_stimuli",
+            # Pytest module that constructed this config; execute_key only.
+            "relevance_source",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
         ]
@@ -1302,7 +1314,23 @@ class TestConfig:
         ]
 
         self.variant_id = sha256(
-            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+            str(
+                " | ".join(
+                    temp_str
+                    + ["<<search-dirs>>"]
+                    + search_dirs
+                    + [
+                        "<<llk-asserts>>",
+                        str(
+                            getattr(
+                                self,
+                                "llk_asserts",
+                                TestConfig.llk_asserts_enabled(),
+                            )
+                        ),
+                    ]
+                )
+            ).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:

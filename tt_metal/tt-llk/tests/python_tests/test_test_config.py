@@ -191,6 +191,16 @@ def test_variant_id_is_stable_for_an_unchanged_configuration(isolated_search_dir
     assert variant_id() == variant_id()
 
 
+def test_llk_asserts_flag_changes_the_variant_id(isolated_search_dirs, monkeypatch):
+    """TT_LLK_DISABLE_ASSERTS is a compile input; it must not share ELFs."""
+    clear_search_dirs()
+    monkeypatch.delenv("TT_LLK_DISABLE_ASSERTS", raising=False)
+    asserts_on = variant_id()
+    monkeypatch.setenv("TT_LLK_DISABLE_ASSERTS", "1")
+    asserts_off = variant_id()
+    assert asserts_on != asserts_off
+
+
 # --------------------------------------------------------------------------- #
 # Parameter lists belong to the instance, not to the caller or the default.
 # --------------------------------------------------------------------------- #

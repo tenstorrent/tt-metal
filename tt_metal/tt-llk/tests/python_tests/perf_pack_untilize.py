@@ -4,6 +4,7 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
+from helpers.llk_params import PerfRunType
 from helpers.param_config import (
     input_output_formats,
     parametrize,
@@ -15,6 +16,12 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     TILE_COUNT,
     generate_input_dim,
+)
+
+assert PACK_UNTILIZE_RELEVANCE.run_types == (
+    PerfRunType.L1_TO_L1,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
 )
 
 
