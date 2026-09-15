@@ -46,6 +46,7 @@ class FakeModel:
         self.dispatch_log: list[tuple] = []
         self.max_inflight = 0
         self.blocks: dict[int, int] = {}
+        self._replays: deque = deque()
 
     def session_usage(self):
         used = sum(self.blocks.values())
@@ -54,12 +55,33 @@ class FakeModel:
     def activate_session(self, sid):
         self.active_sid = sid
 
-    def decode_traced_async(self, token_id, pos):
-        assert self.active_sid is not None, "dispatched with no active session"
-        self.blocks[self.active_sid] = pos // self.BLOCK + 1  # grows as the session does
-        self.queue.append((self.active_sid, token_id, pos))
-        self.dispatch_log.append((self.active_sid, token_id, pos))
+    def ensure_session_capacity(self, pos):
+        if self.active_sid is None:
+            return
+        self.blocks[self.active_sid] = max(self.blocks.get(self.active_sid, 0), pos // self.BLOCK + 1)
+
+    def replay_traced(self, pos):
+        assert self.active_sid is not None, "replayed with no active session"
+        self._replays.append((self.active_sid, int(pos)))
+
+    def replay_traced_ahead(self, positions):
+        for pos in positions:
+            self.replay_traced(pos)
+
+    def write_step_packet(self, token_id, pos):
+        # Sid is captured at replay (post) time: by feed time another user may already
+        # be seated, which is the whole point of posting every trace before any packet.
+        assert self._replays, "packet with no posted trace"
+        sid, queued_pos = self._replays.popleft()
+        assert queued_pos == int(pos), f"packet pos {pos} != queued replay {queued_pos}"
+        self.blocks[sid] = max(self.blocks.get(sid, 0), pos // self.BLOCK + 1)
+        self.queue.append((sid, token_id, pos))
+        self.dispatch_log.append((sid, token_id, pos))
         self.max_inflight = max(self.max_inflight, len(self.queue))
+
+    def decode_traced_async(self, token_id, pos):
+        self.replay_traced(pos)
+        self.write_step_packet(token_id, pos)
 
     def read_decoded_output(self):
         sid, token_id, pos = self.queue.popleft()
@@ -112,10 +134,32 @@ class FakeEngine:
         self.lm_head = None
         self.paged = True
         self.users = [FakeUser(i, self) for i in range(num_users)]
+        self._replay_q: deque = deque()
 
     def tokens_left(self):
         used, total = self.model.session_usage()["sliding"]
         return (total - used) * FakeModel.BLOCK
+
+    def post_traced(self, user, positions):
+        user.activate()
+        positions = [int(p) for p in positions]
+        if not self.traced or not positions:
+            return
+        self.model.ensure_session_capacity(positions[-1])
+        self.model.replay_traced_ahead(positions)
+        self._replay_q.extend(positions)
+
+    def write_traced(self, token_id, pos):
+        queued = self._replay_q.popleft()
+        if queued != int(pos):
+            raise RuntimeError(f"traced packet pos {pos} does not match queued replay {queued}")
+        self.model.write_step_packet(token_id, int(pos))
+
+    def drain_traced(self, token_id):
+        while self._replay_q:
+            pos = self._replay_q[0]
+            self.write_traced(int(token_id), pos)
+            self.model.read_decoded_output()
 
 
 def _run_turns(api, keys, max_tokens=12, content="hello there friend "):
@@ -348,10 +392,13 @@ def test_client_hangup_strands_no_step() -> None:
     stats = api.generate("gone", {"messages": [{"role": "user", "content": "hi there"}], "max_tokens": 50}, on_chunk)
     api.stop()
     assert not engine.model.queue, f"{len(engine.model.queue)} steps left in flight after cancel"
+    assert not engine._replay_q, "posted traces were not drained after cancel"
     assert stats["completion_tokens"] > 0, "the partial reply was dropped"
     user = engine.users[0]
     assert user.messages[-1]["role"] == "assistant", "assistant turn not recorded"
-    assert user.pos == len(engine.model.dispatch_log), "session position out of step with the cache"
+    # Drain may dummy-feed leftover look-ahead traces without advancing ``pos``; those
+    # rows are overwritten if the conversation continues. Real feeds still match pos.
+    assert user.pos <= len(engine.model.dispatch_log), "session ran past the recorded cache writes"
 
 
 def test_follow_up_turn_continues_the_session() -> None:
