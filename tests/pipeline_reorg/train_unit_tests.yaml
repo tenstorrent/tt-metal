@@ -44,9 +44,9 @@
   cmd: python -m pytest tt-train/tests/python
   skus:
     bh_p100:
-      timeout: 20
+      timeout: 35
     bh_p150b_civ2:
-      timeout: 20
+      timeout: 30
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit

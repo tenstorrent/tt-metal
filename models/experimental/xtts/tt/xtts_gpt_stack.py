@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+from models.experimental.xtts.reference.xtts_gpt_block import NUM_LAYERS
+from models.experimental.xtts.tt.xtts_gpt_block import (
+    NEG_INF,
+    TtXttsGptBlock,
+    _to_device,
+    sharded_decode_ln,
+    sharded_prefill_ln,
+)
+
+
+class TtXttsGptStack(LightweightModule):
+    def __init__(self, state_dict, device, num_layers=NUM_LAYERS, max_seq=0):
+        """Build the GPT block stack and final layer-norm weights."""
+        super().__init__()
+        self.device = device
+        self.num_layers = num_layers
+        self.blocks = [TtXttsGptBlock(state_dict, device, layer_idx=i) for i in range(num_layers)]
+        self.ln_f_weight = _to_device(state_dict["gpt.gpt.ln_f.weight"], device)
+        self.ln_f_bias = _to_device(state_dict["gpt.gpt.ln_f.bias"], device)
+        self.max_seq = 0
+        if max_seq:
+            self.init_static(max_seq)
+
+    def init_static(self, max_seq):
+        """Allocate static arange and prompt-pad buffers for decode masking."""
+        self.max_seq = max_seq
+        self.arange = ttnn.from_torch(
+            torch.arange(max_seq, dtype=torch.float32).reshape(1, 1, 1, max_seq),
+            device=self.device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        # 1.0 marks a prompt slot decode must NOT attend to — the STOP_TEXT_TOKEN padding that
+        # pins every chunk of a chunked take to one captured prompt geometry. Persistent and
+        # updated IN PLACE (see set_prompt_pad) so a captured trace keeps binding this buffer.
+        self.prompt_pad = ttnn.from_torch(
+            torch.zeros(1, 1, 1, max_seq),
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+    def set_prompt_pad(self, start, end):
+        """Hide prompt slots [start, end) from decode attention (in place; host write)."""
+        flags = torch.zeros(1, 1, 1, self.max_seq)
+        flags[..., start:end] = 1.0
+        src = ttnn.from_torch(flags, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy(src, self.prompt_pad)
+        ttnn.deallocate(src)
+
+    def forward_decode(self, x, kv, pos, write_idx=None):
+        # add_mask must stay DRAM (SDPA asserts DRAM mask).
+        """Run one decode step through all blocks and final LN."""
+        gt = ttnn.typecast(ttnn.gt(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Block the future (gt) AND the text padding: 1.0 in either -> -inf.
+        blocked = ttnn.maximum(gt, self.prompt_pad, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(gt)
+        add_mask = ttnn.multiply(blocked, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(blocked)
+        pos_idx = None
+        if write_idx is None:
+            # paged_fused_update_cache wants the write row as an INT32 ROW_MAJOR device tensor.
+            # Derive it in-graph from pos so a captured trace advances it with pos, once per step.
+            p_tile = ttnn.typecast(ttnn.slice(pos, [0, 0, 0, 0], [1, 1, 1, 1]), ttnn.int32)
+            pos_idx = ttnn.reshape(ttnn.to_layout(p_tile, ttnn.ROW_MAJOR_LAYOUT), (1,))
+            ttnn.deallocate(p_tile)
+        for block, (k, v) in zip(self.blocks, kv):
+            x = block.forward_decode(x, k, v, pos_idx, add_mask, write_idx)
+        return sharded_decode_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
+
+    def forward(self, x):
+        """Run prefill through all blocks without returning KV."""
+        for block in self.blocks:
+            x, _, _ = block.forward_prefill(x)
+        return sharded_prefill_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
+
+    def forward_prefill(self, x):
+        """Run prefill through all blocks and collect KV caches."""
+        kv = []
+        for block in self.blocks:
+            x, k, v = block.forward_prefill(x)
+            kv.append((k, v))
+        y = sharded_prefill_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
+        return y, kv
