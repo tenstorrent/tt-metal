@@ -64,6 +64,7 @@
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include "common/env_lib.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -219,7 +220,7 @@ protected:
 TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     const auto target = MetalContext::instance().get_cluster().get_target_device_type();
 
-    IDevice* dev = devices_[0]->get_devices()[0];
+    distributed::MeshDevice* device = devices_[0].get();
 
     if (use_mock_mode()) {
         TT_FATAL(
@@ -231,7 +232,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
         // does not steer CompileProgram), so a runner/arch mismatch would gate
         // e.g. Wormhole kernels against the Blackhole golden. Fail fast instead.
         const tt::ARCH expected_arch = get_mock_arch_from_env();
-        const tt::ARCH actual_arch = dev->arch();
+        const tt::ARCH actual_arch = device->arch();
         TT_FATAL(
             actual_arch == expected_arch,
             "CompileStressFixture requested arch '{}' but the attached device is '{}'.",
@@ -260,7 +261,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     const uint32_t num_shared = static_cast<uint32_t>(std::floor(shared_fraction * target_num_kernels));
     const uint32_t num_private = target_num_kernels - num_shared;
 
-    CoreCoord compute_grid = dev->compute_with_storage_grid_size();
+    CoreCoord compute_grid = device->compute_with_storage_grid_size();
     const uint32_t grid_x = compute_grid.x;
     const uint32_t grid_y = compute_grid.y;
     const uint32_t cores_per_program = grid_x * grid_y;
@@ -306,7 +307,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
                 .set_page_size(tt::CBIndex::c_16, single_tile_size);
         CreateCircularBuffer(warmup, CoreCoord(0, 0), cb16);
         CreateKernel(warmup, kernel_path, CoreCoord(0, 0), ComputeConfig{.compile_args = {UINT32_MAX, private_seed}});
-        detail::CompileProgram(dev, warmup);
+        warmup.impl().compile(device);
     }
     log_info(LogTest, "Warmup compile done");
 
@@ -341,7 +342,7 @@ TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     std::vector<std::future<void>> futures;
     futures.reserve(num_programs);
     for (auto& program : programs) {
-        futures.push_back(std::async(std::launch::async, [dev, &program] { detail::CompileProgram(dev, program); }));
+        futures.push_back(std::async(std::launch::async, [device, &program] { program.impl().compile(device); }));
     }
     for (auto& f : futures) {
         f.get();

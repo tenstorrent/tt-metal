@@ -22,7 +22,6 @@
 #include "jit_build/build_env_manager.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/kernels/kernel.hpp"
 // Access to internal API: ProgramImpl::get_kernels
 #include "impl/program/program_impl.hpp"
@@ -42,7 +41,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         Program program = CreateProgram();
         KernelHandle kernel_handle_riscv_0 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_0);
         KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
-        slow_dispatch::CompileProgram(*mesh_device, program);
+        program.impl().compile(mesh_device.get());
 
         const uint32_t tensix_core_type =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);

@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -38,7 +39,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
@@ -168,8 +169,13 @@ void JitBuildEnv::init(
         "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
         // Ban dynamic initializations, via a check we've added
         "-ftt-no-dyninit "
-        // Rely on Link Time Optimization (removes globally unreachable code)
-        "-flto=auto "
+        // Rely on Link Time Optimization (removes globally unreachable code).
+        // Partitioning and job count are pinned rather than left to -flto=auto: the JIT
+        // scheduler already builds ~30 kernels at once, and with no make jobserver to
+        // consult 'auto' resolves to the host CPU count, letting each of those links fan
+        // out on top of it. A single partition is what kernels this size already produce,
+        // so pinning holds current behavior instead of leaving it to a size threshold.
+        "-flto=1 -flto-partition=one "
         // Fast math allows non-IEEE compliant optimizations ...
         "-ffast-math "
         // ... but we require these IEEE behaviors
@@ -195,7 +201,21 @@ void JitBuildEnv::init(
         "-Wno-error=multistatement-macros -Wno-error=parentheses "
         "-Wno-error=unused-but-set-variable "
         // And don't detect these issues
-        "-Wno-unused-variable -Wno-unused-function ";
+        "-Wno-unused-variable -Wno-unused-function "
+        // Firmware and kernels access mailboxes and MMIO through pointers
+        // formed from small literal addresses (e.g. MEM_MAILBOX_BASE is 16
+        // on Wormhole). On these bare-metal cores the bottom of the address
+        // space is ordinary L1 memory, but GCC assumes no object can live in
+        // the first page and -Warray-bounds diagnoses such accesses as
+        // "source object is likely at address zero", which -Werror makes
+        // fatal. (With -flto the literal address is not visible during
+        // per-TU compilation, so today this only fires if LTO is disabled;
+        // see issue #54692.) min-pagesize=0 tells GCC that constant
+        // addresses from zero up are valid objects, disabling exactly that
+        // heuristic while keeping -Warray-bounds active for genuine
+        // out-of-bounds accesses. It is a diagnostics-only parameter with no
+        // effect on generated code.
+        "--param=min-pagesize=0 ";
 
     // Defines
     this->defines_ = "";
@@ -346,6 +366,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
+        root_ + "tt_metal/tt-llk/tools/include",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 
@@ -426,6 +447,11 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
+    this->is_compute_pack_ = build_config.core_type == HalProgrammableCoreType::TENSIX &&
+                             build_config.processor_class == HalProcessorClassType::COMPUTE &&
+                             build_config.processor_id == 2;
+    // Per-kernel opt-in flags (applied in export_target_recipe); empty when unsupported.
+    this->rvv_cflags_ = jit_build_query.rvv_compile_flags(params);
     // Includes
     {
         auto it = std::back_inserter(this->includes_);
@@ -469,9 +495,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->temp_objs_.push_back(jit_build::utils::FileRenamer::generate_temp_path(obj_path));
     }
 
-    // Prepend root path to srcs, but not to outputs (objs) due to device dependency
+    // Prepend root path to srcs, but not to outputs (objs) due to device dependency.
+    // An absolute source path is complete already; that is how an out-of-tree firmware source is
+    // named.
     for (string& src : this->srcs_) {
-        src = env_.root_ + src;
+        if (src.empty() || src.front() != '/') {
+            src = env_.root_ + src;
+        }
     }
 
     // Append hw build objects compiled offline
@@ -520,6 +550,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         }
         hasher.update(default_compile_opt_level_);
         hasher.update(default_linker_opt_level_);
+        // Not part of default recipes, but a change to the HAL's RVV flag string must still
+        // invalidate cached opted-in kernels.
+        hasher.update(rvv_cflags_);
         build_state_hash_ = hasher.digest();
     }
 }
@@ -814,7 +847,10 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     TTZoneScopedD(JIT);
-    auto t0_build = std::chrono::steady_clock::now();
+    // Widens the process-wide JIT build window to cover this call, on every exit path -- including
+    // the warmed-ELF early return below, which is build activity even though it compiles nothing.
+    ScopedBuildWindow build_window;
+    const auto t0_build = build_window.start();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
 
@@ -848,7 +884,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
     }
 
-    auto compiled = compile(out_dir, settings, state_changed);
+    static auto& tok_compile = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::compile");
+    auto compiled = record_elapsed(tok_compile, [&] { return compile(out_dir, settings, state_changed); });
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -882,10 +919,32 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         fs::create_directories(target_out_dir);
         if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
-            target->link(target_out_dir, settings, link_objs);
+            // target_name_ alone does not distinguish firmware from kernels, and firmware images are
+            // much larger/slower to link than a typical kernel -- sharing a key would let firmware set
+            // max and drag mean up, so the numbers would no longer describe kernels.
+            const std::string_view target_kind = target->is_fw_ ? "fw" : "kernel";
+            // Only link() is per-target work (compile() and populate_link_objs() are shared across
+            // targets), and only this branch links at all -- cache hits would record ~0 ms noise.
+            record_elapsed(
+                per_target_telemetry_token(fmt::format("{}_link_time", target_kind), target->target_name_, "ms"),
+                [&] { target->link(target_out_dir, settings, link_objs); });
             if (target->is_fw_) {
                 target->weaken(target_out_dir);
             }
+
+            // Inside the link branch so count is "binaries produced", not "times build() was called":
+            // on a warm cache every target would otherwise re-stat and re-record the same ELF.
+            // This is the on-disk ELF, which is neither stripped nor loaded as-is: it carries debug
+            // info when riscv_debug_info_enabled is set and relocations from -Wl,--emit-relocs, so it
+            // tracks build settings more than the device footprint and will not match
+            // program_config_size.kernel_text.
+            std::error_code elf_size_ec;
+            const auto elf_size = fs::file_size(target_out_dir + target->target_name_ + ".elf", elf_size_ec);
+            if (!elf_size_ec) {
+                per_target_telemetry_token(fmt::format("{}_elf_size", target_kind), target->target_name_, "B")
+                    .record(static_cast<double>(elf_size));
+            }
+
             // Record the build state used for linking so that future runs can detect
             // when link-affecting flags (lflags, linker script, etc.) change.
             target->write_build_state_hash(target_out_dir);
@@ -915,7 +974,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     extract_zone_src_locations(out_dir);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
-    static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
+    static auto& tok_build = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
 
     // Per-kernel compile time makes a slow/stuck compile visible instead of silent, but a workload
@@ -934,6 +993,17 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     tt::jit_build::TargetRecipe target;
     target.target_name = target_name_;
     target.cflags = cflags_;
+    // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
+    // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
+    // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
+    if (settings != nullptr && this->is_compute_pack_ && settings->get_trisc2_rvv_enabled()) {
+        TT_FATAL(
+            !this->rvv_cflags_.empty(),
+            "Kernel {} sets enable_trisc2_rvv, but this architecture does not support RVV code "
+            "generation on the pack processor",
+            settings->get_full_kernel_name());
+        target.cflags += this->rvv_cflags_;
+    }
     target.lflags = lflags_;
     target.linker_script = linker_script_;
     target.extra_link_objs = extra_link_objs_;
@@ -1001,21 +1071,15 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     TTZoneScopedD(JIT);
-    auto t0 = std::chrono::steady_clock::now();
-    build.build(settings);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
-    tok.record(elapsed_ms);
+    static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build");
+    record_elapsed(tok, [&] { build.build(settings); });
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
-    auto t0 = std::chrono::steady_clock::now();
     const JitBuildState& primary = *targets[0];
-    primary.build(settings, targets);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
-    tok.record(elapsed_ms);
+    static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build_for_processors");
+    record_elapsed(tok, [&] { primary.build(settings, targets); });
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {

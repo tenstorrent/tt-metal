@@ -12,7 +12,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/internal/cluster_noc_helpers.hpp>
+#include <internal/cluster_noc_helpers.hpp>
 
 #include "ttnn/cluster.hpp"
 

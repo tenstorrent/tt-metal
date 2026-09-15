@@ -28,10 +28,16 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_KDA_SIGMOID_GATED_RMS_NORM_SRCS}
-        ${TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS}
 )
 
-target_link_libraries(ttnn_op_experimental_kda_sigmoid_gated_rms_norm PRIVATE TT::Metalium PUBLIC TTNN::Core)
+target_link_libraries(
+    ttnn_op_experimental_kda_sigmoid_gated_rms_norm
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Experimental::KDA::Common
+    PUBLIC
+        TTNN::Core
+)
 
 install(
     TARGETS

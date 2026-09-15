@@ -25,6 +25,7 @@ sys.path.append(str(Path(__file__).resolve().parents[6]))
 
 import pytest
 import torch
+from huggingface_hub.constants import HF_HUB_CACHE
 from loguru import logger
 from safetensors import safe_open
 
@@ -77,9 +78,9 @@ def _gemma_path() -> str:
     explicit = os.environ.get("GEMMA_PATH")
     if explicit:
         return explicit
-    cands = glob.glob(
-        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
-    )
+    # HF_HUB_CACHE resolves HF_HUB_CACHE / HF_HOME / the default. Hardcoding ~/.cache/huggingface
+    # here made this unfindable in CI, which points HF_HUB_CACHE at the shared weights mount.
+    cands = glob.glob(os.path.join(HF_HUB_CACHE, "models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/"))
     return cands[0].rstrip("/") if cands else "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
@@ -87,11 +88,9 @@ def _ltx_ckpt() -> str | None:
     explicit = os.environ.get("LTX_CHECKPOINT")
     if explicit and os.path.exists(explicit):
         return explicit
-    cands = glob.glob(
-        os.path.expanduser(
-            "~/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/*/ltx-2.3-22b-dev.safetensors"
-        )
-    )
+    # HF_HUB_CACHE resolves HF_HUB_CACHE / HF_HOME / the default. Hardcoding ~/.cache/huggingface
+    # here made this unfindable in CI, which points HF_HUB_CACHE at the shared weights mount.
+    cands = glob.glob(os.path.join(HF_HUB_CACHE, "models--Lightricks--LTX-2.3/snapshots/*/ltx-2.3-22b-dev.safetensors"))
     return cands[0] if cands else None
 
 
@@ -173,10 +172,10 @@ def _encode_prompts_reference(
     indirect=["mesh_device", "device_params"],
 )
 def test_gemma_encoder(*, mesh_device):
+    # _gemma_path falls back to the bare repo id, which from_pretrained resolves cache-then-hub.
+    # Gating an os.path.isdir on it made that fallback dead and skipped before any HF call.
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
-    if not os.path.isdir(gemma):
-        pytest.skip(f"Gemma not found: {gemma}")
     if not ckpt:
         pytest.skip("LTX checkpoint not found")
 
@@ -259,8 +258,6 @@ def test_prof_gemma_ltx_devicetime(mesh_device, device_params):
     printed GEMMA_ENCODE_HOST_WALL_MS — the gap is host dispatch."""
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
-    if not os.path.isdir(gemma):
-        pytest.skip(f"Gemma not found: {gemma}")
     if not ckpt:
         pytest.skip("LTX checkpoint not found")
 

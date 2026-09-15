@@ -180,8 +180,8 @@ inline void _generic_moe_gate_bitonic8_steps_3_to_1_()
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-template <int num_rows, int scores_offset>
-inline void _generic_moe_gate_normalize_(std::uint32_t eps, std::uint32_t scale)
+template <int num_rows, int scores_offset, bool do_extra_scale = false>
+inline void _generic_moe_gate_normalize_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, scores_offset + 4);
@@ -204,11 +204,16 @@ inline void _generic_moe_gate_normalize_(std::uint32_t eps, std::uint32_t scale)
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 
     TTI_SFPCONFIG(0, 0xF, 1);
-    sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vFloat eps_value          = Converter::as_float(eps);
-    l0                              = l0 + eps_value;
-    l0                              = sfpu_reciprocal<false>(l0);
-    sfpi::vFloat scale_value        = Converter::as_float(scale);
+    sfpi::vFloat l0          = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat eps_value   = Converter::as_float(eps);
+    l0                       = l0 + eps_value;
+    l0                       = sfpu_reciprocal<false>(l0);
+    sfpi::vFloat scale_value = Converter::as_float(scale);
+    if constexpr (do_extra_scale)
+    {
+        sfpi::vFloat es = Converter::as_float(extra_scale);
+        scale_value     = scale_value * es;
+    }
     l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
     TTI_SFPNOP;
@@ -280,8 +285,15 @@ inline void _init_generic_moe_gate_topk_()
 // caller has already loaded DST[1] with its own mapping (e.g. bit-15-flagged SRAM slots) via
 // copy_tile(input_indices, 0, 1): the sort's LREG4-7 LO16 load then reads those values verbatim and the
 // paired sort carries them through to out_indices.
-template <bool normalize, int num_selected_experts, int num_total_experts, bool zero_tail, bool full_sort, bool generate_indices = true>
-inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale)
+template <
+    bool normalize,
+    int num_selected_experts,
+    int num_total_experts,
+    bool zero_tail,
+    bool full_sort,
+    bool generate_indices = true,
+    bool do_extra_scale   = false>
+inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0)
 {
     if constexpr (generate_indices)
     {
@@ -291,11 +303,11 @@ inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale)
 
     if constexpr (num_selected_experts > 8)
     {
-        _generic_moe_gate_top16_<normalize, num_selected_experts, num_total_experts, zero_tail, full_sort>(eps, scale);
+        _generic_moe_gate_top16_<normalize, num_selected_experts, num_total_experts, zero_tail, full_sort, do_extra_scale>(eps, scale, extra_scale);
     }
     else
     {
-        _generic_moe_gate_top8_<normalize, num_selected_experts, num_total_experts, zero_tail, full_sort>(eps, scale);
+        _generic_moe_gate_top8_<normalize, num_selected_experts, num_total_experts, zero_tail, full_sort, do_extra_scale>(eps, scale, extra_scale);
     }
 }
 

@@ -18,7 +18,13 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_domains import _OP_DOMAIN_REGISTRY, exclude_undefined_pair, for_op
+from helpers.sfpu_domains import (
+    _OP_DOMAIN_REGISTRY,
+    Operand,
+    edge_spec,
+    exclude_undefined_pair,
+    for_op,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -45,16 +51,12 @@ def torch_equal_nan(a, b):
 def _ternary_default_specs(mathop, input_format):
     """Per-operand defaults for *mathop*: its registered domain, else the built-in one.
 
-    No ternary op has an _OP_DOMAIN_REGISTRY entry, so every op currently takes the
-    built-in branch. This is the single place a registered domain would take effect, and
-    callers of _run_sfpu_ternary can override any operand to reach an edge the defaults
+    Callers of _run_sfpu_ternary override any operand to reach an edge the defaults
     exclude (e.g. the c -> 0 pole that addcdiv and snake_beta pin away from).
     """
     if mathop in _OP_DOMAIN_REGISTRY:
-        # OperandSpecs carries only A and B, so a registered ternary op has no third
-        # operand to read; reuse B for C.
         specs = exclude_undefined_pair(mathop, for_op(mathop, input_format))
-        return specs.spec_A, specs.spec_B, specs.spec_B
+        return specs.spec_A, specs.spec_B, specs.spec_C
 
     # addcdiv and snake_beta divide by c, so c is held away from zero.
     divide_by_c = mathop in (MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta)
@@ -76,8 +78,7 @@ def _run_sfpu_ternary(
     spec_B=None,
     spec_C=None,
 ):
-    # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
-    # sitting near its tolerance pass or fail by luck. Same as the binary driver.
+    # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
 
     default_A, default_B, default_C = _ternary_default_specs(
@@ -189,6 +190,73 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
     _run_sfpu_ternary(formats, dest_acc, mathop)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Deliberate edge values on the third operand
+#
+# The random sweep holds c away from zero for the ops that divide by it, so the pole is
+# unreachable by construction; these variants drive it, via each op's registered edge metadata.
+# Only C gets edge values: A and B keep their random domains, since the divisor is the
+# interesting operand and pinning all three would test one point rather than a spread.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TERNARY_EDGE_OPS = [
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuAddcmul,
+    MathOperation.SfpuLerp,
+    MathOperation.SfpuSnakeBeta,
+]
+
+# Ops that divide by c, and therefore need a numerator held away from zero: c = 0 with an
+# unconstrained numerator would mix the pole (every element ±inf) with the 0/0 indeterminate
+# form, which the binary suite covers as a class of its own.
+_TERNARY_DIVIDES_BY_C = frozenset(
+    {MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta}
+)
+
+# |x| >= 0.5 on both a and b, keeping both numerators off zero -- addcdiv's is value * b,
+# snake_beta's sin(b*a)^2. Two specs differing only in seed: one spec shared by both operands
+# would make every variant run a == b, hiding a kernel that reads the wrong operand.
+_TERNARY_NONZERO_A = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
+_TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=1)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_EDGE_OPS,
+)
+def test_sfpu_ternary_edges(formats, dest_acc, mathop):
+    """Drive each ternary op's operand-C pole or knee, where it has one."""
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    spec_C = edge_spec(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        operand=Operand.C,
+        dest_acc=dest_acc,
+    )
+    if spec_C is None:
+        # addcmul: c is a multiplicand, so there is no pole or knee for a probe to reach.
+        pytest.skip(
+            reason=f"{mathop.name} has no operand-C edge (no pole, no knee) for this "
+            "pipeline"
+        )
+
+    # Keep the numerator off zero so the variant asserts the pole, not 0/0.
+    nonzero = mathop in _TERNARY_DIVIDES_BY_C
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=_TERNARY_NONZERO_A if nonzero else None,
+        spec_B=_TERNARY_NONZERO_B if nonzero else None,
+        spec_C=spec_C,
+    )
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -245,7 +313,6 @@ def test_ttnn_where(
         src_A = torch.ones_like(src_A)
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
-    # For "mixed" case, use the generated stimuli as-is
 
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(src_A, src_B, src_C)
@@ -306,8 +373,7 @@ def test_ttnn_where(
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
 
 
-# MCW test with dynamic format sweeping like main test
-# Use same input/output format - no mixing
+# MCW test: the main test's format sweep, input format == output format.
 @parametrize(
     formats=input_output_formats(
         [
@@ -328,8 +394,6 @@ def test_ttnn_where_mcw(
     # Multi-tile tensor dimensions (2x2 tiles of 32x32).
     height = 64
     width = 64
-
-    # Generate dtype dynamically based on current input format
 
     if (
         formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32

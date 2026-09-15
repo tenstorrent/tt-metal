@@ -593,7 +593,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
 
     log_info(LogTest, "Running programs");
     for (auto i = 0; i < devices.size(); i++) {
-        fixture->RunProgramNonblocking(devices[i], program_handles[i]);
+        fixture->RunProgramNonblocking(devices[i], std::move(program_handles[i]));
     }
 
     if (!test_config.terminate_from_kernel) {
@@ -629,8 +629,8 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     }
 
     log_info(LogTest, "Waiting for programs");
-    for (auto i = 0; i < devices.size(); i++) {
-        fixture->WaitForSingleProgramDone(devices[i], program_handles[i]);
+    for (const auto& device : devices) {
+        fixture->WaitForSingleProgramDone(device);
     }
 
     auto validate_worker_results = [&](tt::tt_metal::distributed::MeshDevice& device,

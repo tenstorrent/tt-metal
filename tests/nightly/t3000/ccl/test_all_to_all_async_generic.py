@@ -626,6 +626,34 @@ def test_all_to_all_fabric_2d(
     )
 
 
+# A 1x8 view of the 2x4 board follows its perimeter, so axis 1 turns corners. Initialization multicast cannot route it.
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_all_to_all_fabric_2d_bent_axis(mesh_device):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=[1, 128, 128, 512],
+        in_dim=1,
+        out_dim=2,
+        num_links=2,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Ring,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=False,
+        cluster_axis=1,
+    )
+
+
 @pytest.mark.parametrize(
     "mesh_device,device_params,cluster_axis",
     [

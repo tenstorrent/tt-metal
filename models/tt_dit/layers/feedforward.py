@@ -139,6 +139,7 @@ class ParallelFeedForward(Module):
         compute_kernel_config=None,
         parallel_config=None,
         default_block_size=None,
+        core_grid=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -153,6 +154,7 @@ class ParallelFeedForward(Module):
             compute_kernel_config=compute_kernel_config,
             parallel_config=parallel_config,
             default_block_size=default_block_size,
+            core_grid=core_grid,
         )
         return self.ff2.forward_fused_addcmul(
             ff1_out,

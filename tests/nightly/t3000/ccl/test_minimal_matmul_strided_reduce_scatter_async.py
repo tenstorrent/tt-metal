@@ -87,6 +87,8 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     mm_window_blocks=None,
     fused_concat=False,
     fused_concat_ka=None,
+    pass_counter_buffers=True,
+    counter_row_slots=None,
 ):
     torch.manual_seed(0)
 
@@ -110,35 +112,43 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     # Caller-owned MM->RS progress counter array, the same thing CCLManager hands the model
     # (see CCLManager.get_mm_progress_counters_buffer). Passing it exercises the shared-array path;
     # leaving it None makes each compiled program allocate its own, which permanently lowers the
-    # device's L1 floor. One uint32 slot per matmul core, one row per core, L1 HEIGHT_SHARDED so
-    # every RS worker core sees its row at the same local address.
+    # device's L1 floor (the windowed path therefore REQUIRES it — the op validates presence).
+    #
+    # Sizing: uint32, L1 HEIGHT_SHARDED so every reading core sees its row at the same local
+    # address. Each row needs one slot per matmul core (mm_grid.x * mm_grid.y), and the shard grid
+    # must cover the RS worker cores. Rows sized to the FULL compute grid and sharded over it — a
+    # square [num_cores, num_cores] — satisfy any mm_core_grid/RS placement, which is why both this
+    # and CCLManager allocate that shape once and reuse it everywhere.
     _counter_slots = compute_grid_size.x * compute_grid_size.y
-    mm_progress_counters = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([_counter_slots, _counter_slots]),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        mesh_device,
-        ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-    )
+
+    def _allocate_counter_array(row_slots=_counter_slots):
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([_counter_slots, row_slots]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(all_cores, [1, row_slots], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
 
     # Caller-owned RS->MM window credit array, the CCLManager counterpart of the progress array
-    # above (see CCLManager.get_mm_credit_counters_buffer). One uint32 slot per RS reader, one row
-    # per matmul core; only consumed when mm_window_blocks is set.
-    mm_credit_counters = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([_counter_slots, _counter_slots]),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        mesh_device,
-        ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(all_cores, [1, _counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
-        ),
-    )
+    # above (see CCLManager.get_mm_credit_counters_buffer). Only consumed when mm_window_blocks is
+    # set, and required by the op in that case. Each row needs one slot per RS reader
+    # (2 * num_links * num_workers_per_link), and the shard grid must cover the matmul cores; the
+    # same full-grid square shape as the progress array comfortably covers both.
+    if counter_row_slots is not None:
+        # Deliberately mis-sized arrays, for tests that check the op's size validation.
+        mm_progress_counters = _allocate_counter_array(counter_row_slots)
+        mm_credit_counters = _allocate_counter_array(counter_row_slots)
+    else:
+        # pass_counter_buffers: True = both arrays, "progress_only" = progress without credit
+        # (so the credit-specific rejection is reachable — omitting both always fails on the
+        # progress check first), False = neither.
+        mm_progress_counters = _allocate_counter_array() if pass_counter_buffers in (True, "progress_only") else None
+        mm_credit_counters = _allocate_counter_array() if pass_counter_buffers is True else None
 
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]

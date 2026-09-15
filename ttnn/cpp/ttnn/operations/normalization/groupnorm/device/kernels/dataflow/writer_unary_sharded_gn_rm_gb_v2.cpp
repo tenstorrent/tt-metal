@@ -18,8 +18,8 @@
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
 #endif
 
-void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
-    DataflowBuffer dfb(dfb_id);
+static void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
+    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(1);
     CoreLocalMem<uint32_t> ptr(dfb.get_write_ptr());
     for (uint32_t i = 0; i < 512U; ++i) {
@@ -81,8 +81,8 @@ void kernel_main() {
     constexpr uint32_t reduce_factor_c = get_compile_time_arg_val(12);
 
     constexpr auto gamma_args = TensorAccessorArgs<13>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
+    constexpr auto input_mask_args = TensorAccessorArgs<decltype(beta_args)::next_compile_time_args_offset()>();
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
     const uint32_t beta_addr = get_arg_val<uint32_t>(2);
@@ -114,23 +114,22 @@ void kernel_main() {
     constexpr uint32_t dfb_rowvalid_id = tt::CBIndex::c_18;
 #endif
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_gamma_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
+    const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
 #if defined(FUSE_NEGATIVE_MASK)
     constexpr uint32_t dfb_input_negative_mask_id = tt::CBIndex::c_14;
-    const uint32_t input_negative_mask_single_tile_size_bytes = get_tile_size(dfb_input_negative_mask_id);
-
     DataflowBuffer dfb_input_negative_mask(dfb_input_negative_mask_id);
+    const uint32_t input_negative_mask_single_tile_size_bytes = dfb_input_negative_mask.get_tile_size();
 
-    constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
+    constexpr auto negative_mask_args =
+        TensorAccessorArgs<decltype(input_mask_args)::next_compile_time_args_offset()>();
     const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);
 #endif
 
@@ -276,7 +275,7 @@ void kernel_main() {
                 generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
                 if constexpr (fuse_gamma) {
-                    const uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma_id);
+                    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
                     const uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
@@ -292,7 +291,7 @@ void kernel_main() {
                 }
 
                 if constexpr (fuse_beta) {
-                    const uint32_t beta_tile_bytes = get_tile_size(dfb_beta_id);
+                    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
                     const uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 

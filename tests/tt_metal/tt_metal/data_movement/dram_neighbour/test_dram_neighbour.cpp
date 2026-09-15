@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -418,7 +418,7 @@ using unit_tests::dm::dram_neighbour::run_bank_sweep_test;
 using unit_tests::dm::dram_neighbour::run_single_test;
 using unit_tests::dm::dram_neighbour::run_sweep_test;
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourDirectedIdeal) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
     uint32_t test_id = 502;
@@ -441,7 +441,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourDirectedIdeal) {
         core_dram_map));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourNumPagesSweep) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumPagesSweep) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
     uint32_t test_id = 503;
@@ -464,7 +464,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourNumPagesSweep) {
         core_dram_map));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourNumBankSweep) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumBankSweep) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
     uint32_t test_id = 504;
@@ -478,7 +478,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourNumBankSweep) {
         mesh_device, test_id, max_transactions, max_num_banks, num_pages, page_size_bytes, l1_data_format));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourSingleRowSweep) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourSingleRowSweep) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
 
     uint32_t test_id = 505;
@@ -501,7 +501,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourSingleRowSweep) 
         core_dram_map));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourOneHopSweep) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourOneHopSweep) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto logical_grid_size = device->logical_grid_size();
@@ -529,7 +529,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourOneHopSweep) {
         core_dram_map));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDramNeighbourLoopBackSweep) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourLoopBackSweep) {
     shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto logical_grid_size = device->logical_grid_size();

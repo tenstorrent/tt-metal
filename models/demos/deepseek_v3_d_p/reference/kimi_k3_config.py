@@ -12,7 +12,7 @@ Values from HuggingFace config.json for Kimi-K3 (``text_config``), whose ``model
 the TT stack reads lives under ``text_config``.
 
 K3 is a **hybrid**: of its 93 layers only 24 are full-attention (MLA) layers, the rest are KDA
-linear-attention layers. Only the MLA side is modelled here.
+linear-attention layers. This module owns the text-tower constants shared by MLA, KDA, MoE, and FFN consumers.
 
 MLA deltas vs Kimi-K2.6:
   * 96 attention heads (K2.6: 64)
@@ -49,19 +49,31 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross repeatedly on the
+    # 3584x3072 routed-expert shape: the composite's cost is flat inside an M chunk while the
+    # fused op's rises with the count, so the composite takes 352-512, loses 576-768 where the
+    # tail per_core_M rounds 18 tile-rows up to 32, and wins outright from 896. 768 is the
+    # aggregate-optimal cut over that sawtooth (+0.14% against a per-count oracle, worst cell
+    # +23% at 512). Measured under SituGlu, the activation these experts actually run.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
+    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by
     # TtMoEGateConfig as both the default per-chip depth and a ceiling on any explicit sp_dim.
     MAX_GATE_SEQ_LEN_PER_CHIP = 3200
 
-    # Gate-test device-mode scores bar, relaxing the shared 0.93; see #52569. 896 experts under sigmoid
-    # near-tie the 16th and 17th scores often enough that device precision swaps a pick, and the
-    # spread across Blackhole Galaxies (0.886 - 0.952) straddles the shared bar.
-    GATE_SCORES_PCC_DEVICE = 0.87
     # Upstream KimiSparseMoeBlock builds ONE KimiMLP for the shared expert, not num_shared_experts of
     # them: shared_experts.gate_proj.weight is [6144, 7168].
     SHARED_EXPERT_INTERMEDIATE_SIZE = MOE_INTERMEDIATE_SIZE * NUM_SHARED_EXPERTS  # 6144
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 896 experts, top-16 floors at
+    # 0.9989 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.988
 
     # Model architecture
     NUM_LAYERS = 93
@@ -93,17 +105,27 @@ class KimiK3Config:
                                52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
     # fmt: on
 
-    # KDA (linear attention) sizing, recorded for completeness; no TT implementation exists yet.
+    # KDA (linear attention) sizing.
     KDA_NUM_HEADS = 96
     KDA_HEAD_DIM = 128
     KDA_SHORT_CONV_KERNEL_SIZE = 4
     KDA_GATE_LOWER_BOUND = -5.0
+    KDA_USE_FULL_RANK_GATE = True
 
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
 
     LATENT_MOE_USE_NORM = True
-    # Torch reference only: no TT kernel implements SiTU yet (#51335), so the device path runs SiLU.
+    # All three FFN sites run the checkpoint's SiTU-GLU on device: routed experts (#51351), and the
+    # shared expert / layer-0 dense FFN (#53625). Spelled as strings because this config is
+    # torch-only -- ROUTED_EXPERT_ACTIVATION_BY_NAME maps the routed one onto the fused kernel's
+    # enum, while the other two are consumed as-is by TtSharedExpert / TtFfn, which compose SiTU
+    # from Python-level ttnn ops (there is no fused kernel at 6144 / 33792 wide).
+    ROUTED_EXPERT_ACTIVATION = "situ"
+    SHARED_EXPERT_ACTIVATION = "situ"
+    DENSE_FFN_ACTIVATION = "situ"
+    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in; the two composed
+    # sites read these directly, so all three activations stay on one pair of betas.
     ACTIVATION_SITU_BETA = 4.0
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 
@@ -190,9 +212,11 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         # LatentMoE: the routed experts' reduced hidden dim, and the latent RMSNorm flag.
         routed_expert_hidden_size=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         latent_moe_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        # The checkpoint says "situ", but no TT kernel implements it yet (#51335) and consumers of
-        # this field build the activation from it.
-        hidden_act="silu",
+        # What the checkpoint actually uses, so a consumer that reads only this field still builds
+        # the right model. Reading it means branching on "situ" rather than indexing ACT2FN, which
+        # has no such entry -- KimiMLP, KimiBlockSparseMLP and the tests' _build_act_fn all do.
+        # ACT2FN is deliberately left unmutated: it is shared with every other model here.
+        hidden_act="situ",
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )

@@ -189,8 +189,7 @@ keys. Common values:
 If your model is currently running in any of:
 
 - `tests/pipeline_reorg/t3k_e2e_tests.yaml`,
-  `t3k_unit_tests.yaml`, `t3k_demo_tests.yaml`, `t3k_perf_tests.yaml`,
-  `t3k_integration_tests.yaml`
+  `t3k_unit_tests.yaml`, `t3k_integration_tests.yaml`
 - `tests/pipeline_reorg/galaxy_*_tests.yaml`
 - `tests/pipeline_reorg/blackhole_demo_tests.yaml`
 - single-card / standalone workflow files
@@ -226,6 +225,7 @@ Use the same shape as the existing entries. Minimal e2e example:
       tier: <1|2|3>
   owner_id: U03XXXXXXXX # <Owner Name>
   team: models
+  budget_type: e2e
 ```
 
 Minimal unit example:
@@ -242,10 +242,18 @@ Minimal unit example:
       tier: <1|2|3>
   owner_id: U03XXXXXXXX # <Owner Name>
   team: models
+  budget_type: unit
 ```
 
 A model can run on multiple SKUs by adding more entries under `skus:`,
 each with its own `timeout` and `tier`.
+
+`budget_type` names which of the team's allowances in
+[`.github/time_budget.yaml`](../.github/time_budget.yaml) the entry is charged
+against — `e2e`, `unit`, `sweep` or `device_perf`, matching the registry you
+added it to. Every entry needs one: pr-gate sums the timeouts per
+(team, budget_type, sku) across all registries and fails if the total exceeds
+the budget.
 
 ### Test conventions
 

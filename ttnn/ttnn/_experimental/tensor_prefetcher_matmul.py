@@ -16,7 +16,7 @@ couplings nothing enforces.
 it derives ``block_count``, queues the request, then runs the consuming
 ``ttnn.linear`` with the same GCB and program config. Gather-in0 uses one block
 per ring receiver. Mcast-in0 uses ``K_tiles / in0_block_w`` natural-order blocks
-per receiver and requires a receiver-contiguous weight.
+per receiver.
 
 This is a host-side composition, not a device-level fusion: the prefetch still
 runs on the DRAM-core (DRISC) path off the command queue while the matmul is
@@ -42,12 +42,14 @@ def prefetch_and_linear(
 
     Gather-in0 preserves its existing batched/streaming behavior selected by
     ``program_config.stream_in1``. Mcast-in0 always uses natural FIFO order with
-    ``stream_in1=False`` and can consume from a shallow GCB without a rotation table.
+    ``stream_in1=False`` and can consume from a shallow GCB without a rotation table,
+    on either DRAM weight layout.
 
     Args:
         input_tensor_a: Activation (in0).
-        weight: DRAM-sharded weight (in1) to prefetch and multiply by. Streaming gather
-            and GCB-backed mcast require a receiver-contiguous weight layout.
+        weight: DRAM-sharded weight (in1) to prefetch and multiply by, in either the legacy
+            WIDTH_SHARDED K-row-major or the receiver-contiguous layout. Streaming gather
+            (``stream_in1``) requires the receiver-contiguous layout.
         global_cb: DRAM-sender GlobalCircularBuffer shared by the prefetch and
             the matmul.
         program_config: 1D matmul program config driving the matmul.

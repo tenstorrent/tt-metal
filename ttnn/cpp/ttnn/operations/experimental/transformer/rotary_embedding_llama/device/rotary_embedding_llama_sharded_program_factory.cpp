@@ -161,6 +161,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCoreSharded::c
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeShardedSource,
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings = compute_bindings,
         .compile_time_args = {{"Wt", head_dim_t}, {"Ht", n_heads_t}},
         .hw_config = compute_hw_config};

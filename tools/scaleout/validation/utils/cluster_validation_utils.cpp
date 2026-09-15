@@ -1209,7 +1209,7 @@ LinkMetricsResult send_traffic_and_validate_links(
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1,
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+            tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
     } catch (const std::exception& e) {
         log_info(tt::LogDistributed, "Error starting devices to send traffic on rank: {}", *distributed_context.rank());
         log_output_rank0("Error details: " + std::string(e.what()));
@@ -1854,6 +1854,13 @@ bool phased_bring_up_tier(
         // Collective over the SUBGROUP, matching the subgroup-scoped PSD above: each subgroup's local rank 0 drives
         // its own reset fan-out over hosts it can actually see. A converged subgroup runs it over an empty topology.
         reset_ethernet_links(physical_system_descriptor, tier_missing, *subgroup_ctx);
+        // Refresh the cluster descriptor from hardware so the retrained links are reflected in the next
+        // iteration's discovery. rediscover_by_hierarchy_subgroups() -> run_physical_system_discovery()
+        // derives its entire ethernet topology from cluster_desc.get_ethernet_connections(), which is only
+        // rebuilt by rediscover_ethernet_links(). Without this, the next pass returns the stale (pre-reset)
+        // topology, tier_missing never shrinks, and every tier exhausts max_retrains even when the retrain
+        // succeeded.
+        tt::tt_metal::MetalContext::instance().get_cluster().rediscover_ethernet_links();
     }
     // Collect each subgroup leader's missing-channel count, tagged with its color. Unconditional collective: every
     // rank reaches here via one of the two uniform loop exits above, non-leaders reporting NOT_SUBGROUP_LEADER.

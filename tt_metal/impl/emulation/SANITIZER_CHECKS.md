@@ -194,13 +194,22 @@ adjacent memory, false-positiving unrelated cores' writes.
 
 Both buffer-creation paths must register the extent: owning buffers in
 `allocate_impl()`/`deallocate_impl()`, and **explicit-address (non-owning)** buffers —
-e.g. the per-physical-device L1 buffers `MeshBuffer::initialize_device_buffers` builds,
+e.g. the per-physical-device buffers `MeshBuffer::initialize_device_buffers` builds,
 which never run `allocate_impl()` — in the `Buffer::create(address, …)` overload and
-`Buffer::deallocate()`. Without the latter, the runner's physical-`device->id()`
-snapshot is empty for every mesh sharded-L1 buffer and each legitimate access
-false-positives. The non-owning `deallocate()` removes the range under an
+`Buffer::deallocate()`. This covers DRAM as well as L1: without it, the runner's
+physical-`device->id()` snapshot is empty for every mesh buffer and each legitimate
+access false-positives (for DRAM, every `__emule_dram_ptr` resolve above
+`dram_unreserved_base` aborts). The non-owning `deallocate()` removes the range under an
 `allocation_status_` guard so the explicit-call + destructor double-deallocate drops it
 exactly once.
+
+Registrations are keyed by the buffer's `unique_id()`, and removal erases exactly
+that registration — never an address match. Several live buffers routinely share a
+start with different ends (`Buffer::view` subviews, the mesh workload's same-address
+kernel-binary view wrappers), so an address-keyed removal could delete another
+wrapper's still-live extent: the owner's full range vanishes, the dead temporary's
+shorter one lingers, and every later valid access past it aborts as a false-positive
+OOB (guarded by `OOB_Tensor_SameAddressTempBuffer_NoViolation`).
 
 On each access the kernel first **normalizes the address
 to a buffer-relative offset** via `__emule_addr_to_offset`. Under the L1 offset

@@ -18,6 +18,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
@@ -468,7 +469,7 @@ int main(int argc, char* argv[]) {
         log_link_retrain_summary(link_retrain_counts, total_retrains, input_args.output_path);
         log_unretrainable_channels(
             missing_asic_topology, physical_system_descriptor, total_retrains, input_args.output_path);
-        TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
+        log_output_rank0("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
@@ -499,7 +500,7 @@ int main(int argc, char* argv[]) {
     }
     distributed_context.barrier();
     if (input_args.fail_on_warning && !eth_connections_healthy) {
-        TT_THROW("Encountered unhealthy ethernet connections, listed above");
+        log_output_rank0("Encountered unhealthy ethernet connections, listed above");
         return -1;
     }
     return 0;

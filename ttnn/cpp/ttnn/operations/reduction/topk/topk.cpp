@@ -16,11 +16,16 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/experimental/topk_large_indices/topk_large_indices.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_route_prep_device_operation.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_route_finish_device_operation.hpp"
 
 #include <cstdint>
+#include <limits>
 
 namespace ttnn::operations::reduction::topk {
 namespace {
@@ -178,10 +183,235 @@ std::vector<Tensor> post_topk_transform_tensor(
 
     return result;
 }
+
+// ---------------------------------------------------------------------------
+// Large-k routing onto ttnn::experimental::topk_large_indices (Blackhole)
+// ---------------------------------------------------------------------------
+//
+// The device op's multi-core bitonic path is gated at k <= 64 (plus pow2 width
+// and width < 65536), so every larger k runs the single-core factory: k=512 at
+// W=65536 measures ~158 ms on one core. topk_large_indices is a Blackhole-only
+// multi-core top-k that has NONE of those gates (arbitrary width up to 2^30,
+// k up to 2048; internally it splits rows across the grid when rows exceed it
+// and fuses segment merges inside a row), but returns only UINT32 row-major
+// indices of a ROW_MAJOR input, sorted by value descending. This composite
+// routes eligible calls through it:
+//
+//   TILE bf16 -> fused untilize+clamp to the lowest finite bf16 (the private
+//   topk_route_prep device op; -inf parity, see below) -> topk_large_indices
+//   on the CLAMPED tensor (k rounded up to a multiple of 16, its own
+//   constraint) -> fused gather of the ORIGINAL (unclamped) values straight
+//   from the TILE source + TILE assembly of both outputs + index dtype emit
+//   (the private topk_route_finish device op) -> the shared
+//   post_topk_transform (slice to user k, rank/dim restore).
+//
+// Routing lives here at the composite level, NOT in the device op's
+// select_program_factory, so the device op's program hash is untouched.
+//
+// Contract matching vs the device op:
+//   * values: input dtype (bf16), TILE, sorted descending — satisfies both
+//     sorted=true and sorted=false callers (torch.topk(largest=True) order).
+//   * indices: the device op emits UINT16 when the (tile-padded) width fits
+//     16 bits and UINT32 otherwise (see compute_output_specs);
+//     topk_route_finish emits that exact boundary directly.
+//   * -inf lanes (the clamp trick): topk_large_indices marks lanes whose
+//     value is exactly bf16 -inf with the sentinel index 0xFFFFFFFF instead
+//     of a real position. The routed path never lets the op see a -inf: the
+//     op's input is first clamped to the lowest FINITE bf16 (bit pattern
+//     0xFF7F, ~-3.39e38), so every lane keeps a REAL stamped source position
+//     and the sentinel never fires. The gather then runs against the
+//     ORIGINAL tensor, so -inf VALUES come back bit-exact. Net: stock/torch
+//     parity for both values and indices on -inf rows, and every returned
+//     index is in-range (the op's own -inf width padding can never outrank a
+//     clamped-finite lane, and width >= k_rounded is a predicate invariant).
+//     One documented caveat: a genuine 0xFF7F input element ties with
+//     clamped -inf lanes, so their relative order (and which of them makes
+//     the k cut) follows the op's deterministic-but-unspecified tie order —
+//     inside ttnn.topk's documented non-stable contract (stable=true never
+//     routes).
+//
+// Cost shape: only topk_route_prep and topk_large_indices touch the full
+// input width; every other stage works on [rows, k_rounded <= 2048] tensors
+// (topk_route_finish reads 64 B per selected element, not whole rows).
+
+// k <= 64 keeps the device op's fast multi-core bitonic path for pow2 widths
+// at or above multi_core_min_width (plus the grid/L1 cost check). Below that
+// floor the stock op either falls to the single-core factory — linear in
+// width (~137 ns/elem measured on p150a: 695 us at W=5000, 1.38 ms at 10000,
+// 6.87 ms at 50000, 9.49 ms at 65536) while the routed composite is tens of
+// microseconds — or, for pow2 low-tile-row cells eligible via the Ht-aware
+// gate, runs a multi-core bitonic that the composite still beats (measured
+// at W=4096: 70–166 us stock multi-core vs 47–48 us composite; numbers at
+// the wide-arm predicate below). The small-k arm therefore routes every
+// >= small_k_route_min_padded_width cell below the plain
+// multi_core_min_width floor, pow2 or not; eligible pow2 cells at or above
+// the floor keep the stock bitonic path.
+constexpr uint32_t large_k_route_min_k_exclusive = 64;
+// Small-k arm floor (on the tile-padded width): below this the single-core
+// fallback is already sub-ms and the routed composite's fixed envelope is
+// not an empirically proven win. Measured win region starts at W=5000
+// (695 us stock vs tens of us routed); 4096 keeps a conservative floor.
+constexpr uint32_t small_k_route_min_padded_width = 4096;
+// topk_large_indices LLK ceiling.
+constexpr uint32_t large_k_route_max_k = 2048;
+// topk_large_indices requires k to be a multiple of 16. post_topk_transform
+// slices back down to the user's k when it was rounded.
+constexpr uint32_t large_k_route_k_multiple = 16;
+// Routed width ceiling: 2^19 is the conservative, silicon-validated routing
+// envelope (the widest routed cells, 262144/524288, are pinned in
+// test_topk.py; topk_large_indices itself allows up to 2^30 columns).
+// Lifting it is a separate, perf-validated change.
+constexpr uint32_t large_k_route_max_width = 1u << 19;
+
+// Python sampling queries this exact predicate through the nanobind helper
+// ttnn._ttnn.operations.reduction._sampling_topk_would_route_to_large_indices
+// before relaxing its call shape (the binding lives on the reduction
+// submodule; only registered ttnn operations are hoisted to top-level ttnn).
+// Keep that helper wired to this implementation so policy changes cannot
+// drift.
+bool should_route_to_topk_large_indices(
+    const Tensor& transformed_tensor,
+    const uint32_t k,
+    const bool largest,
+    const bool stable,
+    const bool is_dim_last_idx,
+    const bool has_user_indices_tensor,
+    const bool has_preallocated_outputs,
+    const bool has_sub_core_grids,
+    const std::optional<MemoryConfig>& user_memory_config) {
+    // topk_large_indices only produces largest-first (descending) results.
+    if (!largest) {
+        return false;
+    }
+    // stable=true promises lowest-index tie-breaking; topk_large_indices tie
+    // order is deterministic but unspecified.
+    if (stable) {
+        return false;
+    }
+    // The routed pipeline creates its own index tensor and fresh outputs, and
+    // ignores custom core grids; keep the stock path for all three.
+    if (has_user_indices_tensor || has_preallocated_outputs || has_sub_core_grids) {
+        return false;
+    }
+    // The routed composite produces interleaved outputs; the stock path raises
+    // on sharded output configs. Keep the stock (loud) behavior.
+    if (user_memory_config.has_value() && user_memory_config->is_sharded()) {
+        return false;
+    }
+    // Conservative: only route reductions that were already on the last dim.
+    if (!is_dim_last_idx) {
+        return false;
+    }
+    if (k > large_k_route_max_k) {
+        return false;
+    }
+    if (k <= large_k_route_min_k_exclusive) {
+        const uint32_t padded_width = transformed_tensor.padded_shape()[-1];
+        // Wide arm: route the cells where the composite measured faster than
+        // whatever the stock op would run, at padded width >=
+        // small_k_route_min_padded_width:
+        //  * structurally ineligible widths (non-pow2, >= 65535, or a pow2
+        //    below multi_core_min_width with more than
+        //    multi_core_low_ht_max_tile_rows tile rows): stock falls to the
+        //    linear single-core factory (~137 ns/elem) while the composite is
+        //    tens of microseconds.
+        //  * the pow2 [small_k_route_min_padded_width, multi_core_min_width)
+        //    low-tile-row cell: structurally eligible for the stock
+        //    multi-core bitonic via the Ht-aware relaxation, but the
+        //    composite still wins it — measured on p150a (bf16 largest W=4096, 3 Tracy
+        //    trials, <0.2% spread): 70.3 -> 46.8 us (k=32, 1 tile row) up to
+        //    165.5 -> 48.0 us (k=64, 2 tile rows).
+        // Both collapse to evaluating the SHARED
+        // ttnn::prim::topk_multicore_structurally_eligible helper with the
+        // low-Ht relaxation disabled (num_tile_rows pinned above
+        // multi_core_low_ht_max_tile_rows), i.e. the plain
+        // multi_core_min_width floor — which also keeps this router aligned
+        // with the models/common/sampling/_utils.py mirror
+        // (topk_would_route_to_large_indices). Eligible cells at width >=
+        // multi_core_min_width keep the stock bitonic; cells that fail only
+        // verify_multi_core_cost (grid/L1 feasibility) stay on the stock path
+        // (conservative). When routing is declined for other
+        // reasons (sub_core_grids, preallocated outputs, non-bf16, smallest,
+        // stable), the device op's own Ht-aware eligibility still upgrades
+        // low-tile-row cells from single-core to multi-core.
+        const bool multicore_ineligible_ignoring_low_ht_arm = !ttnn::prim::topk_multicore_structurally_eligible(
+            padded_width, ttnn::prim::constants::multi_core_low_ht_max_tile_rows + 1, k);
+        const bool wide_arm =
+            multicore_ineligible_ignoring_low_ht_arm && padded_width >= small_k_route_min_padded_width;
+        if (!wide_arm) {
+            return false;
+        }
+    }
+    if (transformed_tensor.dtype() != DataType::BFLOAT16) {
+        return false;
+    }
+    if (transformed_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    if (transformed_tensor.memory_config().is_sharded()) {
+        return false;
+    }
+    if (transformed_tensor.device()->arch() != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    const uint32_t width = transformed_tensor.logical_shape()[-1];
+    const uint32_t k_rounded = large_k_route_k_multiple * tt::div_up(k, large_k_route_k_multiple);
+    // topk_large_indices needs width >= its (rounded) k; the conservative
+    // routed envelope (see large_k_route_max_width) bounds the width from
+    // above. No pow2 / 16-bit width requirements here — that is the point of
+    // the route.
+    return width >= k_rounded && width <= large_k_route_max_width;
+}
+
+// Runs the routed pipeline on the 4D, last-dim-target TILE bf16 tensor.
+// Returns {values, indices} in TILE layout with last dim k_rounded, matching
+// what ttnn::prim::topk would have produced for adjusted_k == k_rounded, so
+// the shared post_topk_transform_tensor handles the rest.
+std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tensor, const uint32_t k_rounded) {
+    // Fused untilize + floor-at-lowest-finite-bf16 (the clamp trick — see the
+    // contract block above). A fused max, like the ttnn::maximum it replaced
+    // (and unlike ttnn::clamp, whose implicit FLT_MAX upper bound has bf16
+    // rounding behavior at +inf we would rather not depend on), cannot
+    // perturb +inf lanes. The routing predicate guarantees a TILE-layout
+    // input here; the op asserts it (no ROW_MAJOR branch).
+    const Tensor clamped_rm = topk_route_prep(transformed_tensor);
+
+    // UINT32 row-major indices of the top k_rounded per row, sorted by value
+    // descending; every lane carries a real in-range position.
+    const Tensor indices_rm = ttnn::experimental::topk_large_indices(clamped_rm, k_rounded);
+
+    // Gather values by index from the ORIGINAL, unclamped TILE tensor and
+    // assemble both TILE outputs (index dtype per the stock op's u16/u32
+    // width boundary). Canonicalization note: a tilize datacopy pass would
+    // canonicalize bf16 through DEST (-0 -> +0, NaN -> +/-inf);
+    // topk_route_finish is pure data movement and copies values BIT-EXACT
+    // from the source instead. NaN inputs are outside ttnn.topk's contract
+    // on every path.
+    return topk_route_finish(transformed_tensor, indices_rm);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 }  // namespace ttnn::operations::reduction::topk
+
+namespace ttnn::operations::reduction::topk::detail {
+
+bool sampling_topk_would_route_to_large_indices(const Tensor& input_tensor, const uint32_t k) {
+    TT_FATAL(is_device_tensor(input_tensor), "Sampling top-k route query requires an on-device tensor");
+    return CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
+        input_tensor,
+        k,
+        /*largest=*/true,
+        /*stable=*/false,
+        /*is_dim_last_idx=*/true,
+        /*has_user_indices_tensor=*/false,
+        /*has_preallocated_outputs=*/false,
+        /*has_sub_core_grids=*/false,
+        /*user_memory_config=*/std::nullopt);
+}
+
+}  // namespace ttnn::operations::reduction::topk::detail
 
 namespace ttnn {
 
@@ -351,6 +581,45 @@ std::vector<Tensor> topk(
 
     // Rank normalization - convert to 4D tensor format
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+
+    // Blackhole routing onto ttnn::experimental::topk_large_indices covers
+    // two regions where the composite measures faster than the device op:
+    // k in (64, 2048] (above the device op's multi-core k <= 64 gate), and
+    // k <= 64 calls whose padded width is >= small_k_route_min_padded_width
+    // but fails the plain multi_core_min_width bitonic gate (>= 65535,
+    // non-pow2, or pow2 below multi_core_min_width). The router evaluates
+    // that gate without the device op's Ht-aware low-tile-row relaxation:
+    // the composite also beats the stock multi-core bitonic on those
+    // low-tile-row cells. See the comment block on
+    // should_route_to_topk_large_indices for the full predicate and contract.
+    if (operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
+            transformed_tensor,
+            k,
+            largest,
+            stable,
+            is_dim_last_idx,
+            indices_tensor.has_value(),
+            preallocated_output_tensors.has_value(),
+            sub_core_grids.has_value(),
+            memory_config)) {
+        const uint32_t k_rounded =
+            operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::large_k_route_k_multiple *
+            tt::div_up(k, operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::large_k_route_k_multiple);
+        auto routed_result = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::run_topk_large_indices_route(
+            transformed_tensor, k_rounded);
+        auto routed_final = operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
+            transposed_tensor, routed_result, dim, is_dim_last_idx, k, k_rounded, original_lshape, input_memory_config);
+        // Stock parity: the device op places outputs in
+        // memory_config.value_or(input.memory_config()); the routed composite
+        // produces default interleaved outputs and post-transform only applies
+        // the config on its slice branches, so conform here.
+        for (auto& t : routed_final) {
+            if (t.memory_config() != input_memory_config) {
+                t = ttnn::to_memory_config(t, input_memory_config);
+            }
+        }
+        return routed_final;
+    }
 
     // Dimension size padding - ensure minimum dimension size for efficient processing
     auto padded_tensor = transformed_tensor;

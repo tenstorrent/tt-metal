@@ -16,6 +16,7 @@ file(
     GLOB_RECURSE kernels
     device/kernels/*.cpp
     device/kernels/*.hpp
+    shared_with_host/*.hpp
 )
 target_sources(
     ttnn_op_matmul
