@@ -18,6 +18,7 @@
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
 #include "sol_ring.hpp"
+#include "sol_attn.hpp"
 #include "vsa_sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -965,6 +966,29 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_workers_per_link") = 1,
         nb::arg("num_buffers_per_channel") = 8);
+
+    ttnn::bind_function<"sol_attn", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Sol-Attn. Currently an exact clone of scaled_dot_product_attention, forked so chunk skipping,
+        a block mask and the pooled-summary residual can be added against a known-good baseline.
+        )doc",
+        &ttnn::transformer::sol_attn,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("attn_mask") = nb::none(),
+        nb::kw_only(),
+        nb::arg("is_causal") = false,
+        nb::arg("scale") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("cu_window_seqlens") = nb::none(),
+        nb::arg("windowed_q_token_offset") = 0,
+        nb::arg("windowed_q_token_offset_tensor") = nb::none());
 
     const auto* const sol_ring_doc =
         R"doc(
