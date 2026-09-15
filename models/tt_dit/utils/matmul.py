@@ -871,7 +871,9 @@ fused_mmrs_configs = {
         # handoff with 6+ M blocks per core. Unswept at these M: sweep to tune.
         **{
             (m, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 6, 2, 2, None, 1, 5)
-            for m in (11872, 16640, 23296, 32640)  # rungs 94976, 133120, 186368, 261120 / SP 8
+            # Bucket rungs 94976, 133120, 186368, 261120 / SP 8, plus the exact hot
+            # 1080p/50fps/20s stage-2 shape (257040 SP-padded to 257280, / SP 8).
+            for m in (11872, 16640, 23296, 32160, 32640)
         },
         # Aang ff2 (same K/N family as Wan). Windowed beats the best DRAM blocking on both:
         # a2v 601.9 us vs 746.99 us DRAM-swept @ M6/K4/N8 (-19%); SR 2084.2 us vs 2191.75 us

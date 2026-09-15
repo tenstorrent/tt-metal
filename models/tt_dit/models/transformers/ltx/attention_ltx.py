@@ -16,7 +16,13 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
-from ....utils.ltx import LTX_AUDIO_N_BUCKET, LTX_BUCKET_LADDER, LTX_BUCKET_SP_FACTOR
+from ....utils.ltx import (
+    LTX_AUDIO_N_BUCKET,
+    LTX_BUCKET_LADDER,
+    LTX_BUCKET_SP_FACTOR,
+    LTX_FAST_AUDIO_N_BUCKET,
+    LTX_FAST_1080P_25FPS_6S_LADDER,
+)
 from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -40,8 +46,8 @@ class LTXAttention(Module):
     }
 
     # V2A cross ring-SDPA q_chunk: one chunk covering the whole per-device audio Q shard, sized
-    # from the live Q tensor (audio_N / sp_factor; audio_N is the 256 SP pad untraced and the 512
-    # bucket traced). A chunk wider than the shard pads the query rows and burns ~2x SDPA compute;
+    # from the live Q tensor (audio_N / sp_factor; audio_N is 256 for the fast profile and 512 for
+    # the wide profiles). A chunk wider than the shard pads the query rows and burns ~2x SDPA compute;
     # a chunk narrower than the shard splits it into several chunks, a cross-path configuration
     # the kernel tests never cover. k_chunk reuses the self-attn ring value.
     default_sdpa_chunk_size = (256, 256)
@@ -53,24 +59,34 @@ class LTXAttention(Module):
     ring_sdpa_chunk_by_n = {
         (True, 8, 4, 9728): (96, 256),
         (True, 8, 4, 38912): (192, 512),
-        **{(True, 8, 4, rung): (96, 256) for rung in LTX_BUCKET_LADDER if rung <= 12288},
-        **{(True, 8, 4, rung): (192, 512) for rung in LTX_BUCKET_LADDER if rung >= 34560},
+        **{
+            (True, 8, 4, rung): (96, 256)
+            for rung in (*LTX_BUCKET_LADDER, *LTX_FAST_1080P_25FPS_6S_LADDER)
+            if rung <= 12288
+        },
+        **{
+            (True, 8, 4, rung): (192, 512)
+            for rung in (*LTX_BUCKET_LADDER, *LTX_FAST_1080P_25FPS_6S_LADDER)
+            if rung >= 34560
+        },
     }
 
     # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
     # the per-device Q shard and full K. Misses fall back to sdpa_program_config.
-    # Rung entries: q_seq = rung / SP; kv 32 is the text prompt, kv LTX_AUDIO_N_BUCKET the audio.
+    # Rung entries: q_seq = rung / SP; kv 32 is the text prompt, kv 256/512 is the profile's audio.
     sdpa_chunk_by_shape = {
         (True, 1216, 32): (128, 128),  # video text cross-attn, stage 1
         (True, 4864, 32): (192, 128),  # video text cross-attn, stage 2
         (True, 1216, 256): (128, 128),  # audio->video cross-attn, stage 1
         (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
         **{
-            (True, rung // LTX_BUCKET_SP_FACTOR, 32): (128 if rung <= 12288 else 192, 128) for rung in LTX_BUCKET_LADDER
+            (True, rung // LTX_BUCKET_SP_FACTOR, 32): (128 if rung <= 12288 else 192, 128)
+            for rung in (*LTX_BUCKET_LADDER, *LTX_FAST_1080P_25FPS_6S_LADDER)
         },
         **{
-            (True, rung // LTX_BUCKET_SP_FACTOR, LTX_AUDIO_N_BUCKET): (128 if rung <= 12288 else 192, 256)
-            for rung in LTX_BUCKET_LADDER
+            (True, rung // LTX_BUCKET_SP_FACTOR, audio_n): (128 if rung <= 12288 else 192, 256)
+            for rung in (*LTX_BUCKET_LADDER, *LTX_FAST_1080P_25FPS_6S_LADDER)
+            for audio_n in (LTX_FAST_AUDIO_N_BUCKET, LTX_AUDIO_N_BUCKET)
         },
     }
 
@@ -585,7 +601,7 @@ class LTXAttention(Module):
     def _cross_ring_sdpa_program_config(self, q_shard_len: int) -> ttnn.SDPAProgramConfig:
         """SDPA program config for the V2A cross ring path, with q_chunk equal to the per-device Q
         shard so the shard is one chunk. Cached per shard length: the same module serves the 256
-        (untraced) and 512 (bucket) audio lengths."""
+        (fast profile) and 512 (wide profile) audio lengths."""
         cfg = self._cross_ring_sdpa_program_configs.get(q_shard_len)
         if cfg is None:
             cfg = ttnn.SDPAProgramConfig(
