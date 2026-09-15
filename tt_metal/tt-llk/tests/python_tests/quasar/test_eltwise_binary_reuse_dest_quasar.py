@@ -281,8 +281,21 @@ def test_eltwise_binary_reuse_dest_quasar(
             else None
         )
 
+        # The masking models the source registers, so it works in the format the operands
+        # unpack into: MX and BFP land in Float16_b, everything else keeps its own. Forcing
+        # Float16_b for every MX output costs a Float16 input three mantissa bits it never
+        # loses on the device, and this test chains four multiplies through Dest.
+        src_reg_format = (
+            DataFormat.Float16_b
+            if (
+                formats.input_format.is_mx_format()
+                or formats.input_format
+                in (DataFormat.Bfp2_b, DataFormat.Bfp4_b, DataFormat.Bfp8_b)
+            )
+            else formats.input_format
+        )
         math_format_for_fidelity = (
-            (DataFormat.Float16_b if use_mx else formats.output_format)
+            (src_reg_format if use_mx else formats.output_format)
             if eltwise_golden is not None
             else None
         )
