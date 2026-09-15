@@ -50,7 +50,11 @@ from models.demos.gemma4.demo.sampling_utils import (
     log_sampling_mode,
     model_can_sample_on_device,
 )
-from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
+from models.demos.gemma4.tests.test_factory import (
+    PREFILL_BUCKETS,
+    parametrize_mesh_with_fabric,
+    skip_if_weights_exceed_dram,
+)
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import (
@@ -1430,6 +1434,8 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     Filter by prefill length:
         pytest -k "prefill_4096"      # 4k prefill only
     """
+    skip_if_weights_exceed_dram(mesh_device, model_path=model_path)
+
     max_prefill = request.config.getoption("--max-prefill")
     if prefill_len > max_prefill:
         pytest.skip(f"prefill_len={prefill_len} > --max-prefill={max_prefill}")

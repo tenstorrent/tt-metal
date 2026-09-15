@@ -22,6 +22,7 @@ from ...tests.test_factory import (
     get_pcc_threshold,
     num_layers_for_full_attention_group,
     parametrize_mesh_with_fabric,
+    skip_if_weights_exceed_dram,
     with_l1_small,
 )
 
@@ -345,6 +346,9 @@ def test_full_model(mesh_device, reset_seeds, request):
         pytest.skip(f"MoE model too large for TP={tp} (expert weights replicated)")
     if hf_config_check.hidden_size > 4096 and tp < 2:
         pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
+    # hidden_size alone misses 12B, whose 3840 clears the check above while its
+    # weights still overflow a single Wormhole card's DRAM.
+    skip_if_weights_exceed_dram(mesh_device, args=hf_config_check, model_path=model_path)
 
     # ── HF reference ─────────────────────────────────────────────────
     logger.info(f"Loading HF reference model from {model_path}...")

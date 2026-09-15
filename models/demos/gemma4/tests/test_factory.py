@@ -37,6 +37,85 @@ def _get_model_path():
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", _DEFAULT_MODEL_PATH)
 
 
+# Usable DRAM per Wormhole B0 card, taken from the allocator's own OOM report:
+# 12 banks x 1_064_932_288 B. Weights must fit inside this *before* any KV cache
+# or activation buffer is allocated, so it is an upper bound, not a target.
+_WH_DRAM_BYTES_PER_DEVICE = 12 * 1_064_932_288
+
+# Block-float dtypes carry an 8-bit exponent shared by each 16-element block on
+# top of the per-element mantissa, so BFLOAT8_B is 1 + 1/16 bytes/param, not 1.
+_BYTES_PER_PARAM = {
+    ttnn.bfloat16: 2.0,
+    ttnn.float32: 4.0,
+    ttnn.bfloat8_b: 1.0 + 1.0 / 16,
+    ttnn.bfloat4_b: 0.5 + 1.0 / 16,
+}
+
+
+def dense_weight_bytes_per_device(args, model_path, mesh_shape):
+    """Bytes of dense weights each device must hold at the resolved precision.
+
+    Every module here is tensor-parallel, so the total divides by the device
+    count. Precision comes from precision_overrides.json for this (model, mesh),
+    which is why the estimate tracks the table instead of assuming bf16.
+
+    MoE expert weights are deliberately excluded: they are replicated rather
+    than sharded and callers gate them separately. Undercounting can only make
+    a caller skip less, never more.
+    """
+    from ..tt.precision import Gemma4Precision
+
+    precision = Gemma4Precision.load(model_path, mesh_shape)
+    bpp = lambda module, default=ttnn.bfloat16: _BYTES_PER_PARAM[precision.get(module, default)]
+
+    L, H = args.num_hidden_layers, args.hidden_size
+    qkv_o = args.hidden_size * args.num_attention_heads * args.head_dim * 2
+    kv = 2 * H * args.num_key_value_heads * args.head_dim
+    attn = L * (qkv_o + kv)
+    mlp = L * 3 * H * args.intermediate_size
+    lm_head = args.vocab_size * H
+    # The embedding is stored ROW_MAJOR and BFLOAT8_B requires TILE, so it is
+    # bf16 whatever the table says.
+    embedding = args.vocab_size * H
+
+    total = (
+        attn * bpp("attention")
+        + mlp * bpp("shared_mlp")
+        + lm_head * bpp("lm_head")
+        + embedding * _BYTES_PER_PARAM[ttnn.bfloat16]
+    )
+    return total / (mesh_shape[0] * mesh_shape[1])
+
+
+def skip_if_weights_exceed_dram(mesh_device, args=None, model_path=None):
+    """pytest.skip when the weights alone cannot fit in this mesh's DRAM.
+
+    Gemma4-12B on a single Wormhole card needs ~13.5 GiB of weights against
+    ~11.9 GiB of DRAM, so it dies in the allocator partway through loading a
+    decoder layer -- a hardware-capacity fact reported as a test failure. Only
+    Wormhole is gated: the same model fits a Blackhole card and has working
+    blackhole-1x1 gates.
+
+    Weights-only is a necessary, not sufficient, condition. A config that
+    passes here can still exhaust DRAM on KV cache or activations.
+    """
+    from models.common.utility_functions import is_wormhole_b0
+
+    if not is_wormhole_b0():
+        return
+    shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    model_path = model_path or _get_model_path()
+    args = args if args is not None else TestFactory.create_hf_config()
+    need = dense_weight_bytes_per_device(args, model_path, shape)
+    if need > _WH_DRAM_BYTES_PER_DEVICE:
+        gib = 1024**3
+        pytest.skip(
+            f"{os.path.basename(str(model_path).rstrip('/'))} weights need "
+            f"{need / gib:.2f} GiB/device on a {shape[0]}x{shape[1]} mesh, but a Wormhole "
+            f"card has {_WH_DRAM_BYTES_PER_DEVICE / gib:.2f} GiB -- does not fit"
+        )
+
+
 def build_hf_prefill_mask(seq_len, sliding_window=None):
     """Build the HF-format prefill attention mask [1, 1, seq_len, seq_len].
 
