@@ -64,6 +64,13 @@ export DIFFVAE_TP_HEADS=${DIFFVAE_TP_HEADS:-1}
 
 # Fail loudly if the paste-corruption bugs ever come back rather than running a half-configured job.
 : "${LTX25_DIFFVAE:?}" "${LTX25_ROOT:?}"
+# Under LTX_TRACED=1 the transformer's captures and the 1.9 GiB a decode leaves resident put the
+# stage-5 MLP hidden (2.4 GB at slab 73) past the largest contiguous DRAM block; 48 is the measured
+# fit (2026-09-15). Refuse here, at t=0, instead of in gen #0's decode after two minutes of loading.
+if [ "$LTX_TRACED" = 1 ] && [ "$DIFFVAE_SLAB_FRAMES" -gt 48 ]; then
+  echo "LTX_TRACED=1 needs DIFFVAE_SLAB_FRAMES<=48 (got $DIFFVAE_SLAB_FRAMES): larger slabs OOM in the traced decode" >&2
+  exit 1
+fi
 [ -f "$LTX25_ROOT/vae/ltx-2.5-video-vae-bf16.safetensors" ] || {
   echo "DiffVAE weights not under LTX25_ROOT=$LTX25_ROOT" >&2; exit 1; }
 
