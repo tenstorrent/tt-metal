@@ -136,6 +136,23 @@ constexpr uint32_t routing_index_words_per_token(uint32_t topk) {
 // is the top-k bound rather than anything about the ring.
 constexpr uint32_t FO_MAX_DESTS = 8;
 
+// The fan-out tail, occupying the same 64 bytes as FwdMetadata. Hops are measured from the ORIGIN and
+// never rewritten, so a page is immutable in flight: a chip `j` hops from the origin consumes the
+// destinations with hop == j out of its own forwarding region -- a local write, not a fabric one --
+// and forwards the page untouched if any hop > j remains. `cmd` and `this_addr` sit last for the same
+// reason as in FwdMetadata: they are this hop's business and the next hop overwrites them.
+struct FanoutMetadata {
+    uint32_t src_chip;             // linearized coord of the origin, metadata field 0
+    uint32_t token;                // metadata field 1
+    uint32_t n_dests;              // how many of `dests` are live
+    uint32_t pad;                  // keeps dests 16-byte aligned
+    uint32_t dests[FO_MAX_DESTS];  // packed page | hop | top-k slot
+    uint64_t cmd;
+    uint64_t this_addr;
+};
+static_assert(sizeof(FanoutMetadata) <= FORWARDING_METADATA_SIZE);
+static_assert(offsetof(FanoutMetadata, dests) % 16 == 0);
+
 // Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
 
