@@ -89,8 +89,18 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         im_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
 
-    std::uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
+    // Fixed block size that maximizes dest register usage: 4 with fp32 accumulation, 8 otherwise.
+    // Widths not divisible by block_size are handled by the kernels via a clamped final block.
+    std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+
+    // Prefer an exact divisor of Wt when it costs no extra register batches: uniform blocks keep every
+    // CB capacity a multiple of the block, so no fifo needs realignment between tile rows.
+    if (Wt % block_size != 0) {
+        const std::uint32_t divisor = static_cast<std::uint32_t>(tt::tt_metal::find_max_divisor(Wt, block_size));
+        if (tt::div_up(Wt, block_size) == Wt / divisor) {
+            block_size = divisor;
+        }
+    }
 
     // calc_numeric_stable() in softmax.cpp uses indexed access over Wt tiles of its input CB and a
     // WaitUpfrontNoPop reduce, so whichever CB it consumes must be sized to Wt:
@@ -115,9 +125,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     std::uint32_t im2_t = 1;
     std::uint32_t im4_t = tt::div_up(Wt, block_size) * block_size;
 
-    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
+    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing (rounded up to a multiple of block_size)
     std::uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-    TT_FATAL(im0_t == Wt, "im0_t: {} == Wt: {}, (Non user error)", im0_t, Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
@@ -148,13 +157,17 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         im4_t = large_kernel_cb_size;
         im0_t = large_kernel_cb_size;
         im3_t = large_kernel_cb_size;
+        // c_4 is streamed a pass at a time too, and both large kernels align its pad to cb_length_t.
+        in4_t = large_kernel_cb_size;
     }
     if (!use_large_kernel) {
         TT_FATAL(
-            im3_t == Wt + block_size, "im3_t {} == Width in tiles {} + num_dest_regs to use {}", im3_t, Wt, block_size);
+            im3_t >= Wt + block_size,
+            "im3_t {} must be >= Width in tiles {} + num_dest_regs to use {}",
+            im3_t,
+            Wt,
+            block_size);
     }
-    TT_FATAL(Wt % block_size == 0, "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
-    TT_FATAL((block_size != -1), "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
     TT_FATAL(
         im0_t % block_size == 0,
         "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
@@ -341,6 +354,13 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         }
     }
     KernelSpec::CompileTimeArgs reader_cta;
+    if (use_large_kernel) {
+        // The large reader pads in0/fused_attn so each streamed pass ends on the fifo base.
+        reader_cta.insert({"dfb_length", dfb_length});
+    } else {
+        // The small reader pads in0 up to this capacity so its fifo ends each tile row on the base.
+        reader_cta.insert({"in0_t", in0_t});
+    }
     if (has_mask && attributes.is_causal_mask) {
         const std::uint32_t num_tiles_causal_mask = tensor_args.mask.value().padded_shape()[-1] *
                                                     tensor_args.mask.value().padded_shape()[-2] / tile_width /
@@ -373,7 +393,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
                  .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .compile_time_args = {{"num_datum_padded", num_datum_padded}, {"tile_hw", tile_height * tile_width}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "blk", "mask_padded_data"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "blk", "mask_padded_data", "Wt"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
@@ -470,12 +490,19 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         }
     }
 
+    KernelSpec::CompileTimeArgs compute_cta;
+    if (!use_large_kernel) {
+        // The small compute drains the pad the reader pushed to in0, so both agree on the capacity.
+        compute_cta.insert({"in0_t", in0_t});
+    }
+
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::string(SOFTMAX_KERNEL_PATH_ATTENTION) +
                   (use_large_kernel ? "/compute/softmax_large_tensor.cpp" : "/compute/softmax.cpp"),
         .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings = compute_bindings,
+        .compile_time_args = compute_cta,
         .runtime_arg_schema = {.runtime_arg_names = compute_rta_names},
         .hw_config = compute_hw,
     };
@@ -548,7 +575,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             {{"num_tiles", num_tile_rows_per_core * Wt},
              {"tile_offset", tile_offset},
              {"blk", block_size},
-             {"mask_padded_data", static_cast<std::uint32_t>(mask_padded_data)}});
+             {"mask_padded_data", static_cast<std::uint32_t>(mask_padded_data)},
+             {"Wt", Wt}});
 
         if (use_large_kernel) {
             AddRuntimeArgsForNode(

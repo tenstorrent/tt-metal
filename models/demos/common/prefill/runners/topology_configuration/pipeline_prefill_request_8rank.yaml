@@ -1,12 +1,3 @@
-# REQUEST mode (unbounded, H2D-driven), 8-rank D2D pipeline.
-# rank0 builds the H2D service; downstream ranks read via D2D. Migration/LayerAck work at this rank count
-# too (every rank all-gathers the KV table, rank0 publishes it). Shutdown: the producer's all -1 sentinel
-# (PREFILL_SEND_SHUTDOWN=1); SIGKILL is the fallback.
-# Host order is the physical cabling chain (mesh 0 -> first --host, ... mesh 7 -> last). Proven chain on
-# glx-120 (the mesh 3<->4 boundary is the single-link inter-rack bridge c07u20<->c08u20, which trains fine):
-#   bh-glx-120-c07u02:1,c07u08:1,c07u14:1,c07u20:1,c08u20:1,c08u14:1,c08u08:1,c08u02:1
-# Non-default model: add PREFILL_MANIFEST (absolute path) to global_env below — shell-forwarded env
-# reaches only the launch-host rank.
 rank_bindings:
   - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
   - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
@@ -24,12 +15,7 @@ global_env:
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
 
   PREFILL_ENABLE_MIGRATION: "0"
-  # Worker shmem queue names -- must match the running migration_endpoint
-  # Set PREFILL_MIGRATION_CLIENT_DIR to the dir containing the migration_client.so file
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
-  PREFILL_MIGRATION_SELFTEST: "0"
-  PREFILL_MIGRATION_INTERLEAVED: "0"
-  PREFILL_MIGRATION_GRANULARITY: "layerwise"
   LOGURU_LEVEL: "INFO"

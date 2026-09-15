@@ -7,9 +7,6 @@ operands:
   - name: "input_A"
     dims: [256, 256]
     format: "Float16_b"
-  - name: "input_B"
-    dims: [256, 256]
-    format: "Float16_b"
   - name: "mish"
     dims: [256, 256]
     format: "Float16_b"
@@ -20,8 +17,7 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
       - type: "UnarySfpu"
         operation: "Exp"
         approximation_mode: false
@@ -38,8 +34,7 @@ operations:
         iterations: 32
         dst_dest_tile_index: 0
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"

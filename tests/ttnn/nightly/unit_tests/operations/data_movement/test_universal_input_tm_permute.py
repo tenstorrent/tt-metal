@@ -178,7 +178,7 @@ def run_permute_test(
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
 
     if dtype == ttnn.bfloat16:
-        assert_with_ulp(ref, got, ulp_threshold=0)
+        assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
     else:
         assert_with_pcc(ref.float(), got.float(), 0.9999)
 
@@ -773,6 +773,28 @@ def test_permute_tile_sharded_uneven(shape, dims, mc_factory, device):
             lambda _d: L1_INTERLEAVED,
             id="2013_RM_height_to_interleaved",
         ),
+        # Guards permute's WH-lambda delegation to transpose(-2,-1) on the shard_height < H path.
+        *[
+            pytest.param(
+                (1, 1, 64, 128),
+                (0, 1, 3, 2),
+                lambda d, nc=nc: _height_shard_config((1, 1, 64, 128), d, num_cores=nc, layout=ttnn.ROW_MAJOR_LAYOUT),
+                lambda d, nc=nc: _width_shard_config((1, 1, 128, 64), d, num_cores=nc, layout=ttnn.ROW_MAJOR_LAYOUT),
+                id=f"WH_RM_height_to_width_c{nc}",
+            )
+            for nc in (2, 4, 8)
+        ],
+        # Composed (0,3,1,2) = transpose_hc(transpose_wh(input)) hits the same WH-lambda on H-split shards.
+        *[
+            pytest.param(
+                (1, 1, 64, 128),
+                (0, 3, 1, 2),
+                lambda d, nc=nc: _height_shard_config((1, 1, 64, 128), d, num_cores=nc, layout=ttnn.ROW_MAJOR_LAYOUT),
+                lambda _d: L1_INTERLEAVED,
+                id=f"0312_RM_height_split_c{nc}",
+            )
+            for nc in (2, 4, 8)
+        ],
     ],
 )
 def test_permute_row_major_sharded(shape, dims, input_factory, output_factory, device):
@@ -923,7 +945,7 @@ def test_permute_dram_sharded_fallback(device):
 
     ref = x.permute(0, 1, 3, 2)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 # Specless sharded output must shrink CoreRangeSet to populated shard count.
@@ -946,7 +968,7 @@ def _permute_and_assert_shrink(device, shape, dims, out_layout, expected_grid_fa
     assert grid == expected, f"Expected grid {expected}, got {grid}"
     ref = x.permute(dims)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 def test_permute_specless_sharded_output_grid_shrinks_height(device):
@@ -1012,4 +1034,4 @@ def test_permute_specless_sharded_output_grid_shrinks_block_col_major(device):
     assert ss.grid == expected, f"Expected COL_MAJOR rect (0,0)->(1,2), got {ss.grid}"
     ref = x.permute(0, 1, 3, 2)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)

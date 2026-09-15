@@ -17,8 +17,9 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 
 #include <tt-metalium/constants.hpp>
@@ -54,7 +55,7 @@ bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t s
 //                                Uniform Data movement APIs
 // ======================================================================================
 
-HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, bool blocking) {
+HostTensor distributed::MeshCommandQueue::enqueue_read_tensor(const MeshTensor& device_tensor, bool blocking) {
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& device = device_tensor.device();
 
@@ -69,45 +70,47 @@ HostTensor enqueue_read_tensor(distributed::MeshCommandQueue& cq, const MeshTens
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     return host_tensor_from_buffer_with_topology(
         std::move(distributed_host_buffer), device_tensor.tensor_spec(), get_tensor_topology(device_tensor));
 }
 
-MeshTensor enqueue_write_tensor(
-    distributed::MeshCommandQueue& cq,
-    const HostTensor& host_tensor,
-    distributed::MeshDevice& mesh_device,
-    ttsl::optional_reference<const MemoryConfig> memory_config) {
+MeshTensor distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_tensor) {
+    auto& mesh_device = *device();
     TT_FATAL(
         is_uniform_write(host_tensor, mesh_device),
         "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
         "non-uniform data movement APIs.");
-    std::optional<TensorSpec> tensor_spec_overriden_memory_config;
-    if (memory_config) {
-        const auto& old_spec = host_tensor.tensor_spec();
-        tensor_spec_overriden_memory_config = TensorSpec(
-            old_spec.logical_shape(),
-            TensorLayout(
-                old_spec.tensor_layout().get_data_type(),
-                old_spec.tensor_layout().get_page_config(),
-                *memory_config,
-                old_spec.tensor_layout().get_alignment()));
-    }
-
-    const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
-                                  ? &tensor_spec_overriden_memory_config.value()
-                                  : &host_tensor.tensor_spec();
-
-    auto result =
-        allocate_mesh_tensor_on_device_with_topology(mesh_device, *tensor_spec, get_tensor_topology(host_tensor));
-    enqueue_write_tensor(cq, host_tensor, result);
+    auto result = allocate_mesh_tensor_on_device_with_topology(
+        mesh_device, host_tensor.tensor_spec(), get_tensor_topology(host_tensor));
+    enqueue_write_tensor(host_tensor, result);
     return result;
 }
 
-void enqueue_read_tensor(
-    distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
+MeshTensor distributed::MeshCommandQueue::enqueue_write_tensor(
+    const HostTensor& host_tensor, const MemoryConfig& memory_config) {
+    auto& mesh_device = *device();
+    TT_FATAL(
+        is_uniform_write(host_tensor, mesh_device),
+        "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
+        "non-uniform data movement APIs.");
+    const auto& old_spec = host_tensor.tensor_spec();
+    TensorSpec tensor_spec(
+        old_spec.logical_shape(),
+        TensorLayout(
+            old_spec.tensor_layout().get_data_type(),
+            old_spec.tensor_layout().get_page_config(),
+            memory_config,
+            old_spec.tensor_layout().get_alignment()));
+    auto result =
+        allocate_mesh_tensor_on_device_with_topology(mesh_device, tensor_spec, get_tensor_topology(host_tensor));
+    enqueue_write_tensor(host_tensor, result);
+    return result;
+}
+
+void distributed::MeshCommandQueue::enqueue_read_tensor(
+    const MeshTensor& device_tensor, HostTensor& host_tensor, bool blocking) {
     TT_FATAL(host_tensor.logical_shape() == device_tensor.logical_shape(), "Host tensor has different shape");
     TT_FATAL(host_tensor.dtype() == device_tensor.dtype(), "Host tensor has different dtype");
     TT_FATAL(
@@ -135,18 +138,22 @@ void enqueue_read_tensor(
 
             auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
             if (auto pinned = experimental::PinnedMemoryCache::instance().try_pin(
-                    *device, coord_range, *host_buffer, /*map_to_noc=*/true)) {
+                    *device,
+                    coord_range,
+                    *host_buffer,
+                    /*map_to_noc=*/true,
+                    experimental::PinnedMemoryDeviceAccess::ReadWrite)) {
                 experimental::HostBufferSetPinnedMemory(*host_buffer, std::move(pinned));
             }
             return *host_buffer;
         });
     }
 
-    cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
     update_tensor_topology(host_tensor, get_tensor_topology(device_tensor));
 }
 
-void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& host_tensor, MeshTensor& device_tensor) {
+void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_tensor, MeshTensor& device_tensor) {
     TT_FATAL(
         is_uniform_write(host_tensor, device_tensor.device()),
         "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
@@ -168,7 +175,7 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         }
     }
 
-    const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*cq.device(), total_size);
+    const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*device(), total_size);
 
     if (use_pinned) {
         auto* mesh_device = mesh_buffer->device();
@@ -194,7 +201,11 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-                    *mesh_device, coord_range, pinned_buf, /*map_to_noc=*/true);
+                    *mesh_device,
+                    coord_range,
+                    pinned_buf,
+                    /*map_to_noc=*/true,
+                    experimental::PinnedMemoryDeviceAccess::ReadOnly);
 
                 auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
                                 .host_data(buf->view_bytes().data())
@@ -207,12 +218,12 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
             }
         }
         if (any_pinned) {
-            cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
+            enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
         }
     } else {
-        cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
     device_tensor = mesh_tensor_from_buffer_with_topology(

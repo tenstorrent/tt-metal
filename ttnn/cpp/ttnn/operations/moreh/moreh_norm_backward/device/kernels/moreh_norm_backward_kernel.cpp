@@ -4,64 +4,42 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
-    constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
-    constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
+    constexpr auto num_output_tiles = get_arg(args::num_output_tiles);
+    constexpr bool wt_need_bcast = (get_arg(args::wt_need_bcast) == 1);
+    constexpr bool ht_need_bcast = (get_arg(args::ht_need_bcast) == 1);
 
     // runtime args
-    int i{0};
-    const auto num_input_tiles_per_core = get_arg_val<uint32_t>(i++);
-    const auto p = get_arg_val<uint32_t>(i++);
-    const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
-    const auto p_minus_one = get_arg_val<uint32_t>(i++);
-    const bool p_minus_one_is_negative = get_arg_val<uint32_t>(i++) == 1;
+    const auto num_input_tiles_per_core = get_arg(args::num_input_tiles_per_core);
+    const auto p = get_arg(args::p);
+    const bool p_is_negative = get_arg(args::p_is_negative) == 1;
+    const auto p_minus_one = get_arg(args::p_minus_one);
+    const bool p_minus_one_is_negative = get_arg(args::p_minus_one_is_negative) == 1;
 
-    std::uint8_t input_id{tt::CBIndex::c_0};
-    const auto cb_x = input_id++;
-    DataflowBuffer dfb_x_obj(cb_x);  // input(==x)
-    const auto cb_y = input_id++;
-    DataflowBuffer dfb_y_obj(cb_y);  // output(==y)
-    const auto cb_dy = input_id++;
-    DataflowBuffer dfb_dy_obj(cb_dy);  // output_grad(==dy)
-    const auto cb_decimal = input_id++;
-    DataflowBuffer dfb_decimal_obj(cb_decimal);  // decimal
+    DataflowBuffer dfb_x_obj(dfb::x);              // input(==x), c_0
+    DataflowBuffer dfb_y_obj(dfb::y);              // output(==y), c_1
+    DataflowBuffer dfb_dy_obj(dfb::dy);            // output_grad(==dy), c_2
+    DataflowBuffer dfb_decimal_obj(dfb::decimal);  // decimal, c_3
 
-    std::uint8_t output_id{tt::CBIndex::c_16};
-    const auto cb_dx = output_id++;  // input_grad(==dx)
-    DataflowBuffer dfb_dx_obj(cb_dx);
+    DataflowBuffer dfb_dx_obj(dfb::dx);  // input_grad(==dx), c_16
 
-    std::uint8_t intermed_id{tt::CBIndex::c_24};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-    const auto cb_tmp2 = intermed_id++;
-    const auto cb_tmp3 = intermed_id++;
-    const auto cb_tmp4 = intermed_id++;
-    DataflowBuffer dfb_tmp4_obj(cb_tmp4);
-    const auto cb_tmp5 = intermed_id++;
-    DataflowBuffer dfb_tmp5_obj(cb_tmp5);
-    const auto cb_tmp6 = intermed_id++;
-    const auto cb_tmp7 = intermed_id++;
-
-    const auto cb_xpow = cb_tmp0;
-    DataflowBuffer dfb_xpow_obj(cb_xpow);
-    const auto cb_logx = cb_tmp1;
-    DataflowBuffer dfb_logx_obj(cb_logx);
-    const auto cb_exp_lxmd = cb_tmp2;
-    DataflowBuffer dfb_exp_lxmd_obj(cb_exp_lxmd);
-    const auto cb_correct_xpow = cb_tmp3;
-    DataflowBuffer dfb_correct_xpow_obj(cb_correct_xpow);
-    const auto cb_recip_ypow = cb_tmp6;
-    DataflowBuffer dfb_recip_ypow_obj(cb_recip_ypow);
-    const auto cb_sign = cb_tmp7;
-    DataflowBuffer dfb_sign_obj(cb_sign);
+    // Compute-only intermediates (c_24..c_31), each filled and drained by this kernel (self-loop).
+    DataflowBuffer dfb_xpow_obj(dfb::xpow);
+    DataflowBuffer dfb_logx_obj(dfb::logx);
+    DataflowBuffer dfb_exp_lxmd_obj(dfb::exp_lxmd);
+    DataflowBuffer dfb_correct_xpow_obj(dfb::correct_xpow);
+    DataflowBuffer dfb_tmp4_obj(dfb::tmp4);
+    DataflowBuffer dfb_tmp5_obj(dfb::tmp5);
+    DataflowBuffer dfb_recip_ypow_obj(dfb::recip_ypow);
+    DataflowBuffer dfb_sign_obj(dfb::sign);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(dfb::x, dfb::x, dfb::dx);
     dfb_decimal_obj.wait_front(onetile);  // comes from the reader
 
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {
@@ -89,16 +67,16 @@ void kernel_main() {
         tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
             mul_bcast_scalar_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
-            mul_tiles_bcast_scalar(cb_correct_xpow, cb_y, 0, 0, dst0);
+            mul_tiles_bcast_scalar(dfb::correct_xpow, dfb::y, 0, 0, dst0);
         } else if (ht_need_bcast) {
             mul_bcast_rows_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
-            mul_tiles_bcast_rows(cb_correct_xpow, cb_y, 0, 0, dst0);
+            mul_tiles_bcast_rows(dfb::correct_xpow, dfb::y, 0, 0, dst0);
         } else if (wt_need_bcast) {
             mul_bcast_cols_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
-            mul_tiles_bcast_cols(cb_correct_xpow, cb_y, 0, 0, dst0);
+            mul_tiles_bcast_cols(dfb::correct_xpow, dfb::y, 0, 0, dst0);
         } else {
             mul_tiles_init_with_dt(dfb_correct_xpow_obj, dfb_y_obj);
-            mul_tiles(cb_correct_xpow, cb_y, 0, 0, dst0);
+            mul_tiles(dfb::correct_xpow, dfb::y, 0, 0, dst0);
         }
         tile_regs_commit();
 
@@ -116,16 +94,16 @@ void kernel_main() {
         tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
             mul_bcast_scalar_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
-            mul_tiles_bcast_scalar(cb_tmp4, cb_dy, 0, 0, dst0);
+            mul_tiles_bcast_scalar(dfb::tmp4, dfb::dy, 0, 0, dst0);
         } else if (ht_need_bcast) {
             mul_bcast_rows_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
-            mul_tiles_bcast_rows(cb_tmp4, cb_dy, 0, 0, dst0);
+            mul_tiles_bcast_rows(dfb::tmp4, dfb::dy, 0, 0, dst0);
         } else if (wt_need_bcast) {
             mul_bcast_cols_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
-            mul_tiles_bcast_cols(cb_tmp4, cb_dy, 0, 0, dst0);
+            mul_tiles_bcast_cols(dfb::tmp4, dfb::dy, 0, 0, dst0);
         } else {
             mul_tiles_init_with_dt(dfb_tmp4_obj, dfb_dy_obj);
-            mul_tiles(cb_tmp4, cb_dy, 0, 0, dst0);
+            mul_tiles(dfb::tmp4, dfb::dy, 0, 0, dst0);
         }
         tile_regs_commit();
 
@@ -155,16 +133,16 @@ void kernel_main() {
         tile_regs_acquire();
         if (ht_need_bcast && wt_need_bcast) {
             mul_bcast_scalar_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
-            mul_tiles_bcast_scalar(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
+            mul_tiles_bcast_scalar(dfb::tmp5, dfb::recip_ypow, 0, 0, dst0);
         } else if (ht_need_bcast) {
             mul_bcast_rows_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
-            mul_tiles_bcast_rows(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
+            mul_tiles_bcast_rows(dfb::tmp5, dfb::recip_ypow, 0, 0, dst0);
         } else if (wt_need_bcast) {
             mul_bcast_cols_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
-            mul_tiles_bcast_cols(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
+            mul_tiles_bcast_cols(dfb::tmp5, dfb::recip_ypow, 0, 0, dst0);
         } else {
             mul_tiles_init_with_dt(dfb_tmp5_obj, dfb_recip_ypow_obj);
-            mul_tiles(cb_tmp5, cb_recip_ypow, 0, 0, dst0);
+            mul_tiles(dfb::tmp5, dfb::recip_ypow, 0, 0, dst0);
         }
         tile_regs_commit();
 

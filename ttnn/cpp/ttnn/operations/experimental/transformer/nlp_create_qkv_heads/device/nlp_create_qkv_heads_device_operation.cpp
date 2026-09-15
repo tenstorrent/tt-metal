@@ -33,6 +33,40 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
     TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
+
+    if (operation_attributes.kv_tied) {
+        // Every path reaches V from K's own columns rather than the section after them: the
+        // interleaved reader rewinds its running tile id, and the sharded path points the writer's
+        // V base address at K's. transpose_k_heads only selects which CB K lands in, so it is
+        // orthogonal to both.
+        const uint32_t num_q_heads = operation_attributes.num_q_heads;
+        const uint32_t num_kv_heads = operation_attributes.num_kv_heads;
+        const uint32_t head_dim = operation_attributes.head_dim;
+        if (tensor_args.input_tensor_kv.has_value()) {
+            // The single K/V section lives in the KV tensor, so this one carries Q alone.
+            TT_FATAL(
+                input_shape[3] == num_q_heads * head_dim,
+                "kv_tied input width ({}) must be num_q_heads {} * head_dim {} when a KV tensor is given",
+                input_shape[3],
+                num_q_heads,
+                head_dim);
+            const auto kv_shape = tensor_args.input_tensor_kv.value().padded_shape();
+            TT_FATAL(
+                kv_shape[3] == num_kv_heads * head_dim,
+                "kv_tied KV width ({}) must be num_kv_heads {} * head_dim {} -- one K/V section, not two",
+                kv_shape[3],
+                num_kv_heads,
+                head_dim);
+        } else {
+            TT_FATAL(
+                input_shape[3] == (num_q_heads + num_kv_heads) * head_dim,
+                "kv_tied input width ({}) must be (num_q_heads {} + num_kv_heads {}) * head_dim {}",
+                input_shape[3],
+                num_q_heads,
+                num_kv_heads,
+                head_dim);
+        }
+    }
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] ==
@@ -94,13 +128,16 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
                 "Number of KV heads ({}) must be divisible by number of cores ({})",
                 operation_attributes.num_kv_heads,
                 input_tensor.shard_spec().value().num_cores());
+            // One K/V section per core when tied, two otherwise.
+            const uint32_t kv_sections = operation_attributes.kv_tied ? 1 : 2;
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] ==
-                    (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + 2) *
+                    (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + kv_sections) *
                         operation_attributes.head_dim,
-                "Shard spec shape[1] ({}) must equal (num_q_heads / num_kv_heads + 2) * head_dim ({})",
+                "Shard spec shape[1] ({}) must equal (num_q_heads / num_kv_heads + {}) * head_dim ({})",
                 input_tensor.shard_spec().value().shape[1],
-                (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + 2) *
+                kv_sections,
+                (operation_attributes.num_q_heads / operation_attributes.num_kv_heads + kv_sections) *
                     operation_attributes.head_dim);
         }
         TT_FATAL(!operation_attributes.transpose_k_heads, "Transpose K heads must be false");
@@ -138,11 +175,14 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
                 "KV tensor shard orientation must be ROW_MAJOR but got {}",
                 input_tensor_kv.shard_spec().value().orientation);
+            // One K/V section per core when tied, two otherwise.
+            const uint32_t kv_sections = operation_attributes.kv_tied ? 1 : 2;
             TT_FATAL(
-                input_tensor_kv.shard_spec().value().shape[1] == 2 * operation_attributes.head_dim,
-                "KV tensor shard spec shape[1] ({}) must equal 2 * head_dim ({})",
+                input_tensor_kv.shard_spec().value().shape[1] == kv_sections * operation_attributes.head_dim,
+                "KV tensor shard spec shape[1] ({}) must equal {} * head_dim ({})",
                 input_tensor_kv.shard_spec().value().shape[1],
-                2 * operation_attributes.head_dim);
+                kv_sections,
+                kv_sections * operation_attributes.head_dim);
             TT_FATAL(
                 operation_attributes.num_kv_heads % input_tensor_kv.shard_spec().value().num_cores() == 0,
                 "Number of KV heads ({}) must be divisible by KV tensor number of cores ({})",
@@ -264,6 +304,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     std::optional<uint32_t> num_kv_heads,
     uint32_t head_dim,
     bool transpose_k_heads,
+    bool kv_tied,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
     using OperationType = ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation;
@@ -273,6 +314,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
         .num_kv_heads = num_kv_heads.value_or(num_q_heads),
         .head_dim = head_dim,
         .transpose_k_heads = transpose_k_heads,
+        .kv_tied = kv_tied,
         .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor_q = input_tensor_q,

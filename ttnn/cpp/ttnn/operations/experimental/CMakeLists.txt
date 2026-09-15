@@ -33,9 +33,11 @@ add_subdirectory(reduction)
 # metalium-developers-sdpa
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
+add_subdirectory(kda)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
+add_subdirectory(indexed_page_cache)
 add_subdirectory(paged_cache)
 
 # metalium-developers-external-experience
@@ -61,6 +63,7 @@ add_subdirectory(deepseek/moe/generalized_moe_gate)
 add_subdirectory(deepseek/moe/moe_gate_mm)
 add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
+add_subdirectory(fft)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
@@ -68,7 +71,6 @@ add_subdirectory(ssm)
 add_subdirectory(tensor_prefetcher)
 add_subdirectory(test)
 add_subdirectory(topk_router_gpt)
-add_subdirectory(unary_backward)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
 # one target instead of enumerating these op libraries itself. Add/remove
@@ -90,7 +92,9 @@ target_link_libraries(
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
+        TTNN::Ops::Experimental::KDA
         TTNN::Ops::Experimental::TopkLargeIndices
+        TTNN::Ops::Experimental::IndexedPageCache
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
@@ -105,6 +109,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
@@ -112,7 +117,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Test
         TTNN::Ops::Experimental::TopkRouterGpt
-        TTNN::Ops::Experimental::UnaryBackward
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -141,6 +145,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
@@ -155,6 +160,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
@@ -162,5 +168,4 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TensorPrefetcher>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Test>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkRouterGpt>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::UnaryBackward>
 )

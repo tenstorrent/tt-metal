@@ -40,6 +40,13 @@ namespace dram_realtime_profiler_msgs {
 HalCoreInfoType create_dram_mem_map() {
     static_assert(sizeof(mailboxes_t) <= MEM_DRISC_MAILBOX_SIZE);
     static_assert(MEM_DRISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+    // MEM_DRISC_MAILBOX_SIZE is sized to sizeof(mailboxes_t) exactly, so these members sit where the mailbox
+    // layout puts them. Dispatch NOC-writes the launch message and the profiler results are moved by NOC, and
+    // an unaligned dispatch write is silently dropped, so pin the alignment here rather than in a hang.
+    static_assert((MEM_DRISC_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+    static_assert((MEM_DRISC_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+    static_assert(
+        (MEM_DRISC_MAILBOX_BASE + offsetof(mailboxes_t, go_message_index)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -80,6 +87,8 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_DRISC_BANK_TO_NOC_SIZE;
+
+    assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::UNRESERVED, "DRAM");
 
     // No FW mailbox on DRAM cores
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);

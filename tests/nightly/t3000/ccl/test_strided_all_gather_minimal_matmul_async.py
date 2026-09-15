@@ -10,6 +10,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.nightly.t3000.ccl.test_all_gather import is_unsupported_case
 from models.common.utility_functions import skip_for_blackhole
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy import signpost
 
@@ -62,6 +63,8 @@ def run_strided_all_gather_minimal_matmul_impl(
     shard_weights=False,
     ag_core_grid_offset=(0, 6),
     read_local_slice_from_input=False,
+    mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.Auto,
+    fuse_swiglu=False,
 ):
     torch.manual_seed(0)
 
@@ -70,7 +73,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     ag_output_shape = [1, 1, M, K]
 
     # Skip unsupported cases
-    (is_known_failure, message) = is_unsupported_case(
+    is_known_failure, message = is_unsupported_case(
         ag_output_shape,
         dim,
         mem_config_ag,
@@ -121,13 +124,36 @@ def run_strided_all_gather_minimal_matmul_impl(
     if chunks > 1:
         assert not use_non_fused, "chunks > 1 is only wired into the fused strided_all_gather_minimal_matmul path"
         assert N % chunks == 0, f"N ({N}) must be divisible by chunks ({chunks})"
+    # N is the op's OUTPUT width. SwiGLU consumes a packed [up|gate] weight of width 2N and
+    # collapses each gate/up tile pair to one output tile, so the device weight is twice as wide.
+    weight_N = 2 * N if fuse_swiglu else N
+    if fuse_swiglu:
+        assert not use_non_fused, "fuse_swiglu is only wired into the fused strided_all_gather_minimal_matmul path"
+        assert not use_ternary, "fuse_swiglu is mutually exclusive with ternary (addcmul)"
+        assert activation is None, "fuse_swiglu is mutually exclusive with fused_activation"
+    # Interleave over the number of devices the weight's N is actually split across (1 when replicated),
+    # so each device's slice holds whole [gate, up] tile pairs.
+    swiglu_ndev = mesh_device.shape[1] if shard_weights else 1
     for i in range(num_iters):
         torch_dtype = torch.float32
         ag_output_tensor = torch.randn(ag_output_shape, dtype=torch_dtype)
         ag_output_tensor_goldens_list.append(ag_output_tensor)
-        weight_input = torch.randn((1, 1, K, N), dtype=torch_dtype)
+        weight_input = torch.randn((1, 1, K, weight_N), dtype=torch_dtype)
         if use_bias:
-            bias_input = torch.randn((1, N), dtype=torch_dtype)
+            bias_input = torch.randn((1, weight_N), dtype=torch_dtype)
+
+        # SwiGLU: tile-pair interleave the weight/bias so each device's N-slice holds whole
+        # [gate, up] pairs. The golden below still uses the original [up|gate] layout.
+        weight_to_load = weight_input
+        bias_to_load = bias_input if use_bias else None
+        if fuse_swiglu:
+            weight_to_load = prepare_for_fused_swiglu(weight_input.reshape(K, weight_N), ndev=swiglu_ndev).reshape(
+                weight_input.shape
+            )
+            if use_bias:
+                bias_to_load = prepare_for_fused_swiglu(bias_input.reshape(1, weight_N), ndev=swiglu_ndev).reshape(
+                    bias_input.shape
+                )
         activation_fn = None
         if activation == "gelu":
             activation_fn = (ttnn.UnaryOpType.GELU, False)
@@ -145,7 +171,7 @@ def run_strided_all_gather_minimal_matmul_impl(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
         )
         weight_tensor_mesh = ttnn.from_torch(
-            weight_input,
+            weight_to_load,
             device=mesh_device,
             layout=layout,
             dtype=ag_input_dtype,
@@ -156,7 +182,7 @@ def run_strided_all_gather_minimal_matmul_impl(
         )
         if use_bias:
             bias_tensor_mesh = ttnn.from_torch(
-                bias_input,
+                bias_to_load,
                 device=mesh_device,
                 layout=layout,
                 dtype=ag_input_dtype,
@@ -206,6 +232,11 @@ def run_strided_all_gather_minimal_matmul_impl(
         if use_bias:
             # Row-broadcast bias: bias_input is [1, N] and broadcasts over the M rows, matching add_bias_block.
             matmul_output = matmul_output + bias_input
+        if fuse_swiglu:
+            # weight_input is the original [up | gate] packing, so the kernel's silu(gate)*up is
+            # first * silu(second) here. Applied after bias, matching the kernel's swiglu_block.
+            first, second = torch.chunk(matmul_output, 2, dim=-1)
+            matmul_output = first * torch.nn.functional.silu(second)
         if use_ternary:
             matmul_output = ternary_a_input + ternary_scalar * matmul_output * ternary_b_input
         # fused_activation is applied last (mutually exclusive with ternary; see the op's validate).
@@ -305,6 +336,8 @@ def run_strided_all_gather_minimal_matmul_impl(
                 fused_ternary_input_b=ternary_b_tensor_mesh_list[i] if use_ternary else None,
                 fused_ternary_scalar=ternary_scalar if use_ternary else None,
                 chunks=chunks,
+                mm_signal_aggregator_mode=mm_signal_aggregator_mode,
+                fuse_swiglu=fuse_swiglu,
             )
             # Op returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}].
             tt_all_gather_out_tensor = fused_outputs[0]
@@ -554,4 +587,122 @@ def test_strided_all_gather_minimal_matmul_async(
         use_non_fused=use_non_fused,
         shard_weights=shard_weights,
         read_local_slice_from_input=read_local_slice_from_input,
+    )
+
+
+# N here is the OUTPUT width; the device weight is 2N wide (packed [up|gate]). The fabric-bound
+# factory partitions on gate/up PAIRS, so N/32 must divide the core-grid x and mm_block_n/32 must
+# be even for a pair to never straddle a core or an N block.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "M, K, N, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
+    [
+        # replicated weight: 4096-wide packed weight -> 32 weight tiles/core, mm_block_n = 8 tiles
+        (4096, 4096, 2048, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
+        # sharded weight: 8192-wide packed weight over 8 devices -> 8 weight tiles/core, so mm_block_n
+        # drops to 4 tiles to stay under the per-core work
+        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 128, 2, 2, ttnn.CoreCoord(4, 4), True),
+    ],
+    ids=["swiglu_replicated_w", "swiglu_sharded_w"],
+)
+@pytest.mark.parametrize("use_bias", [False, True], ids=["nobias", "bias"])
+@pytest.mark.parametrize("chunks", [1], ids=["1chunk"])
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag, mem_config_mm",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+# num_iters > 1 exercises the cached-program override path, not just create().
+@pytest.mark.parametrize("enable_trace,num_iters", [(False, 2)], ids=["check"])
+@pytest.mark.parametrize("read_local_slice_from_input", [True], ids=["read_local"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_strided_all_gather_minimal_matmul_async_swiglu(
+    mesh_device,
+    M,
+    K,
+    N,
+    dim,
+    other_dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    mem_config_mm,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+    num_workers_per_link,
+    mm_block_m,
+    mm_block_k,
+    mm_block_n,
+    subblock_h,
+    subblock_w,
+    mm_core_grid,
+    shard_weights,
+    use_bias,
+    chunks,
+    read_local_slice_from_input,
+):
+    TILE_SIZE = 32
+    assert not ((M // TILE_SIZE) % num_workers_per_link), f"worker must be divisible by num workers per link"
+
+    N_block_tiles = mm_block_n // TILE_SIZE
+    assert N_block_tiles % 2 == 0, f"fuse_swiglu needs an even mm_block_n in tiles, got {N_block_tiles}"
+
+    # The matmul sees the packed 2N weight; per-core work is measured against that width.
+    weight_Nt = (2 * N) // TILE_SIZE
+    weight_Nt_per_device = weight_Nt // mesh_device.shape[1] if shard_weights else weight_Nt
+    weight_Nt_per_core = weight_Nt_per_device // mm_core_grid.x
+    assert (
+        weight_Nt_per_core % 2 == 0
+    ), f"fuse_swiglu needs an even per-core weight tile count, got {weight_Nt_per_core}"
+    assert (
+        weight_Nt_per_core > N_block_tiles
+    ), f"block_n size is {N_block_tiles} tiles, but only {weight_Nt_per_core} weight tiles of work per core"
+
+    run_strided_all_gather_minimal_matmul_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        M,
+        K,
+        N,
+        dim,
+        other_dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        mem_config_mm,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        num_workers_per_link=num_workers_per_link,
+        mm_block_m=mm_block_m,
+        mm_block_k=mm_block_k,
+        mm_block_n=mm_block_n,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        mm_core_grid=mm_core_grid,
+        use_non_fused=False,
+        shard_weights=shard_weights,
+        use_bias=use_bias,
+        chunks=chunks,
+        read_local_slice_from_input=read_local_slice_from_input,
+        fuse_swiglu=True,
     )

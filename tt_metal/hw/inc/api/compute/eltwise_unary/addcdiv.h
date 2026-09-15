@@ -37,13 +37,13 @@ namespace ckernel {
  * | odst     | Index of the tile in DST register buffer (output)             | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format>
+template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void addcdiv_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst, uint32_t value) {
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_addcdiv,
-        (APPROX, DST_ACCUM_MODE, data_format, 8 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */),
         idst0,
         idst1,
         idst2,

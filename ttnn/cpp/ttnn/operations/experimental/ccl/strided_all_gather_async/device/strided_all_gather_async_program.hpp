@@ -55,7 +55,8 @@ struct StridedAllGatherAsyncProgramFactory {
         std::optional<uint32_t> mm_cores_y,
         std::optional<uint32_t> mm_block_ht,
         std::optional<uint32_t> mm_block_wt,
-        CoreCoord core_grid_offset = CoreCoord(0, 0));
+        CoreCoord core_grid_offset = CoreCoord(0, 0),
+        MMSignalAggregatorMode mm_signal_aggregator_mode = MMSignalAggregatorMode::Auto);
 
     static void override_runtime_arguments_per_program(
         const shared_variables_t& shared_variables,
