@@ -59,6 +59,32 @@ def test_serialization(tmp_path, shape, tt_dtype):
     assert passing
 
 
+def test_serialized_payload_is_dma_aligned(tmp_path):
+    """The mmap'd payload must start 64 B-aligned so pinned host->device writes can DMA from it directly.
+
+    The file is [u64 header_size][flatbuffer header][shard payloads]; load_tensor mmaps it at a page
+    boundary, so the payload lands at 8 + header_size. Anything less than 64 B-aligned makes dispatch
+    reject the pinned path for every shard and log "Pinned source memory start address ... must be
+    aligned 64 B". The writer pads header_size so this offset is a multiple of 64.
+    """
+    torch.manual_seed(0)
+    tt_tensor = ttnn.Tensor(torch.rand((2, 3, 64, 96), dtype=torch.bfloat16), ttnn.bfloat16)
+
+    file_name = tmp_path / pathlib.Path("aligned.tensorbin")
+    ttnn.dump_tensor(str(file_name), tt_tensor)
+
+    with open(file_name, "rb") as f:
+        header_size = int.from_bytes(f.read(8), byteorder="little")
+    payload_offset = 8 + header_size
+    assert (
+        payload_offset % 64 == 0
+    ), f"payload starts at byte {payload_offset}, {payload_offset % 64} past a 64 B boundary"
+
+    # Padding is counted inside header_size, so the round trip is unchanged.
+    torch_tensor_from_file = ttnn.load_tensor(str(file_name)).to_torch()
+    assert torch.equal(tt_tensor.to_torch(), torch_tensor_from_file)
+
+
 def test_large_read_only_file_backed_tensor_upload(tmp_path, device):
     # Deliberately ungated. Uploading a read-only file mapping must produce the right tensor on every
     # system: with device-read-only pinning it takes the pinned path, and without it (older KMD, no
