@@ -61,6 +61,11 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     // words, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole. Every row after
     // the first is misaligned unless the row is a whole number of 64-byte lines.
     TT_FATAL(
+        !args.fanout,
+        "dispatch_fabric2d: fanout is not implemented yet. It needs a per-(source, destination) token "
+        "presence table that no routing-setup op computes: chunk lengths are derived from per-expert "
+        "counts, which are marginals, and a fan-out chunk's length depends on the joint.");
+    TT_FATAL(
         args.num_routed_experts % 16 == 0,
         "dispatch_fabric2d: num_routed_experts must be a multiple of 16 (got {}); a row of the offsets "
         "table has to be a whole number of 64-byte lines or the per-row DRAM reads are misaligned",
@@ -220,6 +225,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    bool fanout,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
     using namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d;
@@ -235,6 +241,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
+            .fanout = fanout,
             .topology = topology,
             .output_mem_config = memory_config},
         DispatchFabric2dInputs{

@@ -26,6 +26,11 @@ struct DispatchFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
+    // One send per (token, destination chip) instead of per (token, expert). A token picking several
+    // experts on one chip currently puts the same bytes on the same cable once per expert; with
+    // fan-out the destination gets one copy and a page list. Both modes are kept so they can be
+    // measured against each other in one build.
+    bool fanout = false;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
