@@ -4,6 +4,7 @@
 import os
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 
 import torch
 from loguru import logger
@@ -1932,6 +1933,58 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 # vLLM's speculative_config stays unset -- the platform assert is untouched.
 
 
+@dataclass(frozen=True)
+class SpecPlan:
+    """Model side of the plugin speculative contract (vllm-tt-plugin#110 s.2).
+
+    Returned by ``spec_plan`` at CONFIG time, before any device allocation. The
+    plugin reads it to size its lane and memory budgets and to publish
+    ``effective_k`` back to ``speculative_config.num_speculative_tokens``.
+
+    The plugin does not define these types yet (the runner side of #110 is
+    unimplemented), so they live here and are consumed structurally.
+    """
+
+    effective_k: int
+    lanes_per_request: int
+    extra_bytes_per_seq: int
+    extra_bytes_per_token: int
+    accept_modes: tuple
+    drafter_state: str
+    drafter_target_cache_requires: tuple = ()
+    supports_narrow_decode: bool = False
+
+
+@dataclass(frozen=True)
+class SpecReject:
+    """Speculation unavailable at this ``(max_num_seqs, K)``. See SpecPlan."""
+
+    reason: str
+    supported_k: tuple = ()
+
+
+def _dflash_drafter_config(snapshot):
+    """Read the drafter checkpoint's HF config. Pure: file read, no device."""
+    import json as _json
+
+    with open(os.path.join(snapshot, "config.json")) as fh:
+        cfg = _json.load(fh)
+    return cfg.get("text_config") or cfg
+
+
+def _dflash_mesh_tp():
+    """Tensor-parallel width from ``MESH_DEVICE`` (e.g. ``P150x8`` -> 8).
+
+    Returns 1 when unset or unparseable (Galaxy DP entries set no MESH_DEVICE).
+    1 is the SAFE default here: ``local_kv = n_kv // tp``, so tp=1 yields the
+    largest per-chip cache and therefore over-reserves rather than under-.
+    """
+    import re as _re
+
+    m = _re.search(r"[xX](\d+)\s*$", os.environ.get("MESH_DEVICE", "") or "")
+    return int(m.group(1)) if m else 1
+
+
 def _dflash_default_snapshot():
     """Locate the z-lab drafter snapshot in the HF cache (harness parity)."""
     import glob as _glob
@@ -2038,6 +2091,105 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # reservation and the model's emission in lockstep with no sentinel.
         "tt_adaptive_block_max_prompt_tokens": int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0")),
     }
+
+    # -- plugin speculative contract (vllm-tt-plugin#110 s.2) -----------------
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs: int, requested_k: int):
+        """Declare what this model can speculate at ``(max_num_seqs, K)``.
+
+        Pure and side-effect free: reads env + the drafter's ``config.json`` and
+        allocates nothing. Deliberately does NOT read ``get_tt_*`` off
+        ``vllm_config`` -- the platform stores those later and two of them
+        default to 1 silently (#110 s.2).
+
+        dFlash today: one fused B=1 trace, keyed on the packed-verify bucket, so
+        the supported K is the single configured verify width rather than a
+        range, and concurrency above one request is not speculable.
+        """
+        del vllm_config  # nothing here is config-derived yet; see docstring
+
+        if max_num_seqs > 1:
+            return SpecReject(
+                reason=(
+                    "Gemma4 dFlash speculation is single-stream: the fused verify trace is "
+                    f"captured at B=1, so max_num_seqs={max_num_seqs} cannot speculate. Serve "
+                    "max_num_seqs>1 through the adaptive block-output rail (batched steps run "
+                    "plain baseline) or set max_num_seqs=1."
+                ),
+                supported_k=(),
+            )
+
+        verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
+        if requested_k < verify:
+            # The trace bucket is fixed at capture, so K is a SET, not a range:
+            # a smaller K would need its own packed-verify capture.
+            return SpecReject(
+                reason=(
+                    f"Gemma4 dFlash verifies exactly {verify} drafts per iteration "
+                    f"(GEMMA4_DFLASH_VERIFY); requested_k={requested_k} is below that and no "
+                    "narrower verify bucket is captured."
+                ),
+                supported_k=(verify,),
+            )
+
+        snapshot = os.environ.get("GEMMA4_DFLASH_DRAFTER") or _dflash_default_snapshot()
+        if not snapshot:
+            # Reject at CONFIG time. Without this the drafter is resolved lazily
+            # at the first request and a missing checkpoint kills the engine
+            # there instead (EngineDeadError, no useful traceback).
+            return SpecReject(
+                reason=(
+                    "Gemma4 dFlash drafter checkpoint not found: set GEMMA4_DFLASH_DRAFTER or "
+                    "fetch it (hf download z-lab/gemma-4-31B-it-DFlash)."
+                ),
+                supported_k=(verify,),
+            )
+        try:
+            cfg = _dflash_drafter_config(snapshot)
+            n_layers = int(cfg["num_hidden_layers"])
+            hidden = int(cfg["hidden_size"])
+            head_dim = int(cfg["head_dim"])
+            n_kv = int(cfg["num_key_value_heads"])
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            return SpecReject(
+                reason=(
+                    f"Gemma4 dFlash drafter config unreadable at {snapshot}: {exc!r}. Point "
+                    "GEMMA4_DFLASH_DRAFTER at a z-lab/gemma-4-31B-it-DFlash snapshot."
+                ),
+                supported_k=(verify,),
+            )
+
+        tp = _dflash_mesh_tp()
+        replicated = os.environ.get("GEMMA4_DFLASH_REPLICATED", "0") == "1"
+        local_kv = n_kv if replicated else max(1, n_kv // tp)
+
+        # Fixed per-session device bytes, PER CHIP (#110 expresses the Qwen3.6
+        # figures per chip). Mirrors DFlashFusedDecoder.__init__ allocations:
+        # every tensor below is bf16 (2 B) except the int64 position vectors.
+        cap = int(os.environ.get("GEMMA4_DFLASH_CTX_CAP", "2048"))
+        p_v = verify + 1  # packed-verify rows
+        ctx_dev = cap * hidden * 2
+        ctx_kv = 2 * n_layers * local_kv * cap * head_dim * 2
+        ctx_pos = cap * 8
+        fc_prev = p_v * hidden * 2
+        commit_pos = p_v * 8
+        extra_bytes_per_seq = ctx_dev + ctx_kv + ctx_pos + fc_prev + commit_pos
+
+        return SpecPlan(
+            effective_k=verify,
+            lanes_per_request=1,
+            extra_bytes_per_seq=extra_bytes_per_seq,
+            # The drafter carries no paged KV that grows with the sequence: its
+            # context cache is the fixed ``cap``-row window above.
+            extra_bytes_per_token=0,
+            accept_modes=("argmax_ids",),
+            drafter_state="internal",
+            drafter_target_cache_requires=(),
+            # The baseline width-1 path exists (adaptive fallback), but it does
+            # not carry the contract's per-row side tensors (accepted_counts /
+            # num_valid_drafts). Flip to True with the narrow contract path.
+            supports_narrow_decode=False,
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
