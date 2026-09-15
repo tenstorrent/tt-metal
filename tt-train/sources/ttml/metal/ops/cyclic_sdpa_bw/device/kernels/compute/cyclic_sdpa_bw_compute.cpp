@@ -355,6 +355,20 @@ void handover_column_gradients() {
 #endif
 }
 
+// The packer for P^T and dS^T: Float32 in and out, but with the packer's
+// "round to a 10-bit mantissa" control set, so what lands in L1 is the 19
+// bits the Src registers keep, rounded to nearest by the packer instead of
+// truncated by the unpacker. Truncation shrinks every product by 2^-11 on
+// average: a systematic -3e-4 to -5e-4 on dQ, dK and dV that this removes
+// for free. The next unconditional pack reconfig (dQ's) clears the bit.
+void pack_score_outputs_rounded() {
+    pack_reconfig_data_format(cb_attention_weights);
+    PACK((cfg_reg_rmw_tensix<
+          PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
+          PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT,
+          PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(1)));
+}
+
 // Broadcast a query tile's statistic (row 0 of its row-layout tile) down the
 // rows of DST. Once per column of the score grid, since every key tile of
 // the column shares it. The statistic goes through SrcB as it did through
@@ -377,6 +391,16 @@ void broadcast_statistic_rows_to_dst(
 // wait for the math unit that the math-thread versions carry -- ordering
 // against the FPU is the semaphore's job here.
 namespace pack_sfpu {
+
+// The exponential's polynomial for 2^f over the fraction f, taken as the
+// float value of its 23 bits (so c_k carries a factor 2^-23k): a minimax
+// fit of degree four with its ends pinned just inside [1, 2). Relative
+// error within 3e-6 everywhere.
+constexpr uint32_t kExpC0 = 0x3F80000Du;
+constexpr uint32_t kExpC1 = 0x33B16976u;
+constexpr uint32_t kExpC2 = 0x2777360Au;
+constexpr uint32_t kExpC3 = 0x1AD512EEu;
+constexpr uint32_t kExpC4 = 0x0E5DE35Du;
 
 inline void set_dst(const uint32_t tile) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << 6) + get_dest_buffer_base());
@@ -416,16 +440,75 @@ inline void init() {
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(inv_ln2_bits >> 16));
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, static_cast<uint16_t>(inv_ln2_bits & 0xFFFFu));
     TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, kExpC2 >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, kExpC2 & 0xFFFFu);
     TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, kExpC4 >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, kExpC4 & 0xFFFFu);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
 }
 
-// P = exp(x) in place, the 21-bit exponential, four faces.
+// The library clamps z = a x / ln 2 + 127 at 255 against overflow. Here x
+// is a score less its row's logsumexp, so exp(a x) <= 1 up to rounding and
+// the clamp is dead: two instructions per vector saved. The lower side,
+// -inf from the mask included, is the z > 0 mask in the body.
+
+// The exponential's constants into their registers: c0 in LREG7, c1 in
+// LREG6, c3 in LREG4, 127 in LREG5 (c2 and c4 sit in the programmable
+// constant registers 13 and 14 from init). Once per group of tiles, since
+// nothing else touches these registers between the group's exponentials.
+inline void exp_prepare() {
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);  // 127.0
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, kExpC1 >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, kExpC1 & 0xFFFFu);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, kExpC0 >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, kExpC0 & 0xFFFFu);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, kExpC3 >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, kExpC3 & 0xFFFFu);
+}
+
+// One face (eight vectors) of exp(x) in place. The same instruction stream
+// as _sfpu_exp_21f_bf16_tti_ -- x / ln 2 split into integer and fraction
+// bits, the fraction refined by a polynomial, the integer part set as the
+// exponent -- less the overflow clamp, and with the polynomial raised from
+// degree two to four. The library's quadratic (and a 16-bit immediate for its constant term) leaves
+// P with a relative error of 1.2e-3 RMS and a mean of +2.2e-4: bfloat16
+// accuracy, and by far the largest error in every gradient once the
+// statistics are exact. Two more multiply-adds per vector, in registers
+// the exponential was not using, bring it to 3e-6, below the 19 bits the
+// Src registers keep. The polynomial is constrained to stay inside [1, 2)
+// over the whole fraction range, since SETEXP only replaces the exponent.
+inline void exp_face() {
+    // The body below is recorded into the replay buffer the first time and
+    // replayed for the other seven vectors; the count must match exactly.
+    constexpr int kBodyLen = 15;
+    TTI_REPLAY(0, kBodyLen, 1, 1);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);           // x
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);      // z = a x / ln 2 + 127
+    TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);                                // exponent of z
+    TTI_SFPEXMAN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);                                // mantissa of z, hidden bit in
+    TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);                                 // fixed point: integer.fraction
+    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);         // the 23 fraction bits
+    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);                                    // as a float f in [0, 2^23)
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, p_sfpu::LREG2, 0);      // c4 f + c3
+    TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 8);                                // mask: z > 0
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, 0);      // .. f + c2
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG2, 0);       // .. f + c1
+    TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG0, 1);                      // integer part, 0 where z <= 0
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG1, 0);       // 2^fraction = .. f + c0
+    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, 2);                               // times 2^integer
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+#pragma GCC unroll 8
+    for (uint32_t i = 1; i < 8u; ++i) {
+        TTI_REPLAY(0, kBodyLen, 0, 0);
+    }
+}
+
+// P = exp(a x) in place, four faces.
 inline void exp_tile(const uint32_t tile) {
     set_dst(tile);
     for (uint32_t face = 0; face < 4u; ++face) {
-        ckernel::sfpu::_sfpu_exp_21f_bf16_tti_</*SCALE_EN*/ false, DST_ACCUM_MODE, /*CLAMP_NEGATIVE*/ false, 8>(0);
+        exp_face();
         next_face();
     }
     clear_dst();
@@ -656,9 +739,10 @@ void kernel_main() {
         DeviceZoneScopedN("SCORES");
         cb_reserve_back(cb_attention_weights, score_tiles);
         cb_reserve_back(cb_grad_scores, score_tiles);
-        // Both outputs are Float32; the previous pack may have been the bf16
-        // K^T. Once per timestep is enough.
-        pack_reconfig_data_format(cb_attention_weights);
+        // Both outputs are Float32 buffers packed as Tf32 -- see
+        // pack_score_outputs_rounded. Once per timestep is enough; every
+        // later pack reconfigures unconditionally.
+        pack_score_outputs_rounded();
         for (uint32_t a = 0; a < Bt; ++a) {
         for (uint32_t h = 0; h < kGroups; ++h) {
             const uint32_t b0 = h * kGroup;  // first key tile of the group
@@ -721,6 +805,7 @@ void kernel_main() {
             // after the math thread's commit, which says dP^T - D^T is in --
             // the multiplies, and the packs once the SFPU has written them.
             PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+            PACK((pack_sfpu::exp_prepare()));
             for (uint32_t i = 0; i < kGroup; ++i) {
                 PACK((pack_sfpu::exp_tile(score_reg(i))));
             }

@@ -334,6 +334,13 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
+    // The column gradients' seeds and accumulators too: read only by the
+    // reload and handover copies, so the running sums keep all 32 bits
+    // across a handover and a reload rather than the register's 19.
+    unpack_mode[tt::CBIndex::c_18] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_21] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_22] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     const auto compute = CreateKernel(
         program, kComputePath, region,
         ComputeConfig{
