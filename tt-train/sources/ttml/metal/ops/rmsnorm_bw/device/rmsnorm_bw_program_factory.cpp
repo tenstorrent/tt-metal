@@ -313,7 +313,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         core_group_2,
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
-        [&](const tt::tt_metal::CoreCoord& core, uint32_t num_rows, uint32_t start_row) {
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row] = work;
             // Reader kernel: (input_addr, gamma_addr, rms_addr, dLdout_addr, num_rows, offset)
             SetRuntimeArgs(
                 program,

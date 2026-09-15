@@ -200,9 +200,8 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         core_group_2,
         tiles_per_core_g1,
         tiles_per_core_g2,
-        [&](const tt::tt_metal::CoreCoord& logical_core, uint32_t tiles_this_core, uint32_t tiles_written) {
-            // The reduction protocol indexes cores in the walk order: core i -> {i / num_cores_y, i % num_cores_y}.
-            const uint32_t core_index = logical_core.x * num_cores_y + logical_core.y;
+        [&](const CoreWork& work) {
+            const auto& [logical_core, core_index, tiles_this_core, tiles_written] = work;
             auto reader_handle = (logical_core == origin_core) ? reader_origin : reader_kernel;
             SetRuntimeArgs(
                 program,
