@@ -15,18 +15,27 @@ from loguru import logger
 
 import ttnn
 
-from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
+from ...models.transformers.ltx.rope_ltx import (
+    prepare_audio_cross_pe,
+    prepare_audio_rope,
+    prepare_av_cross_pe,
+    prepare_compact_video_rope,
+    prepare_video_rope,
+)
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 from ...models.vae.vae_ltx import upsample_latent
+from ...utils.conv3d import _walk_conv3d_modules
 from ...utils.ltx import (
     LTX_AUDIO_N_BUCKET,
     LTX_BUCKET_LADDER,
     LTX_CANVASES,
+    LTX_OUTPUT_CANVASES,
     LTX_SERVED_CANVASES,
     LTXBucketRoute,
     ceil_to,
     load_conditioning_image,
+    ltx_canvas_name,
     ltx_served_configs,
     ltx_stage_video_n_real,
     route_ltx_config,
@@ -35,6 +44,7 @@ from ...utils.ltx import (
 )
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
+from ...utils.tracing import Tracer
 from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
@@ -59,6 +69,22 @@ class LTXDistilledPipeline(LTXPipeline):
     HAS_UPSAMPLER = True
     DEFERS_ENCODE_TRACE = True
     WARMUP_USES_FPS = True
+    # Temporal tiling remains an opt-in diagnostic: this checkpoint's decoder is non-causal, and
+    # independently decoded windows measurably degrade output quality. Prefer the full decode after
+    # reducing resident DiT state; set LTX_VAE_TEMPORAL_CHUNK_LATENTS explicitly to investigate it.
+    VAE_TEMPORAL_CHUNK_LATENTS = None
+    VAE_TEMPORAL_OVERLAP_LATENTS = 4
+    # H3-style deployment-wide dynamic arenas: every stage rewrites these before replay, so sharing
+    # their stable addresses does not force configuration metadata to be rebuilt. RoPE, cross-PE and
+    # masks remain per-rung: although some have the same physical shape, their contents are bound to
+    # a stage/request configuration and sharing them made every S1 -> S2 transition regenerate all
+    # statics before the first replay.
+    SHARED_TRACE_IO_NAMES = (
+        "tt_video_logical_n",
+        "tt_audio_lat",
+        "tt_timestep",
+        "tt_video_ts_pair",
+    )
 
     @staticmethod
     def _post_process_latent_tt(
@@ -131,8 +157,39 @@ class LTXDistilledPipeline(LTXPipeline):
     _served_canvases: tuple[str, ...] | None = None
     _warm_rungs: frozenset[int] = frozenset()
     _hot_shapes: frozenset[tuple[int, int, int, int]] = frozenset()
+    _served_postprocess_shapes: frozenset[tuple[int, int, int]] = frozenset()
+    _warmed_upsampler_shapes: frozenset[tuple[int, int, int]] = frozenset()
+    _warmed_vae_shapes: frozenset[tuple[int, int, int]] = frozenset()
     _upsampler_shape: tuple[int, int, int] | None = None
     _upsampler_hot_shape: tuple[int, int, int] | None = None
+    _upsampler_weight_bank_limit: int = 3
+    _warmed_upsampler_trace_shapes: frozenset[tuple[int, int, int]] = frozenset()
+    _warmed_vae_trace_shapes: frozenset[tuple[int, int, int]] = frozenset()
+    _audio_traces_warmed: bool = False
+    _postprocess_shapes_locked: bool = False
+    _warmed_rope_materializer_rungs: frozenset[int] = frozenset()
+    ROPE_AXIS_CAPACITY = 64
+
+    @staticmethod
+    def _component_trace_enabled(name: str, *, legacy: str | None = None) -> bool:
+        value = os.environ.get(name)
+        if value is None and legacy is not None:
+            value = os.environ.get(legacy)
+        return value in ("1", "true", "True")
+
+    @staticmethod
+    def _device_rope_materializer_enabled() -> bool:
+        return os.environ.get("LTX_DEVICE_ROPE_MATERIALIZE", "0") in ("1", "true", "True")
+
+    def _log_trace_residency(self, label: str) -> None:
+        trace_count, trace_bytes = Tracer.residency(self.mesh_device)
+        if trace_bytes is None:
+            logger.info(f"trace residency [{label}]: {trace_count} live trace(s); byte counter unavailable")
+            return
+        logger.info(
+            f"trace residency [{label}]: {trace_count} live trace(s), "
+            f"{trace_bytes / (1024**2):.1f} MiB resident trace buffers"
+        )
 
     def _route(self, *, num_frames: int, height: int, width: int, fps: int) -> LTXBucketRoute:
         """Route one T2V/I2V request onto the ladder. I2V is not rejected here: this pipeline's
@@ -219,6 +276,27 @@ class LTXDistilledPipeline(LTXPipeline):
         height, width = LTX_CANVASES.get(route.canvas) or tuple(int(v) for v in route.canvas.split("x"))
         return (height // 2, width // 2) if stage == "s1" else (height, width)
 
+    @staticmethod
+    def _postprocess_shape(route: LTXBucketRoute) -> tuple[int, int, int]:
+        height, width = LTX_CANVASES.get(route.canvas) or tuple(int(v) for v in route.canvas.split("x"))
+        return route.num_frames, height, width
+
+    def _sync_and_reset_vae_ccl(self) -> None:
+        """Finish all VAE/upsampler work, then restart its CCL ping-pong epoch.
+
+        The upsampler uses a CCLManager separate from the DiT traces. Shape changes previously
+        reused its all-gather semaphore bank after a module reload and could leave every device
+        waiting in AllBroadcastDeviceOperation. Reset only at a fully synchronized request
+        boundary, never while a collective is in flight.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+        self.vae_ccl_manager.reset_global_semaphores()
+        ttnn.synchronize_device(self.mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+
     def warmup_buffers(
         self,
         *,
@@ -230,7 +308,7 @@ class LTXDistilledPipeline(LTXPipeline):
         stages: tuple[str, ...] = ("s1", "s2"),
         served_configs=None,
         bucket_ladder: tuple[int, ...] | None = None,
-        exact_hot_rungs: bool = True,
+        exact_hot_rungs: bool = False,
     ) -> None:
         """Compile both stages' programs and, when traced, capture one denoise trace per bucket rung.
 
@@ -240,9 +318,9 @@ class LTXDistilledPipeline(LTXPipeline):
         whole served grid, ~1 min and ~110 MB of trace region per rung on the 4x8); every rung's
         persistent I/O is allocated before the first capture so no replay can overwrite another's
         inputs.
-        ``exact_hot_rungs`` adds the hot shape's SP-padded lengths to the ladder as rungs of their
-        own, so the hot config keeps its exact (unpadded-beyond-SP) matmul shapes and pays nothing
-        for bucketing; other configs still land on the geometric ladder.
+        ``exact_hot_rungs`` optionally adds the hot shape's SP-padded lengths as private rungs. It is
+        off by default for serving: otherwise the startup request silently grows the resident trace
+        set beyond the six-rung deployment ladder.
         ``stages=("s1",)`` skips the stage-2 side (upsample, VAE, audio) of the hot shape.
         """
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
@@ -261,6 +339,15 @@ class LTXDistilledPipeline(LTXPipeline):
         routes = self._resolve_served_routes(served_configs, num_frames=num_frames, height=height, width=width, fps=fps)
         self._served_routes = routes
         self._hot_shapes = frozenset({(num_frames, height, width, fps)})
+        self._served_postprocess_shapes = frozenset(self._postprocess_shape(route) for route in routes)
+        self._warmed_upsampler_trace_shapes = frozenset()
+        self._warmed_vae_trace_shapes = frozenset()
+        self._audio_traces_warmed = False
+        self._upsampler_trace_inputs = {}
+        self._vae_trace_inputs = {}
+        self._postprocess_shapes_locked = False
+        self._warmed_rope_materializer_rungs = frozenset()
+        self._rope_compact_inputs = {}
         hot = routes[0]
         # Representatives prefer s1, so a stages=("s1",) warmup drops the rungs only s2 would reach.
         reps = {rung: rep for rung, rep in self._representative_per_rung(routes).items() if rep[1] in stages}
@@ -280,6 +367,26 @@ class LTXDistilledPipeline(LTXPipeline):
                 route, stage = reps[rung]
                 self._prealloc_trace_io(rung, route=route, stage=stage)
             self._warm_rungs = frozenset(reps)
+            if self._device_rope_materializer_enabled():
+                warmed_rope_rungs = set()
+                for rung, (route, stage) in sorted(reps.items()):
+                    s_h, s_w = self._stage_hw(route, stage)
+                    latent_frames, latent_h, latent_w = latent_grid(route.num_frames, s_h, s_w)
+                    logger.info(
+                        f"warmup video RoPE materializer rung {rung} via "
+                        f"{route.canvas} {route.num_frames}f@{route.fps}fps stage {stage}"
+                    )
+                    self._materialize_video_rope(
+                        self._trace_state[rung],
+                        latent_frames=latent_frames,
+                        latent_h=latent_h,
+                        latent_w=latent_w,
+                        video_N=rung,
+                        video_N_real=route.video_n_real(stage),
+                        fps=route.fps,
+                    )
+                    warmed_rope_rungs.add(rung)
+                self._warmed_rope_materializer_rungs = frozenset(warmed_rope_rungs)
 
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
         # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
@@ -292,38 +399,222 @@ class LTXDistilledPipeline(LTXPipeline):
         # VAE halo/padding, and audio buffers created after capture would sit in its activation
         # region and be corrupted by the first denoise replay.
         if "s2" in stages:
-            logger.info(f"warmup upsample → {height}x{width}")
-            self._ensure_upsampler_shape(num_frames, height, width)
-            self._upsampler_hot_shape = self._upsampler_shape
-            self._warmup_upsample(num_frames, height, width)
+            # The fused halo-scatter path hangs on the 4x8 at the long-T VAE shape (T=503);
+            # the original neighbor_pad_async path completes at the same shape. Keep its output
+            # non-persistent here so long decodes do not retain two large buffers per VAE shape.
+            # Scope the fallback to bucketed distilled runs so other LTX pipelines retain
+            # their existing default. The opt-in is for continued halo-scatter debugging.
+            if self.vae_decoder is not None and os.environ.get("LTX_BUCKET_VAE_HALO_SCATTER", "0") == "0":
+                disabled = 0
+                for conv in _walk_conv3d_modules(self.vae_decoder):
+                    if hasattr(conv, "_use_halo_conv"):
+                        conv._use_halo_conv = False
+                        conv._np_use_persistent_buffer = False
+                        disabled += 1
+                logger.info(f"bucket VAE neighbor-pad: original non-persistent path ({disabled} convs)")
 
-            self._warmup_decode(num_frames, height, width)
+            # H3's serving invariant: every non-DiT program shape is initialized before any trace
+            # is captured. LTX cannot collapse these into one fixed VAE tile without changing model
+            # semantics, so compile each exact served (frames, H, W) shape. Upsampler module shells
+            # are retained in a cache, while their large Conv3D weights are shared through up to three
+            # resident preparation-layout banks. The hot shape runs last when trace capture starts.
+            hot_post = (num_frames, height, width)
+            postprocess_shapes = sorted(
+                self._served_postprocess_shapes - {hot_post},
+                key=lambda shape: shape[0] * shape[1] * shape[2],
+                reverse=True,
+            ) + [hot_post]
+            warmed_upsampler_shapes: set[tuple[int, int, int]] = set()
+            warmed_vae_shapes: set[tuple[int, int, int]] = set()
+            trace_upsampler = self._traced and self._component_trace_enabled("LTX_UPSAMPLER_TRACE")
+            trace_video_vae = self._traced and self._component_trace_enabled(
+                "LTX_VIDEO_VAE_TRACE", legacy="LTX_VAE_TRACE"
+            )
+            vae_chunk_latents = int(
+                os.environ.get("LTX_VAE_TEMPORAL_CHUNK_LATENTS", self.VAE_TEMPORAL_CHUNK_LATENTS) or 0
+            )
+            if trace_video_vae and vae_chunk_latents > 0:
+                raise ValueError("resident video-VAE traces require LTX_VAE_TEMPORAL_CHUNK_LATENTS=0")
+            for shape_num_frames, shape_height, shape_width in postprocess_shapes:
+                logger.info(
+                    f"warmup postprocess shape {shape_num_frames}f@{shape_height}x{shape_width} "
+                    f"({len(warmed_vae_shapes) + 1}/{len(postprocess_shapes)})"
+                )
+                self._ensure_upsampler_shape(shape_num_frames, shape_height, shape_width)
+                self._sync_and_reset_vae_ccl()
+                self._warmup_upsample(shape_num_frames, shape_height, shape_width)
+                self._sync_and_reset_vae_ccl()
+                warmed_upsampler_shapes.add(self._upsampler_shape)
+                postprocess_shape = (shape_num_frames, shape_height, shape_width)
+                if trace_upsampler and self.upsampler is not None:
+                    assert self._upsampler_shape is not None
+                    trace_input, logical_h, logical_w = self.upsampler.prepare_input(
+                        torch.zeros(1, self.in_channels, *self._upsampler_shape)
+                    )
+                    trace_key = (tuple(trace_input.shape), logical_h, logical_w)
+                    self._upsampler_trace_inputs[postprocess_shape] = (
+                        self.upsampler,
+                        trace_key,
+                        trace_input,
+                        logical_h,
+                        logical_w,
+                    )
+
+                self._warmup_decode(shape_num_frames, shape_height, shape_width)
+                self._sync_and_reset_vae_ccl()
+                warmed_vae_shapes.add(postprocess_shape)
+                if trace_video_vae and self.vae_decoder is not None:
+                    latent_frames, latent_h, latent_w = latent_grid(shape_num_frames, shape_height, shape_width)
+                    trace_input, logical_h, logical_w = self.vae_decoder.prepare_input(
+                        torch.zeros(1, self.in_channels, latent_frames, latent_h, latent_w)
+                    )
+                    trace_key = (tuple(trace_input.shape), logical_h, logical_w)
+                    self._vae_trace_inputs[postprocess_shape] = (
+                        trace_key,
+                        trace_input,
+                        logical_h,
+                        logical_w,
+                    )
+
+            assert self._upsampler_shape is not None
+            self._upsampler_hot_shape = self._upsampler_shape
+            self._warmed_upsampler_shapes = frozenset(warmed_upsampler_shapes)
+            self._warmed_vae_shapes = frozenset(warmed_vae_shapes)
 
             logger.info("warmup audio decode (on-device, eager)")
             self._warmup_audio_decode(torch.zeros(1, self.audio_n_bucket, self.in_channels), num_frames, fps=fps)
-
             # Audio/decoder warmup may swap modules in dynamic-load configurations.
             self._prepare_transformer(0)
 
-        # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
-        stage_sigmas = {
-            "s1": list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0],
-            "s2": list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0],
-        }
+            if self._needs_image_encoder_warmup():
+                image_shapes = sorted({shape[1:] for shape in self._served_postprocess_shapes})
+                for image_height, image_width in image_shapes:
+                    logger.info(
+                        f"warmup image encoder: {image_height // 2}x{image_width // 2} "
+                        f"+ {image_height}x{image_width}"
+                    )
+                    self._warmup_encode(image_height // 2, image_width // 2)
+                    self._warmup_encode(image_height, image_width)
 
-        # Per rung: an eager pass at the rung's exact shapes to fill the program cache (inner_step
-        # is prep_run=False, and the untraced path pads differently so it cannot compile for the
-        # trace), then the capture. Untraced pipelines just compile. The hot shape's own stages run
-        # first, in stage order, so eager warmup matches the old flow.
-        ordered = sorted(reps.items(), key=lambda kv: (kv[1][0] is not hot, kv[1][1], kv[0]))
-        for rung, (route, stage) in ordered:
-            s_h, s_w = self._stage_hw(route, stage)
-            logger.info(
-                f"warmup rung {rung} via {route.canvas} {route.num_frames}f@{route.fps}fps stage {stage} "
-                f"({s_h}x{s_w}, real N={route.video_n_real(stage)}), σ={stage_sigmas[stage]}"
+            # Programs and cache-owned buffers for every DiT rung must exist before a postprocess
+            # trace captures its activation addresses. Otherwise an upsampler/VAE replay can
+            # overwrite state allocated by the later DiT compile and deadlock its first CCL.
+            stage_sigmas = {
+                "s1": list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0],
+                "s2": list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0],
+            }
+            ordered = sorted(reps.items(), key=lambda kv: (kv[1][0] is not hot, kv[1][1], kv[0]))
+            if self._traced:
+                for rung, (route, stage) in ordered:
+                    s_h, s_w = self._stage_hw(route, stage)
+                    logger.info(
+                        f"warmup rung {rung} compile via {route.canvas} {route.num_frames}f@{route.fps}fps "
+                        f"stage {stage} ({s_h}x{s_w}, real N={route.video_n_real(stage)}), "
+                        f"σ={stage_sigmas[stage]}"
+                    )
+                    self._denoise_no_guidance(
+                        v_p,
+                        a_p,
+                        num_frames=route.num_frames,
+                        height=s_h,
+                        width=s_w,
+                        fps=route.fps,
+                        sigma_values=stage_sigmas[stage],
+                        seed=0,
+                        traced=self._traced,
+                        route=route,
+                        stage=stage,
+                        compile_only=True,
+                    )
+
+            if trace_upsampler:
+                logger.info(f"capturing {len(self._upsampler_trace_inputs)} resident upsampler trace(s)")
+                captured_upsampler_shapes = set()
+                for index, (postprocess_shape, trace_state) in enumerate(self._upsampler_trace_inputs.items(), 1):
+                    upsampler, trace_key, trace_input, logical_h, logical_w = trace_state
+                    logger.info(
+                        f"capture upsampler trace {index}/{len(self._upsampler_trace_inputs)}: "
+                        f"{postprocess_shape[0]}f@{postprocess_shape[1]}x{postprocess_shape[2]}"
+                    )
+                    upsampler.forward_device(
+                        trace_input,
+                        logical_h,
+                        logical_w,
+                        traced=True,
+                        tracer_trace_key=trace_key,
+                    )
+                    self._sync_and_reset_vae_ccl()
+                    captured_upsampler_shapes.add(postprocess_shape)
+                    self._log_trace_residency(f"upsampler {index}/{len(self._upsampler_trace_inputs)}")
+                self._warmed_upsampler_trace_shapes = frozenset(captured_upsampler_shapes)
+
+            if trace_video_vae and self.vae_decoder is not None:
+                logger.info(f"capturing {len(self._vae_trace_inputs)} resident video-VAE trace(s)")
+                captured_vae_shapes = set()
+                for index, (postprocess_shape, trace_state) in enumerate(self._vae_trace_inputs.items(), 1):
+                    trace_key, trace_input, logical_h, logical_w = trace_state
+                    logger.info(
+                        f"capture video-VAE trace {index}/{len(self._vae_trace_inputs)}: "
+                        f"{postprocess_shape[0]}f@{postprocess_shape[1]}x{postprocess_shape[2]}"
+                    )
+                    self.vae_decoder.decode_device(
+                        trace_input,
+                        logical_h,
+                        logical_w,
+                        traced=True,
+                        tracer_trace_key=trace_key,
+                    )
+                    self._sync_and_reset_vae_ccl()
+                    captured_vae_shapes.add(postprocess_shape)
+                    self._log_trace_residency(f"video-VAE {index}/{len(self._vae_trace_inputs)}")
+                self._warmed_vae_trace_shapes = frozenset(captured_vae_shapes)
+
+            audio_trace_enabled = self._traced and (
+                self.tt_mel_decoder.use_trace
+                or self.tt_vocoder_with_bwe.use_trace
+                or self.tt_vocoder_with_bwe.use_trace_bwe
             )
-            passes = (True, False) if self._traced else (False,)
-            for compile_only in passes:
+            if audio_trace_enabled:
+                logger.info("capturing resident audio traces (mel-VAE + vocoder + BWE)")
+                self.decode_audio(
+                    torch.zeros(1, self.audio_n_bucket, self.in_channels),
+                    num_frames,
+                    fps=fps,
+                )
+                self._sync_and_reset_vae_ccl()
+                self._audio_traces_warmed = True
+                self._log_trace_residency("audio")
+
+        # Image-encoder programs are also non-DiT work and therefore must compile before the first
+        # denoise capture. Pure T2V does not build this path.
+        if self._needs_image_encoder_warmup() and "s2" not in stages:
+            image_shapes = sorted({shape[1:] for shape in self._served_postprocess_shapes})
+            for image_height, image_width in image_shapes:
+                logger.info(
+                    f"warmup image encoder: {image_height // 2}x{image_width // 2} " f"+ {image_height}x{image_width}"
+                )
+                self._warmup_encode(image_height // 2, image_width // 2)
+                self._warmup_encode(image_height, image_width)
+
+        # s1-only and untraced warmups do not enter the postprocess block above.
+        if "s2" not in stages:
+            stage_sigmas = {
+                "s1": list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0],
+                "s2": list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0],
+            }
+            ordered = sorted(reps.items(), key=lambda kv: (kv[1][0] is not hot, kv[1][1], kv[0]))
+
+        # DiT programs were compiled before all postprocess captures above. Capture each rung now;
+        # untraced pipelines execute this once as their compile/warmup pass.
+        for compile_only in (False,):
+            phase = "compile" if compile_only else ("capture" if self._traced else "compile")
+            for rung, (route, stage) in ordered:
+                s_h, s_w = self._stage_hw(route, stage)
+                logger.info(
+                    f"warmup rung {rung} {phase} via {route.canvas} {route.num_frames}f@{route.fps}fps "
+                    f"stage {stage} ({s_h}x{s_w}, real N={route.video_n_real(stage)}), "
+                    f"σ={stage_sigmas[stage]}"
+                )
                 self._denoise_no_guidance(
                     v_p,
                     a_p,
@@ -338,24 +629,8 @@ class LTXDistilledPipeline(LTXPipeline):
                     stage=stage,
                     compile_only=compile_only,
                 )
-
-        if (
-            "s2" in stages
-            and self._traced
-            and self.vae_decoder is not None
-            and os.environ.get("LTX_VAE_TRACE", "0") != "0"
-        ):
-            # Programs are compiled; optionally let the first real hot-shape decode capture a
-            # trace. The default console path keeps this off and traces only the DiT.
-            self.vae_decoder._vae_traced = True
-
-        # Warm the image encoder only for an I2V build. Pure T2V constructs the encoder shell from
-        # the checkpoint too, but its transformer is not built for image conditioning and cannot
-        # become I2V later; compiling both encoder resolutions there only adds startup latency.
-        if self._needs_image_encoder_warmup():
-            logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
-            self._warmup_encode(height // 2, width // 2)
-            self._warmup_encode(height, width)
+        if self._traced:
+            self._log_trace_residency("DiT")
 
         # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
         # already warmed before capture (above); dynamic_load / untraced warm last.
@@ -363,21 +638,63 @@ class LTXDistilledPipeline(LTXPipeline):
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
 
+        # This is intentionally the final trace capture. The encoder's programs were compiled
+        # before the DiT traces; capture it now so the first unseen serving prompt only replays.
+        if self._traced and not self.dynamic_load:
+            logger.info("capturing resident Gemma encoder trace")
+            self.gemma_encoder_pair.open_trace_gate()
+            self.encode_prompts(["LTX serving encoder trace warmup"], use_cache=False)
+            self._log_trace_residency("Gemma")
+
+        self._postprocess_shapes_locked = self._traced
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
     def release_traces(self) -> None:
         super().release_traces()
+        for upsampler in set(self.__dict__.get("_upsampler_cache", {}).values()):
+            upsampler.release_trace()
         self._warm_rungs = frozenset()
         self._hot_shapes = frozenset()
+        self._warmed_upsampler_trace_shapes = frozenset()
+        self._warmed_vae_trace_shapes = frozenset()
+        self._audio_traces_warmed = False
+        self._upsampler_trace_inputs = {}
+        self._vae_trace_inputs = {}
+        self._postprocess_shapes_locked = False
+        self._warmed_rope_materializer_rungs = frozenset()
+        self._rope_compact_inputs = {}
 
     def _needs_image_encoder_warmup(self) -> bool:
         return self.vae_encoder is not None and self._image_conditioning
 
+    def _prepare_upsampler(self) -> None:
+        """Keep one resident Conv3D weight bank per preparation-layout fingerprint."""
+        if self.upsampler is None:
+            return
+        banks = self.__dict__.setdefault("_upsampler_weight_banks", {})
+        layout_key = self.upsampler.weight_layout_key()
+        bank = banks.get(layout_key)
+        if bank is None:
+            if len(banks) >= self._upsampler_weight_bank_limit:
+                raise RuntimeError(
+                    f"upsampler needs more than {self._upsampler_weight_bank_limit} resident Conv3D layouts; "
+                    f"already loaded {sorted(banks)}, requested {layout_key}"
+                )
+            self.upsampler.reload_weights()
+            banks[layout_key] = self.upsampler
+            logger.info(
+                f"upsampler resident Conv3D bank {len(banks)}/{self._upsampler_weight_bank_limit}: {layout_key}"
+            )
+            return
+        self.upsampler.reload_weights(conv_weight_bank=bank)
+
     def _ensure_upsampler_shape(self, num_frames: int, height: int, width: int) -> bool:
-        """Rebuild the spatial upsampler when the request's stage-1 latent shape differs from the one
-        it was built for (its DRAM GroupNorm grid is pinned at construction). The hot shape never
-        rebuilds; other served configs pay an eager weight reload here. Returns whether the
-        upsampler now sits at the hot (warmed) shape."""
+        """Select the cached upsampler shell for an exact stage-1 latent shape.
+
+        Shells may be created only before trace capture. Their DRAM GroupNorm grids are
+        shape-pinned, but their programs are all compiled during warmup and their Conv3D
+        parameters borrow from one of the three resident preparation-layout banks.
+        """
         if self.upsampler is None:
             return True
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
@@ -393,27 +710,41 @@ class LTXDistilledPipeline(LTXPipeline):
                 ceil_to(self._init_height // (SPATIAL_COMPRESSION * 2), hf),
                 ceil_to(self._init_width // (SPATIAL_COMPRESSION * 2), wf),
             )
+        cache = self.__dict__.setdefault("_upsampler_cache", {})
+        cache.setdefault(self._upsampler_shape, self.upsampler)
         if shape == self._upsampler_shape:
-            return shape == (self._upsampler_hot_shape or shape)
-        logger.warning(
-            f"upsampler rebuilt for latent shape {shape} (was {self._upsampler_shape}); "
-            "not a hot shape, so this request pays the eager upsampler reload"
+            return shape in self._warmed_upsampler_shapes or not self._warmed_upsampler_shapes
+
+        selected = cache.get(shape)
+        if selected is None:
+            if self._postprocess_shapes_locked:
+                raise ValueError(
+                    f"upsampler shape {shape} was not initialized before trace capture; "
+                    f"warmed shapes: {sorted(self._warmed_upsampler_shapes)}"
+                )
+            selected = LTXLatentUpsampler.from_checkpoint(
+                self._upsampler_path,
+                input_hw=input_hw,
+                latent_frames=latent_frames,
+                mesh_device=self.mesh_device,
+                parallel_config=self.vae_parallel_config,
+                ccl_manager=self.vae_ccl_manager,
+                dit_parallel_config=self.parallel_config,
+            )
+            cache[shape] = selected
+
+        warmed_trace_replay = (
+            self._traced
+            and self._postprocess_shapes_locked
+            and self._component_trace_enabled("LTX_UPSAMPLER_TRACE")
+            and shape in self._warmed_upsampler_trace_shapes
         )
-        old = self.upsampler
-        self.upsampler = LTXLatentUpsampler.from_checkpoint(
-            self._upsampler_path,
-            input_hw=input_hw,
-            latent_frames=latent_frames,
-            mesh_device=self.mesh_device,
-            parallel_config=self.vae_parallel_config,
-            ccl_manager=self.vae_ccl_manager,
-            dit_parallel_config=self.parallel_config,
-        )
+        if not warmed_trace_replay:
+            self._sync_and_reset_vae_ccl()
+        self.upsampler = selected
         self._upsampler_shape = shape
-        if old is not None:
-            old.deallocate_weights()
         self._register_coresident_exclusions()
-        return shape == self._upsampler_hot_shape
+        return shape in self._warmed_upsampler_shapes
 
     def _set_video_logical_n(self, state: LTXTransformerState, video_N_real: int, traced: bool) -> None:
         """Write the live video length into the rung's one-element uint32 tensor (in place when traced)."""
@@ -427,6 +758,123 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.copy_host_to_device_tensor(host, state.tt_video_logical_n)
         else:
             state._tt_video_logical_n.update(host.to(self.mesh_device), False)
+
+    def _refresh_rope_compact_input(
+        self,
+        name: str,
+        value: torch.Tensor,
+        *,
+        dtype: ttnn.DataType,
+        layout: ttnn.Layout,
+    ) -> ttnn.Tensor:
+        """Upload a compact recipe into one deployment-wide fixed-address arena."""
+
+        arenas = self.__dict__.setdefault("_rope_compact_inputs", {})
+        host = ttnn.from_torch(
+            value,
+            dtype=dtype,
+            layout=layout,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        existing = arenas.get(name)
+        if existing is None:
+            existing = host.to(self.mesh_device)
+            arenas[name] = existing
+        else:
+            ttnn.copy_host_to_device_tensor(host, existing)
+        return existing
+
+    def _materialize_video_rope(
+        self,
+        state: LTXTransformerState,
+        *,
+        latent_frames: int,
+        latent_h: int,
+        latent_w: int,
+        video_N: int,
+        video_N_real: int,
+        fps: float,
+    ) -> None:
+        """Expand compact video RoPE recipes directly into this rung's fixed buffers."""
+
+        if self._postprocess_shapes_locked and video_N not in self._warmed_rope_materializer_rungs:
+            raise ValueError(
+                f"RoPE materializer rung {video_N} was not compiled before traces became live; "
+                f"warmed rungs: {sorted(self._warmed_rope_materializer_rungs)}"
+            )
+        operation = getattr(ttnn.experimental, "ltx_rope_materialize", None)
+        if operation is None:
+            raise RuntimeError(
+                "LTX_DEVICE_ROPE_MATERIALIZE=1 requires a build containing " "ttnn.experimental.ltx_rope_materialize"
+            )
+        destinations = (
+            state.tt_video_rope_cos,
+            state.tt_video_rope_sin,
+            state.tt_video_cross_pe_cos,
+            state.tt_video_cross_pe_sin,
+        )
+        if any(value is None for value in destinations):
+            raise RuntimeError("RoPE destination buffers must be allocated before device materialization")
+
+        build_start = time.perf_counter()
+        compact = prepare_compact_video_rope(
+            latent_frames,
+            latent_h,
+            latent_w,
+            inner_dim=self.inner_dim,
+            theta=self.positional_embedding_theta,
+            max_pos=self.positional_embedding_max_pos,
+            fps=fps,
+            axis_capacity=self.ROPE_AXIS_CAPACITY,
+        )
+        build_elapsed = time.perf_counter() - build_start
+
+        upload_start = time.perf_counter()
+        self_cos = self._refresh_rope_compact_input(
+            "self_cos", compact.self_cos.unsqueeze(0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+        )
+        self_sin = self._refresh_rope_compact_input(
+            "self_sin", compact.self_sin.unsqueeze(0), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+        )
+        cross_cos = self._refresh_rope_compact_input(
+            "cross_cos",
+            compact.cross_cos.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        cross_sin = self._refresh_rope_compact_input(
+            "cross_sin",
+            compact.cross_sin.unsqueeze(0).unsqueeze(0),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        metadata = self._refresh_rope_compact_input(
+            "metadata",
+            torch.tensor([video_N_real, latent_frames, latent_h, latent_w], dtype=torch.int64).reshape(1, 1, 1, 4),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        upload_elapsed = time.perf_counter() - upload_start
+
+        expand_start = time.perf_counter()
+        operation(
+            self_cos,
+            self_sin,
+            cross_cos,
+            cross_sin,
+            metadata,
+            *destinations,
+            sp_axis=self.parallel_config.sequence_parallel.mesh_axis,
+            tp_axis=self.parallel_config.tensor_parallel.mesh_axis,
+        )
+        if os.environ.get("LTX_ROPE_TIMING_SYNC", "0") in ("1", "true", "True"):
+            ttnn.synchronize_device(self.mesh_device)
+        expand_elapsed = time.perf_counter() - expand_start
+        logger.info(
+            f"video RoPE compact refresh: host={build_elapsed:.3f}s, "
+            f"upload={upload_elapsed:.3f}s, device={'sync' if os.environ.get('LTX_ROPE_TIMING_SYNC') == '1' else 'enqueue'}"
+            f"={expand_elapsed:.3f}s"
+        )
 
     def _prepare_stage_statics(
         self,
@@ -452,19 +900,21 @@ class LTXDistilledPipeline(LTXPipeline):
         key = (latent_frames, latent_h, latent_w, video_N, video_N_real, audio_N, audio_N_real, fps)
         if state.bound_config == key:
             return
-        v_cos, v_sin = prepare_video_rope(
-            latent_frames,
-            latent_h,
-            latent_w,
-            inner_dim=self.inner_dim,
-            num_attention_heads=self.num_attention_heads,
-            theta=self.positional_embedding_theta,
-            max_pos=self.positional_embedding_max_pos,
-            mesh_device=self.mesh_device,
-            parallel_config=self.parallel_config,
-            fps=fps,
-            video_N=video_N,
-        )
+        use_device_video_rope = self._device_rope_materializer_enabled() and state.tt_video_rope_cos is not None
+        if not use_device_video_rope:
+            v_cos, v_sin = prepare_video_rope(
+                latent_frames,
+                latent_h,
+                latent_w,
+                inner_dim=self.inner_dim,
+                num_attention_heads=self.num_attention_heads,
+                theta=self.positional_embedding_theta,
+                max_pos=self.positional_embedding_max_pos,
+                mesh_device=self.mesh_device,
+                parallel_config=self.parallel_config,
+                fps=fps,
+                video_N=video_N,
+            )
         a_cos, a_sin = prepare_audio_rope(
             audio_N,
             audio_N_real,
@@ -473,35 +923,55 @@ class LTXDistilledPipeline(LTXPipeline):
             parallel_config=self.parallel_config,
         )
         # Cross-PE required: without it A↔V cross-attention loses positional info and lip sync breaks.
-        (
-            v_xpe_cos,
-            v_xpe_sin,
-            a_xpe_cos,
-            a_xpe_sin,
-            a_xpe_cos_full,
-            a_xpe_sin_full,
-        ) = prepare_av_cross_pe(
-            latent_frames,
-            latent_h,
-            latent_w,
-            audio_N,
-            audio_N_real,
-            theta=self.positional_embedding_theta,
-            mesh_device=self.mesh_device,
-            parallel_config=self.parallel_config,
-            fps=fps,
-            video_N=video_N,
-        )
+        if use_device_video_rope:
+            a_xpe_cos, a_xpe_sin, a_xpe_cos_full, a_xpe_sin_full = prepare_audio_cross_pe(
+                audio_N,
+                audio_N_real,
+                theta=self.positional_embedding_theta,
+                mesh_device=self.mesh_device,
+                parallel_config=self.parallel_config,
+            )
+        else:
+            (
+                v_xpe_cos,
+                v_xpe_sin,
+                a_xpe_cos,
+                a_xpe_sin,
+                a_xpe_cos_full,
+                a_xpe_sin_full,
+            ) = prepare_av_cross_pe(
+                latent_frames,
+                latent_h,
+                latent_w,
+                audio_N,
+                audio_N_real,
+                theta=self.positional_embedding_theta,
+                mesh_device=self.mesh_device,
+                parallel_config=self.parallel_config,
+                fps=fps,
+                video_N=video_N,
+            )
+        if use_device_video_rope:
+            self._materialize_video_rope(
+                state,
+                latent_frames=latent_frames,
+                latent_h=latent_h,
+                latent_w=latent_w,
+                video_N=video_N,
+                video_N_real=video_N_real,
+                fps=fps,
+            )
+        else:
+            state._tt_video_rope_cos.update(v_cos, traced)
+            state._tt_video_rope_sin.update(v_sin, traced)
+            state._tt_video_cross_pe_cos.update(v_xpe_cos, traced)
+            state._tt_video_cross_pe_sin.update(v_xpe_sin, traced)
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
             audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
         )
-        state._tt_video_rope_cos.update(v_cos, traced)
-        state._tt_video_rope_sin.update(v_sin, traced)
         state._tt_audio_rope_cos.update(a_cos, traced)
         state._tt_audio_rope_sin.update(a_sin, traced)
         state._tt_trans_mat.update(self._prepare_trans_mat(), traced)
-        state._tt_video_cross_pe_cos.update(v_xpe_cos, traced)
-        state._tt_video_cross_pe_sin.update(v_xpe_sin, traced)
         state._tt_audio_cross_pe_cos.update(a_xpe_cos, traced)
         state._tt_audio_cross_pe_sin.update(a_xpe_sin, traced)
         state._tt_audio_cross_pe_cos_full.update(a_xpe_cos_full, traced)
@@ -536,7 +1006,10 @@ class LTXDistilledPipeline(LTXPipeline):
         audio_N = route.audio_n
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
-        state = self._trace_state.setdefault(rung, LTXTransformerState())
+        state = self._trace_state.get(rung)
+        if state is None:
+            state = self._new_trace_state(share_deployment_io=True)
+            self._trace_state[rung] = state
         self._prepare_stage_statics(
             state,
             latent_frames=latent_frames,
@@ -552,19 +1025,21 @@ class LTXDistilledPipeline(LTXPipeline):
         )
         # Reserve the latent buffers before capture so the trace bakes their addresses.
         if state.tt_video_lat is None:
-            self._set_video_logical_n(state, video_N_real, traced=False)
+            if state.tt_video_logical_n is None:
+                self._set_video_logical_n(state, video_N_real, traced=False)
             state._tt_video_lat.update(
                 torch.zeros(1, 1, video_N, self.in_channels),
                 False,
                 mesh_axes=[None, None, sp_axis, None],
                 device=self.mesh_device,
             )
-            state._tt_audio_lat.update(
-                torch.zeros(1, 1, audio_N, self.in_channels),
-                False,
-                mesh_axes=[None, None, sp_axis, None],
-                device=self.mesh_device,
-            )
+            if state.tt_audio_lat is None:
+                state._tt_audio_lat.update(
+                    torch.zeros(1, 1, audio_N, self.in_channels),
+                    False,
+                    mesh_axes=[None, None, sp_axis, None],
+                    device=self.mesh_device,
+                )
             # I2V pin buffers (mask + clean frame-0 latent): reserve here so replays can't clobber
             # them. Allocated for every rung even when unused by t2v — small and harmless. The mask
             # is per-token width-1 (broadcasts against the 128-ch latent in the pin); clean carries the
@@ -893,6 +1368,12 @@ class LTXDistilledPipeline(LTXPipeline):
                 f"s1 N {route.video_n_real('s1')}->{route.video_n('s1')}, "
                 f"s2 N {route.video_n_real('s2')}->{route.video_n('s2')}, audio {route.audio_n_real}->{route.audio_n}"
             )
+            postprocess_shape = (num_frames, height, width)
+            if self._postprocess_shapes_locked and postprocess_shape not in self._served_postprocess_shapes:
+                raise ValueError(
+                    f"postprocess shape {postprocess_shape} was not initialized before trace capture; "
+                    f"served shapes: {sorted(self._served_postprocess_shapes)}"
+                )
 
         # (label, seconds) rows counted toward the total; prepares and export excluded.
         timings: list[tuple[str, float]] = []
@@ -969,13 +1450,30 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
-        upsampler_hot = self._ensure_upsampler_shape(num_frames, height, width)
+        self._ensure_upsampler_shape(num_frames, height, width)
+        postprocess_shape = (num_frames, height, width)
+        upsampler_trace_requested = self._component_trace_enabled("LTX_UPSAMPLER_TRACE")
+        if (
+            self._traced
+            and upsampler_trace_requested
+            and self._postprocess_shapes_locked
+            and postprocess_shape not in self._warmed_upsampler_trace_shapes
+        ):
+            raise ValueError(
+                f"upsampler trace for {postprocess_shape} was not captured before DiT traces; "
+                f"captured shapes: {sorted(self._warmed_upsampler_trace_shapes)}"
+            )
+        if self.upsampler is not None:
+            self.upsampler.use_trace = (
+                self._traced and upsampler_trace_requested and postprocess_shape in self._warmed_upsampler_trace_shapes
+            )
+        upsampler_trace_replay = self.upsampler is not None and self.upsampler.use_trace
+        if not upsampler_trace_replay:
+            self._sync_and_reset_vae_ccl()
         self._prepare_upsampler()
         upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
-        if self._traced and not upsampler_hot and self.upsampler is not None:
-            # Weights loaded under live traces may sit in a trace's activation region; they were
-            # consumed before any replay, so drop them now and reload fresh next request.
-            self.upsampler.deallocate_weights()
+        if not upsampler_trace_replay:
+            self._sync_and_reset_vae_ccl()
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s; latent std={upsampled.float().std():.4f}")
@@ -1012,20 +1510,52 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+        output_canvas = route.canvas if route is not None else ltx_canvas_name(height, width)
+        target_height, target_width = LTX_OUTPUT_CANVASES.get(output_canvas, (height, width))
+        needs_output_crop = (target_height, target_width) != (height, width)
         # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
-        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
+        # Cropped nominal canvases use the float path because packed planar YUV cannot be sliced as RGB.
+        yuv_export = output_path is not None and not needs_output_crop and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()
-        # VAE decode is traced per exact latent shape, so only the warmed (hot) shapes replay a trace;
-        # any other served config decodes eagerly rather than capturing a trace per request.
+        # VAE decode traces are exact-shape. Bucket serving may pre-capture every served shape;
+        # a missing key must never be captured after DiT traces become live.
         vae_hot = any(shape[:3] == (num_frames, height, width) for shape in self._hot_shapes)
-        vae_traced = self._traced and vae_hot and os.environ.get("LTX_VAE_TRACE", "0") != "0"
+        vae_chunk_latents = int(os.environ.get("LTX_VAE_TEMPORAL_CHUNK_LATENTS", self.VAE_TEMPORAL_CHUNK_LATENTS) or 0)
+        vae_chunked = vae_chunk_latents > 0
+        video_vae_trace_requested = self._component_trace_enabled("LTX_VIDEO_VAE_TRACE", legacy="LTX_VAE_TRACE")
+        if (
+            self._traced
+            and video_vae_trace_requested
+            and self._postprocess_shapes_locked
+            and postprocess_shape not in self._warmed_vae_trace_shapes
+        ):
+            raise ValueError(
+                f"video-VAE trace for {postprocess_shape} was not captured before DiT traces; "
+                f"captured shapes: {sorted(self._warmed_vae_trace_shapes)}"
+            )
+        vae_traced = (
+            self._traced
+            and not vae_chunked
+            and video_vae_trace_requested
+            and (
+                postprocess_shape in self._warmed_vae_trace_shapes or (vae_hot and not self._postprocess_shapes_locked)
+            )
+        )
         saved_vae_traced = getattr(self.vae_decoder, "_vae_traced", None)
         if self.vae_decoder is not None and self._traced:
             self.vae_decoder._vae_traced = vae_traced
         try:
+            if not vae_traced:
+                self._sync_and_reset_vae_ccl()
             video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+            if not vae_traced:
+                self._sync_and_reset_vae_ccl()
+            if needs_output_crop:
+                top = (video_pixels.shape[-2] - target_height) // 2
+                left = (video_pixels.shape[-1] - target_width) // 2
+                video_pixels = video_pixels[..., top : top + target_height, left : left + target_width]
         finally:
             if self.vae_decoder is not None and saved_vae_traced is not None:
                 self.vae_decoder._vae_traced = saved_vae_traced
@@ -1044,7 +1574,22 @@ class LTXDistilledPipeline(LTXPipeline):
         if route is not None and s2_audio.shape[1] < route.audio_n:
             audio_for_decode = torch.zeros(s2_audio.shape[0], route.audio_n, s2_audio.shape[2], dtype=s2_audio.dtype)
             audio_for_decode[:, : s2_audio.shape[1], :] = s2_audio
+        audio_trace_requested = (
+            self.tt_mel_decoder.use_trace
+            or self.tt_vocoder_with_bwe.use_trace
+            or self.tt_vocoder_with_bwe.use_trace_bwe
+        )
+        if self._traced and self._postprocess_shapes_locked and audio_trace_requested and not self._audio_traces_warmed:
+            raise RuntimeError("audio traces were not captured before DiT traces became live")
         audio_obj = self.decode_audio(audio_for_decode, num_frames, fps=fps)
+        audio_fully_traced = (
+            self._audio_traces_warmed
+            and self.tt_mel_decoder.use_trace
+            and self.tt_vocoder_with_bwe.use_trace
+            and self.tt_vocoder_with_bwe.use_trace_bwe
+        )
+        if not audio_fully_traced:
+            self._sync_and_reset_vae_ccl()
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
