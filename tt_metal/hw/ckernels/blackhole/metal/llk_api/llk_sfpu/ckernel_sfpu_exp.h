@@ -420,6 +420,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_accurate_<true>(sfpi::vFloat val) {
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
+    // Preserve NaN payloads through exponential evaluation to prevent false uniform softmax (#56056)
+    v_if (sfpi::is_nan(val)) { return val; } v_endif;
     // If exponent is > -1 extract it and replace with -1
     sfpi::vInt exp = exexp(val);
     v_if(exp >= 0) { val = setexp(val, 126); }
