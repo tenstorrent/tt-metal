@@ -116,11 +116,12 @@ void kernel_main() {
             dfb_inp.reserve_back(block.size());
             if constexpr (welford_unpack_fp32_active) {
                 // SFPU path: copy_tile bypasses SrcA via UnpackToDestEn, preserving full FP32
-                copy_tile_to_dst_init_short(dfb::in0);
+                copy_init(dfb::in0);
                 for (auto i : block.local()) {
                     tile_regs_acquire();
                     copy_tile(dfb::in0, i, 0);
-                    copy_tile_to_dst_init_short_with_dt(dfb::in0, dfb::res);
+                    reconfig_data_format_srca(dfb::in0, dfb::res);
+                    copy_init(dfb::res);
                     copy_tile(dfb::res, i, 1);
                     add_binary_tile_init();
                     add_binary_tile(0, 1, 0);
@@ -128,7 +129,8 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_tile(0, dfb_inp_id);
                     tile_regs_release();
-                    copy_tile_to_dst_init_short_with_dt(dfb::res, dfb::in0);
+                    reconfig_data_format_srca(dfb::res, dfb::in0);
+                    copy_init(dfb::in0);
                 }
             } else {
                 add_init(dfb::in0, dfb::res);
@@ -153,9 +155,10 @@ void kernel_main() {
             dfb_inp.wait_front(block.size());
             tile_regs_acquire();
             reconfig_data_format_srca(dfb::in0, dfb::mean_spill);
-            copy_tile_init(dfb::mean_spill);
+            copy_init(dfb::mean_spill);
             copy_tile(dfb::mean_spill, 0, dst1);
-            copy_tile_to_dst_init_short_with_dt(dfb::mean_spill, dfb::m2_spill);
+            reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
+            copy_init(dfb::m2_spill);
             copy_tile(dfb::m2_spill, 0, dst2);
             welford_restore_state(dst1);
 
@@ -199,9 +202,10 @@ void kernel_main() {
         dfb_m2_spill.wait_front(1);
         tile_regs_acquire();
         reconfig_data_format_srca(dfb_inp_id, dfb::mean_spill);
-        copy_tile_init(dfb::mean_spill);
+        copy_init(dfb::mean_spill);
         copy_tile(dfb::mean_spill, 0, dst1);
-        copy_tile_to_dst_init_short_with_dt(dfb::mean_spill, dfb::m2_spill);
+        reconfig_data_format_srca(dfb::mean_spill, dfb::m2_spill);
+        copy_init(dfb::m2_spill);
         copy_tile(dfb::m2_spill, 0, dst2);
         welford_restore_state(dst1);
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);

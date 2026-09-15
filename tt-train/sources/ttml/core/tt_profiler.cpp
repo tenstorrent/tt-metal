@@ -33,7 +33,7 @@ void TTProfiler::read_results(
     }
 
     if (get_naive_profiling()) {
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
         auto now = std::chrono::high_resolution_clock::now();
         auto us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
         fmt::print("[NAIVE_PROFILER] {} timestamp_us={}\n", noop_identifier, us);

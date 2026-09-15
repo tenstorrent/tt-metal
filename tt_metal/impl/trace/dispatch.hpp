@@ -13,6 +13,7 @@
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/worker_config_buffer.hpp"
+#include "impl/context/context_types.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
 
@@ -76,7 +77,7 @@ void issue_trace_commands(
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core);
 
-uint32_t compute_trace_cmd_size(uint32_t num_sub_devices);
+uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices);
 
 void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,

@@ -9,8 +9,15 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/tt_align.hpp>
 
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
+
+#include <unordered_set>
 
 namespace tt::tt_metal::distributed {
 
@@ -35,7 +42,28 @@ struct SocketPeerDescriptor {
     DeviceAddr config_buffer_address = 0;
     DeviceAddr data_buffer_address = 0;
     multihost::Tag exchange_tag = multihost::Tag{0};
+    // Fabric chip id of this endpoint's core per connection (socket_connection_config order),
+    // resolved locally from its own MeshDevice. Lets the peer skip deriving the chip from a
+    // submesh-local coord, which mis-resolves when a submesh spans several ranks. Empty if the
+    // peer did not supply it; callers then fall back to the coordinate derivation.
+    std::vector<uint32_t> local_chip_ids;
 };
+
+// True when `mesh_device` covers devices this rank does not drive, i.e. a submesh co-owned by
+// several ranks.
+bool mesh_is_coowned(const MeshDevice& mesh_device);
+
+// The distinct (device, core) pairs this endpoint occupies.
+std::unordered_set<MeshCoreCoord> socket_endpoint_cores(const SocketConfig& config, SocketEndpoint socket_endpoint);
+
+// Whether this endpoint's config buffer is per-core rather than lockstep. Requires
+// per_core_allocation, L1 storage, and a single (device, core) for the endpoint, since the peer
+// descriptor carries one address per buffer.
+bool socket_endpoint_uses_per_core_allocation(const SocketConfig& config, SocketEndpoint socket_endpoint);
+
+// Whether every buffer of this socket is per-core and so occupies L1 only on its two endpoint
+// cores, leaving nothing for a co-owning rank to reserve.
+bool socket_is_fully_per_core(const SocketConfig& config);
 
 // Create send/receive socket config buffers
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
@@ -78,17 +106,54 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const std::shared_ptr<const multihost::DistributedContext>& context,
     const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
+// Map each connection's endpoint coords to fabric node ids.
+//
+// An endpoint backed by a local MeshDevice resolves through it. For a remote endpoint, pass the chip
+// ids the peer sent in its descriptor (SocketPeerDescriptor::local_chip_ids) -- the peer resolved
+// them from its own device handle, so they stay correct when its submesh spans several ranks. When
+// they are empty the coord is derived from the owning rank's host binding, which assumes the submesh
+// begins at that rank's host slice.
 std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
     const SocketConfig& config,
     const std::shared_ptr<MeshDevice>& sender_device = nullptr,
-    const std::shared_ptr<MeshDevice>& receiver_device = nullptr);
+    const std::shared_ptr<MeshDevice>& receiver_device = nullptr,
+    const std::vector<uint32_t>& peer_sender_chip_ids = {},
+    const std::vector<uint32_t>& peer_receiver_chip_ids = {});
 
 std::vector<multihost::Rank> get_ranks_for_mesh_id(
     tt_fabric::MeshId mesh_id, const std::unordered_map<multihost::Rank, multihost::Rank>& rank_translation_table);
 
 template <typename OperationType, typename... Args>
 void execute_with_timeout(OperationType&& operation, Args&&... args) {
+#if defined(TT_METAL_USE_EMULE)
+    // The peers reach their sockets minutes apart under emulation (each JIT-compiles its own stage,
+    // serialized by the dispatch lock), so a silicon-sized budget expires on skew rather than on a
+    // real failure. Still bounded: this is a safety net, not a synchronization mechanism.
+    static const float timeout_s = [] {
+        constexpr float kDefault = 900.0f;
+        const char* v = std::getenv("TT_EMULE_SOCKET_CONNECT_TIMEOUT_S");
+        if (v == nullptr || v[0] == '\0') {
+            return kDefault;
+        }
+        // Validate rather than trust strtof: a typo parses as 0 and expires instantly, and "nan"
+        // makes `elapsed >= timeout` permanently false, which silently removes the bound entirely.
+        char* end = nullptr;
+        errno = 0;
+        const float parsed = std::strtof(v, &end);
+        if (end == v || *end != '\0' || errno == ERANGE || !std::isfinite(parsed) || parsed <= 0.0f) {
+            std::fprintf(
+                stderr,
+                "[EMULE] ignoring TT_EMULE_SOCKET_CONNECT_TIMEOUT_S=\"%s\": expected a positive finite "
+                "number of seconds; using %.0fs.\n",
+                v, static_cast<double>(kDefault));
+            return kDefault;
+        }
+        return parsed;
+    }();
+    const auto timeout = std::chrono::duration<float>(timeout_s);
+#else
     const auto timeout = std::chrono::duration<float>(10.0f);
+#endif
 
     std::atomic<bool> completed{false};
     std::atomic<bool> failed{false};

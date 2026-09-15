@@ -17,13 +17,19 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
+from models.common.sampling import (
+    SamplingParams,
+    broadcast_sampling_params,
+    format_sampling_params,
+    scatter_sampling_params_to_slots,
+)
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.tt_transformers.tt.common import Mode, get_padded_prefill_len
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
-    SUPPORTED_PREFILL_BATCH_SIZES,
     Generator,
+    batched_prefill_padded_batch,
+    gather_batched_prefill_samples,
     max_prefill_chunk_size_cutoff,
 )
 
@@ -220,10 +226,7 @@ class GemmaMultimodalGenerator(Generator):
                 use_batched_prefill = False
 
         if use_batched_prefill:
-            padded_batch = next(
-                (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
-                self.model_args[0].max_batch_size,
-            )
+            padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
             if padded_batch > self.model_args[0].max_batch_size:
                 logger.info(
                     f"Batched prefill disabled: padded_batch {padded_batch} exceeds "
@@ -399,7 +402,13 @@ class GemmaMultimodalGenerator(Generator):
                     sampling_module, sampling_dp, sampling_batch, _ = self._get_sampling_contract(model_id)
                     assert sampling_module is not None
                     assert sampling_batch is not None
-                    combined_params = format_sampling_params(sampling_params, sampling_batch)
+                    # ``combined_prompt_tokens`` below and the extracted hidden states
+                    # are both laid out by slot, so the params have to be as well.
+                    combined_params = scatter_sampling_params_to_slots(
+                        format_sampling_params(sampling_params, sampling_batch),
+                        empty_slots,
+                        sampling_batch,
+                    )
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
@@ -458,10 +467,14 @@ class GemmaMultimodalGenerator(Generator):
                         if tt_log_probs is not None
                         else None
                     )
-                    for local_idx, slot in enumerate(empty_slots):
-                        output_tokens[slot] = tokens_host[slot]
-                        if log_probs_host is not None:
-                            output_log_probs[slot] = log_probs_host[slot]
+                    gather_batched_prefill_samples(
+                        empty_slots,
+                        tokens_host,
+                        None,
+                        log_probs_host,
+                        output_tokens,
+                        output_log_probs,
+                    )
                 else:
                     for local_idx, slot in enumerate(empty_slots):
                         user_logits = logits[slot : slot + 1, :, :, :]
@@ -469,7 +482,7 @@ class GemmaMultimodalGenerator(Generator):
                             user_logits, last_token_idx[slot]
                         )
                         _logits = ttnn.to_layout(_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                        output_tensor[slot] = self.model[model_id].process_output_prefill(
+                        output_tensor[local_idx] = self.model[model_id].process_output_prefill(
                             _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
                         )
                 break
@@ -576,21 +589,19 @@ class GemmaMultimodalGenerator(Generator):
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
         warmup_batch_sizes = (1,)
 
-        skip_sequence_lengths = False
-
-        # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
-        sampling_parameters_sweeped = False
+        # Every data-parallel lane is a separate device with its own program cache, and Gemma's prefill is
+        # never traced, so the base gate (warm lanes 1..N-1 only for traced lengths) left those lanes
+        # compiling their whole prefill graph on the first real request - behind the decode traces warmup
+        # had just recorded (measured on DP-4: ~90 stranded programs per lane). Warm every lane for every
+        # bucket, and sweep the sampling parameters once per lane rather than once overall.
+        swept_sampling_model_ids = set()
 
         if enable_trace:
             logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
 
         for model_id in range(self.data_parallel):
+            skip_sequence_lengths = False
             for supported_length in sequence_lengths_to_warmup:
-                if model_id != 0 and (
-                    supported_length not in self.model_args[0].trace_prefill_supported_seq_lens or not enable_trace
-                ):
-                    continue
-
                 # Token-limit guard below skips combinations that would
                 # exceed MAX_BATCHED_PREFILL_SEQ_LEN.
                 for batch_size in warmup_batch_sizes:
@@ -613,14 +624,21 @@ class GemmaMultimodalGenerator(Generator):
                         skip_sequence_lengths = True
                         break
 
-                    if not sampling_parameters_sweeped:
+                    if model_id not in swept_sampling_model_ids:
                         sampling_params = self._create_sampling_params(
                             can_sample_on_device=can_sample_on_device,
                             batch_size=batch_size,
                             greedy_only=greedy_only,
                         )
                     else:
-                        sampling_params = [None]
+                        # Not [None]: that path skips the on-device-sampling tail, whose bucket-keyed
+                        # programs (last-token slice, untilize) would then compile on the first real
+                        # request instead. One greedy pass per bucket compiles them here.
+                        sampling_params = self._create_sampling_params(
+                            can_sample_on_device=can_sample_on_device,
+                            batch_size=batch_size,
+                            greedy_only=True,
+                        )
 
                     for param in sampling_params:
                         logger.info(
@@ -634,7 +652,7 @@ class GemmaMultimodalGenerator(Generator):
                             sampling_params=param,
                         )
 
-                    sampling_parameters_sweeped = True
+                    swept_sampling_model_ids.add(model_id)
 
                 if skip_sequence_lengths:
                     break

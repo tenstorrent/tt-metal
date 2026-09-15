@@ -11,7 +11,7 @@
 #include "reduce_op_device_operation_types.hpp"
 #include "tt_stl/reflection.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::prim {
 
@@ -22,21 +22,21 @@ struct ReduceDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct ReduceSingleCoreHwProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct ReduceMultiCoreHProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct ReduceMultiCoreWProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -71,6 +71,8 @@ ttnn::Tensor reduce(
     float post_mul_scaler = 1.0f,
     bool row_major_w_dense_path = false,
     bool row_major_h_dense_path = false,
-    bool use_sfpu_reduce = false);
+    bool use_sfpu_reduce = false,
+    uint32_t num_h_slices = 1,
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE);
 
 }  // namespace ttnn::prim

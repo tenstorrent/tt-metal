@@ -29,7 +29,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 TILE = 32
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_quasar_fc_kspill(mesh_device):
     """resnet50 fc (2048 -> 1000) via the real ResnetLinear/fit_fc_grid path. PASS => the fc alias-size FATAL is

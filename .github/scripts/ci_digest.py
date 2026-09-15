@@ -4,7 +4,7 @@
 """CI digest: report the current state of watched workflows.
 
 Thin aggregator. For each watched workflow it finds the latest completed
-scheduled run and reads that run's machine-readable ``ai_run_summary_<run_id>``
+scheduled run and reads that run's machine-readable ``ai_run_summary[_<scope>]_r<run>_a<attempt>``
 artifact — a factual JSON the ai_summary/run action already produces (succeeded
 / failed / infra_failure jobs). The digest does no classification of its own; it
 collects those per-run summaries and renders them at one point so a team can
@@ -15,13 +15,18 @@ from __future__ import annotations
 import argparse
 import glob as _glob
 import json
+import contextlib
+import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 from dataclasses import dataclass
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 
@@ -60,24 +65,80 @@ def latest_run(repo: str, workflow: str, branch: str) -> dict | None:
     return runs[0] if runs else None
 
 
-def _latest_artifact_id(listing: list[str]) -> str | None:
-    """Newest artifact id from ``created_at\\tid`` lines — RFC3339-Z sorts
-    lexically, ties break on the higher id. None for an empty listing."""
-    if not listing:
+def _summary_name_re(run_id: int) -> "re.Pattern[str]":
+    """Matches this run's report artifacts, capturing the attempt.
+
+    ``ai_run_summary[_<scope>]_r<run>_a<n>``. The scope is present when a
+    workflow is invoked more than once per run and publishes one report per
+    invocation. Anchored at both ends, so a longer run id (``r421`` for run 42),
+    an unrelated prefix and a suffixed copy (``_a3_backup``) are all rejected.
+
+    The scope segment is ``[^_]+`` rather than a character class: the producer
+    (``qualified_stem``/``slugify_scope`` in
+    tenstorrent/tt-github-actions ``.github/actions/ai_summary/tool/common/artifact_names.py``)
+    slugifies every non-alphanumeric character to ``-``, so a slug never
+    contains ``_`` but may hold any alphanumeric, Unicode included.
+    """
+    return re.compile(rf"^ai_run_summary_(?:[^_]+_)?r{run_id}_a(\d+)$")
+
+
+def _artifacts_jq() -> str:
+    """jq projection listing every artifact as ``name\\tcreated_at\\tid``.
+
+    Projection only — the name match happens in Python, so one engine decides
+    it and the tests exercise the same code CI runs.
+    """
+    return '.artifacts[] | "\\(.name)\\t\\(.created_at)\\t\\(.id)"'
+
+
+def _pick_latest_report(listing: list[str], run_id: int) -> tuple[str, str] | None:
+    """``(name, id)`` of the highest-attempt report, or None if none match.
+
+    The attempt in the name ranks first; created_at then the higher id settle
+    ties. Ties are real: an unscoped workflow invoked more than once per run
+    publishes one report per invocation under a single name, and only one of
+    them can be read — so that case is reported rather than resolved quietly.
+
+    Lines that don't parse are skipped, not raised: one bad line must not cost
+    the caller every other workflow's result.
+    """
+    name_re = _summary_name_re(run_id)
+    ranked = []
+    for line in listing:
+        if not line.strip():
+            continue
+        # Artifact names may contain tabs — GitHub rejects only " : < > | * ?
+        # \r \n \ / — so just the two machine-generated trailing fields split off.
+        parts = line.rsplit("\t", 2)
+        if len(parts) != 3 or not (parts[2].isascii() and parts[2].isdigit()):
+            print(f"Skipping malformed artifact listing line: {line!r}", file=sys.stderr)
+            continue
+        name, created_at, art_id = parts
+        m = name_re.match(name)
+        if m:
+            ranked.append(((int(m.group(1)), created_at, int(art_id)), name, art_id))
+    if not ranked:
         return None
-    return max(listing, key=lambda ln: (ln.split("\t")[0], int(ln.split("\t")[1]))).split("\t")[1]
+    best = max(ranked, key=lambda r: r[0])
+    tied = [r for r in ranked if r[0][0] == best[0][0]]
+    if len(tied) > 1:
+        print(
+            f"Run {run_id} has {len(tied)} reports at attempt {best[0][0]}; "
+            f"reading {best[1]} and ignoring the rest — the producing workflow "
+            f"is invoked more than once per run without a distinct scope",
+            file=sys.stderr,
+        )
+    return best[1], best[2]
 
 
 def fetch_run_summary(repo: str, run_id: int) -> dict | None:
-    """Download the latest attempt's ``ai_run_summary_<run_id>`` JSON.
+    """Download the highest attempt's ``ai_run_summary[_<scope>]_r<run>_a<n>`` JSON.
 
-    Re-runs upload multiple artifacts under this one name; pick the newest by
-    created_at, since a name-only download has no defined order among duplicates.
-    Returns None when no such artifact exists — the workflow doesn't run
-    ai_summary/run, or the run predates JSON output — so the caller can fall back
-    to the run's conclusion.
+    Each attempt uploads its own report, so every attempt stays downloadable and
+    the highest wins. Returns None when the run has no such artifact — the
+    workflow doesn't run ai_summary/run, or it produced only markdown — so the
+    caller can fall back to the run's conclusion.
     """
-    name = f"ai_run_summary_{run_id}"
     listing = subprocess.run(
         [
             "gh",
@@ -85,24 +146,27 @@ def fetch_run_summary(repo: str, run_id: int) -> dict | None:
             "--paginate",
             f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100",
             "--jq",
-            f'.artifacts[] | select(.name == "{name}") | "\\(.created_at)\\t\\(.id)"',
+            _artifacts_jq(),
         ],
         capture_output=True,
         text=True,
         check=True,
     ).stdout.splitlines()
-    art_id = _latest_artifact_id(listing)
-    if art_id is None:
+    latest = _pick_latest_report(listing, run_id)
+    if latest is None:
         return None
+    art_name, art_id = latest
     with tempfile.TemporaryDirectory() as d:
         zip_path = os.path.join(d, "artifact.zip")
         with open(zip_path, "wb") as fh:
             subprocess.run(["gh", "api", f"repos/{repo}/actions/artifacts/{art_id}/zip"], stdout=fh, check=True)
         with zipfile.ZipFile(zip_path) as z:
             z.extractall(d)
-        matches = _glob.glob(os.path.join(d, "**", f"{name}.json"), recursive=True)
+        # Escaped: GitHub permits [ and ] in an artifact name, and glob would
+        # read them as a character class and resolve to a different file.
+        matches = _glob.glob(os.path.join(d, "**", _glob.escape(art_name) + ".json"), recursive=True)
         if not matches:
-            return None  # artifact present but .md-only (run predates JSON output)
+            return None  # artifact present but markdown-only
         with open(matches[0], encoding="utf-8") as fh:
             return json.load(fh)
 
@@ -309,9 +373,9 @@ def check_workflow(repo: str, branch: str, workflow: str) -> dict:
         # One flaky gh call must not discard the other workflows' results.
         err = ((exc.stderr or "").strip().splitlines() or ["gh command failed"])[-1]
         return {**base, "outcome": "ERROR", "note": err[:200]}
-    except (json.JSONDecodeError, OSError, zipfile.BadZipFile) as exc:
-        # A corrupt/truncated artifact marks only this workflow ERROR, never
-        # aborts the others' reports.
+    except (json.JSONDecodeError, ValueError, OSError, zipfile.BadZipFile) as exc:
+        # A corrupt/truncated artifact, or any parse error, marks only this
+        # workflow ERROR and never aborts the others' reports.
         return {**base, "outcome": "ERROR", "note": str(exc)[:200]}
 
 
@@ -372,17 +436,154 @@ class TestSummarizeRun(unittest.TestCase):
         self.assertEqual(summarize_run({}, "skipped").outcome, "UNKNOWN")
 
 
-class TestLatestArtifactId(unittest.TestCase):
-    def test_newest_created_at_wins(self):
-        lines = ["2026-07-23T01:00:00Z\t100", "2026-07-23T02:00:00Z\t50"]
-        self.assertEqual(_latest_artifact_id(lines), "50")
+class TestPickLatestReport(unittest.TestCase):
+    NAME = "ai_run_summary_r42"
 
-    def test_tie_breaks_on_higher_id(self):
-        lines = ["2026-07-23T01:00:00Z\t100", "2026-07-23T01:00:00Z\t200"]
-        self.assertEqual(_latest_artifact_id(lines), "200")
+    def _id(self, lines):
+        got = _pick_latest_report(lines, 42)
+        return got[1] if got else None
 
-    def test_empty_listing_is_none(self):
-        self.assertIsNone(_latest_artifact_id([]))
+    def test_higher_attempt_wins_over_newer_created_at(self):
+        # The attempt is authoritative; created_at is incidental.
+        lines = [
+            f"{self.NAME}_a2\t2026-07-23T01:00:00Z\t100",
+            f"{self.NAME}_a1\t2026-07-23T09:00:00Z\t900",
+        ]
+        self.assertEqual(self._id(lines), "100")
+
+    def test_created_at_then_id_settle_same_attempt_ties(self):
+        newer_lower_id = [
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t900",
+            f"{self.NAME}_a1\t2026-07-23T09:00:00Z\t100",
+        ]
+        self.assertEqual(self._id(newer_lower_id), "100")
+        same_time = [
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100",
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t200",
+        ]
+        self.assertEqual(self._id(same_time), "200")
+
+    def test_a_tie_is_reported_because_the_other_reports_are_lost(self):
+        # An unscoped workflow invoked more than once per run publishes one
+        # report per invocation under a single name; only one can be read.
+        lines = [
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100",
+            f"{self.NAME}_a1\t2026-07-23T02:00:00Z\t200",
+            f"{self.NAME}_a1\t2026-07-23T03:00:00Z\t300",
+        ]
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            self.assertEqual(self._id(lines), "300")
+        self.assertIn("3 reports at attempt 1", buf.getvalue())
+
+    def test_returns_the_winning_name_for_addressing_the_report(self):
+        lines = [f"{self.NAME}_a2\t2026-07-23T01:00:00Z\t100"]
+        self.assertEqual(_pick_latest_report(lines, 42), (f"{self.NAME}_a2", "100"))
+
+    def test_malformed_lines_are_skipped_not_raised(self):
+        # A ValueError here escapes check_workflow's guards and leaves the
+        # digest silent instead of red.
+        lines = [
+            "not-a-tabbed-line",
+            "",
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\tnope",
+            f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100",
+        ]
+        self.assertEqual(self._id(lines), "100")
+
+    def test_a_non_ascii_digit_id_is_skipped_not_raised(self):
+        # "²".isdigit() is True while int("²") raises, and a ValueError here
+        # would abort every remaining workflow.
+        lines = [f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t²", f"{self.NAME}_a1\t2026-07-23T01:00:00Z\t100"]
+        self.assertEqual(self._id(lines), "100")
+
+    def test_a_tab_bearing_name_is_accepted(self):
+        # GitHub rejects " : < > | * ? in artifact names but not tab, so the
+        # split takes only the two machine-generated trailing fields.
+        lines = [f"ai_run_summary_r42\tstray_a1\t2026-07-23T01:00:00Z\t100"]
+        self.assertIsNone(self._id(lines))
+
+    def test_nothing_matching_is_none(self):
+        lines = ["garbage", "", f"ai_run_summary_r7_a1\t2026-07-23T01:00:00Z\t100"]
+        self.assertIsNone(_pick_latest_report(lines, 42))
+
+
+class TestFetchRunSummary(unittest.TestCase):
+    """The download seam: which artifact is asked for, and which file is read."""
+
+    def _fake_gh(self, listing, members):
+        def run(argv, **kw):
+            if "--jq" in argv:
+                return SimpleNamespace(stdout="\n".join(listing), stderr="", returncode=0)
+            self.requested = argv[-1]
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as z:
+                for name, body in members.items():
+                    z.writestr(name, body)
+            kw["stdout"].write(buf.getvalue())
+            return SimpleNamespace(stdout=b"", stderr="", returncode=0)
+
+        return run
+
+    def test_reads_the_highest_attempt_report_by_exact_name(self):
+        # A scope containing [ ] would make an unescaped glob resolve to the
+        # sibling file instead. GitHub permits both characters.
+        name = "ai_run_summary_[ab]_r42_a2"
+        listing = [
+            f"ai_run_summary_x_r42_a1\t2026-07-23T09:00:00Z\t900",
+            f"{name}\t2026-07-23T01:00:00Z\t100",
+        ]
+        members = {
+            f"{name}.json": json.dumps({"run_id": "42", "failed": [], "infra_failure": [], "succeeded": []}),
+            "ai_run_summary_a_r42_a2.json": json.dumps({"run_id": "WRONG"}),
+        }
+        with unittest.mock.patch("subprocess.run", side_effect=self._fake_gh(listing, members)):
+            data = fetch_run_summary("o/r", 42)
+        self.assertEqual(data["run_id"], "42")
+        self.assertIn("/100/", self.requested)
+
+    def test_no_matching_artifact_is_none(self):
+        listing = ["ai_run_summary_r7_a1\t2026-07-23T01:00:00Z\t100"]
+        with unittest.mock.patch("subprocess.run", side_effect=self._fake_gh(listing, {})):
+            self.assertIsNone(fetch_run_summary("o/r", 42))
+
+
+class TestSummaryNameRe(unittest.TestCase):
+    def _matches(self, name):
+        return _summary_name_re(42).match(name) is not None
+
+    def test_accepts_plain_and_scoped(self):
+        for name in ("ai_run_summary_r42_a3", "ai_run_summary_ubuntu-24-04_r42_a1"):
+            self.assertTrue(self._matches(name), name)
+
+    def test_accepts_a_unicode_scope(self):
+        # The producer keeps any alphanumeric, so the segment cannot be an
+        # ASCII character class.
+        self.assertTrue(self._matches("ai_run_summary_ubuntú_r42_a1"))
+
+    def test_captures_the_attempt(self):
+        self.assertEqual(_summary_name_re(42).match("ai_run_summary_s_r42_a13").group(1), "13")
+
+    def test_rejects_near_misses(self):
+        # r421 for run 42, another run, another artifact kind, a stray prefix,
+        # an unversioned name, a suffixed copy, and a missing attempt.
+        for name in (
+            "ai_run_summary_r421_a1",
+            "ai_run_summary_r7_a1",
+            "ai_job_summary_r42_a1_j99",
+            "xai_run_summary_r42_a1",
+            "ai_run_summary_42",
+            "ai_run_summary_r42_a3_backup",
+            "ai_run_summary_r42",
+        ):
+            self.assertFalse(self._matches(name), name)
+
+
+class TestArtifactsJq(unittest.TestCase):
+    def test_projects_the_three_fields_resolution_needs(self):
+        # Dropping a field makes every line fail the parse guard, so every
+        # workflow silently degrades to its run conclusion.
+        self.assertEqual(_artifacts_jq(), '.artifacts[] | "\\(.name)\\t\\(.created_at)\\t\\(.id)"')
 
 
 class TestRender(unittest.TestCase):

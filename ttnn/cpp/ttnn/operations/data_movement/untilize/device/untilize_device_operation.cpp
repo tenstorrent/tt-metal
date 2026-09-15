@@ -115,6 +115,16 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             operation_attributes.use_multicore,
             "sub_core_grid implementation only supported when use_multicore flag argument is set to true");
+        // The sub_core_grid factory parallelizes over columns, and its writer derives its tile count
+        // from the tensor-wide stick count -- so it only agrees with the reader's per-core tile count
+        // when the tensor is one tile row tall. Taller tensors deadlock in the writer's wait_front
+        // rather than failing, so reject them here. `get_pf_type` holds the same restriction for the
+        // non-sub-core column-parallel factory this one derives from.
+        TT_FATAL(
+            tensor_height == input_tensor_a.tensor_spec().tile().get_tile_shape()[0],
+            "sub_core_grid untilize only supports tensors one tile row tall, got height {} with tile height {}",
+            tensor_height,
+            input_tensor_a.tensor_spec().tile().get_tile_shape()[0]);
     }
 
     // If input is sharded, then the shard shape must be in multiples of tiles

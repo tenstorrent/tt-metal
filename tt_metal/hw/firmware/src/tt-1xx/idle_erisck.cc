@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "internal/tt-1xx/risc_common.h"

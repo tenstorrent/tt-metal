@@ -96,6 +96,22 @@ void configure_static_tlbs(
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
 
+    // Static TLBs for L2CPU tiles, anchored at the LIM base rather than 0 because
+    // LIM does not start at 0. Sized to the 2 MiB static window, not a 4 GiB one,
+    // which DRAM below consumes in full.
+    if (arch == tt::ARCH::BLACKHOLE) {
+        TT_FATAL(
+            get_static_tlb_size() == kL2cpuLimTlbSize,
+            "L2CPU LIM aperture ({} B) must match the static TLB size ({} B); consumers validate LIM addresses "
+            "against kL2cpuLimTlbEnd.",
+            kL2cpuLimTlbSize,
+            get_static_tlb_size());
+        for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED)) {
+            device_driver.configure_tlb(
+                mmio_device_id, core, get_static_tlb_size(), kL2cpuLimBase, tt::umd::tlb_data::Strict);
+        }
+    }
+
     if (arch == tt::ARCH::BLACKHOLE && sdesc.get_num_dram_channels() == blackhole::NUM_DRAM_CHANNELS &&
         include_dram_tlbs) {
         uint32_t dram_addr = 0;

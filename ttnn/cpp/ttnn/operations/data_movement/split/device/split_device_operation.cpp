@@ -31,6 +31,7 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         args.dim >= 0 && args.dim < static_cast<int>(input_tensor.padded_shape().rank()),
         "Dim being split must be from 0 to rank - 1");
     TT_FATAL(input_tensor.padded_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
+    TT_FATAL(args.num_splits > 0, "num_splits must be non-zero");
     TT_FATAL(
         input_tensor.padded_shape()[args.dim] % args.num_splits == 0,
         "Dim being split must be evenly divisible by number of splits");
@@ -40,12 +41,22 @@ void SplitDeviceOperation::validate_on_program_cache_miss(
         "Tile count in split dim ({} tiles) must be divisible by num_splits ({})",
         input_tensor.padded_shape()[args.dim] / tile_size,
         args.num_splits);
+    // Kernel splits on padded tile boundaries; logical dim must match so reported chunk widths
+    // agree with what the kernel writes.
+    TT_FATAL(
+        input_tensor.logical_shape()[args.dim] % (args.num_splits * tile_size) == 0,
+        "logical dim {} ({}) must be divisible by num_splits ({}) × tile ({})",
+        args.dim,
+        input_tensor.logical_shape()[args.dim],
+        args.num_splits,
+        tile_size);
 }
 
 SplitDeviceOperation::spec_return_value_t SplitDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    auto input_shape_array = input_tensor.padded_shape().to_array_4D();
+    TT_FATAL(args.num_splits > 0, "num_splits must be non-zero");
+    auto input_shape_array = input_tensor.logical_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
     output_shape_array[args.dim] /= args.num_splits;
     tt::tt_metal::TensorSpec spec(

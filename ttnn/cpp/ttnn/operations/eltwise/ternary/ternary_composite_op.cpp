@@ -24,9 +24,14 @@ Tensor _addcmul(
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 
-    Tensor t_mul = ttnn::multiply(input_b, input_c, std::nullopt, output_mem_config);
-    Tensor t_factor = ttnn::multiply(t_mul, value, std::nullopt, output_mem_config);
-    t_mul.deallocate();
+    // Associate as (value * input_b) * input_c, matching both the LLK kernel
+    // (ckernel_sfpu_addcmul.h) and the registered golden torch.addcmul, which computes
+    // self + scalar_val * t1_val * t2_val left-to-right. Scaling by `value` first (rather
+    // than last) avoids spurious overflow/underflow when `value` is chosen to keep the
+    // product in range (e.g. Adam's addcmul(avg_sq, grad, grad, value=1-beta2)).
+    Tensor t_scaled = ttnn::multiply(input_b, value, std::nullopt, output_mem_config);
+    Tensor t_factor = ttnn::multiply(t_scaled, input_c, std::nullopt, output_mem_config);
+    t_scaled.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
     return result;
 }
@@ -146,37 +151,29 @@ Tensor _lerp(
 
     return result;
 }
+
 }  // namespace operations::ternary
 
-// Function: MAC
-// compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
-// being a scalar or tensor
-Tensor mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
-    bool a_is_scalar = a.is_scalar();
-    bool b_is_scalar = b.is_scalar();
-    bool c_is_scalar = c.is_scalar();
-
-    // When 'a' is a tensor, compute a * b + c regardless of whether b and c are scalars or tensors
-    if (!a_is_scalar) {
-        return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    }
-    if (a_is_scalar && !b_is_scalar) {
-        // a - scalar, b - tensor, c - scalar or tensor
-        return ttnn::add(ttnn::multiply(b, a, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
-    }
-    if (a_is_scalar && b_is_scalar && !c_is_scalar) {
-        // a - scalar, b - scalar, c - is tensor
-        return ttnn::add(c, ttnn::multiply(a, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    }
-
-    // all scalars
-    // a - scalar, b - scalar, c - is scalar
-    TT_ASSERT(a_is_scalar && b_is_scalar && c_is_scalar);
-    return ttnn::add(ttnn::multiply(a, b), c);
+// Fallback composite implementations for mac: y = a * b + c.
+// Used when the native LLK path cannot serve the request (unsupported broadcast,
+// block-float subtile broadcast, or integer dtypes, which the SFPU mac path does
+// not handle - it computes in the FP32 SFPU accumulator).
+Tensor _mac(const Tensor& a, const Tensor& b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
 }
 
-// y = a * b + c
-Tensor mac(const Tensor& a, float b, float c, const std::optional<MemoryConfig>& output_mem_config) {
+// TTS: a * b + scalar
+Tensor _mac(const Tensor& a, const Tensor& b, float c, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
+}
+
+// TST: a * scalar + c
+Tensor _mac(const Tensor& a, float b, const Tensor& c, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
+}
+
+// TSS: a * scalar1 + scalar2
+Tensor _mac(const Tensor& a, float b, float c, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
 }
 

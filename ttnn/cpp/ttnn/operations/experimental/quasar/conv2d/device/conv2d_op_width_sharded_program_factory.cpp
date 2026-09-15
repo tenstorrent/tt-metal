@@ -26,6 +26,8 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -420,8 +422,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     }();
 
     auto& cq = a.device()->mesh_command_queue();
-    tt::tt_metal::MeshTensor reader_indices_mesh_tensor = tt::tt_metal::enqueue_write_tensor(
-        cq, host_config_tensor.host_tensor(), *a.device(), reader_indices_mem_config);
+    tt::tt_metal::MeshTensor reader_indices_mesh_tensor =
+        cq.enqueue_write_tensor(host_config_tensor.host_tensor(), reader_indices_mem_config);
     tt::tt_metal::Buffer* conv_reader_indices_buffer = reader_indices_mesh_tensor.mesh_buffer().get_reference_buffer();
     const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
 
@@ -779,12 +781,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     spec.kernels.push_back(std::move(compute_kernel));
 
     // ---- Work units ----
-    // Compute + readers run on all_cores.  (Width-sharded uses one homogeneous topology; the weights
-    // reader is gated per-core by the is_active RTA rather than by node placement, mirroring legacy.)
+    // Placement must follow the legacy split, NOT the bounding box (#51270 item 3). On a non-rectangular
+    // width-sharded grid (e.g. 12 cores whose bbox is 16) the extra bbox nodes have no activation producer
+    // and no weights RTAs, so running compute/weights there hangs (compute blocks in wait_front) or fails
+    // to build (missing weights RTAs). Only the activation reader may cover the bbox — it early-returns on
+    // this_core_id >= num_mcast_cores. So: ACT on the bbox, WEIGHTS + COMPUTE on the real shard grid.
     spec.work_units.push_back(m2::WorkUnitSpec{
-        .name = "wu",
-        .kernels = {KERNEL_ACT, KERNEL_WEIGHTS, KERNEL_COMPUTE},
+        .name = "wu_act",
+        .kernels = {KERNEL_ACT},
         .target_nodes = all_reader_cores_set,
+    });
+    spec.work_units.push_back(m2::WorkUnitSpec{
+        .name = "wu_compute",
+        .kernels = {KERNEL_WEIGHTS, KERNEL_COMPUTE},
+        .target_nodes = all_cores,
     });
 
     // ============================================================================

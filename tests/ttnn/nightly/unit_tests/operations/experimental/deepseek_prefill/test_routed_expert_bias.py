@@ -38,6 +38,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SITU, apply_glu_activation
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -65,8 +67,32 @@ def _torch_swigluoai_expert_with_bias(x, w, b, alpha=SWIGLU_ALPHA, limit=SWIGLU_
     return F.linear(activated, w["down_proj"], b["down_proj_bias"])
 
 
-def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
-    """1 chip, 1 expert. Compares the fused op (SwiGLU-OAI + biases) vs a torch reference."""
+def _torch_situglu_expert_with_bias(x, w, b):
+    """SiTU-GLU FFN WITH gate/up/down biases (Kimi K3), fp32. Weights HF (out, in)."""
+    gate = F.linear(x, w["gate_proj"], b["gate_proj_bias"])
+    up = F.linear(x, w["up_proj"], b["up_proj_bias"])
+    activated = apply_glu_activation(
+        gate,
+        up,
+        activation=ACTIVATION_SITU,
+        situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
+        situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
+    )
+    return F.linear(activated, w["down_proj"], b["down_proj_bias"])
+
+
+# Bias-capable activation -> its torch reference. The kernel's bias branch lives in the
+# shared binary-activation phase, so every fused binary activation supports biases.
+_BIAS_REFERENCE = {
+    ttnn.RoutedExpertActivation.SwiGluOai: _torch_swigluoai_expert_with_bias,
+    ttnn.RoutedExpertActivation.SituGlu: _torch_situglu_expert_with_bias,
+}
+
+
+def run_bias_routed_expert(
+    mesh_device, num_tokens, emb_dim, hidden_dim, activation=ttnn.RoutedExpertActivation.SwiGluOai
+):
+    """1 chip, 1 expert. Compares the fused op (activation + biases) vs a torch reference."""
     torch.manual_seed(42)
 
     weights = {
@@ -83,8 +109,11 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
     }
 
     torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
+    reference = _BIAS_REFERENCE.get(activation)
+    if reference is None:
+        raise ValueError(f"no bias reference for {activation}; supported: {list(_BIAS_REFERENCE)}")
     with torch.no_grad():
-        torch_output = _torch_swigluoai_expert_with_bias(torch_input, weights, biases)
+        torch_output = reference(torch_input, weights, biases)
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -116,7 +145,7 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
         torch_biases=[biases],  # PROPOSED — bias support is the subject of this PR
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        activation=ttnn.RoutedExpertActivation.SwiGluOai,
+        activation=activation,
     )
 
     tt_output = tt_expert(tt_input, _idx([num_tokens]), _idx([0]))
@@ -126,7 +155,7 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
     )[:num_tokens]
 
     passing, pcc = comp_pcc(torch_output, tt_output_torch, 0.97)
-    logger.info(f"bias routed expert num_tokens={num_tokens}: PCC={pcc}")
+    logger.info(f"bias routed expert {activation} num_tokens={num_tokens}: PCC={pcc}")
     assert not torch.isnan(tt_output_torch).any(), "Output contains NaN"
     assert not torch.isinf(tt_output_torch).any(), "Output contains Inf"
     assert passing, f"PCC below threshold: {pcc}"
@@ -140,6 +169,27 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
 def test_gptoss_bias_routed_expert(mesh_device, device_params, num_tokens):
     """gpt-oss expert biases (gate/up/down) + SwiGLU-OAI vs torch. SPEC — skipped until kernel support lands."""
     run_bias_routed_expert(mesh_device, num_tokens=num_tokens, emb_dim=GPT_OSS_EMB, hidden_dim=GPT_OSS_HIDDEN)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
+@pytest.mark.parametrize("num_tokens", [128, 1024], ids=["t128", "t1k"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_situglu_bias_routed_expert(mesh_device, device_params, num_tokens):
+    """Expert biases + SiTU-GLU at Kimi K3 routed-expert dims.
+
+    The kernel's bias branch sits inside the shared binary-activation phase, so it applies to
+    SiTU-GLU as much as to SwiGLU-OAI; the host validation permits both. This covers the
+    SiTU-GLU half so that permission is backed by a measurement rather than by inspection.
+    """
+    run_bias_routed_expert(
+        mesh_device,
+        num_tokens=num_tokens,
+        emb_dim=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+        hidden_dim=KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        activation=ttnn.RoutedExpertActivation.SituGlu,
+    )
 
 
 # Multiple experts on ONE chip. Different real token count per expert (all multiples of TILE=32,
