@@ -67,14 +67,18 @@ export GEMMA_PATH="google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Loud Box 2x4 (sp1/tp0)
 RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
-  -k "bh_2x4sp1tp0" -s --timeout 3600
+  -k "2x4sp1tp0nl2_line_is_fsdp0" -s --timeout 3600
 
 # Audio-Video Fast (distilled 2-stage) — Blackhole Galaxy 4x8 (ring)
 RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
-  -k "bh_4x8sp1tp0_ring" -s --timeout 3600
+  -k "4x8sp1tp0nl2_ring_is_fsdp0" -s --timeout 3600
+
+# Audio-Video Fast (distilled 2-stage) — Blackhole QuietBox 2, 2x2 (sp0/tp1)
+RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
+  -k "2x2sp0tp1nl2_line_is_fsdp1" -s --timeout 7200
 
 # Interactive prompt (omit NO_PROMPT)
-pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -k "bh_2x4sp1tp0" -s --timeout 3600
+pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -k "2x4sp1tp0nl2_line_is_fsdp0" -s --timeout 3600
 ```
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.
