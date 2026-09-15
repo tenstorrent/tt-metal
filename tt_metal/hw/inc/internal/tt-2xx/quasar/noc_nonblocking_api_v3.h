@@ -406,7 +406,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     // instruction. LEN is the transfer size. The INLINE_WR/BYTE_ENABLE MISC bits
     // with a byte-enable mask in LEN never complete on this NIU (no ack, no
     // data), and one such issue wedges every later barrier on the core.
-    ASSERT(be == 0xF);  // the RoCC inline write carries one full dword
+    ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     uint32_t num_dests = 1;
     uint32_t mcast_coord = 0;
     if (mcast) {
@@ -471,7 +471,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     // Same recipe as noc_fast_write_dw_inline (see there); the caller supplies
     // the destination count. The sender is not included, so a rectangle that
     // contains it has one destination fewer than its area.
-    ASSERT(be == 0xF);
+    ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     uint32_t mcast_coord = 0;
     if (mcast) {
         const noc_att::NocMulticastAddress mcast_target =
@@ -784,7 +784,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
     // Reference recipe (cmdbuff_api.hpp): plain write, LEN = dword; see
     // noc_fast_write_dw_inline for why the INLINE_WR/BYTE_ENABLE form is wrong.
-    ASSERT(be == 0xF);
+    ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
     if constexpr (set_val) {
         noc_v3_inline_write_state_val = val;
     }
