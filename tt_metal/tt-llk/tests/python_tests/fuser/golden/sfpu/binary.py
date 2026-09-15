@@ -12,7 +12,7 @@ def binary_golden(call, state, node, operation, config):
     data_format = config.sentinel.golden_math_format
     tensor = state.dest.tilized(data_format)
     iterations = node.sfpu.iterations
-    if config.architecture == ChipArchitecture.BLACKHOLE:
+    if config.architecture in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE):
         iterations = tile_dims[0] * tile_dims[1] // 32
     result = get_golden_generator(BinarySFPUGolden)(
         node.sfpu.operation,
