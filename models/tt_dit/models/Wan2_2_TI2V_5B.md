@@ -130,3 +130,26 @@ runs at M=32 like the scalar path, needs no blocking entries at any resolution, 
    fidelity, and the 36.0 threshold is calibrated to one prompt at one resolution.
 4. **480p is out of distribution.** 16x16 VAE compression plus patchify leaves 15x26 tokens
    at 832x480 versus 22x40 at 1280x704. Run correctness and quality work at 720p.
+
+## Prompting I2V — this matters more than it does for T2V
+
+TI2V-5B pins **only latent frame 0**. Nothing constrains frames 1..N, so over an 81-frame
+(3.4 s) clip the model is free to follow the prompt away from the seed image. A prompt that
+asks for a subject which is not in the seed is an instruction to change the scene, and the
+model obeys: tested with "…add sharks in the water" on a surfing photo, the surfer is gone by
+the final frame, replaced by sharks.
+
+The model card's own I2V example prompt is purely **descriptive of the seed image** plus
+motion ("a white cat wearing sunglasses sits on a surfboard… gazes directly at the camera…
+naturally relaxed posture"). Following that pattern on the same image and seed keeps the
+subject intact through all 81 frames.
+
+Controlled A/B, identical image / seed 42 / 40 steps / 1280x704, prompt the only variable:
+
+| prompt style | `mean_frame_delta` | final frame |
+|---|---|---|
+| introduces a new subject ("add sharks") | 19.62 | subject gone, scene replaced |
+| descriptive of the seed + motion | 16.29 | subject preserved, coherent motion |
+
+So apparent "melting" or subject loss in an I2V clip is usually prompt-driven drift, not a
+pipeline defect. Check the prompt style before investigating the implementation.
