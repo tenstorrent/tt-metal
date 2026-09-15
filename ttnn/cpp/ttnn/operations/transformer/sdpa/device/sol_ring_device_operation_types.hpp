@@ -36,6 +36,9 @@ struct SolRingParams {
     uint32_t cluster_axis;
     uint32_t num_workers_per_link = 1;
     uint32_t num_buffers_per_channel = 8;
+    // Mirrors SolRingInputs::chunk_mask having a value. Kept on the params so it reaches the program
+    // hash: the mask is a compile-time branch in the kernels, not just data.
+    bool has_chunk_mask = false;
 
     SolRingParams(
         std::string joint_strategy,
@@ -52,7 +55,8 @@ struct SolRingParams {
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         uint32_t cluster_axis,
         uint32_t num_workers_per_link = 1,
-        uint32_t num_buffers_per_channel = 8) :
+        uint32_t num_buffers_per_channel = 8,
+        bool has_chunk_mask = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         logical_n(logical_n),
@@ -67,7 +71,8 @@ struct SolRingParams {
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel) {}
+        num_buffers_per_channel(num_buffers_per_channel),
+        has_chunk_mask(has_chunk_mask) {}
 
     // for Program-cache hash calculation
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -79,7 +84,8 @@ struct SolRingParams {
         "program_config",
         "dim",
         "num_links",
-        "cluster_axis");
+        "cluster_axis",
+        "has_chunk_mask");
     auto attribute_values() const {
         return std::forward_as_tuple(
             joint_strategy,
@@ -90,7 +96,8 @@ struct SolRingParams {
             program_config,
             dim,
             num_links,
-            cluster_axis);
+            cluster_axis,
+            has_chunk_mask);
     }
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
@@ -109,6 +116,12 @@ struct SolRingInputs {
     std::optional<Tensor> joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
+    // Optional chunk-skip mask, [H, n_q_chunks, n_kv_chunks_per_ring_iter] packed into uint32 words,
+    // ROW_MAJOR. A zero bit means the (q chunk, kv chunk) pair has no selected block and the chunk is
+    // skipped outright -- the whole point, since a masked-but-visited chunk costs what an unmasked one
+    // does. Selection at chunk granularity only: a block-granular mask needs intra-chunk stamping,
+    // which is a later step.
+    std::optional<Tensor> chunk_mask;
 };
 
 // Index constants for SolRingResult vector

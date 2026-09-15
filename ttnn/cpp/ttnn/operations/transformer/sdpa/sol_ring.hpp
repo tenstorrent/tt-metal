@@ -47,6 +47,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring(
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel);
+    uint32_t num_buffers_per_channel,
+    // packed-bit [H, n_q_chunks, n_kv_chunks] chunk-skip mask; absent = attend every chunk
+    std::optional<ttnn::Tensor> chunk_mask = std::nullopt);
 
 }  // namespace ttnn::transformer

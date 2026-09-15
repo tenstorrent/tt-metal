@@ -22,9 +22,25 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+void validate_chunk_mask(const SolRingInputs& t) {
+    if (!t.chunk_mask.has_value()) {
+        return;
+    }
+    const auto& m = *t.chunk_mask;
+    TT_FATAL(m.dtype() == DataType::UINT32, "sol_ring: chunk_mask must be uint32 (packed bits)");
+    TT_FATAL(m.layout() == Layout::ROW_MAJOR, "sol_ring: chunk_mask must be ROW_MAJOR");
+    TT_FATAL(
+        m.memory_config().buffer_type() == BufferType::DRAM && !m.memory_config().is_sharded(),
+        "sol_ring: chunk_mask must be interleaved in DRAM");
+    TT_FATAL(m.logical_shape().rank() == 4, "sol_ring: chunk_mask must be rank 4, got {}", m.logical_shape());
+}
+}  // namespace
+
 void SolRingDeviceOperation::validate_on_program_cache_miss(
     const SolRingParams& args, const SolRingInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
+    validate_chunk_mask(tensor_args);
 
     const bool has_joint = tensor_args.joint_q.has_value();
     TT_FATAL(
@@ -462,7 +478,8 @@ SolRingResult sol_ring(
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    std::optional<Tensor> chunk_mask) {
     using OperationType = ttnn::prim::SolRingDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -498,7 +515,8 @@ SolRingResult sol_ring(
         subdevice_id,
         cluster_axis,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        chunk_mask.has_value());
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -508,7 +526,8 @@ SolRingResult sol_ring(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        .gathered_v = persistent_output_buffer_v,
+        .chunk_mask = std::move(chunk_mask)};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

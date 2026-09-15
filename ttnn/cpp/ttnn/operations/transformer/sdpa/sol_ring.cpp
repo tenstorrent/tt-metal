@@ -40,7 +40,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring(
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    std::optional<ttnn::Tensor> chunk_mask) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -68,7 +69,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring(
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        std::move(chunk_mask));
     return {
         output_tensors[prim::SOL_RING_OUTPUT_IDX],
         output_tensors[prim::SOL_RING_JOINT_OUTPUT_IDX],

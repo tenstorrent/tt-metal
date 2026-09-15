@@ -223,7 +223,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring_wrapper(
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel) {
+    uint32_t num_buffers_per_channel,
+    std::optional<ttnn::Tensor> chunk_mask) {
     return ttnn::transformer::sol_ring(
         input_tensor_q,
         input_tensor_k,
@@ -246,7 +247,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring_wrapper(
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        std::move(chunk_mask));
 }
 
 }  // namespace
@@ -995,7 +997,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_workers_per_link") = 1,
-        nb::arg("num_buffers_per_channel") = 8);
+        nb::arg("num_buffers_per_channel") = 8,
+        nb::arg("chunk_mask") = nb::none());
 
     const auto* const mla_doc =
         R"doc(
