@@ -140,10 +140,11 @@ done
 
 ## End-to-end matmul test
 
-The operation-level end-to-end benchmark measures real Tensor
-Prefetcher-to-matmul overlap. It currently requires an unharvested eight-bank
-Blackhole because its matmul receiver topology is the production 64-core
-layout:
+The operation-level end-to-end receiver-contiguous benchmark measures real
+Tensor-Prefetcher-to-matmul overlap. It uses all available Blackhole DRAM banks,
+keeps eight receivers per bank, and pads the model shape for the resulting ring.
+An unharvested device retains the production scattered 64-core topology; a
+harvested device uses a compact logical receiver grid.
 
 ```bash
 PYTHONPATH=$PWD \
@@ -154,6 +155,20 @@ pytest -sv \
 tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bench.py::test_bench_dram_core_repeats_recv_contig \
 -k '1B_FF1 and shard_contiguous'
 ```
+
+Run the complete priority matrix on `3B_FF1`, the shape with the clearest
+historical end-to-end Tensor Prefetcher gain, with:
+
+```bash
+BENCH_SUITE_ITERATIONS=3 BENCH_TRACE_REPEATS=100 \
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_ff1_benchmarks.sh
+```
+
+Each iteration runs `static-000` first as the baseline, followed by every policy
+and configured weight in the standard MPFE matrix. Results include the detected
+bank and ring counts and are written to `benchmark.log`, `results.jsonl`, and
+`relative-to-static-000.csv`. Set `MPFE_MATMUL_SHAPE=8B_FF1_2d` to run the
+other historically strong FF1 shape.
 
 These environment variables apply to every workload that calls
 `ttnn.experimental.start_tensor_prefetcher`, so the same policy matrix can also

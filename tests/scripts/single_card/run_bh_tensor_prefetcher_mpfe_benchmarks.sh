@@ -18,7 +18,7 @@ MPFE_HIGH_WEIGHTS="${MPFE_HIGH_WEIGHTS:-3 5 7}"
 MPFE_MEDIUM_WEIGHTS="${MPFE_MEDIUM_WEIGHTS:-1 3 5}"
 MPFE_ACTIVE_WEIGHTS="${MPFE_ACTIVE_WEIGHTS:-1 3 5 7}"
 OUTPUT_DIR="${OUTPUT_DIR:-$TT_METAL_HOME/generated/mpfe-benchmark-$(date -u +%Y%m%dT%H%M%SZ)}"
-TEST="tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention"
+TEST="${TEST:-tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention}"
 PYTEST_ARGS=("$@")
 
 mkdir -p "$OUTPUT_DIR"
@@ -72,8 +72,10 @@ run_case() {
 }
 
 for ((iteration = 1; iteration <= BENCH_SUITE_ITERATIONS; ++iteration)); do
-    run_case "$iteration" "production-default" "-" "-" "-" "-" "-"
+    # Run the neutral hardware-default policy first so every suite iteration has
+    # an explicit baseline before any priority-weighted configuration.
     run_case "$iteration" "static-000" "static-000" "-" "-" "-" "-"
+    run_case "$iteration" "production-default" "-" "-" "-" "-" "-"
 
     for high in "${high_weights[@]}"; do
         run_case "$iteration" "static-777-high-$high" "static-777" "$high" "-" "-" "-"

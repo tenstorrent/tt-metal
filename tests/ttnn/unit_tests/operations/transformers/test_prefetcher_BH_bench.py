@@ -25,8 +25,9 @@ via `sub_device_id`.
 
 Shape envs `BENCH_K / BENCH_N / BENCH_DTYPE / BENCH_RECV_PER_BANK` override the
 parametrize values for ad-hoc runs. `BENCH_TRACE_REPEATS` (default 100) controls the
-trace replay length for both paths. All shapes use ring=64 (8 banks × 8
-receivers/bank) and bfloat8_b.
+trace replay length for both paths. The receiver-contiguous DRAM-core benchmark uses
+all available banks with eight receivers per bank (ring=64 when unharvested) and
+bfloat8_b. The legacy and worker-core comparisons still require eight banks.
 
 Per-shape results: see `docs/tensor_prefetcher_bench_results.md`. The
 table there was measured with the previous worker-core trace shape and is
@@ -119,8 +120,8 @@ _DTYPE_BYTES_FROM_NAME = {"bfloat16": 2, "bfloat8_b": 1088 / 1024.0}  # bf8_b in
 # Llama-3.1-8B  (2 dev): dim=4096, hidden_dim=14336, n_heads=32, n_kv_heads=8, head_dim=128, qkv=6144
 # Llama-3.3-70B (2 dev): dim=8192, hidden_dim=28672, n_heads=64, n_kv_heads=8, head_dim=128, qkv=10240
 #
-# All shapes use ring=64 (8 banks × 8 receivers/bank); N gets padded up to ring*TILE_SIZE in
-# the test body when not already a multiple.
+# Shapes normally use ring=64 (8 banks × 8 receivers/bank). The harvested-device
+# receiver-contiguous benchmark instead pads K and N for its detected ring size.
 LLAMA_SHAPES = [
     # Llama-3.2-1B, single-device per-op shapes (no TP).
     pytest.param("1B_QKV", dict(K=2048, N=3072, dtype="bfloat8_b", recv_per_bank=8), id="1B_QKV"),
@@ -147,7 +148,7 @@ LLAMA_SHAPES = [
 ]
 
 
-def _apply_shape(shape: dict) -> None:
+def _apply_shape(shape: dict, num_dram_banks: int = _NUM_DRAM_BANKS) -> None:
     """Set module globals from the parametrize dict, allowing BENCH_* env vars to override.
 
     Tests call this at the top of their body so all helpers below see the shape via ambient
@@ -163,7 +164,7 @@ def _apply_shape(shape: dict) -> None:
     _K_ORIG = int(os.environ.get("BENCH_K", shape["K"]))
     _N_ORIG = int(os.environ.get("BENCH_N", shape["N"]))
     _NUM_RECV_PER_BANK = int(os.environ.get("BENCH_RECV_PER_BANK", shape["recv_per_bank"]))
-    _RING_SIZE = _NUM_DRAM_BANKS * _NUM_RECV_PER_BANK
+    _RING_SIZE = num_dram_banks * _NUM_RECV_PER_BANK
     assert _RING_SIZE % _RING_COLS == 0, f"ring_size {_RING_SIZE} not a clean rect on 8-col grid"
     _RING_ROWS = _RING_SIZE // _RING_COLS
     # Pad K and N to multiples of (ring_size * TILE_SIZE) so every ring receiver gets at
@@ -505,11 +506,15 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     """Same matmul trace-replay bench as test_bench_dram_core_repeats, but the weight
     is in **receiver-contiguous** DRAM layout (NdShardSpec, num_shards = ring_size).
 
+    Unlike the legacy and worker-core comparisons, this variant uses all available
+    DRAM banks. On a harvested device it builds a compact logical receiver grid and
+    pads the model shape to that bank_count × receivers_per_bank ring.
+
     Parametrized on the shard distribution to A/B the ring-routing effect:
-      - round_robin: bank b feeds the STRIDED ring set [b, b+num_banks, ...] (column b
-        of receivers_per_y) -- each bank's writes fan out across the whole ring.
-      - shard-contiguous (CONTIGUOUS_1D): bank b feeds the CONTIGUOUS arc [b*R, b*R+R-1] (row b of
-        receivers_per_y) -- each bank's writes stay on a local ring segment.
+      - round_robin: bank b feeds the STRIDED ring positions [b, b+num_banks, ...],
+        so each bank's writes fan out across the whole ring.
+      - shard-contiguous (CONTIGUOUS_1D): bank b feeds the CONTIGUOUS ring arc
+        [b*R, b*R+R-1], so each bank's writes stay on a local ring segment.
     The matmul topology (receiver cores, ring order, program config) is identical; only
     the shard->bank placement and the GCB pairing change, so PCC holds for both. Compare
     the logged GB/s across the two ids for the same shape.
@@ -528,44 +533,44 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
         weight's DRAM layout (here receiver-contiguous NdShardSpec) and sizes/builds the GCB
         accordingly.
     """
-    _apply_shape(shape)
-
+    num_dram_banks = device.dram_grid_size().x
+    _apply_shape(shape, num_dram_banks=num_dram_banks)
     trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "100"))
     num_prefetch_layers = trace_repeats + 1
-    if device.dram_grid_size().x != 8:
-        pytest.skip("Production receiver layout requires 8 unharvested DRAM banks")
-    num_dram_banks = _select_num_dram_banks(device.dram_grid_size().x)
-    num_receivers_per_bank = _select_num_receivers_per_bank(num_dram_banks)
+    num_receivers_per_bank = _NUM_RECV_PER_BANK
     ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = _ring_grid_cols(_NUM_DRAM_BANKS, ring_size)
+    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
     ring_rows = ring_size // ring_cols
     k_padded = _round_up(_K, ring_size * ttnn.TILE_SIZE)
-    if num_dram_banks != _NUM_DRAM_BANKS or num_receivers_per_bank != _NUM_RECV_PER_BANK:
-        pytest.skip(
-            f"Production receiver layout requires {_NUM_DRAM_BANKS} banks x {_NUM_RECV_PER_BANK} recv/bank, "
-            f"got {num_dram_banks} x {num_receivers_per_bank}"
-        )
 
-    # Production scattered receiver layout (identical to the K-row-major bench) so the
-    # matmul receiver/in0-gather NoC paths match exactly.
-    from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
+    if num_dram_banks == _NUM_DRAM_BANKS:
+        # Preserve the production scattered 64-core topology on an unharvested device.
+        from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
 
-    bh_cfg = ARCH_CONFIG["blackhole"]
-    raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=num_receivers_per_bank)
-    left_y = bh_cfg["bank_ordered_y_coords"]["left"]
-    right_y = bh_cfg["bank_ordered_y_coords"]["right"]
-    left_col = bh_cfg["sender_cols"]["left"]
-    right_col = bh_cfg["sender_cols"]["right"]
-    ordered_senders = [(left_col, y) for y in left_y] + [(right_col, y) for y in right_y]
-    receivers_by_y: dict = {}
-    for sx, sy in ordered_senders:
-        receivers_by_y.setdefault(sy, []).extend(raw_mapping[(sx, sy)])
-    sorted_ys = sorted(receivers_by_y.keys())
-    assert len(sorted_ys) == num_dram_banks, f"want {num_dram_banks} y-rows, got {len(sorted_ys)}"
-    receivers_per_y = [sorted(receivers_by_y[y]) for y in sorted_ys]  # row-major-sortable
-    # Flattened row-major == ring position order (ring pos r = receivers_per_y[r//rpb][r%rpb]).
+        bh_cfg = ARCH_CONFIG["blackhole"]
+        raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=num_receivers_per_bank)
+        left_y = bh_cfg["bank_ordered_y_coords"]["left"]
+        right_y = bh_cfg["bank_ordered_y_coords"]["right"]
+        left_col = bh_cfg["sender_cols"]["left"]
+        right_col = bh_cfg["sender_cols"]["right"]
+        ordered_senders = [(left_col, y) for y in left_y] + [(right_col, y) for y in right_y]
+        receivers_by_y: dict = {}
+        for sx, sy in ordered_senders:
+            receivers_by_y.setdefault(sy, []).extend(raw_mapping[(sx, sy)])
+        ring_cores = [
+            core
+            for y in sorted(receivers_by_y)
+            for core in sorted(receivers_by_y[y])
+        ]
+    else:
+        # A harvested device has fewer logical DRAM banks. Keep eight receivers per
+        # available bank and form a compact logical grid whose row-major order is the
+        # gather-in0 ring order.
+        ring_cores = [(position % ring_cols, position // ring_cols) for position in range(ring_size)]
+
+    assert len(ring_cores) == ring_size
     receiver_core_range_set = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(rx, ry), ttnn.CoreCoord(rx, ry)) for row in receivers_per_y for rx, ry in row]
+        [ttnn.CoreRange(ttnn.CoreCoord(rx, ry), ttnn.CoreCoord(rx, ry)) for rx, ry in ring_cores]
     )
 
     receiver_sub_device = ttnn.SubDevice([receiver_core_range_set])
@@ -609,17 +614,18 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
         num_global_cb_receivers=num_receivers_per_bank,
     )
 
-    # bank_to_receivers pairing must match the BDS placement so ring position r receives
-    # shard r (full K, N-cols [r*npr, ...)):
-    #   round_robin -> STRIDED: bank b feeds [b, b+num_banks, ...] = column b of receivers_per_y.
-    #   shard-contiguous -> CONTIGUOUS arc: bank b feeds [b*R, b*R+R-1] = row b of receivers_per_y.
+    # Pair each buffer shard with its ring position. This remains valid when DRAM
+    # harvesting changes the bank count and therefore changes the ring from 64 cores.
     if is_shard_contiguous:
         bank_to_receivers = [
             (
                 b,
                 ttnn.CoreRangeSet(
                     [
-                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[b][s]), ttnn.CoreCoord(*receivers_per_y[b][s]))
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(*ring_cores[b * num_receivers_per_bank + s]),
+                            ttnn.CoreCoord(*ring_cores[b * num_receivers_per_bank + s]),
+                        )
                         for s in range(num_receivers_per_bank)
                     ]
                 ),
@@ -632,7 +638,10 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
                 b,
                 ttnn.CoreRangeSet(
                     [
-                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[s][b]), ttnn.CoreCoord(*receivers_per_y[s][b]))
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(*ring_cores[b + s * num_dram_banks]),
+                            ttnn.CoreCoord(*ring_cores[b + s * num_dram_banks]),
+                        )
                         for s in range(num_receivers_per_bank)
                     ]
                 ),
@@ -731,7 +740,8 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     policy = resolve_mpfe_benchmark_policy()
     logger.info(
         f"[dram_core_rc][{op_name}] policy={policy.name} idle={policy.idle_weights} active={policy.active_weights} "
-        f"dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"banks={num_dram_banks} ring={ring_size} dist={dist_id} dual_senders={dual_senders} "
+        f"trace_elapsed={elapsed * 1e3:.2f}ms "
         f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s"
     )
     append_benchmark_jsonl(
@@ -739,6 +749,8 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
             "benchmark": "dram_core_recv_contig_matmul",
             **policy_result_fields(policy),
             "operation": op_name,
+            "num_dram_banks": num_dram_banks,
+            "ring_size": ring_size,
             "distribution": dist_id,
             "dual_senders": dual_senders,
             "trace_repeats": trace_repeats,
