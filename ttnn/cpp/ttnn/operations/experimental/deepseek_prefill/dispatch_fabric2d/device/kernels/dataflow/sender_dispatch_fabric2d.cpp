@@ -95,6 +95,9 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
     if (cmd == dspf2d::CMD_END) {
         return cmd;
     }
+    if (cmd == dspf2d::CMD_SKIP) {
+        return cmd;  // consumed where it landed; the slot is freed with the rest of the batch
+    }
     const bool forwarding = (cmd == dspf2d::CMD_FORWARD) || (cmd == dspf2d::CMD_FORWARD_END);
     const uint32_t slot_base = ct.ring_addr + slot * ct.slot_stride();
 

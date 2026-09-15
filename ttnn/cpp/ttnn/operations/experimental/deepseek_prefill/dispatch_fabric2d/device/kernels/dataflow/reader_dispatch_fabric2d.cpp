@@ -357,6 +357,11 @@ uint32_t slice_begin(uint32_t n, uint32_t idx, uint32_t count) { return (n * idx
 // NUM_L1_SLOTS/2 is what proves the reader cannot take every slot before announcing any.
 struct Ring {
     uint32_t claimed = 0;
+    // Slots whose routing tail is final. A slot is announced only once it reaches here, never merely
+    // because it was claimed: a reader that claims several slots to keep DRAM reads in flight would
+    // otherwise hand the sender a slot whose command word it has not written yet, every time a claim
+    // blocks and flushes.
+    uint32_t ready = 0;
     uint32_t published = 0;
 
     uint32_t claim_slot() {
@@ -372,18 +377,24 @@ struct Ring {
         }
     }
 
-    // Hand back a slot claimed as scratch. Only valid while nothing has been published for it, which
-    // is what keeps the sender from ever seeing it.
-    void release_slot() { claimed--; }
+    // A slot's tail is written; it may now be announced.
+    void mark_ready() { ready++; }
+
+    // Hand back a slot claimed as scratch. Only valid for the most recent claim while nothing has been
+    // published for it, which is what keeps the sender from ever seeing it.
+    void release_slot() {
+        ASSERT(claimed == ready + 1);
+        claimed--;
+    }
 
     void flush_publish() {
-        if (published == claimed) {
+        if (published == ready) {
             return;
         }
         // The tokens have to be in L1 before the sender is told the slots are filled.
         noc_async_read_barrier();
-        noc_semaphore_inc(get_noc_addr(ct.filled_addr), claimed - published);
-        published = claimed;
+        noc_semaphore_inc(get_noc_addr(ct.filled_addr), ready - published);
+        published = ready;
     }
 };
 
@@ -423,6 +434,16 @@ uint32_t mc_link_of(uint32_t rank, uint32_t class_size) {
     }
     return ct.num_links - 1;
 }
+
+// The reach index a region chunk is sized at. A destination one hop away is written straight into its
+// output page by the chip holding the token -- the same fabric write the unicast path makes -- so a
+// page enters the forwarding region only if it still has a destination two or more hops out. Chunks at
+// hop 1 therefore carry the hop-2 population, and a token whose only destination is the neighbour never
+// touches a region at all.
+//
+// Both sides of a region derive this the same way, so the dense layout is unaffected: it is the same m
+// numbers as before, read one index further along at the near end.
+uint32_t mc_region_hop(uint32_t hop) { return hop < 2u ? 2u : hop; }
 
 uint32_t mc_chunk_len(const Control& c, uint32_t origin_row, uint32_t dir_idx, uint32_t hop, uint32_t link) {
     const uint32_t m = ct.extent / 2u;
@@ -499,7 +520,7 @@ uint32_t mc_chunk_starts(
     for (uint32_t i = 0; i < m; i++) {
         const uint32_t origin = mc_row_back(i + (outgoing ? 0u : 1u), travel);
         start[i] = at;
-        at += mc_chunk_len(c, origin, dir_idx, i + 1u, link);
+        at += mc_chunk_len(c, origin, dir_idx, mc_region_hop(i + 1u), link);
     }
     ASSERT(at <= ct.fwd_pages_per_stream);
     return at;
@@ -571,6 +592,7 @@ void own_phase(
                     tail->cmd = (i + 1 == to) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
                     tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + (i - from));
                 }
+                ring.mark_ready();
             }
         }
     }
@@ -599,43 +621,56 @@ void relay_phase(const Control& c, Ring& ring, const FwdAcc& fwd_acc, uint32_t m
             const uint32_t in_base = c.in_start[d * ct.experts_per_chip + j];
             const uint32_t out_base = continues ? c.out_start[this_out_d * ct.experts_per_chip + j] : 0;
             volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
-            for (uint32_t p = 0; p < len; p++) {
-                // Upstream fills the region strictly left to right, so its page count is the high-water
-                // offset and a page is ready once that count passes it.
-                // The invalidate has to precede the read: an upstream chip owns this counter, so a
-                // cached line would never show its increments.
-                while (true) {
-                    invalidate_l1_cache();
-                    if (*arrived > in_base + p) {
-                        break;
+            // Pages are read a batch at a time. One read in flight per stream is a DRAM round trip
+            // per page -- the op's actual limit, not its bandwidth -- and the ring already has the
+            // depth to cover it. BATCH <= NUM_L1_SLOTS/2 is what keeps a batch of unannounced slots
+            // from filling the ring against a sender that is still draining the previous one.
+            for (uint32_t p = 0; p < len;) {
+                const uint32_t n = (len - p < ct.batch) ? (len - p) : ct.batch;
+                uint32_t slots[dspf2d::BATCH];
+                for (uint32_t i = 0; i < n; i++) {
+                    // Upstream fills the region strictly left to right, so its page count is the
+                    // high-water offset and a page is ready once that count passes it.
+                    // The invalidate has to precede the read: an upstream chip owns this counter, so a
+                    // cached line would never show its increments.
+                    while (true) {
+                        invalidate_l1_cache();
+                        if (*arrived > in_base + p + i) {
+                            break;
+                        }
+                        ring.flush_publish();  // let our own sender work while we wait on upstream
                     }
-                    ring.flush_publish();  // let our own sender work while we wait on upstream
+                    slots[i] = ring.claim_slot();
+                    noc_async_read(
+                        fwd_acc.get_noc_addr(my_region + in_base + p + i),
+                        slot_addr(slots[i]),
+                        ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
                 }
-                const uint32_t slot = ring.claim_slot();
-                noc_async_read(
-                    fwd_acc.get_noc_addr(my_region + in_base + p),
-                    slot_addr(slot),
-                    ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
-                noc_async_read_barrier();  // the routing tail decides the next hop, so it must be here
-                // The read landed behind the data cache, and this slot carried a different page eight
-                // iterations ago: without this, the tail's addresses can still be that page's.
+                noc_async_read_barrier();  // the routing tails decide the next hop, so they must be here
+                // The reads landed behind the data cache, and these slots carried different pages a
+                // few iterations ago: without this, a tail's addresses can still be that page's.
                 invalidate_l1_cache();
 
-                volatile tt_l1_ptr dspf2d::FwdMetadata* tail = slot_tail(slot);
-                // Whether this hop is the last is a property of the CHUNK, so it comes from the
-                // descriptor rather than from the arriving tail: every page of (origin, dst_row) shares
-                // one destination, and the descriptor lists are the pair validate_chunk_agreement
-                // proved the two chips agree on. Reading it back out of the tail would instead make
-                // control flow depend on a DRAM round-trip, and an unwritten tail reads as chip 0 --
-                // indistinguishable from a genuine destination on the chip whose id is 0.
-                ASSERT(tail->dst_chip == (uint64_t)dst_chip);
-                if (!continues) {
-                    tail->cmd = dspf2d::CMD_FINAL_WRITE;
-                    tail->this_addr = tail->final_payload_addr;
-                } else {
-                    tail->cmd = (p + 1 == len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
-                    tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + p);
+                for (uint32_t i = 0; i < n; i++) {
+                    volatile tt_l1_ptr dspf2d::FwdMetadata* tail = slot_tail(slots[i]);
+                    // Whether this hop is the last is a property of the CHUNK, so it comes from the
+                    // descriptor rather than from the arriving tail: every page of (origin, dst_row)
+                    // shares one destination, and the descriptor lists are the pair
+                    // validate_chunk_agreement proved the two chips agree on. Reading it back out of
+                    // the tail would instead make control flow depend on a DRAM round-trip, and an
+                    // unwritten tail reads as chip 0 -- indistinguishable from a genuine destination
+                    // on the chip whose id is 0.
+                    ASSERT(tail->dst_chip == (uint64_t)dst_chip);
+                    if (!continues) {
+                        tail->cmd = dspf2d::CMD_FINAL_WRITE;
+                        tail->this_addr = tail->final_payload_addr;
+                    } else {
+                        tail->cmd = (p + i + 1 == len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
+                        tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + p + i);
+                    }
+                    ring.mark_ready();
                 }
+                p += n;
             }
         }
     }
@@ -688,18 +723,20 @@ void local_phase(const Control& c, Ring& ring, const InAcc& in_acc, const OutAcc
 //
 // The share is by farthest-hop class, which is what makes a link's count at every later hop derivable
 // from the same reach table -- see mc_link_of.
-template <typename InAcc, typename FwdAcc>
+template <typename InAcc, typename OutAcc, typename MetaAcc, typename FwdAcc>
 void mc_own_phase(
     const Control& c,
     Ring& ring,
     const InAcc& in_acc,
+    const OutAcc& out_acc,
+    const MetaAcc& meta_acc,
     const FwdAcc& fwd_acc,
     uint32_t my_region,
     uint32_t dir_idx,
     uint32_t link) {
     const uint32_t m = ct.extent / 2u;
     const uint32_t stride = dspf2d::fo_entry_words(ct.topk);
-    const uint32_t len = mc_chunk_len(c, ct.my_row, dir_idx, 1u, link);
+    const uint32_t len = mc_chunk_len(c, ct.my_row, dir_idx, mc_region_hop(1u), link);
     // The table is built from this chip's own routing, so its first hop has to be the entries just
     // staged. If it is not, every chunk length downstream is wrong and the axis deadlocks.
     ASSERT(c.mc_count[dir_idx] == mc_reach(c, ct.my_row, dir_idx, 1u));
@@ -721,21 +758,60 @@ void mc_own_phase(
         }
         const uint32_t token = ent[0];
         const uint32_t n_dests = ent[1];
+
+        // The neighbour's pages go straight to their final addresses, exactly as the unicast path
+        // sends them: one fabric write for the token and one for its metadata, costing the receiving
+        // chip nothing. Routing them through its forwarding region instead would make it read every
+        // one back out and rewrite it, which is what made fan-out lose to store-and-forward.
+        for (uint32_t d = 0; d < n_dests; d++) {
+            const uint32_t packed = ent[2 + d];
+            if (((packed >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK) != 1u) {
+                continue;
+            }
+            const uint32_t page = packed & dspf2d::FO_PAGE_MASK;
+            const uint32_t slot = ring.claim_slot();
+            noc_async_read(in_acc.get_noc_addr(token), slot_addr(slot), ct.token_size_bytes);
+            volatile tt_l1_ptr dspf2d::FwdMetadata* uni = slot_tail(slot);
+            uni->final_payload_addr = out_acc.get_noc_addr(page);
+            uni->final_meta_addr = meta_acc.get_noc_addr(page);
+            uni->dst_chip = ct.nbr_chip_id;
+            uni->meta[0] = ct.linearized_coord;
+            uni->meta[1] = token;
+            uni->meta[2] = packed >> dspf2d::FO_SLOT_SHIFT;
+            uni->pad = 0;
+            uni->cmd = dspf2d::CMD_FINAL_WRITE;
+            uni->this_addr = uni->final_payload_addr;
+            ring.mark_ready();
+        }
+        if (far < 2u) {
+            continue;  // nothing left to relay; this token never enters a region
+        }
+
         const uint32_t slot = ring.claim_slot();
         noc_async_read(in_acc.get_noc_addr(token), slot_addr(slot), ct.token_size_bytes);
 
         // Hops are measured from HERE and never rewritten, which is what lets a page be immutable in
-        // flight: a chip j hops along takes the destinations with hop == j and forwards the rest.
+        // flight: a chip j hops along takes the destinations with hop == j and forwards the rest. The
+        // hop-1 destinations are dropped rather than carried -- they have already been delivered, and
+        // leaving them in would make the neighbour write them a second time.
         volatile tt_l1_ptr dspf2d::FanoutMetadata* tail = slot_mc_tail(slot);
         tail->src_chip = ct.linearized_coord;
         tail->token = token;
-        for (uint32_t d = 0; d < dspf2d::FO_MAX_DESTS; d++) {
-            tail->dests[d] = (d < n_dests) ? ent[2 + d] : 0u;
+        uint32_t kept = 0;
+        for (uint32_t d = 0; d < n_dests; d++) {
+            const uint32_t packed = ent[2 + d];
+            if (((packed >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK) > 1u) {
+                tail->dests[kept++] = packed;
+            }
+        }
+        for (uint32_t d = kept; d < dspf2d::FO_MAX_DESTS; d++) {
+            tail->dests[d] = 0u;
         }
         // The last page of a chunk forces the downstream bump, which is the boundary that reader
         // switches on: leave it uncounted and the whole axis waits.
         tail->cmd = (q + 1 == len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
         tail->this_addr = fwd_acc.get_noc_addr(my_region + c.out_start[0] + q);
+        ring.mark_ready();
         q++;
     }
     ASSERT(q == len);
@@ -763,82 +839,95 @@ void mc_relay_phase(
 
     for (uint32_t j = 1; j <= m; j++) {
         const uint32_t origin = mc_row_back(j, travel);
-        const uint32_t len = mc_chunk_len(c, origin, dir_idx, j, link);
+        const uint32_t len = mc_chunk_len(c, origin, dir_idx, mc_region_hop(j), link);
         // Nothing travels past half the ring, so the last chunk is consumed whole.
         const uint32_t fwd_len = (j < m) ? mc_chunk_len(c, origin, dir_idx, j + 1u, link) : 0u;
         const uint32_t in_base = c.in_start[j - 1u];
         const uint32_t out_base = (j < m) ? c.out_start[j] : 0u;
         uint32_t q = 0;
-        for (uint32_t p = 0; p < len; p++) {
-            // Upstream fills the region strictly left to right, so its page count is the high-water
-            // offset and a page is ready once that count passes it.
-            // The invalidate has to precede the read: an upstream chip owns this counter, so a
-            // cached line would never show its increments.
-            while (true) {
-                invalidate_l1_cache();
-                if (*arrived > in_base + p) {
-                    break;
+        // Batched exactly as the unicast relay is: one read in flight per stream is a DRAM round trip
+        // per page. The consume writes stage their metadata per (page-in-batch, destination), so a
+        // batch's writes can overlap instead of each page flushing on its own.
+        for (uint32_t p = 0; p < len;) {
+            const uint32_t n = (len - p < ct.batch) ? (len - p) : ct.batch;
+            uint32_t slots[dspf2d::BATCH];
+            for (uint32_t i = 0; i < n; i++) {
+                // Upstream fills the region strictly left to right, so its page count is the
+                // high-water offset and a page is ready once that count passes it.
+                // The invalidate has to precede the read: an upstream chip owns this counter, so a
+                // cached line would never show its increments.
+                while (true) {
+                    invalidate_l1_cache();
+                    if (*arrived > in_base + p + i) {
+                        break;
+                    }
+                    ring.flush_publish();  // let our own sender work while we wait on upstream
                 }
-                ring.flush_publish();  // let our own sender work while we wait on upstream
+                slots[i] = ring.claim_slot();
+                noc_async_read(
+                    fwd_acc.get_noc_addr(my_region + in_base + p + i),
+                    slot_addr(slots[i]),
+                    ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
             }
-            const uint32_t slot = ring.claim_slot();
-            noc_async_read(
-                fwd_acc.get_noc_addr(my_region + in_base + p),
-                slot_addr(slot),
-                ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
-            noc_async_read_barrier();  // the destination list decides the next hop, so it must be here
-            // The read landed behind the data cache, and this slot carried a different page eight
-            // iterations ago: without this, the tail can still be that page's.
+            noc_async_read_barrier();  // the destination lists decide the next hop, so they must be here
+            // The reads landed behind the data cache, and these slots carried different pages a few
+            // iterations ago: without this, a tail can still be that page's.
             invalidate_l1_cache();
 
-            volatile tt_l1_ptr dspf2d::FanoutMetadata* tail = slot_mc_tail(slot);
-            const uint32_t src_chip = tail->src_chip;
-            const uint32_t token = tail->token;
-            uint32_t kept = 0;
-            bool travels_on = false;
-            for (uint32_t d = 0; d < dspf2d::FO_MAX_DESTS; d++) {
-                const uint32_t packed = tail->dests[d];
-                const uint32_t hop = (packed >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK;
-                if (hop > j) {
-                    travels_on = true;
-                    continue;
+            for (uint32_t i = 0; i < n; i++) {
+                volatile tt_l1_ptr dspf2d::FanoutMetadata* tail = slot_mc_tail(slots[i]);
+                const uint32_t src_chip = tail->src_chip;
+                const uint32_t token = tail->token;
+                uint32_t kept = 0;
+                bool travels_on = false;
+                for (uint32_t d = 0; d < dspf2d::FO_MAX_DESTS; d++) {
+                    const uint32_t packed = tail->dests[d];
+                    const uint32_t hop = (packed >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK;
+                    if (hop > j) {
+                        travels_on = true;
+                        continue;
+                    }
+                    // Hop 0 is an unused slot, and a hop below j was consumed by a chip behind us: the
+                    // page is never rewritten in flight, so both are still here and neither is ours.
+                    if (hop != j) {
+                        continue;
+                    }
+                    // A token can hold several of this chip's experts, and several pages of the batch
+                    // are in flight at once, so every destination needs its own metadata words.
+                    volatile tt_l1_ptr uint32_t* meta =
+                        c.mc_meta + (i * dspf2d::FO_MAX_DESTS + kept) * (dspf2d::MC_META_SLOT_BYTES / 4u);
+                    meta[0] = src_chip;
+                    meta[1] = token;
+                    meta[2] = packed >> dspf2d::FO_SLOT_SHIFT;
+                    meta[3] = 0;
+                    noc_async_write(
+                        slot_addr(slots[i]), out_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK), ct.token_size_bytes);
+                    noc_async_write(
+                        (uint32_t)meta,
+                        meta_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK),
+                        dspf2d::METADATA_WIRE_BYTES);
+                    kept++;
                 }
-                // Hop 0 is an unused slot, and a hop below j was consumed by a chip behind us: the
-                // page is never rewritten in flight, so both are still here and neither is ours.
-                if (hop != j) {
-                    continue;
+                // Every page in chunk j has a destination at hop j or beyond, or it would not be here.
+                ASSERT(kept > 0 || travels_on);
+                if (travels_on) {
+                    tail->cmd = (q + 1 == fwd_len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
+                    tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + q);
+                    q++;
+                } else {
+                    // Consumed here. The slot still travels the ring in order, so it carries a command
+                    // the sender frees without putting anything on the cable.
+                    tail->cmd = dspf2d::CMD_SKIP;
                 }
-                // A token can hold several of this chip's experts, so each destination needs its own
-                // metadata words -- one shared scratch would be overwritten under the write still
-                // reading it.
-                volatile tt_l1_ptr uint32_t* meta = c.mc_meta + kept * (dspf2d::MC_META_SLOT_BYTES / 4u);
-                meta[0] = src_chip;
-                meta[1] = token;
-                meta[2] = packed >> dspf2d::FO_SLOT_SHIFT;
-                meta[3] = 0;
-                noc_async_write(
-                    slot_addr(slot), out_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK), ct.token_size_bytes);
-                noc_async_write(
-                    (uint32_t)meta, meta_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK), dspf2d::METADATA_WIRE_BYTES);
-                kept++;
             }
-            // Every page in chunk j has a destination at hop j or beyond, or it would not be here.
-            ASSERT(kept > 0 || travels_on);
-            if (kept > 0) {
-                // The slot is the source of those writes and is about to be either forwarded from or
-                // handed back, so they have to have read it out first.
-                noc_async_write_barrier();
+            // The slots are the source of this batch's local writes and must not be refilled until
+            // those have read them OUT of L1. One flush per batch covers every page in it, and no slot
+            // can be re-claimed before the next batch's claims below.
+            noc_async_writes_flushed();
+            for (uint32_t i = 0; i < n; i++) {
+                ring.mark_ready();
             }
-            if (travels_on) {
-                tail->cmd = (q + 1 == fwd_len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
-                tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + q);
-                q++;
-            } else {
-                // Consumed here. Nothing was published for this slot, so handing it straight back is
-                // what keeps a fully consumed page off the cable -- there is no drop command, and the
-                // sender walks the ring in order.
-                ring.release_slot();
-            }
+            p += n;
         }
         ASSERT(q == fwd_len);
     }
@@ -906,7 +995,7 @@ void kernel_main() {
         mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/false, c.in_start);
         mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/true, c.out_start);
 
-        mc_own_phase(c, ring, in_acc, fwd_acc, my_region, dir_idx, link);
+        mc_own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link);
         ring.flush_publish();
         mc_relay_phase(c, ring, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link, travel);
         ring.flush_publish();
@@ -923,6 +1012,7 @@ void kernel_main() {
 
     const uint32_t end_slot = ring.claim_slot();
     slot_tail(end_slot)->cmd = dspf2d::CMD_END;
+    ring.mark_ready();
     ring.flush_publish();
 
     noc_async_atomic_barrier();
