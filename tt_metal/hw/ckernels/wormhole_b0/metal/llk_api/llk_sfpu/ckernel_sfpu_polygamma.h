@@ -125,12 +125,10 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
         sum = sum + tail;
 
-        sfpi::vFloat result = sum;
-
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sum = sfpi::convert<sfpi::vFloat16b>(sum, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[0] = sum;
         sfpi::dst_reg++;
     }
 }

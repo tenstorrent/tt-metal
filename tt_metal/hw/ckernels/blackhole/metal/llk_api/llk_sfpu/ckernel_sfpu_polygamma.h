@@ -47,6 +47,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
     // Unpack parameters using Converter (union-based type punning supported by SFPU compiler)
     int n = int(Converter::as_float(n_packed));
+    int n_plus_1 = n + 1;
     float scale = Converter::as_float(scale_packed);
 
     // Precompute Bernoulli-related coefficients for asymptotic tail
@@ -66,6 +67,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     float c_b4 = -scale * (n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
     float c_b6 = scale * (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
     float half_scale = 0.5f * scale;
+    sfpi::vFloat vscale = scale;
 
     constexpr auto RECIP = APPROXIMATION_MODE ? 0 : is_fp32_dest_acc_en ? 2 : 1;
 
@@ -96,7 +98,6 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat sum = 0.0f;
-        sfpi::vFloat vscale = scale;
 
         // Part 1: Exact summation of first NUM_TERMS terms
         // Σ_{k=0}^{NUM_TERMS-1} scale/(x+k)^(n+1)
@@ -105,7 +106,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
             // Compute reciprocal first, then raise to power (avoids overflow of large intermediates)
             sfpi::vFloat inv_xi = sfpu_reciprocal_iter<RECIP>(xi);
-            sfpi::vFloat inv_power = power(inv_xi, n + 1, vscale);
+            sfpi::vFloat inv_power = power(inv_xi, n_plus_1, vscale);
 
             sum += inv_power;
         }
@@ -136,12 +137,10 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
         sum += tail;
 
-        sfpi::vFloat result = sum;
-
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sum = sfpi::convert<sfpi::vFloat16b>(sum, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[0] = sum;
         sfpi::dst_reg++;
     }
 }

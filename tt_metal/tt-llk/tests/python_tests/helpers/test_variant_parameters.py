@@ -45,6 +45,11 @@ from .llk_params import (
 )
 from .matmul_sweep import validate_tile_dimensions
 
+
+def _fp32_bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
 # Base parameter classes
 
 
@@ -356,12 +361,9 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
     def convert_to_cpp(self) -> str:
         n = self.polygamma_order
         scale = (-1) ** (n + 1) * math.factorial(n)
-        n_bits, scale_bits = (
-            struct.unpack("<I", struct.pack("<f", v))[0] for v in (n, scale)
-        )
         return (
-            f"#define SFPU_POLYGAMMA_N_BITS {n_bits:#x}u\n"
-            f"#define SFPU_POLYGAMMA_SCALE_BITS {scale_bits:#x}u"
+            f"#define SFPU_POLYGAMMA_N_BITS {_fp32_bits(n):#x}u\n"
+            f"#define SFPU_POLYGAMMA_SCALE_BITS {_fp32_bits(scale):#x}u"
         )
 
 
@@ -2040,13 +2042,9 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
     scalar0: float = 1.0
     scalar1: float = 1.0
 
-    @staticmethod
-    def _fp32_bits(value: float) -> int:
-        return struct.unpack("<I", struct.pack("<f", value))[0]
-
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.scalar1)}u;"
         )
