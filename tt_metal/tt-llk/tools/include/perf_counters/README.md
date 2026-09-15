@@ -17,6 +17,6 @@ Two consumers use these headers and nothing else describes the counters:
 
 Adding a counter: append the name to the end of `PerfCounterType` (never reorder or remove, the
 ordinals are decoded by position on the host), add one `{PerfCounterType::NAME, select}` entry to the
-right bank table in the arch header, and keep the `NUM_*_COUNTERS` constant in step. The Python side
+right bank table in the arch header, and bump the size in that table declaration. The Python side
 (`tt_metal/tt-llk/tools/python/tt_llk_perf`) parses names and tables from these headers, so nothing
 else has to change. Quasar has no tables here yet; both arch-selecting headers `#error` on `ARCH_QUASAR`.
