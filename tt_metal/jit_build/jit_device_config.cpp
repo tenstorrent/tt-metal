@@ -214,9 +214,8 @@ void enumerate_jit_device_configs(
                             .harvesting_mask = 0,
                             .dispatch_core_type = dispatch_core_type,
                             .resolved_dispatch_core_type = resolve_dispatch_core_type(arch, dispatch_core_type),
-                            // fds_signalling keeps its default. FDS needs the live dispatch core placement and
-                            // the FDS runtime options, neither available offline, but only Quasar can enable it
-                            // and resolve_dispatch_core_type above already rejects Quasar here.
+                            // FDS is Quasar-only, and this enumerator does not support Quasar
+                            .fds_signalling = false,
                             .dispatch_core_axis = dispatch_core_axis,
                             .coordinate_virtualization_enabled = true,
                             .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),

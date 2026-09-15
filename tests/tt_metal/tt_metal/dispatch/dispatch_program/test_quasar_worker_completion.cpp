@@ -236,6 +236,220 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoTransportRemappedSingleSubDevi
     EXPECT_EQ(read_l1_word(*mesh_device, nodes[1], l1_address), 0x33330000u);
 }
 
+TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoConcurrentSubDevices) {
+    MetalContext& metal_context = MetalContext::instance();
+    if (!metal_context.rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "Requires the Quasar simulator or emulator";
+    }
+    if (!metal_context.rtoptions().get_fast_dispatch()) {
+        GTEST_SKIP() << "Requires fast dispatch";
+    }
+    if (metal_context.get_dispatch_core_manager().get_dispatch_core_type() != CoreType::DISPATCH) {
+        GTEST_SKIP() << "Requires dispatch engines";
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device = devices_[0];
+    const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const std::vector<experimental::NodeCoord> nodes = worker_nodes(worker_grid);
+    if (nodes.size() < 2) {
+        GTEST_SKIP() << "Requires at least two worker nodes";
+    }
+
+    const size_t partition = nodes.size() / 2;
+    const std::vector<experimental::NodeCoord> first_partition(nodes.begin(), nodes.begin() + partition);
+    const std::vector<experimental::NodeCoord> second_partition(nodes.begin() + partition, nodes.end());
+    const SubDeviceManagerId split_manager = mesh_device->create_sub_device_manager(
+        {sub_device_from_nodes(first_partition), sub_device_from_nodes(second_partition)}, local_l1_size);
+    mesh_device->load_sub_device_manager(split_manager);
+
+    const uint32_t l1_address =
+        metal_context.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    distributed::MeshCommandQueue& command_queue = mesh_device->mesh_command_queue();
+
+    // Back-to-back non-blocking enqueues on different sub-devices keep both FDS rounds open at once,
+    // which is the case the go-wire strobe exists for.
+    distributed::MeshWorkload first_write =
+        create_l1_write_workload(*mesh_device, first_partition[0], l1_address, 0xA11A0000, "concurrent_first");
+    distributed::MeshWorkload second_write =
+        create_l1_write_workload(*mesh_device, second_partition[0], l1_address, 0xB22B0000, "concurrent_second");
+    distributed::EnqueueMeshWorkload(command_queue, first_write, false);
+    distributed::EnqueueMeshWorkload(command_queue, second_write, false);
+    distributed::Finish(command_queue);
+    EXPECT_EQ(read_l1_word(*mesh_device, first_partition[0], l1_address), 0xA11A0000u);
+    EXPECT_EQ(read_l1_word(*mesh_device, second_partition[0], l1_address), 0xB22B0000u);
+
+    mesh_device->clear_loaded_sub_device_manager();
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoMaxSubDevices) {
+    MetalContext& metal_context = MetalContext::instance();
+    if (!metal_context.rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "Requires the Quasar simulator or emulator";
+    }
+    if (!metal_context.rtoptions().get_fast_dispatch()) {
+        GTEST_SKIP() << "Requires fast dispatch";
+    }
+    if (metal_context.get_dispatch_core_manager().get_dispatch_core_type() != CoreType::DISPATCH) {
+        GTEST_SKIP() << "Requires dispatch engines";
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device = devices_[0];
+    const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const std::vector<experimental::NodeCoord> nodes = worker_nodes(worker_grid);
+    if (nodes.size() < 2) {
+        GTEST_SKIP() << "Requires at least two worker nodes";
+    }
+
+    constexpr size_t max_fds_sub_devices = 8;
+    const size_t num_sub_devices = nodes.size() > max_fds_sub_devices ? max_fds_sub_devices : nodes.size();
+    std::vector<SubDevice> single_node_sub_devices;
+    single_node_sub_devices.reserve(num_sub_devices);
+    for (size_t sub_device_index = 0; sub_device_index < num_sub_devices; ++sub_device_index) {
+        single_node_sub_devices.push_back(sub_device_from_nodes({nodes[sub_device_index]}));
+    }
+    const SubDeviceManagerId per_node_manager =
+        mesh_device->create_sub_device_manager(single_node_sub_devices, local_l1_size);
+    mesh_device->load_sub_device_manager(per_node_manager);
+
+    const uint32_t l1_address =
+        metal_context.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    distributed::MeshCommandQueue& command_queue = mesh_device->mesh_command_queue();
+
+    for (size_t sub_device_index = 0; sub_device_index < num_sub_devices; ++sub_device_index) {
+        const uint32_t value = 0xC0C00000u + static_cast<uint32_t>(sub_device_index);
+        distributed::MeshWorkload workload = create_l1_write_workload(
+            *mesh_device,
+            nodes[sub_device_index],
+            l1_address,
+            value,
+            "max_sub_device_" + std::to_string(sub_device_index));
+        distributed::EnqueueMeshWorkload(command_queue, workload, false);
+    }
+    distributed::Finish(command_queue);
+    for (size_t sub_device_index = 0; sub_device_index < num_sub_devices; ++sub_device_index) {
+        const uint32_t value = 0xC0C00000u + static_cast<uint32_t>(sub_device_index);
+        EXPECT_EQ(read_l1_word(*mesh_device, nodes[sub_device_index], l1_address), value);
+    }
+
+    mesh_device->clear_loaded_sub_device_manager();
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoTraceTwoSubDevices) {
+    MetalContext& metal_context = MetalContext::instance();
+    if (!metal_context.rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "Requires the Quasar simulator or emulator";
+    }
+    if (!metal_context.rtoptions().get_fast_dispatch()) {
+        GTEST_SKIP() << "Requires fast dispatch";
+    }
+    if (metal_context.get_dispatch_core_manager().get_dispatch_core_type() != CoreType::DISPATCH) {
+        GTEST_SKIP() << "Requires dispatch engines";
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device = devices_[0];
+    const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const std::vector<experimental::NodeCoord> nodes = worker_nodes(worker_grid);
+    if (nodes.size() < 2) {
+        GTEST_SKIP() << "Requires at least two worker nodes";
+    }
+
+    const size_t partition = nodes.size() / 2;
+    const std::vector<experimental::NodeCoord> first_partition(nodes.begin(), nodes.begin() + partition);
+    const std::vector<experimental::NodeCoord> second_partition(nodes.begin() + partition, nodes.end());
+    const SubDeviceManagerId split_manager = mesh_device->create_sub_device_manager(
+        {sub_device_from_nodes(first_partition), sub_device_from_nodes(second_partition)}, local_l1_size);
+    mesh_device->load_sub_device_manager(split_manager);
+
+    const uint32_t l1_address =
+        metal_context.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    distributed::MeshCommandQueue& command_queue = mesh_device->mesh_command_queue();
+
+    distributed::MeshWorkload traced_first_write =
+        create_l1_write_workload(*mesh_device, first_partition[0], l1_address, 0xD11D0000, "trace_two_first");
+    distributed::MeshWorkload traced_second_write =
+        create_l1_write_workload(*mesh_device, second_partition[0], l1_address, 0xD22D0000, "trace_two_second");
+    distributed::EnqueueMeshWorkload(command_queue, traced_first_write, true);
+    distributed::EnqueueMeshWorkload(command_queue, traced_second_write, true);
+    clear_l1_word(*mesh_device, first_partition[0], l1_address);
+    clear_l1_word(*mesh_device, second_partition[0], l1_address);
+    const distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(command_queue);
+    distributed::EnqueueMeshWorkload(command_queue, traced_first_write, false);
+    distributed::EnqueueMeshWorkload(command_queue, traced_second_write, false);
+    mesh_device->end_mesh_trace(command_queue, trace_id);
+    mesh_device->replay_mesh_trace(command_queue, trace_id, true);
+    EXPECT_EQ(read_l1_word(*mesh_device, first_partition[0], l1_address), 0xD11D0000u);
+    EXPECT_EQ(read_l1_word(*mesh_device, second_partition[0], l1_address), 0xD22D0000u);
+
+    // A second replay guards the REPLAY_TRACE completion path between FDS gos: without a completion
+    // the replay hangs, and a worker loop stuck re-entering the replay branch corrupts the trace count.
+    clear_l1_word(*mesh_device, first_partition[0], l1_address);
+    clear_l1_word(*mesh_device, second_partition[0], l1_address);
+    mesh_device->replay_mesh_trace(command_queue, trace_id, true);
+    EXPECT_EQ(read_l1_word(*mesh_device, first_partition[0], l1_address), 0xD11D0000u);
+    EXPECT_EQ(read_l1_word(*mesh_device, second_partition[0], l1_address), 0xD22D0000u);
+    mesh_device->release_mesh_trace(trace_id);
+
+    mesh_device->clear_loaded_sub_device_manager();
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoSubDeviceManagerSwitch) {
+    MetalContext& metal_context = MetalContext::instance();
+    if (!metal_context.rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "Requires the Quasar simulator or emulator";
+    }
+    if (!metal_context.rtoptions().get_fast_dispatch()) {
+        GTEST_SKIP() << "Requires fast dispatch";
+    }
+    if (metal_context.get_dispatch_core_manager().get_dispatch_core_type() != CoreType::DISPATCH) {
+        GTEST_SKIP() << "Requires dispatch engines";
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device = devices_[0];
+    const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const std::vector<experimental::NodeCoord> nodes = worker_nodes(worker_grid);
+    if (nodes.size() < 2) {
+        GTEST_SKIP() << "Requires at least two worker nodes";
+    }
+
+    const size_t partition = nodes.size() / 2;
+    const std::vector<experimental::NodeCoord> first_partition(nodes.begin(), nodes.begin() + partition);
+    const std::vector<experimental::NodeCoord> second_partition(nodes.begin() + partition, nodes.end());
+    const std::vector<experimental::NodeCoord> remaining_nodes(nodes.begin() + 1, nodes.end());
+    const SubDeviceManagerId halves_manager = mesh_device->create_sub_device_manager(
+        {sub_device_from_nodes(first_partition), sub_device_from_nodes(second_partition)}, local_l1_size);
+    const SubDeviceManagerId leading_node_manager = mesh_device->create_sub_device_manager(
+        {sub_device_from_nodes({nodes[0]}), sub_device_from_nodes(remaining_nodes)}, local_l1_size);
+
+    const uint32_t l1_address =
+        metal_context.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    distributed::MeshCommandQueue& command_queue = mesh_device->mesh_command_queue();
+
+    mesh_device->load_sub_device_manager(halves_manager);
+    distributed::MeshWorkload halves_write =
+        create_l1_write_workload(*mesh_device, nodes[1], l1_address, 0xE1110000, "switch_halves");
+    distributed::EnqueueMeshWorkload(command_queue, halves_write, false);
+    distributed::Finish(command_queue);
+    EXPECT_EQ(read_l1_word(*mesh_device, nodes[1], l1_address), 0xE1110000u);
+
+    // nodes[1] moves from sub-device 0 to sub-device 1, exercising the worker-count update drain and
+    // the go-message-index remap on manager switch.
+    mesh_device->load_sub_device_manager(leading_node_manager);
+    distributed::MeshWorkload remapped_write =
+        create_l1_write_workload(*mesh_device, nodes[1], l1_address, 0xE2220000, "switch_remapped");
+    distributed::EnqueueMeshWorkload(command_queue, remapped_write, false);
+    distributed::Finish(command_queue);
+    EXPECT_EQ(read_l1_word(*mesh_device, nodes[1], l1_address), 0xE2220000u);
+
+    mesh_device->load_sub_device_manager(halves_manager);
+    distributed::MeshWorkload restored_write =
+        create_l1_write_workload(*mesh_device, second_partition[0], l1_address, 0xE3330000, "switch_restored");
+    distributed::EnqueueMeshWorkload(command_queue, restored_write, false);
+    distributed::Finish(command_queue);
+    EXPECT_EQ(read_l1_word(*mesh_device, second_partition[0], l1_address), 0xE3330000u);
+
+    mesh_device->clear_loaded_sub_device_manager();
+}
+
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, WorkerCompletionTransport) {
     MetalContext& metal_context = MetalContext::instance();
     if (!metal_context.rtoptions().is_simulator_or_emulated()) {
@@ -318,6 +532,20 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, WorkerCompletionTransport) {
     distributed::Finish(command_queue_1);
     EXPECT_EQ(read_l1_word(*mesh_device, nodes[0], l1_address), 0x44440001u);
     EXPECT_EQ(read_l1_word(*mesh_device, nodes[1], l1_address), 0x44440002u);
+
+    // Two CQs on one dispatch engine keep FDS off by design, so this section covers the 2-CQ hand-off
+    // with concurrent workloads on different sub-devices from each queue.
+    log_info(tt::LogTest, "WorkerCompletionTransport 2-CQ section: FDS stays off for two CQs on one engine");
+    distributed::MeshWorkload queue_zero_write =
+        create_l1_write_workload(*mesh_device, nodes[0], l1_address, 0x5555000A, "two_cq_zero");
+    distributed::MeshWorkload queue_one_write =
+        create_l1_write_workload(*mesh_device, nodes[1], l1_address, 0x5555000B, "two_cq_one");
+    distributed::EnqueueMeshWorkload(command_queue_0, queue_zero_write, false);
+    distributed::EnqueueMeshWorkload(command_queue_1, queue_one_write, false);
+    distributed::Finish(command_queue_0);
+    distributed::Finish(command_queue_1);
+    EXPECT_EQ(read_l1_word(*mesh_device, nodes[0], l1_address), 0x5555000Au);
+    EXPECT_EQ(read_l1_word(*mesh_device, nodes[1], l1_address), 0x5555000Bu);
 }
 
 }  // namespace tt::tt_metal

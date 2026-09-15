@@ -79,10 +79,12 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_M
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 #ifdef FDS_SIGNALLING
-constexpr uint32_t fds_go_group_id = 1;
 constexpr uint32_t fds_num_dispatch_lanes = 3;
 constexpr uint32_t fds_dispatch_lane_mask = (uint32_t{1} << fds_num_dispatch_lanes) - 1;
 constexpr uint32_t fds_filter_length = 8;
+constexpr uint32_t fds_num_go_groups = go_message_num_entries - 1;
+constexpr uint32_t fds_go_interrupt_mask = ((uint32_t{1} << fds_num_go_groups) - 1) << 1;
+static_assert(fds_go_interrupt_mask == 0x1FE, "FDS interrupt mask must cover exactly groups 1..8");
 
 __attribute__((interrupt)) void fds_go_interrupt_handler() {
     const uint32_t claimed_source = overlay::quasar::plic_claim();
@@ -91,6 +93,10 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
     }
 
     const uint32_t group_id = claimed_source - overlay::quasar::plic_source_base;
+    if (group_id - 1 >= fds_num_go_groups) {
+        overlay::quasar::plic_complete(claimed_source);
+        return;
+    }
     uint32_t dispatch_lanes = overlay::fds_signalling::worker_read_group_status(group_id);
     while (dispatch_lanes != 0) {
         const uint32_t dispatch_lane = __builtin_ctz(dispatch_lanes);
@@ -102,8 +108,9 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
     (void)overlay::fds_signalling::worker_read_group_status(group_id);
     overlay::quasar::plic_complete(claimed_source);
 
-    if (group_id == fds_go_group_id && mailboxes->go_message_index == 0) {
-        mailboxes->go_messages[0].signal = RUN_MSG_GO;
+    // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
+    if (group_id == mailboxes->go_message_index + 1) {
+        mailboxes->go_messages[group_id - 1].signal = RUN_MSG_GO;
     }
 }
 #endif
@@ -299,23 +306,21 @@ inline void wait_for_tile_noc_traffic() {
 // Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
 // round, or 0 when the round is on the NOC.
 inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
-#ifdef FDS_SIGNALLING
     if (worker_completion_group != 0) {
+#ifdef FDS_SIGNALLING
         DPRINT("DM0-FW: completion FDS\n");
         // FDS does not share the NOC's ordering, so all tile traffic must leave the NIU before completion.
         wait_for_tile_noc_traffic();
         mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
         overlay::fds_signalling::worker_signal_done(worker_completion_group);
-    }
-#else
-    DPRINT("DM0-FW: completion NOC\n");
-    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-    // calculate_dispatch_addr reads master_x, master_y and dispatch_message_offset, which the store above
-    // leaves untouched.
-    const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-    notify_dispatch_core_done(dispatch_addr, noc_index);
 #endif
+    } else {
+        DPRINT("DM0-FW: completion NOC\n");
+        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+        const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+        notify_dispatch_core_done(dispatch_addr, noc_index);
+    }
 }
 
 extern "C" uint32_t _start1() {
@@ -387,13 +392,18 @@ extern "C" uint32_t _start1() {
         for (uint32_t dispatch_lane = 0; dispatch_lane < fds_num_dispatch_lanes; ++dispatch_lane) {
             overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
         }
-        overlay::fds_signalling::worker_config_group(fds_go_group_id, fds_dispatch_lane_mask, 1);
+        for (uint32_t go_group_id = 1; go_group_id <= fds_num_go_groups; ++go_group_id) {
+            overlay::fds_signalling::worker_config_group(go_group_id, fds_dispatch_lane_mask, 1);
+        }
         overlay::quasar::plic_set_threshold(0);
-        overlay::quasar::plic_set_priority(overlay::quasar::plic_source_base + fds_go_group_id, 1);
-        overlay::quasar::plic_enable_source(overlay::quasar::plic_source_base + fds_go_group_id, true);
+        for (uint32_t go_group_id = 1; go_group_id <= fds_num_go_groups; ++go_group_id) {
+            const uint32_t plic_source = overlay::quasar::plic_source_base + go_group_id;
+            overlay::quasar::plic_set_priority(plic_source, 1);
+            overlay::quasar::plic_enable_source(plic_source, true);
+        }
         overlay::quasar::plic_drain_pendings();
         // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
-        overlay::fds_signalling::worker_config_interrupt_enable(uint32_t{1} << fds_go_group_id);
+        overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
         asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
         asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
 #endif
