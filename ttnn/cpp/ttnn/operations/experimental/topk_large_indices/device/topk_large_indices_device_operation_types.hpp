@@ -33,10 +33,15 @@ struct operation_attributes_t {
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
+    // Constant added to valid_length_tensor[0] on-device. Included in the program hash.
+    uint32_t valid_length_offset{0};
 };
 
 struct tensor_args_t {
     Tensor input_tensor;
+    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe valid lengths.
+    std::optional<Tensor> valid_length_tensor{std::nullopt};
+    bool has_valid_length_metadata() const { return valid_length_tensor.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

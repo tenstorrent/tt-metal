@@ -14,15 +14,15 @@ void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t batch = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
 #ifdef FUSE_BIAS
     // bias tensor args
@@ -65,14 +65,14 @@ void kernel_main() {
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     constexpr auto in1_args = TensorAccessorArgs<19>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<decltype(in1_args)::next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
     // bias accessor CT args follow the output accessor
-    constexpr auto bias_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto bias_args = TensorAccessorArgs<decltype(out_args)::next_compile_time_args_offset()>();
     constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
     DataflowBuffer dfb_out(dfb_id_out0);
 

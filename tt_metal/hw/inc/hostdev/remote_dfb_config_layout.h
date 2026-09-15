@@ -55,6 +55,22 @@ inline constexpr uint32_t PREFETCHER_PIPE_CFG_NOC_XY_OFFSET = 6;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET = 7;
 inline constexpr uint32_t PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET = 8;
 
+// Word index, within a receiver's counter slot, of that receiver's sender-side write cursor.
+//
+// A slot is 2 * L1_ALIGNMENT bytes: entries_sent at word 0, entries_acked at word
+// L1_ALIGNMENT / sizeof(uint32_t). Both are NOC-atomic targets, which is why they are a whole
+// alignment apart; the cursor lives in the padding that alignment already reserves, so it costs no
+// page growth and -- the reason it belongs here rather than in a separate array -- it sits inside
+// the range PrefetcherPipe::credit_reset_offset() / credit_reset_size() covers. Zeroing a pipe's
+// credits therefore returns its cursors to the ring start in the same store, and the two can never
+// be reset out of step.
+//
+// The cursor is a byte offset from the ring base that wraps at the full allocation. It is kept
+// separately from entries_sent -- rather than derived as (entries_sent % ring_units) -- because
+// entries_sent is a free-running uint32 whose 2^32 wrap only preserves that modulus when
+// ring_units is a power of two.
+inline constexpr uint32_t PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD = 1;
+
 inline constexpr uint32_t prefetcher_pipe_noc_xy_byte_offset() {
     return PREFETCHER_PIPE_CONFIG_HEADER_WORDS * static_cast<uint32_t>(sizeof(uint32_t));
 }

@@ -343,6 +343,21 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
     reader_ct.push_back(0u);  // partial all-gather readiness off (non-fused path)
     reader_ct.push_back(1u);  // unused physical SP size
+    // Chunk-start metadata is fused-ring only (validate rejects it here), but the SAME reader binary
+    // serves both factories, so the block must exist on this path too -- an absent compile arg is a hard
+    // build error in the kernel, not a default. Fixed width: flag, rt base, two CBs, Sq, rotation-exact
+    // flag, then a placeholder accessor. Pushed AFTER partial readiness AND after #55617's physical SP
+    // size, matching the reader's meta_ct_base.
+    reader_ct.push_back(0u);
+    // 6 zeros: rt base, two CBs, Sq, rotation-exact flag, key-stripe split. The split is only read on the
+    // metadata path (rejected here), so 0 is inert -- but the WIDTH must match the reader.
+    reader_ct.insert(reader_ct.end(), 6, 0u);
+    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    // Cache-slot metadata, same reasoning and the same fixed-width discipline: flag, rt base,
+    // pages-per-slot, mailbox CB, then a placeholder accessor.
+    reader_ct.push_back(0u);
+    reader_ct.insert(reader_ct.end(), 3, 0u);
+    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -355,6 +370,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     writer_ct.push_back(1u);  // unused logical key stripe count
     writer_ct.push_back(1u);  // unused physical SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
+    writer_ct.push_back(0u);
+    writer_ct.push_back(0u);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -370,6 +387,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(1u);                        // unused block-cyclic run width
     compute_ct.push_back(1u);                        // unused logical key stripe count
     compute_ct.push_back(1u);                        // unused physical SP size
+    compute_ct.push_back(0u);                        // trace-safe metadata off
+    compute_ct.push_back(0u);                        // metadata CB unused
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(

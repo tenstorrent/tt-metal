@@ -14,10 +14,10 @@ void kernel_main() {
     // RUNTIME ARGS
     uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t batch = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // COMPILE TIME ARGS
     // in0 tensor args
@@ -40,7 +40,7 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
 
 #ifdef IN0_SHARDED

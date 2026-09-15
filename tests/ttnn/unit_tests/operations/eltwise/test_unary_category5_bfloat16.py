@@ -90,7 +90,7 @@ def test_glu_reglu_ops(device, ttnn_op, ulp, dim):
     result = result.clone()
     result[ftz] = 0.0
 
-    assert_with_ulp(golden, result, ulp)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

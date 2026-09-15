@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY
@@ -67,6 +68,7 @@ inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_A,
     [[maybe_unused]] const std::uint32_t operand_B,
     const std::uint32_t acc_to_dest = 0) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
@@ -81,6 +83,7 @@ template <
     MathFidelity math_fidelity,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(std::uint32_t dst_index, const bool clear_fp32_dst_acc = true) {
+    SAN_HOOK(unsupported());
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
     //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());
@@ -109,6 +112,7 @@ inline void llk_math_eltwise_binary(
     const std::uint32_t operand_B,
     std::uint32_t dst_index,
     const bool clear_fp32_dst_acc) {
+    SAN_HOOK(unsupported());
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
     //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>());

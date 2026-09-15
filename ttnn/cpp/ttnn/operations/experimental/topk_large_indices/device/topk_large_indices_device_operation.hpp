@@ -34,13 +34,24 @@ struct TopkLargeIndicesDeviceOperation {
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length);
+        const Tensor& input_tensor,
+        uint32_t k,
+        std::optional<uint32_t> valid_length,
+        const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+        uint32_t valid_length_offset = 0);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt);
+// For trace replay, valid_length_tensor supplies the dynamic value on-device and valid_length_offset supplies
+// an optional constant component. valid_length and valid_length_tensor are mutually exclusive.
+Tensor topk_large_indices(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length = std::nullopt,
+    const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+    uint32_t valid_length_offset = 0);
 
 }  // namespace ttnn::experimental

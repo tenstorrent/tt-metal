@@ -222,7 +222,7 @@ def test_binary_sfpu_accuracy(device, dtype):
     output = ttnn.to_torch(output)
 
     if dtype == "bfloat16":
-        assert_with_ulp(torch_output_tensor, output, 1)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=1)
     else:
         assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
 
@@ -245,7 +245,7 @@ def test_special_input_fp32(device):
 
     output = ttnn.pow(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
@@ -371,7 +371,7 @@ def test_binary_sfpu_accuracy_pos(device, dtype):
     output = ttnn.to_torch(output)
 
     if dtype == "bfloat16":
-        assert_with_ulp(torch_output_tensor, output, 5)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=5)
     else:
         assert_allclose(torch_output_tensor, output, rtol=0.02, atol=1e-5)  # Ensure > 98% accuracy
 
@@ -433,7 +433,7 @@ def test_unary_pow_fp32_ulp_noninteger(exponent, device):
     tt_out = ttnn.pow(tt_base, exponent)
     result = ttnn.to_torch(tt_out)
 
-    assert_with_ulp(golden, result, ulp_threshold=3)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=3)
 
 
 @pytest.mark.parametrize("exponent", [2.0, 3.0])
@@ -445,7 +445,7 @@ def test_unary_pow_fp32_ulp_integer_exact(exponent, device):
     tt_out = ttnn.pow(tt_base, exponent)
     result = ttnn.to_torch(tt_out)
 
-    assert_with_ulp(golden, result, ulp_threshold=0)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0)
 
 
 # Overflow must saturate to +inf, not wrap. The non-integer fp32 path scales by 2**k via

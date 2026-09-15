@@ -60,7 +60,6 @@
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
@@ -82,6 +81,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/combine_fabric2d_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/moe_fused_swiglu_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
@@ -187,8 +187,6 @@ void py_module(nb::module_& mod) {
     ttnn::experimental::detail::bind_rgb_to_yuv(mod);
     reshape::detail::bind_view(mod);
 
-    gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
-
     test::bind_test_hang_device_operation(mod);
     test::bind_test_dram_prefetcher_consumer(mod);
     bind_tensor_prefetcher(mod);
@@ -219,6 +217,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_combine(mod);
     deepseek_prefill::detail::bind_routed_expert_ffn(mod);
     deepseek_prefill::detail::bind_unified_routed_expert_ffn(mod);
+    deepseek_prefill::detail::bind_moe_fused_swiglu(mod);
     deepseek_prefill::detail::bind_extract(mod);
     deepseek_prefill::detail::bind_insert(mod);
     deepseek_prefill::detail::bind_update_padded_kv_cache(mod);

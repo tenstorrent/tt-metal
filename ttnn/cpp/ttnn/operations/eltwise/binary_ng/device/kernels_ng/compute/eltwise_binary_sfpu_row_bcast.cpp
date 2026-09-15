@@ -92,7 +92,6 @@ void kernel_main() {
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
         PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
@@ -118,7 +117,7 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
-#if ISCLOSE_OP
+#ifdef ISCLOSE_OP
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
 #else
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);

@@ -5,10 +5,12 @@
 #include <memory>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include "allocator_state.hpp"
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
 #include <functional>
 #include <algorithm>
@@ -142,7 +144,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     auto size = buffer->aligned_size();
     auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
-    auto bottom_up = buffer->bottom_up();
+    auto bottom_up = buffer->impl().bottom_up();
     auto num_cores = buffer->num_cores();
     this->verify_safe_allocation();
     if (config_->disable_interleaved) {
@@ -150,7 +152,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     }
 
     // Per-core allocation path: each core gets an independent address
-    if (buffer->per_core_allocation_) {
+    if (buffer->impl().per_core_allocation_) {
         TT_FATAL(
             config_->allocator_mode == AllocatorMode::HYBRID,
             "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
@@ -178,12 +180,12 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                 AllocatorID{bank_id + 1},
                 persistent_l1_.occupied_ranges(core));
         }
-        buffer->set_per_core_addresses(std::move(addrs));
+        buffer->impl().set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
         if (tracking_enabled_) [[unlikely]] {
             this->record_allocation_if_unsafe(buffer);
         }
-        return buffer->per_core_addresses_.at(cores[0]);
+        return buffer->impl().per_core_addresses_.at(cores[0]);
     }
 
     switch (buffer_type) {
@@ -191,16 +193,86 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
         case BufferType::L1: {
-            // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
-            // PrefetcherPipe / persistent L1 regions sit outside BankManager; lockstep must avoid them too.
+            // In HYBRID mode the per-core allocators hand out addresses this one cannot see, so
+            // gather their occupied ranges and keep the lockstep address clear of them.
+            //
+            // By default that means every bank, since an op may reach the buffer on a core outside
+            // its own shard grid; experimental/range_lockstep_allocation/buffer.hpp covers when a
+            // buffer may instead be scanned against just the cores it occupies.
+            //
+            // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
+            std::vector<CoreCoord> cores_to_scan;
+            const bool scope_to_own_cores =
+                experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
+            // A tensor carries both specs, so the order matters: the distribution spec wins, as it
+            // does in Buffer::num_cores(). Its cores_with_data() is the set that actually gets an
+            // allocation, which the shard grid overstates when the data does not fill it.
+            if (const auto& distribution_spec = buffer->buffer_distribution_spec();
+                scope_to_own_cores && distribution_spec.has_value()) {
+                cores_to_scan = distribution_spec->cores_with_data();
+            } else if (scope_to_own_cores && buffer->has_shard_spec()) {
+                const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+                bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+                cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
+            }
+
+            // Scanning nothing is not a safe fallback -- it would place the buffer without avoiding
+            // anything. set_range_lockstep_allocation() requires one of the two specs and Buffer
+            // carries both through, so this cannot fire, but that invariant now lives in another
+            // file and this is where it is relied on.
+            TT_FATAL(
+                !scope_to_own_cores || !cores_to_scan.empty(),
+                "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
+                "distribution spec naming the cores it occupies");
+
+            // PrefetcherPipe / persistent L1 regions sit outside BankManager, so lockstep must avoid
+            // them too. They stay unscoped under range lockstep: they are reservations this allocator
+            // cannot attribute to a core, so there is no smaller set to narrow them to.
             std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges = persistent_l1_.occupied_ranges();
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-                uint32_t num_banks = l1_manager_->num_banks();
+                auto gather_from = [&](const AllocatorImpl* dev_alloc, uint32_t bank_id) {
+                    auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
+                    additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
+                };
+
                 for (auto* dev_alloc : hybrid_device_allocators_) {
-                    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
-                        auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
-                        additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
+                    if (!scope_to_own_cores) {
+                        // Each device's own bank count: harvesting varies across a mesh, so the
+                        // reference device's count would leave the extra banks of a less-harvested
+                        // device unscanned. Pre-existing, kept in step with the narrowed branch.
+                        const uint32_t num_l1_banks = dev_alloc->get_num_banks(BufferType::L1);
+                        for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+                            gather_from(dev_alloc, bank_id);
+                        }
+                        continue;
+                    }
+                    for (const auto& core : cores_to_scan) {
+                        // Resolve the core in this device's own mapping. L1 bank ids are handed out
+                        // per device, in worker-grid order over that device's ComputeAndStore cores,
+                        // so a core's bank id here is not necessarily its bank id there once the
+                        // compute/dispatch split or the harvesting differs across the mesh.
+                        //
+                        // A core with no bank contributes nothing: a service core claimed by fast
+                        // dispatch is a legal shard core with real L1, but the allocator gives it no
+                        // bank, so it holds no per-core ranges to avoid.
+                        if (const auto* bank_ids = dev_alloc->find_bank_ids(BufferType::L1, core)) {
+                            gather_from(dev_alloc, bank_ids->front());
+                        }
+                    }
+                }
+            }
+            // The scan above only covers device allocators reachable from a mesh allocator. This
+            // allocator's own per-core allocators are subtracted separately, through the dependency
+            // graph, and that path is the only one a direct Buffer::create takes. Narrow it the same
+            // way, or the same request would be range lockstep through a mesh and full lockstep
+            // through a device.
+            std::optional<std::unordered_set<uint32_t>> scoped_dependent_allocators;
+            if (scope_to_own_cores) {
+                scoped_dependent_allocators.emplace();
+                for (const auto& core : cores_to_scan) {
+                    if (const auto* bank_ids = this->find_bank_ids(BufferType::L1, core)) {
+                        scoped_dependent_allocators->insert(bank_ids->front() + 1);
                     }
                 }
             }
@@ -216,7 +288,8 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                 config_->compute_grid,
                 num_cores,
                 BankManager::AllocatorDependencies::AllocatorID{0},
-                additional_ranges);
+                additional_ranges,
+                scoped_dependent_allocators);
             break;
         }
         case BufferType::L1_SMALL: {
@@ -245,10 +318,10 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     auto buffer_type = buffer->buffer_type();
 
     // Per-core deallocation path
-    if (buffer->per_core_allocation_) {
+    if (buffer->impl().per_core_allocation_) {
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-        for (const auto& [core, addr] : buffer->per_core_addresses_) {
+        for (const auto& [core, addr] : buffer->impl().per_core_addresses_) {
             auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
         }
@@ -410,11 +483,19 @@ const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_logical_core(
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
 }
 
-bool AllocatorImpl::has_bank(BufferType buffer_type, const CoreCoord& logical_core) const {
+const std::vector<uint32_t>* AllocatorImpl::find_bank_ids(BufferType buffer_type, const CoreCoord& logical_core) const {
     // Don't lock mutex_ because logical_core_to_bank_ids_ is populated during init and is not
     // mutated afterwards, the same reasoning get_num_banks() relies on.
     auto banks = logical_core_to_bank_ids_.find(buffer_type);
-    return banks != logical_core_to_bank_ids_.end() && banks->second.contains(logical_core);
+    if (banks == logical_core_to_bank_ids_.end()) {
+        return nullptr;
+    }
+    auto core_banks = banks->second.find(logical_core);
+    return core_banks == banks->second.end() ? nullptr : &core_banks->second;
+}
+
+bool AllocatorImpl::has_bank(BufferType buffer_type, const CoreCoord& logical_core) const {
+    return this->find_bank_ids(buffer_type, logical_core) != nullptr;
 }
 
 const AllocatorConfig& AllocatorImpl::get_config() const { return *config_; }
@@ -586,7 +667,7 @@ AllocatorImpl::~AllocatorImpl() {
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->impl().per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
     }
 
     std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
@@ -619,7 +700,7 @@ AllocatorState AllocatorImpl::extract_state() const {
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->impl().per_core_allocation_, "override_state does not yet support per-core L1 allocations");
     }
 
     // Clear all buffer types
@@ -665,42 +746,38 @@ DeviceAddr calculate_bank_size_spread(
 }  // namespace detail
 
 // External facing Allocator
-Allocator::Allocator(AllocatorImpl* _impl) : impl(_impl) {}
+Allocator::Allocator(AllocatorImpl* _impl) : impl_(_impl) {}
 
-void Allocator::deallocate_buffers() { impl->deallocate_buffers(); }
+void Allocator::deallocate_buffers() { impl_->deallocate_buffers(); }
 
-std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const { return impl->get_allocated_buffers(); }
+std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const { return impl_->get_allocated_buffers(); }
 
-uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const { return impl->get_num_banks(buffer_type); }
+uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const { return impl_->get_num_banks(buffer_type); }
 
-DeviceAddr Allocator::get_bank_size(const BufferType& buffer_type) const { return impl->get_bank_size(buffer_type); }
+DeviceAddr Allocator::get_bank_size(const BufferType& buffer_type) const { return impl_->get_bank_size(buffer_type); }
 
 CoreCoord Allocator::get_logical_core_from_bank_id(uint32_t bank_id) const {
-    return impl->get_logical_core_from_bank_id(bank_id);
+    return impl_->get_logical_core_from_bank_id(bank_id);
 }
 
 int32_t Allocator::get_bank_offset(BufferType buffer_type, uint32_t bank_id) const {
-    return impl->get_bank_offset(buffer_type, bank_id);
+    return impl_->get_bank_offset(buffer_type, bank_id);
 }
 
 const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core) const {
-    return impl->get_bank_ids_from_logical_core(buffer_type, logical_core);
+    return impl_->get_bank_ids_from_logical_core(buffer_type, logical_core);
 }
 
 DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
-    return impl->get_base_allocator_addr(mem_type);
+    return impl_->get_base_allocator_addr(mem_type);
 }
 
-uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl->get_alignment(buffer_type); }
+uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl_->get_alignment(buffer_type); }
 
-Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl->get_statistics(buffer_type); }
+Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl_->get_statistics(buffer_type); }
 
-AllocatorState Allocator::extract_state() const { return impl->extract_state(); }
-
-void Allocator::override_state(const AllocatorState& state) { impl->override_state(state); }
-
-size_t Allocator::get_worker_l1_size() const { return impl->get_worker_l1_size(); }
+size_t Allocator::get_worker_l1_size() const { return impl_->get_worker_l1_size(); }
 
 }  // namespace tt::tt_metal
 
@@ -709,9 +786,9 @@ namespace tt::tt_metal::experimental {
 void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*>& sources) {
     AllocatorState merged_state;
     for (auto* source : sources) {
-        merged_state.merge(source->extract_state());
+        merged_state.merge(source->impl().extract_state());
     }
-    target->override_state(merged_state);
+    target->impl().override_state(merged_state);
 }
 
 }  // namespace tt::tt_metal::experimental
