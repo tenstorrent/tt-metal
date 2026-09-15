@@ -1822,6 +1822,21 @@ class FILL_INT_FORMAT(TemplateParameter):
 
 
 @dataclass
+class COPY_DEST_VALUES_FORMAT(TemplateParameter):
+    """DataFormat template argument of ``ckernel::sfpu::copy_dest_value``.
+
+    It selects the SFPLOAD/SFPSTORE instruction modifier via
+    ``GetSfpLoadStoreInstrMod``, so it must match the DEST precision the
+    preceding op wrote -- not the L1 format.
+    """
+
+    data_format: DataFormat = DataFormat.Float16_b
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto COPY_DEST_VALUES_FORMAT = DataFormat::{self.data_format.name};"
+
+
+@dataclass
 class TYPECAST_FORMATS(TemplateParameter):
     """Compile-time config for the SFPU typecast test kernel.
 
