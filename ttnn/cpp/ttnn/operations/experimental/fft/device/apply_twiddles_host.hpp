@@ -89,7 +89,7 @@ inline uint64_t make_key(tt::tt_metal::distributed::MeshDevice* md, uint32_t N1,
 }
 
 inline std::shared_ptr<TwiddlePlan> get_or_create(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md, uint32_t N1, uint32_t N2) {
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md, uint32_t N1, uint32_t N2) {
     using namespace tt::tt_metal::distributed;
 
     const uint64_t key = make_key(md.get(), N1, N2);
