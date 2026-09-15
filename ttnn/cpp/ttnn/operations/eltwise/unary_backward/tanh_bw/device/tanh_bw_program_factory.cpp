@@ -142,6 +142,16 @@ ProgramDescriptor TanhBwProgramFactory::create_descriptor(
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };
 
+    // The compute kernel only needs the unpacker to switch format between the two operand
+    // buffers when the operands actually carry different formats; otherwise the single
+    // configuration compute_kernel_hw_startup() installs covers both, and reconfiguring is
+    // measurable overhead on the common same-dtype path. Both operand dtypes are part of
+    // compute_program_hash, so a program built for one pairing is never replayed for another
+    // and this can be a compile-time decision in the kernel.
+    if (src0_cb_data_format != src1_cb_data_format) {
+        compute_desc.defines = {{"MIXED_OPERAND_DATA_FORMATS", "1"}};
+    }
+
     // ---- Per-core runtime args ----
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
