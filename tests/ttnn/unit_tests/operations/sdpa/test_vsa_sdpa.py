@@ -411,6 +411,17 @@ def test_vsa_sdpa_lse_out(device, heads, seq_len, kv_len, pattern, ragged):
     key_ok = key_ok.repeat_interleave(BLOCK, dim=1)  # q tile -> q row
     want = torch.logsumexp(logits[0].masked_fill(~key_ok, float("-inf")), dim=-1)
 
+    # Two references: one masking the ragged blocks' pad columns as the op contract says, one
+    # counting them. The error is one-signed and tracks raggedness, so which reference the device
+    # matches tells us whether the pad columns reach the row sum.
+    block_of_key = torch.arange(kv_len) // BLOCK
+    listed_keys = listed.repeat_interleave(BLOCK, dim=2).repeat_interleave(BLOCK, dim=1)
+    want_padded = torch.logsumexp(logits[0].masked_fill(~listed_keys, float("-inf")), dim=-1)
+    logger.info(
+        f"lse vs pad-counting reference: PCC {comp_pcc(want_padded, got, 0.0)[1]} | "
+        f"mean offset {(got - want_padded).mean():.4f} | (block_of_key spans {int(block_of_key.max()) + 1})"
+    )
+
     # Characterise the gap rather than asserting a guessed floor: the kernel's logits are bf16 at
     # HiFi2 while this reference is fp32, and a logsumexp is a raw magnitude with none of the
     # error cancellation a normalised output gets.
