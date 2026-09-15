@@ -454,3 +454,221 @@ def test_dispatch_fabric2d_region_bound_production_shape(seq_len_per_chip, num_l
                 worst = max(worst, at)
                 assert at <= bound, f"g={g} stream={stream} row={row}: region needs {at} pages, host bound is {bound}"
     logger.info(f"worst region occupancy {worst} of {bound} pages ({100 * worst / bound:.0f}%)")
+
+
+# --------------------------------------------------------------------------------------------------
+# Fan-out chunk arithmetic, on host. Fan-out replaces the per-expert chunk with one per (origin,
+# destination): a token picking several experts on one chip crosses the cable once, carrying a page
+# list. That breaks the length derivation the dense region rests on -- per-expert counts are
+# marginals and a fan-out length depends on the joint -- so the length has to come from a presence
+# table instead. This checks the replacement derivation before any kernel is written.
+# --------------------------------------------------------------------------------------------------
+
+
+def _fanout_presence(indices, table, offs, capacity, G, H, seq, topk, num_routed_experts):
+    """presence[g][origin][dst] = tokens from `origin` with at least one SURVIVING expert on `dst`.
+
+    Post-drop on purpose. A token whose every page on `dst` was dropped for capacity must not be
+    counted, or the origin sends fewer pages than the relay waits for.
+    """
+    presence = torch.zeros(G, H, H, dtype=torch.int64)
+    for g in range(G):
+        for origin in range(H):
+            alloc = offs[g, origin].clone().to(torch.int64)
+            for t in range(seq):
+                hit = set()
+                for k in range(topk):
+                    e = int(indices[g, origin, t, k])
+                    row = int(table[g, e])
+                    if row == -1:
+                        continue
+                    if alloc[e] >= capacity:
+                        alloc[e] += 1
+                        continue
+                    alloc[e] += 1
+                    hit.add(row)
+                for row in hit:
+                    presence[g, origin, row] += 1
+    return presence
+
+
+@pytest.mark.parametrize("extent", [4, 8], ids=lambda e: f"extent{e}")
+@pytest.mark.parametrize("num_links", [1, 2], ids=lambda n: f"{n}link")
+@pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
+def test_dispatch_fabric2d_fanout_chunk_agreement(extent, num_links, capacity_div):
+    """What one chip writes into its neighbour's region is what that neighbour reads, under fan-out."""
+    G, seq, topk = 2, 16, 4
+    num_routed_experts = extent * topk * G
+    experts_per_chip = num_routed_experts // G // extent
+    capacity = max(1, extent * seq * topk // capacity_div)
+
+    torch.manual_seed(13)
+    table = _expert_dispatch_table(num_routed_experts, extent, G)
+    experts_per_group = num_routed_experts // G
+    indices = torch.zeros(G, extent, seq, topk, dtype=torch.int64)
+    for g in range(G):
+        for h in range(extent):
+            for t in range(seq):
+                indices[g, h, t] = g * experts_per_group + torch.randperm(experts_per_group)[:topk]
+
+    offs = torch.zeros(G, extent, num_routed_experts, dtype=torch.int64)
+    for g in range(G):
+        o, _, _, _ = get_gate_outputs(
+            indices[g], extent, num_routed_experts, experts_per_chip, seq, topk, expert_dispatch_table=table[g : g + 1]
+        )
+        offs[g] = o[0].long()
+
+    presence = _fanout_presence(indices, table, offs, capacity, G, extent, seq, topk, num_routed_experts)
+
+    # Fan-out can only ever help: one send per destination chip instead of one per expert.
+    sends_per_expert = 0
+    for g in range(G):
+        for origin in range(extent):
+            alloc = offs[g, origin].clone().to(torch.int64)
+            for t in range(seq):
+                for k in range(topk):
+                    e = int(indices[g, origin, t, k])
+                    if int(table[g, e]) == -1:
+                        continue
+                    if alloc[e] >= capacity:
+                        alloc[e] += 1
+                        continue
+                    alloc[e] += 1
+                    sends_per_expert += 1
+    assert int(presence.sum()) <= sends_per_expert, "fan-out sends more pages than per-expert does"
+
+    for g in range(G):
+
+        def run_len(origin, dst):
+            return int(presence[g, origin, dst])
+
+        def starts(chunks):
+            at, out = 0, []
+            for origin, dst, idx, cnt in chunks:
+                n = run_len(origin, dst)
+                out.append(at)
+                at += _slice_begin(n, idx + 1, cnt) - _slice_begin(n, idx, cnt)
+            return out, at
+
+        for stream in range(2 * num_links):
+            travel = 1 if stream % 2 == 0 else -1
+            for row in range(extent):
+                nbr = (row + travel) % extent
+                wrote, wrote_total = starts(_outgoing_chunks(stream, row, extent, num_links))
+                reads, reads_total = starts(_forwarding_chunks(stream, nbr, extent, num_links))
+                assert wrote == reads and wrote_total == reads_total, (
+                    f"g={g} stream={stream}: row {row} writes {wrote_total} pages at {wrote[:6]}... "
+                    f"but row {nbr} reads {reads_total} at {reads[:6]}..."
+                )
+
+
+# --------------------------------------------------------------------------------------------------
+# Multicast (drop-off) chunk arithmetic, on host.
+#
+# A token crosses a cable once per DIRECTION, not once per expert or even once per destination chip:
+# the copy travels to the farthest destination that way and every chip en route that wants it keeps
+# one and passes it on. The relay already forwards hop by hop, so this costs a consume, not a new
+# transport -- but a chunk is now (origin, hop) and its length comes from a reach table, since
+# per-expert counts cannot express "how many tokens travel at least h hops this way".
+# --------------------------------------------------------------------------------------------------
+
+
+def _mc_direction(origin, dst, extent):
+    """Short way round; a tie at exactly half the ring goes clockwise so reach stays well defined."""
+    d = (dst - origin) % extent
+    return (1, d) if d <= extent - d else (-1, extent - d)
+
+
+def _mc_reach(indices, table, offs, capacity, G, extent, seq, topk):
+    """reach[g][origin][dir_idx][h] = tokens from origin whose farthest hop that way is >= h.
+
+    dir_idx 0 is clockwise. Post-drop: a token whose every surviving page lies elsewhere must not
+    hold a hop open, or the origin sends fewer pages than the relay waits for.
+    """
+    m = extent // 2
+    reach = torch.zeros(G, extent, 2, m + 2, dtype=torch.int64)
+    for g in range(G):
+        for origin in range(extent):
+            alloc = offs[g, origin].clone().to(torch.int64)
+            for t in range(seq):
+                far = {1: 0, -1: 0}
+                for k in range(topk):
+                    e = int(indices[g, origin, t, k])
+                    row = int(table[g, e])
+                    if row == -1:
+                        continue
+                    if alloc[e] >= capacity:
+                        alloc[e] += 1
+                        continue
+                    alloc[e] += 1
+                    if row == origin:
+                        continue
+                    s, d = _mc_direction(origin, row, extent)
+                    far[s] = max(far[s], d)
+                for s, di in ((1, 0), (-1, 1)):
+                    for h in range(1, far[s] + 1):
+                        reach[g, origin, di, h] += 1
+    return reach
+
+
+@pytest.mark.parametrize("extent", [4, 8], ids=lambda e: f"extent{e}")
+@pytest.mark.parametrize("num_links", [1, 2], ids=lambda n: f"{n}link")
+@pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
+def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity_div):
+    G, seq, topk = 2, 16, 4
+    num_routed_experts = extent * topk * G
+    experts_per_chip = num_routed_experts // G // extent
+    capacity = max(1, extent * seq * topk // capacity_div)
+    m = extent // 2
+
+    torch.manual_seed(17)
+    table = _expert_dispatch_table(num_routed_experts, extent, G)
+    epg = num_routed_experts // G
+    indices = torch.zeros(G, extent, seq, topk, dtype=torch.int64)
+    for g in range(G):
+        for h in range(extent):
+            for t in range(seq):
+                indices[g, h, t] = g * epg + torch.randperm(epg)[:topk]
+
+    offs = torch.zeros(G, extent, num_routed_experts, dtype=torch.int64)
+    for g in range(G):
+        o, _, _, _ = get_gate_outputs(
+            indices[g], extent, num_routed_experts, experts_per_chip, seq, topk, expert_dispatch_table=table[g : g + 1]
+        )
+        offs[g] = o[0].long()
+
+    reach = _mc_reach(indices, table, offs, capacity, G, extent, seq, topk)
+    # Monotone by construction; if this ever breaks the chunk lengths below go negative.
+    for g in range(G):
+        for o_ in range(extent):
+            for di in range(2):
+                for h in range(1, m + 1):
+                    assert reach[g, o_, di, h] >= reach[g, o_, di, h + 1]
+
+    for g in range(G):
+
+        def chunk(origin, di, h, link):
+            n = int(reach[g, origin, di, h])
+            return _slice_begin(n, link + 1, num_links) - _slice_begin(n, link, num_links)
+
+        for stream in range(2 * num_links):
+            travel = 1 if stream % 2 == 0 else -1
+            di, link = (0 if travel == 1 else 1), stream // 2
+            for row in range(extent):
+                nbr = (row + travel) % extent
+                # what row puts on the cable: its own tokens, then each upstream origin pushed one hop on
+                out, at = [], 0
+                for j in range(0, m):
+                    origin = (row - j * travel) % extent
+                    out.append(at)
+                    at += chunk(origin, di, j + 1, link)
+                # what nbr reads: the same origins, each one hop further along
+                rd, at2 = [], 0
+                for j in range(1, m + 1):
+                    origin = (nbr - j * travel) % extent
+                    rd.append(at2)
+                    at2 += chunk(origin, di, j, link)
+                assert out == rd and at == at2, (
+                    f"g={g} stream={stream}: row {row} writes {at} pages at {out} "
+                    f"but row {nbr} reads {at2} at {rd}"
+                )
