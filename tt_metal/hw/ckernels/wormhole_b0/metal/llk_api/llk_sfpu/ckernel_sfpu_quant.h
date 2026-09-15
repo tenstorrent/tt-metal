@@ -35,13 +35,12 @@ namespace ckernel::sfpu {
 //
 // Body content (see the inits for the exact emission order):
 //   QUANT   (3)            : SFPMAD, SFPNOP, STOCH_RND
-//   QUANT   (uint8-out, 6) : SFPMAD, SFPNOP, <3-instr clamp: SFPSETCC, SFPMOV,
-//                            SFPENCC>, STOCH_RND
-//   QUANT   (int8-out, 7)  : SFPMAD, SFPNOP, <5-instr offset-128 pack: SFPSETCC,
-//                            SFPMOV, SFPENCC, STOCH_RND, SFPXOR>
+//   QUANT   (uint8-out, 4) : SFPMAD, SFPNOP, <clamp: SFPSWAP>, STOCH_RND
+//   QUANT   (int8-out, 5)  : SFPMAD, SFPNOP, <3-instr offset-128 pack: SFPSWAP,
+//                            STOCH_RND, SFPXOR>
 //   REQUANT (4)            : SFPCAST(int->fp32), SFPMAD, SFPNOP, STOCH_RND
-//   REQUANT (uint8-out, 7) : SFPCAST(int->fp32), SFPMAD, SFPNOP, <3-instr clamp>, STOCH_RND
-//   REQUANT (int8-out, 8)  : SFPCAST(int->fp32), SFPMAD, SFPNOP, <5-instr pack>
+//   REQUANT (uint8-out, 5) : SFPCAST(int->fp32), SFPMAD, SFPNOP, <clamp>, STOCH_RND
+//   REQUANT (int8-out, 6)  : SFPCAST(int->fp32), SFPMAD, SFPNOP, <3-instr pack>
 //   DEQUANT (5)            : SFPCAST(int->fp32), SFPADD, SFPNOP, SFPMUL, SFPNOP
 //
 // The int8-out bodies fold the +128 offset into the fp32 zero-point once at init,
@@ -52,14 +51,14 @@ constexpr std::uint32_t QUANT_REPLAY_LEN = 3;
 // pack without its closing SFPXOR. As with the other lengths here, the int32
 // representation conversion happens in SFPLOAD/SFPSTORE instr_mod0, outside the
 // recorded window, so one length per kernel still suffices.
-constexpr std::uint32_t QUANT_REPLAY_LEN_UINT8_OUT = 6;
-constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 7;
+constexpr std::uint32_t QUANT_REPLAY_LEN_UINT8_OUT = 4;
+constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 5;
 constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
 constexpr std::uint32_t REQUANT_REPLAY_LEN = 4;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_UINT8_OUT = 7;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 8;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_UINT8_OUT = 5;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 6;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_MAX;
@@ -70,20 +69,33 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN = 5;
 // length with the recording and the hardware does not check one, so a recorded and a
 // replayed length that disagree misalign the buffer silently; deriving both from one
 // helper is what keeps them from drifting apart.
+template <DataFormat>
+inline constexpr bool quant_unhandled_format = false;
+
 template <DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t quant_replay_len() {
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         return QUANT_REPLAY_LEN_INT8_OUT;
+    } else if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+        return QUANT_REPLAY_LEN_UINT8_OUT;
+    } else if constexpr (OUTPUT_FORMAT == DataFormat::Int32) {
+        return QUANT_REPLAY_LEN;
+    } else {
+        static_assert(quant_unhandled_format<OUTPUT_FORMAT>, "quant_replay_len: unhandled OUTPUT_FORMAT");
     }
-    return OUTPUT_FORMAT == DataFormat::UInt8 ? QUANT_REPLAY_LEN_UINT8_OUT : QUANT_REPLAY_LEN;
 }
 
 template <DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t requant_replay_len() {
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         return REQUANT_REPLAY_LEN_INT8_OUT;
+    } else if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+        return REQUANT_REPLAY_LEN_UINT8_OUT;
+    } else if constexpr (OUTPUT_FORMAT == DataFormat::Int32) {
+        return REQUANT_REPLAY_LEN;
+    } else {
+        static_assert(quant_unhandled_format<OUTPUT_FORMAT>, "requant_replay_len: unhandled OUTPUT_FORMAT");
     }
-    return OUTPUT_FORMAT == DataFormat::UInt8 ? REQUANT_REPLAY_LEN_UINT8_OUT : REQUANT_REPLAY_LEN;
 }
 
 // Int8 L1 pack path:
@@ -241,12 +253,11 @@ inline void _int8_bias_zero_point_() { TTI_SFPADDI(INT8_OFFSET_128_IMM16, p_sfpu
 // zero are clamped to 0.0 first and FP32_TO_UINT8(0.0) = 0. Both the unsigned output
 // path and the int8 offset-128 pack below round through here, so they share one clamp.
 // The SFPMAD -> SFPNOP bubble emitted by each init already covers the read-after-write
-// hazard on LREG0 for the SFPSETCC that opens this sequence, exactly as it does today
+// hazard on LREG0 for the SFPSWAP that opens this sequence, exactly as it does today
 // for the STOCH_RND that used to read LREG0 first.
 inline void _round_fp32_to_uint8_() {
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPENCC(0, 0, 0, 0);
+    // LREG0 = max(LREG0, 0.0); only LREG0 is written since LCONST_0 is a constant register.
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
     TTI_SFP_STOCH_RND(
         sfpi::SFPSTOCHRND_RND_EVEN,
         0 /*imm8*/,
@@ -301,7 +312,7 @@ inline void calculate_requant_int32_int8_pack(
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, in0_off);  // operand A (int32/byte)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);           // operand B (fp32 scaler)
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
@@ -340,7 +351,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, in_mode, ADDR_MOD_3, in0_off);  // operand A (int32 -> sign-magn LREG0)
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);   // operand B (fp32 scaler)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
         }
