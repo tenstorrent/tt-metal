@@ -421,6 +421,16 @@ class LTXPipeline:
         mesh_shape = tuple(mesh_device.shape)
         device_configs: dict[tuple[int, int], dict] = {}
         if ttnn.device.is_blackhole():
+            # 4-chip QuietBox 2. Axes are swapped vs the 2x4: a 1x4 open would give SP=1,
+            # which video self-attention does not support.
+            device_configs[(2, 2)] = {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "num_links": 2,
+                "dynamic_load": True,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": True,
+            }
             device_configs[(2, 4)] = {
                 "sp_axis": 1,
                 "tp_axis": 0,

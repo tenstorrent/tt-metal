@@ -68,9 +68,13 @@ def _with_dynamic_load(param, dynamic_load):
     return pytest.param(*v, dynamic_load, marks=param.marks, id=param.id)
 
 
-# dynamic_load=True only for the 2x4 (BH-like) configs — mirrors production, where 2x4 pages
-# weights in/out (dynamic_load path) to avoid init-time DRAM OOM rather than per-layer FSDP gathers.
-_PIPELINE_DL_TRUE = {"2x4sp0tp1nl1_line_is_fsdp1", "2x4sp1tp0nl2_line_is_fsdp0"}
+# dynamic_load=True for the 2x2/2x4 (BH-like) configs — mirrors production: pages weights in/out
+# (dynamic_load path) to avoid init-time DRAM OOM rather than per-layer FSDP gathers.
+_PIPELINE_DL_TRUE = {
+    "2x2sp0tp1nl2_line_is_fsdp1",
+    "2x4sp0tp1nl1_line_is_fsdp1",
+    "2x4sp1tp0nl2_line_is_fsdp0",
+}
 
 LTX_PIPELINE_MESH_PARAMS_DL = [_with_dynamic_load(p, p.id in _PIPELINE_DL_TRUE) for p in LTX_PIPELINE_MESH_PARAMS]
 
@@ -84,9 +88,13 @@ def _override_base_device_params(base, device_params, *, id=None):
 
 # One-stage (Pro) AV needs the L1_SMALL pool for the audio-vocoder conv1d taps. The base pipeline
 # params leave l1_small_size=0, which OOMs the vocoder on the 4x8 galaxy ("L1_SMALL ... bank size is
-# 0 B" in bank_manager). Reserve 32 KB L1_SMALL on the BH 4x8 configs (untraced -> no trace region),
+# 0 B" in bank_manager). Reserve 32 KB L1_SMALL on the BH 2x2/4x8 configs (untraced -> no trace region),
 # matching the distilled AV configs. Other geometries (deselected by the CI -k) pass through unchanged.
-_LTX_ONE_STAGE_L1SMALL_IDS = {"4x8sp1tp0nl2_ring_is_fsdp0", "4x8sp1tp0nl2_line_is_fsdp0"}
+_LTX_ONE_STAGE_L1SMALL_IDS = {
+    "2x2sp0tp1nl2_line_is_fsdp1",
+    "4x8sp1tp0nl2_ring_is_fsdp0",
+    "4x8sp1tp0nl2_line_is_fsdp0",
+}
 LTX_ONE_STAGE_MESH_PARAMS_DL = [
     _override_base_device_params(p, {**p.values[4], "l1_small_size": 32768}, id=p.id)
     if p.id in _LTX_ONE_STAGE_L1SMALL_IDS
@@ -122,7 +130,8 @@ _line_trace = {**_line, "trace_region_size": 500_000_000, "l1_small_size": 32768
 _ring_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 LTX_DISTILLED_MESH_PARAMS_DL = [
-    _with_dynamic_load(_2x2sp0tp1nl2_line_is_fsdp1, False),
+    # BH on 2x2: L1_SMALL scratch for the vocoder conv taps.
+    _with_dynamic_load(_override_base_device_params(_2x2sp0tp1nl2_line_is_fsdp1, _line_l1small), True),
     _with_dynamic_load(_2x4sp0tp1nl1_line_is_fsdp1, True),
     # BH on 2x4: L1_SMALL scratch for the vocoder conv taps.
     _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_l1small), True),
@@ -171,6 +180,7 @@ LTX_TRANSFORMER_MESH_PARAMS = [
 
 LTX_ATTENTION_MESH_PARAMS = [
     _1x1sp0tp1nl1_line_is_fsdp0,
+    _2x2sp0tp1nl2_line_is_fsdp1,
     _2x4sp0tp1nl1_line_is_fsdp1,
     _2x4sp1tp0nl1_line_is_fsdp1,
     _4x8sp1tp0nl4_ring_is_fsdp1,
