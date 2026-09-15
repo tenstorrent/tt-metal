@@ -98,11 +98,10 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     sender_core_(sender_core),
     receiver_cores_(receiver_cores),
     ring_size_(ring_size),
-    // Quasar reserves lane slots up front; active count starts at 1 and is raised by the first
+    // Quasar reserves lane slots up front; the active count (default 1) is raised by the first
     // multi-thread consumer Attach / multi-producer relay. WH/BH stay single-lane.
     credit_lane_capacity_(
-        (device != nullptr && device->arch() == tt::ARCH::QUASAR) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u),
-    active_credit_lanes_(1) {
+        (device != nullptr && device->arch() == tt::ARCH::QUASAR) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u) {
     initialize_prefetcher_pipe(device, sender_core, receiver_cores_, sender_cores_, all_cores_);
     try {
         setup_buffers(buffer_type);
