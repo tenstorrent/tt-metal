@@ -17,20 +17,10 @@
 namespace ckernel {
 namespace sfpu {
 
-// Quasar TTI encodings for the Blackhole trunc/floor/ceil chain. Macro signatures dropped unused
-// SFPU fields (SFPENCC 2-arg, SFPAND 2-arg, SFPEXEXP 3-arg); do not paste BH 4-arg forms.
+// Trunc/floor/ceil are TTI because SFPI currently produces slower kernels. Macro signatures
+// dropped unused SFPU fields (SFPENCC 2-arg, SFPAND 2-arg, SFPEXEXP 3-arg); do not paste BH 4-arg
+// forms. Encodings live in ckernel_instr_params.h (p_sfploadi / p_sfpexexp / p_sfpiadd / p_sfpshft2).
 //
-// SFPLOADI INT16 (assembly.yaml 4'b0100) sign-extends 0xffff → 0xffffffff. UINT16 yields
-// 0x0000ffff and would break the mantissa mask.
-constexpr std::uint32_t SFPLOADI_MOD0_INT16 = 0x4;
-// SFPEXEXP: unbiased exp + SET_CC from sign + invert → CC.Res = (exp >= 0). Confluence SFPU ISA
-// (page 1170505767) has InstrMod[1]=1 meaning "update CC"; assembly.yaml inverts that bit. Follow
-// the ISA so this matches BH SET_CC_SGN_EXP | SET_CC_COMP_EXP (0xA).
-constexpr std::uint32_t SFPEXEXP_MOD1_SET_CC_GE0 = 0xA;
-// SFPIADD: dest = lreg_c - dest, update CC from sign, invert → dest = 23-exp, CC.Res = (exp <= 23).
-constexpr std::uint32_t SFPIADD_MOD1_SUB_CC_GTE0 = 0xA;
-constexpr std::uint32_t SFPSHFT2_MOD1_SHFT_LREG = 0x5;
-
 // Predication is LaneEnabled = (~CC.En | CC.Res). The trunc chain only *narrows* (never re-enables
 // mid-body), so LaneEnabled-gated CC writes on SFPEXEXP / SFPIADD / SFPGT are required, not a
 // reason to avoid TTI. CC is already on: MATH TRISC firmware (`trisc.cc` `enable_cc_stack`) and the
@@ -42,12 +32,12 @@ constexpr std::uint32_t SFPSHFT2_MOD1_SHFT_LREG = 0x5;
 //   exp > 23 (already integral, inf, nan): keep all bits
 sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val) {
     sfpi::l_reg[sfpi::LRegs::LReg0] = val;
-    TTI_SFPLOADI(p_sfpu::LREG3, SFPLOADI_MOD0_INT16, 23);
+    TTI_SFPLOADI(p_sfpu::LREG3, p_sfploadi::MOD0_INT16, 23);
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);  // 0x80000000
-    TTI_SFPEXEXP(p_sfpu::LREG0, p_sfpu::LREG2, SFPEXEXP_MOD1_SET_CC_GE0);
-    TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_INT16, 0xffff);  // 0xffffffff on remaining lanes
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, SFPIADD_MOD1_SUB_CC_GTE0);
-    TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG1, SFPSHFT2_MOD1_SHFT_LREG);
+    TTI_SFPEXEXP(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpexexp::MOD1_SET_CC_GE0);
+    TTI_SFPLOADI(p_sfpu::LREG1, p_sfploadi::MOD0_INT16, 0xffff);  // 0xffffffff on remaining lanes
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpiadd::MOD1_SUB_CC_GTE0);
+    TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG1, p_sfpshft2::MOD1_SHFT_LREG);
     TTI_SFPENCC(0, 0);
     TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG1);  // LREG1 &= LREG0
 
