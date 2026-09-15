@@ -1236,6 +1236,12 @@ void py_module(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
+    // Keep MatmulMultiCoreReuseOptimizedProgramFactory registered with no methods. Its Metal 2.0
+    // port replaced create_descriptor with create_program_artifacts, but the type itself is needed by
+    // select_program_factory, which in turn is needed by the fusion suite. See also issue #54365.
+    nb::class_<ttnn::prim::MatmulMultiCoreReuseOptimizedProgramFactory>(
+        mod, "MatmulMultiCoreReuseOptimizedProgramFactory");
+
     // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
     nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
         .def_static(
