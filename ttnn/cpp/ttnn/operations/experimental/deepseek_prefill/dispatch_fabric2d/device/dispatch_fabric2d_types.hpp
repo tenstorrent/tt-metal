@@ -47,6 +47,10 @@ struct DispatchFabric2dInputs {
     // not first in its chip group.
     ttnn::Tensor expert_token_counts;
     ttnn::Tensor expert_region_offsets;
+    // fanout only: reach[origin][direction][hop] -- tokens from `origin` whose farthest destination
+    // that way is at least `hop` hops off. Per-expert counts are marginals and cannot express it, so
+    // without this a relay could not size a multicast chunk it neither wrote nor receives.
+    std::optional<ttnn::Tensor> fanout_reach;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
