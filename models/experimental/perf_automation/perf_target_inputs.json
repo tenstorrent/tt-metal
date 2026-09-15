@@ -1,0 +1,8 @@
+{
+  "weight_bytes": 24374793024,
+  "dominant_dtype": "bfloat16",
+  "source": "checkpoint bytes + HF config",
+  "total_params": 11766034176,
+  "resolution": 896,
+  "layers": 48
+}
