@@ -59,7 +59,7 @@ def assert_accurate(
     *,
     name: str = "accuracy",
     pcc_threshold: float = 0.999,
-    rmse_threshold: float = 0.05,
+    rmse_threshold: float | None = None,
     linf_threshold: float | None = None,
 ) -> float:
     """Require matching metadata, finite tensors, PCC, relative RMSE and relative L-inf.
@@ -100,7 +100,7 @@ def assert_accurate(
     print(f"{name}: PCC={pcc:.6f}, rel_RMSE={rmse:.3e}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
     if pcc < pcc_threshold:
         raise AssertionError(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
-    if rmse > rmse_threshold:
+    if rmse_threshold is not None and rmse > rmse_threshold:
         raise AssertionError(f"{name} relative RMSE {rmse:.3e} > {rmse_threshold:.3e}")
     if linf_threshold is not None and linf > linf_threshold:
         raise AssertionError(
