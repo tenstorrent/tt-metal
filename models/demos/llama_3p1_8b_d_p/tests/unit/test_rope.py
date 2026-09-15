@@ -36,6 +36,7 @@ def _rotate_meta(x):
     return rotated
 
 
+# Compare every Llama3 scaling band with HF; exact agreement catches a wrong scaling formula or branch.
 def test_llama3_inv_freq_matches_hf_in_all_wavelength_bands():
     """Catches default/linear/YaRN scaling or an incorrect smoothing branch."""
     rope = _rope_module()
@@ -68,6 +69,7 @@ def test_llama3_inv_freq_matches_hf_in_all_wavelength_bands():
         torch.testing.assert_close(actual[mask], expected[mask], rtol=1e-6, atol=1e-8)
 
 
+# Sample tile, chunk, and context edges against HF; matching Meta-pair tables catch bad origins and layout.
 def test_cos_sin_tables_match_hf_at_tile_chunk_and_context_boundaries():
     """Catches half-split tables, wrong position origin, and off-by-one table construction."""
     rope = _rope_module()
@@ -88,6 +90,7 @@ def test_cos_sin_tables_match_hf_at_tile_chunk_and_context_boundaries():
     torch.testing.assert_close(sin[..., 0::2], sin[..., 1::2], rtol=0, atol=0)
 
 
+# Convert a hand-written vector to Meta order and back; exact literals catch a reversible but wrong permutation.
 def test_hf_meta_conversion_has_known_adjacent_pair_coordinates():
     """Catches a half-split table accidentally treated as already Meta-interleaved."""
     rope = _rope_module()
@@ -100,6 +103,7 @@ def test_hf_meta_conversion_has_known_adjacent_pair_coordinates():
     torch.testing.assert_close(rope.meta_to_hf(expected_meta), hf, rtol=0, atol=0)
 
 
+# Apply the same coordinate conversion to full Q and K head counts; both must preserve the intended pair mapping.
 def test_projection_conversion_covers_q_and_k_head_counts():
     """Catches omitting or differently permuting either projected Q or projected K."""
     rope = _rope_module()
@@ -112,6 +116,7 @@ def test_projection_conversion_covers_q_and_k_head_counts():
         torch.testing.assert_close(projected_meta[..., 1::2], projected_hf[..., 64:], rtol=0, atol=0)
 
 
+# Rotate random full-size Q and K through both frames; matching HF catches frame-compatible-looking math errors.
 def test_meta_rotation_of_random_q_and_k_matches_hf_llama():
     """Catches a coordinate conversion that is reversible but incompatible with HF rotation."""
     rope = _rope_module()
@@ -135,6 +140,7 @@ def test_meta_rotation_of_random_q_and_k_matches_hf_llama():
     torch.testing.assert_close(actual_k, expected_k, rtol=1e-5, atol=1e-5)
 
 
+# Round-trip several host dtypes and shapes exactly; any value, dtype, or shape change exposes a lossy conversion.
 @pytest.mark.parametrize("dtype", (torch.float16, torch.float32, torch.float64))
 def test_coordinate_conversion_round_trip_preserves_tensor_properties(dtype):
     """Catches lossy reshaping, dtype conversion, or loss of arbitrary leading dimensions."""
@@ -148,6 +154,7 @@ def test_coordinate_conversion_round_trip_preserves_tensor_properties(dtype):
     torch.testing.assert_close(restored, source, rtol=0, atol=0)
 
 
+# Reject an unpaired final coordinate in both directions; a clear error prevents silent truncation.
 @pytest.mark.parametrize("name", ("hf_to_meta", "meta_to_hf"))
 def test_coordinate_conversion_rejects_odd_head_dimension(name):
     """Catches silent truncation of the unpaired final coordinate."""
@@ -156,6 +163,7 @@ def test_coordinate_conversion_rejects_odd_head_dimension(name):
         getattr(rope, name)(torch.zeros(2, 3, 127))
 
 
+# Reject odd dimensions in both frequency builders; this prevents constructing incomplete rotary pairs.
 def test_frequency_and_table_builders_reject_odd_head_dimension():
     """Catches construction of an incomplete rotary pair."""
     rope = _rope_module()
@@ -163,3 +171,37 @@ def test_frequency_and_table_builders_reject_odd_head_dimension():
         rope.llama3_inv_freq(head_dim=127)
     with pytest.raises(ValueError, match="even"):  # allow-pytest.raises: pure-host test uses --noconftest
         rope.build_llama3_cos_sin(32, head_dim=127)
+
+
+# Size tables for a full padded tail and round to chunks; 3072 rows catch accidental logical-only allocation.
+def test_indexed_rope_table_capacity_covers_the_last_physical_chunk():
+    """Catches sizing tables only to the logical KV limit instead of the kernel's padded reads."""
+    rope = _rope_module()
+
+    assert rope.indexed_rope_table_capacity(max_seq_len=2048, chunk_size=1024) == 3072
+    assert rope.indexed_rope_table_capacity(max_seq_len=2049, chunk_size=1024) == 4096
+
+
+# Feed invalid limits, axes, dimensions, and local chunks; each must fail clearly before TTNN device setup.
+@pytest.mark.parametrize(
+    "mesh_shape,max_seq_len,chunk_size,sp_axis,match",
+    (
+        ((4, 8), 0, 1024, 0, "max_seq_len"),
+        ((4, 8), 2048, 0, 0, "chunk_size"),
+        ((4, 8), 2048, 1024, 2, "sp_axis"),
+        ((0, 8), 2048, 1024, 0, "positive"),
+        ((4, 8), 2048, 1000, 0, "tile-aligned"),
+    ),
+)
+def test_indexed_rope_setup_rejects_unsupported_geometry(mesh_shape, max_seq_len, chunk_size, sp_axis, match):
+    """Catches malformed SP geometry reaching TTNN as wrong or non-tile table shards."""
+    rope = _rope_module()
+    fake_mesh = type("FakeMesh", (), {"shape": mesh_shape})()
+
+    with pytest.raises(ValueError, match=match):  # allow-pytest.raises: validation runs before local TTNN import
+        rope.build_indexed_rope(
+            fake_mesh,
+            max_seq_len=max_seq_len,
+            chunk_size=chunk_size,
+            sp_axis=sp_axis,
+        )
