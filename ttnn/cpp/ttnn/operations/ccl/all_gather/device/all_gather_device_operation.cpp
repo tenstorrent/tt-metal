@@ -238,6 +238,33 @@ AllGatherDeviceOperation::create_op_performance_model(
     return result;
 }
 
+////////////////////////////////////////////////////////////////
+// How this op is laid out
+//
+// all_gather is two machineries, kept apart on purpose.
+//
+//   Moving chunks -- generic. Order, runs, packets, CB entry sizes. Knows no op.
+//       kernels/chunk_walk.hpp      what order to move chunks in, and where each one is
+//       kernels/chunk_packets.hpp   runs -> segments -> packets
+//       chunk_plan.hpp              the host sizing rules (packet, run, entry)
+//
+//   all_gather    -- the concatenation, and the sending.
+//       kernels/concat.hpp          where our chunks land in the output
+//       *_factory.cpp               geometry, cores, fabric, kernel args
+//       kernels/*_common.hpp        how each algorithm sends, and its sync protocol
+//       kernels/*_reader.cpp, kernels/*_writer.cpp
+//
+// One number crosses between them: stripe, our chunks per output row. A run stops at the row
+// edge, because past it sits another device's stripe. That edge is why runs are short, and
+// short runs are what the host sizes packets and CB entries from.
+//
+// Two algorithms, with a factory and a reader/writer pair each. Unicast relays hop by hop, so
+// every device re-reads and re-sends; multicast hands the fabric one packet and lets it copy
+// the packet onward. select_program_factory below picks between them.
+//
+// Read in that order: this file, then a factory, then the chunk machinery.
+////////////////////////////////////////////////////////////////
+
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // Pick the kernel algorithm based on limitations and heuristics
@@ -325,7 +352,6 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
             use_unicast = tt::align(out_page, out_align) == chunks_per_page * chunk;
         }
     }
-
     return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
 }
 

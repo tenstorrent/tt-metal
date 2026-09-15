@@ -4,6 +4,8 @@
 
 #include "all_gather_multicast_factory.hpp"
 
+#include "chunk_plan.hpp"
+
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -212,60 +214,47 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         worker_cores.size());
 
     ////////////////////////////////////////////////////////////////
-    // Page indexing
+    // Chunks
     //
-    // Glossary:
-    //   input page     -- one page of the input tensor.
-    //   output page    -- one page of the output tensor (the real buffer page).
-    //   chunk          -- the transfer unit, min(input_page, output_page). An input
-    //                     page = split_factor chunks; an output page = output_chunks_per_page
-    //                     chunks.
-    //   stripe         -- the chunks this device contributes per row of the output.
+    // Where the two machineries meet. See the layout map in all_gather_device_operation.cpp.
     //
-    // Three copy modes, picked by input vs output page sizes:
-    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
-    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each
-    //                        chunk lands at a byte offset within a shared output page.
-    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
+    // Glossary, one language everywhere:
+    //   chunk           -- the unit we move. min(input page, output page).
+    //   chunks_per_page -- how many chunks share one page. One number per side, and one of them is 1.
+    //   bank_step       -- page-id step to the next chunk sitting next to this one in memory.
+    //   run             -- chunks next to each other in memory. One NOC command, one packet segment.
+    //   run_max         -- most chunks one run may take.
+    //   payload_chunks  -- chunks the fabric payload could hold.
+    //   packet_chunks   -- chunks a packet really holds: min(payload_chunks, 4 runs).
+    //   entry           -- one CB page, in chunks. Always a whole number of packets.
+    //   stripe          -- our chunks per output row. The one number all_gather hands the chunk
+    //                      machinery: a run stops at the row edge, past which sits another device.
+    //   route           -- one multicast range: how many hops, in which direction.
     //
-    // Host supplies geometry and each worker's slice. The kernels derive the walk order
-    // themselves from TensorAccessor and the packet size (see kernels/gather_walk.hpp), so no
-    // layout is special-cased here.
+    // The host sizes, the kernels walk. Reader and writer read bank_step off the TensorAccessor
+    // themselves, so no layout is special-cased here and the two cannot disagree.
     ////////////////////////////////////////////////////////////////
 
     const auto arch = input_tensor.device()->arch();
 
-    // --- Copy mode ---
-    // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
-    // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity -- which is
-    // why chunk sizing differs by the three modes above.
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
-    // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
-    // split writes output-content-sized pieces to separate output page bases.
-    const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
-    const uint32_t output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
-    const uint32_t output_chunks_per_page = is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
-    const uint32_t split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
-    TT_FATAL(
-        output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
-        "concat requires an unpadded input page");  // so slots align to content
+    const auto chunks = chunk_sizes(input_tensor, output_tensor);
+    const uint32_t chunk_size = chunks.chunk_size;
+    const uint32_t in_chunks_per_page = chunks.in_chunks_per_page;
+    const uint32_t out_chunks_per_page = chunks.out_chunks_per_page;
 
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    const uint32_t num_output_chunks = num_input_pages * split_factor;
+    const uint32_t num_output_chunks = num_input_pages * in_chunks_per_page;
     TT_FATAL(
-        num_output_chunks / split_factor == num_input_pages,
-        "all_gather output chunk count overflowed uint32: {} input pages x split factor {}",
+        num_output_chunks / in_chunks_per_page == num_input_pages,
+        "all_gather output chunk count overflowed uint32: {} input pages x {} chunks per page",
         num_input_pages,
-        split_factor);
+        in_chunks_per_page);
 
-    ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
-
-    // --- Stripe geometry ---
+    // --- Stripe ---
     // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
     // device contributes per stripe. For a last-dim RM gather this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
+    const uint32_t input_content_page = input_tensor.buffer()->page_size();
     const auto& input_shape = input_tensor.padded_shape();
     const auto tile_spec =
         input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
@@ -277,7 +266,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
                 extent = input_shape[i] / tile_spec.get_width();
             } else {
                 // This is a page count, so divide by the unaligned page size, not aligned
-                extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
+                extent = (input_shape[i] * input_tensor.element_size()) / input_content_page;
             }
         } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
             extent = input_shape[i] / tile_spec.get_height();
@@ -287,11 +276,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         input_pages_per_stripe *= extent;
     }
 
-    // Stripe = this device's contiguous run of chunks per row = input_pages_per_stripe
-    // * split_factor. Measured in chunks (not output pages) so multi-shard concat works:
+    // Our chunks per output row. Measured in chunks (not output pages) so multi-shard concat works:
     // a stripe's chunks are laid across output pages and may straddle pages.
-    const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
-    TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
+    const uint32_t stripe = input_pages_per_stripe * in_chunks_per_page;
+    TT_FATAL(stripe > 0, "stripe must be > 0");
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -327,35 +315,49 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             any_ring = any_ring || (operation_attributes.axis_num_devices[ax] > 1 &&
                                     tt::tt_fabric::is_ring_or_torus(operation_attributes.axis_topology[ax]));
         }
-        const bool long_stripe = output_chunks_per_stripe >= 32;
+        const bool long_stripe = stripe >= 32;
         // ...and only while the link count is low. With 4 links the per-hop send is no longer the
         // serialising step, so the amortisation a four-packet entry buys comes back.
         const bool few_links = min_num_links <= 2;
         packets_per_cb_entry = (!any_ring && long_stripe && few_links) ? 1 : 4;  // unicast differs here
         // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only chunks
         // big enough to still span a few runs are worth capping; below that the packet's own limit wins.
-        run_cap_bytes = output_chunk_size >= 1024 ? 8192 : 0;
+        run_cap_bytes = chunk_size >= 1024 ? 8192 : 0;
     }
 
-    // --- CB sizing ---
-    // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
-    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
-    // can still end early: broken contiguity can fill its scatter chunks before its payload.
-    const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
-    uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
-    chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
-    uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
-    // An integer multiplier preserves the whole-packet and whole-page properties above. The clamp is
-    // defensive: it holds whatever packets_per_cb_entry is tuned to, including 1.
-    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, packets_per_cb_entry);
-    if (multiplier < packets_per_cb_entry) {
-        log_warning(
-            tt::LogOp,
-            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
-            max_l1_space);
+    // --- Packets, runs and the CB entry ---
+    // Whole chunks only: a packet cannot use a tail shorter than one chunk, and leaving that tail out
+    // of the figure the entry is sized from keeps entry and packet boundaries coincident.
+    // bank_step is 1 on a sharded output -- its chunks are already neighbours, so runs are long and
+    // nothing caps them.
+    const uint32_t payload_chunks = std::max(1u, packet_size / chunk_size);
+    const uint32_t bank_step =
+        output_tensor.memory_config().is_sharded()
+            ? 1u
+            : std::max(1u, input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type()));
+    const uint32_t packet_chunks = packet_chunks_of(payload_chunks, stripe, bank_step);
+    report_payload(packet_size, chunk_size, stripe, bank_step, arch);
+
+    // Two upper bounds on a run: the geometry rule (chunk_plan.hpp) and the per-arch cap above. Take
+    // the tighter of the two. 0 means no cap, which is what the kernels expect.
+    uint32_t run_max = run_max_of(packet_chunks, payload_chunks, chunk_size);
+    if (run_cap_bytes != 0) {
+        const uint32_t arch_run_max = std::max(1u, run_cap_bytes / chunk_size);
+        run_max = run_max != 0 ? std::min(run_max, arch_run_max) : arch_run_max;
     }
-    cb_page_size *= multiplier;
+
+    // An entry holds a whole number of packets, and a whole number of pages on whichever side shares
+    // one, so an entry boundary never cuts either. The unit is what a packet actually carries.
+    const uint32_t chunks_per_group = std::max(in_chunks_per_page, out_chunks_per_page);
+    uint32_t entry_unit = run_max != 0 ? packet_chunks : payload_chunks;
+    entry_unit = std::max(chunks_per_group, (entry_unit / chunks_per_group) * chunks_per_group);
+    // No byte floor here: this reader sends its own packets off transaction ids, with no per-entry
+    // flush to stall on, so the handshake the floor pays for is not on its critical path. Its own
+    // packets_per_cb_entry tuning above is the whole story.
+    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+    const uint32_t entry_chunks =
+        entry_chunks_of(entry_unit, chunk_size, packets_per_cb_entry, /*floor_bytes=*/0, cb_depth, max_l1_space);
+    const uint32_t cb_page_size = entry_chunks * chunk_size;
 
     // Input CB
     uint32_t cb0_id = tt::CB::c_in0;
@@ -368,36 +370,42 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
     std::vector<uint32_t> reader_compile_args = {
-        split_factor,                    // chunks per input page (1 unless split)
-        output_chunk_size,               // NOC write size = min(input, output)
-        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks
-        num_devices,                     // device count (stripe indexing)
+        // --- moving chunks ---
+        chunk_size,           // the unit we move
+        in_chunks_per_page,   // chunks per input page
+        out_chunks_per_page,  // chunks per output page
+        packet_size,          // bytes a packet may carry
+        run_max,              // most chunks one run may take; 0 = the whole payload
+        entry_chunks,         // one CB entry, in chunks
+        // --- all_gather ---
+        stripe,       // our chunks per output row
+        num_devices,  // how far apart our rows sit in the output
+        // --- this kernel ---
         cb0_id,                          // cb id
-        cb_depth,                        // cb depth
-        cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size (sets the transfer size, hence the walk order)
-        load_balance_across_alt_routes,  // load_balance_across_alt_routes
+        cb_depth,                        // cb depth, which is also the in-flight trid count
+        load_balance_across_alt_routes,  // alternate between the two routes
         (e_hops > 0) + (s_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
-        run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     // Writer (covers backward directions W-line + N-rect)
     std::vector<uint32_t> writer_compile_args = {
-        output_chunk_size,               // NOC write size = min(input, output)
-        output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
-        output_chunks_per_stripe,        // stripe length in chunks
-        num_devices,                     // device count (stripe indexing)
+        // --- moving chunks ---
+        chunk_size,           // the unit we move
+        out_chunks_per_page,  // chunks per output page
+        packet_size,          // bytes a packet may carry
+        run_max,              // most chunks one run may take; 0 = the whole payload
+        entry_chunks,         // one CB entry, in chunks
+        // --- all_gather ---
+        stripe,       // our chunks per output row
+        num_devices,  // how far apart our rows sit in the output
+        // --- this kernel ---
         cb0_id,                          // cb id
-        cb_page_size,                    // cb entry size
-        packet_size,                     // packet_size (sets the transfer size, hence the walk order)
-        load_balance_across_alt_routes,  // load_balance_across_alt_routes
+        load_balance_across_alt_routes,  // alternate between the two routes
         (w_hops > 0) + (n_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
-        run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -429,10 +437,9 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
 
         // Map this worker's slice of input pages to its slice of output chunks. num_output_chunks is
-        // num_input_pages * split_factor, so the map is just a scale by split_factor (1 in
-        // matched/concat).
-        uint32_t local_output_start = input_tile_id_start * split_factor;
-        uint32_t local_output_end = input_tile_id_end * split_factor;
+        // num_input_pages * in_chunks_per_page, so the map is just a scale by that count.
+        uint32_t local_output_start = input_tile_id_start * in_chunks_per_page;
+        uint32_t local_output_end = input_tile_id_end * in_chunks_per_page;
         uint32_t num_worker_output_chunks = local_output_end - local_output_start;
 
         // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:

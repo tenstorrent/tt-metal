@@ -15,35 +15,41 @@
 
 #include <cstdint>
 
+#include "chunk_walk.hpp"
+#include "concat.hpp"
 #include "multicast_common.hpp"
 
 using address_t = uint32_t;
 
+// Multicast writer: CB consumer, covers the backward directions (W-line + N-rect). Sends our stripe to
+// every device on those routes, and writes it into our own output on the way.
 void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(8);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t run_cap_bytes = get_compile_time_arg_val(10);  // longest run the walk may emit; 0 = no cap
+
+    // --- moving chunks ---
+    constexpr uint32_t chunk_size = get_compile_time_arg_val(0);
+    constexpr uint32_t out_chunks_per_page = get_compile_time_arg_val(1);
+    constexpr uint32_t payload = get_compile_time_arg_val(2);        // bytes a packet may carry
+    constexpr uint32_t asked_run_max = get_compile_time_arg_val(3);  // chunks; 0 = the whole payload
+    constexpr uint32_t entry_chunks = get_compile_time_arg_val(4);
+    // --- all_gather ---
+    constexpr uint32_t stripe = get_compile_time_arg_val(5);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(6);
+    // --- this kernel ---
+    constexpr uint32_t cb_id = get_compile_time_arg_val(7);
+    constexpr bool alternate_routes = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t num_connections = get_compile_time_arg_val(9);
+    constexpr bool do_init_barrier = get_compile_time_arg_val(10) != 0;
     constexpr auto output_tensor_args = TensorAccessorArgs<11>();
 
     constexpr bool enable_fabric = (num_connections > 0);
-    constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
-    constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size, run_cap_bytes);
-    // A chunk bigger than a burst cannot be one NOC command, so it takes the generic path.
-    constexpr bool one_command = output_chunk_size <= NOC_MAX_BURST_SIZE;
-    // A run is emitted as one scatter chunk starting at its source offset within the packet, so every chunk
-    // size has to keep source and destination NoC-write aligned.
-    static_assert(output_chunk_size % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
+    constexpr uint32_t payload_chunks = payload / chunk_size > 0 ? payload / chunk_size : 1;
+    constexpr uint32_t run_max_want = run_max_capped(asked_run_max, payload_chunks, chunk_size);
+    // A run is emitted as one scatter segment starting at its source offset within the packet, so every
+    // chunk size has to keep source and destination NoC-write aligned.
+    static_assert(chunk_size % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -73,7 +79,7 @@ void kernel_main() {
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
-    CircularBuffer cb(cb0_id);
+    CircularBuffer cb(cb_id);
 
     ///////////////////////////////////////////////////
     // FABRIC INIT
@@ -114,9 +120,9 @@ void kernel_main() {
         ++conn;
     }
 
-    // Allocate header and set state for data sends
-    FabricWriter<output_chunk_size, packet_size, load_balance_across_alt_routes> fabric(
-        noc, fabric_connection, num_connections, ranges, ranges_alt);
+    // Allocate headers and set state for data sends
+    MulticastSender<alternate_routes> fabric(fabric_connection, num_connections, ranges, ranges_alt);
+    Packer<chunk_size, payload, MulticastSender<alternate_routes>> packer(noc, fabric);
 
     // Allocate header and set state for semaphore sends
     uint8_t sem_route_id = 0;
@@ -157,31 +163,35 @@ void kernel_main() {
     }
 
     ///////////////////////////////////////////////////
-    // MAIN
+    // SETUP
     ///////////////////////////////////////////////////
 
-    const auto plan = walk_plan<output_chunks_per_page, output_chunk_size, xfer_max>(output_tensor_accessor);
+    const bool packed = packed_pages(output_tensor_accessor, out_chunks_per_page, chunk_size);
+    const uint32_t bank_step = bank_step_of(output_tensor_accessor, out_chunks_per_page);
+    const bool out_in_page = join_in_page(packed, out_chunks_per_page, bank_step);
+    const bool out_across_pages =
+        join_pages(packed, out_chunks_per_page, output_tensor_accessor.contiguous_page_stride(), bank_step);
+    const uint32_t run_max = packed ? run_max_want : 1u;
+    const uint32_t stripe_base = device_idx * stripe;
 
-    TiledWalk walk;
-    walk.init(slice_first_chunk, slice_chunks, 0, plan.stride, plan.xfer);
-    StripeMap<output_chunks_per_stripe, num_devices> map;
-    map.init(device_idx);
+    Walk walk;
+    walk.init(slice_first_chunk, slice_chunks, 0, bank_step, run_max);
 
-    auto output_addr = [&](uint32_t global) {
+    auto out_addr = [&](uint32_t out) {
         return output_tensor_accessor.get_noc_addr(
-            page_of<output_chunks_per_page>(global),
-            byte_off_of<output_chunks_per_page, output_chunk_size>(global),
-            noc.get_noc_id());
+            page_of<out_chunks_per_page>(out), byte_off<out_chunks_per_page, chunk_size>(out), noc.get_noc_id());
     };
-    auto run_addr = [&](uint32_t chunk) { return output_addr(map.at(chunk).global); };
+    // Address of one of our chunks. Named, not inline: an ASSERT argument is unevaluated, and a
+    // lambda cannot appear there.
+    auto run_addr = [&](uint32_t ours) { return out_addr(out_chunk<stripe, num_devices>(ours, stripe_base)); };
 
     auto local_write = [&](uint32_t l1_read_addr, uint64_t dst, uint32_t chunks) {
         // Posted write on a separate VC so it doesn't contend with the fabric writes on the same NOC.
-        if constexpr (one_command) {
+        if constexpr (chunk_fits_command(chunk_size)) {
             noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                 CoreLocalMem<uint32_t>(l1_read_addr),
                 tensor_accessor::Page(dst, 0),
-                chunks * output_chunk_size,
+                chunks * chunk_size,
                 {},
                 {},
                 {.vc = NOC_UNICAST_WRITE_VC + 1});
@@ -189,44 +199,56 @@ void kernel_main() {
             noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
                 CoreLocalMem<uint32_t>(l1_read_addr),
                 tensor_accessor::Page(dst, 0),
-                output_chunk_size,
+                chunk_size,
                 {},
                 {},
                 {.vc = NOC_UNICAST_WRITE_VC + 1});
         }
     };
 
+    ///////////////////////////////////////////////////
+    // MAIN
+    ///////////////////////////////////////////////////
+
     for (uint32_t chunks_sent = 0; chunks_sent < slice_chunks;) {
-        const uint32_t batch = std::min(chunks_per_cb_entry, slice_chunks - chunks_sent);
+        const uint32_t entry = std::min(entry_chunks, slice_chunks - chunks_sent);
         cb.wait_front(1);
         uint32_t l1_read_addr = cb.get_read_ptr();
 
-        for (uint32_t left = batch; left > 0;) {
-            const auto pos = map.at(walk.chunk());
-            const uint32_t run =
-                next_run<output_chunks_per_page>(walk, output_tensor_accessor, plan.out, pos.global, pos.row_end, left);
-            const uint64_t dst = output_addr(pos.global);
-            ASSERT(run_is_linear(walk, run, output_chunk_size, dst, run_addr));
+        for (uint32_t left = entry; left > 0;) {
+            const uint32_t ours = walk.chunk();
+            const uint32_t out = out_chunk<stripe, num_devices>(ours, stripe_base);  // all_gather: where it lands
+            const uint32_t room = row_room<stripe>(ours);  // all_gather: a run stops at the row edge
+            const uint32_t run = run_length<out_chunks_per_page>(
+                output_tensor_accessor,
+                out_in_page,
+                out_across_pages,
+                out,
+                out + room,
+                std::min(left, walk.lane_room()));
+            const uint64_t dst = out_addr(out);
+            ASSERT(run_is_linear(walk, run, chunk_size, dst, run_addr));
             if constexpr (enable_fabric) {
-                const uint32_t page = page_of<output_chunks_per_page>(pos.global);
-                const uint32_t off = byte_off_of<output_chunks_per_page, output_chunk_size>(pos.global);
-                fabric.queue_segment(
+                packer.add_run(
                     l1_read_addr,
-                    tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page, off),
-                    run * output_chunk_size);
+                    tt::tt_fabric::addrgen_detail::get_noc_address(
+                        output_tensor_accessor,
+                        page_of<out_chunks_per_page>(out),
+                        byte_off<out_chunks_per_page, chunk_size>(out)),
+                    run * chunk_size);
             }
             local_write(l1_read_addr, dst, run);
-            l1_read_addr += run * output_chunk_size;
+            l1_read_addr += run * chunk_size;
             left -= run;
             walk.advance(run);
         }
 
         noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes
         if constexpr (enable_fabric) {
-            fabric.flush_packet_and_wait();  // wait for Fabric writes
+            packer.flush();  // wait for Fabric writes
         }
         cb.pop_front(1);
-        chunks_sent += batch;
+        chunks_sent += entry;
     }
 
     ///////////////////////////////////////////////////

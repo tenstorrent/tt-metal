@@ -4,6 +4,8 @@
 
 #include "all_gather_unicast_factory.hpp"
 
+#include "chunk_plan.hpp"
+
 #include <tt-metalium/kernel_types.hpp>  // for tt::tt_metal::NOC
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -20,7 +22,7 @@ using namespace ::ttnn::ccl;
 //
 // Every device relays stripes to its neighbor one hop at a time; a shard reaches far devices by being
 // re-forwarded at each hop. Forward and backward directions run on separate cores. Per direction: the reader
-// (CB producer, no fabric) reads iteration 0 from local input and later iterations from what upstream relayed
+// (CB producer, no fabric) reads hop 0 from local input and later hops from what upstream relayed
 // into our output; the writer (CB consumer) unicasts each stripe one hop to the neighbor's output (same
 // address on every device). Direction/topology are runtime args, so both kernels compile once and run on all
 // cores. Two semaphores: barrier_sem (init handshake) and data_valid_sem (relay gate + completion).
@@ -99,7 +101,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Glossary:
     //   relay          -- re-forward a received stripe from upstream one hop to downstream.
     //   slice          -- portion of tensor stripes allocated to this (link, worker)
-    //   sink direction -- a direction that forwards nothing (num_iters == 0), e.g. a line endpoint's dead side.
+    //   sink direction -- a direction that forwards nothing (num_hops == 0), e.g. a line endpoint's dead side.
     //   sink stripe    -- a stripe consumed here, not relayed onward (a line endpoint's incoming, or a ring
     //                     antipode).
     //   antipode       -- on a ring, the device N/2 hops away.
@@ -120,106 +122,84 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     auto bwd_coord =
         ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, -1, topology, axis);
 
-    // Stripes a direction sends from a device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead endpoint.
-    // Also queried for the downstream device to choose granular vs single data_valid signalling.
-    auto relay_iters = [&](uint32_t idx, bool is_forward) -> uint32_t {
+    // Relay steps a direction takes from a device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead
+    // endpoint. Also queried for the downstream device, to choose fine-grained vs single data_valid signalling.
+    auto relay_hops = [&](uint32_t idx, bool is_forward) -> uint32_t {
         if (is_ring) {
             return num_devices / 2;
         }
         return is_forward ? (idx + 1 < num_devices ? idx + 1 : 0) : (idx > 0 ? num_devices - idx : 0);
     };
-    const uint32_t fwd_iters = relay_iters(device_idx, true);
-    const uint32_t bwd_iters = relay_iters(device_idx, false);
-    TT_FATAL(fwd_iters > 0 || bwd_iters > 0, "device participates in neither direction");
+    const uint32_t fwd_hops = relay_hops(device_idx, true);
+    const uint32_t bwd_hops = relay_hops(device_idx, false);
+    TT_FATAL(fwd_hops > 0 || bwd_hops > 0, "device participates in neither direction");
 
     // Even-sized ring: for load balancing, the antipode device receives the antipode stripe as halves from both
     // forward and backward directions.
     const bool ring_even_split = is_ring && (num_devices % 2 == 0);
     // We use an init barrier to wait for remote output tensors to be allocated.
     // But we cannot skip init_barrier when persistent output buffer is used since:
-    // - The persistent output buffer is also an input source (store-and-forward in the relay iterations).
+    // - The persistent output buffer is also an input source (store-and-forward in the relay hops).
     // - The persistent output buffer may be reused across multiple invocations of this CCL.
     const bool do_init_barrier = true;
 
-    const uint32_t packet_size = operation_attributes.packet_size;
+    const uint32_t fabric_packet_size = operation_attributes.packet_size;
     const auto arch = input_tensor.device()->arch();
 
     ////////////////////////////////////////////////////////////////
-    // Page indexing
+    // Chunks
     //
-    // Glossary (shared with the kernels):
-    //   input/output page -- one page of the input/output tensor buffer.
-    //   chunk             -- the transfer unit, min(input page, output page). An input page is
-    //                        split_factor chunks; an output page is output_chunks_per_page chunks.
-    //   chunk id          -- a chunk's index in this device's contribution.
-    //   global            -- a chunk's index in the output tensor. Rows are strided: between them the
-    //                        output holds the other devices' stripes.
-    //   seqno             -- a chunk's position in the emission order. This is what data_valid counts.
-    //   stride            -- chunk step between neighbours in memory, from TensorAccessor.
-    //   lane              -- residue class mod stride, i.e. one line of chunks contiguous in memory.
-    //   xfer              -- chunks per transfer: the most that fits a packet and one NOC command.
-    //   tile              -- xfer * stride chunks. The walk reads each tile column-major, so a run is
-    //                        long yet consecutive runs sit in different banks.
-    //   run               -- one tile column: chunks contiguous at the destination, sent as one transfer.
-    //   segment           -- one scatter-list entry in a packet.
-    //   stripe            -- the chunks this device contributes per row of the output.
+    // Where the two machineries meet. See the layout map in all_gather_device_operation.cpp.
     //
-    // Three copy modes, picked by input vs output page sizes:
-    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
-    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each
-    //                        chunk lands at a byte offset within a shared output page.
-    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
+    // Glossary, one language everywhere:
+    //   chunk           -- the unit we move. min(input page, output page).
+    //   chunks_per_page -- how many chunks share one page. One number per side, and one of them is 1.
+    //   bank_step       -- page-id step to the next chunk sitting next to this one in memory.
+    //   run             -- chunks next to each other in memory. One NOC command, one packet segment.
+    //   run_max         -- most chunks one run may take.
+    //   payload_chunks  -- chunks the fabric payload could hold.
+    //   packet_chunks   -- chunks a packet really holds: min(payload_chunks, 4 runs).
+    //   entry           -- one CB page, in chunks. Always a whole number of packets.
+    //   stripe          -- our chunks per output row. The one number all_gather hands the chunk
+    //                      machinery: a run stops at the row edge, past which sits another device.
+    //   hop             -- one relay step. Hop 0 sends our own input, later hops relay.
+    //   sink            -- a stripe consumed here, not relayed on.
     //
-    // Host supplies geometry and each worker's slice. The walk order is two numbers the kernels derive
-    // themselves -- stride from TensorAccessor, xfer from the packet size -- so no layout is
-    // special-cased here, and reader and writer cannot disagree.
+    // The host sizes, the kernels walk. Reader and writer read bank_step off the TensorAccessor
+    // themselves, so no layout is special-cased here and the two cannot disagree.
     ////////////////////////////////////////////////////////////////
 
-    // --- Copy mode ---
-    // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
-    // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity -- which is
-    // why chunk sizing differs by the three modes above.
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
-    // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
-    // split writes output-content-sized pieces to separate output page bases.
-    const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
-    const uint32_t output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
-    const uint32_t output_chunks_per_page = is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
-    const uint32_t split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
-    TT_FATAL(
-        output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
-        "concat requires an unpadded input page");  // so slots align to content
+    const auto chunks = chunk_sizes(input_tensor, output_tensor);
+    const uint32_t chunk_size = chunks.chunk_size;
+    const uint32_t in_chunks_per_page = chunks.in_chunks_per_page;
+    const uint32_t out_chunks_per_page = chunks.out_chunks_per_page;
 
-    // Relay reads our own output back into the CB, which is packed at chunk stride, so the output's
-    // aligned page must be exactly tiled by chunks. select_program_factory routes these away;
-    // reaching here means unicast was forced (2D bent axis or neighbour-exchange fabric).
+    // A hop past the first reads our own output back into the CB, which is packed at chunk stride, so
+    // the output's aligned page must be exactly tiled by chunks. select_program_factory routes these
+    // away; reaching here means unicast was forced (2D bent axis or neighbour-exchange fabric).
     TT_FATAL(
-        output_tensor.buffer()->aligned_page_size() == output_chunks_per_page * output_chunk_size,
+        output_tensor.buffer()->aligned_page_size() == out_chunks_per_page * chunk_size,
         "all_gather unicast cannot relay a padded output page: {} B of content in a {} B page holding {} chunk(s) of "
         "{} B. Use a row size that is a multiple of the output's memory alignment, or the same buffer type on both "
         "sides.",
-        output_unaligned_page_size,
+        output_tensor.buffer()->page_size(),
         output_tensor.buffer()->aligned_page_size(),
-        output_chunks_per_page,
-        output_chunk_size);
+        out_chunks_per_page,
+        chunk_size);
 
     const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    const uint32_t num_output_chunks = num_input_pages * split_factor;
+    const uint32_t num_output_chunks = num_input_pages * in_chunks_per_page;
     TT_FATAL(
-        num_output_chunks / split_factor == num_input_pages,
-        "all_gather output chunk count overflowed uint32: {} input pages x split factor {}",
+        num_output_chunks / in_chunks_per_page == num_input_pages,
+        "all_gather output chunk count overflowed uint32: {} input pages x {} chunks per page",
         num_input_pages,
-        split_factor);
+        in_chunks_per_page);
 
-    // TODO: fix the messaging in below function
-    ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
-
-    // --- Stripe geometry ---
+    // --- Stripe ---
     // input_pages_per_stripe = num input pages along [gather dim .. last dim] this
     // device contributes per stripe. For a last-dim RM gather this is the *page* count,
     // which handles sharded RM input (> 1 input page per row).
+    const uint32_t input_content_page = input_tensor.buffer()->page_size();
     const auto& input_shape = input_tensor.padded_shape();
     const auto tile_spec =
         input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
@@ -231,7 +211,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 extent = input_shape[i] / tile_spec.get_width();
             } else {
                 // This is a page count, so divide by the unaligned page size, not aligned
-                extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
+                extent = (input_shape[i] * input_tensor.element_size()) / input_content_page;
             }
         } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
             extent = input_shape[i] / tile_spec.get_height();
@@ -241,12 +221,24 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         input_pages_per_stripe *= extent;
     }
 
-    // Stripe = this device's contiguous run of chunks per row = input_pages_per_stripe
-    // * split_factor. Measured in chunks (not output pages) so multi-shard concat works:
-    // a stripe's chunks are laid across output pages via the inner byte-offset counter
-    // and may straddle pages.
-    const uint32_t output_chunks_per_stripe = input_pages_per_stripe * split_factor;
-    TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
+    // Our chunks per output row. Measured in chunks (not output pages) so multi-shard concat works:
+    // a stripe's chunks are laid across output pages via the inner byte offset and may straddle pages.
+    const uint32_t stripe = input_pages_per_stripe * in_chunks_per_page;
+    TT_FATAL(stripe > 0, "stripe must be > 0");
+
+    // --- Packets and runs ---
+    // Whole chunks only: a packet cannot use a tail shorter than one chunk, and leaving that tail out
+    // of the figure the CB entry is sized from keeps entry and packet boundaries coincident.
+    // bank_step is 1 on a sharded output -- its chunks are already neighbours, so runs are long and
+    // nothing below caps them.
+    const uint32_t payload_chunks = std::max(1u, fabric_packet_size / chunk_size);
+    const uint32_t packet_size = payload_chunks * chunk_size;
+    const uint32_t bank_step =
+        output_tensor.memory_config().is_sharded()
+            ? 1u
+            : std::max(1u, mesh_device->allocator()->get_num_banks(output_tensor.buffer()->buffer_type()));
+    const uint32_t packet_chunks = packet_chunks_of(payload_chunks, stripe, bank_step);
+    report_payload(packet_size, chunk_size, stripe, bank_step, arch);
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -282,7 +274,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // A long stripe outlasts a transfer many times over, so a worker's runs stay inside one row and
         // its writes land sequentially at the destination; short stripes straddle a row edge on every
         // transfer, which is where the extra worker starts paying.
-        const bool long_stripe = output_chunks_per_stripe >= 64;
+        const bool long_stripe = stripe >= 64;
         // Keyed on this device's own share of the link, not the whole gathered output: that share is what
         // actually transfers, and the boundaries below sit at the same per-device figure at 2, 4 and 8
         // devices. Stated against the total they would only be right at 8.
@@ -300,46 +292,27 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // No run cap: the best run length lands at the hardware ceiling (7616 B), so any value settable
         // here is already above it and would only cost payload.
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // Calibrated on two machines: 8 devices x 2 links, and 4 devices x 4 links with the link count
-        // also forced down to 2 and 1. Page size moves none of the boundaries below; stripe length and
-        // link count do, so both appear in the rules.
+        // Calibrated at 8 devices x 2 links, ring and line, from 16 KB to 200 MB of output, at 2 KB and
+        // 1088 B chunks. Stripe length moves none of these boundaries any more -- the chunk machinery
+        // handles it -- so only volume and topology appear below.
         //
-        // workers_per_dir: each extra worker feeds a link harder but costs a core and, past one, a mux
-        // core plus a NOC hop per packet. How far that pays scales with link count, because workers are
-        // per-link while DRAM is shared -- so at 4 links a fourth worker regresses, while at 2 links it
-        // is worth 1.4-2.2% once the output passes ~16 MB.
-        // The scaling variable differs by topology:
-        //  - Ring: total output bytes. The boundary sits at the same total volume at every link count
-        //    measured (the per-link figure moves with links, the total does not).
-        //  - Line: per-link bytes divided by device count. A line's relay crosses N-1 hops, so its
-        //    per-device relay load -- and with it the point where another worker pays -- scales with N.
-        //    This one is a two-machine fit (4 and 8 devices), not a measured law.
+        // workers_per_dir: two, or four on a ring once the output is big enough to keep four fed. Each
+        // extra worker feeds a link harder but costs a core and, past one, a mux core plus a NOC hop per
+        // packet. Two is enough almost everywhere now that a packet is filled: two beats four by 5-9%
+        // from 4 to 10 MB, ties at 20 MB, and loses 1.6-2.7% from 50 MB up, so the crossover sits
+        // between 20 and 50 MB. One worker is never right in this range (+27% at 4 MB, +75% at 20 MB),
+        // and three never beats the better of two and four by more than the run-to-run spread. Below
+        // ~2 MB the choice is inside noise (within 4% across 16 KB to 1.7 MB).
+        //
+        // A line stays at two at every size: its relay crosses N-1 hops, so the per-hop send is the
+        // serialising step and more feeders cannot help -- four measured 1.5% slower at 50 MB and level
+        // at 100 MB. A ring sends both directions at once and does saturate its links, which is why the
+        // volume rule is ring-only.
         const uint64_t total_output_bytes = per_link_bytes * num_links;
-        // A stripe shorter than a transfer straddles a row edge on nearly every send, so the extra workers
-        // cannot land sequential writes and stop paying.
-        const bool long_stripe = output_chunks_per_stripe >= 8;
-        if (is_ring) {
-            workers_per_dir = total_output_bytes < 64u * 1024u ? 1u
-                              : (total_output_bytes < 1536u * 1024u || !long_stripe)
-                                  ? 2u
-                                  : (total_output_bytes >= 16u * 1024u * 1024u ? 4u : 3u);
-        } else {
-            // A line wants two workers over essentially its whole useful range: three loses 3-8% from
-            // 1 MB per link up, and below ~256 KB per link the choice is inside the noise.
-            const uint64_t dev = std::max(1u, num_devices);
-            workers_per_dir = per_link_bytes < (640u * 1024u / dev) ? 1u : 2u;
-        }
-        // packets_per_cb_entry: one, except in a narrow stripe band. A two-packet entry halves the
-        // reader/writer handshake count but leaves the writer trailing an extra packet behind, and that
-        // lag costs 1-4% at almost every stripe length -- measured at 2, 4, 5, 8, 20, 32 and 64 chunks.
-        // Between 9 and 15 it inverts hard, and by a lot: +16% on a ring and +23-27% on a line at
-        // stripes 10 and 12, with stripe 8 and 16 sitting within half a percent either way. A packet
-        // holds 7 chunks of a 2 KB page, so this band is where a one-packet entry leaves its second
-        // entry roughly half empty on every stripe while a two-packet entry covers the stripe in one.
-        // Measured band, not a derived one: the boundaries are where the sign flips, and the two
-        // shapes in it (last dim 2560 and 3072 at 8 devices) are otherwise 11-27% off their best.
-        const bool half_empty_second_entry = output_chunks_per_stripe >= 9 && output_chunks_per_stripe <= 15;
-        packets_per_cb_entry = half_empty_second_entry ? 2u : 1u;
+        workers_per_dir = (is_ring && total_output_bytes >= 32u * 1024u * 1024u) ? 4u : 2u;
+        // packets_per_cb_entry: one. The CB entry rule below sizes the entry from what a packet
+        // actually carries, which is what the old stripe band was reaching for by hand.
+        packets_per_cb_entry = 1;
         // run_cap_bytes: capping a run costs packet fill but stops the walk parking in one DRAM bank. On
         // a ring the cap follows *link count*: every link runs its own 2 x workers_per_dir readers
         // against one shared DRAM, so the more links, the shorter each run has to be to keep the banks
@@ -356,6 +329,14 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // mux_slots_per_channel: one slot wins only on an even split, and loses more when the split is
         // uneven than it wins there, so the even case is not worth special-casing.
         mux_slots_per_channel = 2;
+    }
+
+    // Two upper bounds on a run: the geometry rule (chunk_plan.hpp) and the per-arch cap above. Take
+    // the tighter of the two. 0 means no cap, which is what the kernels expect.
+    uint32_t run_max = run_max_of(packet_chunks, payload_chunks, chunk_size);
+    if (run_cap_bytes != 0) {
+        const uint32_t arch_run_max = std::max(1u, run_cap_bytes / chunk_size);
+        run_max = run_max != 0 ? std::min(run_max, arch_run_max) : arch_run_max;
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -405,7 +386,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         return group_at(link, dir).workers[w];
     };
     auto dir_neighbor = [&](uint32_t dir) { return dir == 0 ? fwd_coord : bwd_coord; };
-    auto dir_iters = [&](uint32_t dir) { return dir == 0 ? fwd_iters : bwd_iters; };
+    auto dir_hops = [&](uint32_t dir) { return dir == 0 ? fwd_hops : bwd_hops; };
 
     // Reader/writer kernels + CB run on worker cores only; the mux kernels run on their own cores.
     std::vector<CoreCoord> worker_cores;
@@ -425,26 +406,33 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Circular Buffer and Kernel creation
     ////////////////////////////////////////////////////////////////
 
-    // --- CB sizing ---
-    // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
-    // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
-    // can still end early: broken contiguity can fill its scatter chunks before its payload.
-    const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
-    uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
-    chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
-    uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
-    // Pack several packets into one CB page to reduce reader/writer sync frequency (this also raises the
-    // effective CB depth). An integer multiplier preserves the whole-packet and whole-page properties above.
-    // The clamp is defensive: it holds whatever packets_per_cb_entry is tuned to, including 1.
+    // --- CB entry ---
+    // An entry holds a whole number of packets, and a whole number of pages on whichever side shares
+    // one, so an entry boundary never cuts either; one of those two counts is always 1.
+    //
+    // The unit is what a packet actually carries -- not what the payload could carry, which is a
+    // different number whenever the segment count ends the packet first. Sizing from the payload
+    // leaves the entry a fraction of a packet and cuts one at every boundary: a 4-chunk stripe
+    // measured 250-255 us at every such entry against 223-227 us at every multiple of what a packet
+    // holds.
+    const uint32_t chunks_per_group = std::max(in_chunks_per_page, out_chunks_per_page);
+    uint32_t entry_unit = packet_chunks;
+    entry_unit = std::max(chunks_per_group, (entry_unit / chunks_per_group) * chunks_per_group);
+    // One packet, or enough packets to reach 14 KB. Below that the reader/writer handshake shows: at
+    // a 8192 B fabric payload a one-packet entry measured 22% slower at every stripe. Above it, more
+    // packets per entry only adds writer lag -- two measured 3-7% slower than one at stripes 16-64.
+    // 14 KB is also where both per-arch tunings landed on their own: Wormhole's 7616 B packet at 3
+    // packets/entry is 18 KB, Blackhole's 15232 B at 1 packet is 14 KB.
+    //
+    // Known gap: at a 1088 B chunk, stripes 10 and 12 want a ~30 KB entry -- five or six packets, and
+    // not a whole number of them -- and lose 4-9% to this rule. Every setting that serves them costs
+    // more elsewhere (the same entries are 5-9% slower at stripes 4 and 8 of that same chunk size),
+    // so it is left as measured rather than special-cased.
+    const uint32_t entry_floor_bytes = 14 * 1024;
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, packets_per_cb_entry);
-    if (multiplier < packets_per_cb_entry) {
-        log_warning(
-            tt::LogOp,
-            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
-            max_l1_space);
-    }
-    cb_page_size *= multiplier;
+    const uint32_t entry_chunks =
+        entry_chunks_of(entry_unit, chunk_size, packets_per_cb_entry, entry_floor_bytes, cb_depth, max_l1_space);
+    const uint32_t cb_page_size = entry_chunks * chunk_size;
 
     // Input and relay CB
     uint32_t cb0_id = tt::CB::c_in0;
@@ -453,48 +441,53 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
-    // data_valid_granularity:
-    // data_valid is signalled once per this many CB pages so a downstream can start relaying before the whole
-    // stripe arrives. Larger = fewer syncs, smaller = finer pipelining.
-    // Sized for exactly 2 signals per stripe: the downstream relay starts at the halfway point without paying
-    // for a signal per CB page. Both neighbours are worse, and the two divides have to round up -- truncating
-    // them lands on 3-4 signals instead.
+    // --- signal rate ---
+    // signal_every: data_valid is signalled once per this many entries, so a downstream can start
+    // relaying before the whole stripe arrives. Larger = fewer syncs, smaller = finer pipelining.
+    // Sized for exactly 2 signals per stripe: the downstream relay starts at the halfway point without
+    // paying for a signal per entry. Both neighbours are worse, and the two divides have to round up --
+    // truncating them lands on 3-4 signals instead.
     const uint32_t total_slices = num_links * workers_per_dir;
-    const uint32_t outputs_per_cb_page = std::max(1u, cb_page_size / output_chunk_size);
     const uint32_t chunks_per_slice = std::max(1u, num_output_chunks / total_slices);
-    const uint32_t cb_pages_per_stripe = std::max(1u, tt::div_up(chunks_per_slice, outputs_per_cb_page));
-    constexpr uint32_t signals_per_stripe = 2;
-    const uint32_t data_valid_granularity = std::max(1u, tt::div_up(cb_pages_per_stripe, signals_per_stripe));
+    const uint32_t entries_per_stripe = std::max(1u, tt::div_up(chunks_per_slice, entry_chunks));
+    const uint32_t signals_per_stripe = 2;
+    const uint32_t signal_every = std::max(1u, tt::div_up(entries_per_stripe, signals_per_stripe));
 
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        split_factor,              // chunks per input page (1 unless split)
-        output_chunk_size,         // NOC write size = min(input, output)
-        output_chunks_per_page,    // chunks per output page (1 unless concat)
-        output_chunks_per_stripe,  // stripe length in chunks
-        num_devices,               // device count (stripe indexing)
-        cb0_id,                    // cb id
-        cb_page_size,              // cb entry size
-        do_init_barrier,           // wait for remote output allocation before relaying
-        packet_size,               // packet_size (sets the transfer size, hence the walk order)
-        run_cap_bytes,             // longest run the walk may emit; 0 = no cap
+        // --- moving chunks ---
+        chunk_size,           // the unit we move
+        in_chunks_per_page,   // chunks per input page
+        out_chunks_per_page,  // chunks per output page
+        packet_size,          // bytes a packet may carry
+        run_max,              // most chunks one run may take; 0 = the whole payload
+        entry_chunks,         // one CB entry, in chunks
+        // --- all_gather ---
+        stripe,       // our chunks per output row
+        num_devices,  // how far apart our rows sit in the output
+        // --- this kernel ---
+        cb0_id,           // cb id
+        do_init_barrier,  // wait for remote output allocation before relaying
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
-        output_chunk_size,         // NOC write size = min(input, output)
-        output_chunks_per_page,    // chunks per output page (1 unless concat)
-        output_chunks_per_stripe,  // stripe length in chunks
-        num_devices,               // device count (stripe indexing)
-        cb0_id,                    // cb id
-        cb_page_size,              // cb entry size
-        packet_size,               // packet_size
-        do_init_barrier,           // send init handshake before relaying
-        data_valid_granularity,    // signal data_valid once per this many CB pages
-        run_cap_bytes,             // longest run the walk may emit; 0 = no cap
+        // --- moving chunks ---
+        chunk_size,           // the unit we move
+        out_chunks_per_page,  // chunks per output page
+        packet_size,          // bytes a packet may carry
+        run_max,              // most chunks one run may take; 0 = the whole payload
+        entry_chunks,         // one CB entry, in chunks
+        // --- all_gather ---
+        stripe,       // our chunks per output row
+        num_devices,  // how far apart our rows sit in the output
+        // --- this kernel ---
+        cb0_id,           // cb id
+        do_init_barrier,  // send init handshake before relaying
+        signal_every,     // signal data_valid once per this many entries
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -530,7 +523,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             for (uint32_t dir = 0; dir < num_directions; ++dir) {
                 // MuxV2 only exits once every channel has been opened and closed, so a mux with a channel nobody
                 // connects to hangs the op. Hence mux must be created under the same condition as worker connection.
-                if (dir_iters(dir) == 0) {
+                if (dir_hops(dir) == 0) {
                     continue;
                 }
                 const auto dst_node = mesh_device->get_fabric_node_id(*dir_neighbor(dir));
@@ -569,10 +562,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             const uint32_t input_tile_id_end =
                 ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
             // Map this slice of input pages to its slice of output chunks. num_output_chunks is
-            // num_input_pages * split_factor, so the map is just a scale by split_factor (1 in
-            // matched/concat).
-            const uint32_t local_output_start = input_tile_id_start * split_factor;
-            const uint32_t local_output_end = input_tile_id_end * split_factor;
+            // num_input_pages * in_chunks_per_page, so the map is just a scale by that count.
+            const uint32_t local_output_start = input_tile_id_start * in_chunks_per_page;
+            const uint32_t local_output_end = input_tile_id_end * in_chunks_per_page;
             const uint32_t num_worker_output_chunks = local_output_end - local_output_start;
             const uint32_t half = num_worker_output_chunks / 2;
 
@@ -588,24 +580,24 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 const auto neighbor = dir_neighbor(dir);
 
                 const uint32_t stripe_step = is_forward ? num_devices - 1 : 1;
-                const uint32_t num_iters = dir_iters(dir);
+                const uint32_t num_hops = dir_hops(dir);
                 const uint32_t num_recv =
                     is_ring ? num_devices / 2 : (is_forward ? device_idx : num_devices - 1 - device_idx);
-                const bool do_local_write = is_forward ? (fwd_iters > 0) : (fwd_iters == 0);
+                const bool do_local_write = is_forward ? (fwd_hops > 0) : (fwd_hops == 0);
 
                 // data_valid sem is granularly incremented when downstream needs to relay the stripe.
                 // data_valid sem is incremented just once when downstream is a sink (doesn't need to relay).
-                uint32_t num_granular = 0;
-                if (num_iters > 0) {
-                    const uint32_t downstream_iters =
+                uint32_t relayed_hops = 0;
+                if (num_hops > 0) {
+                    const uint32_t downstream_hops =
                         is_ring ? num_devices / 2
-                                : relay_iters(is_forward ? device_idx + 1 : device_idx - 1, is_forward);
-                    num_granular = downstream_iters > 0 ? downstream_iters - 1 : 0;
+                                : relay_hops(is_forward ? device_idx + 1 : device_idx - 1, is_forward);
+                    relayed_hops = downstream_hops > 0 ? downstream_hops - 1 : 0;
                 }
 
-                // Even ring: the antipode stripe is split between the two directions. Expressed as a range of
-                // seqnos, not chunk ids, so the downstream reader's data_valid arithmetic holds once the walk
-                // is strided.
+                // Even ring: the antipode stripe is split between the two directions. Expressed as a range
+                // of positions in the emission order, not chunk ids, so the downstream reader's data_valid
+                // arithmetic holds once the walk is strided.
                 uint32_t final_skip = 0;
                 uint32_t final_take = num_worker_output_chunks;
                 if (ring_even_split) {
@@ -622,13 +614,13 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     input_addr,                // input tensor address
                     output_addr,               // output tensor address
                     device_idx,                // this device's index (initial stripe)
-                    stripe_step,               // stripe index step per iteration
-                    num_iters,                 // iterations this direction runs
+                    stripe_step,               // stripe index step per hop
+                    num_hops,                  // relay steps this direction runs
                     total_chunks,              // chunks upstream delivers (completion wait)
                     local_output_start,        // this worker's slice start (chunk id)
                     num_worker_output_chunks,  // this worker's slice length (chunks)
-                    final_skip,                // last-iteration seqno offset (even-ring split)
-                    final_take,                // last-iteration seqno count (even-ring split)
+                    final_skip,                // last hop: where in the emission order to start (even-ring split)
+                    final_take,                // last hop: how many to take (even-ring split)
                     barrier_sem.address(),     // barrier_sem L1 address
                     data_valid_sem.address(),  // data_valid_sem L1 address
                 };
@@ -638,27 +630,27 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 const auto route_node =
                     neighbor.has_value() ? mesh_device->get_fabric_node_id(*neighbor) : sender_fabric_node_id;
                 std::vector<uint32_t> writer_rt_args = {
-                    output_addr,                      // output tensor address
-                    device_idx,                       // this device's index (initial stripe)
-                    stripe_step,                      // stripe index step per iteration
-                    num_iters,                        // iterations this direction runs
-                    local_output_start,               // this worker's slice start (chunk id)
-                    num_worker_output_chunks,         // this worker's slice length (chunks)
-                    final_skip,                       // last-iteration seqno offset (even-ring split)
-                    final_take,                       // last-iteration seqno count (even-ring split)
-                    do_local_write ? 1u : 0u,         // write local data into local output on iteration 0
-                    barrier_sem.address(),            // barrier_sem L1 address
-                    data_valid_sem.address(),         // data_valid_sem L1 address
-                    (uint32_t)partner_core.x,         // barrier_sem target (neighbor partner core x)
-                    (uint32_t)partner_core.y,         // barrier_sem target (neighbor partner core y)
-                    (uint32_t)mirror_core.x,          // data_valid_sem target (neighbor mirror core x)
-                    (uint32_t)mirror_core.y,          // data_valid_sem target (neighbor mirror core y)
-                    num_granular,                     // leading sends the downstream relays
-                    (uint32_t)route_node.chip_id,     // neighbor chip id (packet header 2D route)
+                    output_addr,                   // output tensor address
+                    device_idx,                    // this device's index (initial stripe)
+                    stripe_step,                   // stripe index step per hop
+                    num_hops,                      // relay steps this direction runs
+                    local_output_start,            // this worker's slice start (chunk id)
+                    num_worker_output_chunks,      // this worker's slice length (chunks)
+                    final_skip,                    // last hop: where in the emission order to start (even-ring split)
+                    final_take,                    // last hop: how many to take (even-ring split)
+                    do_local_write ? 1u : 0u,      // write local data into local output on hop 0
+                    barrier_sem.address(),         // barrier_sem L1 address
+                    data_valid_sem.address(),      // data_valid_sem L1 address
+                    (uint32_t)partner_core.x,      // barrier_sem target (neighbor partner core x)
+                    (uint32_t)partner_core.y,      // barrier_sem target (neighbor partner core y)
+                    (uint32_t)mirror_core.x,       // data_valid_sem target (neighbor mirror core x)
+                    (uint32_t)mirror_core.y,       // data_valid_sem target (neighbor mirror core y)
+                    relayed_hops,                  // leading sends the downstream relays
+                    (uint32_t)route_node.chip_id,  // neighbor chip id (packet header 2D route)
                     (uint32_t)(*route_node.mesh_id),  // neighbor mesh id (packet header 2D route)
                 };
-                TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active direction must have a neighbor");
-                if (num_iters > 0) {
+                TT_FATAL(num_hops == 0 || neighbor.has_value(), "an active direction must have a neighbor");
+                if (num_hops > 0) {
                     if (use_mux) {
                         const CoreCoord mux_vc = mesh_device->worker_core_from_logical_core(mux_core(link, dir));
                         const auto flow_control_sem_id = tt::tt_metal::CreateSemaphore(program, core, 0);
