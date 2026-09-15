@@ -16,6 +16,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -24,6 +25,7 @@
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 #include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
 #include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -180,6 +182,160 @@ autograd::TensorPtr clip(const autograd::TensorPtr& tensor, float lo, float hi) 
         auto res = ttnn::clip_bw(out->get_grad(), tensor->get_value(), lo, hi);
         tensor->add_grad(res[0]);
     };
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr sigmoid(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::sigmoid(tensor->get_value()));
+
+    autograd::GradFunction grad = [tensor, out]() {
+        auto res = ttnn::sigmoid_bw(out->get_grad(), tensor->get_value());
+        tensor->add_grad(res[0]);
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr sum_over_dim(const autograd::TensorPtr& tensor, int dim) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn_fixed::sum_ttnn(tensor->get_value(), dim, /* keep_dim */ true));
+
+    autograd::GradFunction grad = [tensor, out, dim]() {
+        // Every input element along `dim` contributed once, so the gradient is
+        // the upstream gradient broadcast back over the reduced axis.
+        auto input_shape = tensor->get_value().logical_shape();
+        const auto rank = static_cast<int>(input_shape.rank());
+        const int axis = dim < 0 ? dim + rank : dim;
+
+        ttnn::SmallVector<uint32_t> repeats(rank, 1U);
+        repeats[axis] = input_shape[axis];
+        tensor->add_grad(ttnn::repeat(out->get_grad(), ttnn::Shape(repeats)));
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr cumsum(const autograd::TensorPtr& tensor, int dim) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::cumsum(tensor->get_value(), dim, /* dtype */ std::nullopt, /* reverse_order */ false));
+
+    autograd::GradFunction grad = [tensor, out, dim]() {
+        // out_i = sum_{j<=i} x_j, so dL/dx_i = sum_{j>=i} g_j: a reverse cumsum.
+        tensor->add_grad(ttnn::cumsum(out->get_grad(), dim, /* dtype */ std::nullopt, /* reverse_order */ true));
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr softplus(const autograd::TensorPtr& tensor, float beta, float threshold) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::softplus(tensor->get_value(), beta, threshold));
+
+    autograd::GradFunction grad = [tensor, out, beta, threshold]() {
+        auto res = ttnn::softplus_bw(out->get_grad(), tensor->get_value(), beta, threshold);
+        tensor->add_grad(res[0]);
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr l2_norm(const autograd::TensorPtr& tensor, float epsilon) {
+    auto out = autograd::create_tensor();
+
+    auto input = tensor->get_value();
+    auto squared_sum = ttnn_fixed::sum_ttnn(ttnn::multiply(input, input), 3, /* keep_dim */ true);
+    auto inv_norm = ttnn::rsqrt(ttnn::add(squared_sum, epsilon));
+    auto normalized = ttnn::multiply(input, inv_norm);
+    out->set_value(normalized);
+
+    autograd::GradFunction grad = [tensor, out, inv_norm, normalized]() {
+        // With r = rsqrt(sum(x^2) + eps) and y = x * r,
+        //     dL/dx = r * (g - y * sum(g * y))
+        // which keeps the reduction in terms of y instead of recomputing it from x.
+        auto upstream = out->get_grad();
+        auto projection = ttnn_fixed::sum_ttnn(ttnn::multiply(upstream, normalized), 3, /* keep_dim */ true);
+        tensor->add_grad(ttnn::multiply(inv_norm, ttnn::subtract(upstream, ttnn::multiply(normalized, projection))));
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+namespace {
+
+// Slice `length` elements starting at `start` along `dim`, then pad the opposite
+// end back to the original extent with zeros. Used by shift_along_dim for both
+// the forward (pad at the front) and the backward (pad at the back).
+ttnn::Tensor shift_impl(const ttnn::Tensor& input, int axis, uint32_t shift, bool pad_front) {
+    const auto shape = input.logical_shape();
+    const auto rank = static_cast<int>(shape.rank());
+    const uint32_t extent = shape[axis];
+
+    ttsl::SmallVector<uint32_t> start(rank, 0U);
+    ttsl::SmallVector<uint32_t> end(rank);
+    ttsl::SmallVector<uint32_t> step(rank, 1U);
+    for (int i = 0; i < rank; ++i) {
+        end[i] = shape[i];
+    }
+    if (pad_front) {
+        // Keep [0, extent - shift) and prepend zeros.
+        end[axis] = extent - shift;
+    } else {
+        // Keep [shift, extent) and append zeros.
+        start[axis] = shift;
+    }
+    auto kept = ttnn::slice(input, start, end, step);
+
+    auto pad_shape = shape;
+    pad_shape[axis] = shift;
+    auto zeros = core::zeros(pad_shape, &autograd::ctx().get_device(), input.dtype());
+
+    std::vector<ttnn::Tensor> parts =
+        pad_front ? std::vector<ttnn::Tensor>{zeros, kept} : std::vector<ttnn::Tensor>{kept, zeros};
+    return ttnn::concat(parts, axis);
+}
+
+}  // namespace
+
+autograd::TensorPtr shift_along_dim(const autograd::TensorPtr& tensor, int dim, int shift) {
+    if (shift == 0) {
+        return tensor;
+    }
+    if (shift < 0) {
+        throw std::runtime_error("shift_along_dim expects a non-negative shift");
+    }
+
+    const auto rank = static_cast<int>(tensor->get_value().logical_shape().rank());
+    const int axis = dim < 0 ? dim + rank : dim;
+    const auto amount = static_cast<uint32_t>(shift);
+
+    auto out = autograd::create_tensor();
+    out->set_value(shift_impl(tensor->get_value(), axis, amount, /* pad_front */ true));
+
+    autograd::GradFunction grad = [tensor, out, axis, amount]() {
+        // out[t] = x[t - shift], so dL/dx[t] = g[t + shift] -- the same shift
+        // the other way, which drops the leading rows and pads the tail.
+        tensor->add_grad(shift_impl(out->get_grad(), axis, amount, /* pad_front */ false));
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
+    return out;
+}
+
+autograd::TensorPtr transpose(const autograd::TensorPtr& tensor, int dim0, int dim1) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn::transpose(tensor->get_value(), dim0, dim1));
+
+    autograd::GradFunction grad = [tensor, out, dim0, dim1]() {
+        tensor->add_grad(ttnn::transpose(out->get_grad(), dim0, dim1));
+    };
+
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
     return out;
 }

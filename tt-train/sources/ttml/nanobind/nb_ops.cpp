@@ -574,6 +574,41 @@ void py_module(nb::module_& m) {
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
+        py_unary.def("sigmoid", &ttml::ops::sigmoid, nb::arg("tensor"));
+        py_unary.def(
+            "sum_over_dim",
+            &ttml::ops::sum_over_dim,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            "Sum along a single axis, keeping the reduced dim.");
+        py_unary.def(
+            "cumsum",
+            &ttml::ops::cumsum,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            "Cumulative sum along dim; backward is the corresponding reverse cumsum.");
+        py_unary.def(
+            "softplus",
+            &ttml::ops::softplus,
+            nb::arg("tensor"),
+            nb::arg("beta") = 1.0F,
+            nb::arg("threshold") = 20.0F,
+            "log(1 + exp(beta * x)) / beta, linear above threshold.");
+        py_unary.def(
+            "l2_norm",
+            &ttml::ops::l2_norm,
+            nb::arg("tensor"),
+            nb::arg("epsilon") = 1e-6F,
+            "L2-normalize along the last dim: x * rsqrt(sum(x^2) + epsilon).");
+        py_unary.def(
+            "shift_along_dim",
+            &ttml::ops::shift_along_dim,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("shift"),
+            "Shift forward along dim by shift, zero-filling the front (causal conv building block).");
+        py_unary.def(
+            "transpose", &ttml::ops::transpose, nb::arg("tensor"), nb::arg("dim0"), nb::arg("dim1"), "Swap two dims.");
         py_unary.def(
             "polynorm3",
             [](const ttml::autograd::TensorPtr& tensor,

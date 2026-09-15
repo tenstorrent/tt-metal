@@ -32,11 +32,47 @@ ttnn::Tensor matmul(
         /* optional_output_tensor */ std::move(output_tensor));
 }
 
+namespace {
+
+// True when `t` carries real batch dims, i.e. it is not just a 2D operand
+// wearing leading 1s (the `[1, 1, out, in]` weight of a linear layer).
+bool has_batch_dims(const ttnn::Tensor& t) {
+    const auto shape = t.logical_shape();
+    const auto rank = static_cast<int>(shape.rank());
+    for (int i = 0; i < rank - 2; ++i) {
+        if (shape[i] != 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 std::pair<ttnn::Tensor, ttnn::Tensor> matmul_backward(
     const ttnn::Tensor& a, const ttnn::Tensor& b, const ttnn::Tensor& out_grad, bool transpose_a, bool transpose_b) {
     auto a_shape = a.logical_shape();
     auto b_shape = b.logical_shape();
     auto grad_shape = out_grad.logical_shape();
+
+    // Batch-by-batch matmul (attention scores, the gated delta rule, ...).
+    //
+    // The fast path below flattens `a` and `out_grad` to rank 2, which is only
+    // sound when `b` is effectively a 2D weight: the flattened operand is then
+    // matmul'd against a still-batched `b`, and ttnn requires the higher-rank
+    // operand's leading dims to be 1. When `b` really is batched that assert
+    // fires, so keep every operand at full rank and use the textbook forms:
+    //
+    //   C = op(A) @ op(B)
+    //   dA = g @ op(B)^T     (or op(B) @ g^T   when A was given transposed)
+    //   dB = op(A)^T @ g     (or g^T @ op(A)   when B was given transposed)
+    if (has_batch_dims(b)) {
+        ttnn::Tensor batched_a_grad = transpose_a ? ttnn_fixed::matmul(b, out_grad, transpose_b, true)
+                                                  : ttnn_fixed::matmul(out_grad, b, false, !transpose_b);
+        ttnn::Tensor batched_b_grad = transpose_b ? ttnn_fixed::matmul(out_grad, a, true, transpose_a)
+                                                  : ttnn_fixed::matmul(a, out_grad, !transpose_a, false);
+        return {batched_a_grad, batched_b_grad};
+    }
 
     auto volume_without_features_a = a.logical_volume() / static_cast<uint64_t>(a.logical_shape()[-1]);
     auto reshaped_a =
