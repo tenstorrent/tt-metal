@@ -344,12 +344,45 @@ def _compute_and_send(
     return t_start
 
 
-def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float) -> None:
+def _stamp_last_chunk_end(runtime, rank: int, first_compute_start, n_done: int) -> float:
+    """Device-synchronised end of the last chunk's compute, stamped BEFORE shutdown and drain.
+
+    `_drain_and_log_e2e` runs after `_forward_shutdown` and after the fabric drain, so the
+    `last_compute_end` it stamps is not the end of compute -- it absorbs the shutdown sentinel's
+    D2D forward plus the drain. That is also why the last chunk's duration is otherwise
+    unobtainable: `_compute_and_send` returns the chunk's START, and `_record_chunk_timing` only
+    fires under SYNC_PER_CHUNK (which perf runs must not set, as it removes the overlap being
+    measured), so differencing CHUNK_START stamps gives N-1 intervals for N chunks -- and none at
+    all for a single-chunk request.
+
+    One synchronize, once per run, at a point where there is no more work to overlap.
+    """
+    ttnn.synchronize_device(runtime.mesh_device)
+    last_chunk_end = time.time()
+    fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
+    logger.info(
+        f"[pp rank {rank}] E2E_CLOCK_V2 first_compute_start={fcs} "
+        f"last_chunk_end={last_chunk_end:.6f} chunks={n_done}"
+    )
+    return last_chunk_end
+
+
+def _drain_and_log_e2e(
+    runtime, rank: int, d2d_out, first_compute_start, n_done: int, t0: float, last_chunk_end: Optional[float] = None
+) -> None:
     if d2d_out is not None:
         d2d_out.wait_for_fabric_links()
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
-    logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
+    drain_end = time.time()
+    # Emitted unchanged so existing logs and analyzers stay comparable. It is a post-drain stamp,
+    # not the end of compute -- E2E_CLOCK_V2 above is. The gap between them is logged below.
+    logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={drain_end:.6f}")
+    if last_chunk_end is not None:
+        logger.info(
+            f"[pp rank {rank}] E2E_DRAIN_GAP gap_ms={(drain_end - last_chunk_end) * 1000.0:.3f} "
+            f"(E2E_CLOCK last_compute_end - E2E_CLOCK_V2 last_chunk_end)"
+        )
     logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
 
 
@@ -375,6 +408,7 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    last_chunk_end = None
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -383,6 +417,7 @@ def run_request_loop(
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
+            last_chunk_end = _stamp_last_chunk_end(runtime, rank, first, c)
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_msg)
             if d2d_out is not None:
@@ -394,7 +429,7 @@ def run_request_loop(
         if first is None:
             first = t
         c += 1
-    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
+    _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, last_chunk_end)
 
 
 def _print_config() -> None:
