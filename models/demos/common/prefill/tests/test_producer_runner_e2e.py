@@ -190,7 +190,8 @@ SCENARIOS = {
     # 6) GLM-5.2 with MTP4 (#53533): scenario 4 plus four Multi-Token-Prediction levels after the
     #    trunk's last layer. What this exercises that scenario 4 does not, end to end through the
     #    real serving path:
-    #      * the H2D socket carries CHUNK_SIZE + K tokens per chunk, in rows that OVERLAP by K, so
+    #      * the H2D socket carries CHUNK_SIZE + num_mtp_tokens(K) ids per chunk -- K real lookahead
+    #        ids then alignment pad, the inference server's own shape -- in rows that OVERLAP by K, so
     #        MTP level k's window is the same local slice on every SP chip (no cross-chip rotation);
     #      * the runner slices the trunk's own CHUNK_SIZE tokens back out ON DEVICE and the trunk
     #        forward is bit-identical to scenario 4's -- which is exactly what the 78-layer KVPE +

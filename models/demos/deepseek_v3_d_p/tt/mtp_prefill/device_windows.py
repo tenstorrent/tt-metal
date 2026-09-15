@@ -12,9 +12,10 @@ trip anywhere in it.
 
 Two things make that possible.
 
-**1. The MTP ids ride the trunk's own H2D row.** One socket delivers chip ``c`` the contiguous
-``[c*L, c*L + L + num_mtp_tokens)``, and the runner cuts it at ``L`` into the ``[1, 1, L]`` trunk the
-model has always been handed and the ``num_mtp_tokens`` ids that follow it. Because a chip's
+**1. The MTP ids ride the trunk's own H2D row.** One socket delivers chip ``c`` its ``L`` trunk ids
+followed by ``num_mtp_tokens`` lookahead slots -- contiguous with the trunk over the first ``K`` of
+them, ``[c*L, c*L + L + K)``, then alignment filler -- and the runner cuts the row at ``L`` into the
+``[1, 1, L]`` trunk the model has always been handed and the ``num_mtp_tokens`` ids that follow it. Because a chip's
 lookahead is the ids immediately past its OWN shard, MTP level ``k`` -- which wants position ``p + k``
 on the row whose hidden sits at ``p`` -- reads the SAME local slice ``[k, k+L)`` on every chip. No SP
 ring-shift, no cross-chip rotation. See ``runner_utils.MTP_TOKEN_ALIGN`` for why that count is a

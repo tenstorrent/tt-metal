@@ -557,16 +557,13 @@ class TtPrefillRuntime:
                 "the device MTP path needs the MTP ids alongside the chunk; the first rank cuts "
                 "both out of one H2D row (see runner_utils.make_h2d_spec)"
             )
-            # MTP_PAD_TOKEN_ID is max uint32 -- deliberately outside every vocabulary, so a scan can
-            # never mistake a real token for padding. That also means it must NOT reach
-            # ttnn.embedding, which would index the table out of bounds. Clamp first. The clamped rows
-            # are exactly the ones the generation keep-mask clears and the patches overwrite, so the
-            # substituted id never survives into a window.
-            safe_mtp_tokens = ttnn.minimum(mtp_tokens, self.hf_config.vocab_size - 1)
-            ttnn.deallocate(mtp_tokens)
-            union = MTPUnionEmbedding.from_ids(input_tensor, safe_mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
+            # Either tensor can carry MTP_PAD_TOKEN_ID -- the lookahead's alignment filler and its
+            # end-of-request slots, the trunk's tail on a final partial chunk. TtParallelEmbedding
+            # clamps it out of the gather, and the rows it substitutes are exactly the ones the
+            # generation keep-mask clears and the patches overwrite, so it never reaches a window.
+            union = MTPUnionEmbedding.from_ids(input_tensor, mtp_tokens, self.model.mtp_embed_ids, num_levels=k)
             ttnn.deallocate(input_tensor)
-            ttnn.deallocate(safe_mtp_tokens)
+            ttnn.deallocate(mtp_tokens)
             return union, union.trunk
         assert mtp_tokens is None, "only the first rank receives H2D MTP ids"
         hidden, union = self._mtp_unpack_activation(input_tensor)

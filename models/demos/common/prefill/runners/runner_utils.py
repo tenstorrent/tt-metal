@@ -88,18 +88,22 @@ def h2d_row_len(chunk_size: int, sp_factor: int) -> int:
 TILE_HEIGHT = 32
 
 MTP_PAD_TOKEN_ID = 0xFFFFFFFF
-"""Id written into a lookahead slot whose global position is past the request's real end.
+"""Id written into any slot with no token behind it: a lookahead position past the request's real
+end, the ``[K, num_mtp_tokens)`` alignment filler of a lookahead row, and the tail of a final
+partial chunk.
 
-THE sentinel every side of the MTP transport agrees on -- the producer writes it, the runner scans
-for it to decide how many levels have their token provided, and the tests build to it. Before this
-existed the producer padded with 1, the tests with 0 and the runtime warmup with 0, none of which
-could be told apart from a real token.
+THE sentinel every side of the transport agrees on -- the inference server writes it, the runner
+scans for it to decide how many levels have their token provided, and the tests build to it. Before
+this existed the producer padded with 1, the tests with 0 and the runtime warmup with 0, none of
+which could be told apart from a real token.
+
+One value for all three uses is unambiguous because the scan only ever reads slots ``[0, K)``, where
+alignment filler cannot appear -- so inside that window the sentinel can only mean end-of-request.
 
 ``max uint32``, deliberately: it is outside every vocabulary (GLM-5.2's is 154880), so no prompt can
 contain it and a scan can never mistake content for padding. The price is that it MUST NOT reach
-``ttnn.embedding`` -- it would index the table out of bounds. The runner clamps the id tensor before
-building the union (``tt_prefill_runtime._mtp_prepare_input``); the clamped rows are exactly the ones
-the generation keep-mask clears and the patches overwrite, so the substituted value never survives.
+``ttnn.embedding`` -- it would index the table out of bounds. ``TtParallelEmbedding.forward`` clamps
+every id it gathers, which is what makes that safe on the trunk as well as the lookahead.
 """
 
 MTP_TOKEN_ALIGN = TILE_HEIGHT
@@ -129,12 +133,16 @@ def num_mtp_tokens(mtp_levels: int) -> int:
     """MTP lookahead ids the H2D row carries past this chip's trunk shard: ``mtp_levels`` rounded up
     to ``MTP_TOKEN_ALIGN``. 0 when MTP is off.
 
-    THE number every side of the MTP transport builds to -- the producer's rows, the H2D socket's
-    spec, the runner's cut point, the union embedding's height and the D2D activation's height. Chip
-    ``c``'s MTP ids are ``stream[(c+1)*L : (c+1)*L + num_mtp_tokens]`` -- they hang past the end of
-    ``c``'s own shard into ``c+1``'s territory, so ``chunk_row ++ mtp_row`` is exactly the contiguous
-    ``stream[c*L : c*L + L + num_mtp_tokens]`` and MTP level ``k``'s window is the SAME local slice
-    ``[k, k+L)`` on every chip -- one uniform slice, no cross-chip rotation.
+    THE number every side of the MTP transport builds to -- the row width, the H2D socket's spec, the
+    runner's cut point, the union embedding's height and the D2D activation's height. It is the row's
+    WIDTH, not its real-id count: the inference server fills slots ``[0, mtp_levels)`` with
+    ``stream[(c+1)*L : (c+1)*L + mtp_levels]`` and pads the rest to this alignment
+    (:data:`MTP_PAD_TOKEN_ID`).
+
+    Those K are what the levels need. ``chunk_row ++ mtp_row`` is contiguous over them, so MTP level
+    ``k``'s window is the SAME local slice ``[k, k+L)`` on every chip -- one uniform slice, no
+    cross-chip rotation -- and the deepest window ends at slot ``K-1``. Slots ``[K, num_mtp_tokens)``
+    are read by nothing.
 
     Note they are PER CHIP: only the last chip's ids reach into the next chunk, the other ``sp-1``
     take theirs from inside this one. That is what makes the windows uniform.
@@ -180,7 +188,8 @@ def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0) -> tt
     """Per-push spec of THE H2D token socket -- there is exactly one, MTP or not.
 
     Plain: ``chunk_size // sp`` ids per chip. MTP: those plus ``num_mtp_tokens(mtp_levels)``
-    lookahead ids, so chip ``c``'s row is the contiguous ``stream[c*L : c*L + L + num_mtp_tokens]``.
+    lookahead slots -- contiguous with the trunk over the first ``mtp_levels`` of them,
+    ``stream[c*L : c*L + L + mtp_levels]``, then alignment filler no level reads.
     The runner cuts the row back at ``L`` on arrival (``prefill_runner._socket_next``), and hands the model the same
     ``[1, 1, chunk_size // sp]`` trunk it gets with MTP off.
     """

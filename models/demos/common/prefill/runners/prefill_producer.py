@@ -171,21 +171,25 @@ def _h2d_rows(tokens):
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None):
-    """The MTP lookahead tensor: `[SP, 1, num_mtp_tokens]`, row c holding the ids that follow chip
-    c's shard -- `stream[(c+1)*L : (c+1)*L + num_mtp_tokens]`. None when MTP is off.
+    """The MTP lookahead tensor: `[SP, 1, num_mtp_tokens]`. None when MTP is off.
 
-    Only the LAST chip's row reaches past this chunk; the other sp-1 take theirs from inside it. That
-    overlap is the whole trick: `chunk_row ++ lookahead_row` is the contiguous
-    `stream[c*L : c*L + L + num_mtp_tokens]`, so MTP level k reads the SAME local slice `[k, k+L)` on
-    every chip, with no SP ring-shift and no cross-chip rotation. It costs that many re-sent ids per
-    chip.
+    Row c is the inference server's shape: the MTP_LEVELS ids that follow chip c's shard, then
+    MTP_PAD_TOKEN_ID filler out to `num_mtp_tokens`. The row is 32 wide because the socket page is,
+    but only K of it is real -- IS sends the level count it is configured for, not a whole tile.
+
+    K is exactly what the levels need. `chunk_row ++ lookahead_row` is contiguous over those K, i.e.
+    `stream[c*L : c*L + L + K]`, so level k reads the SAME local slice `[k, k+L)` on every chip with
+    no SP ring-shift; the deepest window ends at lookahead slot K-1, and slots `[K, 32)` are read by
+    nothing. Only the LAST chip's row reaches past this chunk; the other sp-1 take theirs from inside
+    it.
     """
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
     sp = GLOBAL_MESH_SHAPE[0]
     stride = h2d_row_len(CHUNK_SIZE, sp)
-    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, n_mtp, actual_isl) for c in range(sp)]
+    align_pad = [MTP_PAD_TOKEN_ID] * (n_mtp - MTP_LEVELS)
+    rows = [_pool_slice(pool, actual_start + (c + 1) * stride, MTP_LEVELS, actual_isl) + align_pad for c in range(sp)]
     return _to_host_array(torch.tensor(rows, dtype=torch.int64).unsqueeze(1))
 
 
