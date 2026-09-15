@@ -6,8 +6,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <mutex>
 #include <string>
 #include <system_error>
@@ -37,15 +35,14 @@ std::string ensure_pch(
     // The umbrella's own text is part of the key, so editing it produces a new artifact
     // instead of silently reusing the one built from the previous contents. Re-reading a
     // ~1 KB file per compile costs nothing next to spawning a compiler.
-    std::ifstream in(umbrella, std::ios::binary);
-    const std::string umbrella_text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    const auto umbrella_bytes = utils::read_file_bytes(umbrella.string());
 
     tt::StableHasher hasher;
     hasher.update(gpp);
     hasher.update(opt_level);
     hasher.update(cflags);
     hasher.update(includes);
-    hasher.update(umbrella_text);
+    hasher.update(umbrella_bytes.data(), umbrella_bytes.size());
     const std::string key = fmt::format("{:016x}", hasher.digest());
     const fs::path dir = fs::absolute(pch_root / key);
 
@@ -60,11 +57,6 @@ std::string ensure_pch(
         return it->second;
     }
     std::string& result = staged[dir.string()];
-
-    if (umbrella_text.empty()) {
-        log_warning(tt::LogBuildKernels, "Skipping the shared PCH: cannot read {}.", umbrella.string());
-        return result;
-    }
 
     const fs::path header = dir / umbrella.filename();
     const fs::path gch = header.string() + ".gch";

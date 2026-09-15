@@ -229,11 +229,7 @@ void compile_one(
     // missing dephash conservatively forces a server-side recompile next time, and client-side reuse
     // rides on the client-written <elf> full-dephash sidecar instead.
     if (fs::path(target.srcs[src_index]).extension() != ".ii") {
-        tt::jit_build::write_dependency_hashes(
-            out_dir,
-            obj_temp_path,
-            obj_temp_path + ".dephash",
-            fs::exists(target.pch_umbrella) ? target.pch_umbrella : "");
+        tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", target.pch_umbrella);
     }
     fs::remove(temp_d_path);
 }

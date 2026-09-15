@@ -720,8 +720,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
-    jit_build::write_dependency_hashes(
-        out_dir, obj_temp_path, obj_temp_path + ".dephash", fs::exists(recipe.pch_umbrella) ? recipe.pch_umbrella : "");
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", recipe.pch_umbrella);
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
