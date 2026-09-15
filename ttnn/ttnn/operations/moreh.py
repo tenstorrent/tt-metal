@@ -10,43 +10,43 @@ from ttnn.operations.golden_common import (
     golden_select_optional_outputs,
 )
 
-abs = ttnn._ttnn.operations.moreh.moreh_abs_pow
-adam = ttnn._ttnn.operations.moreh.moreh_adam
-adamw = ttnn._ttnn.operations.moreh.moreh_adamw
-arange = ttnn._ttnn.operations.moreh.moreh_arange
-bmm = ttnn._ttnn.operations.moreh.moreh_bmm
-bmm_backward = ttnn._ttnn.operations.moreh.moreh_bmm_backward
-clip_grad_norm = ttnn._ttnn.operations.moreh.moreh_clip_grad_norm
-cumsum = ttnn._ttnn.operations.moreh.moreh_cumsum
-cumsum_backward = ttnn._ttnn.operations.moreh.moreh_cumsum_backward
-dot = ttnn._ttnn.operations.moreh.moreh_dot
-dot_backward = ttnn._ttnn.operations.moreh.moreh_dot_backward
-fold = ttnn._ttnn.operations.moreh.moreh_fold
-getitem = ttnn._ttnn.operations.moreh.moreh_getitem
-group_norm = ttnn._ttnn.operations.moreh.moreh_group_norm
-group_norm_backward = ttnn._ttnn.operations.moreh.moreh_group_norm_backward
-layer_norm = ttnn._ttnn.operations.moreh.moreh_layer_norm
-layer_norm_backward = ttnn._ttnn.operations.moreh.moreh_layer_norm_backward
-linear = ttnn._ttnn.operations.moreh.moreh_linear
-linear_backward = ttnn._ttnn.operations.moreh.moreh_linear_backward
-logsoftmax = ttnn._ttnn.operations.moreh.moreh_logsoftmax
-logsoftmax_backward = ttnn._ttnn.operations.moreh.moreh_logsoftmax_backward
-matmul = ttnn._ttnn.operations.moreh.moreh_matmul
-matmul_backward = ttnn._ttnn.operations.moreh.moreh_matmul_backward
-mean = ttnn._ttnn.operations.moreh.moreh_mean
-mean_backward = ttnn._ttnn.operations.moreh.moreh_mean_backward
-nll_loss = ttnn._ttnn.operations.moreh.moreh_nll_loss
-nll_loss_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_backward
-nll_loss_unreduced_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_unreduced_backward
-norm = ttnn._ttnn.operations.moreh.moreh_norm
-norm_backward = ttnn._ttnn.operations.moreh.moreh_norm_backward
-sgd = ttnn._ttnn.operations.moreh.moreh_sgd
-softmax = ttnn._ttnn.operations.moreh.moreh_softmax
-softmax_backward = ttnn._ttnn.operations.moreh.moreh_softmax_backward
-softmin = ttnn._ttnn.operations.moreh.moreh_softmin
-softmin_backward = ttnn._ttnn.operations.moreh.moreh_softmin_backward
-sum = ttnn._ttnn.operations.moreh.moreh_sum
-sum_backward = ttnn._ttnn.operations.moreh.moreh_sum_backward
+abs = ttnn.moreh_abs_pow
+adam = ttnn.moreh_adam
+adamw = ttnn.moreh_adamw
+arange = ttnn.moreh_arange
+bmm = ttnn.moreh_bmm
+bmm_backward = ttnn.moreh_bmm_backward
+clip_grad_norm = ttnn.moreh_clip_grad_norm
+cumsum = ttnn.moreh_cumsum
+cumsum_backward = ttnn.moreh_cumsum_backward
+dot = ttnn.moreh_dot
+dot_backward = ttnn.moreh_dot_backward
+fold = ttnn.moreh_fold
+getitem = ttnn.moreh_getitem
+group_norm = ttnn.moreh_group_norm
+group_norm_backward = ttnn.moreh_group_norm_backward
+layer_norm = ttnn.moreh_layer_norm
+layer_norm_backward = ttnn.moreh_layer_norm_backward
+linear = ttnn.moreh_linear
+linear_backward = ttnn.moreh_linear_backward
+logsoftmax = ttnn.moreh_logsoftmax
+logsoftmax_backward = ttnn.moreh_logsoftmax_backward
+matmul = ttnn.moreh_matmul
+matmul_backward = ttnn.moreh_matmul_backward
+mean = ttnn.moreh_mean
+mean_backward = ttnn.moreh_mean_backward
+nll_loss = ttnn.moreh_nll_loss
+nll_loss_backward = ttnn.moreh_nll_loss_backward
+nll_loss_unreduced_backward = ttnn.moreh_nll_loss_unreduced_backward
+norm = ttnn.moreh_norm
+norm_backward = ttnn.moreh_norm_backward
+sgd = ttnn.moreh_sgd
+softmax = ttnn.moreh_softmax
+softmax_backward = ttnn.moreh_softmax_backward
+softmin = ttnn.moreh_softmin
+softmin_backward = ttnn.moreh_softmin_backward
+sum = ttnn.moreh_sum
+sum_backward = ttnn.moreh_sum_backward
 
 SoftmaxBackwardOp = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOp
 SoftmaxBackwardOpParallelizationStrategy = ttnn._ttnn.operations.moreh.MorehSoftmaxBackwardOpParallelizationStrategy
@@ -248,7 +248,11 @@ def _golden_layer_norm(
     return [output_value, mean_value if mean is not None else None, rstd_value if rstd is not None else None]
 
 
-ttnn.attach_golden_function(ttnn.moreh_layer_norm, golden_function=_golden_layer_norm)
+ttnn.attach_golden_function(
+    ttnn.moreh_layer_norm,
+    golden_function=_golden_layer_norm,
+    output_tensor_kwarg_names=("output", "mean", "rstd"),
+)
 
 
 def _golden_group_norm(
@@ -284,7 +288,11 @@ def _golden_group_norm(
     return golden_select_optional_outputs([output_value, mean_value, rstd_value], required)
 
 
-ttnn.attach_golden_function(ttnn.moreh_group_norm, golden_function=_golden_group_norm)
+ttnn.attach_golden_function(
+    ttnn.moreh_group_norm,
+    golden_function=_golden_group_norm,
+    output_tensor_kwarg_names=("output", "mean", "rstd"),
+)
 
 
 def _golden_softmax(input_tensor, dim, *_, **__):
@@ -347,7 +355,11 @@ def _golden_sum_backward(output_grad, input=None, dim=None, *_, keepdim=False, *
     return torch.broadcast_to(grad, target_shape).contiguous()
 
 
-ttnn.attach_golden_function(ttnn.moreh_sum_backward, golden_function=_golden_sum_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_sum_backward,
+    golden_function=_golden_sum_backward,
+    output_tensor_kwarg_names=("input_grad",),
+)
 
 
 def _golden_mean_backward(output_grad, *, dim=None, keepdim=False, input_grad_shape=None, input_grad=None, **__):
@@ -368,7 +380,11 @@ def _golden_mean_backward(output_grad, *, dim=None, keepdim=False, input_grad_sh
     return torch.broadcast_to(grad, target_shape).contiguous() / count
 
 
-ttnn.attach_golden_function(ttnn.moreh_mean_backward, golden_function=_golden_mean_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_mean_backward,
+    golden_function=_golden_mean_backward,
+    output_tensor_kwarg_names=("input_grad",),
+)
 
 
 def _golden_cumsum_backward(output_grad, dim, *_, **__):
@@ -378,7 +394,11 @@ def _golden_cumsum_backward(output_grad, dim, *_, **__):
     return torch.flip(torch.cumsum(torch.flip(output_grad, dims=[dim]), dim=dim), dims=[dim])
 
 
-ttnn.attach_golden_function(ttnn.moreh_cumsum_backward, golden_function=_golden_cumsum_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_cumsum_backward,
+    golden_function=_golden_cumsum_backward,
+    output_tensor_kwarg_names=("input_grad",),
+)
 
 
 def _golden_dot_backward(output_grad, input, other, *, input_grad=None, other_grad=None, **__):
@@ -388,7 +408,11 @@ def _golden_dot_backward(output_grad, input, other, *, input_grad=None, other_gr
     return [grad_a if input_grad is not None else None, grad_b if other_grad is not None else None]
 
 
-ttnn.attach_golden_function(ttnn.moreh_dot_backward, golden_function=_golden_dot_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_dot_backward,
+    golden_function=_golden_dot_backward,
+    output_tensor_kwarg_names=("input_grad", "other_grad"),
+)
 
 
 def _golden_matmul_backward(output_grad, input_a, input_b, *_, are_required_outputs=None, **__):
@@ -402,7 +426,11 @@ def _golden_matmul_backward(output_grad, input_a, input_b, *_, are_required_outp
     return grads
 
 
-ttnn.attach_golden_function(ttnn.moreh_matmul_backward, golden_function=_golden_matmul_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_matmul_backward,
+    golden_function=_golden_matmul_backward,
+    output_tensor_kwarg_names=("input_a_grad", "input_b_grad"),
+)
 
 
 def _golden_bmm_backward(output_grad, input, mat2, *_, are_required_outputs=None, **__):
@@ -416,7 +444,11 @@ def _golden_bmm_backward(output_grad, input, mat2, *_, are_required_outputs=None
     return grads
 
 
-ttnn.attach_golden_function(ttnn.moreh_bmm_backward, golden_function=_golden_bmm_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_bmm_backward,
+    golden_function=_golden_bmm_backward,
+    output_tensor_kwarg_names=("input_grad", "mat2_grad"),
+)
 
 
 def _golden_linear_backward(
@@ -450,7 +482,11 @@ def _golden_linear_backward(
     return golden_select_optional_outputs(grads, required)
 
 
-ttnn.attach_golden_function(ttnn.moreh_linear_backward, golden_function=_golden_linear_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_linear_backward,
+    golden_function=_golden_linear_backward,
+    output_tensor_kwarg_names=("input_grad", "weight_grad", "bias_grad"),
+)
 
 
 def _golden_layer_norm_backward(
@@ -500,7 +536,11 @@ def _golden_layer_norm_backward(
     ]
 
 
-ttnn.attach_golden_function(ttnn.moreh_layer_norm_backward, golden_function=_golden_layer_norm_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_layer_norm_backward,
+    golden_function=_golden_layer_norm_backward,
+    output_tensor_kwarg_names=("input_grad", "gamma_grad", "beta_grad"),
+)
 
 
 def _golden_group_norm_backward(
@@ -546,7 +586,11 @@ def _golden_group_norm_backward(
     return golden_select_optional_outputs([input_grad_value, gamma_grad_value, beta_grad_value], required)
 
 
-ttnn.attach_golden_function(ttnn.moreh_group_norm_backward, golden_function=_golden_group_norm_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_group_norm_backward,
+    golden_function=_golden_group_norm_backward,
+    output_tensor_kwarg_names=("input_grad", "gamma_grad", "beta_grad"),
+)
 
 
 def _golden_norm_backward(input, output, output_grad, p, *, dim=None, keepdim=False, input_grad=None, **__):
@@ -558,7 +602,11 @@ def _golden_norm_backward(input, output, output_grad, p, *, dim=None, keepdim=Fa
     return grads[0]
 
 
-ttnn.attach_golden_function(ttnn.moreh_norm_backward, golden_function=_golden_norm_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_norm_backward,
+    golden_function=_golden_norm_backward,
+    output_tensor_kwarg_names=("input_grad",),
+)
 
 
 def _golden_softmax_backward(output_tensor, output_grad_tensor, dim, *_, **__):
@@ -568,7 +616,11 @@ def _golden_softmax_backward(output_tensor, output_grad_tensor, dim, *_, **__):
     return output_tensor * (output_grad_tensor - (output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True))
 
 
-ttnn.attach_golden_function(ttnn.moreh_softmax_backward, golden_function=_golden_softmax_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_softmax_backward,
+    golden_function=_golden_softmax_backward,
+    output_tensor_kwarg_names=("input_grad_tensor",),
+)
 
 
 def _golden_softmin_backward(output_tensor, output_grad_tensor, dim, *_, **__):
@@ -576,7 +628,11 @@ def _golden_softmin_backward(output_tensor, output_grad_tensor, dim, *_, **__):
     return output_tensor * ((output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True) - output_grad_tensor)
 
 
-ttnn.attach_golden_function(ttnn.moreh_softmin_backward, golden_function=_golden_softmin_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_softmin_backward,
+    golden_function=_golden_softmin_backward,
+    output_tensor_kwarg_names=("input_grad_tensor",),
+)
 
 
 def _golden_logsoftmax_backward(output_tensor, output_grad_tensor, dim, *_, **__):
@@ -586,7 +642,11 @@ def _golden_logsoftmax_backward(output_tensor, output_grad_tensor, dim, *_, **__
     return output_grad_tensor - output_tensor.exp() * output_grad_tensor.sum(dim=dim, keepdim=True)
 
 
-ttnn.attach_golden_function(ttnn.moreh_logsoftmax_backward, golden_function=_golden_logsoftmax_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_logsoftmax_backward,
+    golden_function=_golden_logsoftmax_backward,
+    output_tensor_kwarg_names=("input_grad_tensor",),
+)
 
 
 def _nll_loss_backward_impl(
@@ -647,7 +707,11 @@ def _golden_nll_loss_backward(
     )
 
 
-ttnn.attach_golden_function(ttnn.moreh_nll_loss_backward, golden_function=_golden_nll_loss_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_nll_loss_backward,
+    golden_function=_golden_nll_loss_backward,
+    output_tensor_kwarg_names=("input_grad_tensor",),
+)
 
 
 def _golden_nll_loss_unreduced_backward(
@@ -664,7 +728,11 @@ def _golden_nll_loss_unreduced_backward(
     )
 
 
-ttnn.attach_golden_function(ttnn.moreh_nll_loss_unreduced_backward, golden_function=_golden_nll_loss_unreduced_backward)
+ttnn.attach_golden_function(
+    ttnn.moreh_nll_loss_unreduced_backward,
+    golden_function=_golden_nll_loss_unreduced_backward,
+    output_tensor_kwarg_names=("input_grad_tensor",),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +781,11 @@ def _golden_adam(
     return golden_select_optional_outputs(values, required)
 
 
-ttnn.attach_golden_function(ttnn.moreh_adam, golden_function=_golden_adam)
+ttnn.attach_golden_function(
+    ttnn.moreh_adam,
+    golden_function=_golden_adam,
+    output_tensor_kwarg_names=("param_out", "exp_avg_out", "exp_avg_sq_out", "max_exp_avg_sq_out"),
+)
 
 
 def _golden_adamw(
@@ -756,7 +828,11 @@ def _golden_adamw(
     return golden_select_optional_outputs(values, required)
 
 
-ttnn.attach_golden_function(ttnn.moreh_adamw, golden_function=_golden_adamw)
+ttnn.attach_golden_function(
+    ttnn.moreh_adamw,
+    golden_function=_golden_adamw,
+    output_tensor_kwarg_names=("param_out", "exp_avg_out", "exp_avg_sq_out", "max_exp_avg_sq_out"),
+)
 
 
 def _golden_sgd(
@@ -791,7 +867,11 @@ def _golden_sgd(
     return golden_select_optional_outputs(values, required)
 
 
-ttnn.attach_golden_function(ttnn.moreh_sgd, golden_function=_golden_sgd)
+ttnn.attach_golden_function(
+    ttnn.moreh_sgd,
+    golden_function=_golden_sgd,
+    output_tensor_kwarg_names=("param_out", "momentum_buffer_out"),
+)
 
 
 def _golden_clip_grad_norm(
@@ -815,4 +895,8 @@ def _golden_clip_grad_norm(
 
 
 _golden_clip_grad_norm._ttnn_mutates_global_inputs = True
-ttnn.attach_golden_function(ttnn.moreh_clip_grad_norm, golden_function=_golden_clip_grad_norm)
+ttnn.attach_golden_function(
+    ttnn.moreh_clip_grad_norm,
+    golden_function=_golden_clip_grad_norm,
+    output_tensor_kwarg_names=("total_norm",),
+)

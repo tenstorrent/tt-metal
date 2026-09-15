@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 
 import torch
@@ -436,6 +438,110 @@ def test_copy_golden_propagates_positional_destination():
     assert golden_function._ttnn_mutates_global_inputs
     assert output is destination
     assert torch.equal(destination, source.to(torch.bfloat16))
+
+
+def test_golden_function_output_tensor_kwargs_default_and_override():
+    default_operation = SimpleNamespace()
+    custom_operation = SimpleNamespace()
+
+    ttnn.attach_golden_function(default_operation, golden_function=torch.clone)
+    ttnn.attach_golden_function(
+        custom_operation,
+        golden_function=torch.clone,
+        output_tensor_kwarg_names=("input_grad", "bias_grad"),
+    )
+
+    assert default_operation.output_tensor_kwarg_names == ttnn.decorators.DEFAULT_OUTPUT_TENSOR_KWARG_NAMES
+    assert "bias_grad" not in default_operation.output_tensor_kwarg_names
+    assert custom_operation.output_tensor_kwarg_names == ("input_grad", "bias_grad")
+
+
+def test_custom_output_tensor_kwargs_preserve_golden_output_order(monkeypatch):
+    input_grad = SimpleNamespace(tensor_id=900_001)
+    bias_grad = SimpleNamespace(tensor_id=900_002)
+    input_tensor = SimpleNamespace(tensor_id=900_003)
+    golden_input_grad = torch.tensor([1.0, 2.0])
+    golden_bias_grad = torch.tensor([3.0, 4.0])
+    function_kwargs = {
+        "bias_grad": bias_grad,
+        "input": input_tensor,
+        "input_grad": input_grad,
+    }
+
+    monkeypatch.setattr(ttnn.decorators, "get_ttnn_tensors", lambda value: [value])
+    output_tensors = ttnn.decorators.get_inplace_output_tensors(
+        function_kwargs,
+        ("input_grad", "bias_grad"),
+    )
+
+    try:
+        ttnn.decorators.refresh_or_invalidate_global_goldens(
+            output_tensors,
+            (golden_input_grad, golden_bias_grad),
+        )
+
+        assert output_tensors == [input_grad, bias_grad]
+        assert torch.equal(
+            ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[input_grad.tensor_id],
+            golden_input_grad,
+        )
+        assert torch.equal(
+            ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[bias_grad.tensor_id],
+            golden_bias_grad,
+        )
+        assert input_tensor.tensor_id not in ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR
+    finally:
+        for tensor in (input_grad, bias_grad, input_tensor):
+            ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor.tensor_id, None)
+
+
+@pytest.mark.parametrize(
+    "alias, operation_name",
+    [
+        ("abs", "moreh_abs_pow"),
+        ("adam", "moreh_adam"),
+        ("adamw", "moreh_adamw"),
+        ("arange", "moreh_arange"),
+        ("bmm", "moreh_bmm"),
+        ("bmm_backward", "moreh_bmm_backward"),
+        ("clip_grad_norm", "moreh_clip_grad_norm"),
+        ("cumsum", "moreh_cumsum"),
+        ("cumsum_backward", "moreh_cumsum_backward"),
+        ("dot", "moreh_dot"),
+        ("dot_backward", "moreh_dot_backward"),
+        ("fold", "moreh_fold"),
+        ("getitem", "moreh_getitem"),
+        ("group_norm", "moreh_group_norm"),
+        ("group_norm_backward", "moreh_group_norm_backward"),
+        ("layer_norm", "moreh_layer_norm"),
+        ("layer_norm_backward", "moreh_layer_norm_backward"),
+        ("linear", "moreh_linear"),
+        ("linear_backward", "moreh_linear_backward"),
+        ("logsoftmax", "moreh_logsoftmax"),
+        ("logsoftmax_backward", "moreh_logsoftmax_backward"),
+        ("matmul", "moreh_matmul"),
+        ("matmul_backward", "moreh_matmul_backward"),
+        ("mean", "moreh_mean"),
+        ("mean_backward", "moreh_mean_backward"),
+        ("nll_loss", "moreh_nll_loss"),
+        ("nll_loss_backward", "moreh_nll_loss_backward"),
+        ("nll_loss_unreduced_backward", "moreh_nll_loss_unreduced_backward"),
+        ("norm", "moreh_norm"),
+        ("norm_backward", "moreh_norm_backward"),
+        ("sgd", "moreh_sgd"),
+        ("softmax", "moreh_softmax"),
+        ("softmax_backward", "moreh_softmax_backward"),
+        ("softmin", "moreh_softmin"),
+        ("softmin_backward", "moreh_softmin_backward"),
+        ("sum", "moreh_sum"),
+        ("sum_backward", "moreh_sum_backward"),
+    ],
+)
+def test_moreh_alias_uses_registered_operation(alias, operation_name):
+    operation = getattr(ttnn, operation_name)
+
+    assert getattr(ttnn.operations.moreh, alias) is operation
+    assert operation.golden_function is not None
 
 
 @pytest.mark.parametrize("batch_size", [1])
