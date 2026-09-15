@@ -621,6 +621,29 @@ def inject_stage_marks(text: str) -> tuple:
     return "".join(o), "injected at line %d, per-stage pass in %s()" % (k + 1, fname)
 
 
+def _build_pipeline_call_site(node):
+    """(index of the line AFTER the statement that calls a `build_pipeline`-named factory directly
+    inside `node`, that statement's own indent), or None when no such call is visible here.
+
+    `build_pipeline(device, ...)` is the one factory name perf_test_gen requires every generated
+    test to call (see its own instructions to the generator) -- not a per-model guess, the same
+    fixed contract PIPELINE_STAGES and <stage>_trace_step already are. A test that instead reaches
+    the pipeline through its own helper (e.g. `pipe = _get_pipe(device)`) has no such call visible
+    here; that shape falls through to the loop-based site below, unchanged.
+    """
+    for stmt in ast.walk(node):
+        if not isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.Expr)):
+            continue
+        for call in ast.walk(stmt):
+            if not isinstance(call, ast.Call):
+                continue
+            fn = call.func
+            fname = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            if fname == "build_pipeline":
+                return (stmt.end_lineno or stmt.lineno), " " * stmt.col_offset
+    return None
+
+
 def _mark_pass_site(text: str, name: str):
     """Where the per-stage pass goes inside `name`: (insert index, that body's indent).
 
@@ -632,12 +655,26 @@ def _mark_pass_site(text: str, name: str):
     Reproduced and fixed on device: 1 signpost before, all 7 after.
 
     The bulk of a perf pass is its loop over inputs, and the pipeline is built before that loop --
-    it is what the loop iterates against. So the first loop in the body is the earliest point that is
-    both inside the instrumentation budget and late enough for the pipeline to exist. Structural, so
-    nothing is assumed about what the test calls its stages, its pipeline or its inputs.
+    it is what the loop iterates against. So the first loop AFTER the pipeline is built is the
+    earliest point that is both inside the instrumentation budget and late enough for the pipeline
+    to exist. "The first loop in the body", full stop, only means that when the pipeline happens to
+    be built before every loop in the function -- true of some generated tests, not all: one model's
+    generated test builds the pipeline only after an earlier, unrelated loop (wrapping ttnn ops so
+    the profiler flushes periodically), and taking that first loop landed the pass before the
+    pipeline existed, so mark_stages_in_scope found no object to mark and split nothing. Structural,
+    so nothing is assumed about what the test calls its stages or its inputs -- only that a call
+    literally named build_pipeline, when visible in this function, cannot have produced the
+    pipeline until after it returns.
 
-    A body with no loop keeps the previous site (before the return), which is still correct for a
-    pass small enough not to exhaust tracy.
+    WHEN build_pipeline IS VISIBLE HERE, its site wins outright, ahead of any loop -- it is both
+    correct (the pipeline exists) and no later than any loop could be, so searching further only
+    risks landing on some unrelated loop that happens to sit after it (a `finally:` cleanup loop,
+    say) instead of the real one, or none at all if the measured call is one opaque forward with
+    its own loop hidden inside it. The loop search below is what a test without a direct
+    build_pipeline call still needs (e.g. one that reaches the pipeline through its own helper).
+
+    A body with neither a visible build_pipeline call nor a loop keeps the previous site (before
+    the return), which is still correct for a pass small enough not to exhaust tracy.
     """
     end, indent = _function_body_end(text, name)
     if end is None:
@@ -649,6 +686,9 @@ def _mark_pass_site(text: str, name: str):
     for node in ast.walk(tree):
         if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name and node.body):
             continue
+        build_site = _build_pipeline_call_site(node)
+        if build_site is not None:
+            return build_site
         for st in ast.walk(node):
             if isinstance(st, (ast.For, ast.AsyncFor, ast.While)):
                 # The loop's OWN indent, not the body's: the pass is a sibling of the loop, and a
