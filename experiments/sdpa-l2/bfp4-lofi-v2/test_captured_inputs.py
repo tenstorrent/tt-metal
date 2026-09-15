@@ -192,6 +192,10 @@ class CaptureTests(unittest.TestCase):
         self.assertTrue(any(p.endswith("chain_link.hpp") for p in pins))
         self.assertTrue(any(p.endswith("captured_inputs.py") for p in pins))
         self.assertTrue(all(len(digest) == 64 for digest in pins.values()))
+        for directory in ("single-core-resident-v1/main", "bf16-denom-pair-v3/candidate"):
+            prefix = "experiments/sdpa-l2/" + directory + "/"
+            for filename in ("compute_common.hpp", "compute_streaming.hpp", "ckernel_sfpu_sdpa.h"):
+                self.assertTrue(any(p.startswith(prefix) and p.endswith("/" + filename) for p in pins))
 
     def test_no_eager_device_import(self):
         for path in (Path(C.__file__), Path(D.__file__)):

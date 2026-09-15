@@ -2,11 +2,15 @@
 
 ## Qualification and attention outcome
 
-The parent reports an exact primitive pass over524288 values, including all
-17405 supported BF16 encodings in[-1000,0], integer-grid ties, underflow and
-the required cleared positive-output mantissa bit. The implementation agent
-has not yet received the primitive JSON and does not mark that raw record as
-locally inspected.
+Both parent-run primitive records are now locally inspected:
+[grid7](../grid7-probe-grid7-v1.json) and
+[native control](../grid7-probe-native-v1.json). Each tested524288 values,
+including all17405 supported BF16 encodings in[-1000,0], with **zero exact-bit
+oracle mismatches**. Grid7 had35 transformed half-ties,1260 pre-store subnormal
+results and1701 zero outputs; all522587 positive outputs had low BF16 mantissa
+bit0 clear. Native had1095 half-ties,2573 pre-store subnormal results and3344
+zero outputs. The generated threshold pools differ by grid, so those aggregate
+counts are coverage statistics, not a matched-input accuracy comparison.
 
 The following separate attention records **have** been inspected locally;
 all contain a final `complete` record. N32768/H10/110cores, Q256/K512, Q7 and
@@ -32,6 +36,64 @@ insufficient to remove the remaining error. BF16 reduction, recurrent state
 and normalization still contribute; these results do not individually isolate
 which one dominates. Grid7 is a qualified numerical probe, not a recommended
 replacement on the strength of these attention results.
+
+The256K follow-up reaches the same conclusion, at N262144/H10/110cores and
+the same input/geometry settings:
+
+| Compensation | Input | Native L2 | Grid7 L2 | Attention TFLOP/s native → grid7 |
+|---|---|---:|---:|---:|
+| Full FAST | normal | 3.73504% | 3.77683% | 194.81 → 194.31 |
+| Full FAST | constant V | 0.53611% | 0.56385% | 200.70 → 201.75 |
+| Denominator only | normal | 4.59853% | 4.63112% | 210.75 → 211.56 |
+| Denominator only | constant V | 25.46694% | 25.32216% | 217.54 → 218.28 |
+
+Evidence: [full native](../grid7-262144-full-native-v1.jsonl),
+[full grid7](../grid7-262144-full-grid7-v1.jsonl),
+[denominator native](../grid7-262144-denom-native-v1.jsonl),
+[denominator grid7](../grid7-262144-denom-grid7-v1.jsonl).
+All complete/source-unchanged records were inspected. Minor timing differences
+are not presented as an established performance improvement.
+
+### Resident repetition is a different accuracy stress
+
+One core, Q256/K512,16 repeated Q blocks and512 repeats of **the same512 K/V
+tokens**, normal original BF16 data, Q7 and K/V RNE5-BFP8, two input slots:
+
+| Mode | Native → grid7 TFLOP/core | Native → grid7 L2 | Native → grid7 gain |
+|---|---:|---:|---:|
+| MAIN | 2.44071 → 2.44015 | 20.30868% → 20.36220% | .993929 → .996452 |
+| Full FAST | 1.87717 → 1.87640 | 3.10922% → 3.13487% | .995918 → .997954 |
+| Denominator only | 2.25268 → 2.25126 | 31.96831% → 31.80845% | .714371 → .716430 |
+
+Evidence: [MAIN native](../grid7-resident-main-native-v1.jsonl),
+[MAIN grid7](../grid7-resident-main-grid7-v1.jsonl),
+[FAST native](../grid7-resident-full-native-v1.jsonl),
+[FAST grid7](../grid7-resident-full-grid7-v1.jsonl),
+[denominator native](../grid7-resident-denom-native-v1.jsonl),
+[denominator grid7](../grid7-resident-denom-grid7-v1.jsonl).
+
+The reference contract is correct: repeating every token equally multiplies
+softmax numerator and denominator by the same count, leaving ideal attention
+unchanged. The reader initializes both ring slots from identical K/V pages and
+republishes them without new reads; the writer saves the final Q repeat. The
+kernel starts fresh accumulator halves for every Q block. All six records have
+identical original Q/K/V hashes and passing trace/source-stability checks.
+
+This repeatedly adds the same per-block numerator, instead of distinct random
+block contributions. BF16 rounding errors can therefore accumulate coherently.
+Correcting only the denominator exposes roughly28% numerator attenuation;
+correcting both states removes most of it. Grid7's denominator-only result also
+has14.41031% gain-corrected L2, so the error is not just one removable scalar.
+This interpretation is supported by the controlled compensation comparison,
+not a bit-exact model of every internal accumulation. Do not cite31.8% as the
+error of distinct262K normally distributed keys: that separate device result
+is4.63112% above.
+
+Qualification caveat: these six performance records set `check_preprocess=False`
+and have empty exact-preprocessing checks. They reuse the qualified device
+packers and check original tensors unchanged, but do not independently verify
+packed-input equality on these invocations. A targeted exact-input rerun, if
+needed, should enable `--check-preprocess`; no such rerun is claimed here.
 
 ## Primitive mechanics
 

@@ -46,8 +46,22 @@ def sources():
     paths.add(ROOT / "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py")
     frozen = HERE.parent / "hybrid-mixed-v1/candidate"
     paths.update(p for p in frozen.rglob("*") if p.suffix in (".hpp", ".h"))
+    # MAIN/FAST select different frozen headers in fullchip/compute.cpp, including
+    # their own relative SFPU headers. The hybrid tree alone does not cover them.
+    for directory in ("single-core-resident-v1/main", "bf16-denom-pair-v3/candidate"):
+        paths.update(p for p in (HERE.parent / directory).rglob("*") if p.suffix in (".hpp", ".h"))
     for path in ("ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
                  "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp",
+                 "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp",
+                 "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp",
+                 "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp",
+                 "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp",
+                 "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp",
+                 "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp",
+                 "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp",
+                 "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h",
+                 "tt_metal/hw/inc/api/compute/experimental/matmul_custom.h",
+                 "tt_metal/hw/inc/api/compute/experimental/sdpa_sub_custom.h",
                  "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_matmul.h",
                  "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h",
                  "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h"):

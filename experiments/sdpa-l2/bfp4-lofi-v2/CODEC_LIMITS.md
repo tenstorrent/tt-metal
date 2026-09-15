@@ -97,11 +97,95 @@ FP64-mean-subtracted residual L2, avoiding a misleading large-offset denominator
 
 ## Execution and evidence status
 
-No model runtime or device jobs were started by the implementation agent:
-local Torch is unavailable and the parent owns scheduling to avoid disturbing
-device timings. Syntax and selected source paths are checked locally. Numerical
-conclusions and tables must wait for passing `self_tests` and a final `complete`
-record in the output JSONL. No format superiority factor is asserted yet.
+The parent executed both CPU studies. Their complete JSONL files are now locally
+inspected: [codec formats](codec-formats-v1.jsonl) and
+[V orientation](codec-vaxis-v1.jsonl). Both pass all self-tests, end with a
+`complete`/sources-unchanged record, and their five pinned sources still match
+the current files. No GPU or TTNN calls were made by these models. Device
+results belong in the separate operator reports, not these tables.
+
+### Codec comparison: corrected TT is moderately worse, not severalfold worse
+
+N4096, Q128, D128, one head/seed1240, original BF16 Q, group16 along D for
+both K and V. Values below are **representation-only attention relative L2
+percent with FP64 output**, not tensor reconstruction error, hardware SDPA
+error or full SageAttention3 results:
+
+| Codec | Normal K only | Normal V only | Normal K+V | Outliers K only | Outliers V only | Outliers K+V |
+|---|---:|---:|---:|---:|---:|---:|
+| TT native biased | 22.611 | 20.976 | 33.003 | 21.201 | 20.463 | 30.999 |
+| TT RNE | 11.981 | 11.368 | 16.399 | 18.322 | 12.066 | 21.439 |
+| TT adaptive E/E−1/E+1 | 11.450 | 10.800 | 15.693 | 24.990 | 11.134 | 26.801 |
+| Uniform7, continuous absmax scale | 8.826 | 8.660 | 12.411 | 12.373 | 8.539 | 14.968 |
+| E2M1, continuous absmax scale | 9.998 | 9.566 | 14.002 | 12.229 | 10.006 | 15.686 |
+| E2M1, power2 scale/group16 | 12.337 | 11.366 | 16.864 | 30.601 | 11.577 | 32.312 |
+| Representative NVFP4 E4M3/global | 10.076 | 9.401 | 13.842 | 14.007 | 10.197 | 17.146 |
+
+Interpretation, restricted to these two small synthetic samples:
+
+- Native TT K+V error is2.38× NVFP4 on normal data, but fixing TT rounding
+  reduces that ratio to1.18×; adaptive is1.13×. Thus most of the original large
+  gap here is avoidable packing error, not an intrinsic severalfold format gap.
+- Finer scaling helps a uniform codebook too: continuous uniform7 is **better**
+  than either tested E2M1 absmax recipe on these K+V cases. E2M1 itself is not
+  the missing universal accuracy mechanism.
+- Adaptive tensor-MSE selection is unsafe to promote blindly for K. On sparse
+  outliers it reduces K reconstruction L2 from12.489% to11.904% yet worsens
+  K-only attention L2 from18.322% to24.990%. Softmax sensitivity and clipping
+  matter more than average tensor reconstruction error for those values.
+- The encoded NVFP4 scale slightly beats the continuous E2M1 recipe on normal
+  K+V error13.842% versus14.002%, confirming why the continuous recipe is **not
+  a lower bound**. On outliers the encoded scale is worse17.146% versus15.686%.
+- Normal TT RNE and NVFP4 K/V reconstruction errors are about11.73% and9.50%,
+  respectively. None of these single-component four-bit recipes is near0.5%
+  attention L2 here, even with exact P/arithmetic. This is not a formal lower
+  bound for smoothing, residual codecs, attention-aware scaling or real models.
+
+The recorded Q-RNE7 controls preserve this overall ranking. Final BF16 output
+rounding has little effect relative to the much larger quantization error;
+the JSON contains both precisions rather than hiding that rounding.
+
+### V grouping: protect quiet channels, do not expect universal improvement
+
+This second study uses Q64, N4096, D128, one head/seed1240, original BF16 Q/K
+and quantizes **V only**. Values are FP64-output attention L2 percent, D-axis
+grouping → N-axis grouping:
+
+| Input | TT RNE | TT adaptive | NVFP4 recipe |
+|---|---:|---:|---:|
+| Normal | 11.368 → 11.653 | 10.880 → 10.938 | 9.383 → 9.847 |
+| Sparse outliers | 11.874 → 12.586 | 11.228 → 12.340 | 9.051 → 10.005 |
+| Persistent32× feature outliers | 12.328 → 11.082 | 11.780 → 10.300 | 8.430 → 10.978 |
+| Common V+32, global L2 | .08196 → .08196 | .08196 → .08196 | 6.39302 → 6.40649 |
+
+The persistent-feature global norm is dominated by the eight32× channels.
+For the120 quiet output features, the same V-only attention errors are:
+
+| Codec | D-group quiet-channel L2 | N-group quiet-channel L2 |
+|---|---:|---:|
+| TT RNE | 78.737% | 11.684% |
+| TT adaptive | 76.463% | 10.973% |
+| NVFP4 recipe | 58.578% | 9.561% |
+
+That is the clear justification for testing V-axisN on hardware. It avoids
+cross-feature scale contamination, even when global NVFP4 L2 appears worse.
+Normal and sparse independent outliers show no such systematic benefit in this
+sample, and transposition does not repair common-mode quantization.
+
+CommonV also warns against drawing conclusions from global error alone:
+TT RNE/adaptive global L2 is only.08196%, but subtracting the same exact original-V
+mean from actual/reference exposes125.921% residual L2. For this NVFP4 absmax
+recipe, the global6.39–6.41% error corresponds to roughly9822–9843% residual L2.
+The positive common offset places many values near the coarse upper E2M1 bins
+and makes block-scale bias coherent. This is a failure of this unsmoothed
+synthetic recipe, **not a measured failure of SageAttention3**.
+
+Recommended next decision: retain TT RNE, test V-axisN specifically for
+persistent feature outliers, and qualify adaptive K against attention error
+before accepting it. Do not infer an NVFP4 hardware advantage or a viable TT
+implementation speed from this CPU representability comparison.
+
+### Reproduction commands
 
 Priority orientation audit,72 attention variants plus controls:
 

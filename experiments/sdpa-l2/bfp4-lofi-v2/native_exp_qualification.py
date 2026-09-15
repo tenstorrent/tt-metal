@@ -59,6 +59,32 @@ def source_hashes():
         ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h",
         ROOT / "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h",
     ])
+    # Selected project/API dependencies; not the full compiler/firmware closure.
+    files += [ROOT / path for path in (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp",
+        "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp",
+        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp",
+        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl",
+        "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h",
+        "tt_metal/hw/inc/api/compute/experimental/matmul_custom.h",
+        "tt_metal/hw/inc/api/compute/experimental/sdpa_sub_custom.h",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
+        "tt_metal/hw/inc/api/compute/eltwise_unary/exp.h",
+        "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h",
+        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp",
+        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl",
+        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp",
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/generic/generic_reductions.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op_multi_core_h_program_factory.cpp",
+    )]
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(set(files))}
 
 

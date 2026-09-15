@@ -1,0 +1,174 @@
+{
+  "status": "planned; execution and validation tracked in FINAL_QUALIFICATION.md",
+  "scope": "Post-format representative current-source correctness and JIT smoke; no performance claims",
+  "cases": [
+    {
+      "label": "final-captured-v1",
+      "driver": "captured_fullchip.py",
+      "args": "experiments/sdpa-l2/bfp4-lofi-v2/capture-interface-smoke-v1.pt --output experiments/sdpa-l2/bfp4-lofi-v2/final-captured-v1.jsonl --cores 4 --sample-rows 1024 --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-captured-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/captured_fullchip.py experiments/sdpa-l2/bfp4-lofi-v2/capture-interface-smoke-v1.pt --output experiments/sdpa-l2/bfp4-lofi-v2/final-captured-v1.jsonl --cores 4 --sample-rows 1024 --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-captured-v1.log 2>&1"
+    },
+    {
+      "label": "final-hi2-native-v1",
+      "driver": "hifi2_native_fullchip.py",
+      "args": "--label final-hi2-native-v1 --variant hi2_fp32_b8 --native-exp --b8-rne --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-native-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_native_fullchip.py --label final-hi2-native-v1 --variant hi2_fp32_b8 --native-exp --b8-rne --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-native-v1.log 2>&1"
+    },
+    {
+      "label": "final-hi2-lut-v1",
+      "driver": "hifi2_lut_fullchip.py",
+      "args": "--label final-hi2-lut-v1 --variant hi2_fp32_b8 --native-exp --b8-rne --lut-exp --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-lut-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_lut_fullchip.py --label final-hi2-lut-v1 --variant hi2_fp32_b8 --native-exp --b8-rne --lut-exp --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-lut-v1.log 2>&1"
+    },
+    {
+      "label": "final-hi2-bf16-lut-v1",
+      "driver": "hifi2_bf16_lut_fullchip.py",
+      "args": "--label final-hi2-bf16-lut-v1 --variant hi2_fp32_bf16 --native-exp --lut-exp --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-bf16-lut-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/hifi2_bf16_lut_fullchip.py --label final-hi2-bf16-lut-v1 --variant hi2_fp32_bf16 --native-exp --lut-exp --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-hi2-bf16-lut-v1.log 2>&1"
+    },
+    {
+      "label": "final-native-storage-v1",
+      "driver": "native_storage_fullchip.py",
+      "args": "--label final-native-storage-v1 --variant lofi_fp32 --native-exp --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-native-storage-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/native_storage_fullchip.py --label final-native-storage-v1 --variant lofi_fp32 --native-exp --length 1024 --heads 2 --cores 4 --reader-chain --read-barrier-tiles 2 --sample-rows 1024 --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-native-storage-v1.log 2>&1"
+    },
+    {
+      "label": "final-vaxis-D-v1",
+      "driver": "Vtransposed_fullchip.py",
+      "args": "--label final-vaxis-D-v1 --destination fast_bf16 --kv-formats b8_b4  --length 1024 --heads 2 --cores 4 --distributions normal constant_v channel_v --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-vaxis-D-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py --label final-vaxis-D-v1 --destination fast_bf16 --kv-formats b8_b4  --length 1024 --heads 2 --cores 4 --distributions normal constant_v channel_v --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-vaxis-D-v1.log 2>&1"
+    },
+    {
+      "label": "final-vaxis-N-v1",
+      "driver": "Vtransposed_fullchip.py",
+      "args": "--label final-vaxis-N-v1 --destination fast_bf16 --kv-formats b8_b4 --v-transposed --length 1024 --heads 2 --cores 4 --distributions normal constant_v channel_v --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-vaxis-N-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/Vtransposed_fullchip.py --label final-vaxis-N-v1 --destination fast_bf16 --kv-formats b8_b4 --v-transposed --length 1024 --heads 2 --cores 4 --distributions normal constant_v channel_v --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-vaxis-N-v1.log 2>&1"
+    },
+    {
+      "label": "final-recipe-v1",
+      "driver": "combined_recipe_fullchip.py",
+      "args": "--label final-recipe-v1 --destination fast_bf16 --h16 --v-transposed --adaptive-v pm --length 1024 --heads 2 --cores 4 --distributions normal constant_v k_outliers_channel_v --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-recipe-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/combined_recipe_fullchip.py --label final-recipe-v1 --destination fast_bf16 --h16 --v-transposed --adaptive-v pm --length 1024 --heads 2 --cores 4 --distributions normal constant_v k_outliers_channel_v --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-recipe-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b4-normal-none-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b4-normal-none-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-normal-none-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b4-normal-none-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-normal-none-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b4-normal-mean_error-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b4-normal-mean_error-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-normal-mean_error-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b4-normal-mean_error-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-normal-mean_error-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b4-uniform-none-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b4-uniform-none-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-uniform-none-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b4-uniform-none-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-uniform-none-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b4-uniform-mean_error-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b4-uniform-mean_error-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-uniform-mean_error-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b4-uniform-mean_error-v1 --destination fast_bf16 --kv-formats b8_b4 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b4-uniform-mean_error-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b8-normal-none-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b8-normal-none-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-normal-none-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b8-normal-none-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-normal-none-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b8-normal-mean_error-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b8-normal-mean_error-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-normal-mean_error-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b8-normal-mean_error-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution normal --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-normal-mean_error-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b8-uniform-none-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b8-uniform-none-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-uniform-none-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b8-uniform-none-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode none --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-uniform-none-v1.log 2>&1"
+    },
+    {
+      "label": "final-mean-b8_b8-uniform-mean_error-v1",
+      "driver": "value_mean_error_fullchip.py",
+      "args": "--label final-mean-b8_b8-uniform-mean_error-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-uniform-mean_error-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/value_mean_error_fullchip.py --label final-mean-b8_b8-uniform-mean_error-v1 --destination fast_bf16 --kv-formats b8_b8 --correction-mode mean_error --length 1024 --heads 2 --cores 4 --distribution uniform --check-preprocess --iters 0 --sample-rows 1024 > experiments/sdpa-l2/bfp4-lofi-v2/final-mean-b8_b8-uniform-mean_error-v1.log 2>&1"
+    },
+    {
+      "label": "final-recip-r0-f0-v1",
+      "driver": "recip8_fullchip.py",
+      "args": "--label final-recip-r0-f0-v1 --destination fast_bf16   --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r0-f0-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/recip8_fullchip.py --label final-recip-r0-f0-v1 --destination fast_bf16   --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r0-f0-v1.log 2>&1"
+    },
+    {
+      "label": "final-recip-r0-f1-v1",
+      "driver": "recip8_fullchip.py",
+      "args": "--label final-recip-r0-f1-v1 --destination fast_bf16  --final-scale-hifi4 --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r0-f1-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/recip8_fullchip.py --label final-recip-r0-f1-v1 --destination fast_bf16  --final-scale-hifi4 --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r0-f1-v1.log 2>&1"
+    },
+    {
+      "label": "final-recip-r1-f0-v1",
+      "driver": "recip8_fullchip.py",
+      "args": "--label final-recip-r1-f0-v1 --destination fast_bf16 --recip8  --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r1-f0-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/recip8_fullchip.py --label final-recip-r1-f0-v1 --destination fast_bf16 --recip8  --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r1-f0-v1.log 2>&1"
+    },
+    {
+      "label": "final-recip-r1-f1-v1",
+      "driver": "recip8_fullchip.py",
+      "args": "--label final-recip-r1-f1-v1 --destination fast_bf16 --recip8 --final-scale-hifi4 --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r1-f1-v1.jsonl",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/recip8_fullchip.py --label final-recip-r1-f1-v1 --destination fast_bf16 --recip8 --final-scale-hifi4 --kv-formats b8_b8 --length 1024 --heads 2 --cores 4 --distributions normal constant_v uniform_constant_v uniform --check-preprocess --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-recip-r1-f1-v1.log 2>&1"
+    },
+    {
+      "label": "final-b4-normal-v1",
+      "driver": "bfp4_round.py",
+      "args": "--label final-b4-normal-v1 --length 1024 --cores 4 --distribution normal --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-normal-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py --label final-b4-normal-v1 --length 1024 --cores 4 --distribution normal --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-b4-normal-v1.log 2>&1"
+    },
+    {
+      "label": "final-b4-thresholds-v1",
+      "driver": "bfp4_round.py",
+      "args": "--label final-b4-thresholds-v1 --length 1024 --cores 4 --distribution thresholds --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-thresholds-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py --label final-b4-thresholds-v1 --length 1024 --cores 4 --distribution thresholds --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-b4-thresholds-v1.log 2>&1"
+    },
+    {
+      "label": "final-b4-wide-v1",
+      "driver": "bfp4_round.py",
+      "args": "--label final-b4-wide-v1 --length 1024 --cores 4 --distribution wide --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-wide-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py --label final-b4-wide-v1 --length 1024 --cores 4 --distribution wide --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-b4-wide-v1.log 2>&1"
+    },
+    {
+      "label": "final-b4-zeros-v1",
+      "driver": "bfp4_round.py",
+      "args": "--label final-b4-zeros-v1 --length 1024 --cores 4 --distribution zeros --iters 0",
+      "output": "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/final-b4-zeros-v1.json",
+      "command": "python_env/bin/python -B experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py --label final-b4-zeros-v1 --length 1024 --cores 4 --distribution zeros --iters 0 > experiments/sdpa-l2/bfp4-lofi-v2/final-b4-zeros-v1.log 2>&1"
+    }
+  ]
+}

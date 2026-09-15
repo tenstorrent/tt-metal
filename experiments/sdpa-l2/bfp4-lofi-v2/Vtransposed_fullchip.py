@@ -408,6 +408,21 @@ def source_files(destination):
     for folder in ("vtransposed", "fullchip", "resident", "preprocess", "bfp4_round"):
         for suffix in ("*.cpp", "*.hpp", "*.h"):
             sources += list((HERE / folder).glob(suffix))
+    # Selected attention/reader headers only; no generic-mean kernels.
+    sources += [ROOT / path for path in (
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp",
+        "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp",
+        "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp",
+        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp",
+        "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.inl",
+        "tt_metal/hw/inc/api/compute/compute_kernel_hw_startup.h",
+        "tt_metal/hw/inc/api/compute/experimental/matmul_custom.h",
+        "tt_metal/hw/inc/api/compute/experimental/sdpa_sub_custom.h",
+    )]
     return sorted(set(sources))
 
 

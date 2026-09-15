@@ -47,7 +47,7 @@ def source_hashes():
                *sorted((HERE / "bfp8_round").glob("*.cpp")),
                ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
                ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h"]
-    sources.extend((ROOT / "ttnn/cpp/ttnn/operations/transformer/sdpa").rglob("reduce_helpers*.inl"))
+    # Shared attention/reduction headers are explicitly inherited from qualification.
     hashes.update({str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources})
     return hashes
 
