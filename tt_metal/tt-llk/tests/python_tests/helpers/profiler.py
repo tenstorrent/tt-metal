@@ -448,10 +448,14 @@ class Profiler:
             return None
 
     @staticmethod
-    def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
+    def _get_meta(
+        testname: str, variant_id: str
+    ) -> dict[str, dict[int, ProfilerFullMarker]]:
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}
         for thread in TestConfig.KERNEL_COMPONENTS:
+            # IDs only need to be unique within the thread's profiler buffer.
+            thread_metadata = metadata[thread] = {}
             file = profiler_data_dir / f"{thread}.meta.bin"
             if not file.exists():
                 continue
@@ -460,8 +464,8 @@ class Profiler:
                 strings = [s.decode("ascii") for s in binary.split(b"\0")]
                 for s in strings:
                     if marker := Profiler._parse_meta(s):
-                        Profiler._assert_no_collision(metadata, marker)
-                        metadata[marker.id] = marker
+                        Profiler._assert_no_collision(thread_metadata, marker)
+                        thread_metadata[marker.id] = marker
 
         return metadata
 
@@ -471,13 +475,14 @@ class Profiler:
     ) -> int:
         """Look up marker ID from metadata by marker name, file suffix, and line number.
         This provides stable marker ID lookup regardless of build environment paths."""
-        for marker in metadata.values():
-            if (
-                marker.marker == marker_name
-                and marker.file.endswith(file_suffix)
-                and marker.line == line
-            ):
-                return marker.id
+        for thread_metadata in metadata.values():
+            for marker in thread_metadata.values():
+                if (
+                    marker.marker == marker_name
+                    and marker.file.endswith(file_suffix)
+                    and marker.line == line
+                ):
+                    return marker.id
         raise ValueError(
             f"Marker '{marker_name}' not found in metadata (file ending with '{file_suffix}', line {line})"
         )
@@ -506,7 +511,9 @@ class Profiler:
         marker_rows = []
         # Parse each thread and append to the DataFrame
         for thread, buffer in zip(TestConfig.KERNEL_COMPONENTS, buffers):
-            marker_rows.extend(Profiler._parse_thread(thread, buffer, profiler_meta))
+            marker_rows.extend(
+                Profiler._parse_thread(thread, buffer, profiler_meta[thread])
+            )
 
         df = Profiler._dataframe(marker_rows)
         return ProfilerData(df)

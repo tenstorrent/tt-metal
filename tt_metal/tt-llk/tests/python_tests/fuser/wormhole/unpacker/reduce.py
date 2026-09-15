@@ -11,6 +11,7 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopTileByTile, TileLoop
+from helpers.llk_params import ReduceDimension, ReducePool
 
 
 class ReduceUnpacker(Unpacker):
@@ -46,11 +47,13 @@ class ReduceUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return (
-            f"_perf_unpack_loop_set_valid<false, true>(1);\n"
-            f"_perf_unpack_loop_set_valid<true, false>({face_r_dim * num_faces});\n"
+        is_full_tile = (
+            self.reduce_dim == ReduceDimension.Row
+            and self.reduce_pool != ReducePool.Max
+            and num_faces == 4
         )
+        iterations = 1 if is_full_tile else num_faces
+        return f"_perf_unpack_loop_set_valid<true, true>({iterations});\n"
 
     def perf_clear_valid(
         self,
@@ -60,11 +63,13 @@ class ReduceUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return (
-            f"_perf_math_loop_clear_valid<true, false>({face_r_dim * num_faces});\n"
-            f"_perf_math_loop_clear_valid<false, true>(1);\n"
+        is_full_tile = (
+            self.reduce_dim == ReduceDimension.Row
+            and self.reduce_pool != ReducePool.Max
+            and num_faces == 4
         )
+        iterations = 1 if is_full_tile else num_faces
+        return f"_perf_math_loop_clear_valid<true, true>({iterations});\n"
 
     def init(
         self,
