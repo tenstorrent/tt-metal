@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -181,6 +182,57 @@ TEST_F(EmuleHostWait, DeferredProducerRunsBeforeDownstreamHostWait) {
     // Complete the future host dependency so the process-global scheduler registry is clean.
     next_host_page_ready.store(true, std::memory_order_release);
     ASSERT_EQ(sched.pump(), RunOutcome::Completed);
+}
+
+// Consumer churn is not evidence that an independently executing compute
+// quantum is stuck. Keep the wall backstop; only the resumption budget is unfair.
+TEST_F(EmuleHostWait, FiniteComputeOutlivesConsumerResumptionWindow) {
+    arm_fast_watchdog();
+    std::atomic<bool> ready{false};
+    std::atomic<uint64_t> consumer_resumes{0};
+    spawn_fiber(
+        [&] {
+            while (!ready.load(std::memory_order_acquire)) {
+                consumer_resumes.fetch_add(1, std::memory_order_relaxed);
+                FiberScheduler::instance().yield();
+            }
+        },
+        4,
+        "consumer_waiting_for_finite_compute");
+    spawn_fiber(
+        [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+            // No scheduler calls until the finite computation produces its result.
+            while (std::chrono::steady_clock::now() < deadline) {
+            }
+            ready.store(true, std::memory_order_release);
+            FiberScheduler::instance().note_publish(1);
+        },
+        5,
+        "finite_non_yielding_compute");
+    FiberScheduler::instance().run_until_idle();
+    EXPECT_TRUE(ready.load());
+    disarm_fast_watchdog();
+}
+
+TEST_F(EmuleHostWait, AllYieldingLivelockStillTripsResumptionWindow) {
+    arm_fast_watchdog();
+    EXPECT_DEATH(
+        {
+            for (uint8_t core = 0; core < 2; ++core) {
+                spawn_fiber(
+                    [] {
+                        for (;;) {
+                            FiberScheduler::instance().yield();
+                        }
+                    },
+                    core,
+                    "yielding_livelock");
+            }
+            FiberScheduler::instance().run_until_idle();
+        },
+        "resumption window");
+    disarm_fast_watchdog();
 }
 
 // The existential host root must not become a sticky exemption. Once it clears, an unrelated

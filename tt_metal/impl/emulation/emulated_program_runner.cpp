@@ -293,13 +293,13 @@ extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yie
 extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
 extern "C" void __emule_fiber_note_publish(unsigned pages) { efib::FiberScheduler::instance().note_publish(pages); }
 
-// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
+// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 4 MiB), so masking the low
 // bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
 // per-resolver comments). Used by every NOC-address resolver.
 // Taken FROM the pool rather than restated: the mask is only an idempotent guard while it matches the
 // allocator's actual stride, and a peer rank resolves into the same segment using the same constant.
 static constexpr uint32_t L1_SLOT_SIZE = static_cast<uint32_t>(tt_emule::L1Pool::SLOT_SIZE);
-static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
+static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // shared pool geometry
 
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
@@ -1690,6 +1690,15 @@ static std::map<std::string, std::string> build_kernel_defines(
     if (kernel.get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         const auto kernel_config = kernel.config();
         if (const auto* cc = std::get_if<ComputeConfig>(&kernel_config)) {
+            // Metal's generated prelude normally supplies this. Keep it in the
+            // defines map so differing compute fidelities also get distinct JIT cache keys.
+            switch (cc->math_fidelity) {
+                case MathFidelity::LoFi: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::LoFi"; break;
+                case MathFidelity::HiFi2: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::HiFi2"; break;
+                case MathFidelity::HiFi3: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::HiFi3"; break;
+                case MathFidelity::HiFi4: defines["MATH_FIDELITY"] = "::ckernel::MathFidelity::HiFi4"; break;
+                default: throw std::runtime_error("emule: unsupported compute math fidelity");
+            }
             defines["DST_ACCUM_MODE"] = cc->fp32_dest_acc_en ? "1" : "0";
             defines["ENABLE_FP32_DEST_ACC"] = cc->fp32_dest_acc_en ? "1" : "0";
             defines["DST_SYNC_FULL"] = cc->dst_full_sync_en ? "1" : "0";
@@ -2012,12 +2021,23 @@ static void collect_kernels(
                 for (int t = 0; t < 4; t++) {
                     auto trisc_defs = defines;
                     trisc_defs[trisc_define_names[t]] = "1";
+                    // Quasar's public headers and kernels use the UCK spelling
+                    // for the same hardware phase selected by this variant.
+                    trisc_defs[std::string("UCK_CHLKC_") + (trisc_define_names[t] + 6)] = "1";
                     std::string key = compute_cache_key(trisc_defs);
                     register_cache_key(key, trisc_defs);
                     variant_cache_keys.push_back(std::move(key));
                 }
                 run_all_variants = true;
             } else {
+                if (is_quasar_compute) {
+                    // DFB bridge kernels execute once on a unified compute fiber.
+                    // Enable phase-local scalar work (e.g. UNPACK-side digests)
+                    // without running shared wait/pop/reserve/push loops four times.
+                    for (const char* phase : trisc_define_names) {
+                        defines[std::string("UCK_CHLKC_") + (phase + 6)] = "1";
+                    }
+                }
                 std::string key = compute_cache_key(defines);
                 register_cache_key(key, defines);
                 if (trisc.needs_runtime_trisc) {
