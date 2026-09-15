@@ -13,6 +13,7 @@ For detailed information about each model including performance metrics, usage i
 - **[Ideogram 4.0](models/Ideogram4.md)** - Text-to-image generation model (best-in-class typography; Blackhole)
 - **[Mochi-1](models/Mochi_1.md)** - Video generation model
 - **[Wan2.2-T2V-A14B](models/Wan2_2.md)** - Text-to-video generation model
+- **[Wan2.2-TI2V-5B](models/Wan2_2_TI2V_5B.md)** - Dense 5B text-to-video *and* image-to-video model (720P, high-compression VAE)
 - See **[experimental/](experimental/)** for in-progress model variants (AniSora, Wan2.2-Distill, LoRA adapters)
 - **[LTX-2.3](models/LTX2.md)** - Joint audio-video generation model (Pro and Fast variants)
 
@@ -29,7 +30,8 @@ tt_dit/
 │   ├── Motif.md         # Motif model documentation
 │   ├── QwenImage.md     # Qwen-Image model documentation
 │   ├── Mochi_1.md       # Mochi-1 model documentation
-│   ├── Wan2_2.md        # Wan2.2 model documentation
+│   ├── Wan2_2.md        # Wan2.2-A14B model documentation
+│   ├── Wan2_2_TI2V_5B.md # Wan2.2-TI2V-5B model documentation (T2V + I2V)
 │   └── LTX2.md          # LTX-2.3 model documentation
 ├── encoders/            # Text encoder implementations
 │   ├── clip/           # CLIP encoder
