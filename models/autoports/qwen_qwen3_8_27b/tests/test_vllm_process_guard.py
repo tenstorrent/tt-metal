@@ -219,3 +219,69 @@ def test_identity_is_rechecked_after_pidfd_open(monkeypatch):
     monkeypatch.setattr(guard, "read_owned", lambda pid, marker: process)
     assert guard.signal_owned(process, "abcd", signal.SIGTERM)
     assert sent == [(42, signal.SIGTERM)]
+
+
+def test_unmarked_adopted_child_is_reaped(tmp_path):
+    """An engine can lose its marker through exec/setproctitle before API exit."""
+    child_path = tmp_path / "unmarked.json"
+    child = "import os,time; print(os.getpid(), flush=True); time.sleep(30)"
+    parent = (
+        "import subprocess,sys; from pathlib import Path; "
+        "p=subprocess.Popen([sys.executable,'-c',sys.argv[1]],env={},stdout=subprocess.PIPE,text=True); "
+        "Path(sys.argv[2]).write_text(p.stdout.readline()); sys.exit(7)"
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(GUARD_PATH),
+            "--shutdown-timeout",
+            "2",
+            "--",
+            sys.executable,
+            "-c",
+            parent,
+            child,
+            str(child_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        output, _ = process.communicate(timeout=8)
+        assert process.returncode == 7, output
+        assert "VLLM_STAGE_CLEANUP complete" in output
+        assert not Path(f"/proc/{int(child_path.read_text())}").exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def test_adopted_identity_and_parent_are_rechecked(monkeypatch):
+    process = guard.OwnedProcess(1234, 100)
+    sent = []
+    monkeypatch.setattr(guard, "pidfd_open", lambda pid: 42)
+    monkeypatch.setattr(guard.os, "close", lambda fd: None)
+    monkeypatch.setattr(guard, "pidfd_send_signal", lambda fd, sig: sent.append(sig))
+    monkeypatch.setattr(guard, "read_owned", lambda pid, marker: None)
+    monkeypatch.setattr(guard, "read_adopted", lambda pid: guard.OwnedProcess(pid, 101))
+    assert not guard.signal_owned(process, "abcd", signal.SIGTERM, allow_adopted=True)
+    monkeypatch.setattr(guard, "read_adopted", lambda pid: process)
+    assert not guard.signal_owned(process, "abcd", signal.SIGTERM)
+    assert guard.signal_owned(process, "abcd", signal.SIGTERM, allow_adopted=True)
+    assert sent == [signal.SIGTERM]
+
+
+def test_idle_preflight_rejects_unknown_owner_and_missing_devices(tmp_path, expect_error):
+    for index in range(4):
+        directory = tmp_path / str(index)
+        directory.mkdir()
+        (directory / "pids").write_text("")
+    guard.require_idle_tt(4, tmp_path)
+    (tmp_path / "0/pids").write_text("0\n0\n")
+    with expect_error(RuntimeError, "idle devices"):
+        guard.require_idle_tt(4, tmp_path)
+    (tmp_path / "0/pids").unlink()
+    with expect_error(RuntimeError, "idle devices"):
+        guard.require_idle_tt(4, tmp_path)

@@ -7,7 +7,7 @@ export PYTHONPATH="$VLLM_ROOT:$PYTHONPATH"
 export PATH="$TT_METAL_ROOT/python_env/bin:$PATH"
 export TT_MESH_PASS_THROUGH_THREAD_POOL=1
 export HF_HUB_OFFLINE=1
-exec python "$TT_METAL_ROOT/models/autoports/qwen_qwen3_8_27b/tests/vllm_process_guard.py" -- \
+exec python "$TT_METAL_ROOT/models/autoports/qwen_qwen3_8_27b/tests/vllm_process_guard.py" --require-idle-tt 4 -- \
  python -m readiness_check.run_vllm_server \
  --model-dir models/autoports/qwen_qwen3_8_27b --hf-model Qwen/Qwen3.8-27B \
  --mesh-device P300x2 --max-num-seqs "${QWEN_VLLM_MAX_SEQS:-4}" \

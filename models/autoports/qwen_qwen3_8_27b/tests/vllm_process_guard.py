@@ -66,14 +66,36 @@ def owned_processes(marker, proc_root=Path("/proc")):
     return sorted(processes, key=lambda process: process.pid)
 
 
-def signal_owned(process, marker, signum):
+def read_adopted(pid, proc_root=Path("/proc")):
+    """The dedicated subreaper owns its direct children even after exec clears env."""
+    path = proc_root / str(pid)
+    try:
+        fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+        if path.stat().st_uid != os.getuid() or fields[0] in ("Z", "X") or int(fields[1]) != os.getpid():
+            return None
+        return OwnedProcess(pid, int(fields[19]))
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def cleanup_processes(marker):
+    processes = set(owned_processes(marker))
+    for path in Path("/proc").iterdir():
+        if path.name.isdigit():
+            process = read_adopted(int(path.name))
+            if process is not None:
+                processes.add(process)
+    return sorted(processes, key=lambda process: process.pid)
+
+
+def signal_owned(process, marker, signum, *, allow_adopted=False):
     """Use a pidfd so PID reuse after validation cannot signal another launch."""
     try:
         fd = pidfd_open(process.pid)
     except ProcessLookupError:
         return False
     try:
-        if read_owned(process.pid, marker) != process:
+        if read_owned(process.pid, marker) != process and not (allow_adopted and read_adopted(process.pid) == process):
             return False
         pidfd_send_signal(fd, signum)
         return True
@@ -98,20 +120,20 @@ def cleanup_owned(marker, timeout):
     notified = set()
     while True:
         reap_children()
-        remaining = owned_processes(marker)
+        remaining = cleanup_processes(marker)
         if not remaining:
             return []
         for process in remaining:
             if process not in notified:
                 try:
-                    if signal_owned(process, marker, signal.SIGTERM):
+                    if signal_owned(process, marker, signal.SIGTERM, allow_adopted=True):
                         print(f"VLLM_STAGE_CLEANUP SIGTERM pid={process.pid} launch_id={marker}", flush=True)
                 except OSError as error:
                     print(f"VLLM_STAGE_CLEANUP signal_failed pid={process.pid}: {error}", flush=True)
                 notified.add(process)
         delay = deadline - time.monotonic()
         if delay <= 0:
-            return owned_processes(marker)
+            return cleanup_processes(marker)
         time.sleep(min(0.1, delay))
 
 
@@ -170,15 +192,26 @@ def run(command, *, runner_grace=20, shutdown_timeout=30):
     return returncode
 
 
+def require_idle_tt(expected_devices, driver_root=Path("/proc/driver/tenstorrent")):
+    owners = {str(path): path.read_text().split() for path in driver_root.glob("*/pids")}
+    if len(owners) != expected_devices or any(owners.values()):
+        raise RuntimeError(f"TT launch requires {expected_devices} idle devices; observed owner entries: {owners}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner-grace", type=float, default=20)
     parser.add_argument("--shutdown-timeout", type=float, default=30)
+    parser.add_argument("--require-idle-tt", type=int, help="Refuse launch unless this many TT devices have no owner")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command or min(args.runner_grace, args.shutdown_timeout) <= 0:
         parser.error("a command and positive shutdown timeouts are required")
+    if args.require_idle_tt is not None:
+        if args.require_idle_tt < 1:
+            parser.error("--require-idle-tt must be positive")
+        require_idle_tt(args.require_idle_tt)
     return run(command, runner_grace=args.runner_grace, shutdown_timeout=args.shutdown_timeout)
 
 

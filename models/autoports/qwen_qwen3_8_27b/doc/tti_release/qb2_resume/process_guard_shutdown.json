@@ -1,0 +1,33 @@
+{
+  "utc": "2026-09-15T13:23:16.886902+00:00",
+  "server_exec_session": 49219,
+  "server_exit_code": 143,
+  "owners": {
+    "/proc/driver/tenstorrent/0/pids": [],
+    "/proc/driver/tenstorrent/1/pids": [],
+    "/proc/driver/tenstorrent/2/pids": [],
+    "/proc/driver/tenstorrent/3/pids": []
+  },
+  "processes": {
+    "guard_pid": {
+      "pid": 1034665,
+      "state": "absent"
+    },
+    "runner_pid": {
+      "pid": 1034668,
+      "state": "absent"
+    },
+    "api_pid": {
+      "pid": 1034742,
+      "state": "absent"
+    },
+    "engine_pid": {
+      "pid": 1034850,
+      "state": "absent"
+    }
+  },
+  "guard_cleanup_pass": true,
+  "server_log_sha256": "279c40990b44e56c597ffbeb7d41a4050f08fc3af794d032cb875e66d3095898",
+  "server_log_bytes": 2242862,
+  "hardware_reset": false
+}
