@@ -665,6 +665,8 @@ def test_exp_ring_joint_attention_sdpa_accuracy(
 
 # === sol_ring: the fork must clear the gates its parent clears ===
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("max_payload_size", [8192], ids=["8k"])
+@pytest.mark.parametrize("test_global_mask", [False, True], ids=["aligned", "global_mask"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
 def test_sol_ring_matches_dense_accuracy(
