@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "34881025269",
-  "timestamp": "2026-09-14T18:34:00Z"
+  "run_id": "34915404707",
+  "timestamp": "2026-09-15T01:04:52Z"
  },
- "run_id": "34881025269",
+ "run_id": "34915404707",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -137,8 +137,8 @@
   },
   "56520_logical_not": {
    "issue": 56520,
-   "branch": "repo-assist/fix-issue-56520-logical-not-negative-zero",
-   "status": "opened this run; fixes calculate_logical_not float layout to classify zero on abs(v) instead of raw v, mirroring #43831 fix in ckernel_sfpu_comp.h; both Blackhole and Wormhole B0 headers patched; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; did not add suggested test_vif_equiv_sweep.py regression case (logical_not not wired into _FLOAT_OPS, unverifiable in sandbox)"
+   "pr": 56529,
+   "status": "CI green (5/5 checks: RTL Sim CI test + 4 Cycode scans), posted confirmation comment 2026-09-15, no reviews yet"
   }
  },
  "issues_labeled": [
@@ -382,7 +382,8 @@
   "54932": "replied to contributor naufalfx805-source's test-coverage follow-up analysis; endorsed separate follow-up PR",
   "55435": "RTL Sim CI still failure but parent workflow run 33846253050 conclusion is action_required (not failure) - likely gating/approval issue not code issue; job logs still 404; mergeable_state now behind; needs maintainer, no fix pushed",
   "55933": "confirmed bug, awaiting fix PR (community reporter has branch)",
-  "56195": "RTL Sim CI test failing since 2026-09-11 (job log retrieval 404s in this sandbox via get_job_logs/actions_get - endpoints return 404 for both run_id and job_id); needs maintainer to inspect directly. Other checks (Cycode x4) green."
+  "56195": "RTL Sim CI test failing since 2026-09-11 (job log retrieval 404s in this sandbox via get_job_logs/actions_get - endpoints return 404 for both run_id and job_id); needs maintainer to inspect directly. Other checks (Cycode x4) green.",
+  "56538": "external PR fixing #56522 (ttnn.where -0.0 predicate float32 path); no repo-assist duplicate needed"
  },
  "sfpu_clamp_family": {
   "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991.",
@@ -969,7 +970,8 @@
   "task1_task2_2026_09_13c": "reviewed fresh issues #56424/#56414 (appeared since prior run's newest-scan of #56390); both investigated (56424 fixed via PR, 56414 confirmed+labeled+commented no fix); next run resume newest-issue scan from #56424 downward or continue prior gap below #55443",
   "task1_task2_2026_09_14": "reviewed newest issues #56424 down to #56371 (fresh since prior run); all already labeled/covered or non-defect (#56388 test-coverage tracking); next run continue newest-scan below #56371 or resume prior gap below #55443",
   "task1_task2_2026_09_14b": "reviewed backlog issues 55545/55542/55450/55457 (gap below prior cursor #55443 area, oldest-first scan); #55450 covered by open PR #55651 no dup; #55457/#55542 already correctly triaged with existing comment threads, no new action; #55545 (ttnn.conv1d prepared-weight silent corruption on Wormhole, 8193-8704 length band) confirmed real+well-documented+already labeled bug but could not pin exact root cause in prepare_conv2d_weights.cpp with available budget - flagged in monthly summary for maintainer/next-run. Next run continue scanning below #55429 or re-attempt 55545 root cause.",
-  "task1_task2_2026_09_14c": "reviewed newest issues #56480 down to #56298 (fresh scan); most are agentic-workflows bot noise (#56457/#56454/#56451/#56441/#56416/#56399/#56390/#56389 - not defects), shield_prefill CI perf-tracking issues (#56480/56479/56478/56477/56476 - perf/PCC monitoring, no confirmed defect), #56474 (Qwen3.6 trace-capture ordering, well-documented design/tracking issue, already labeled bug by reporter, no repo-assist action needed), #56456 (empty stub tracking issue), #56455 (BEVFormer perf tracking); confirmed+labeled+commented #56324 (tt_transformers page-table stale-block exposure on batched/Galaxy branch, verified against current generator.py:3848-3888, primary bug already fixed via merged #55589, this tracks remaining exposure); other newest issues (56345/56336/56323/56312/56304/56298) already correctly labeled/covered from prior runs. Next run continue newest-scan below #56298 or resume prior gap below #55429."
+  "task1_task2_2026_09_14c": "reviewed newest issues #56480 down to #56298 (fresh scan); most are agentic-workflows bot noise (#56457/#56454/#56451/#56441/#56416/#56399/#56390/#56389 - not defects), shield_prefill CI perf-tracking issues (#56480/56479/56478/56477/56476 - perf/PCC monitoring, no confirmed defect), #56474 (Qwen3.6 trace-capture ordering, well-documented design/tracking issue, already labeled bug by reporter, no repo-assist action needed), #56456 (empty stub tracking issue), #56455 (BEVFormer perf tracking); confirmed+labeled+commented #56324 (tt_transformers page-table stale-block exposure on batched/Galaxy branch, verified against current generator.py:3848-3888, primary bug already fixed via merged #55589, this tracks remaining exposure); other newest issues (56345/56336/56323/56312/56304/56298) already correctly labeled/covered from prior runs. Next run continue newest-scan below #56298 or resume prior gap below #55429.",
+  "task1_task2_2026_09_15": "reviewed newest issues #56583 down to #56517 (fresh since prior cursor #56298); labeled/commented 56517/56550/56526/56522 (bug); most others (Fabric epic batch #56557-56569, aw-bot noise, perf-tracking) already labeled or non-defect; #56525 quantize-ties claim deferred, needs closer verification (RND_EVEN mode already present, claim may be stale/inaccurate); next run continue newest-scan below #56517 or verify #56525, or resume older gap below #55429/#55022"
  },
  "labeled_issues": {
   "53866": {
@@ -1274,6 +1276,11 @@
  },
  "run_history": [
   {
+   "run_id": "34915404707",
+   "date": "2026-09-15T01:04:52Z",
+   "summary": "Task5: posted CI-green confirmation on PR #56529 (logical_not, 5/5 checks, no prior comment since opening); re-verified all 17 tracked repo-assist PRs via pull_request_read/get_check_runs - no CI regressions, no new maintainer activity beyond what already handled. Task1/2: reviewed newest issues #56583 down to #56517 (fresh scan since prior cursor #56298); most are Fabric/control-plane epic sub-issues (already correctly labeled by others), agentic-workflows bot noise, or perf/PCC tracking issues with no confirmed defect; confirmed+labeled+commented 4 defects with root-cause verified against current source: #56517 (ttnn.gelu Tanh negative-tail cancellation in ckernel_sfpu_gelu.h, suggested fix pattern mirroring existing x_times_exp_negative_tail helper but did not implement - needs build/ULP validation unavailable in sandbox), #56550 (chunk_gated_delta_rule FTZ underflow/NaN in decayfac*decay_exp product, confirmed against chunk_gdn_prep.cpp:470-590, flagged as needing real fix not quick patch), #56526 (ttnn.quantize int32 output never reaches -128, confirmed FP32_TO_INT8 7-bit sign-magnitude saturation against ckernel_sfpu_quant.h), #56522 (labeled bug only - already has open external fix PR #56538 fixing ttnn.where -0.0 predicate, no duplicate needed). Deferred #56525 (quantize ties-to-even claim) - on inspection the kernel already uses SFPSTOCHRND_RND_EVEN mode which looks inconsistent with the reported away-from-zero/toward-+inf tie behavior, needs closer verification before labeling. Task6: 3 stale-PR actions on never-before-nudged non-repo-assist PRs found via oldest-updated-first non-draft search (page3): /codeowners ping on #52679 (SFPU kernel accuracy fix, clean CI, 9 pending reviewers, zero reviews) and #53022 (erfc constant-above-5 fix, clean CI, 9 pending reviewers, zero reviews); author check-in on #52611 (dirty/needs-rebase, zero prior comments). Task8: rewrote monthly summary #55015 (had regrown to ~118KB) to canonical trimmed format with refreshed suggested actions and current run history."
+  },
+  {
    "run_id": "34881025269",
    "date": "2026-09-14T18:34:00Z",
    "summary": "Task3: opened fix PR (branch repo-assist/fix-issue-56520-logical-not-negative-zero) for issue #56520 (ttnn.logical_not float32 returns 0 for -0.0); verified root cause against current ckernel_sfpu_logical_not.h (Blackhole+Wormhole B0, unchanged v_if(v==0) raw compare); mirrored #43831 abs(v)==0 fix for float layout only, integer layouts untouched; did NOT add suggested _SIGNED_ZERO_EXPECTED regression test since logical_not is not wired into test_vif_equiv_sweep.py _FLOAT_OPS mapping and harness cannot be compiled/run in this sandbox - flagged as follow-up. Labeled #56520 bug, commented linking fix. Task5: re-verified all 16 tracked repo-assist PRs (55670/56428/56396/56195/55435/51868/53113/53690/54246/54666/54792/54862/54932/55688) via pull_request_read - no CI regressions, no new maintainer activity beyond what was already handled in the 06:52 run (55670 codeowners ping still stands, no new comments since). Task6: 3 stale-PR actions on never-before-nudged non-repo-assist PRs found via oldest-updated-first search (page1): /codeowners ping on #51421 (fused_rms_minimal cross-device stats, fully approved+CI green, blocked only on 3 pending required reviewers razorback3/dongjin-na/jonathansuTT); author check-in on #51467 (ttnn.move dangling MemoryConfig fix, approved but dirty/needs-rebase since Aug); author check-in on #51656 (custom-Alignment API split, 4 approvals but dirty/needs-rebase, unanswered reviewer question from dstoiljkovicTT re L2/perf coverage). Task8: rewrote monthly summary #55015 (was stale, dated 09-11 despite newer runs in memory) to canonical trimmed format with refreshed suggested actions and full current run history."
@@ -1457,5 +1464,6 @@
   }
  },
  "task5_maintain_2026_09_14": "replied to bbradelTT question on PR #55670 (confirmed ready, triggered /codeowners ping); re-verified CI green on #56428/#56396 (no reviews yet), no other new maintainer activity found on 55847/55435/53690/52106/53113/54792/54246/54666/54862",
- "task8_last_update": "2026-09-14T18:34:00Z"
+ "task8_last_update": "2026-09-14T18:34:00Z",
+ "task5_maintain_2026_09_15": "re-verified all 17 tracked PRs via pull_request_read/get_check_runs; posted CI-green comment on #56529 (new since 09-14 18:34 run); no other new maintainer activity found"
 }
