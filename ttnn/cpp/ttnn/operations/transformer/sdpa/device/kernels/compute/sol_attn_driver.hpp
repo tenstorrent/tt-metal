@@ -984,9 +984,10 @@ void sol_attn_standard_v2(
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
             if constexpr (chunk_keep_every > 1) {
                 if (!stride_keeps(k_chunk)) {
-                    // The reader streams every chunk regardless of selection; drain or the CBs desync.
-                    CircularBuffer(cb_k_in).wait_front(Sk_chunk_t * DHt);
-                    sdpa_cb_pop_front_out_of_line(cb_k_in, Sk_chunk_t * DHt);
+                    // The reader streams every chunk regardless of selection; drain or the CBs
+                    // desync. K arrives transposed on this path, hence cb_kt_in.
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                     CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * vDHt);
                     sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * vDHt);
                     if constexpr (use_provided_mask) {
