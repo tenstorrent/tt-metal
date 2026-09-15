@@ -139,6 +139,8 @@ public:
     // Contiguity APIs:
     // Page-id step between memory-contiguous pages. Constant for the accessor. Usually 1, but
     // tensor_shape[-1] for a one-page-wide shard (what row-major width/block sharding gives).
+    // A step, not proof of adjacency: a single-page shard reports 1 though round-robin puts
+    // neighbouring pages on different cores. num_contiguous_pages() has the real reach; read both.
     uint32_t contiguous_page_stride() const { return dspec().tensor_strides()[contiguous_dim()]; }
 
     // How many pages from page_id are contiguous in memory, page_id included. They are the page ids
@@ -412,6 +414,7 @@ private:
 
     // Innermost dim the shard spans more than one page of. Stepping any dim inside it leaves the
     // shard, so the run walks this one. Depends only on shapes, hence constant per accessor.
+    // BufferDistributionSpec copies this rule on the host; change both together.
     int contiguous_dim() const {
         const int rank = static_cast<int>(dspec().rank());
         ASSERT(rank > 0);  // callers index tensor_strides() with the result

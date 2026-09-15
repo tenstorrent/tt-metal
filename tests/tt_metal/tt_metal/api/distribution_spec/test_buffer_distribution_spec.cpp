@@ -562,6 +562,24 @@ TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousVsRoundRobinPlacement)
     EXPECT_EQ(shard_contiguous_map[1], (std::vector<uint32_t>{4, 5, 6, 7}));
 }
 
+// Shape-only, so the core grid is arbitrary. Values match the accessor's own, in
+// tests/ttnn/unit_tests/gtests/accessor/test_tensor_accessor.cpp.
+TEST(BufferDistributionSpecContiguous, CPU_ContiguousPageStride) {
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));
+    auto stride_of = [&grid](std::initializer_list<uint32_t> tensor, std::initializer_list<uint32_t> shard) {
+        return BufferDistributionSpec(
+                   tt::tt_metal::Shape(tensor), tt::tt_metal::Shape(shard), grid, ShardOrientation::ROW_MAJOR)
+            .contiguous_page_stride();
+    };
+
+    EXPECT_EQ(stride_of({3, 5}, {2, 2}), 1u);
+    EXPECT_EQ(stride_of({4, 6}, {4, 1}), 6u);
+    EXPECT_EQ(stride_of({4, 3, 2, 2}, {2, 1, 1, 1}), 12u);
+
+    // No run to claim: a single-page shard cannot extend. The accessor reports 1 here.
+    EXPECT_EQ(stride_of({8, 1}, {1, 1}), 0u);
+}
+
 // CONTIGUOUS_1D requires a uniform shards-per-core; an indivisible count must fatal.
 TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousRequiresUniformShardsPerCore) {
     const tt::tt_metal::Shape tensor_in_pages{7, 1};  // 7 shards over 2 cores -> not uniform

@@ -49,6 +49,11 @@ public:
     const Shape& tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
     const Shape& shard_shape_in_pages() const { return shard_shape_in_pages_; }
 
+    // Page-id step between pages at consecutive addresses in one bank. 0 for a single-page shard,
+    // where a run stops at the shard edge before reaching a second page.
+    // TensorAccessor::contiguous_page_stride() reports 1 there, needing a non-zero step.
+    uint32_t contiguous_page_stride() const;
+
     size_t num_shards() const;
     size_t max_num_shards_per_core() const;
     size_t max_num_dev_pages_per_core() const;
@@ -88,6 +93,9 @@ private:
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy);
     void init_precomputed_data();
+
+    // Stepping any dim inside this one leaves the shard, so a run walks this dim.
+    int contiguous_dim() const;
 
     Shape tensor_shape_in_pages_;
     Shape shard_shape_in_pages_;

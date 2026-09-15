@@ -211,6 +211,28 @@ size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
     return num_shards_per_core(core_idx) * shard_volume_;
 }
 
+int BufferDistributionSpec::contiguous_dim() const {
+    const int rank = static_cast<int>(tensor_shape_in_pages_.rank());
+    for (int i = rank - 1; i >= 0; --i) {
+        if (shard_shape_in_pages_[i] > 1) {
+            return i;
+        }
+    }
+    return rank - 1;
+}
+
+uint32_t BufferDistributionSpec::contiguous_page_stride() const {
+    const int d = contiguous_dim();
+    if (shard_shape_in_pages_[d] == 1) {
+        return 0;
+    }
+    uint32_t stride = 1;
+    for (int i = static_cast<int>(tensor_shape_in_pages_.rank()) - 1; i > d; --i) {
+        stride *= tensor_shape_in_pages_[i];
+    }
+    return stride;
+}
+
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
 BufferDistributionSpec::core_groups_tuple() const {
     return {
