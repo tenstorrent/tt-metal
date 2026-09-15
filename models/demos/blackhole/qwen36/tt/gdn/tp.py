@@ -1898,6 +1898,10 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        # Decode CCL tuning: this call had none, so it took tt_all_reduce's 10/2 defaults and its
+        # reduce-scatter ran at ~61% of link. chunks_per_sync=1 is -13.7% on it; see
+        # tp_common.decode_ccl_tuning for the measurements and why the knob differs from prefill's.
+        _dt = tpc.decode_ccl_tuning(self.args)
         out = tt_all_reduce(
             partial,
             self.mesh,
@@ -1906,6 +1910,7 @@ class TPGatedDeltaNet:
             dim=3,
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **({"chunks_per_sync": _dt[0], "num_workers_per_link": _dt[1]} if _dt else {}),
         )
         return out
 
