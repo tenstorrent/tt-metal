@@ -214,10 +214,16 @@ jobs:
     # fetch-ttsim is a prerequisite even for hardware legs: every fetch the run needs
     # completes before any test starts.
     needs: [scope, build-default, build-profiler, fetch-ttsim]
+    # An empty matrix vector is a workflow-level error in Actions, not a skipped
+    # job: the run is marked failed with nothing red inside it. scope returns an
+    # empty matrix on every no_op PR -- i.e. most of them -- so guard it here the
+    # same way fetch-ttsim guards sim-libs above.
     if: >-
       ${{ !cancelled()
           && !contains(needs.*.result, 'failure')
-          && github.event_name == 'pull_request'}}
+          && github.event_name == 'pull_request'
+          && needs.scope.outputs.matrix != '[]'
+          && needs.scope.outputs.matrix != ''}}
     strategy:
       fail-fast: false
       matrix:
