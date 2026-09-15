@@ -38,7 +38,7 @@ pytestmark = [
     pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
     pytest.mark.parametrize(
         "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 8 * 1024 * 1024}],
         indirect=True,
     ),
 ]
@@ -430,7 +430,7 @@ def test_worst_case_split_offset_is_deterministic(
     local_rows = SEQUENCE // sp_size
     actual_start = local_rows + local_rows // 2
 
-    config, weights, hidden, _, _ = _reference_case()
+    config, weights, hidden, expected_output, expected_state = _reference_case()
     layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
     permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
     hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
@@ -451,54 +451,67 @@ def test_worst_case_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDe
     sp_size = 2
     local_rows = SEQUENCE // sp_size
     actual_start = local_rows + local_rows // 2
-    config, weights, hidden, _, _ = _reference_case()
+    config, weights, hidden, expected_output, expected_state = _reference_case()
     layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
     permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
     hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
 
-    warm_input = layer.allocate_state(batch_size=1)
-    warm_output, warm_state = layer.forward(hidden_tt, warm_input, actual_start)
-    ttnn.synchronize_device(mesh_device)
-    ttnn.deallocate(warm_output)
-    ttnn.deallocate(warm_state.recurrent)
-    ttnn.deallocate(warm_state.convolution)
-    ttnn.deallocate(warm_input.recurrent)
-    ttnn.deallocate(warm_input.convolution)
-
     input_state = layer.allocate_state(batch_size=1)
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    output_tt, state = layer.forward(hidden_tt, input_state, actual_start)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    trace_id = None
+    capturing = False
+    output_tt = state = None
     try:
-
-        def replay_to_host() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        for _ in range(2):
+            warm_output, warm_state = layer.forward(hidden_tt, input_state, actual_start)
             ttnn.synchronize_device(mesh_device)
-            return (
-                reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tensor_parallel_axis, tp_dim=2, sp_dim=1),
-                reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, 0),
-                reconstruct_convolution_at_sp_rank(
-                    state.convolution,
-                    mesh_device,
-                    sp_axis,
-                    tensor_parallel_axis,
-                    0,
-                    config.num_heads // 4 * config.head_k_dim,
-                ),
+            ttnn.deallocate(warm_output)
+            ttnn.deallocate(warm_state.recurrent)
+            ttnn.deallocate(warm_state.convolution)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        capturing = True
+        output_tt, state = layer.forward(hidden_tt, input_state, actual_start)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        capturing = False
+        first = None
+        for replay in range(3):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            _assert_matches_reference(
+                output_tt=output_tt,
+                state=state,
+                permutation=permutation,
+                expected_output=expected_output,
+                expected_state=expected_state,
+                mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                tp_axis=tensor_parallel_axis,
+                config=config,
+                label=f"split trace replay={replay}",
             )
-
-        first = replay_to_host()
-        second = replay_to_host()
-        for name, expected, actual in zip(("output", "recurrent", "convolution"), first, second, strict=True):
-            assert_bit_identical(expected, actual, name=f"split trace replay {name}")
+            current = [
+                ttnn.to_torch(shard).clone()
+                for tensor in (output_tt, state.recurrent, state.convolution)
+                for shard in ttnn.get_device_tensors(tensor)
+            ]
+            if first is None:
+                first = current
+            else:
+                for index, (expected, actual) in enumerate(zip(first, current, strict=True)):
+                    assert_bit_identical(expected, actual, name=f"split trace replay={replay} shard={index}")
     finally:
-        ttnn.release_trace(mesh_device, trace_id)
-        ttnn.deallocate(output_tt)
-        ttnn.deallocate(state.recurrent)
-        ttnn.deallocate(state.convolution)
-        ttnn.deallocate(input_state.recurrent)
-        ttnn.deallocate(input_state.convolution)
-        ttnn.deallocate(hidden_tt)
+        try:
+            if capturing:
+                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        finally:
+            if trace_id is not None:
+                ttnn.release_trace(mesh_device, trace_id)
+            if output_tt is not None:
+                ttnn.deallocate(output_tt)
+            if state is not None:
+                ttnn.deallocate(state.recurrent)
+                ttnn.deallocate(state.convolution)
+            ttnn.deallocate(input_state.recurrent)
+            ttnn.deallocate(input_state.convolution)
+            ttnn.deallocate(hidden_tt)
 
 
 def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device: ttnn.MeshDevice) -> None:
