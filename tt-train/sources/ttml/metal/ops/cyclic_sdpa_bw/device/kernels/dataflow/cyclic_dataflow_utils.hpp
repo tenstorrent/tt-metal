@@ -195,11 +195,74 @@ inline void produce_statistic_tiles(
     cb_push_back(cb_neg_u_rem, Bt);
 }
 
+// The statistic block: what a packet carries for one row tile instead of
+// the five prepared tiles -- 512 bytes, the 32 values of each part:
+//
+//   words   0.. 31  -L, hi part (Float32)
+//   words  32.. 63  -D, hi part (Float32)
+//   halves 128..159 -L, lo part as bfloat16
+//   halves 160..191 -D, lo part as bfloat16
+//   words  96..127  -L, lo part (Float32; the path with the scale in the
+//                   exponential adds it as a row)
+//
+// Made once where the row's packet enters from DRAM, from the L and D
+// tiles; expanded into the tiles the compute kernel takes on every core the
+// packet visits, by that core's writer RISC, which has a timestep of lead.
+constexpr uint32_t kStatBlockBytes = 512;
+
+inline void gather_statistic_block(uint32_t l_l1, uint32_t d_l1, uint32_t block_l1) {
+    const uint32_t* l = reinterpret_cast<const uint32_t*>(l_l1);
+    const uint32_t* d = reinterpret_cast<const uint32_t*>(d_l1);
+    uint32_t* w = reinterpret_cast<uint32_t*>(block_l1);
+    uint16_t* h = reinterpret_cast<uint16_t*>(block_l1);
+    for (uint32_t r = 0; r < 2u * kFaceRows; ++r) {
+        const uint32_t col_idx = ((r < kFaceRows) ? 0u : 2u) * kFaceElems + (r % kFaceRows) * kFaceRows;
+        uint32_t hi = 0;
+        uint32_t lo = 0;
+        split_statistic(l[col_idx] ^ 0x80000000u, hi, lo);
+        w[r] = hi;
+        w[96u + r] = lo;
+        h[128u + r] = static_cast<uint16_t>(lo >> 16);
+        split_statistic(d[col_idx] ^ 0x80000000u, hi, lo);
+        w[32u + r] = hi;
+        h[160u + r] = static_cast<uint16_t>(lo >> 16);
+    }
+}
+
+// The block into the tiles: hi parts into row 0 of the row tiles (face 0
+// for columns 0..15, face 1 for 16..31), lo parts into column 0 of the
+// bfloat16 tiles (face 0 for rows 0..15, face 2 for 16..31), and with
+// kFold false -L's lo part into row 0 of its Float32 row tile too. Only
+// those rows and columns are written; the tiles are zeroed once at start.
+template <bool kFold>
+inline void expand_statistic_block(
+    uint32_t block_l1, uint32_t lrow, uint32_t urow, uint32_t lrem_row, uint32_t lrem, uint32_t urem) {
+    const uint32_t* w = reinterpret_cast<const uint32_t*>(block_l1);
+    const uint16_t* h = reinterpret_cast<const uint16_t*>(block_l1);
+    uint32_t* lr = reinterpret_cast<uint32_t*>(lrow);
+    uint32_t* ur = reinterpret_cast<uint32_t*>(urow);
+    uint32_t* lrr = reinterpret_cast<uint32_t*>(lrem_row);
+    uint16_t* lc = reinterpret_cast<uint16_t*>(lrem);
+    uint16_t* uc = reinterpret_cast<uint16_t*>(urem);
+    for (uint32_t r = 0; r < 2u * kFaceRows; ++r) {
+        const uint32_t row_idx = ((r < kFaceRows) ? 0u : 1u) * kFaceElems + (r % kFaceRows);
+        const uint32_t col_idx = ((r < kFaceRows) ? 0u : 2u) * kFaceElems + (r % kFaceRows) * kFaceRows;
+        lr[row_idx] = w[r];
+        ur[row_idx] = w[32u + r];
+        if constexpr (kFold) {
+            lc[col_idx] = h[128u + r];
+        } else {
+            lrr[row_idx] = w[96u + r];
+        }
+        uc[col_idx] = h[160u + r];
+    }
+}
+
 // The reader pushes one page here once a timestep's L and D are in L1, and
 // the writer waits on it before producing the statistic tiles. In the relay
-// the writer answers on kStatsDoneCb (the D scratch buffer's pages, free for
-// this since D itself is not a packet field there) once the tiles are in the
-// slot, and the reader pushes them to the compute kernel. A buffer
+// the writer answers on kStatsDoneCb (the L/D scratch buffer's pages, free
+// for this since only their memory is used there) once the block is made,
+// and the reader forwards it. A buffer
 // rather than an L1 word because the host resets buffer state every launch;
 // a word in scratch L1 could carry the previous launch's count and pass a
 // wait early.

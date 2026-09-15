@@ -634,8 +634,11 @@ Gradients run_relay(
     // The packet buffers hold two slots; everything else holds one.
     make_cb(tt::CBIndex::c_0, 2 * rowT, tt::DataFormat::Float16_b);  // Q_i
     make_cb(tt::CBIndex::c_3, 2 * valT, tt::DataFormat::Float16_b);  // dO_i
-    make_cb(tt::CBIndex::c_4, 2 * Bt, tt::DataFormat::Float32);      // L_i
-    make_cb(tt::CBIndex::c_5, 2 * Bt, tt::DataFormat::Float32);      // D_i
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(2 * Bt * 512, {{tt::CBIndex::c_4, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_4, 512));  // statistic block
+    make_cb(tt::CBIndex::c_5, 4 * Bt, tt::DataFormat::Float32);      // L_i, D_i scratch
     make_cb(tt::CBIndex::c_15, 2 * rowT, tt::DataFormat::Float32);   // dQ_i, travels along
     make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);      // K_j
     make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);      // V_j

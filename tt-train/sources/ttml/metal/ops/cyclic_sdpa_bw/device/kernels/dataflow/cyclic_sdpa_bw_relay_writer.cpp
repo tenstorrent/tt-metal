@@ -127,21 +127,25 @@ void kernel_main() {
     // Slot-0 addresses of the packet's statistic buffers (this kernel never
     // reserves them, so its write pointers stay at the base), and the reader's
     // "statistics in L1" word.
-    const uint32_t interm_bytes = get_tile_size(cb_lse);
-    const uint32_t base_lse = get_write_ptr(cb_lse);
-    const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
+    const uint32_t interm_bytes = get_tile_size(cb_u_scalar);
+    const uint32_t base_lse = get_write_ptr(cb_u_scalar);
+    const uint32_t base_u_scalar = base_lse + 2u * Bt * interm_bytes;
     const uint32_t stride_interm = Bt * interm_bytes;
-    // Slot-0 addresses of the statistic tile buffers (never reserved here:
-    // the reader owns them) and the zero page the slots are cleared from.
-    const uint32_t base_lse_row = get_write_ptr(cb_lse_row);
-    const uint32_t base_u_row = get_write_ptr(cb_u_row);
-    const uint32_t base_lse_rem_row = get_write_ptr(cb_lse_rem_row);
-    const uint32_t base_lse_rem = get_write_ptr(cb_lse_rem);
-    const uint32_t base_u_rem = get_write_ptr(cb_u_rem);
     const uint32_t rem_bytes = get_tile_size(cb_u_rem);
-    const uint32_t stride_rem = Bt * rem_bytes;
-    const uint32_t zero_l1 = get_write_ptr(tt::CBIndex::c_8);
-    const uint32_t zero_bytes = get_tile_size(tt::CBIndex::c_8);  // half a Float32 tile
+    // The packet's statistic block (the L buffer, reader-owned) and the L / D
+    // scratch (the D buffer) -- the reader's layout, see the relay reader.
+    const uint32_t base_block = get_write_ptr(cb_lse);
+    const uint32_t stride_block = Bt * cyclic_dataflow::kStatBlockBytes;
+    volatile tt_l1_ptr uint32_t* ready_imm_sem[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[0])),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[1]))};
+    // The row tiles are written in row 0 only, the remainder columns in
+    // column 0 only, by this thread alone: zero them once.
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * rem_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * rem_bytes);
 
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
@@ -175,40 +179,63 @@ void kernel_main() {
         // counter must keep rising across a slice boundary.
         const uint32_t g = s * kTimesteps + t;
 
-        // The statistic tiles of a packet the reader loads from DRAM this
-        // timestep: made here, into the packet's slot, once the reader says L
-        // and D are in; the reader then pushes them, and they travel with the
-        // packet, so a forwarded packet needs nothing from this thread.
-        if (!sched.producer(my_core, t).internal) {
+        // The statistic tiles for this timestep, from the packet's block. A
+        // packet loaded from DRAM gets its block made here first, from L and
+        // D, once the reader says they are in; a forwarded packet's block
+        // arrived with it, which the readiness semaphore says a timestep
+        // ahead of the reader. Before the column-gradient writes below, which
+        // wait on the compute kernel and so must not hold this up.
+        {
             DeviceZoneScopedN("STAT-ROWS");
-            cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
-            invalidate_l1_cache();
             const uint32_t slot = g % 2u;
-            const uint32_t lrow = base_lse_row + slot * stride_interm;
-            const uint32_t urow = base_u_row + slot * stride_interm;
-            const uint32_t lrem_row = base_lse_rem_row + slot * stride_interm;
-            const uint32_t lrem = base_lse_rem + slot * stride_rem;
-            const uint32_t urem = base_u_rem + slot * stride_rem;
-            // The gather writes row 0 or column 0 only; the rest of each tile
-            // must be zero. Zero the slot's tiles first, by NoC from the zero
-            // page, which is faster than the RISC storing zeros.
-            for (uint32_t k = 0; k < Bt; ++k) {
-                for (uint32_t half = 0; half < 2u; ++half) {
-                    noc_async_write(zero_l1, get_noc_addr(lrow + k * interm_bytes + half * zero_bytes), zero_bytes);
-                    noc_async_write(zero_l1, get_noc_addr(urow + k * interm_bytes + half * zero_bytes), zero_bytes);
-                    noc_async_write(
-                        zero_l1, get_noc_addr(lrem_row + k * interm_bytes + half * zero_bytes), zero_bytes);
+            const uint32_t block = base_block + slot * stride_block;
+            if (!sched.producer(my_core, t).internal) {
+                {
+                    DeviceZoneScopedN("STAT-WAIT-DRAM");
+                    cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
                 }
-                noc_async_write(zero_l1, get_noc_addr(lrem + k * rem_bytes), rem_bytes);
-                noc_async_write(zero_l1, get_noc_addr(urem + k * rem_bytes), rem_bytes);
+                invalidate_l1_cache();
+                DeviceZoneScopedN("STAT-GATHER");
+                for (uint32_t k = 0; k < Bt; ++k) {
+                    cyclic_dataflow::gather_statistic_block(
+                        base_lse + slot * stride_interm + k * interm_bytes,
+                        base_u_scalar + slot * stride_interm + k * interm_bytes,
+                        block + k * cyclic_dataflow::kStatBlockBytes);
+                }
+                cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
+                cb_reserve_back(cyclic_dataflow::kStatsDoneCb, 1);
+                cb_push_back(cyclic_dataflow::kStatsDoneCb, 1);
+            } else {
+                DeviceZoneScopedN("STAT-WAIT-FWD");
+                WAYPOINT("STRW");
+                do {
+                    invalidate_l1_cache();
+                } while ((*ready_imm_sem[slot]) < g + 1u);
+                WAYPOINT("STRD");
             }
-            noc_async_write_barrier();
-            cyclic_dataflow::produce_statistic_tiles_at<FOLD_SCALE_INTO_KEY != 0>(
-                base_lse + slot * stride_interm, base_u_scalar + slot * stride_interm, Bt, interm_bytes, rem_bytes,
-                lrow, urow, lrem_row, lrem, urem);
-            cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
-            cb_reserve_back(cyclic_dataflow::kStatsDoneCb, 1);
-            cb_push_back(cyclic_dataflow::kStatsDoneCb, 1);
+            {
+            DeviceZoneScopedN("STAT-EXPAND");
+            cb_reserve_back(cb_lse_row, Bt);
+            cb_reserve_back(cb_u_row, Bt);
+            cb_reserve_back(cb_lse_rem_row, Bt);
+            cb_reserve_back(cb_lse_rem, Bt);
+            cb_reserve_back(cb_u_rem, Bt);
+            const uint32_t lrow = get_write_ptr(cb_lse_row);
+            const uint32_t urow = get_write_ptr(cb_u_row);
+            const uint32_t lrem_row = get_write_ptr(cb_lse_rem_row);
+            const uint32_t lrem = get_write_ptr(cb_lse_rem);
+            const uint32_t urem = get_write_ptr(cb_u_rem);
+            for (uint32_t k = 0; k < Bt; ++k) {
+                cyclic_dataflow::expand_statistic_block<FOLD_SCALE_INTO_KEY != 0>(
+                    block + k * cyclic_dataflow::kStatBlockBytes, lrow + k * interm_bytes, urow + k * interm_bytes,
+                    lrem_row + k * interm_bytes, lrem + k * rem_bytes, urem + k * rem_bytes);
+            }
+            cb_push_back(cb_lse_row, Bt);
+            cb_push_back(cb_u_row, Bt);
+            cb_push_back(cb_lse_rem_row, Bt);
+            cb_push_back(cb_lse_rem, Bt);
+            cb_push_back(cb_u_rem, Bt);
+            }
         }
 
         // The column gradients are handed over once per residency interval,
