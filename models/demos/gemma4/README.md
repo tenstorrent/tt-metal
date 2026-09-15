@@ -274,9 +274,9 @@ known TTSampling multi-row broadcast limitation (see the demo's module docstring
 
 #### Op-level fixes (all default ON)
 
-Three op-level fixes to the target model's `decode_forward` / the drafter's own attention,
-each with a bit-exact hardware verification and an env-var escape hatch back to the
-previous behavior:
+Four op-level fixes to the target model's `decode_forward` / the drafter's own attention /
+the prefill call, each with a bit-exact hardware verification and an env-var escape hatch
+back to the previous behavior:
 
 | Flag | Default | What it does | Measured effect |
 |---|---|---|---|
@@ -284,8 +284,45 @@ previous behavior:
 | `GEMMA4_KV_FUSED_WRITE` | `1` | `paged_fused_update_cache` (one launch, K+V together) instead of two separate `paged_update_cache` calls in the batch-alias verify write loop. | 10.2% device-time reduction (`PagedUpdateCacheDeviceOperation` 256 calls → `PagedFusedUpdateCacheDeviceOperation` 128 calls, call count halved). |
 | `GEMMA4_DFLASH_PAD_NOISE_CONCAT` | `1` | Pads the drafter's noise-block K/V to a 32-row tile boundary before `ttnn.concat`, avoiding `ttnn.concat`'s untilize→splice→retile fallback (~38.7µs/call) for its native tile-aligned path (~3µs/call). | ~13x faster per concat call, twice per drafter layer. |
 | `GEMMA4_DFLASH_KV_FILL_CACHE` | `0` (opt-in) | Replaces the drafter's KV-cache delta write's O(max_seq_len) slice/concat/copy with a bounded `ttnn.fill_cache`-based write. | 36% reduction at max_seq_len=512, 65% at max_seq_len=4096 — the win *grows* with context length, unlike the others. Off by default pending a wider rollout (see `_dflash_kv_fill_cache_enabled`'s docstring in `tt/dflash/attention.py`). |
+| `GEMMA4_DFLASH_PREFILL_TRACE` | `1` | Traces the real prefill call (single chunk only, `MAX_SEQ_LEN <= 2048`) instead of running it eager. See below. | First call: ~10% *slower* end-to-end (one-time capture tax). Every call after: prefill collapses from ~3.3s to ~0.1s on a 44-token prompt (38.6x on the prefill call itself, +67% end-to-end tok/s) — bigger at longer ISL, since prefill dominates total time more there. |
 
 Set any of these to `0` to bisect a regression against the pre-fix path.
+
+##### Traced prefill: why, and its current single-chunk limit
+
+Device profiling of DFlash's prefill (`test_dflash_prefill_tracy.py`,
+`scripts/run_dflash_prefill_profile.sh`) found the eager prefill call spends **~96% of its
+measured device-time window in host-dispatch gaps between ops, not compute** (859ms gap vs
+38ms device compute, 8-layer/4k-token profile) — the classic signature of eager (untraced)
+execution, where every op needs a host→device dispatch round-trip. Tracing amortizes that
+away on repeat calls at the same shape, same mechanism the plain (non-DFlash) baseline
+already uses for its own prefill.
+
+The tap-capture hook that feeds the drafter's context already has a trace-safe mode
+(`dflash_capture_taps(..., buffers=...)` — copy into persistent, boot-owned buffers instead
+of the default python-side clone-append), because the steady-state verify step already needs
+it inside `DFlashFusedDecoder`'s fused trace. Wiring that same mode into the real prefill call
+is what `GEMMA4_DFLASH_PREFILL_TRACE` does.
+
+**Single chunk only (`MAX_SEQ_LEN <= 2048`) for now.** The tap-buffer index
+(`_dflash_tap_idx`, `tt/model.py`) resets to `0` at the start of **every** `Gemma4Model.__call__`
+— for a multi-chunk prompt, each 2048-token chunk is its own call, so a captured trace
+replayed once per chunk would overwrite the same buffer slot every time instead of
+accumulating across the full prompt. `demo/dflash_fused_decoder_demo.py` auto-falls-back to
+eager (with a warning) whenever `MAX_SEQ_LEN` exceeds one chunk. Extending this to multi-chunk
+would mean sizing the tap buffers to the full ISL and writing into a `chunk_start_idx`-offset
+slice per chunk — the same device-side dynamic-offset pattern `_slice_prefill_rot_mats` and
+the paged KV-cache write path already use for RoPE tables / KV writes under multi-chunk trace
+replay — not yet implemented.
+
+Validated on real hardware: with tracing on, mean accepted-drafts/iteration was **identical**
+(5.67, four consecutive runs) to the eager baseline — the trace-safe buffers capture the same
+tapped hidden states, just via a different (traced) execution path. `GEMMA4_DFLASH_PREFILL_TRACE_BENCH=1`
+reruns prefill a second time back-to-back and logs the capture-vs-replay split
+(`[prefill-trace] capture+first call: Xs | replay: Ys | speedup: Zx`) — useful to reproduce the
+speedup number, but adds a throwaway extra prefill call not representative of a real session's
+cost, so it's off by default. `GEMMA4_DFLASH_PREFILL_TRACE=0` reverts to the old eager path
+entirely (e.g. to bisect a regression against it).
 
 #### Running it
 
@@ -335,6 +372,37 @@ reach that many real tokens) that's off-distribution from what the drafter was t
 chat/instruct prompts) — expect a real deployment's acceptance rate at a given ISL to differ
 from these numbers; they demonstrate the *mechanism* works correctly at scale, not a
 production acceptance-rate forecast.
+
+#### Acceptance rate depends on prompt *structure*, not just ISL
+
+Measured on T3K (1×8): six short prompts (69–100 real tokens, all within the `batch-32` bucket's
+ISL range) spanning code generation, structured extraction, factual Q&A, and open-ended
+conversation, against a `batch-32`-bucket baseline of 15.65 tok/s/user (same session):
+
+| Prompt | Type | Real prompt tokens | DFlash tok/s | Mean accepted/iter | Speedup |
+|---|---|---:|---:|---:|---:|
+| "Write a Fibonacci function..." | code generation | 69 | 69.3 | 5.95 | 4.4x |
+| "What is the capital of Germany?" | factual Q&A | 91 | 28.9 | 1.95 | 1.9x |
+| "What is the capital of Canada?" | factual Q&A | 81 | 25.6 | 1.75 | 1.6x |
+| "Suggest cities to visit in Japan" | factual Q&A | 91 | 24.8 | 1.80 | 1.6x |
+| "What are you good at?" | conversational | 83 | 25.4 | 1.59 | 1.6x |
+| "Can you tell me a joke?" | conversational | 91 | 19.9 | 1.06 | 1.3x |
+
+At essentially the *same* real ISL, the code-generation prompt gets 3–6x the acceptance rate of
+every open-ended Q&A / conversational prompt tested — regardless of whether the Q&A is factual or
+chatty, they all cluster at 1.06–1.95 accepted/iter. This matches the ~112–128 / ~217–816 token
+rows in the table above (also a short coding-instruction prompt, 5.7–8.6 accepted/iter) and
+confirms the driver is *how predictable the continuation is* (code syntax, a repeated extraction
+template) rather than prompt length or ISL bucket.
+
+**Practical implication**: the 3–4x headline speedup is representative of code-generation and
+structured-extraction workloads — what this drafter was tuned on, and what the demo's
+`DEFAULT_PROMPT` deliberately uses. For open-ended conversational or factual-QA serving, budget
+closer to **1.3–1.9x**, not 3–4x. **When sweeping/demoing DFlash going forward, keep the default
+code-generation-style prompt (`DEFAULT_PROMPT`, or a `GEMMA4_DFLASH_PROMPT_FILE` pointed at one)
+as the standard/representative measurement**, and additionally spot-check an open-ended prompt
+whenever the target deployment is conversational rather than code/extraction — the two prompt
+families are not interchangeable for forecasting production speedup.
 
 #### Supported ISL range, and why it's not the full 262,144 HF declares
 
