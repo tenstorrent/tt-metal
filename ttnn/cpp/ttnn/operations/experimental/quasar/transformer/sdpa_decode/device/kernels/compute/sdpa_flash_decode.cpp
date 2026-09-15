@@ -34,6 +34,10 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
+    // Quasar: reset the packer-operand tracker so the first pack of this launch re-inits the packer
+    // descriptor regardless of any value left over from a prior launch. No-op on WH/BH.
+    sdpa_pack_operand_tracker_reset();
+
     // Compile time arguments
 
     // Input dimensions in tiles
@@ -418,7 +422,7 @@ void kernel_main() {
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             // Reconfig register DF
             reconfig_data_format(dfb_k_in, dfb_q_in);
-            pack_reconfig_data_format(dfb_qk_im);
+            pack_reconfig_out(dfb_qk_im);
 
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
@@ -501,7 +505,7 @@ void kernel_main() {
              */
 
             reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
-            pack_reconfig_data_format(dfb_cur_max);
+            pack_reconfig_out(dfb_cur_max);
 
             /**
              * OPTIMIZATION
@@ -516,7 +520,7 @@ void kernel_main() {
             /* QK -= dfb_cur_max */
             /* QK = exp(QK)*/
             reconfig_data_format(dfb_qk_im, dfb_cur_max);
-            pack_reconfig_data_format(dfb_qk_im);
+            pack_reconfig_out(dfb_qk_im);
 
             /**
              * sub_exp performs `QK = exp((QK - cur_max) * scale)`
@@ -528,7 +532,7 @@ void kernel_main() {
 
             // Reconfig register DF
             reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
-            pack_reconfig_data_format(dfb_cur_sum);
+            pack_reconfig_out(dfb_cur_sum);
 
             /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
             reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_qk_im, dfb_identity_scale_in, Sq_chunk_t, vector_mode>(
@@ -536,7 +540,7 @@ void kernel_main() {
 
             /* OUT_IM = QK @ V_CHUNK */
             reconfig_data_format(dfb_v_in, dfb_qk_im);  // DEBUG
-            pack_reconfig_data_format(dfb_out_im);
+            pack_reconfig_out(dfb_out_im);
             matmul_blocks(
                 dfb_qk_im,
                 dfb_v_in,
@@ -566,7 +570,7 @@ void kernel_main() {
                 // When there is more than 1 chunk, we perform Lazy Softmax
                 // Reconfig register DF
                 reconfig_data_format(dfb_prev_max, dfb_cur_max);
-                pack_reconfig_data_format(dfb_exp_max_diff);
+                pack_reconfig_out(dfb_exp_max_diff);
 
                 /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
                 // Split max: prev_max and cur_max are distinct DFBs, each read at its own front (no offset).
@@ -587,13 +591,13 @@ void kernel_main() {
 
                 /* OUT_ACC *= EXP_MAX_DIFF */
                 reconfig_data_format(dfb_out_accumulate_im, dfb_exp_max_diff);
-                pack_reconfig_data_format(dfb_out_accumulate_im);
+                pack_reconfig_out(dfb_out_accumulate_im);
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
                     dfb_out_accumulate_im, dfb_exp_max_diff, dfb_out_accumulate_im);
 
                 /* OUT_ACC += OUT_IM */
                 reconfig_data_format(dfb_out_accumulate_im, dfb_out_im);
-                pack_reconfig_data_format(dfb_out_accumulate_im);
+                pack_reconfig_out(dfb_out_accumulate_im);
                 add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_im, out_chunk_tiles);
             }
 
@@ -602,7 +606,7 @@ void kernel_main() {
             // copies the just-computed running max from cur into prev (through DST) and pops cur, setting up
             // prev for the next chunk's reduce_c / the tree correction_block.
             reconfig_data_format(dfb_cur_max, dfb_cur_max);
-            pack_reconfig_data_format(dfb_prev_max);
+            pack_reconfig_out(dfb_prev_max);
 
             // PREV_MAX <- CUR_MAX
             move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
@@ -710,7 +714,7 @@ void kernel_main() {
 
             /* SUM = 1.0 / SUM */
             reconfig_data_format(dfb_prev_sum, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_prev_sum);
+            pack_reconfig_out(dfb_prev_sum);
 
             // Handle attention sink here
 #ifdef USE_ATTENTION_SINK
@@ -742,16 +746,16 @@ void kernel_main() {
 #endif
 
             reconfig_data_format(dfb_prev_sum, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_prev_sum);
+            pack_reconfig_out(dfb_prev_sum);
             recip_block_inplace(dfb_prev_sum, Sq_chunk_t);
 
             /* OUT_ACC *= 1/SUM */
             reconfig_data_format(dfb_out_accumulate_im, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_out_accumulate_im);
+            pack_reconfig_out(dfb_out_accumulate_im);
 
             // dfb_prev_sum is consumed and popped by mul_block_bcast_cols_inplace
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_out_final);
+            pack_reconfig_out(dfb_out_final);
 
             // Pop the max buffer that still has data
             DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
