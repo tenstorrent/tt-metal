@@ -958,8 +958,9 @@ void bind_clamped_silu_glu(nb::module_& mod, const std::string& description, con
                * - BFLOAT16, BFLOAT8_B
                  - TILE
 
-            Runs as a single multiply and allocates no intermediates, so any output memory
-            config is accepted alongside a core restriction.
+            Runs as a single multiply with no intermediates, so any output memory config is
+            accepted alongside a core restriction. An interleaved-L1 output still spans every
+            bank: :attr:`sub_core_grids` scopes the compute, not that allocation.
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),

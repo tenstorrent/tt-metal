@@ -1313,8 +1313,8 @@ def test_clamped_silu_glu_sub_core_grids(device, sub_core_grid):
 
 
 def test_clamped_silu_glu_sub_core_grids_allow_interleaved_l1(device):
-    # Nothing is allocated on the cores a restriction exists to stay off, so an interleaved-L1
-    # output is safe here.
+    # No intermediates, so the only interleaved-L1 buffer is the one the caller asked for. situ_glu
+    # rejects the same combination because it would place its own intermediates there too, unasked.
     shape = torch.Size([1, 1, 32, 3072])
     gate, up = _clamped_silu_glu_inputs(shape)
 
