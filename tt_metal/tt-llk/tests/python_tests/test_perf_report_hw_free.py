@@ -225,6 +225,54 @@ def test_l1_to_l1_three_trisc_keeps_unpack_to_pack_duration():
     assert stat_column(f"{prefix}[FPU]", MEAN) not in result.columns
 
 
+def test_l1_to_l1_three_trisc_ignores_one_sided_non_rendezvous_zone():
+    data = ProfilerData(
+        pd.concat(
+            [
+                _parallel_events(
+                    [
+                        ("unpack", 100, 105),
+                        ("pack", 155, 160),
+                    ]
+                ),
+                _parallel_events([("math", 165, 175)]).assign(
+                    **{MARKER: "UNINIT", "marker_id": 2}
+                ),
+            ],
+            ignore_index=True,
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    assert result[MARKER].tolist() == ["TILE_LOOP"]
+
+
+def test_l1_to_l1_four_trisc_ignores_subset_non_rendezvous_zone():
+    data = ProfilerData(
+        pd.concat(
+            [
+                _parallel_events(
+                    [
+                        ("unpack", 100, 105),
+                        ("pack", 155, 160),
+                        ("sfpu", 110, 150),
+                    ]
+                ),
+                _parallel_events(
+                    [
+                        ("math", 165, 175),
+                        ("sfpu", 170, 180),
+                    ]
+                ).assign(**{MARKER: "UNINIT", "marker_id": 2}),
+            ],
+            ignore_index=True,
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    assert result[MARKER].tolist() == ["TILE_LOOP"]
+
+
 def test_l1_to_l1_four_trisc_rejects_mismatched_zone_counts():
     data = ProfilerData(
         _parallel_events(

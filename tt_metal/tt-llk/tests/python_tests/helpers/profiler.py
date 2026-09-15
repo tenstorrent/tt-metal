@@ -11,7 +11,14 @@ import pandas as pd
 
 from .device_io import read_words_from_device
 from .llk_params import PerfRunType
-from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
+from .perf.schema import (
+    MARKER,
+    MEAN,
+    NON_RENDEZVOUS_MARKERS,
+    STD,
+    stat_column,
+    stat_prefix,
+)
 from .test_config import TestConfig
 
 
@@ -217,6 +224,11 @@ def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
 
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
+
+    # L1-to-L1 measures synchronized cross-thread phases. Bare ZONE_SCOPED
+    # markers such as UNINIT are thread-local and may intentionally be emitted
+    # only by the TRISC that has cleanup work, so they have no valid envelope.
+    raw_data = raw_data[~raw_data[MARKER].isin(NON_RENDEZVOUS_MARKERS)]
 
     if raw_data.empty:
         return pd.DataFrame()
