@@ -138,25 +138,24 @@ def _mesh_shape_from_env() -> Tuple[int, ...]:
 
 
 @pytest.fixture(scope="module")
-def seeding_mesh():
+def seeding_mesh(skip_if_host_too_small):
     """Open ONE mesh (shape from ``SAMPLE_SEEDING_MESH``) for all seeding scenarios.
 
-    Skips the whole module if the host has too few devices or the mesh can't be
-    opened. Closes the device and restores the MGD env var on teardown.
+    Skips the whole module if the host has too few devices for the shape. A host
+    that has enough but still can't open the mesh fails instead. Closes the device
+    and restores the MGD env var on teardown.
     """
     shape = _mesh_shape_from_env()
-    required = math.prod(shape)
-    num_devices = ttnn.get_num_devices()
-    if num_devices < required:
-        pytest.skip(f"mesh {shape} needs {required} devices, have {num_devices}")
+    skip_if_host_too_small(shape, "sample-seeding tests")
 
     previous_mgd = _ensure_mgd_path(shape)
     _close_device_quietly()
     try:
         ttml.open_device_mesh(shape)
-    except BaseException as e:  # noqa: BLE001 - mesh unopenable on this topology
+    except BaseException:  # noqa: BLE001
+        _close_device_mesh_quietly()
         _restore_mgd_path(previous_mgd)
-        pytest.skip(f"could not open mesh {shape}: {e}")
+        raise
 
     ttml.autograd.AutoContext.get_instance().set_seed(SEED)
     yield shape
