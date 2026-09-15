@@ -21,7 +21,6 @@ inline constexpr std::array<Entry, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0},
      {PerfCounterType::SFPU_COUNTER, 1},
      {PerfCounterType::MATH_COUNTER, 257}}};
-inline constexpr std::size_t NUM_FPU_COUNTERS = 3;
 
 inline constexpr std::array<Entry, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
@@ -42,7 +41,6 @@ inline constexpr std::array<Entry, 18> unpack_counters = {
      {PerfCounterType::SRCB_WRITE_TID_EVEN, 264},
      {PerfCounterType::SRCA_WRITE_TID_ODD, 265},
      {PerfCounterType::SRCB_WRITE_TID_ODD, 266}}};
-inline constexpr std::size_t NUM_UNPACK_COUNTERS = unpack_counters.size();
 // PACK_COUNT=1 on BH.
 inline constexpr std::array<Entry, 5> pack_counters = {
     {{PerfCounterType::PACKER0_DEST_READ_REQ, 11},
@@ -50,7 +48,6 @@ inline constexpr std::array<Entry, 5> pack_counters = {
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
-inline constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
 // L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker 0 (also the packer L1-to-L1 read), unpacker 1 + ECC scrubber,
 // TDMA bundles, ring 0 NOC.
@@ -72,7 +69,6 @@ inline constexpr std::array<Entry, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_1_GRANT, 261},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
-inline constexpr std::size_t NUM_L1_0_COUNTERS = 16;
 
 // L1 bank 1 (MUX_CTRL[6:4] = 1): packer L1 interface 0, unpacker 1's extended read interfaces 1-3 (also the
 // packer L1-to-L1 read), ring 1 NOC.
@@ -94,7 +90,6 @@ inline constexpr std::array<Entry, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_OUTGOING_1_GRANT, 261},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
-inline constexpr std::size_t NUM_L1_1_COUNTERS = 16;
 
 // L1 bank 2 (BH only, MUX_CTRL[6:4] = 2): unpacker 1's extended read interfaces 4-7 (ports 16-19), ring 0
 // ports 2-3 (ports 20-23).
@@ -115,7 +110,6 @@ inline constexpr std::array<Entry, 16> l1_2_counters = {
      {PerfCounterType::L1_2_NOC_RING0_OUTGOING_3_GRANT, 261},
      {PerfCounterType::L1_2_NOC_RING0_INCOMING_2_GRANT, 262},
      {PerfCounterType::L1_2_NOC_RING0_INCOMING_3_GRANT, 263}}};
-inline constexpr std::size_t NUM_L1_2_COUNTERS = 16;
 
 // L1 bank 3 (BH only, MUX_CTRL[6:4] = 3): ring 1 ports 2-3 (ports 24-27), ext packers 2-5 (ports 28-31)
 inline constexpr std::array<Entry, 16> l1_3_counters = {
@@ -135,7 +129,6 @@ inline constexpr std::array<Entry, 16> l1_3_counters = {
      {PerfCounterType::L1_3_EXT_PACKER_3_GRANT, 261},
      {PerfCounterType::L1_3_EXT_PACKER_4_GRANT, 262},
      {PerfCounterType::L1_3_EXT_PACKER_5_GRANT, 263}}};
-inline constexpr std::size_t NUM_L1_3_COUNTERS = 16;
 
 // L1 bank 4 (BH only, MUX_CTRL[6:4] = 4): ext packers 6-7 (ports 32-33), packer L1 interface 1 arbitrated with the
 // tag-search accelerator, debug L1 RAM and timestamp (port 34), unpacker 0's extended read interfaces 1-5 (ports 35-39).
@@ -157,7 +150,6 @@ inline constexpr std::array<Entry, 16> l1_4_counters = {
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_3_GRANT, 261},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_4_GRANT, 262},
      {PerfCounterType::L1_4_UNPACKER0_EXT_IF_5_GRANT, 263}}};
-inline constexpr std::size_t NUM_L1_4_COUNTERS = l1_4_counters.size();
 
 // L1 bank 5 (BH only, MUX_CTRL[6:4] = 5): unpacker 0's extended read interfaces 6-7 (ports 40-41); the mux
 // wires only slots 0 and 1 here.
@@ -167,14 +159,12 @@ inline constexpr std::array<Entry, 4> l1_5_counters = {
      // Grant counters
      {PerfCounterType::L1_5_UNPACKER0_EXT_IF_6_GRANT, 256},
      {PerfCounterType::L1_5_UNPACKER0_EXT_IF_7_GRANT, 257}}};
-inline constexpr std::size_t NUM_L1_5_COUNTERS = l1_5_counters.size();
 
 // BH: 3-bit L1 mux at MUX_CTRL[6:4], values 0-5 (6 and 7 fall back to 0 in the RTL decode)
 inline constexpr std::uint32_t L1_MUX_MASK = 0x7 << 4;
 
 // BH INSTRN_THREAD: sel gaps at 9-11 (XSEARCH kick tied to 0).
-inline constexpr std::size_t NUM_INSTRN_COUNTERS = 59;
-inline constexpr std::array<Entry, NUM_INSTRN_COUNTERS> instrn_counters = {
+inline constexpr std::array<Entry, 59> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
