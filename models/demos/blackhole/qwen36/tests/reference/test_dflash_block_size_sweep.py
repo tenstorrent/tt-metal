@@ -2,19 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 """Does a BIGGER speculative block buy throughput, now that the verify forward is traced?
 
-MEASURED 2026-09-14 (T3K, eager verify, 64 new tokens from "The capital of France is"): **no.**
+MEASURED 2026-09-14/15 (T3K, eager verify, 64 new tokens from "The capital of France is"):
+**16 is a genuine optimum, and block_size is not a tuning knob at all.**
 
-    block 16:  3.65 tok/s  273.6 ms/tok  acceptance 7.00   9 steps
-    block 24:  2.54 tok/s  393.8 ms/tok  acceptance 7.00   9 steps
-    block 32:  2.82 tok/s  354.7 ms/tok  acceptance 6.30  10 steps
+    block  8:  acceptance 4.85  13 steps      (2026-09-15)
+    block 12:  acceptance 5.73  11 steps      (2026-09-15)
+    block 16:  acceptance 7.00   9 steps      <- the drafter's native size
+    block 24:  acceptance 7.00   9 steps      (2026-09-14)
+    block 32:  acceptance 6.30  10 steps      (2026-09-14)
 
-Acceptance is FLAT at 7.00 from 16 to 24 and DROPS to 6.30 at 32. The ceiling is the drafter's
-useful horizon -- about 7 tokens -- not the number of slots offered, so the extra slots are drafted
-and thrown away and tok/s falls. The 32-slot regression is the trained-horizon effect predicted
-below: the drafter was trained at "1 anchor + 15 drafted" and asking it for 31 makes the early
-slots worse, not just the late ones. Tokens were identical across all three (greedy), as asserted.
+Acceptance climbs approaching 16 and falls away above it. The eager tok/s column tracks it (block 16
+was 2.15x block 8 within the 2026-09-15 run), but compare RATIOS within a run, never absolutes
+across them.
 
-Do not re-run this hoping for a different answer; a bigger block needs a drafter trained for one.
+WHY SMALLER LOSES, and it is not truncation. Block 8 accepts 4.85 against a cap of 8 -- the cap is
+not binding, the drafter is simply WORSE when given fewer slots. That is the signature of a
+block-diffusion drafter: it denoises the whole block jointly rather than left to right, so the slot
+count changes the prediction for EVERY slot, including the first seven. The same mechanism explains
+32. The drafter was trained at "1 anchor + 15 drafted" and both directions are off-distribution.
+
+So block_size is a property of the checkpoint, not a speed/quality dial. Changing it needs a drafter
+trained for the new size -- in EITHER direction. Do not re-run this hoping for a different answer.
 
 With the verify traced and its readback narrowed, the loop runs at 18.82 tok/s (53 ms/tok) at
 ``block_size=16``, committing 7.000 tokens per target forward. Every other lever on the table saves
@@ -72,7 +80,9 @@ PAGED_BLOCK_SIZE = 64
 NUM_BLOCKS = 64
 TRACE_REGION = 200_000_000
 MAX_NEW_TOKENS = 64
-BLOCK_SIZES = (16, 24, 32)
+#: 8 and 12 probe BELOW the drafter's native 16; 24 and 32 (measured 2026-09-14) probe above. Both
+#: directions lose -- see the docstring.
+BLOCK_SIZES = (8, 12, 16)
 PROMPT = "The capital of France is"
 
 
