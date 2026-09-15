@@ -4,6 +4,9 @@
 
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
+#include <tt-metalium/tt_metal.hpp>
+#include <nanobind/stl/map.h>
+
 #include <tt_stl/reflection.hpp>
 #include <cstddef>
 #include <memory>
@@ -26,6 +29,7 @@
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -33,6 +37,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt_stl/assert.hpp>
 #include <ttnn/api/ttnn/types.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -42,6 +47,24 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
+
+namespace {
+
+// The device a mesh coordinate names, or the mesh's first device when none is given.
+// MeshDevice::get_device returns nullptr for a coordinate outside the mesh, and the raw L1
+// accessors would dereference it, so that is refused here with the coordinate in the message.
+tt::tt_metal::IDevice* device_at(
+    tt::tt_metal::distributed::MeshDevice* mesh,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinate>& coord) {
+    if (!coord.has_value()) {
+        return mesh->get_devices().at(0);
+    }
+    tt::tt_metal::IDevice* device = mesh->get_device(*coord);
+    TT_FATAL(device != nullptr, "MeshCoordinate {} is outside the mesh of shape {}", *coord, mesh->shape());
+    return device;
+}
+
+}  // namespace
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
@@ -517,6 +540,25 @@ void py_module(nb::module_& mod) {
                     >>> logical_core = ttnn.CoreCoord(0, 0)
                     >>> worker_core = device.worker_core_from_logical_core(logical_core)
                     >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
+            )doc")
+        .def(
+            "dram_core_from_logical_core",
+            [](MeshDevice* device, const CoreCoord& logical_core) {
+                return device->virtual_core_from_logical_core(logical_core, tt::CoreType::DRAM);
+            },
+            nb::arg("logical_core"),
+            R"doc(
+                Convert a logical DRAM coordinate to a virtual (NoC) coordinate.
+
+                The DRAM counterpart of worker_core_from_logical_core, for building NoC
+                addresses on the host -- e.g. the runtime binary-reload stage table, whose
+                entries name a source by NoC coordinates and an address.
+
+                Args:
+                    logical_core (CoreCoord): Logical DRAM coordinate, x = bank index.
+
+                Returns:
+                    CoreCoord: The virtual coordinate of that DRAM bank.
             )doc");
 
     // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same
@@ -1358,6 +1400,107 @@ void py_module(nb::module_& mod) {
             Total number of ranks in MPI_COMM_WORLD (the un-split world).
         )doc");
     auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
+    // Host support for the runtime binary reload (Blaze): raw L1 access, launch-message readback
+    // and the configure-only dispatch mode. Experimental, like the C++ APIs behind them.
+    m_experimental.def(
+        "set_configure_only",
+        [](MeshDevice* device, bool enable) {
+            tt::tt_metal::experimental::DispatchContext::get().set_configure_only(device, enable);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("enable"),
+        R"doc(
+            Slow Dispatch only: while enabled, dispatching a program writes its kernel binaries,
+            circular-buffer configs, runtime args and launch message to L1 but never sends the go
+            signal -- so nothing runs. Used to capture a reloadable image off L1 without executing
+            it, and therefore without tearing the pipeline down to do it.
+
+            Experimental API; may change.
+        )doc");
+    m_experimental.def(
+        "read_core_l1",
+        [](MeshDevice* device,
+           const CoreCoord& logical_core,
+           uint32_t address,
+           uint32_t size,
+           const std::optional<MeshCoordinate>& coord) {
+            std::vector<uint32_t> data;
+            tt::tt_metal::detail::ReadFromDeviceL1(device_at(device, coord), logical_core, address, size, data);
+            return data;
+        },
+        nb::arg("mesh_device"),
+        nb::arg("logical_core"),
+        nb::arg("address"),
+        nb::arg("size"),
+        nb::arg("coord") = nb::none(),
+        R"doc(
+                Read raw L1 words from one core.
+
+                For capturing state the device wrote and the host has no other view of --
+                the runtime binary reload uses it to copy a stage's kernel-config block
+                (CB configs, runtime args, semaphores and text) after that stage has run
+                once, and to read the launch message describing it.
+
+                Args:
+                    mesh_device (MeshDevice): The mesh.
+                    logical_core (CoreCoord): Core whose L1 to read.
+                    address (int): Byte address in L1.
+                    size (int): Bytes to read; must be a multiple of 4.
+
+                Returns:
+                    List[int]: The words read.
+            )doc");
+    m_experimental.def(
+        "write_core_l1",
+        [](MeshDevice* device,
+           const CoreCoord& logical_core,
+           uint32_t address,
+           std::vector<uint32_t> words,
+           const std::optional<MeshCoordinate>& coord) {
+            tt::tt_metal::detail::WriteToDeviceL1(device_at(device, coord), logical_core, address, words);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("logical_core"),
+        nb::arg("address"),
+        nb::arg("words"),
+        nb::arg("coord") = nb::none(),
+        R"doc(
+                Write raw L1 words to one core.
+
+                The writer for read_core_l1: host-set state that is not a tensor and not part
+                of a program's kernel-config block. The semaphore pool uses it to give a slot
+                its initial value without rewriting the whole pool region, whose other slots
+                may belong to a program that is running.
+
+                Args:
+                    mesh_device (MeshDevice): The mesh.
+                    logical_core (CoreCoord): Core whose L1 to write.
+                    address (int): Byte address in L1; 4-byte aligned.
+                    words (List[int]): The words to write.
+                    coord (MeshCoordinate, optional): Which device of the mesh; the first when omitted.
+            )doc");
+    m_experimental.def(
+        "capture_kernel_config",
+        [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
+            auto cfg = tt::tt_metal::experimental::CaptureKernelConfig(device_at(device, coord), logical_core);
+            const auto& launch_kernel_config = cfg.launch_kernel_config();
+            nb::dict out;
+            out["kernel_config_base"] = cfg.kernel_config_base();
+            out["kernel_config_size"] = cfg.kernel_config_size();
+            out["launch_kernel_config"] =
+                nb::bytes(reinterpret_cast<const char*>(launch_kernel_config.data()), launch_kernel_config.size());
+            return out;
+        },
+        nb::arg("mesh_device"),
+        nb::arg("logical_core"),
+        nb::arg("coord") = nb::none(),
+        R"doc(
+                Capture the kernel config a core is running.
+
+                Returns the L1 base and size of the relocatable kernel-config block plus an
+                opaque copy of the launch kernel config. Its detailed layout remains private
+                to Metal.
+            )doc");
     m_experimental.def(
         "get_worker_noc_hop_distance",
         [](MeshDevice& mesh_device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {

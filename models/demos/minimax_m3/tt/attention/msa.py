@@ -30,6 +30,29 @@ from models.demos.minimax_m3.utils.profiler_utils import zone
 from .operations import apply_qk_norm_per_head, apply_rope
 
 
+def _ensure_dram(t):
+    """high_bw_all_gather streams its source from DRAM; move an L1-resident activation there first."""
+    if t.memory_config().buffer_type != ttnn.BufferType.DRAM:
+        return ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
+    return t
+
+
+def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None):
+    """SP all-gather of ``t`` on dim 2 with ``ttnn.experimental.high_bw_all_gather`` into the persistent
+    ``out_buf`` (CCLManager.get_high_bw_gather_buffer); the returned tensor aliases it, do not deallocate.
+    ``input_batch_index`` selects one slot of a multi-slot [B, 1, rows, D] cache; ``gathered_dim_size``
+    bounds the rows moved per rank (rank r still lands at its fixed slot r*rows)."""
+    return ttnn.experimental.high_bw_all_gather(
+        t,
+        dim=2,
+        output_tensor=out_buf,
+        cluster_axis=mesh_config.sp_axis,
+        num_links=ccl_manager.num_links,
+        input_batch_index=input_batch_index,
+        gathered_dim_size=gathered_dim_size,
+    )
+
+
 def _split_index_heads(t, index_dim):
     """[1, 1, S, n*index_dim] -> [1, n, S, index_dim] (head-major split, like the main QKV split)."""
     s = t.shape[2]
@@ -111,6 +134,7 @@ def msa_indexer_sparse(
     cluster_axis=None,
     block_cyclic_sp_axis=None,
     block_cyclic_chunk_local=None,
+    kv_len=None,
 ):
     """The MSA op chain over a FULL-context (already-gathered) K/V; index_q/q may stay SP-sharded.
 
@@ -125,6 +149,11 @@ def msa_indexer_sparse(
       V writer) remap each natural block-id to its physical block IN-KERNEL (#49490/#48772), so the
       caller no longer untilize->transpose->tilize them to natural order on the host. None -> the
       tensors are already natural (single-chunk / pre-reordered).
+    kv_len: when K/index_k are allocated at a FIXED worst-case T (the persistent high_bw_all_gather
+      buffers, T = cache capacity) this is the valid natural-position prefix actually written (a multiple
+      of block_size). The indexer scores/writes only columns [0, kv_len) (hash-excluded runtime arg, so a
+      growing prefix reuses one program) and top-k ranks only those kv_len/block_size block columns; the
+      stale tail past kv_len is never read. None -> T is the valid length (the legacy exact-size gather).
     -> out  [1, Hq, Sq, head_dim]
     """
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
@@ -140,11 +169,17 @@ def msa_indexer_sparse(
             seq_shard_axes=[cluster_axis] if cluster_axis is not None else [],
             block_cyclic_sp_axis=block_cyclic_sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
+            kv_len=kv_len,
         )
 
         # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
         # force-locals the current (diagonal) block; upstream minimax_m3_vl forces ONLY the local block.
-        block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks)
+        # valid_length bounds the search to the populated block columns when K sits in a worst-case buffer.
+        topk_kwargs = {}
+        if kv_len is not None:
+            assert kv_len % block_size == 0, f"kv_len ({kv_len}) must be a whole number of {block_size}-token blocks"
+            topk_kwargs["valid_length"] = kv_len // block_size
+        block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks, **topk_kwargs)
 
     # sparse_sdpa_msa (#48700): q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
     # chunk_start_idx + cluster_axis drive the token-level diagonal-block causal mask with the per-device
@@ -196,13 +231,32 @@ def msa_sp_attention_nocache(
     """
     sp_axis = mesh_config.sp_axis
     device = ccl_manager.mesh_device
+
+    sp = device.shape[sp_axis]
+    if sp == 1:
+        # Nothing to gather: one SP row already holds the full context (the collective rejects a one-device axis).
+        def gather(key, t):
+            return t
+
+    else:
+        # Exact-size activations: the worst-case buffer IS the gathered shape, so no kv_len bound is needed.
+        def gather(key, t):
+            src = _ensure_dram(t)
+            buf = ccl_manager.get_high_bw_gather_buffer(
+                key, (src.shape[0], src.shape[1], src.shape[2] * sp, src.shape[3]), src.dtype, src.layout
+            )
+            full = high_bw_sp_gather(src, mesh_config, ccl_manager, buf)
+            if src is not t:
+                src.deallocate(True)  # the DRAM staging copy; the caller still owns `t`
+            return full
+
     # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
     # attributable to their consumer (see tests/perf/profile_prefill.py).
     with zone("ag_kv"):
-        k_full = mesh_config.allgather(k, ccl_manager, axis=sp_axis, dim=2)
-        v_full = mesh_config.allgather(v, ccl_manager, axis=sp_axis, dim=2)
+        k_full = gather("msa_nocache_k", k)
+        v_full = gather("msa_nocache_v", v)
     with zone("ag_index_k"):
-        index_k_full = mesh_config.allgather(index_k, ccl_manager, axis=sp_axis, dim=2)
+        index_k_full = gather("msa_nocache_index_k", index_k)
     # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
     # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
     return msa_indexer_sparse(
@@ -221,69 +275,59 @@ def msa_sp_attention_nocache(
     )
 
 
-def msa_sp_attention(
+def msa_sp_attention_cache_read(
     q,
-    k_acc,
-    v_acc,
     index_q,
-    index_k_acc,
+    kv_cache,
     *,
+    slot,
     mesh_config,
     ccl_manager,
     cached_len,
-    s_local,
     chunk_local,
     scale,
     block_size,
     topk_blocks,
     num_groups=1,
 ):
-    """Cross-chunk MSA: the CURRENT chunk's queries attend the ACCUMULATED context read from the
-    block-cyclic SP cache (the multi-chunk read path; ``msa_sp_attention_nocache`` is its single-chunk,
-    contiguous-context sibling).
-
-    Args (per device, on the (sp, tp) mesh):
-        q, index_q          CURRENT chunk's CONTIGUOUS SP shards: q [1, Hq_local, s_local, hd],
-                            index_q [1, num_groups, s_local, hd]  (chip r owns chunk positions
-                            [cached_len + r*s_local : ...]).
-        k_acc, v_acc        ACCUMULATED context's BLOCK-CYCLIC SP shards (as the cache stores them):
-                            [1, n_kv_local, n_chunks*chunk_local, hd].
-        index_k_acc         accumulated index_k block-cyclic shard [1, 1, n_chunks*chunk_local, hd].
-        cached_len          valid prefix length BEFORE the current chunk.
-        chunk_local         tokens/chip/chunk; the accumulated context spans n_chunks*chunk_local rows,
-                            where n_chunks is derived from the gathered K/V tensor shape (dim 2).
-
-    AllGather K/V/index_k across SP -> full block-cyclic context -> indexer + sparse_sdpa_msa, which
-    read the block-cyclic ("slab") layout IN-KERNEL (block_cyclic_* args) so the indexer's block-pool +
-    causal offset see true positions without a host reorder. Returns the current chunk's SP-sharded
-    attention out [1, Hq_local, s_local, hd].
+    """Cross-chunk MSA: the current chunk's queries attend the accumulated context, gathered across SP
+    straight out of (user, layer) ``slot`` of the packed ``[num_users*num_layers, 1, seq_local, hd]``
+    ND-sharded cache by ``high_bw_all_gather`` (``input_batch_index=slot``, ``gathered_dim_size`` = the
+    written prefix, incl. the current chunk that prefill.py wrote before calling us). The output is the
+    persistent worst-case buffer ``[1, 1, seq_local*sp, hd]`` with rank r at the fixed slot r*seq_local,
+    which is the block-cyclic layout the indexer / sparse_sdpa_msa decode in-kernel (stride T/sp ==
+    seq_local); ``kv_len`` bounds them to the written prefix. Returns the chunk's SP-sharded attention out
+    ``[1, Hq_local, s_local, hd]``. The gathered tensors alias the persistent buffers: never deallocate.
     """
     sp_axis = mesh_config.sp_axis
     device = ccl_manager.mesh_device
+    sp = device.shape[sp_axis]
+    assert sp > 1, "msa_sp_attention_cache_read needs sp > 1 (high_bw_all_gather rejects a one-device axis)"
+    # The replicated cache tensors carry a 1-D tensor topology, and high_bw_all_gather requires
+    # cluster_axis < that rank, so the SP gather only works with SP on mesh axis 0.
+    assert sp_axis == 0, f"msa_sp_attention_cache_read needs sp_axis == 0 (got {sp_axis})"
+    seq_local = kv_cache.k.shape[2]  # per-device cache capacity (rows)
+    chunk_global = chunk_local * sp
+    assert (
+        cached_len % chunk_global == 0
+    ), f"cached_len={cached_len} must be a whole number of {chunk_global}-token chunks"
+    n_rows = cached_len // sp + chunk_local  # per-device rows written so far (incl. the current chunk)
+    assert n_rows <= seq_local, f"cache read past capacity: {n_rows} rows > {seq_local}"
+    kv_len = cached_len + chunk_global  # natural-position valid prefix (== n_rows * sp)
 
-    # AllGather this slot's SP-sharded block-cyclic context across the SP rows. The gathered K/V/index_k
-    # stay in block-cyclic ("slab") order: the indexer (K reader) and sparse_sdpa_msa (K reader / V writer)
-    # remap each natural block-id to its physical block IN-KERNEL via block_cyclic_* below (#49490/#48772),
-    # so the host no longer untilize->transpose->tilize them to natural token order (was ~1.5 ms/MSA layer).
-    # (Input is de-slabbed + slot-sliced by prefill.py.)
-    def gather(t):
-        t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
-        full_bc = mesh_config.allgather(t, ccl_manager, axis=sp_axis, dim=2)
-        if full_bc.dtype != ttnn.bfloat16:
-            full_bc = ttnn.typecast(full_bc, ttnn.bfloat16)
-        return full_bc
+    def gather(key, cache_t):
+        buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)
+        return high_bw_sp_gather(
+            cache_t, mesh_config, ccl_manager, buf, input_batch_index=slot, gathered_dim_size=n_rows * sp
+        )
 
     # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
     # attributable to their consumer (see tests/perf/profile_prefill.py).
     with zone("ag_kv"):
-        k_full = gather(k_acc)
-        v_full = gather(v_acc)
+        k_full = gather("msa_cache_k", kv_cache.k)
+        v_full = gather("msa_cache_v", kv_cache.v)
     with zone("ag_index_k"):
-        index_k_full = gather(index_k_acc)
-    # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
-    # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
-    # block_cyclic_sp_axis/chunk_local: the gathered context is still block-cyclic across the SP rows, so
-    # the ops read it in that layout in-kernel (chunk_local == q's s_local rows, satisfying the op guard).
+        index_k_full = gather("msa_cache_index_k", kv_cache.index_k)
     return msa_indexer_sparse(
         index_q,
         index_k_full,
@@ -299,4 +343,5 @@ def msa_sp_attention(
         cluster_axis=sp_axis,
         block_cyclic_sp_axis=sp_axis,
         block_cyclic_chunk_local=chunk_local,
+        kv_len=kv_len,
     )

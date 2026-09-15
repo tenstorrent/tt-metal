@@ -614,13 +614,11 @@ std::vector<Tensor> bias_gelu_bw(
     const Tensor& grad_tensor,
     const Tensor& input_a,
     const Tensor& input_b,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant,
     const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(
-        (approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor_res;
     Tensor input = ttnn::add(input_a, input_b);
-    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, approximate, output_mem_config);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, variant, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor_res.push_back(gelu_result[0].value());
         grad_tensor_res.push_back(gelu_result[0].value());
@@ -632,19 +630,39 @@ std::vector<Tensor> bias_gelu_bw(
     const Tensor& grad_tensor,
     const Tensor& input_tensor,
     float bias,
-    const std::string& approximate,
+    operations::unary::GeluVariant variant,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor_res;
-    TT_FATAL(
-        (approximate == "none" || approximate == "tanh"),
-        "Incorrect rounding mode (expected 'none' or 'tanh')",
-        "Error");
     Tensor input = ttnn::add(input_tensor, bias);
-    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, approximate, output_mem_config);
+    std::vector<std::optional<Tensor>> gelu_result = ttnn::gelu_bw(grad_tensor, input, variant, output_mem_config);
     if (gelu_result[0].has_value()) {
         grad_tensor_res.push_back(gelu_result[0].value());
     }
     return grad_tensor_res;
+}
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::string& approximate,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(approximate == "none" || approximate == "tanh", "Incorrect approximation type (expected 'none', 'tanh')");
+    const auto variant =
+        approximate == "tanh" ? operations::unary::GeluVariant::TANH : operations::unary::GeluVariant::ACCURATE;
+    return ttnn::bias_gelu_bw(grad_tensor, input_a, input_b, variant, output_mem_config);
+}
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_tensor,
+    float bias,
+    const std::string& approximate,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(approximate == "none" || approximate == "tanh", "Incorrect approximation type (expected 'none', 'tanh')");
+    const auto variant =
+        approximate == "tanh" ? operations::unary::GeluVariant::TANH : operations::unary::GeluVariant::ACCURATE;
+    return ttnn::bias_gelu_bw(grad_tensor, input_tensor, bias, variant, output_mem_config);
 }
 
 std::vector<Tensor> max_bw(
@@ -720,21 +738,9 @@ std::vector<std::optional<Tensor>> div_bw(
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     if (rounding_mode == std::nullopt) {
-        float t_nan = std::nanf("");
-        float t_inf = std::numeric_limits<float>::infinity();
-        float neg_inf = -std::numeric_limits<float>::infinity();
         if (are_required_outputs.at(0)) {
             ttnn::multiply(
                 grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
-            ttnn::where(
-                ttnn::eqz(other, output_mem_config),
-                ttnn::where(
-                    ttnn::eqz(grad_tensor, output_mem_config),
-                    t_nan,
-                    ttnn::multiply(ttnn::sign(grad_tensor, output_mem_config), t_inf, std::nullopt, output_mem_config),
-                    output_mem_config),
-                input_grad.value(),
-                output_mem_config);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
@@ -748,24 +754,6 @@ std::vector<std::optional<Tensor>> div_bw(
                 std::nullopt,
                 output_mem_config,
                 other_grad);
-            ttnn::where(
-                ttnn::eqz(other, output_mem_config),
-                ttnn::where(
-                    ttnn::eqz(grad_tensor, output_mem_config),
-                    t_nan,
-                    ttnn::where(
-                        ttnn::eqz(input_a, output_mem_config),
-                        t_nan,
-                        ttnn::multiply(
-                            ttnn::multiply(
-                                ttnn::sign(input_a, output_mem_config), neg_inf, std::nullopt, output_mem_config),
-                            ttnn::sign(grad_tensor, output_mem_config),
-                            std::nullopt,
-                            output_mem_config),
-                        output_mem_config),
-                    output_mem_config),
-                other_grad.value(),
-                output_mem_config);
             result[1] = other_grad;
         }
     } else {
