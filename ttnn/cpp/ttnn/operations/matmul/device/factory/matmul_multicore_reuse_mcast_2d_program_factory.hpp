@@ -31,19 +31,30 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         std::vector<CoreCoord> cores;
     };
 
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const shared_variables_t& shared_variables,
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Re-applies the op's per-dispatch state on every program-cache hit. On
+    // CustomProgramSpecFactoryConcept the framework refreshes nothing on the factory's behalf, so
+    // what this returns is the whole refresh.
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value,
-        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
+        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
+
+// Cache-hit address refresh for a Program built by matmul_multi_core_reuse_mcast_2d_optimized_helper
+// below, for the CCL fused ops that build through it. This is the pre-Metal-2.0 form of the
+// factory's override_runtime_arguments, which now carries the signature the spec-factory concept
+// requires; the concept keys on a single unambiguous overload, so the legacy form lives out here.
+void matmul_multi_core_reuse_mcast_2d_override_runtime_arguments_helper(
+    tt::tt_metal::Program& program,
+    const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& shared_variables,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value);
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
 matmul_multi_core_reuse_mcast_2d_optimized_helper(
