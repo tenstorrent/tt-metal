@@ -34,6 +34,7 @@ from .relevance import (
     maybe_relevance,
     project_formats,
     project_runtimes,
+    project_stimuli,
     project_templates,
 )
 from .schema import (
@@ -388,7 +389,7 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
 
 # Run mode, not a test parameter: identical for every test, and carried by the CSV
 # and DB_SCHEMA but deliberately not by the per-test catalog.
-NON_CATALOG_KEY_COLUMNS = frozenset({"speed_of_light"})
+NON_CATALOG_KEY_COLUMNS = frozenset({"speed_of_light", "llk_asserts"})
 
 
 def _assert_matches_catalog(frame: pd.DataFrame, base_name: str, label: str):
@@ -761,9 +762,10 @@ class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
-    # Process-local isolate results keyed by execute_key. A hit copies the whole
-    # stats_df (INIT + TILE_LOOP). Pytest builds a new PerfConfig per case, so
-    # hits only happen across cases in the same worker.
+    # Process-local isolate results keyed by execute_key. A hit copies TILE_LOOP
+    # rows only (INIT is not reused). MATH keeps DEST_SYNC so miss INIT matches
+    # the labeled sweep. Pytest builds a new PerfConfig per case, so hits only
+    # happen across cases in the same worker.
     EXECUTE_CACHE: ClassVar[dict[tuple, dict[str, Any]]] = {}
 
     def __init__(
@@ -823,6 +825,9 @@ class PerfConfig(TestConfig):
         self.passed_formats_config = (
             [copy(fmt) for fmt in self.formats_config] if self.formats_config else None
         )
+        self.passed_stimuli = (
+            copy(self.variant_stimuli) if self.variant_stimuli is not None else None
+        )
 
     @staticmethod
     def _dataclass_name_and_values(obj):
@@ -865,6 +870,10 @@ class PerfConfig(TestConfig):
         # the report so SoL and non-SoL measurements are never compared together.
         names.append("speed_of_light")
         values.append(TestConfig.SPEED_OF_LIGHT)
+        # Kept in the report so assert-on and assert-off measurements are never
+        # compared together. True when LLK_ASSERT is compiled in.
+        names.append("llk_asserts")
+        values.append(os.environ.get("TT_LLK_DISABLE_ASSERTS") != "1")
 
         for param in passed_templates + passed_runtimes:
             for name, value in PerfConfig._dataclass_name_and_values(param):
@@ -963,15 +972,20 @@ class PerfConfig(TestConfig):
         return self.relevance.get(run_type)
 
     def _apply_run_config(self, templates, runtimes, run_type: PerfRunType) -> None:
-        """Project unused templates (and SoL runtimes/formats) then refresh variant_id."""
+        """Project unused templates (and SoL runtimes/formats/stimuli) then refresh variant_id."""
         spec = self._relevance_spec(run_type)
         projected_templates = project_templates(templates, spec)
         self.current_run_type = run_type
         if TestConfig.SPEED_OF_LIGHT:
-            self.templates = projected_templates + project_runtimes(runtimes, spec)
+            projected_runtimes = project_runtimes(runtimes, spec)
+            self.templates = projected_templates + projected_runtimes
             self.runtimes = []
             self.compile_time_formats = True
             self.formats_config = project_formats(self.passed_formats_config, spec)
+            if self.passed_stimuli is not None:
+                self.variant_stimuli = project_stimuli(
+                    self.passed_stimuli, projected_runtimes, spec
+                )
             self._refresh_tile_sizes()
         else:
             self.templates = projected_templates
@@ -992,12 +1006,20 @@ class PerfConfig(TestConfig):
             ),
             speed_of_light=TestConfig.SPEED_OF_LIGHT,
             spec=self._relevance_spec(run_type),
+            unpack_to_dest=self.unpack_to_dest,
+            l1_acc=self.l1_acc,
         )
 
     def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
         code_sizes = {}
+
+        # Callers may patch formats_config between construction and run()
+        # (e.g. perf_eltwise_unary_typecast). Snapshot after those patches so
+        # SoL projection and the post-loop restore keep them.
+        if self.formats_config is not None:
+            self.passed_formats_config = [copy(fmt) for fmt in self.formats_config]
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
@@ -1132,9 +1154,12 @@ class PerfConfig(TestConfig):
                         counter_results_list.append(counter_csv_df)
 
             if cache_key is not None:
+                tile_loop_df = stats_df
+                if MARKER in stats_df.columns:
+                    tile_loop_df = stats_df[stats_df[MARKER] == TILE_LOOP_MARKER].copy()
                 PerfConfig.EXECUTE_CACHE[cache_key] = {
-                    "stats_df": stats_df,
-                    "stats_appended": stats_appended,
+                    "stats_df": tile_loop_df,
+                    "stats_appended": stats_appended and not tile_loop_df.empty,
                     "metrics_df": metrics_df,
                     "counter_df": counter_df,
                     "code_size": code_size,
@@ -1142,7 +1167,10 @@ class PerfConfig(TestConfig):
 
         if self.passed_formats_config is not None:
             self.formats_config = self.passed_formats_config
-            self._refresh_tile_sizes()
+        if self.passed_stimuli is not None:
+            self.variant_stimuli = self.passed_stimuli
+        if self.passed_formats_config is not None or self.passed_stimuli is not None:
+            self._refresh_tile_sizes(self.passed_templates + self.passed_runtimes)
 
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(

@@ -4,9 +4,6 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import (
-    PerfRunType,
-)
 from helpers.param_config import (
     input_output_formats,
     parametrize,
@@ -80,11 +77,7 @@ def test_perf_pack_untilize(
     configuration = PerfConfig(
         "sources/pack_untilize_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=list(PACK_UNTILIZE_RELEVANCE.run_types),
         templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(32)],
         variant_stimuli=StimuliConfig(

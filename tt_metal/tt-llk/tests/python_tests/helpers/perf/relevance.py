@@ -8,6 +8,10 @@ in the C++ header, so unused templates are pinned to canonical defaults rather
 than omitted. Unused runtime / format fields are dropped from the execute cache
 key only; L1 writes keep the original values unless SPEED_OF_LIGHT promotes
 runtimes and formats into the compile header.
+
+Isolate modes still run every TRISC INIT, so SoL format projection never pins
+unpack_* or math: those must match L1 stimuli and dest_acc. Pack / SFPU fields
+that TILE_LOOP cannot see still pin to Float16.
 """
 
 import copy
@@ -48,6 +52,10 @@ PIN_ALL = frozenset()  # keep none (pin templates / drop runtimes+formats)
 class RunTypeRelevance:
     """TILE_LOOP-observable fields for one PerfRunType.
 
+    EXECUTE_CACHE replays TILE_LOOP rows only. INIT still runs on a miss (and
+    is reported for that first case) but is not reused. MATH keeps DEST_SYNC
+    so that miss INIT matches the labeled sweep; UNPACK still pins it.
+
     ``KEEP_ALL`` (None) keeps every value. ``PIN_ALL`` (empty frozenset) keeps
     none of that slot (pin templates / drop runtimes and formats).
     """
@@ -60,12 +68,16 @@ class RunTypeRelevance:
 
 
 _UNPACK_FORMATS = frozenset(
-    {"unpack_A_src", "unpack_B_src", "unpack_A_dst", "unpack_B_dst"}
+    {
+        "unpack_A_src",
+        "unpack_B_src",
+        "unpack_A_dst",
+        "unpack_B_dst",
+        "unpack_S_src",
+        "unpack_S_dst",
+    }
 )
-_PACK_FORMATS = frozenset({"pack_src", "pack_dst"})
-_ALL_FORMATS = (
-    _UNPACK_FORMATS | _PACK_FORMATS | frozenset({"math", "sfpu_src", "sfpu_dst"})
-)
+_PACK_FORMATS = frozenset({"pack_src", "pack_dst", "pack_S_src", "pack_S_dst"})
 _MATH_FORMATS = frozenset({"math"})
 _IO_FORMATS = _UNPACK_FORMATS | _PACK_FORMATS
 
@@ -85,7 +97,8 @@ _PACK_BLOCK_RUNTIMES = frozenset(
 # execute_key must keep it even when spec.templates omits the type.
 _PINNABLE_TEMPLATES = frozenset({MATH_FIDELITY, DEST_SYNC, THROTTLE_LEVEL})
 
-# SPEED_OF_LIGHT inlines every FormatConfig field; unused ones pin to this.
+# SPEED_OF_LIGHT inlines every FormatConfig field; TILE_LOOP-unused pack/SFPU
+# fields pin to this. Unpack and math stay original (see _INIT_LIVE_FORMATS).
 _PINNED_FORMAT = DataFormat.Float16
 _FORMAT_FIELDS = (
     "unpack_A_src",
@@ -101,6 +114,20 @@ _FORMAT_FIELDS = (
     "math",
     "sfpu_src",
     "sfpu_dst",
+)
+_ALL_FORMATS = frozenset(_FORMAT_FIELDS)
+# INIT of idle isolate threads still runs. Pinning these to Float16 while L1 is
+# Float32 (unpack_to_dest + dest_acc=Yes) deadlocks Math and Unpacker.
+_INIT_LIVE_FORMATS = frozenset(
+    {
+        "unpack_A_src",
+        "unpack_B_src",
+        "unpack_A_dst",
+        "unpack_B_dst",
+        "unpack_S_src",
+        "unpack_S_dst",
+        "math",
+    }
 )
 
 
@@ -119,7 +146,11 @@ class PerfRelevance:
     run_types: tuple[PerfRunType, ...] = _ALL_RUN_TYPES
 
     unpack_templates: frozenset[type] | None = PIN_ALL
-    math_templates: frozenset[type] | None = frozenset({MATH_FIDELITY, THROTTLE_LEVEL})
+    # INIT runs _llk_math_pack_sync_init_<dest_sync>; keep DEST_SYNC so that
+    # miss INIT matches the labeled sweep. TILE_LOOP does not reuse across it.
+    math_templates: frozenset[type] | None = frozenset(
+        {MATH_FIDELITY, THROTTLE_LEVEL, DEST_SYNC}
+    )
     pack_templates: frozenset[type] | None = frozenset({DEST_SYNC})
     cong_templates: frozenset[type] | None = frozenset({DEST_SYNC})
 
@@ -215,11 +246,9 @@ class PackUntilizeRelevance(PerfRelevance):
         PerfRunType.PACK_ISOLATE,
         PerfRunType.L1_CONGESTION,
     )
-    pack_templates = KEEP_ALL
-    pack_runtimes = KEEP_ALL
-    # INPUT_DIMENSIONS is a template; default cong_templates is DEST_SYNC only
-    # and would alias layouts that share tile_cnt (4x5 vs 5x4).
-    cong_templates = KEEP_ALL
+    # INPUT_DIMENSIONS is not in _PINNABLE_TEMPLATES, so it stays in the execute
+    # key regardless of spec.templates. Layouts that share tile_cnt (4x5 vs 5x4)
+    # therefore miss without KEEP_ALL on cong_templates / pack_templates.
 
 
 class UnpackTilizeRelevance(PerfRelevance):
@@ -300,8 +329,10 @@ def _default_runtime(param: RuntimeParameter) -> RuntimeParameter:
     cls = type(param)
     try:
         return cls()
-    except TypeError:
-        return param
+    except TypeError as exc:
+        raise TypeError(
+            f"Cannot pin {cls.__name__}: no zero-argument constructor"
+        ) from exc
 
 
 def _default_field_value(value: Any) -> Any:
@@ -311,10 +342,16 @@ def _default_field_value(value: Any) -> Any:
     if isinstance(value, int):
         return 1 if value else 0
     if isinstance(value, Enum):
-        return value
-    if hasattr(value, "value") and isinstance(getattr(value, "value"), int):
+        raise TypeError(
+            f"Cannot pin Enum field {type(value).__name__}={value!r}; "
+            "drop the runtime type instead of a single Enum field"
+        )
+    raw = getattr(value, "value", None)
+    if isinstance(raw, int):
         return type(value)(1)
-    return value
+    raise TypeError(
+        f"Cannot pin {type(value).__name__}={value!r} to a canonical default"
+    )
 
 
 def project_runtimes(
@@ -342,7 +379,11 @@ def project_runtimes(
 
 
 def project_formats(formats: Any, spec: RunTypeRelevance | None) -> Any:
-    """Pin unused format fields. Used when SPEED_OF_LIGHT inlines formats."""
+    """Pin TILE_LOOP-unused pack/SFPU fields when SPEED_OF_LIGHT inlines formats.
+
+    Unpack and math are never pinned: isolate INIT still consumes them against
+    L1 stimuli and dest_acc even when TILE_LOOP cannot see those fields.
+    """
     if formats is None:
         return None
     if isinstance(formats, list):
@@ -351,10 +392,72 @@ def project_formats(formats: Any, spec: RunTypeRelevance | None) -> Any:
     if spec is None or spec.format_fields is None:
         return projected
     for name in _FORMAT_FIELDS:
+        if name in _INIT_LIVE_FORMATS:
+            continue
         if not hasattr(projected, name):
             continue
         if name not in spec.format_fields:
             setattr(projected, name, _PINNED_FORMAT)
+    return projected
+
+
+def _runtime_type_visible(cls: type, spec: RunTypeRelevance | None) -> bool:
+    if spec is None or spec.runtime_types is None:
+        return True
+    return cls in spec.runtime_types
+
+
+def _runtime_field_visible(name: str, spec: RunTypeRelevance | None) -> bool:
+    if spec is None or spec.runtime_fields is None:
+        return True
+    return name in spec.runtime_fields
+
+
+def _as_int(value: Any) -> int:
+    raw = getattr(value, "value", None)
+    if isinstance(raw, int):
+        return raw
+    return int(value)
+
+
+def project_stimuli(
+    stimuli: Any,
+    runtimes: Iterable[RuntimeParameter],
+    spec: RunTypeRelevance | None,
+) -> Any:
+    """Canonicalize L1 tile counts when SPEED_OF_LIGHT inlines dropped dims.
+
+    ``str(variant_stimuli)`` is hashed into ``variant_id`` under SoL. If TILE_COUNT
+    is dropped from the header but stimuli still carry the original ``kt``-dependent
+    counts, isolate compiles do not reuse. Pin those counts from the projected
+    CRK dims (or 1) so the header and execute key agree.
+    """
+    if stimuli is None:
+        return None
+    projected = copy.copy(stimuli)
+    if spec is None:
+        return projected
+    if _runtime_type_visible(TILE_COUNT, spec) or _runtime_type_visible(
+        INPUT_DIMENSIONS, spec
+    ):
+        return projected
+    tile_cnt = 1
+    if _runtime_type_visible(CRK_TILE_DIMM, spec):
+        crk = next((p for p in runtimes if isinstance(p, CRK_TILE_DIMM)), None)
+        if crk is not None:
+            k = _as_int(crk.k_dimm) if _runtime_field_visible("k_dimm", spec) else 1
+            tile_cnt = max(_as_int(crk.r_dimm) * _as_int(crk.c_dimm) * k, 1)
+    for attr in (
+        "tile_count_A",
+        "tile_count_B",
+        "tile_count_res",
+        "tile_count_S",
+        "tile_count_T",
+        "tile_count_C",
+    ):
+        if getattr(projected, attr, None) is not None:
+            setattr(projected, attr, tile_cnt)
+    projected._calculate_tile_sizes()
     return projected
 
 
@@ -381,6 +484,8 @@ def execute_key(
     formats: Any,
     speed_of_light: bool,
     spec: RunTypeRelevance | None,
+    unpack_to_dest: Any = False,
+    l1_acc: Any = None,
 ) -> tuple:
     """Hashable identity of one run-type measurement under ``spec``."""
     dest = dest_acc if (spec is None or spec.dest_acc) else None
@@ -420,6 +525,8 @@ def execute_key(
         test_name,
         run_type,
         _hashable(dest),
+        _hashable(unpack_to_dest),
+        _hashable(l1_acc),
         tuple(template_items),
         tuple(runtime_items),
         tuple(format_items),

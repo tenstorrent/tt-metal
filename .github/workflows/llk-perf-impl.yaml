@@ -19,6 +19,11 @@ on:
         required: false
         default: true
         type: boolean
+      disable-llk-asserts:
+        description: "Disable LLK_ASSERT in perf kernels (avoids shape-coverage ebreaks)"
+        required: false
+        default: true
+        type: boolean
       upload-to-warehouse:
         description: "Upload the run's Parquet to the perf warehouse over SFTP"
         required: false
@@ -142,13 +147,18 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
-          TT_LLK_DISABLE_ASSERTS: "1"
+          DISABLE_LLK_ASSERTS: ${{ inputs.disable-llk-asserts }}
           RELEVANCE_MAP: ${{ inputs.relevance-map }}
         run: |
           if [[ "$RELEVANCE_MAP" == "true" ]]; then
             export LLK_DISABLE_PERF_RELEVANCE=0
           else
             export LLK_DISABLE_PERF_RELEVANCE=1
+          fi
+          if [[ "$DISABLE_LLK_ASSERTS" == "true" ]]; then
+            export TT_LLK_DISABLE_ASSERTS=1
+          else
+            export TT_LLK_DISABLE_ASSERTS=0
           fi
           ${{ matrix.test-group.cmd }}
 

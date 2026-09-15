@@ -781,6 +781,11 @@ def test_catalog_check_passes_and_ignores_speed_of_light(monkeypatch):
     _assert_matches_catalog(_frame(speed_of_light=True), _EXAMPLE, "perf_example.csv")
 
 
+def test_catalog_check_passes_and_ignores_llk_asserts(monkeypatch):
+    _register(monkeypatch, ["dest_acc", "tile_cnt", MARKER])
+    _assert_matches_catalog(_frame(llk_asserts=False), _EXAMPLE, "perf_example.csv")
+
+
 def test_catalog_check_rejects_a_column_the_catalog_does_not_record(monkeypatch):
     # The exact failure the static source reader could not see.
     _register(monkeypatch, ["dest_acc", "tile_cnt", MARKER])

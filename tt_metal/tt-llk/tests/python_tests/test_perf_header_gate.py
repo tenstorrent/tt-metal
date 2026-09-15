@@ -259,7 +259,7 @@ def test_emitted_fields_see_helper_returns_and_post_init_copies():
 
 
 # Run mode, not a sweep parameter: published, deliberately never in the catalog.
-NOT_A_SWEEP_COLUMN = {"speed_of_light"}
+NOT_A_SWEEP_COLUMN = {"speed_of_light", "llk_asserts"}
 
 
 def _published_test_columns(module_filename: str) -> set:

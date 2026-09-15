@@ -4,7 +4,6 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.perf.relevance import UNPACK_TILIZE_RELEVANCE
@@ -87,12 +86,7 @@ def _perf_unpack_tilize(
     configuration = PerfConfig(
         "sources/unpack_tilize_perf.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
+        run_types=list(UNPACK_TILIZE_RELEVANCE.run_types),
         templates=[],
         runtimes=[
             generate_input_dim(dimensions, dimensions),

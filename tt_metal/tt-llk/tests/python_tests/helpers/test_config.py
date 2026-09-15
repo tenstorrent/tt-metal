@@ -1023,37 +1023,6 @@ class TestConfig:
             )
             self.variant_stimuli.set_srcs_32bit_mode(srcs_32bit_mode)
 
-        if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
-            itd_param = next(
-                (
-                    param
-                    for param in self.runtimes + self.templates
-                    if isinstance(param, IN_TILE_DIMS)
-                ),
-                None,
-            )
-            faces_param = next(
-                (
-                    param
-                    for param in self.runtimes + self.templates
-                    if isinstance(param, NUM_FACES)
-                ),
-                None,
-            )
-            if itd_param and faces_param:
-                temp_num_faces_A = (
-                    faces_param.num_faces_A
-                    if faces_param.num_faces_A
-                    else faces_param.num_faces
-                )
-                if itd_param.in0_r_dim <= 16:
-                    self.pack_size = (self.pack_size // faces_param.num_faces) * (
-                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
-                    )
-                    self.unpack_size_a = (self.unpack_size_a // temp_num_faces_A) * (
-                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
-                    )
-
         # We need to call this here because this function generates serialisation format need for writing RTs to L1,
         # Which is needed by execution part of test infra
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1206,14 +1175,45 @@ class TestConfig:
             return f'#include "{source}"\n'
         return f"#include  <{source}>\n"
 
-    def _refresh_tile_sizes(self) -> None:
-        """Recompute L1 tile sizes from the current formats_config."""
+    def _refresh_tile_sizes(self, params: list | None = None) -> None:
+        """Recompute L1 tile sizes from the current formats_config.
+
+        Under SPEED_OF_LIGHT, projected runtimes live on ``self.templates``
+        (``self.runtimes`` is emptied). Pass ``params`` to look up IN_TILE_DIMS /
+        NUM_FACES from a specific list, e.g. ``passed_templates + passed_runtimes``
+        after restoring original formats.
+        """
         if not self.formats_config:
             return
         fmt = self.formats_config[0]
         self.pack_size = TestConfig.TILE_SIZES.get(fmt.output_format, 128)
         self.unpack_size_a = TestConfig.TILE_SIZES.get(fmt.input_format, 128)
         self.unpack_size_b = TestConfig.TILE_SIZES.get(fmt.input_format_B, 128)
+        if self.variant_stimuli is None:
+            return
+        search = (
+            params if params is not None else list(self.templates) + list(self.runtimes)
+        )
+        itd_param = next(
+            (param for param in search if isinstance(param, IN_TILE_DIMS)),
+            None,
+        )
+        faces_param = next(
+            (param for param in search if isinstance(param, NUM_FACES)),
+            None,
+        )
+        if itd_param and faces_param and itd_param.in0_r_dim <= 16:
+            temp_num_faces_A = (
+                faces_param.num_faces_A
+                if faces_param.num_faces_A
+                else faces_param.num_faces
+            )
+            self.pack_size = (self.pack_size // faces_param.num_faces) * (
+                itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+            )
+            self.unpack_size_a = (self.unpack_size_a // temp_num_faces_A) * (
+                itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+            )
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
@@ -1229,6 +1229,8 @@ class TestConfig:
             "relevance",
             # Original formats for report columns; SoL compile uses projected formats_config.
             "passed_formats_config",
+            # Original stimuli; SoL compile uses the projected variant_stimuli.
+            "passed_stimuli",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
         ]

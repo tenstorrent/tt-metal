@@ -26,6 +26,11 @@ on:
         required: false
         default: true
         type: boolean
+      disable-llk-asserts:
+        description: "Disable LLK_ASSERT in perf kernels (avoids shape-coverage ebreaks)"
+        required: false
+        default: true
+        type: boolean
       upload-to-warehouse:
         description: "Upload the run's Parquet to the perf warehouse over SFTP"
         required: false
@@ -53,6 +58,8 @@ jobs:
       speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
       # Nightly runs always use isolate relevance maps; manual runs use the checkbox.
       relevance-map: ${{ github.event_name == 'schedule' || inputs.relevance-map }}
+      # Nightly runs always disable LLK_ASSERT; manual runs use the checkbox.
+      disable-llk-asserts: ${{ github.event_name == 'schedule' || inputs.disable-llk-asserts }}
       # Nightly runs always publish; manual runs use the checkbox.
       upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
     secrets: inherit
