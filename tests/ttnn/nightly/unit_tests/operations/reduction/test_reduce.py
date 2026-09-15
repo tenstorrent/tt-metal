@@ -175,8 +175,6 @@ def test_nd_sharded_reduce_h_no_output_shard_spec(op, device, function_level_def
 )
 def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
-    if dtype == ttnn.bfloat16 and shape == (1, 1, 12544, 32):
-        pytest.skip("bf16 accumulation-limited at H=12544; covered by the FP32 variant")
     torch.manual_seed(0)
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.rand(shape, dtype=torch_dtype)
@@ -224,8 +222,6 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
 )
 def test_tile_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     """H reduce on tall TILE input — tiled stage 1, RM stage 2."""
-    if dtype == ttnn.bfloat16 and shape[2] >= 12544:
-        pytest.skip("bf16 accumulation-limited at this H; covered by the FP32 variant")
     torch.manual_seed(0)
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.rand(shape, dtype=torch_dtype)
