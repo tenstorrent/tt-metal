@@ -262,8 +262,8 @@ MLA_MATMUL_CONFIG = {
             {
                 **_GLM_TAGS,
                 "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-                    compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=6,
+                    compute_with_storage_grid_size=(11, 6),
+                    in0_block_w=3,
                     out_subblock_h=1,
                     out_subblock_w=8,
                     per_core_M=5,
@@ -446,8 +446,8 @@ MLA_MATMUL_CONFIG = {
             {
                 **_GLM_TAGS,
                 "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-                    compute_with_storage_grid_size=COMPUTE_GRID,
-                    in0_block_w=2,
+                    compute_with_storage_grid_size=(11, 6),
+                    in0_block_w=4,
                     out_subblock_h=1,
                     out_subblock_w=8,
                     per_core_M=5,
@@ -591,10 +591,10 @@ MLA_MATMUL_CONFIG = {
         160: {
             **_GLM_INDEXER_TAGS,
             # M=5 tiles, N=128 tiles: multicast the whole M slab across 64 N-parallel cores.
-            # QB traced sweep: ~31 us vs ~60 us auto and ~48 us for the best tested 2D config.
+            # Local LB RT sweep: K-block=8 is ~31 us versus ~35 us for K-block=16.
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=COMPUTE_GRID,
-                in0_block_w=16,
+                in0_block_w=8,
                 out_subblock_h=1,
                 out_subblock_w=2,
                 per_core_M=5,
