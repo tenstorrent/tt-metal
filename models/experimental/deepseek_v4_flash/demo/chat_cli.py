@@ -56,6 +56,7 @@ import contextlib
 import os
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 import torch
@@ -81,6 +82,16 @@ from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo imp
 )
 
 _PAGE_BLOCK_SIZE = 32
+
+# Generated tokens per decode-rate report. A trailing window, not a whole-reply mean:
+# it is what the device is doing *now*, so a cold cache or a rate that throttles part
+# way through a long reply shows up in the line instead of being averaged away.
+_DECODE_RATE_WINDOW = 64
+
+# ``execute_trace`` calls posted on the replay thread before their H2D packets during
+# generation. Prefill already queues the whole prompt; decode cannot (EOS can stop it),
+# so this is a rolling window. Leftovers are dummy-drained if the reply ends early.
+_DECODE_REPLAY_AHEAD = 32
 
 
 class ContextFull(RuntimeError):
@@ -309,6 +320,23 @@ class ChatEngine:
         cache_dir = args.cache_dir
         top_cache = WeightCache(os.path.join(cache_dir, model_name)) if cache_dir else None
 
+        # Re-resolved against the open mesh, so an 8-chip host and a 32-chip one
+        # pick up their own profile from the same command line. ``system_variant``
+        # carries the workload flavour the entry point asked for (the server sets
+        # "server"), so the machine match does not drop it.
+        system_config = load_system_config(
+            profile=args.system_profile,
+            path=args.system_config_file,
+            variant=getattr(args, "system_variant", None),
+            mesh_device=mesh_device,
+        ).log()
+        # TP is a deployment knob in the profile, so the CLI builds the layout the decode
+        # demo runs on this mesh rather than the model's TP1 default: galaxy32 is TP4,
+        # i.e. two 1x4 stages over 8 chips with the other 24 left idle (see
+        # system_configs.yaml and DeepSeekV4Model.__init__).
+        tp_size = getattr(args, "tp_size", None)
+        if tp_size is None:
+            tp_size = system_config.pipeline.tp_size
         self.model = DeepSeekV4Model(
             config,
             loader,
@@ -318,16 +346,8 @@ class ChatEngine:
             max_layers=max_layers,
             use_submeshes=True,
             use_prefetcher=args.prefetcher,
-            # Re-resolved against the open mesh, so an 8-chip host and a 32-chip one
-            # pick up their own profile from the same command line. ``system_variant``
-            # carries the workload flavour the entry point asked for (the server sets
-            # "server"), so the machine match does not drop it.
-            system_config=load_system_config(
-                profile=args.system_profile,
-                path=args.system_config_file,
-                variant=getattr(args, "system_variant", None),
-                mesh_device=mesh_device,
-            ).log(),
+            system_config=system_config,
+            tp_size=tp_size,
         )
         self.lm_head = Linear(
             _w(loader, "lm_head.weight"),
@@ -337,6 +357,8 @@ class ChatEngine:
         )
         logger.info(
             f"built DeepSeekV4Model with {self.model.num_layers}/{config.num_hidden_layers} layers, "
+            f"TP{tp_size} over {self.model.pipeline_stages} pipeline stages "
+            f"({self.model.pipeline_devices} of {self.model.mesh_devices} chips), "
             f"context {self.max_seq} tokens/user"
         )
 
@@ -345,6 +367,11 @@ class ChatEngine:
         # next. The caller owns the stack, so the session also covers the trace capture, the
         # warmup and every turn of the REPL. A no-op when the prefetcher is off.
         prefetcher.enter_context(self.model.prefetcher_session())
+        # Registered after the session so it unwinds first (LIFO): stopping the traced-decode
+        # replay thread releases the model before the DRISC senders stop. Without it the
+        # thread's closure keeps the model -- and every ttnn tensor in it -- alive until
+        # interpreter shutdown, where nanobind reports the whole graph as leaked.
+        prefetcher.callback(self.model.shutdown)
         logger.info(f"tensor prefetcher: {'on' if self.model.use_prefetcher else 'off'}")
 
         if self.traced:
@@ -366,6 +393,8 @@ class ChatEngine:
         self.users = [UserSession(self, i, args) for i in range(args.num_users)]
         self.active = 0
         self.users[0].activate()
+        # Traces posted by :meth:`post_traced` and not yet packed by :meth:`write_traced`.
+        self._replay_q: deque[int] = deque()
 
     # -- users ----------------------------------------------------------------- #
     @property
@@ -386,10 +415,56 @@ class ChatEngine:
         return self.model.session_tokens_left() if self.traced and self.model.paged else self.max_seq
 
     # -- decode ---------------------------------------------------------------- #
+    def post_traced(self, user: "UserSession", positions) -> None:
+        """Seat ``user`` and queue ``execute_trace`` for each pos, with no packet yet.
+
+        Same ahead-of-time dispatch as ``test_full_model_decode_demo``: the traces land
+        on the command queue (device parked on in-trace recv) before
+        :meth:`write_traced` writes PCIe. ``positions`` must later be fed in this order.
+        Capacity is grown here while the session is resident -- the replay thread may
+        run these entries after another user has been seated.
+        """
+        user.activate()
+        positions = [int(p) for p in positions]
+        if not self.traced or not positions:
+            return
+        self.model.ensure_session_capacity(positions[-1])
+        self.model.replay_traced_ahead(positions)
+        self._replay_q.extend(positions)
+
+    def write_traced(self, token_id: int, pos: int) -> None:
+        """Push the packet for the oldest queued :meth:`post_traced` step."""
+        queued = self._replay_q.popleft()
+        if queued != int(pos):
+            raise RuntimeError(f"traced packet pos {pos} does not match queued replay {queued}")
+        self.model.write_step_packet(token_id, int(pos))
+
+    def read_decoded_token(self) -> int:
+        """Argmax of the oldest in-flight traced step's logits."""
+        logits = self.model.read_decoded_output().reshape(1, -1).float()
+        return int(logits[0].argmax().item())
+
+    def drain_traced(self, token_id: int) -> None:
+        """Feed leftover queued traces so they do not sit forever on in-trace recv.
+
+        Used when a reply stops (EOS, interrupt, error) with a step posted but not
+        packed. The dummy write is at the leftover position and is overwritten if a
+        later turn actually feeds there.
+        """
+        while self._replay_q:
+            pos = self._replay_q[0]
+            self.write_traced(int(token_id), pos)
+            self.model.read_decoded_output()
+
     def step(self, user: "UserSession", token_id: int, pos: int) -> int:
         """Feed ``token_id`` at absolute position ``pos`` of ``user``'s conversation;
         return the argmax of the resulting single-token logits (the device sync happens
-        when the logits are read back)."""
+        when the logits are read back).
+
+        One-step convenience for warmup and the eager path. Traced prefill/decode use
+        :meth:`post_traced` / :meth:`write_traced` / :meth:`read_decoded_token` so a
+        stretch of known positions can park the device on recv before any packet.
+        """
         user.activate()
         if self.traced:
             # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
@@ -489,6 +564,22 @@ class UserSession:
                 f"this turn needs {len(ids)}"
             )
         next_id = engine.eos_id
+        if engine.traced and ids:
+            # Prompt length is known, so every execute_trace can sit on the command
+            # queue (device parked on recv) before the first H2D packet -- the decode
+            # demo's replay_traced_ahead path.
+            positions = list(range(self.pos, self.pos + len(ids)))
+            try:
+                engine.post_traced(self, positions)
+                for done, (token_id, pos) in enumerate(zip(ids, positions), start=1):
+                    engine.write_traced(token_id, pos)
+                    next_id = engine.read_decoded_token()
+                    self.pos += 1
+                    if progress is not None:
+                        progress(done, len(ids))
+            finally:
+                engine.drain_traced(ids[-1])
+            return next_id
         for done, token_id in enumerate(ids, start=1):
             next_id = engine.step(self, token_id, self.pos)
             self.pos += 1
@@ -545,7 +636,33 @@ class UserSession:
         generated: list[int] = []
         stream = _ReplyStream(tokenizer, self.thinking_mode == "thinking")
         decode_time = 0.0
+        # Step times for the trailing window. Only the packet write plus the logits
+        # readback are measured -- matching the decode demo's throughput line -- so
+        # tokenizer/terminal work inside ``stream.push`` stays out of it. Traces for
+        # the step being timed are posted before that host work, so the device is
+        # already waiting on recv when the timed region starts.
+        window: deque[float] = deque(maxlen=_DECODE_RATE_WINDOW)
+        window_tokens = 0
+        # Next absolute position that does not yet have an execute_trace queued.
+        posted_end = self.pos
+
+        def refill_replay() -> None:
+            """Keep ``_DECODE_REPLAY_AHEAD`` traces on the replay thread, capped by the
+            token budget and context. Called only when the next token will actually be
+            fed, so an EOS/cap stop leaves at most that window to dummy-drain."""
+            nonlocal posted_end
+            if not engine.traced:
+                return
+            remaining = min(engine.max_new_tokens - len(generated), engine.max_seq - 1 - self.pos)
+            queued = posted_end - self.pos
+            n_more = min(_DECODE_REPLAY_AHEAD, remaining) - queued
+            if n_more > 0:
+                engine.post_traced(self, range(posted_end, posted_end + n_more))
+                posted_end += n_more
+
         try:
+            if next_id != engine.eos_id:
+                refill_replay()
             for _ in range(engine.max_new_tokens):
                 if next_id == engine.eos_id:
                     break
@@ -555,9 +672,30 @@ class UserSession:
                 generated.append(next_id)
                 stream.push(generated)
                 t1 = time.perf_counter()
-                next_id = engine.step(self, next_id, self.pos)
+                if engine.traced:
+                    engine.write_traced(next_id, self.pos)
+                    next_id = engine.read_decoded_token()
+                else:
+                    next_id = engine.step(self, next_id, self.pos)
+                step_seconds = time.perf_counter() - t1
                 self.pos += 1
-                decode_time += time.perf_counter() - t1
+                decode_time += step_seconds
+                window.append(step_seconds)
+                window_tokens += 1
+                if window_tokens == _DECODE_RATE_WINDOW:
+                    window_time = sum(window)
+                    if window_time > 0:
+                        logger.info(
+                            f"user {self.index}: last {len(window)} tokens decoded in "
+                            f"{window_time:.2f}s = {len(window) / window_time:.2f} tok/s/u"
+                        )
+                    window_tokens = 0
+                if (
+                    next_id != engine.eos_id
+                    and self.pos < engine.max_seq - 1
+                    and len(generated) < engine.max_new_tokens
+                ):
+                    refill_replay()
             else:
                 logger.info(f"stopped at the {engine.max_new_tokens}-token cap")
         except KeyboardInterrupt:
@@ -568,6 +706,9 @@ class UserSession:
             # Another user holds the blocks this reply would need. The turn so far is
             # valid, so keep it and let the user free space with /reset.
             print(f"\n[cache pool full: {e} -- /reset a user]", flush=True)
+        finally:
+            if engine.traced:
+                engine.drain_traced(next_id if next_id is not None else 0)
 
         stream.close()
         # ``next_id`` was produced but never fed; the next turn starts with it.
@@ -575,9 +716,16 @@ class UserSession:
         self.messages.append({"role": "assistant", "content": stream.text})
         self._next_render = len(self.messages)
         rate = f"{len(generated) / decode_time:.2f} tok/s" if decode_time else "n/a"
+        # The trailing window over the reply (its last ``_DECODE_RATE_WINDOW`` tokens, or
+        # all of them if shorter). ``rate`` above averages in the cold-cache start; this
+        # is the rate the reply ended at.
+        window_time = sum(window)
+        window_rate = f"{len(window) / window_time:.2f} tok/s/u" if window_time else "n/a"
         logger.info(
             f"user {self.index}: prefill {len(prompt_ids)} tokens in {prefill_time:.2f}s | "
-            f"decode {len(generated)} tokens at {rate} | context {self.pos}/{engine.max_seq}"
+            f"decode {len(generated)} tokens at {rate} | "
+            f"last {len(window)} in {window_time:.2f}s at {window_rate} | "
+            f"context {self.pos}/{engine.max_seq}"
         )
 
 
@@ -725,6 +873,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "startup: their cache blocks cannot be allocated once the traces exist)",
     )
     p.add_argument(
+        "--tp-size",
+        type=int,
+        default=None,
+        help="chips per 1xN tensor-parallel stage (default: the machine profile's "
+        "pipeline.tp_size -- galaxy32 is TP4, i.e. two stages over 8 chips with the "
+        "rest of the mesh idle, the layout test_full_model_decode_demo.py runs)",
+    )
+    p.add_argument(
         "--max-context",
         type=int,
         default=decode.max_context,
@@ -792,6 +948,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.error("--reasoning-effort requires --think")
     if args.num_users < 1:
         p.error("--num-users must be at least 1")
+    if args.tp_size is not None and args.tp_size < 1:
+        p.error("--tp-size must be at least 1")
     # Multiple users need the paged caches, which only the traced path has: the eager
     # path decodes against one dense cache per layer.
     if not args.traced and args.num_users > 1:

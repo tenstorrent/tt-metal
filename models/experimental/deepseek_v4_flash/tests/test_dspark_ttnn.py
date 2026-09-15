@@ -10,6 +10,7 @@ are unavailable. Batch=1, context length = block size = 32 (one tile).
 
 from __future__ import annotations
 
+import contextlib
 import time
 
 import pytest
@@ -71,7 +72,12 @@ def test_dspark_ttnn_traced_socket_draft_matches_eager(device):
     target_hiddens_2 = torch.randn_like(target_hiddens)
     anchor_2 = torch.randint(0, cfg.vocab_size - 1, (1,))
 
-    with tensor_prefetcher_session(device):
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(tensor_prefetcher_session(device))
+        # Registered after the session so it unwinds first (LIFO). The traced path's daemon
+        # replay thread closes over the model, so without this the model and its tensors
+        # stay reachable until interpreter shutdown and nanobind reports them as leaked.
+        stack.callback(tt_model.shutdown)
         ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
         eager = tt_model(target_hiddens, anchor, greedy=True, hoist_prefetch=True)
         eager_2 = tt_model(target_hiddens_2, anchor_2, greedy=True, hoist_prefetch=True)

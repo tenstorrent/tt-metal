@@ -37,16 +37,18 @@ from the request. The OpenAI ``user`` field only labels who last held a slot: cl
 that send one identifier for all their traffic, or none, still run in parallel.
 
 **Concurrency.** Up to ``--num-users`` turns generate at once. One scheduler thread
-owns the device and walks the active turns in rounds, dispatching a step per turn and
-only reading that step's logits back a round later, once every other turn's step has
-been queued behind it -- the pipelined round-robin of
-``tests/test_multi_user_paged_decode_demo.py``, with prefill and decode turns mixed
-into the same rounds (a prompt is fed ``--prefill-chunk`` tokens per round). This
-single thread is required, not incidental: the trace replays and the paged session
-state have to be driven from one thread, and each step's output must be collected in
-dispatch order. HTTP threads never touch the device -- they submit a turn and relay
-its reply -- so total throughput scales with the users while each reply streams
-independently. A request that arrives with every slot busy waits for one to free.
+owns the device and walks the active turns in rounds. Prefill is the pipelined
+round-robin of ``tests/test_multi_user_paged_decode_demo.py``: a prompt is fed
+``--prefill-chunk`` tokens per round, traces posted before packets, logits read the
+next round. Decode posts ``_DECODE_REPLAY_AHEAD`` (32) ``execute_trace`` calls for a
+turn before writing that burst's packets -- the same look-ahead as ``chat_cli`` --
+and reads them inline so leftover traces cannot block another user on the shared
+FIFO. This single thread is required, not incidental: the trace replays and the
+paged session state have to be driven from one thread, and each step's output must
+be collected in dispatch order. HTTP threads never touch the device -- they submit
+a turn and relay its reply -- so total throughput scales with the users while each
+reply streams independently. A request that arrives with every slot busy waits for
+one to free.
 
 **Live console.** On a terminal the server runs a split view (``demo/tui.py``): a status
 header with uptime, active turns, throughput and the KV block pool, a row per cache slot
@@ -127,6 +129,7 @@ from models.experimental.deepseek_v4_flash.demo.chat_cli import (
     ChatEngine,
     ContextFull,
     UserSession,
+    _DECODE_REPLAY_AHEAD,
     open_mesh_device,
 )
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
@@ -811,18 +814,18 @@ class _Scheduler:
     are met by keeping all model work here and tracking dispatch order explicitly in
     :attr:`_inflight`.
 
-    Each round walks the active turns in a stable order and, per turn, collects the
-    outputs of the steps it dispatched last round and then dispatches its next ones.
-    Because a turn's own output is only read at the start of its *next* round -- after
-    every other turn's step has already been queued behind it -- the host never waits
-    on one turn before feeding the next, and device work overlaps host work. This is
-    the pipelining of ``tests/test_multi_user_paged_decode_demo.py``, with prefill and
-    decode turns mixed into the same rounds.
+    Each round walks the active turns in a stable order and collects the outputs of
+    any steps still in flight (prefill chunks). Decode then runs as a per-turn burst:
+    up to ``_DECODE_REPLAY_AHEAD`` (32) ``execute_trace`` calls are posted on the
+    replay thread before any of that burst's packets, matching ``chat_cli`` and
+    ``test_full_model_decode_demo``. The burst write/reads those steps immediately so
+    leftover traces never sit in front of another user's packets on the shared FIFO.
+    Prefill stays chunked: every prompt token of the round is posted, then packed,
+    and the logits are read next round -- they have no step-to-step dependency.
 
-    Prompt tokens are dispatched ``prefill_chunk`` at a time: their logits are thrown
-    away (only the last prompt token's prediction is used), so they carry no
-    step-to-step dependency and can all be in flight at once. A decode step, whose
-    input is the previous step's sampled output, is necessarily one per round.
+    Prompt tokens are dispatched ``prefill_chunk`` at a time. A decode burst's input
+    tokens are sampled from the previous step, so only the traces (not the packets)
+    can be issued ahead of time.
     """
 
     def __init__(self, server: "GenerationServer", prefill_chunk: int = 16):
@@ -1061,6 +1064,8 @@ class _Scheduler:
         self._window_steps = 0
 
     def _round_turns(self) -> None:
+        prefill: list[tuple] = []
+        decode: list[_Turn] = []
         for turn in list(self._active):
             try:
                 self._collect(turn)
@@ -1071,11 +1076,28 @@ class _Scheduler:
                 self._fail(turn, turn.error)  # its in-flight steps have now been drained
                 continue
             try:
-                self._dispatch(turn)
+                if turn.phase == _Turn.PREFILL:
+                    prefill.extend(self._plan(turn))
+                else:
+                    decode.append(turn)
             except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
-                # Reported once the steps this turn already has in flight have been
-                # collected, next round; dropping it now would strand their outputs.
-                turn.error = e
+                # No device work for this turn this round; fail it now rather than
+                # posting a trace that would have no packet.
+                self._fail(turn, e)
+        # Decode bursts read the output socket inline, so they run while it is empty
+        # (prefill packets of this round have not been written yet).
+        for turn in decode:
+            if turn not in self._active:
+                continue
+            try:
+                self._decode_ahead(turn)
+            except Exception as e:  # noqa: BLE001 - one bad turn must not stop the others
+                if self.engine.traced:
+                    with contextlib.suppress(Exception):
+                        self.engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
+                self._fail(turn, e)
+        self._post(prefill)
+        self._feed(prefill)
 
     def _collect(self, turn: _Turn) -> None:
         """Read back every step this turn has in flight, in dispatch order.
@@ -1100,68 +1122,129 @@ class _Scheduler:
                     f"{seconds:.2f}s ({rate} tok/s), cache at {self.engine.users[turn.slot].pos} tokens"
                 )
 
-    def _dispatch(self, turn: _Turn) -> None:
-        """Queue this turn's next steps, without waiting for their outputs."""
-        user = self.engine.users[turn.slot]
-        if turn.phase == _Turn.PREFILL:
-            # A client that hangs up mid-prompt is not abandoned here: the prompt is fed
-            # to the end so the KV cache matches the stored conversation, and the turn
-            # then finishes below with an empty reply.
-            n = min(self.prefill_chunk, turn.prompt_left)
-            if turn.fed == 0:
-                logger.debug(
-                    f"user {turn.user_key!r}: prefilling {len(turn.ids)} tokens from pos {user.pos} "
-                    f"in chunks of {self.prefill_chunk}"
-                )
-            user.activate()
-            for _ in range(n):
-                token_id = turn.ids[turn.fed]
-                turn.fed += 1
-                self._send(turn, user, token_id, last_prompt_token=turn.fed == len(turn.ids))
-            return
+    def _plan(self, turn: _Turn) -> list[tuple]:
+        """Prefill steps for this round, without touching the device.
 
-        if turn.cancelled.is_set():  # client hung up: keep the partial reply
+        Returns ``(turn, user, token_id, pos, last_prompt_token)`` tuples. Decode is
+        handled by :meth:`_decode_ahead` instead: its traces are posted as a burst
+        whose packets are written and read before the next turn runs.
+        """
+        user = self.engine.users[turn.slot]
+        # A client that hangs up mid-prompt is not abandoned here: the prompt is fed
+        # to the end so the KV cache matches the stored conversation, and the turn
+        # then finishes in :meth:`_decode_ahead` with an empty reply.
+        n = min(self.prefill_chunk, turn.prompt_left)
+        if turn.fed == 0:
+            logger.debug(
+                f"user {turn.user_key!r}: prefilling {len(turn.ids)} tokens from pos {user.pos} "
+                f"in chunks of {self.prefill_chunk}"
+            )
+        start = user.pos
+        base = turn.fed
+        planned: list[tuple] = []
+        for i in range(n):
+            token_id = turn.ids[base + i]
+            planned.append((turn, user, int(token_id), start + i, base + i + 1 == len(turn.ids)))
+        return planned
+
+    def _decode_ahead(self, turn: _Turn) -> None:
+        """Generate up to ``_DECODE_REPLAY_AHEAD`` tokens, traces posted before packets.
+
+        Same rolling window as ``chat_cli.UserSession.generate``: the burst's
+        ``execute_trace`` calls sit on the replay thread (device parked on recv)
+        before any H2D packet. Outputs are read inline so this turn's leftover
+        traces cannot block another user on the shared FIFO. A long reply comes
+        back next round for another burst.
+        """
+        engine = self.engine
+        user = engine.users[turn.slot]
+        if turn.cancelled.is_set() or turn.next_id == engine.eos_id:
             self._finish(turn)
             return
-        if turn.next_id == self.engine.eos_id:
-            self._finish(turn)
-            return
-        if len(turn.generated) >= turn.max_tokens or user.pos >= self.engine.max_seq - 1:
+        if len(turn.generated) >= turn.max_tokens or user.pos >= engine.max_seq - 1:
             turn.hit_cap = True
             self._finish(turn)
             return
-        turn.generated.append(turn.next_id)
-        turn.mark_token()
-        turn.stream.push(turn.generated)
-        if len(turn.generated) % 32 == 0:
-            logger.debug(
-                f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
-                f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
-                f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
-                f"cache at {user.pos}/{self.engine.max_seq}"
-            )
-        user.activate()
-        self._send(turn, user, turn.next_id, last_prompt_token=False)
 
-    def _send(self, turn: _Turn, user: UserSession, token_id: int, last_prompt_token: bool) -> None:
-        """Dispatch one traced step for the (already activated) session.
+        remaining = min(turn.max_tokens - len(turn.generated), engine.max_seq - 1 - user.pos)
+        n = min(_DECODE_REPLAY_AHEAD, remaining)
+        try:
+            if engine.traced and n > 0:
+                engine.post_traced(user, range(user.pos, user.pos + n))
+            for _ in range(n):
+                if turn.cancelled.is_set() or turn.next_id == engine.eos_id:
+                    break
+                if user.pos >= engine.max_seq - 1:
+                    turn.hit_cap = True
+                    break
+                turn.generated.append(turn.next_id)
+                turn.mark_token()
+                turn.stream.push(turn.generated)
+                if len(turn.generated) % 32 == 0:
+                    logger.debug(
+                        f"user {turn.user_key!r}: {len(turn.generated)}/{turn.max_tokens} tokens "
+                        f"at {turn.decode_rate:.2f} tok/s over the last {DECODE_RATE_WINDOW} "
+                        f"({turn.mean_decode_rate:.2f} tok/s for the reply so far), "
+                        f"cache at {user.pos}/{engine.max_seq}"
+                    )
+                if engine.traced:
+                    engine.write_traced(int(turn.next_id), int(user.pos))
+                    out = engine.model.read_decoded_output().reshape(1, -1).float()
+                else:
+                    hidden = engine.model.decode(int(turn.next_id), int(user.pos), engine.rope)
+                    with _region("LM_HEAD"):
+                        out = ttnn.to_torch(engine.lm_head(hidden)).reshape(1, -1).float()
+                turn.next_id = turn.sampler(out) if turn.sampler is not None else int(out[0].argmax().item())
+                user.pos += 1
+                self.steps += 1
+        finally:
+            if engine.traced:
+                engine.drain_traced(turn.next_id if turn.next_id is not None else 0)
 
-        ``activate_session`` is what makes the interleaving safe: it repoints the page
-        tables and swaps in this session's compressor window state, ordered on the
-        command queue behind the trace replays already queued for other sessions."""
-        model = self.engine.model
-        if self.engine.traced:
-            model.decode_traced_async(int(token_id), int(user.pos))
-        else:
-            # No async dispatch on the eager path: the step runs to completion here and
-            # its logits wait in the turn (``--no-trace`` is single-user anyway).
-            hidden = model.decode(int(token_id), int(user.pos), self.engine.rope)
-            with _region("LM_HEAD"):
-                turn.eager.append(ttnn.to_torch(self.engine.lm_head(hidden)).reshape(1, -1).float())
-        user.pos += 1
-        turn.pending.append(last_prompt_token)
-        self._inflight.append(turn)
-        self.steps += 1
+        if (
+            turn.cancelled.is_set()
+            or turn.next_id == engine.eos_id
+            or len(turn.generated) >= turn.max_tokens
+            or user.pos >= engine.max_seq - 1
+        ):
+            if turn.next_id != engine.eos_id and not turn.cancelled.is_set():
+                turn.hit_cap = True
+            self._finish(turn)
+
+    def _post(self, steps: list[tuple]) -> None:
+        """Queue every step's ``execute_trace`` before any of this round's packets.
+
+        Consecutive steps of one user share one seat swap and one ``replay_traced_ahead``,
+        matching ``Batch.post`` in the multi-user paged demo.
+        """
+        if not self.engine.traced or not steps:
+            return
+        i = 0
+        while i < len(steps):
+            _turn, user, _token_id, _pos, _last = steps[i]
+            j = i + 1
+            while j < len(steps) and steps[j][1] is user:
+                j += 1
+            self.engine.post_traced(user, [steps[k][3] for k in range(i, j)])
+            i = j
+
+    def _feed(self, steps: list[tuple]) -> None:
+        """Write each posted step's packet, in the same order as :meth:`_post`."""
+        for turn, user, token_id, pos, last_prompt_token in steps:
+            if self.engine.traced:
+                self.engine.write_traced(int(token_id), int(pos))
+            else:
+                # No async dispatch on the eager path: the step runs to completion here and
+                # its logits wait in the turn (``--no-trace`` is single-user anyway).
+                hidden = self.engine.model.decode(int(token_id), int(pos), self.engine.rope)
+                with _region("LM_HEAD"):
+                    turn.eager.append(ttnn.to_torch(self.engine.lm_head(hidden)).reshape(1, -1).float())
+            user.pos += 1
+            if turn.phase == _Turn.PREFILL:
+                turn.fed += 1
+            turn.pending.append(last_prompt_token)
+            self._inflight.append(turn)
+            self.steps += 1
 
     # -- completion ------------------------------------------------------------- #
     def _finish(self, turn: _Turn) -> None:
