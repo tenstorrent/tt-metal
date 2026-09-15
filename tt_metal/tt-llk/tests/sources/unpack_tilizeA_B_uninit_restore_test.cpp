@@ -4,19 +4,12 @@
 
 // Teardown test for `_llk_unpack_tilizeA_B_uninit_`.
 //
-// The unpacker runs tilizeA_B init, then uninit, then a plain `_llk_unpack_A_`
-// datacopy of operand A with NO data-format reconfig in between. The datacopy is
-// an identity copy, so the result must equal operand A. tilizeA_B itself is not
-// executed: the teardown is what is under test, and it writes the same config
-// whether or not any tile was unpacked.
+// Runs tilizeA_B init, then uninit, then an identity `_llk_unpack_A_` datacopy of
+// operand A with no reconfig in between, so uninit is the only thing restoring the
+// operand baseline. A wrong `Tile_x_dim_cntx0` corrupts the datacopy.
 //
-// With no reconfig between the two, uninit is the only thing that puts the
-// unpacker back at the operand baseline programmed by `configure_unpack_AB`. A
-// wrong `Tile_x_dim_cntx0` there makes the datacopy read the operand with the
-// wrong per-row datum count and the result diverges.
-//
-// Run this with face_r_dim < 16, where a fixed 16x16 restore and the operand
-// baseline disagree.
+// Only face_r_dim < 16 is interesting: that is where a fixed 16x16 restore and the
+// operand baseline differ.
 
 #include <cstdint>
 
