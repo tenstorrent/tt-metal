@@ -728,6 +728,54 @@ def quantize_input_to_unpack_format(
     return operand
 
 
+# The B-exponent block-floats, and the round trip that quantizes a datum onto one of them.
+# Keyed rather than branched so a caller cannot half-support the family; Bfp8 (A-exponent) is
+# deliberately absent, having no converter here, so is_block_float() is not the test to use.
+_BFP_B_PACK_QUANTIZERS = {
+    DataFormat.Bfp2_b: _bfp2b_to_float16b,
+    DataFormat.Bfp4_b: _bfp4b_to_float16b,
+    DataFormat.Bfp8_b: _bfp8b_to_float16b,
+}
+
+
+def quantize_output_to_pack_format(
+    result: torch.Tensor, output_format: DataFormat
+) -> torch.Tensor:
+    """*result* as the packer writes it to L1 for a block-float *output_format*.
+
+    The counterpart of quantize_input_to_unpack_format() at the other end of the datapath,
+    and the same 16-datum shared exponent: a block spanning several decades loses its low
+    end on the way out, not just on the way in. A no-op on every other format.
+
+    Per block, and only where there is a shared exponent to quantize onto:
+
+      * a block holding a non-finite has none -- the non-finite takes the exponent and every
+        finite neighbour with it, which is _bfp_zero_nonfinite_blocks' job, and the
+        non-finite lanes themselves are then carried through rather than decoded as a
+        magnitude;
+      * an all-zero block is already exactly representable, and feeding one to the shared
+        helper answers 2^-127 on every lane (it decodes the leading 1 that a zero does not
+        have) -- a golden the packer never writes.
+
+    Cloned rather than quantized in place, and handed back in the dtype it arrived in: every
+    value on the block-float grid is exact in bfloat16, so that round trip loses nothing.
+    """
+    quantizer = _BFP_B_PACK_QUANTIZERS.get(output_format)
+    if quantizer is None:
+        return result
+
+    zeroed = _bfp_zero_nonfinite_blocks(result.float().clone())
+    blocks = zeroed.reshape(-1, BFP_BLOCK_ELEMENTS)
+    quantizable = torch.isfinite(blocks).all(dim=1) & (blocks != 0.0).any(dim=1)
+
+    packed = blocks.clone()
+    if bool(quantizable.any()):
+        packed[quantizable] = (
+            quantizer(blocks[quantizable]).float().reshape(-1, BFP_BLOCK_ELEMENTS)
+        )
+    return packed.reshape(result.shape).to(result.dtype)
+
+
 class SrcFormatModel:
     """
     Source register holds data in TF32 format.
@@ -4231,8 +4279,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         from -exp(-x) by up to 0.9% just above the threshold. test_sfpu_domains pins the
         approximation separately, so modelling the branch does not stop asserting that
         -exp(-x) is a logsigmoid.
+
+        Per element, not per row: ``__call__`` walks the two rows in a Python loop, so the
+        branch below is a scalar test. Asserted rather than left implicit -- a refactor that
+        vectorized the call the way `_div` and `_pow` are vectorized would keep working until
+        the first row that straddles the threshold, and then raise from ``float(x)``.
         """
         x = t1.to(torch.float32)
+        assert (
+            x.numel() == 1
+        ), "per-element golden; vectorize the exp-branch test before batching rows"
         if float(x) > self._LOGSIGMOID_EXP_BRANCH:
             return -t2.to(torch.float32)
         return torch.nn.functional.logsigmoid(x)
@@ -5335,6 +5391,11 @@ class TernarySFPUGolden:
     store into a Dest whose width dest_acc selects, and the pack out of it, where a NaN too
     wide becomes a signed infinity. Without them a cat-B probe reads that substitution as a
     computed infinity -- the defect behind the binary suite's retracted "0/0 returns inf" xfails.
+
+    The pack also carries the *output* shared exponent where the output is block-float
+    (quantize_output_to_pack_format), which is not sub-ULP at all: on a block spanning
+    several decades it flushes the low lanes, and that block is the whole stimulus of
+    test_sfpu_ternary_block_spread.
     """
 
     # No ternary op selects among its operands, so every NaN they return is built through the
@@ -5431,6 +5492,15 @@ class TernarySFPUGolden:
         # substituted infinity's sign by accident.
         result = cast_to_dest_dtype(result, format_dict[dst_format]).float()
         result = cast_to_dest_dtype(result, format_dict[data_format]).flatten()
+
+        # The store's dtype is only the storage bfloat16 of a block-float output; the pack
+        # itself is the shared exponent, which test_sfpu_ternary_block_spread drives a block
+        # across on purpose. Without this the golden compares unquantized values there and
+        # the assertion rests on passed_test()'s block-aware fallback excusing the difference
+        # rather than on the golden having modelled the datapath. On the same flat 16-datum
+        # grouping the input side above quantizes on: the kernel is layout-preserving, so
+        # golden and device agree about where a block starts.
+        result = quantize_output_to_pack_format(result, data_format)
 
         if not nan_survives_to_l1(input_format, data_format, dest_acc):
             # The packer cannot write a NaN through this pipeline, so it substitutes an

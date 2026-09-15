@@ -84,9 +84,16 @@ class OperandSpecs:
 # Picking which format bounds the domain
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Largest finite magnitude each format can hold. Only formats with a narrower
-# exponent field than bfloat16 need an entry; every other format shares
-# bfloat16's ceiling and is therefore never the binding constraint.
+# Largest finite magnitude each format can *bound a domain* with. Only formats with a
+# narrower exponent field than bfloat16 need an entry; every other format shares bfloat16's
+# ceiling and is therefore never the binding constraint.
+#
+# Float32 is deliberately absent even though its ceiling is higher: the fallback makes it tie
+# with Float16_b, and narrowest_range_format() resolves that tie to its first argument, which
+# is the *stimulus* format. That is what keeps a probe on a (Float32 -> Float16_b) pipeline
+# spaced by an fp32 ULP rather than a bfloat16 one -- the output's narrower mantissa bounds
+# the result, not how finely the input can be dialled. format_max_magnitude() below is the
+# other question, "what can this format hold", and there fp32's own ceiling is the answer.
 #
 # The MX rows come from MX_FORMAT_MAX_NORMAL rather than being restated here: MxFp8R is
 # E5M2 (ceiling 57344) and MxFp8P is E4M3 (ceiling 448).
@@ -98,6 +105,30 @@ _FORMAT_MAX_MAGNITUDE: Dict[DataFormat, float] = {
 }
 
 _BF16_MAX_MAGNITUDE = 3.3895314e38
+_FP32_MAX_MAGNITUDE = float(torch.finfo(torch.float32).max)
+
+
+def format_max_magnitude(fmt: DataFormat) -> float:
+    """The largest finite magnitude *fmt* itself can represent.
+
+    _FORMAT_MAX_MAGNITUDE answers the neighbouring question -- which format bounds a domain --
+    and leaves Float32 out on purpose (see its comment). Callers asking what a format *holds*
+    need fp32's real ceiling: cat F probes it, and clip_to_format() must not drop the probe it
+    emits there.
+    """
+    if fmt == DataFormat.Float32:
+        return _FP32_MAX_MAGNITUDE
+    return _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE)
+
+
+def _has_own_ceiling(fmt: DataFormat) -> bool:
+    """Does *fmt* carry its own ceiling, or borrow bfloat16's from the fallback?
+
+    The domain-bounding table's rows do, and so does Float32 -- the one format
+    format_max_magnitude() adds on top of it.
+    """
+    return fmt in _FORMAT_MAX_MAGNITUDE or fmt == DataFormat.Float32
+
 
 # Smallest positive *normal* of each format: the other end of the exponent range from
 # _FORMAT_MAX_MAGNITUDE. From torch.finfo / the MX tables, because _FTZ_THRESHOLD comes from
@@ -127,6 +158,21 @@ def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
         candidates,
         key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
     )
+
+
+def narrowest_ceiling_format(*formats: Optional[DataFormat]) -> DataFormat:
+    """Return whichever of *formats* has the lowest ceiling, fp32's own ceiling included.
+
+    narrowest_range_format()'s sibling, and they differ on exactly one pair. There the
+    (Float32, Float16_b) tie resolves to the stimulus format, which is what spaces a probe by
+    an fp32 ULP on that pipeline. Here it resolves to Float16_b, because a magnitude probe has
+    to survive *both* legs: 3.40e38 into a bfloat16 output is a value the pack cannot hold,
+    which is the saturation sweep's subject rather than cat F's.
+    """
+    candidates = [fmt for fmt in formats if fmt is not None]
+    if not candidates:
+        raise ValueError("narrowest_ceiling_format() requires at least one format")
+    return min(candidates, key=format_max_magnitude)
 
 
 def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
@@ -1706,10 +1752,8 @@ def format_extremes(fmt: DataFormat) -> Tuple[float, ...]:
             "small end is set by the exponent shared across a block, so a cat-F probe would "
             "be wrong for every block but one"
         )
-    ceiling_fmt = fmt if fmt in _FORMAT_MAX_MAGNITUDE else DataFormat.Float16_b
-    ceiling = _truncate_mantissa(
-        _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE), ceiling_fmt
-    )
+    ceiling_fmt = fmt if _has_own_ceiling(fmt) else DataFormat.Float16_b
+    ceiling = _truncate_mantissa(format_max_magnitude(fmt), ceiling_fmt)
     below_ceiling = _truncate_mantissa(
         ceiling - format_ulp(ceiling_fmt, ceiling), ceiling_fmt
     )
@@ -2684,8 +2728,12 @@ def extreme_values(
 
     Separate from edge_values() because a sweep wants one failure class per variant. No *op*
     argument: the ceiling and the subnormal band are properties of the pipeline, and which ops
-    may be *driven* at them is EXTREMES_READY_OPS' question."""
-    range_fmt = narrowest_range_format(input_format, output_format)
+    may be *driven* at them is EXTREMES_READY_OPS' question.
+
+    Bounded by narrowest_ceiling_format() rather than narrowest_range_format(): every probe
+    here is a magnitude that has to survive both legs of the pipeline, and the two disagree
+    on (Float32 -> Float16_b) -- see that function."""
+    range_fmt = narrowest_ceiling_format(input_format, output_format)
     return _dedup_representable(
         clip_to_format(
             _deliverable_extremes(range_fmt, input_format, dest_acc), range_fmt
@@ -2784,7 +2832,7 @@ def clip_to_format(values: List[float], fmt: DataFormat) -> List[float]:
     Non-finite values are the *point* of a cat-B probe, so they are never clipped — the
     decision about whether they belong at all is specials_safe()'s, made before this.
     """
-    limit = _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE)
+    limit = format_max_magnitude(fmt)
     return [v for v in values if not math.isfinite(v) or abs(v) <= limit]
 
 

@@ -38,6 +38,7 @@ from helpers.sfpu_domains import (
     generated_nan_sign_is_asserted,
     nan_sign_is_unspecified,
     nan_survives_to_l1,
+    narrowest_ceiling_format,
     narrowest_range_format,
     op_edge_points,
     ops_with_singularity,
@@ -1476,6 +1477,97 @@ def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
         )
 
 
+def test_ternary_golden_quantizes_a_block_float_output():
+    """The pack into Bfp8_b is the shared exponent, and it is the step block_spread drives.
+
+    Its stimulus is a 16-datum block spanning the exponent on purpose, so a golden that
+    skipped the output quantization would compare unquantized values there and rest on
+    passed_test()'s block-aware fallback excusing the difference -- green either way, and
+    green for the wrong reason. Asserted as "the low lane is gone", the one observable
+    difference between the two goldens."""
+    import torch
+    from helpers.golden_generators import TernarySFPUGolden
+
+    # One block, repeated: a whole tile of the same 24-decade spread block_spread_spec builds.
+    block = torch.tensor([2.0**-e for e in range(0, 16)], dtype=torch.float32)
+    a = block.repeat(64)
+    b = torch.ones(1024, dtype=torch.float32)
+    c = torch.zeros(1024, dtype=torch.float32)
+
+    out = TernarySFPUGolden()(
+        MathOperation.SfpuAddcmul,
+        a,
+        b,
+        c,
+        0,
+        DataFormat.Bfp8_b,
+        input_format=DataFormat.Bfp8_b,
+        dest_acc=DestAccumulation.No,
+    )
+    # addcmul with value=0 is a + 0*b*c = a, so the result is the block verbatim and every
+    # difference from it is the pack.
+    quantized = torch.tensor(out, dtype=torch.float32).flatten()[: block.numel()]
+    assert float(quantized[0]) == float(
+        block[0]
+    ), "the block maximum must survive the pack; it sets the shared exponent"
+    lost = [i for i in range(block.numel()) if quantized[i] == 0.0 != block[i]]
+    assert lost, (
+        "no lane of a 16-decade block was flushed by the pack, so the golden is comparing "
+        f"unquantized values: {quantized.tolist()}"
+    )
+
+    # Float32 out is untouched by the same call: this is the block-float leg only.
+    fp32_out = TernarySFPUGolden()(
+        MathOperation.SfpuAddcmul,
+        a,
+        b,
+        c,
+        0,
+        DataFormat.Float32,
+        input_format=DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+    )
+    assert torch.equal(
+        torch.tensor(fp32_out, dtype=torch.float32).flatten(), a
+    ), "a Float32 output must reach L1 unquantized"
+
+
+def test_pack_quantizer_leaves_a_block_it_cannot_encode_alone():
+    """The two blocks quantize_output_to_pack_format() must not hand to the BFP converter.
+
+    A block holding a non-finite has no shared exponent left to quantize onto, and an
+    all-zero one makes the shared helper decode a leading 1 that is not there and answer
+    2^-127 on every lane. Both are per *block*, so a neighbouring block must still quantize.
+    """
+    import torch
+    from helpers.golden_generators import quantize_output_to_pack_format
+
+    spread = torch.tensor([2.0**-e for e in range(16)], dtype=torch.float32)
+    zeros = torch.zeros(16, dtype=torch.float32)
+    tainted = torch.ones(16, dtype=torch.float32)
+    tainted[3] = float("inf")
+
+    out = quantize_output_to_pack_format(
+        torch.cat([spread, zeros, tainted]), DataFormat.Bfp8_b
+    )
+    quantized, all_zero, non_finite = out[:16], out[16:32], out[32:]
+
+    assert (quantized[8:] == 0.0).all() and quantized[
+        0
+    ] == 1.0, f"the quantizable block did not quantize: {quantized.tolist()}"
+    assert (
+        all_zero == 0.0
+    ).all(), f"an all-zero block must pack to zero, not {all_zero.tolist()}"
+    # The non-finite keeps its value and takes its finite neighbours' exponent with it.
+    assert (
+        torch.isinf(non_finite[3]) and (non_finite[torch.arange(16) != 3] == 0.0).all()
+    )
+
+    # And a no-op on everything that is not a B-exponent block-float.
+    for fmt in (DataFormat.Float32, DataFormat.Float16_b, DataFormat.Int32):
+        assert torch.equal(quantize_output_to_pack_format(spread, fmt), spread)
+
+
 def test_logsigmoid_exp_branch_is_a_logsigmoid():
     """-exp(-x) has to *be* logsigmoid(x) above the threshold, or modelling it proves nothing.
 
@@ -1499,6 +1591,29 @@ def test_logsigmoid_exp_branch_is_a_logsigmoid():
     # bound meaningful over an unbounded interval.
     at_threshold = float(((approximation[0] - exact[0]) / exact[0]).abs())
     assert at_threshold == pytest.approx(worst, rel=1e-6)
+
+
+def test_logsigmoid_golden_refuses_a_batched_row():
+    """The exp-branch test is `float(x)`, so the golden is per element by construction.
+
+    __call__ walks the rows in a Python loop today, so nothing batches it -- and that is the
+    hazard: a refactor that vectorized this the way `_div` and `_pow` are vectorized would
+    keep passing until the first row straddling the threshold, then raise from deep inside
+    `float()`. The assert makes it fail on the refactor instead.
+    """
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+
+    golden = BinarySFPUGolden()
+    threshold = BinarySFPUGolden._LOGSIGMOID_EXP_BRANCH
+    row = torch.tensor([threshold - 1.0, threshold + 1.0], dtype=torch.float32)
+    with pytest.raises(AssertionError, match="per-element golden"):
+        golden._logsigmoid(row, torch.exp(-row))
+
+    # Scalars on both sides of the branch still work.
+    for x in (threshold - 1.0, threshold + 1.0):
+        t1 = torch.tensor(x, dtype=torch.float32)
+        assert math.isfinite(float(golden._logsigmoid(t1, torch.exp(-t1))))
 
 
 def test_logsigmoid_nan_pair_carries_a_negative_b():
@@ -2018,6 +2133,61 @@ def test_format_extremes_straddle_the_ftz_cliff_and_are_representable(fmt):
         )
 
 
+def test_float32_ceiling_is_probed_as_its_own_and_not_bfloat16s():
+    """Float32 is the one format whose ceiling is *above* the bfloat16 fallback's.
+
+    So it is the one format the fallback gets wrong, and silently: 3.39e38 round-trips
+    through fp32 intact, satisfies the representability check above, and leaves the thirty-
+    thousandth of a decade up to 3.40e38 -- fp32's actual ceiling and the value the pack has
+    to saturate past -- unprobed. Pinned against torch.finfo rather than a literal."""
+    import torch
+    from helpers.sfpu_domains import _BF16_MAX_MAGNITUDE, format_extremes
+
+    fp32_max = float(torch.finfo(torch.float32).max)
+    ceiling = max(abs(v) for v in format_extremes(DataFormat.Float32))
+    assert ceiling == fp32_max, (
+        f"the Float32 cat-F ceiling is {ceiling!r}, not fp32's own {fp32_max!r} -- the "
+        "bfloat16 fallback in format_extremes() is being taken for a format that does not "
+        "need it"
+    )
+    assert ceiling > _BF16_MAX_MAGNITUDE
+
+    # Both signs, and the step below it is a real fp32 neighbour rather than a truncation
+    # back onto the ceiling.
+    magnitudes = sorted({abs(v) for v in format_extremes(DataFormat.Float32)})
+    assert magnitudes[-2] < magnitudes[-1] == fp32_max
+    assert set(format_extremes(DataFormat.Float32)) == {-m for m in magnitudes} | set(
+        magnitudes
+    )
+
+
+@pytest.mark.parametrize("dest_acc", [DestAccumulation.No, DestAccumulation.Yes])
+def test_the_fp32_ceiling_probe_stays_off_a_narrower_output(dest_acc):
+    """It is fp32's ceiling only where fp32 carries the result too.
+
+    A magnitude probe has to survive both legs, so on (Float32 -> Float16_b) the ceiling is
+    bfloat16's: sending 3.40e38 there would probe the pack's saturation, which is the
+    saturation sweep's subject and a different failure class. This is the pair on which
+    narrowest_ceiling_format and narrowest_range_format part, so it is the one worth pinning.
+    """
+    from helpers.sfpu_domains import _BF16_MAX_MAGNITUDE, extreme_values
+
+    same = extreme_values(DataFormat.Float32, DataFormat.Float32, dest_acc)
+    narrower = extreme_values(DataFormat.Float32, DataFormat.Float16_b, dest_acc)
+
+    assert max(abs(v) for v in same) > _BF16_MAX_MAGNITUDE
+    assert max(abs(v) for v in narrower) <= _BF16_MAX_MAGNITUDE
+
+    # And the probe *spacing* question keeps its own answer on that same pair: coarsening it
+    # to a bfloat16 ULP is what the acosh test above measures against.
+    assert narrowest_ceiling_format(DataFormat.Float32, DataFormat.Float16_b) is (
+        DataFormat.Float16_b
+    )
+    assert narrowest_range_format(DataFormat.Float32, DataFormat.Float16_b) is (
+        DataFormat.Float32
+    )
+
+
 def test_format_extremes_are_never_clipped_away():
     """clip_to_format() must keep every probe format_extremes() emits, on every pipeline: one
     derived from the format's maximum but clipped against the *pipeline's* would silently drop
@@ -2027,7 +2197,9 @@ def test_format_extremes_are_never_clipped_away():
     for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
         if not extremes_safe(input_format, output_format, dest_acc):
             continue
-        range_fmt = narrowest_range_format(input_format, output_format)
+        # narrowest_ceiling_format, the one extreme_values() bounds against. Against
+        # narrowest_range_format this would pass while checking a pair no probe comes from.
+        range_fmt = narrowest_ceiling_format(input_format, output_format)
         emitted = list(format_extremes(range_fmt))
         assert clip_to_format(emitted, range_fmt) == emitted, (
             f"{input_format.name}->{output_format.name}: clip_to_format drops "
