@@ -554,10 +554,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
 
     const DFBSpecName DFB_Q_IN{"q_in"};
     const DFBSpecName DFB_K_IN{"k_in"};
-    // K^T staging: Quasar's matmul unpacker cannot transpose SrcA, so compute physically transposes the
-    // K-chunk into this dedicated buffer, then matmul_blocks(transpose=false) reads it. (Extra DFB for now;
-    // to be compressed later.)
-    const DFBSpecName DFB_KT{"kt"};
     const DFBSpecName DFB_V_IN{"v_in"};
     const DFBSpecName DFB_MASK_IN{"mask_in"};
     const DFBSpecName DFB_ATTN_SINK{"attention_sink"};
@@ -808,8 +804,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const auto qk_intermediate_tiles =
         device->arch() == tt::ARCH::QUASAR ? std::max(qk_tiles, 2 * statistics_tiles) : qk_tiles;
     add_compute_intermediate(DFB_QK_IM, "qk_im", im_tile_size, qk_intermediate_tiles, im_df, &im_tile);
-    // K^T staging buffer (compute transposes K into it), same tile size/format as k_in.
-    add_compute_intermediate(DFB_KT, "kt", k_tile_size, k_tiles, k_df, nullptr);
     add_compute_intermediate(DFB_OUT_IM, "out_im", im_tile_size, out_tiles, im_df, &im_tile);
     add_compute_intermediate(DFB_OUT_ACC_IM, "out_accumulate_im", im_tile_size, out_tiles, im_df, &im_tile);
     // Max ping-pong: two separate depth-statistics_tiles buffers (cur/prev), swapped by move_block.
@@ -819,14 +813,14 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     add_compute_intermediate(DFB_SUM, "sum", stats_tile_size, 2 * statistics_tiles, stats_df, &stats_tile);
     add_compute_intermediate(
         DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    // Tile-counter budget (Quasar cap 8). The 8 compute self-loop DFBs are: qk_im, kt, out_im,
-    // out_accumulate_im, max_1, max_2, sum, exp_max_diff. Two levers keep the count at 8:
+    // Tile-counter budget (Quasar cap 8). The 7 compute self-loop DFBs are: qk_im, out_im,
+    // out_accumulate_im, max_1, max_2, sum, exp_max_diff. Two levers keep the count under 8:
     //   (1) the 3 tree-reduction temps are NOT allocated: the compute kernel reuses qk_im for
     //       prev_sum_2 followed by exp_max_diff_2, and out_im for out_accumulate_im_2. Both buffers
-    //       are compute-local and no longer needed by the flash loop (would be 11 -> 8); and
-    //   (2) SUM is merged into one depth-2*statistics_tiles DFB (its fma re-bases the ring each chunk),
-    //       reclaiming the slot the kt transpose DFB needed. MAX is kept split (max_1/max_2) — merging
-    //       it desyncs multi-chunk and hits the reduce_c prev==out hazard. See the kernel.
+    //       are compute-local and no longer needed by the flash loop (would be 10 -> 7); and
+    //   (2) SUM is merged into one depth-2*statistics_tiles DFB (its fma re-bases the ring each chunk).
+    //       MAX is kept split (max_1/max_2) — merging it desyncs multi-chunk and hits the reduce_c
+    //       prev==out hazard. See the kernel. (QK^T uses the native matmul SrcA transpose, so no kt DFB.)
 
     // ---- Tensor parameters + bindings ----
     Group<TensorParameter> tensor_params;

@@ -115,7 +115,6 @@ void kernel_main() {
 #endif
 
     constexpr auto dfb_qk_im = dfb::qk_im;
-    constexpr auto dfb_kt = dfb::kt;  // K^T staging (Quasar: transpose K here, then matmul transpose=false)
     constexpr auto dfb_out_im = dfb::out_im;
     constexpr auto dfb_out_accumulate_im = dfb::out_accumulate_im;
     // Max ping-pong: two separate DFBs (each depth statistics_tiles). cur_max and prev_max are distinct
@@ -437,17 +436,13 @@ void kernel_main() {
             }
 #endif
 
-            // QK = Q @ K^T. Quasar's matmul unpacker cannot transpose SrcA (K), so physically transpose the
-            // K-chunk into dfb_kt, then run the standard matmul with transpose=false (mask fusion intact).
-            transpose_block(dfb_k_in, dfb_kt, Sk_chunk_t_dynamic * DHt);
-            reconfig_data_format(dfb_kt, dfb_q_in);
-            // Re-point the packer to the QK output AFTER transpose_block (which packs dfb_kt). matmul_blocks
-            // packs via pack_tile naming dfb_qk_im but does not itself reconfig the packer, so this switch
-            // must sit here (mirrors prefill sdpa), not before transpose_block, or the packer stays on dfb_kt.
+            // QK = Q @ K^T via the matmul's native SrcA transpose (transpose=true), reading dfb_k_in directly.
+            // matmul_blocks packs via pack_tile naming dfb_qk_im but does not itself reconfig the packer, so
+            // re-point the packer to the QK output here first (mirrors prefill sdpa).
             pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
                 dfb_q_in,
-                dfb_kt,
+                dfb_k_in,
                 dfb_qk_im,
                 Sq_chunk_t,
                 Sk_chunk_t_dynamic,
@@ -458,7 +453,7 @@ void kernel_main() {
                 qk_in0_block_w,
                 qk_subblock_h_dynamic,
                 qk_subblock_w_dynamic,
-                false /*transpose*/,
+                true /*transpose*/,
                 add_mask_fusion,
                 mask_dfb_to_use,
                 dfb_zero_in);
