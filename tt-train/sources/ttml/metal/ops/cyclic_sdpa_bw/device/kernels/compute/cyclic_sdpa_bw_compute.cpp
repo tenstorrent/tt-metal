@@ -91,38 +91,19 @@
 #define RELEASE_TOKEN 0
 #endif
 
-// FOLD_SCALE_INTO_KEY: where the softmax's 1/sqrt(d) lives.
-//
-// It appears twice in the arithmetic, on the scores and again on dS. Where
-// a is a power of two (d = 64, 256) it goes into K, exactly, since K is
-// bfloat16:
-//
-//     S  = Q (aK)^T = a Q K^T     the score path then needs no scale at all,
-//     dQ = G (aK)   = a G K       with dS left unscaled,
-//     dK = G^T Q                  short by a -- but dK is an accumulator, so
-//                                 one scale at its handover fixes it,
-//     dV = P^T dO                 untouched.
-//
-// K is resident for a whole residency interval, so scaling it costs one pass
-// per interval, twice per core over the run.
-//
-// Where a is not a power of two (d = 128) it goes into the exponential and
-// the statistic instead. The exponential computes exp(a x) with a folded
-// into its 1/ln 2 constant, and the writer seeds the scores not with -L but
-// with -(L + ln sqrt(d)) sqrt(d), so what comes out is
+// Where the softmax's 1/sqrt(d) lives: in the exponential and in the
+// statistic. The exponential computes exp(a x) / sqrt(d), with a folded
+// into its 1/ln 2 constant and ln sqrt(d) into its bias, and the writer
+// seeds the scores not with -L but with -L sqrt(d), so what comes out is
 //
 //     P' = exp(a S - L - ln sqrt(d)) = a P     dS' = P' (dP - D) = a dS  exact,
 //     dQ = G' K, dK = G'^T Q                   both right as they stand,
 //     dV = P'^T dO                             short by a -- an accumulator,
 //                                              one scale at its handover.
 //
-// Either way the score pass itself is the same code: -L seeded by the FPU,
-// no SFPU work but the exponential and the dS^T multiply, and one column
-// gradient scaled once per residency interval. The host picks by checking
-// whether a's mantissa is zero.
-#ifndef FOLD_SCALE_INTO_KEY
-#define FOLD_SCALE_INTO_KEY 0
-#endif
+// (An earlier version folded a into K where a is a power of two, at the
+// cost of a scaling pass over the K block at every column change -- 9 us
+// at Bt = 4 -- and a second code path; this needs neither.)
 
 // SEED_COLUMN_GRADIENTS: start every column's gradients from what is in DRAM,
 // not only on a revisit. A first visit then reads dK_j, dV_j and adds to
@@ -178,6 +159,12 @@ constexpr uint32_t Bt = get_compile_time_arg_val(7);
 // so the statistic being subtracted is divided by it first -- once per row of
 // score tiles instead of a scale pass on each of the Bt tiles.
 constexpr uint32_t inv_scaler_bits = get_compile_time_arg_val(8);
+// 127 - log2(sqrt d): the exponential's bias constant with ln sqrt(d)
+// folded in, so that it computes exp(a x) / sqrt(d) = exp(a x + ln a) -- the
+// scaled probability aP the rest of the kernel wants -- and the writer's
+// score seed is plainly -L sqrt(d), a shift of the exponent where sqrt(d) is
+// a power of two. Exact for power-of-two d; one Float32 rounding otherwise.
+constexpr uint32_t exp_bias_bits = get_compile_time_arg_val(9);
 constexpr uint32_t score_tiles = Bt * Bt;
 
 // The transposed orientation.
@@ -227,12 +214,7 @@ constexpr uint32_t grad_score_reg(uint32_t i) {
 // Operands, all per timestep.
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
-constexpr uint32_t cb_key_scaled = tt::CBIndex::c_27;  // a * K, when exact
-#if FOLD_SCALE_INTO_KEY
-constexpr uint32_t cb_key_operand = cb_key_scaled;
-#else
 constexpr uint32_t cb_key_operand = cb_key;
-#endif
 constexpr uint32_t cb_key_operand_t = tt::CBIndex::c_16;  // the same block, transposed, for dQ^T
 constexpr uint32_t cb_value = tt::CBIndex::c_2;
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_3;
@@ -251,7 +233,7 @@ constexpr uint32_t cb_neg_u_row = tt::CBIndex::c_14;
 // one more product of the same matmul, against a column of ones -- a
 // rank-one term that adds them along every row. Where the exponential
 // carries the softmax scale the writer has already multiplied L's seed by
-// sqrt(d) and shifted it by ln sqrt(d) (see FOLD_SCALE_INTO_KEY); the tiles
+// sqrt(d) and shifted it by ln sqrt(d) (see the top of the file); the tiles
 // here are the same either way.
 constexpr uint32_t cb_neg_lse_rem = tt::CBIndex::c_9;  // bfloat16, column 0
 constexpr uint32_t cb_neg_u_rem = tt::CBIndex::c_29;
@@ -293,13 +275,11 @@ constexpr uint32_t cb_grad_value_out = tt::CBIndex::c_23;
 
 // pack_tiles_to_output with a multiply on the way through.
 //
-// One column gradient needs it at both ends of its life: dK with the scale
-// folded into K, dV with the scale in the exponential (see
-// FOLD_SCALE_INTO_KEY). The accumulator runs short by a factor of a, so the
-// handover multiplies by 1/a -- but a revisit then reads that value back
-// from DRAM as its seed, so the seed is multiplied by a again first. Both
-// are one block of tiles once per residency interval, which is twice per
-// core over the whole run.
+// dV needs it at both ends of its life: its accumulator runs short by a
+// factor of a (P carries the scale), so the handover multiplies by 1/a --
+// but a revisit then reads that value back from DRAM as its seed, so the
+// seed is multiplied by a again first. Both are one block of tiles once
+// per residency interval, which is twice per core over the whole run.
 void pack_tiles_scaled(
     const uint32_t cb_source, const uint32_t cb_output, const uint32_t num_tiles, const uint32_t scale_bits) {
     cb_wait_front(cb_source, num_tiles);
@@ -323,37 +303,20 @@ void pack_tiles_scaled(
     cb_pop_front(cb_source, num_tiles);
 }
 
-// The column gradient that carries the scale: seeded by a, handed over by
-// 1/a. Where the scale is folded into K that is dK and the factor is exact;
-// otherwise dV, and the two multiplies round once each per residency
-// interval. The other column gradient is copied as it is.
-#if FOLD_SCALE_INTO_KEY
-constexpr uint32_t seed_scale_bits = inv_scaler_bits;   // dK's seed, divided by a
-constexpr uint32_t handover_scale_bits = scaler_bits;   // dK's handover, times a
-#else
+// dV carries the scale: seeded by a, handed over by 1/a (exact where a is
+// a power of two, one rounding each otherwise). dK is copied as it is.
 constexpr uint32_t seed_scale_bits = scaler_bits;       // dV's seed, times a
 constexpr uint32_t handover_scale_bits = inv_scaler_bits;  // dV's handover, divided by a
-#endif
 void reload_column_gradients() {
     // The scaled copy first: a matmul issued straight after an SFPU pass
     // (with only a pack between) came out as zeros; the plain copies that
     // follow are what keeps the two apart.
-#if FOLD_SCALE_INTO_KEY
-    pack_tiles_scaled(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt, seed_scale_bits);
-    pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, Bt * vWt);
-#else
     pack_tiles_scaled(cb_grad_value_seed, cb_grad_value_accum, Bt * vWt, seed_scale_bits);
     pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt);
-#endif
 }
 void handover_column_gradients() {
-#if FOLD_SCALE_INTO_KEY
-    pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, Bt * vWt);
-    pack_tiles_scaled(cb_grad_key_accum, cb_grad_key_out, Bt * qWt, handover_scale_bits);
-#else
     pack_tiles_scaled(cb_grad_value_accum, cb_grad_value_out, Bt * vWt, handover_scale_bits);
     pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, Bt * qWt);
-#endif
 }
 
 // The packer for P^T and dS^T: Float32 in and out, but with the packer's
@@ -513,11 +476,7 @@ inline void init() {
     ckernel::sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-#if FOLD_SCALE_INTO_KEY
-    constexpr float exp_scale = 1.0F;
-#else
     constexpr float exp_scale = __builtin_bit_cast(float, scaler_bits);
-#endif
     constexpr uint32_t inv_ln2_bits = __builtin_bit_cast(uint32_t, exp_scale * 1.4426950408889634F);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(inv_ln2_bits >> 16));
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, static_cast<uint16_t>(inv_ln2_bits & 0xFFFFu));
@@ -540,7 +499,8 @@ inline void init() {
 // constant registers 13 and 14 from init). Once per group of tiles, since
 // nothing else touches these registers between the group's exponentials.
 inline void exp_prepare() {
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);  // 127.0
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, exp_bias_bits >> 16);  // 127 - log2(sqrt d)
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, exp_bias_bits & 0xFFFFu);
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, kExpC1 >> 16);
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, kExpC1 & 0xFFFFu);
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, kExpC0 >> 16);
@@ -566,7 +526,7 @@ inline void exp_face() {
     constexpr int kBodyLen = 15;
     TTI_REPLAY(0, kBodyLen, 1, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);           // x
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);      // z = a x / ln 2 + 127
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);      // z = a x / ln 2 + bias
     TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);                                // exponent of z
     TTI_SFPEXMAN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);                                // mantissa of z, hidden bit in
     TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);                                 // fixed point: integer.fraction
@@ -610,29 +570,6 @@ inline void mul_tiles(const uint32_t a, const uint32_t b, const uint32_t out) {
 }  // namespace pack_sfpu
 #endif
 
-#if FOLD_SCALE_INTO_KEY
-// a * K from the K block at the front of cb_key: Bt x qWt bf16 tiles, one
-// SFPU multiply each. Exact, since the host folds only power-of-two scales.
-void scale_key_block() {
-    cb_wait_front(cb_key, Bt * qWt);
-    cb_reserve_back(cb_key_scaled, Bt * qWt);
-    reconfig_data_format_srca(cb_key);
-    copy_init(cb_key);
-    pack_reconfig_data_format(cb_key_scaled);
-    for (uint32_t t0 = 0; t0 < Bt * qWt; ++t0) {
-        tile_regs_acquire();
-        copy_tile(cb_key, t0, 0);
-        binop_with_scalar_tile_init();
-        mul_unary_tile(0, scaler_bits);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_key_scaled);
-        tile_regs_release();
-    }
-    cb_push_back(cb_key_scaled, Bt * qWt);
-    cb_wait_front(cb_key_scaled, Bt * qWt);
-}
-#endif
 
 // K_j^T from the resident K_j (scaled where the scale is folded): Bt x qWt
 // bf16 tiles in, qWt x Bt out, each tile transposed by the unpacker on the
@@ -705,6 +642,7 @@ void kernel_main() {
     column_accumulating = false;
 #endif
     for (uint32_t t = 0; t < kTimesteps; ++t) {
+        DeviceZoneScopedN("T-STEP");
         const auto pair = sched.pair(my_core, t);
         const uint32_t g = s * kTimesteps + t;  // global timestep across slices
         // Dense mode masks nothing, so a pair with i == j is an ordinary
@@ -746,18 +684,9 @@ void kernel_main() {
             cb_pop_front(cb_key, Bt * qWt);
             cb_pop_front(cb_value, Bt * vWt);
             cb_pop_front(cb_key_operand_t, Bt * qWt);
-#if FOLD_SCALE_INTO_KEY
-            cb_pop_front(cb_key_scaled, Bt * qWt);
-#endif
         }
-#if FOLD_SCALE_INTO_KEY
-        // a * K, once for the residency interval. Everything that reads K --
-        // the scores and dQ -- reads this copy instead.
         if (column_changed) {
-            scale_key_block();
-        }
-#endif
-        if (column_changed) {
+            DeviceZoneScopedN("COL-CHANGE");
             transpose_key_block();
             if (visited[owned_slot] || SEED_COLUMN_GRADIENTS) {
                 // A revisit, or every visit when accumulating into the
@@ -776,9 +705,6 @@ void kernel_main() {
         // Without residency the column arrives every timestep, scaled and
         // transposed copies included.
         cb_wait_front(cb_key, Bt * qWt);
-#if FOLD_SCALE_INTO_KEY
-        scale_key_block();
-#endif
         transpose_key_block();
 #endif
         {
@@ -1102,6 +1028,7 @@ void kernel_main() {
             column_accumulating = true;
             // Hand both column gradients over once, at the end of the interval.
             if (column_ends) {
+                DeviceZoneScopedN("HANDOVER");
                 handover_column_gradients();
             }
 #else
@@ -1109,14 +1036,13 @@ void kernel_main() {
 #endif
         }
 
+        {
+            DeviceZoneScopedN("T-POPS");
         cb_pop_front(cb_query, Bt * qWt);
 #if !COLUMN_RESIDENT
         cb_pop_front(cb_key, Bt * qWt);
         cb_pop_front(cb_value, Bt * vWt);
         cb_pop_front(cb_key_operand_t, Bt * qWt);
-#if FOLD_SCALE_INTO_KEY
-        cb_pop_front(cb_key_scaled, Bt * qWt);
-#endif
 #endif
         cb_pop_front(cb_grad_output, Bt * vWt);
         cb_pop_front(cb_neg_lse_row, Bt);
@@ -1126,6 +1052,7 @@ void kernel_main() {
         cb_pop_front(cb_attention_weights, score_tiles);
         cb_pop_front(cb_grad_scores, score_tiles);
 
+        }
 #if RELEASE_TOKEN
         // Slot t mod 2 is free now: every read of it is done.
         cb_reserve_back(cb_slot_release, 1);
