@@ -26,6 +26,17 @@ pytestmark = pytest.mark.skipif(not is_blackhole(), reason="mhc_split_sinkhorn i
 PCC = 0.999
 
 
+@pytest.fixture(autouse=True)
+def _p150_only(device):
+    """The kernel is brought up on P150 only.
+
+    The cluster query hangs off the open device rather than a collection-time skipif because
+    get_cluster_type() takes the chip lock, which would strand anything that later forks.
+    """
+    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P100:
+        pytest.skip("mhc_split_sinkhorn is validated on P150 only")
+
+
 def _check(name, ref, dev, pcc=PCC):
     ref = ref.float().flatten()
     dev = dev.float().flatten()
