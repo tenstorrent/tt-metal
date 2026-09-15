@@ -400,12 +400,24 @@ Gradients run_algorithm2(
             .set_page_size(tt::CBIndex::c_15, fp32_tile)
             .set_page_size(tt::CBIndex::c_17, fp32_tile));
     make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
-    make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);
+    // dK and dV: the seed from DRAM and the output share one slot each (two
+    // views), the accumulator sits between them; see the compute kernel.
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            rowT * fp32_tile, {{tt::CBIndex::c_18, tt::DataFormat::Float32}, {tt::CBIndex::c_20, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_18, fp32_tile)
+            .set_page_size(tt::CBIndex::c_20, fp32_tile));
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_21, valT, tt::DataFormat::Float32);
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            valT * fp32_tile, {{tt::CBIndex::c_21, tt::DataFormat::Float32}, {tt::CBIndex::c_23, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_21, fp32_tile)
+            .set_page_size(tt::CBIndex::c_23, fp32_tile));
     make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_23, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // control word
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
@@ -463,9 +475,7 @@ Gradients run_algorithm2(
     // The column gradients' seeds and accumulators too: read only by the
     // reload and handover copies, so the running sums keep all 32 bits
     // across a handover and a reload rather than the register's 19.
-    unpack_mode[tt::CBIndex::c_18] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     unpack_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
-    unpack_mode[tt::CBIndex::c_21] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     unpack_mode[tt::CBIndex::c_22] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     const auto compute = CreateKernel(
         program, kComputePath, region,
@@ -678,12 +688,24 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
     make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
     make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
-    make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);  // dK seed
+    // dK and dV: the seed from DRAM and the output share one slot each (two
+    // views), the accumulator sits between them; see the compute kernel.
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            rowT * fp32_tile, {{tt::CBIndex::c_18, tt::DataFormat::Float32}, {tt::CBIndex::c_20, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_18, fp32_tile)
+            .set_page_size(tt::CBIndex::c_20, fp32_tile));
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_21, valT, tt::DataFormat::Float32);  // dV seed
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            valT * fp32_tile, {{tt::CBIndex::c_21, tt::DataFormat::Float32}, {tt::CBIndex::c_23, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_21, fp32_tile)
+            .set_page_size(tt::CBIndex::c_23, fp32_tile));
     make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_23, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // readiness word
     make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);  // release word
     make_cb(tt::CBIndex::c_26, 1, tt::DataFormat::Float32);  // column-gradient progress
@@ -772,9 +794,7 @@ Gradients run_relay(
     // The column gradients' seeds and accumulators too: read only by the
     // reload and handover copies, so the running sums keep all 32 bits
     // across a handover and a reload rather than the register's 19.
-    unpack_mode[tt::CBIndex::c_18] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     unpack_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
-    unpack_mode[tt::CBIndex::c_21] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     unpack_mode[tt::CBIndex::c_22] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     const auto compute = CreateKernel(
         program, kComputePath, region,
@@ -2064,10 +2084,12 @@ TEST(CyclicSdpaBwIdentityTest, RemovingTheBarrierChangesNothingWithTallBlocks) {
     }
 }
 
-// The column gradients are where the two differ, and residency is the more
-// accurate side. Worth pinning: it says the per-timestep reload was costing
-// precision, not just bandwidth, and it would catch a regression that made
-// residency the worse of the two.
+// The column gradients are where the two once differed: the per-timestep
+// reload copied the running sum through the Src registers and cost
+// precision. Neither path reloads now -- both start an interval's
+// accumulator from zero and add what DRAM holds at the handover, exactly --
+// so they agree to the order of the summation (a rounding-level difference
+// at most), and this pins that they stay that close.
 TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
     const uint32_t C = 4;
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
@@ -2085,8 +2107,8 @@ TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
     std::cout << "  dK relative error: reloaded " << reload_dk << ", resident " << resident_dk
               << "\n  dV relative error: reloaded " << reload_dv << ", resident " << resident_dv
               << "\n";
-    EXPECT_LE(resident_dk, reload_dk);
-    EXPECT_LE(resident_dv, reload_dv);
+    EXPECT_NEAR(resident_dk, reload_dk, 1e-6F);
+    EXPECT_NEAR(resident_dv, reload_dv, 1e-6F);
 
     // An absolute bound as well as a relative one. Dropping the compute
     // kernels from the default HiFi4 to HiFi2 -- on the argument that every
@@ -2095,8 +2117,8 @@ TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
     // 1.05e-3 here, nine times worse, and bought 3 to 4% of runtime. Every
     // other test in this file passed with that change in place: the
     // gradient-accuracy tolerances are loose enough to hide it, and the
-    // relative comparison above only asks that residency beat the reload,
-    // which it still did. This is the assertion that catches it.
+    // comparison above only asks that the two paths agree with each other,
+    // which they still did. This is the assertion that catches it.
     EXPECT_LT(resident_dk, 2.5e-3F);
     EXPECT_LT(resident_dv, 2.5e-3F);
     EXPECT_LT(reload_dk, 2.5e-3F);
