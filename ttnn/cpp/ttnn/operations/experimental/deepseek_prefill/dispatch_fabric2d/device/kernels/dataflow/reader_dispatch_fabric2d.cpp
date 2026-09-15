@@ -39,6 +39,7 @@ struct Control {
     volatile tt_l1_ptr uint32_t* bucket_len;    // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
+    volatile tt_l1_ptr uint32_t* mc_meta;       // fanout: 4-word scratch for one page's metadata
     volatile tt_l1_ptr uint32_t* mc_count;      // fanout: entries emitted per direction
     volatile tt_l1_ptr uint32_t* reach;         // fanout: extent x 2 x (m + 2), tokens reaching >= h hops
     volatile tt_l1_ptr uint32_t* in_start;      // page offset of each chunk this stream reads
@@ -67,6 +68,7 @@ Control carve_control() {
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
     c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         words(ct.seq_len * dspf2d::routing_index_words_per_token(ct.topk)));
+    c.mc_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(4));
     c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(2));
     c.reach = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * 2u * (ct.extent / 2u + 2u)));
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
