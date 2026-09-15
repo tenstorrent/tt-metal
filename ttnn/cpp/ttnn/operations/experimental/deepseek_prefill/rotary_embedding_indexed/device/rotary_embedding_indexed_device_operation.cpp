@@ -369,11 +369,13 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     const uint32_t num_cores = num_cores_x * num_cores_y;
     const uint32_t batch_parallel_factor = std::min(batch, num_cores);
     const uint32_t seq_parallel_factor = std::min(num_cores / batch_parallel_factor, seq_len_t);
+    const uint32_t head_parallel_factor = std::min(n_heads, num_cores / (batch_parallel_factor * seq_parallel_factor));
+    const uint32_t heads_per_core = (n_heads + head_parallel_factor - 1) / head_parallel_factor;
     const uint32_t batch_per_core = (batch + batch_parallel_factor - 1) / batch_parallel_factor;
     const uint32_t seq_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
 
     const uint32_t num_sin_cos_rows_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
-    const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * n_heads;
+    const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * heads_per_core;
 
     uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
@@ -486,7 +488,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     }
 
     KernelSpec::RuntimeArgSchema reader_schema{
-        .runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}};
+        .runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}};
     if (!has_metadata) {
         reader_schema.common_runtime_arg_names = {"kv_actual_global"};
     }
@@ -537,7 +539,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"Ht", seq_len_t},
              {"input_Wt", input_head_dim_t},
              {"rotary_offset_t", rotary_offset_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
         .hw_config = create_writer_datamovement_config(mesh_device->arch())};
 
     KernelSpec compute_spec{
@@ -579,8 +582,9 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
                  .dfb_spec_name = SIN_INTERM_DFB,
                  .accessor_name = "sin_interm",
                  .endpoint_type = DFBEndpointType::CONSUMER}},
-        .compile_time_args = {{"Wt", head_dim_t}, {"n_heads", n_heads}, {"rotary_Ht", rotary_seq_len_t}},
-        .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
+        .compile_time_args = {{"Wt", head_dim_t}, {"rotary_Ht", rotary_seq_len_t}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "n_heads"}},
         .hw_config = compute_hw_config};
 
     // ------------------------------------------------------------------ per-node runtime args
@@ -591,19 +595,26 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         uint32_t end_batch = 0;
         uint32_t start_seq = 0;
         uint32_t end_seq = 0;
+        uint32_t start_head = 0;
+        uint32_t end_head = 0;
     };
     std::vector<CoreArgs> per_core_args(cores.size());
-    for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
-        for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
-            uint32_t core_idx = (batch_parallel * seq_parallel_factor) + seq_parallel;
-            uint32_t start_batch = batch_parallel * batch_per_core;
-            uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
-            uint32_t start_seq = seq_parallel * seq_per_core;
-            uint32_t end_seq = std::min(start_seq + seq_per_core, seq_len_t);
-            if (start_seq >= seq_len_t || start_batch >= batch) {
-                continue;
+    for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; ++batch_parallel) {
+        for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; ++seq_parallel) {
+            for (uint32_t head_parallel = 0; head_parallel < head_parallel_factor; ++head_parallel) {
+                uint32_t core_idx =
+                    (batch_parallel * seq_parallel_factor + seq_parallel) * head_parallel_factor + head_parallel;
+                uint32_t start_batch = batch_parallel * batch_per_core;
+                uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
+                uint32_t start_seq = seq_parallel * seq_per_core;
+                uint32_t end_seq = std::min(start_seq + seq_per_core, seq_len_t);
+                uint32_t start_head = head_parallel * heads_per_core;
+                uint32_t end_head = std::min(start_head + heads_per_core, n_heads);
+                if (start_seq >= seq_len_t || start_batch >= batch || start_head >= n_heads) {
+                    continue;
+                }
+                per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq, start_head, end_head};
             }
-            per_core_args[core_idx] = CoreArgs{start_batch, end_batch, start_seq, end_seq};
         }
     }
 
@@ -622,21 +633,26 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             {{"batch_start", a.start_batch},
              {"batch_end", a.end_batch},
              {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+             {"seq_t_end", a.end_seq},
+             {"head_start", a.start_head},
+             {"head_end", a.end_head}});
         AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             node,
             {{"batch_start", a.start_batch},
              {"batch_end", a.end_batch},
              {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+             {"seq_t_end", a.end_seq},
+             {"head_start", a.start_head},
+             {"head_end", a.end_head}});
         AddRuntimeArgsForNode(
             compute_run.runtime_arg_values,
             node,
             {{"batch_start", a.start_batch},
              {"batch_end", a.end_batch},
              {"seq_t_start", a.start_seq},
-             {"seq_t_end", a.end_seq}});
+             {"seq_t_end", a.end_seq},
+             {"n_heads", a.end_head - a.start_head}});
     }
 
     // ------------------------------------------------------------------ assemble + compile
