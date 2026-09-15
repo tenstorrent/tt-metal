@@ -30,6 +30,11 @@ struct L1Layout {
     uint32_t drain_sink;
     uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the sender
     uint32_t pkt_hdr_ring;  // TWO prebuilt headers per slot: the last hop issues two writes from one slot
+    // fanout: per (slot, destination) delivery records and the metadata words they point at. Written
+    // by the reader, read by the sender, so they live outside the reader's control carve, which the
+    // sender knows nothing about.
+    uint32_t mc_delivery;
+    uint32_t mc_meta;
     // The reader's copy of the control tensors and its routing index, read once at startup and then
     // indexed from L1. Nothing on another chip addresses this, so it sits last -- but it is still
     // computed identically everywhere.
@@ -162,11 +167,28 @@ struct FanoutMetadata {
     uint32_t dests[FO_MAX_DESTS];  // packed page | hop | top-k slot, zero where unused
     uint64_t cmd;
     uint64_t this_addr;
+    // How many of this slot's staged deliveries the SENDER writes out, as local DRAM writes on its own
+    // NOC, before it acts on `cmd`. The reader stages them because only it holds the output accessors;
+    // the sender issues them because its port has the headroom -- multicast forwards far fewer pages
+    // than it delivers, and the reader's port was the one saturated.
+    uint32_t deliver_count;
+    uint32_t pad;
 };
 static_assert(sizeof(FanoutMetadata) <= FORWARDING_METADATA_SIZE);
 
 // Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
+
+// One local delivery the sender issues out of a slot: where the token and its metadata go on THIS chip,
+// and where the reader staged the metadata words. Every destination has its own record and its own
+// metadata buffer because several are in flight from one slot at once.
+struct FanoutDelivery {
+    uint64_t payload_addr;
+    uint64_t meta_addr;
+    uint32_t meta_src;
+    uint32_t pad;
+};
+static_assert(sizeof(FanoutDelivery) == 24);
 
 // Asserted so that whoever changes this layout has to acknowledge they need some other means of ensuring
 // every device runs kernels built from the same metadata format.
@@ -248,7 +270,6 @@ enum ControlBlock : uint32_t {
     kCbBucketLen,
     kCbBucketStart,
     kCbEntries,
-    kCbMcMeta,
     kCbMcCount,
     kCbReach,
     kCbInStart,
@@ -296,10 +317,6 @@ constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t bl
         case kCbBucketLen: return 4u * g.extent * g.experts_per_chip;
         case kCbBucketStart: return 4u * g.extent * g.experts_per_chip;
         case kCbEntries: return 4u * g.seq_len * routing_index_words_per_token(g.topk);
-        // Four words per destination, not four in total: a token can hold several experts on one chip
-        // and each gets its own page, so several metadata writes are in flight out of this scratch at
-        // once and they cannot share a buffer.
-        case kCbMcMeta: return MC_META_SLOT_BYTES * FO_MAX_DESTS * BATCH;
         case kCbMcCount: return 4u * 2u;
         case kCbReach: return g.extent * 2u * mc_reach_row_bytes(g.extent);
         case kCbInStart: return 4u * control_chunk_start_slots(g);
