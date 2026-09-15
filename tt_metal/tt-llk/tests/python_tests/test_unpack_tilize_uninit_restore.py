@@ -5,10 +5,10 @@
 
 This exercises a gap left by the existing tilize tests: every other call site of
 `_llk_unpack_tilize_uninit_` (matmul_unpack_tilize, the fuser tilize node, the
-C++ sweep) restores with ``num_faces=4`` / ``face_r_dim=16``. The PR threads the
-operand's ``num_faces``/``face_r_dim`` through uninit so it restores the SrcA
-tile-descriptor + ``Tile_x_dim_cntx0`` back to the *operand* baseline programmed
-by ``configure_unpack_AB`` (not a hardcoded 16x16, 4-face baseline).
+C++ sweep) restores with ``num_faces=4`` / ``face_r_dim=16``. The operand's
+``num_faces``/``face_r_dim`` are threaded through uninit so it restores
+``Tile_x_dim_cntx0`` to the *operand* baseline programmed by
+``configure_unpack_AB`` (not a hardcoded 16x16, 4-face baseline).
 
 The C++ source runs two ops back-to-back on the SAME operand format:
     1. ``unpack_tilize`` of operand A (with the parameterized ``num_faces``)
@@ -17,13 +17,13 @@ The C++ source runs two ops back-to-back on the SAME operand format:
        data-format reconfig in between.
 
 Because there is no reconfig, the uninit restore is the only thing that resets
-the unpacker state between the two ops. If it leaves the tile-descriptor Z-dim
-(num_faces), the Y-dim, ``tilize_mode``, or ``Tile_x_dim_cntx0`` in a
-tilize-specific / wrong-faces state, the second datacopy reads corrupted data
-and the result diverges from ``TilizeGolden(src_A, num_faces)``.
+the unpacker state between the two ops. If it leaves ``tilize_mode`` or
+``Tile_x_dim_cntx0`` in a tilize-specific / wrong-faces state, the second
+datacopy reads corrupted data and the result diverges from
+``TilizeGolden(src_A, num_faces)``.
 
-``num_faces ∈ {1, 2}`` specifically covers the tile-descriptor Z-dim restore
-that no existing tilize test reaches.
+``num_faces ∈ {1, 2}`` covers non-4-face operands, which no existing tilize
+test reaches.
 """
 
 import pytest
