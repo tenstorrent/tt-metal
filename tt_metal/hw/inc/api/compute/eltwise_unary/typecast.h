@@ -80,8 +80,9 @@ ALWI void typecast_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
     // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
-    // collapse to a pure format no-op, while MX <-> {Float32, Int32, ...} run the Float16_b <-> X SFPU
-    // conversion on top of the format (X -> MX runs X -> Float16_b, then the packer emits MX).
+    // collapse to a pure format no-op, and so does MX -> Float32, which reaches the Float16_b -> Float32
+    // no-op arm. The rest (MX <-> {Int32, ...}) run the Float16_b <-> X SFPU conversion on top of the
+    // format (X -> MX runs X -> Float16_b, then the packer emits MX).
     constexpr DataFormat effective_input_format =
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
@@ -416,8 +417,9 @@ ALWI void typecast_tile_init() {
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
 #ifdef ARCH_QUASAR
-    // Mirror typecast_tile: an MX endpoint behaves as Float16_b at the SFPU level, so only a
-    // non-trivial effective conversion needs the SFPU init (MX <-> Float16_b is a format no-op).
+    // Mirror typecast_tile: an MX endpoint behaves as Float16_b at the SFPU level, so only a pair that
+    // dispatches an SFPU op needs the init. The no-op pairs (MX <-> Float16_b, MX <-> MX, and
+    // Float16_b/MX -> Float32) are gated out here too, so init and execute stay in lockstep.
     constexpr DataFormat effective_input_format =
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
