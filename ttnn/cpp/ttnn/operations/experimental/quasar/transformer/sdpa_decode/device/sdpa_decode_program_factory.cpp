@@ -804,7 +804,10 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, name, accessor, DFBEndpointType::PRODUCER);
         bind(compute_dfb, name, std::move(accessor), DFBEndpointType::CONSUMER);
     };
-    add_compute_intermediate(DFB_QK_IM, "qk_im", im_tile_size, qk_tiles, im_df, &im_tile);
+    // Quasar tree correction holds the child sum and its factor in adjacent QK ring blocks.
+    const auto qk_intermediate_tiles =
+        device->arch() == tt::ARCH::QUASAR ? std::max(qk_tiles, 2 * statistics_tiles) : qk_tiles;
+    add_compute_intermediate(DFB_QK_IM, "qk_im", im_tile_size, qk_intermediate_tiles, im_df, &im_tile);
     // K^T staging buffer (compute transposes K into it), same tile size/format as k_in.
     add_compute_intermediate(DFB_KT, "kt", k_tile_size, k_tiles, k_df, nullptr);
     add_compute_intermediate(DFB_OUT_IM, "out_im", im_tile_size, out_tiles, im_df, &im_tile);
@@ -818,9 +821,9 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     // Tile-counter budget (Quasar cap 8). The 8 compute self-loop DFBs are: qk_im, kt, out_im,
     // out_accumulate_im, max_1, max_2, sum, exp_max_diff. Two levers keep the count at 8:
-    //   (1) the 3 tree-reduction temps are NOT allocated — the compute kernel reuses qk_im / out_im
-    //       (dead after the flash loop) and out_m (compute-produced, idle until send-to-parent) for
-    //       prev_sum_2 / out_accumulate_im_2 / exp_max_diff_2 (would be 11 -> 8); and
+    //   (1) the 3 tree-reduction temps are NOT allocated: the compute kernel reuses qk_im for
+    //       prev_sum_2 followed by exp_max_diff_2, and out_im for out_accumulate_im_2. Both buffers
+    //       are compute-local and no longer needed by the flash loop (would be 11 -> 8); and
     //   (2) SUM is merged into one depth-2*statistics_tiles DFB (its fma re-bases the ring each chunk),
     //       reclaiming the slot the kt transpose DFB needed. MAX is kept split (max_1/max_2) — merging
     //       it desyncs multi-chunk and hits the reduce_c prev==out hazard. See the kernel.
