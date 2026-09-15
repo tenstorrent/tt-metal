@@ -286,7 +286,7 @@ def test_summarize_chunk_recurrence_emits_grouped_head_and_tail_segments(
         context=f"G={groups_per_head} g={chunks_per_group} wrap={wrap_chunk}",
         pcc_threshold=0.999,
     )
-    head_a, head_b, tail_a, tail_b = expected
+    head_a, head_b, tail_a, tail_b = (ttnn.to_torch(t).float() for t in actual)
     full_a, full_b = summary_oracle(host_inputs)
     assert_accurate(full_a, tail_a @ head_a, name="tail-after-head A", pcc_threshold=0.999)
     assert_accurate(full_b, tail_a @ head_b + tail_b, name="tail-after-head B", pcc_threshold=0.999)

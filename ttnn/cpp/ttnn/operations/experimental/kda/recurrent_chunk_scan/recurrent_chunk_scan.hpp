@@ -39,8 +39,6 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<ttnn::Tensor>& wrap_indicator = std::nullopt,
     uint32_t wrap_chunk = 0,
     uint32_t groups_per_head = 1,
-    uint32_t chunk_start = 0,
-    uint32_t chunk_count = 0,
     bool emit_tail_summaries = false,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);

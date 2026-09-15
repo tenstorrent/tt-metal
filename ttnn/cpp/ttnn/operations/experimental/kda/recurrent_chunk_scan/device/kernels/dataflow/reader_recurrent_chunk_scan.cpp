@@ -111,13 +111,7 @@ template <
     uint32_t has_wrap_indicator,
     uint32_t emit_tail_summaries,
     uint32_t groups_per_head>
-TT_KERNEL void reader(
-    uint32_t head,
-    uint32_t value_block,
-    uint32_t num_chunks,
-    uint32_t active_chunks,
-    uint32_t reset_chunk,
-    uint32_t chunk_start) {
+TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t reset_chunk) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
     const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed);
@@ -153,7 +147,6 @@ TT_KERNEL void reader(
         device_wrap = reset_chunk != 0 && control_ptr[0] != 0;
         wrap_control.push_back(1);
     }
-    const uint32_t device_active_chunks = active_chunks;
     const uint32_t device_reset_chunk = (!summary_pair && device_wrap) ? reset_chunk : 0;
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
@@ -180,9 +173,8 @@ TT_KERNEL void reader(
             initial_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
     }
 
-    // num_chunks stays the tensor stride; active_chunks is the loop bound.
-    for (uint32_t chunk = 0; chunk < device_active_chunks; ++chunk) {
-        const uint32_t head_chunk = head * num_chunks + chunk_start + chunk;
+    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        const uint32_t head_chunk = head * num_chunks + chunk;
         // Publish the post-wrap seed just in time, never before the loop. The state
         // DFB holds one kv payload and compute frees it only via pop_front at the
         // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
