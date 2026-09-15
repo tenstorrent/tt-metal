@@ -1647,6 +1647,47 @@ TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
     check_asic_mapping_against_golden("T3K2x2AssignZDirectionControlPlaneInit");
 }
 
+TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() < 2) {
+        GTEST_SKIP() << "Requires at least 2 ranks";
+    }
+
+    const auto my_rank = static_cast<int>(*world_ctx->rank());
+    const auto fabric_config =
+        my_rank % 2 == 0 ? tt::tt_fabric::FabricConfig::FABRIC_2D : tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
+
+    const std::filesystem::path dual_bh_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            dual_bh_galaxy_mesh_graph_desc_path.string(),
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
+}
+
+TEST(MultiHost, SingleProcessMultiMeshFabricConfigConsistency) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() != 1) {
+        GTEST_SKIP() << "Requires single process run";
+    }
+
+    const std::filesystem::path single_process_multi_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto";
+    auto control_plane = make_control_plane(
+        single_process_multi_mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    const auto local_mesh_ids = control_plane->get_local_mesh_id_bindings();
+    EXPECT_GT(local_mesh_ids.size(), 1u) << "single-process multi-mesh run must bind more than one mesh";
+}
+
 // Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
 // marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
 // falls back to NESW), so it resolves zero routers -> control-plane initialization must fail. This exercises
