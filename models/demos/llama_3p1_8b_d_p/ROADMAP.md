@@ -273,16 +273,42 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$PREFILL_PYTHON" -m pytest \
   models/demos/llama_3p1_8b_d_p/tests/unit/test_rope.py
 ```
 
-The device test needs repository root fixtures, so it must not use `--noconftest`. Run it only in
-the developer's currently assigned allocation; do not preserve an expired job ID as the recipe:
+The device test needs repository root fixtures, so it must not use `--noconftest`. Run these steps
+from an Exabox login shell. First inspect the user's running jobs and identify the allocation that
+the developer assigned to this test; do not select another user's job or preserve an expired job ID
+as the permanent recipe:
 
 ```bash
-srun --overlap --jobid "$PREFILL_SLURM_JOB_ID" --nodes=1 --ntasks=1 --cpu-bind=none \
-  bash -lc 'cd /data/divanovic/llama31-8b-disagg && \
-  source tools/prefill_env.sh && \
-  cd repos/tt-metal && \
-  "$PREFILL_PYTHON" -m pytest -v \
-  models/demos/llama_3p1_8b_d_p/tests/unit/test_indexed_rope_vs_ref.py'
+squeue --me --states=RUNNING --format="%.18i %.9P %.8j %.2t %.10M %.6D %R"
+```
+
+Replace the marker below with that current allocation's numeric job ID. The subshell fails before
+`srun` if the marker was not replaced, the value is empty/non-numeric, or the job is no longer
+running:
+
+```bash
+(
+  export PREFILL_SLURM_JOB_ID="REPLACE_WITH_CURRENT_ASSIGNED_JOB_ID"
+  case "$PREFILL_SLURM_JOB_ID" in
+    ''|*[!0-9]*)
+      echo "Set PREFILL_SLURM_JOB_ID to the developer's current numeric Slurm allocation ID." >&2
+      exit 2
+      ;;
+  esac
+  if ! squeue --jobs "$PREFILL_SLURM_JOB_ID" --states=RUNNING --noheader --format="%A" \
+    | grep -Fxq "$PREFILL_SLURM_JOB_ID"; then
+    echo "Slurm job $PREFILL_SLURM_JOB_ID is not a current running allocation." >&2
+    exit 2
+  fi
+
+  srun --overlap --jobid "$PREFILL_SLURM_JOB_ID" --nodes=1 --ntasks=1 --cpu-bind=none \
+    bash -lc 'cd /data/divanovic/llama31-8b-disagg && \
+    source tools/prefill_env.sh && \
+    cd repos/tt-metal && \
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$PREFILL_PYTHON" -m pytest \
+      --rootdir=. -c /dev/null -v \
+      models/demos/llama_3p1_8b_d_p/tests/unit/test_indexed_rope_vs_ref.py'
+)
 ```
 
 Future stage reports must record the exact allocation, interpreter/native source identity, command,
