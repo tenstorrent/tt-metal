@@ -92,6 +92,8 @@ struct ReduceChunkPlan {
     std::uint32_t output_tiles = 1;
     // Number of chunks which fit concurrently in the input allocation.
     std::uint32_t buffers = 1;
+    // Consume a full packet at short static edges, without reducing its unused tiles.
+    bool padded = false;
 
     std::uint32_t input_tiles() const { return reduce_axis_tiles * output_tiles; }
 };

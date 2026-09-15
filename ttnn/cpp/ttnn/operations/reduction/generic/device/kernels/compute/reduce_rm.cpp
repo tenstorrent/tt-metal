@@ -117,6 +117,15 @@ void kernel_main() {
 #endif
 
         constexpr uint32_t Ht_total = Ht;  // For H reduce, the Ht arg IS the total Ht.
+        using FirstCall = ttnn::kernel_lib::ReduceCallAtT<1, 0>;
+        constexpr bool padded_input = FirstCall::padded_input_chunk;
+        constexpr uint32_t packet_tiles = FirstCall::reduce_axis_chunk_tiles * FirstCall::output_chunk_tiles;
+        static_assert(!padded_input || packet_tiles == wt_tiles_per_chunk * ht_tiles_per_chunk);
+        DataflowBuffer tile_in(dfb::tile_in);
+        if constexpr (padded_input) {
+            UNPACK(ASSERT(tile_in.get_total_num_entries() % packet_tiles == 0));
+            PACK(ASSERT(tile_in.get_total_num_entries() % packet_tiles == 0));
+        }
 
         for (uint32_t out_idx = 0; out_idx < num_output_tiles_local; ++out_idx) {
             uint32_t chunk_idx = 0;
@@ -127,6 +136,17 @@ void kernel_main() {
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, dfb::rm, dfb::tile_in>(
                     ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
+
+                if constexpr (padded_input) {
+                    // Publish unused scratch slots without accessing their
+                    // contents. Chunked reduction skips these slots and pops
+                    // the full packet, keeping the next column aligned.
+                    const uint32_t unused_tiles = packet_tiles - ht_in_chunk * wt_tiles_per_chunk;
+                    if (unused_tiles > 0) {
+                        tile_in.reserve_back(unused_tiles);
+                        tile_in.push_back(unused_tiles);
+                    }
+                }
                 reduce_block(chunk_idx, is_last_chunk);
                 ++chunk_idx;
             }

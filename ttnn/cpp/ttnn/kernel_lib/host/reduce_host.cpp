@@ -256,6 +256,15 @@ void choose_tiled_chunk(
         axis_tiles = std::min<std::uint32_t>(reduced_tiles, input_budget / bytes_per_axis_tile);
         buffers = 1;
     }
+    if (dim == ReduceOpDim::H && plan.algorithm == ReduceAlgorithm::AccumulateViaAdd && axis_tiles == 1) {
+        // A pair of rows is enough for column accumulation. Prefer one such
+        // buffer over two single-row buffers that would force a native fallback.
+        const auto single_buffer_axis = std::min<std::uint32_t>(reduced_tiles, input_budget / bytes_per_axis_tile);
+        if (single_buffer_axis >= 2) {
+            axis_tiles = single_buffer_axis;
+            buffers = 1;
+        }
+    }
     TT_FATAL(
         axis_tiles > 0,
         "Reduce planner: input CB cap {} cannot hold a minimum reduction chunk of {} bytes",
@@ -1412,7 +1421,8 @@ std::uint32_t encode_chunk_and_auxiliary(const ReduceCallPlan& call) {
            insert(
                tile_count,
                chunk_and_auxiliary::auxiliary_tile_count_shift,
-               chunk_and_auxiliary::auxiliary_tile_count_mask);
+               chunk_and_auxiliary::auxiliary_tile_count_mask) |
+           insert(plan.chunk.padded, chunk_and_auxiliary::padded_shift, chunk_and_auxiliary::padded_mask);
 }
 
 std::uint32_t encode_auxiliary_header(const ReduceAuxiliaryPlan& auxiliary) {
@@ -1453,6 +1463,10 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
     using reduce_plan_args::CallWord;
     const auto& plan = call.plan;
     const bool accumulates = call.accumulation_mode != ReduceAccumulationMode::None;
+    TT_FATAL(
+        !plan.chunk.padded ||
+            (plan.input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop && plan.reduce_dim != ReduceOpDim::HW),
+        "Reduce plan args: padded input packets require chunked W or H reduction");
     TT_FATAL(
         accumulates == call.accumulator_cb_id.has_value(),
         "Reduce plan args: accumulation mode and accumulator CB presence disagree");

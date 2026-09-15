@@ -196,6 +196,10 @@ public:
         chunk_and_auxiliary,
         reduce_plan_args::chunk_and_auxiliary::output_tiles_shift,
         reduce_plan_args::chunk_and_auxiliary::output_tiles_mask);
+    static constexpr bool padded_input_chunk = reduce_plan_args::extract(
+        chunk_and_auxiliary,
+        reduce_plan_args::chunk_and_auxiliary::padded_shift,
+        reduce_plan_args::chunk_and_auxiliary::padded_mask);
     static constexpr std::uint32_t auxiliary_tile_offset = reduce_plan_args::extract(
         chunk_and_auxiliary,
         reduce_plan_args::chunk_and_auxiliary::auxiliary_tile_offset_shift,

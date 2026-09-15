@@ -34,6 +34,7 @@
 #include "ttnn/operations/reduction/accumulation/ema/ema.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/manual_seed/manual_seed.hpp"
 #include "ttnn/operations/reduction/moe/moe.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
@@ -62,6 +63,85 @@ ttnn::kernel_lib::host::ReduceBlockSpec local_reduce_block(
         shape[shape.rank() - 2], shape[shape.rank() - 1], dtype, dtype, batches);
 }
 }  // namespace
+
+TEST(ReduceHostPlanner, FourColumnAccumulationFitsOneEightTileBuffer) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+        for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32}) {
+            const auto tile_bytes = tile_size(dtype);
+            const auto input_budget = 8U * tile_bytes;
+            const ReduceHardwareConfig hardware{
+                .arch = arch,
+                .fp32_dest_acc_en = true,
+                .available_l1_bytes = input_budget + tile_bytes + 2U * tile_size(DataType::FLOAT32)};
+            const auto block = ReduceBlockSpec::tiled(9 * 32, 4 * 32, dtype, DataType::FLOAT32);
+            const auto plan = make_reduce_plan(
+                block, ReduceOpMath::SUM, ReduceOpDim::H, 1.0F, ReduceFp32Mode::Fast, hardware, input_budget);
+            EXPECT_EQ(plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+            EXPECT_EQ(plan.input_policy, compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
+            EXPECT_EQ(plan.chunk.reduce_axis_tiles, 2U);
+            EXPECT_EQ(plan.chunk.output_tiles, 4U);
+            EXPECT_EQ(plan.chunk.buffers, 1U);
+            EXPECT_EQ(plan.find_cb(ReduceCbRole::Input)->total_size_bytes, input_budget);
+            EXPECT_EQ(plan.total_owned_l1_bytes, hardware.available_l1_bytes);
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, RowMajorColumnPacketsPreserveShortStaticTails) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    namespace args = ttnn::kernel_lib::reduce_plan_args;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    for (const auto ht : {8U, 9U, 15U, 17U, 33U}) {
+        const Shape shape{1, 1, ht * 32, 144};
+        const TensorSpec input(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+        const TensorSpec output(
+            Shape{1, 1, 1, 144}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+        const auto rm = ttnn::prim::make_rm_plan(
+            shape,
+            shape,
+            32,
+            32,
+            tt::DataFormat::Float16_b,
+            tt::DataFormat::Float32,
+            ReduceOpMath::SUM,
+            ReduceOpDim::H);
+        const auto sequence = ttnn::prim::make_generic_reduce_sequence(
+            input,
+            output,
+            ReduceOpMath::SUM,
+            ReduceOpDim::H,
+            1.0F,
+            ReduceFp32Mode::Fast,
+            hardware,
+            ht,
+            5,
+            1,
+            true,
+            &rm);
+        for (const auto& call : sequence.calls) {
+            EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+            EXPECT_EQ(call.plan.input_policy, compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
+            EXPECT_EQ(call.plan.chunk.reduce_axis_tiles, 8U);
+            EXPECT_EQ(call.plan.chunk.output_tiles, 1U);
+            EXPECT_TRUE(call.plan.chunk.padded);
+            EXPECT_EQ(call.plan.find_cb(ReduceCbRole::Input)->page_count, 8U);
+            const auto words = ReduceCallArgs(call).get_compile_time_args();
+            EXPECT_EQ(
+                args::extract(
+                    words[static_cast<uint32_t>(args::CallWord::ChunkAndAuxiliary)],
+                    args::chunk_and_auxiliary::padded_shift,
+                    args::chunk_and_auxiliary::padded_mask),
+                1U);
+            EXPECT_EQ(words[static_cast<uint32_t>(args::CallWord::TailRuntimeArgOffset)], args::no_runtime_arg);
+        }
+        EXPECT_EQ(sequence.calls.back().plan.Ht, (ht - 1) % 8 + 1);
+        EXPECT_EQ(sequence.calls.back().accumulation_index, (ht - 1) / 8);
+    }
+}
 
 TEST(ReduceHostPlanner, EmptyAuxiliaryRecipeOmitsAllocationAndSerializesNoCb) {
     using namespace tt::tt_metal;

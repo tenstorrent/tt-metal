@@ -84,6 +84,8 @@ inline constexpr std::uint32_t auxiliary_tile_offset_shift = 8;
 inline constexpr std::uint32_t auxiliary_tile_offset_mask = 0xFF;
 inline constexpr std::uint32_t auxiliary_tile_count_shift = 16;
 inline constexpr std::uint32_t auxiliary_tile_count_mask = 0xFF;
+inline constexpr std::uint32_t padded_shift = 24;
+inline constexpr std::uint32_t padded_mask = 0x1;
 }  // namespace chunk_and_auxiliary
 
 namespace auxiliary_header {

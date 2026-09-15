@@ -1747,7 +1747,7 @@ ALWI void reduce(PostReduceOp post_reduce_op) {
     auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
     auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
                                         : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
-    constexpr auto chunk = Call::is_tail && should_pop(Call::input_policy)
+    constexpr auto chunk = Call::padded_input_chunk || (Call::is_tail && should_pop(Call::input_policy))
                                ? ReduceInputChunk::padded_to(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles)
                                : ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
     [[maybe_unused]] uint32_t valid_h = Call::logical_h;

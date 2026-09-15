@@ -41,6 +41,11 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
                   : axis_tiles;
     const uint32_t num_chunks = row_major ? tt::div_up(axis_tiles, chunk_tiles) : 1;
     const uint32_t descriptors = std::min(num_chunks, 3U);
+    const uint32_t input_cb_tiles =
+        row_major ? std::max(2U, row_major->wt_tiles_per_chunk * row_major->ht_tiles_per_chunk) : 2U;
+    const auto input_cb_bytes =
+        row_major ? input_cb_tiles * tile.get_tile_size(datatype_to_dataformat_converter(input.data_type()))
+                  : 2 * tt::tt_metal::tile_size(input.data_type());
     std::vector<rh::ReduceCbConfig> calls;
     for (uint32_t i = 0; i < descriptors; ++i) {
         uint32_t h = Ht * tile_h;
@@ -62,17 +67,15 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
         }
         auto block = rh::ReduceBlockSpec::tiled(h, w, input.data_type(), output.data_type(), batches, tile);
         block.output_tile = output.tile();
-        calls.emplace_back(
-            0,
-            rh::ReduceCallConfig{
-                block,
-                math,
-                dim,
-                scalar,
-                fp32_mode,
-                row_major ? std::optional<std::size_t>{} : 2 * tt::tt_metal::tile_size(input.data_type())});
+        calls.emplace_back(0, rh::ReduceCallConfig{block, math, dim, scalar, fp32_mode, input_cb_bytes});
     }
-    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
+    // The tiled H reader interleaves columns in a per-tile stream. Request its
+    // native algorithm explicitly instead of relying on a small input budget
+    // to make the planner fall back from grouped column accumulation.
+    const auto algorithm = dim == ReduceOpDim::H && !row_major
+                               ? std::optional{compute_kernel_lib::ReduceAlgorithm::ReduceTile}
+                               : std::nullopt;
+    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware, algorithm);
     if (dim == ReduceOpDim::H && !row_major) {
         // The existing H reader streams individual tiles through a two-tile FIFO,
         // interleaving independent columns in DEST. A grouped wait would require
@@ -98,9 +101,27 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
     }
     if (row_major) {
         for (auto& call : sequence.calls) {
-            // Tilize pushes tiles individually. Pop the same way so a short final
-            // chunk cannot leave the circular-buffer pointer misaligned on reuse.
-            call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+            auto& plan = call.plan;
+            if (dim == ReduceOpDim::H && plan.algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd) {
+                // The producer emits one column in fixed packets of up to eight
+                // rows. The helper owns wait/pop, including unused tail slots.
+                plan.input_policy = compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop;
+                plan.chunk = {.reduce_axis_tiles = chunk_tiles, .output_tiles = 1, .buffers = 1, .padded = true};
+                for (auto& cb : plan.cb_requirements) {
+                    if (cb.role == rh::ReduceCbRole::Input) {
+                        plan.total_owned_l1_bytes -= cb.total_size_bytes;
+                        cb.page_count = input_cb_tiles;
+                        cb.total_size_bytes = input_cb_bytes;
+                        plan.total_owned_l1_bytes += cb.total_size_bytes;
+                    }
+                }
+                TT_FATAL(
+                    plan.total_owned_l1_bytes <= hardware.available_l1_bytes,
+                    "Row-major H reduction input packet exceeds the reduction L1 budget");
+            } else {
+                // Tilize pushes individual tiles; consume them the same way.
+                plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+            }
         }
         if (num_chunks > 1) {
             sequence.calls.back().accumulation_index = num_chunks - 1;
