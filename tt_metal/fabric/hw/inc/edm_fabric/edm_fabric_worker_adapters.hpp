@@ -24,17 +24,9 @@
 
 namespace tt::tt_fabric {
 
-// How a worker passes its teardown and buffer-index runtime args to build_from_args.
-//
-// By default they are program semaphore ids, resolved with get_semaphore(). A framework
-// that keeps these two semaphores in its own per-core L1 region instead -- because the
-// 16-slot program semaphore table cannot hold two per fabric router a core reaches --
-// compiles its kernels with -DTT_FABRIC_WORKER_SEMS_ARE_ADDRESSES and passes the L1
-// addresses directly. The worker owns both values (it publishes the teardown address to
-// the router during open_start, and the buffer-index address is its own landing zone for
-// the SenderChannelProducerCursor block), so nothing outside the worker needs to agree.
-//
-// This is per translation unit: kernels built without the define keep resolving ids.
+// Opt-in interface for workers that pass their teardown and buffer-index semaphores as raw
+// L1 addresses instead of program semaphore ids. Per translation unit: kernels built
+// without the define keep resolving ids.
 #if defined(TT_FABRIC_WORKER_SEMS_ARE_ADDRESSES)
 constexpr bool worker_sems_are_addresses = true;
 #else
@@ -169,8 +161,8 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        // Either program semaphore ids or raw L1 addresses; see worker_sems_are_addresses.
-        // Read both args first so the arg order is identical either way.
+        // Ids, or addresses under worker_sems_are_addresses. Both args are read first so the
+        // arg order is identical either way.
         const uint32_t teardown_arg = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t buffer_index_arg = get_arg_val<uint32_t>(arg_idx++);
         uintptr_t teardown_address;
