@@ -536,3 +536,224 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }
+
+tile_id = b * block_hw;
+
+for (std::uint32_t i = 0; i < block_h; ++i) {
+    std::uint32_t min_group = 0;
+    std::uint32_t channels_left = num_channels_per_group;
+
+    // One mask tile per block_w slice of every group.
+    std::uint32_t block_w_index = 0;
+
+    for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
+        std::uint32_t group_offset = 0;
+
+        for (std::uint32_t g = min_group; g < num_groups; ++g) {
+            dfb_xmm.reserve_back(1);
+
+            // a. x - mean
+            reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
+            sub_bcast_scalar_init(
+                dfb_in0_id,
+                dfb_ex_global_id
+            );
+
+            tile_regs_acquire();
+
+#ifdef TILIZE_IN
+            sub_tiles_bcast_scalar(
+                dfb_in_id,
+                dfb_ex_global_id,
+                tile_id,
+                0 + (g << 1),
+                dst0
+            );
+#else
+            sub_tiles_bcast_scalar(
+                dfb_in0_id,
+                dfb_ex_global_id,
+                tile_id,
+                0 + (g << 1),
+                dst0
+            );
+#endif
+
+            tile_regs_commit();
+            tile_regs_wait();
+
+            pack_tile(dst0, dfb_xmm_id);
+            tile_regs_release();
+
+            dfb_xmm.push_back(1);
+
+            // b. (x - mean) * rsqrt(var + eps)
+            dfb_xmm.wait_front(1);
+
+            reconfig_data_format(
+                dfb_in0_id,
+                dfb_xmm_id,
+                dfb_ex_global_id,
+                dfb_ex2pe_id
+            );
+
+            mul_bcast_scalar_init(
+                dfb_xmm_id,
+                dfb_ex2pe_id
+            );
+
+            tile_regs_acquire();
+
+            mul_tiles_bcast_scalar(
+                dfb_xmm_id,
+                dfb_ex2pe_id,
+                0,
+                g,
+                dst0
+            );
+
+            tile_regs_commit();
+
+            dfb_xmm.pop_front(1);
+            dfb_xmm.reserve_back(1);
+
+            tile_regs_wait();
+
+            pack_tile(dst0, dfb_xmm_id);
+            tile_regs_release();
+
+            dfb_xmm.push_back(1);
+
+            // c. normalized value * input mask
+            //
+            // The production groupnorm kernel uses a precomputed
+            // 0/1 mask CB rather than an SFPU mask primitive.
+            const std::uint32_t mask_offset = g * block_w;
+            const std::uint32_t mask_index =
+                mask_offset + block_w_index;
+
+            dfb_xmm.wait_front(1);
+
+            reconfig_data_format(
+                dfb_xmm_id,
+                dfb_xmm_id,
+                dfb_ex2pe_id,
+                dfb_input_mask_id
+            );
+
+            mul_bcast_rows_init(
+                dfb_xmm_id,
+                dfb_input_mask_id
+            );
+
+            tile_regs_acquire();
+
+            mul_tiles_bcast_rows(
+                dfb_xmm_id,
+                dfb_input_mask_id,
+                0,
+                mask_index,
+                dst0
+            );
+
+            dfb_xmm.pop_front(1);
+
+            // d. Accumulate into output CB.
+            if (group_offset != 0) {
+                reconfig_data_format_srca(dfb_x_id);
+
+                add_reuse_dest_init<
+                    EltwiseBinaryReuseDestType::DEST_TO_SRCB
+                >(dfb_x_id);
+
+                dfb_x.wait_front(1);
+
+                add_reuse_dest_tiles<
+                    EltwiseBinaryReuseDestType::DEST_TO_SRCB
+                >(
+                    dfb_x_id,
+                    0,
+                    dst0
+                );
+
+                dfb_x.pop_front(1);
+            }
+
+            tile_regs_commit();
+
+            dfb_x.reserve_back(1);
+
+            tile_regs_wait();
+
+            pack_tile(dst0, dfb_x_id);
+
+            tile_regs_release();
+
+            dfb_x.push_back(1);
+
+            reconfig_data_format_srcb(dfb_xmm_id);
+
+            const std::uint32_t cols_available =
+                tile_width - group_offset;
+
+            const std::uint32_t cols_consumed =
+                std::min(
+                    cols_available,
+                    channels_left
+                );
+
+            channels_left -= cols_consumed;
+            group_offset += cols_consumed;
+
+            if (channels_left > 0) {
+                ++block_w_index;
+                break;
+            }
+
+            ++min_group;
+
+            channels_left = num_channels_per_group;
+            block_w_index = 0;
+
+            if (group_offset == tile_width) {
+                break;
+            }
+        }
+
+        ++tile_id;
+
+        // gamma / beta / output handling continues here...
+    }
+}
+
+mask_index = g * block_w + block_w_index;
+
+
+mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
+mul_tiles_bcast_rows(
+    dfb_xmm_id,
+    dfb_input_mask_id,
+    0,
+    mask_index,
+    dst0
+);
+
+
+
+// x
+//  ↓
+// x - shift
+//  ↓
+// mask                         ← mul_tiles_bcast_rows
+//  ↓
+// reduce → mean(diff)
+//  ↓
+// mean = shift + mean(diff)
+//  ↓
+// x - mean
+//  ↓
+// mask                         ← same mask mechanism
+//  ↓
+// square
+//  ↓
+// reduce → variance
