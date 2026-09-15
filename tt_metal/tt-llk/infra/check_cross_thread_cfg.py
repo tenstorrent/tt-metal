@@ -137,10 +137,9 @@ MUTEX_REL = re.compile(r"t6_mutex_release\s*\(\s*mutex::REG_RMW")
 THREADS = ("UNPACK", "MATH", "PACK")
 
 
-# --- consumer map, read from the hazard database ------------------------------------------------
+# --- consumer map ------------------------------------------------------------------------------
 # Which THREAD's instructions consume a field is not derivable from the LLK source; it is a
-# hardware fact. It is taken from the database's reader rows rather than from the ISA pages,
-# because the database is RTL-derived and the ISA pages are incomplete (notably for Blackhole).
+# hardware fact, so it is supplied as a vendored table rather than inferred here.
 READER_THREADS = [
     ("unpacker", "UNPACK"),
     ("matrix unit", "MATH"),
@@ -159,9 +158,9 @@ CONSUMERS_FILE = os.path.join(
 def load_consumers(arch, path=None):
     """field -> set(consuming threads), from the vendored table.
 
-    The table is generated from the hazard database by infra/gen_cfg_consumers.py and committed,
-    because the database is not available to CI. A field ABSENT from it has no reader row recorded
-    upstream: that is UNKNOWN, not 'nobody consumes it'.
+    The table is generated data, committed so the check needs no external input at run time.
+    A field ABSENT from it has no reader recorded for it: that is UNKNOWN, not 'nobody consumes
+    it'.
     """
     try:
         import yaml
@@ -442,9 +441,9 @@ def main():
         if consumers is not None:
             cs = consumers.get(field.replace("_ADDR32", ""))
             print(
-                f"  consumed by: {', '.join(sorted(cs))} (hazard db)"
+                f"  consumed by: {', '.join(sorted(cs))}"
                 if cs
-                else "  consumed by: NOT RECORDED in the hazard db -- treat as unknown, not safe"
+                else "  consumed by: NOT RECORDED -- treat as unknown, not safe"
             )
         print(
             "  fix: masked cfg_reg_rmw_tensix for your own bits; for a shared FIELD, hold mutex::REG_RMW\n"
