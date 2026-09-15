@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include "internal/risc_attribs.h"
+#include "internal/tt-1xx/cache.h"
 #include "noc_parameters.h"
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"
