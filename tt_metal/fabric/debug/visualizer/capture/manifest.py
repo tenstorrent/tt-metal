@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,8 @@ class RouterTarget:
         direction,
         routing_plane,
         link_class,
+        layout_id,
+        instance,
     ):
         self.mesh_id = mesh_id
         self.chip_id = chip_id
@@ -42,6 +45,8 @@ class RouterTarget:
         self.direction = direction
         self.routing_plane = routing_plane
         self.link_class = link_class
+        self.layout_id = layout_id
+        self.instance = instance
 
     def endpoint(self):
         """Return the endpoint shape shared by manifests and snapshots."""
@@ -58,11 +63,42 @@ class RouterTarget:
 class FabricManifest:
     """A validated manifest and the local routers selected from it."""
 
-    def __init__(self, path, data, router_targets):
+    def __init__(self, path, data, router_targets, sha256):
         self.path = path
         self.data = data
         self.router_targets = router_targets
+        self.sha256 = sha256
         self.run = data["run"]
+        self.hal = data["hal"]
+        self.heartbeat = data["heartbeat"]
+        self.fabric_context = data["fabric_context"]
+        self.router_template = data["router_template"]
+        self.stream_assignment = data["stream_assignment"]
+        self.enums = data["enums"]
+        self.layouts = data["layouts"]
+
+    def router_layout(self, mesh_id: int, chip_id: int, eth_chan: int) -> dict[str, Any]:
+        """Return the corresponding layout for a local router."""
+        for target in self.router_targets:
+            if (target.mesh_id, target.chip_id, target.eth_chan) == (mesh_id, chip_id, eth_chan):
+                return self.layouts[target.layout_id]
+        raise ManifestError(
+            f"no local router (mesh_id={mesh_id}, chip_id={chip_id}, eth_chan={eth_chan})"
+        )
+
+    def stream_regs_for_router(self, mesh_id: int, chip_id: int, eth_chan: int) -> tuple[int, ...]:
+        """Enabled overlay stream ids for the named router's layout, sorted uniquely."""
+        layout = self.router_layout(mesh_id, chip_id, eth_chan)
+        stream_ids: set[int] = set()
+        for region in layout["regions"]:
+            if (
+                region.get("backing") == "stream_reg"
+                and region.get("allocated")
+                and region.get("enabled")
+                and "stream_id" in region
+            ):
+                stream_ids.add(region["stream_id"])
+        return tuple(sorted(stream_ids))
 
 
 def _require_object(value: Any, location: str) -> dict[str, Any]:
@@ -131,6 +167,20 @@ def _validate_header(data: dict[str, Any]) -> None:
     )
     if world_size < 1:
         raise ManifestError("manifest.run.world_size must be at least 1")
+    _require_string(_required(run, "written_at", "manifest.run"), "manifest.run.written_at")
+
+    for block in (
+        "hal",
+        "heartbeat",
+        "fabric_context",
+        "router_template",
+        "stream_assignment",
+        "enums",
+        "layouts",
+    ):
+        _require_object(_required(data, block, "manifest"), f"manifest.{block}")
+
+    _validate_layouts(data)
 
 
 def _enumerate_local_router_targets(data: dict[str, Any]) -> tuple[RouterTarget, ...]:
@@ -154,6 +204,12 @@ def _enumerate_local_router_targets(data: dict[str, Any]) -> tuple[RouterTarget,
             is_local = _required(chip, "is_local", chip_location)
             if not isinstance(is_local, bool):
                 raise ManifestError(f"{chip_location}.is_local must be a boolean")
+
+            master_router_chan = _required(chip, "master_router_chan", chip_location)
+            if is_local:
+                _require_int(master_router_chan, f"{chip_location}.master_router_chan")
+            elif master_router_chan is not None:
+                raise ManifestError(f"{chip_location}.master_router_chan must be null for a non-local chip")
 
             # A non-local chip belongs to another host process. Its empty router
             # list describes topology, but it is not a legal ttexalens target here.
@@ -184,6 +240,18 @@ def _enumerate_local_router_targets(data: dict[str, Any]) -> tuple[RouterTarget,
                     )
                 endpoints.add(endpoint)
 
+                layout_id = _require_string(
+                    _required(router, "layout_id", router_location),
+                    f"{router_location}.layout_id",
+                )
+                layouts = data["layouts"]
+                if layout_id not in layouts:
+                    raise ManifestError(f"{router_location}.layout_id {layout_id!r} is not in manifest.layouts")
+                instance = _require_object(
+                    _required(router, "instance", router_location),
+                    f"{router_location}.instance",
+                )
+
                 routing_plane_value = router.get("routing_plane")
                 routing_plane = (
                     None
@@ -213,10 +281,83 @@ def _enumerate_local_router_targets(data: dict[str, Any]) -> tuple[RouterTarget,
                             _required(router, "link_class", router_location),
                             f"{router_location}.link_class",
                         ),
+                        layout_id=layout_id,
+                        instance=instance,
                     )
                 )
 
     return tuple(sorted(targets, key=lambda target: target.sort_key()))
+
+
+def _validate_layouts(data: dict[str, Any]) -> None:
+    layouts = _require_object(_required(data, "layouts", "manifest"), "manifest.layouts")
+    hal = _require_object(_required(data, "hal", "manifest"), "manifest.hal")
+    unreserved = _require_object(_required(hal, "unreserved", "manifest.hal"), "manifest.hal.unreserved")
+    unreserved_base = _require_int(
+        _required(unreserved, "base", "manifest.hal.unreserved"),
+        "manifest.hal.unreserved.base",
+    )
+    unreserved_size = _require_int(
+        _required(unreserved, "size", "manifest.hal.unreserved"),
+        "manifest.hal.unreserved.size",
+    )
+    unreserved_end = unreserved_base + unreserved_size
+
+    for layout_id, raw_layout in layouts.items():
+        location = f"manifest.layouts[{layout_id}]"
+        layout = _require_object(raw_layout, location)
+        _require_int(_required(layout, "router_count", location), f"{location}.router_count")
+        regions = _require_array(_required(layout, "regions", location), f"{location}.regions")
+        parsed_regions: list[tuple[str, dict[str, Any]]] = []
+        ids: set[str] = set()
+        for region_index, raw_region in enumerate(regions):
+            region_location = f"{location}.regions[{region_index}]"
+            region = _require_object(raw_region, region_location)
+            region_id = _require_string(_required(region, "id", region_location), f"{region_location}.id")
+            if region_id in ids:
+                raise ManifestError(f"{region_location}.id {region_id!r} is duplicated")
+            ids.add(region_id)
+            parsed_regions.append((region_location, region))
+
+        for region_location, region in parsed_regions:
+            parent = _require_string(_required(region, "parent", region_location), f"{region_location}.parent")
+            if parent and parent not in ids:
+                raise ManifestError(f"{region_location}.parent {parent!r} is unknown")
+
+            backing = _require_string(_required(region, "backing", region_location), f"{region_location}.backing")
+            allocated = _required(region, "allocated", region_location)
+            enabled = _required(region, "enabled", region_location)
+            if not isinstance(allocated, bool):
+                raise ManifestError(f"{region_location}.allocated must be a boolean")
+            if not isinstance(enabled, bool):
+                raise ManifestError(f"{region_location}.enabled must be a boolean")
+
+            if backing in ("unreserved_l1", "fixed_l1"):
+                address = _require_int(_required(region, "address", region_location), f"{region_location}.address")
+                size = _require_int(_required(region, "size", region_location), f"{region_location}.size")
+                if backing == "unreserved_l1" and allocated and size != 0:
+                    end = address + size
+                    if address < unreserved_base or end > unreserved_end:
+                        raise ManifestError(
+                            f"{region_location} [{address}, {end}) lies outside UNRESERVED "
+                            f"[{unreserved_base}, {unreserved_end})"
+                        )
+            elif backing == "stream_reg" and allocated:
+                stream_id = _require_int(
+                    _required(region, "stream_id", region_location),
+                    f"{region_location}.stream_id",
+                )
+                if stream_id < 0 or stream_id >= 32:
+                    raise ManifestError(f"{region_location}.stream_id must be in [0, 32)")
+
+            if region.get("schema", "") == "packet_ring" and all(
+                key in region for key in ("count", "stride", "size")
+            ):
+                count = _require_int(region["count"], f"{region_location}.count")
+                stride = _require_int(region["stride"], f"{region_location}.stride")
+                size = _require_int(region["size"], f"{region_location}.size")
+                if count * stride != size:
+                    raise ManifestError(f"{region_location} count*stride must equal size")
 
 
 def load_manifest(path: str | Path) -> FabricManifest:
@@ -224,14 +365,22 @@ def load_manifest(path: str | Path) -> FabricManifest:
 
     manifest_path = Path(path)
     try:
-        with manifest_path.open(encoding="utf-8") as manifest_file:
-            raw_data = json.load(manifest_file)
+        raw_bytes = manifest_path.read_bytes()
     except OSError as error:
         raise ManifestError(f"could not read manifest {manifest_path}: {error}") from error
+
+    sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    try:
+        raw_data = json.loads(raw_bytes)
     except json.JSONDecodeError as error:
         raise ManifestError(f"manifest {manifest_path} is not valid JSON: {error}") from error
 
     data = _require_object(raw_data, "manifest")
     _validate_header(data)
     targets = _enumerate_local_router_targets(data)
-    return FabricManifest(path=manifest_path.resolve(), data=data, router_targets=targets)
+    return FabricManifest(
+        path=manifest_path.resolve(),
+        data=data,
+        router_targets=targets,
+        sha256=sha256,
+    )

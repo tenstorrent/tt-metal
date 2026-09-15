@@ -22,6 +22,7 @@ def snapshot() -> dict:
         "manifest": {
             "path": "generated/fabric/fabric_debug_manifest_rank_1_of_2.json",
             "manifest_version": 1,
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "run": {
                 "arch": "WORMHOLE_B0",
                 "fabric_config": "FABRIC_2D",
@@ -71,6 +72,12 @@ class SnapshotSchemaTest(unittest.TestCase):
 
         errors = list(self.validator.iter_errors(data))
         self.assertTrue(any("'capture_time' is a required property" in error.message for error in errors))
+
+    def test_sha256_is_required(self):
+        data = snapshot()
+        del data["manifest"]["sha256"]
+        errors = list(self.validator.iter_errors(data))
+        self.assertTrue(any("'sha256' is a required property" in error.message for error in errors))
 
     def test_mpi_rank_is_required(self):
         data = snapshot()

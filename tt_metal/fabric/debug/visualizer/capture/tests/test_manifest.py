@@ -2,12 +2,125 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from tt_metal.fabric.debug.visualizer.capture.manifest import ManifestError, load_manifest
+
+MINIMAL_LAYOUT_ID = "L0123456789abcdef"
+
+
+def default_instance() -> dict:
+    return {
+        "handshake": 16,
+        "sender_channels_per_vc": [1, 0, 0, 0],
+        "receiver_channels_per_vc": [1, 0],
+        "downstream_edm_mask_per_vc": [1, 0, 0, 0],
+        "tensix_extension": False,
+        "udm_mode": False,
+    }
+
+
+def minimal_layout(*, router_count: int = 1) -> dict:
+    return {
+        "regions": [
+            {
+                "id": "lifecycle",
+                "parent": "",
+                "backing": "group",
+                "allocated": False,
+                "enabled": True,
+                "writer": "none",
+            },
+            {
+                "id": "lifecycle.handshake",
+                "parent": "lifecycle",
+                "backing": "unreserved_l1",
+                "address": 16,
+                "size": 16,
+                "allocated": True,
+                "enabled": True,
+                "writer": "any_erisc",
+                "schema": "handshake_info_t",
+            },
+            {
+                "id": "credits.sender.0.free_slots",
+                "parent": "",
+                "backing": "stream_reg",
+                "stream_id": 22,
+                "allocated": True,
+                "enabled": True,
+                "writer": "worker",
+            },
+            {
+                "id": "credits.sender.1.free_slots",
+                "parent": "",
+                "backing": "stream_reg",
+                "stream_id": 23,
+                "allocated": True,
+                "enabled": False,
+                "writer": "worker",
+            },
+        ],
+        "router_count": router_count,
+    }
+
+
+def required_blocks() -> dict:
+    region = {"base": 0, "size": 0}
+    return {
+        "hal": {
+            "unreserved": {"base": 0, "size": 1024},
+            "go_msg": region,
+            "launch": region,
+            "fabric_telemetry": region,
+            "routing_table": region,
+            "router_state": region,
+            "router_command": region,
+            "eth_fw_mailbox": region,
+        },
+        "heartbeat": {
+            "address": 0x1F80,
+            "magic": 0xDCBA0000,
+            "magic_mask": 0xFFFF0000,
+            "period_iters": 64,
+        },
+        "fabric_context": {
+            "topology": "Linear",
+            "is_2d_routing": True,
+            "packet_header_size_bytes": 32,
+            "max_payload_size_bytes": 4320,
+            "channel_buffer_size_bytes": 4352,
+            "tensix_enabled": False,
+            "bubble_flow_control": False,
+        },
+        "router_template": {
+            "edm_status_address": 1,
+            "termination_signal_address": 2,
+            "edm_local_sync_address": 3,
+            "handshake_address": 4,
+            "unused_config_handshake_address": 4,
+            "edm_channel_ack_addr": 5,
+            "diagnostics": {
+                "perf_telemetry": region,
+                "code_profiling": region,
+                "trimming": region,
+            },
+            "addresses_to_clear": [],
+            "router_buffer_clear_size_words": 1,
+        },
+        "stream_assignment": {"0": {"VC0_ACK_STREAM": 0}},
+        "enums": {
+            "EDMStatus": {"READY_FOR_TRAFFIC": 0xA3B3C3D3},
+            "TerminationSignal": {"IMMEDIATELY_TERMINATE": 2},
+            "RouterCommand": {"RUN": 0},
+            "RunMsg": {"RUN_MSG_GO": 0x80, "RUN_MSG_DONE": 0},
+        },
+        "layouts": {MINIMAL_LAYOUT_ID: minimal_layout()},
+    }
 
 
 def router(eth_chan: int, direction: str = "E") -> dict:
@@ -18,6 +131,8 @@ def router(eth_chan: int, direction: str = "E") -> dict:
         "link_class": "intramesh",
         "logical_core": [0, eth_chan],
         "virtual_core": [18 + eth_chan, 16],
+        "layout_id": MINIMAL_LAYOUT_ID,
+        "instance": default_instance(),
     }
 
 
@@ -27,19 +142,23 @@ def chip(
     is_local: bool,
     physical_chip_id: int | None,
     routers: list[dict],
+    master_router_chan: int | None = None,
 ) -> dict:
+    if master_router_chan is None:
+        master_router_chan = (routers[0]["eth_chan"] if routers else 0) if is_local else None
     return {
         "fabric_chip_id": chip_id,
         "mesh_coord": [0, chip_id],
         "physical_chip_id": physical_chip_id,
         "asic_id": None,
         "is_local": is_local,
+        "master_router_chan": master_router_chan,
         "routers": routers,
     }
 
 
 def manifest(chips: list[dict]) -> dict:
-    return {
+    data = {
         "manifest_version": 1,
         "kind": "fabric_debug_manifest",
         "run": {
@@ -49,6 +168,7 @@ def manifest(chips: list[dict]) -> dict:
             "host_rank": 0,
             "mpi_rank": 0,
             "world_size": 2,
+            "written_at": "2026-09-15T00:00:00Z",
         },
         "meshes": [
             {
@@ -59,6 +179,8 @@ def manifest(chips: list[dict]) -> dict:
         ],
         "links": [],
     }
+    data.update(required_blocks())
+    return data
 
 
 class ManifestTest(unittest.TestCase):
@@ -89,6 +211,9 @@ class ManifestTest(unittest.TestCase):
             loaded.router_targets[1].endpoint(),
             {"mesh_id": 0, "chip_id": 2, "eth_chan": 8},
         )
+        self.assertEqual(loaded.heartbeat["address"], 0x1F80)
+        self.assertEqual(loaded.enums["EDMStatus"]["READY_FOR_TRAFFIC"], 0xA3B3C3D3)
+        self.assertEqual(loaded.router_targets[0].layout_id, MINIMAL_LAYOUT_ID)
 
     def test_targets_are_sorted_by_global_endpoint(self):
         loaded = self.load(
@@ -130,6 +255,82 @@ class ManifestTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ManifestError, "unsupported manifest_version"):
             self.load(data)
+
+    def test_rejects_missing_required_block(self):
+        data = manifest([])
+        del data["hal"]
+
+        with self.assertRaisesRegex(ManifestError, "manifest.hal is required"):
+            self.load(data)
+
+    def test_sha256_is_hash_of_file_bytes(self):
+        data = manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "manifest.json"
+            encoded = json.dumps(data).encode("utf-8")
+            path.write_bytes(encoded)
+            loaded = load_manifest(path)
+
+        self.assertEqual(loaded.sha256, hashlib.sha256(encoded).hexdigest())
+        self.assertRegex(loaded.sha256, r"^[0-9a-f]{64}$")
+
+    def test_layout_id_must_exist(self):
+        data = manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])])
+        data["meshes"][0]["chips"][0]["routers"][0]["layout_id"] = "Ldeadbeefdeadbeef"
+
+        with self.assertRaisesRegex(ManifestError, "is not in manifest.layouts"):
+            self.load(data)
+
+    def test_unreserved_region_out_of_bounds_rejected(self):
+        data = manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])])
+        handshake = data["layouts"][MINIMAL_LAYOUT_ID]["regions"][1]
+        handshake["address"] = 2000
+        handshake["size"] = 16
+
+        with self.assertRaisesRegex(ManifestError, "lies outside UNRESERVED"):
+            self.load(data)
+
+    def test_stream_regs_for_router(self):
+        loaded = self.load(manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])]))
+        self.assertEqual(loaded.stream_regs_for_router(0, 0, 1), (22,))
+        self.assertEqual(
+            loaded.router_layout(0, 0, 1),
+            loaded.layouts[MINIMAL_LAYOUT_ID],
+        )
+
+    def test_rejects_unknown_parent_and_duplicate_region_id(self):
+        data = manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])])
+        regions = data["layouts"][MINIMAL_LAYOUT_ID]["regions"]
+        regions[1]["parent"] = "missing.parent"
+        with self.assertRaisesRegex(ManifestError, "parent 'missing.parent' is unknown"):
+            self.load(data)
+
+        data = manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])])
+        regions = data["layouts"][MINIMAL_LAYOUT_ID]["regions"]
+        regions.append(dict(regions[1], id="lifecycle.handshake"))
+        with self.assertRaisesRegex(ManifestError, "is duplicated"):
+            self.load(data)
+
+    def test_rejects_count_stride_mismatch(self):
+        data = manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])])
+        handshake = data["layouts"][MINIMAL_LAYOUT_ID]["regions"][1]
+        handshake["schema"] = "packet_ring"
+        handshake["count"] = 2
+        handshake["stride"] = 16
+        handshake["size"] = 16
+        with self.assertRaisesRegex(ManifestError, "count\\*stride must equal size"):
+            self.load(data)
+
+        padded = dict(handshake)
+        padded["id"] = "credits.to_sender_ack"
+        padded["parent"] = ""
+        padded["schema"] = "u32_counter_array"
+        padded["count"] = 2
+        padded["stride"] = 4
+        padded["size"] = 16
+        data = manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])])
+        data["layouts"][MINIMAL_LAYOUT_ID]["regions"].append(padded)
+        self.load(data)
 
 
 if __name__ == "__main__":

@@ -473,6 +473,12 @@ public:
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
+    size_t get_handshake_address() const { return handshake_address; }
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> get_actual_sender_channels_per_vc() const;
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> get_actual_receiver_channels_per_vc() const;
+    uint32_t get_downstream_edm_mask_for_vc(uint32_t vc) const;
+    bool has_tensix_extension_enabled() const { return has_tensix_extension; }
+    bool is_udm_mode() const { return udm_mode; }
 
     //    protected:
     tt::tt_metal::CoreCoord my_eth_core_logical;

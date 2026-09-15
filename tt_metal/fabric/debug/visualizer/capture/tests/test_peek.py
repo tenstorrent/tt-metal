@@ -12,6 +12,7 @@ import jsonschema
 from tt_metal.fabric.debug.visualizer.capture.manifest import load_manifest
 from tt_metal.fabric.debug.visualizer.capture.peek import FABRIC_STREAM_IDS, CaptureError, peek_manifest
 from tt_metal.fabric.debug.visualizer.capture.snapshot import build_snapshot
+from tt_metal.fabric.debug.visualizer.capture.tests.test_manifest import required_blocks
 
 
 SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_debug_snapshot_schema.json"
@@ -40,7 +41,7 @@ class FakeDevice:
 
 
 def fixture_manifest():
-    return {
+    data = {
         "manifest_version": 1,
         "kind": "fabric_debug_manifest",
         "run": {
@@ -50,6 +51,7 @@ def fixture_manifest():
             "host_rank": 0,
             "mpi_rank": 0,
             "world_size": 1,
+            "written_at": "2026-09-15T00:00:00Z",
         },
         "meshes": [
             {
@@ -62,6 +64,7 @@ def fixture_manifest():
                         "physical_chip_id": 4,
                         "asic_id": None,
                         "is_local": True,
+                        "master_router_chan": 1,
                         "routers": [
                             {
                                 "eth_chan": 1,
@@ -70,6 +73,15 @@ def fixture_manifest():
                                 "link_class": "intramesh",
                                 "logical_core": [0, 1],
                                 "virtual_core": [18, 16],
+                                "layout_id": "L0123456789abcdef",
+                                "instance": {
+                                    "handshake": 16,
+                                    "sender_channels_per_vc": [1, 0, 0, 0],
+                                    "receiver_channels_per_vc": [1, 0],
+                                    "downstream_edm_mask_per_vc": [1, 0, 0, 0],
+                                    "tensix_extension": False,
+                                    "udm_mode": False,
+                                },
                             }
                         ],
                     },
@@ -79,6 +91,7 @@ def fixture_manifest():
                         "physical_chip_id": None,
                         "asic_id": None,
                         "is_local": False,
+                        "master_router_chan": None,
                         "routers": [],
                     },
                 ],
@@ -86,6 +99,8 @@ def fixture_manifest():
         ],
         "links": [],
     }
+    data.update(required_blocks())
+    return data
 
 
 class PeekTest(unittest.TestCase):
@@ -128,6 +143,8 @@ class PeekTest(unittest.TestCase):
         ).validate(snapshot)
         self.assertEqual(snapshot["manifest"]["run"]["mpi_rank"], 0)
         self.assertEqual(snapshot["samples"][0]["capture_time"], sample["capture_time"])
+        self.assertEqual(snapshot["manifest"]["sha256"], manifest.sha256)
+        self.assertNotIn("written_at", snapshot["manifest"]["run"])
 
     def test_records_error_when_device_is_missing(self):
         manifest = self.load_fixture()
