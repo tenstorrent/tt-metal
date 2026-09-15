@@ -349,10 +349,27 @@ step below has a baseline.
 
 ### Step 1 -- accept a block mask, prove it against dense
 
-Add a `[1, H, n_q_blocks, n_kv_blocks]` bool/bitmask input; per ring iteration the reader stamps the
-rows for that shard into `cb_mask_in` and the driver sets `use_provided_mask`. **No new math**: the
-machinery is already in `sdpa_inner_loop_step` (`use_provided_mask`, `cb_mask_in`,
-`apply_provided_mask_streaming`, `active_Sk`).
+Add a compact `[H, n_q_blocks, n_kv_blocks]` bitmap. Per (q chunk, kv chunk) the driver takes one of
+three paths: **skip** when no bit is set, **no mask** when all are, **stamp** otherwise. **No new
+math**: `sdpa_inner_loop_step` already has `use_provided_mask`, `cb_mask_in`,
+`apply_provided_mask_streaming` and `active_Sk`, and `sdpa_program_factory` already drives a provided
+mask end to end.
+
+Two properties of the existing machinery make this cheap, and both were checked rather than assumed:
+
+* **The mask is additive.** `apply_provided_mask_streaming` is `l1_acc_tile_run` -- it accumulates
+  mask tiles onto `cb_qkt_im`. So masking a column means accumulating a -inf tile onto it, and an
+  unmasked column costs nothing because the accumulate is simply not issued.
+* **A palette already exists.** The lightweight-mask path stamps canned tiles by index
+  (`neginf_tile_idx`, `total_mask_tiles`). A block mask needs exactly one -inf tile plus the bitmap
+  saying where to stamp it, so no `[S, T]` mask tensor is ever built -- which matters because at the
+  15 s shard that tensor would be 115712^2.
+
+**Chunk granularity is the decision that matters here.** Setting the chunk to one block (64 keys)
+would make selection pure skipping and need no mask at all -- and would rebuild `vsa_sdpa`'s problem
+exactly, since section 4 attributes its 23-25%-of-peak ceiling to bookkeeping paid per 64-key visit.
+Keep the dense chunk (512 keys = 8 blocks), skip empty chunks, and stamp within partial ones. That is
+what preserves the amortisation the fork exists to get.
 
 Gate: an all-ones mask must reproduce Step 0 bit-for-bit. A mask matching VSA's top-k selection must
 match `vsa_sdpa` on the same indices to the bf16 floor. That second one is the cheap way to find out
