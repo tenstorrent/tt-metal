@@ -511,6 +511,7 @@ uint32_t finalize_prefetcher_pipes(
     for (ProgramImpl* program : programs) {
         const auto& per_core_participants = program->get_per_core_prefetcher_pipes();
         for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+            program->validate_prefetcher_pipe_consumer_threads(*kg);
             bool has_participants = false;
             for (const CoreRange& cr : kg->core_ranges.ranges()) {
                 for (const auto& core : cr) {

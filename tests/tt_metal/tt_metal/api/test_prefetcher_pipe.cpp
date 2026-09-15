@@ -1295,6 +1295,82 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
             std::exception);
         EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
     }
+
+    {
+        // Lane mode needs an exact entry ring with an entry count divisible by P; a rejected
+        // Attach must not leave the persistent pipe armed.
+        auto pipe =
+            experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, /*ring_size=*/1024);
+        Program program = CreateProgram();
+        // 1024 % 384 != 0: trailing gap would never be credited with striped lanes.
+        EXPECT_THROW(
+            AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 384, /*num_pipe_consumer_threads=*/2),
+            std::exception);
+        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
+        // 4 entries is not a multiple of 3 lanes.
+        EXPECT_THROW(
+            AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256, /*num_pipe_consumer_threads=*/3),
+            std::exception);
+        EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);
+        EXPECT_NO_THROW(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256, /*num_pipe_consumer_threads=*/2));
+        EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
+    }
+
+    {
+        // Multi-producer ALL relay: the DFB must be serialized lane-interleaved (stride P) so
+        // producer h's TC walks the entries pipe lane h receives (h, h+P, ...), not a
+        // contiguous per-producer block. A standalone ALL DFB keeps stride 1.
+        auto pipe =
+            experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, /*ring_size=*/1024);
+        Program program = CreateProgram();
+        EXPECT_EQ(AttachPrefetcherPipe(program, pipe, pipe.all_cores(), 256, /*num_pipe_consumer_threads=*/2), 0u);
+        experimental::dfb::DataflowBufferConfig all_multi_producer{
+            .entry_size = 256,
+            .num_entries = 4,
+            .num_producers = 2,
+            .pap = experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 2,
+            .cap = experimental::dfb::AccessPattern::ALL,
+        };
+        const uint32_t relay_id =
+            experimental::CreatePrefetcherPipeRelayDataflowBuffer(program, receiver_cores, all_multi_producer, 0);
+        EXPECT_EQ(program.impl().get_dataflow_buffer(relay_id)->stride_in_entries, 2u);
+        EXPECT_EQ(program.impl().get_dataflow_buffer(relay_id)->capacity, 2u);
+        const uint32_t standalone_id =
+            experimental::dfb::CreateDataflowBuffer(program, receiver_cores, all_multi_producer);
+        EXPECT_EQ(program.impl().get_dataflow_buffer(standalone_id)->stride_in_entries, 1u);
+    }
+
+    {
+        // Armed lanes must match the receiver DM kernel's thread count; the device guard is a
+        // debug-only ASSERT, so the host rejects the mismatch at finalize.
+        auto pipe =
+            experimental::CreatePrefetcherPipe(mesh_device.get(), CoreCoord(0, 0), receiver_cores, /*ring_size=*/1024);
+        Program program = CreateProgram();
+        EXPECT_EQ(AttachPrefetcherPipe(program, pipe, receiver_cores, 256, /*num_pipe_consumer_threads=*/2), 0u);
+        create_dm_kernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            receiver_cores,
+            {},
+            {},
+            /*num_threads_per_cluster=*/1);
+        detail::CompileProgram(mesh_device.get(), program);
+        EXPECT_THROW(program.impl().finalize_offsets(mesh_device.get()), std::exception);
+
+        // Sender cores are not lane-bound: partition-R uses the kernel's own thread count.
+        Program sender_program = CreateProgram();
+        EXPECT_EQ(AttachPrefetcherPipe(sender_program, pipe, pipe.sender_cores(), 256), 0u);
+        create_dm_kernel(
+            sender_program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            pipe.sender_cores(),
+            {},
+            {},
+            /*num_threads_per_cluster=*/1);
+        detail::CompileProgram(mesh_device.get(), sender_program);
+        EXPECT_NO_THROW(sender_program.impl().finalize_offsets(mesh_device.get()));
+    }
 }
 
 static uint32_t prefetcher_pipe_relay_expected_checksum(uint32_t total_entries) {
@@ -1396,6 +1472,30 @@ static uint32_t run_prefetcher_pipe_relay(
                                               : (recv_total_entries / params.num_consumers);
     TT_FATAL(entries_per_consumer % params.batch_size == 0, "entries_per_consumer must be divisible by batch_size");
 
+    // Pipe-side batch for the relay receiver DM. The receiver publishes one relay entry per
+    // push, round-robin over its consumer TCs (STRIDED cap with C > P gives each producer
+    // C / P TCs). A TRISC batch of b on one TC therefore needs b * (C / P) pipe entries per
+    // iteration, or the DM would block in pop_front waiting for consumers that are still
+    // waiting for their batch. batch_size == 1 never needs the factor.
+    uint32_t pipe_batch_size = params.batch_size;
+    if (params.batch_size > 1 && params.cap == experimental::dfb::AccessPattern::STRIDED &&
+        params.num_consumers > params.num_producers) {
+        TT_FATAL(
+            params.num_consumers % params.num_producers == 0,
+            "STRIDED relay: num_consumers must be a multiple of num_producers");
+        pipe_batch_size *= params.num_consumers / params.num_producers;
+    }
+    TT_FATAL(
+        (recv_total_entries / params.num_producers) % pipe_batch_size == 0,
+        "per-hart pipe entries {} must be divisible by pipe batch {}",
+        recv_total_entries / params.num_producers,
+        pipe_batch_size);
+    TT_FATAL(
+        (recv_num_entries / params.num_producers) >= pipe_batch_size,
+        "per-hart ring depth {} must hold a pipe batch of {}",
+        recv_num_entries / params.num_producers,
+        pipe_batch_size);
+
     const uint32_t result_words = static_cast<uint32_t>(params.num_consumers) * 2u;
     const uint32_t result_page_size = std::max(32u, result_words * static_cast<uint32_t>(sizeof(uint32_t)));
     auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
@@ -1421,7 +1521,7 @@ static uint32_t run_prefetcher_pipe_relay(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_relay_receiver.cpp",
             receiver_cores,
-            {0u, recv_total_entries, params.batch_size},
+            {0u, recv_total_entries, pipe_batch_size},
             {},
             /*num_threads_per_cluster=*/params.num_producers);
         const KernelHandle trisc_kernel = create_compute_kernel(
@@ -1466,7 +1566,7 @@ static uint32_t run_prefetcher_pipe_relay(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_relay_receiver.cpp",
             receiver_cores,
-            {0u, recv_total_entries, params.batch_size},
+            {0u, recv_total_entries, pipe_batch_size},
             {},
             /*num_threads_per_cluster=*/params.num_producers);
         const KernelHandle trisc_kernel = create_compute_kernel(
@@ -1796,7 +1896,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumer
         1u);
 }
 
-// Multi-producer relay into ALL consumers (each TRISC sees every entry).
+// Multi-producer relay into ALL consumers (each TRISC sees every entry). The relay DFB is
+// serialized lane-interleaved so producer h's TC follows pipe lane h (h, h+P, ...).
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_MultiDM_2P_RelayProducers2_Consumers2_ALL_1S1R) {
     if (!is_quasar_arch()) {
         GTEST_SKIP() << "Multi-producer PrefetcherPipe relay requires Quasar";

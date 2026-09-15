@@ -54,10 +54,14 @@ public:
     uint32_t num_credit_lanes() const { return active_credit_lanes_; }
     // Slots allocated in the config page (Quasar may reserve headroom above active).
     uint32_t credit_lane_capacity() const { return credit_lane_capacity_; }
-    // Set active lanes from consumer geometry; updates host pages + device L1.
+    // Set active lanes from consumer geometry; updates host pages + word[9] on device.
     // May upgrade from the Create-time default of 1, or no-op if already equal.
     // Reprogramming to a different value after arming is rejected.
     void set_active_credit_lanes(uint32_t num_lanes);
+    // Lane mode (num_lanes > 1) needs an exact entry ring whose entry count is a multiple of
+    // num_lanes; throws otherwise. Call before set_active_credit_lanes so a rejected Attach
+    // does not leave the persistent pipe re-armed.
+    void validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const;
 
     uint32_t config_page_size() const { return config_page_size_; }
     uint32_t credit_reset_offset() const { return credit_reset_offset_; }
@@ -74,6 +78,7 @@ private:
     void setup_buffers(BufferType buffer_type);
     void build_config_pages();
     void write_config_to_device();
+    void write_config_word_to_device(uint32_t word_idx);
     void release_allocations() noexcept;
 
     uint64_t data_allocation_id_ = 0;
@@ -112,6 +117,9 @@ private:
  * `cap=STRIDED` → Neo i owns entries i, i+C, …. For `num_producers>1`, registering
  * the relay programs PrefetcherPipe lane credits from `num_producers` (must match
  * `AttachPrefetcherPipe(..., num_pipe_consumer_threads)` if that already armed lanes).
+ * With `num_producers>1` the relay DFB is serialized lane-interleaved (producer h at entries
+ * h, h+P, …) for both `cap` values, so an ALL consumer sees entries in ring order rather than
+ * the contiguous per-producer blocks a standalone ALL DFB would use.
  * Programming model: create the pipe first, bind sender and consumer programs, then
  * enqueue in either order. Multi-DM *pipe sender* parallelism is separate: partition
  * receivers (Flow C). Mid-kernel entry-size resize with `num_tcs_to_rr > 1` is

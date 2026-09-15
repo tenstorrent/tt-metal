@@ -229,6 +229,10 @@ public:
         // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
         // Drop any cached copy of this core's credit words before anyone touches them, so a
         // host reset / the previous program's flushed values in TL1 are what every hart sees.
+        // Not multi-DM specific: it is the Quasar cost of reading credit words through the
+        // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
+        // immediately when the kernel has one thread, so the single-thread path only pays
+        // the one-time invalidate here and the flush in the dtor.
         invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
         sync_threads();
         if (dense_entry_size != applied_entry_size) {
@@ -728,9 +732,12 @@ public:
 #endif
     }
 
-    // Lock entries at the receiver's current front for direct CPU access.
+    // Lock entries at the receiver's current front for direct CPU access. The pointer covers
+    // num_entries contiguous entries, so with P > 1 lanes (where this hart's entries are P
+    // entries apart) only one entry may be locked at a time: lock, read, pop_front(1), repeat.
     [[nodiscard]] FORCE_INLINE auto scoped_read_lock(uint32_t num_entries = 1) {
         const CrossNodeReceiverDFBInterface& iface = interface_.receiver;
+        ASSERT(num_entries == 1 || num_credit_lanes() == 1);
         ASSERT(iface.fifo_rd_ptr + num_entries * iface.fifo_page_size <= iface.fifo_limit_page_aligned);
 #ifdef ARCH_QUASAR
         // Quasar DM L2 does not snoop NOC→TL1 fills; invalidate then hand out the uncached alias.

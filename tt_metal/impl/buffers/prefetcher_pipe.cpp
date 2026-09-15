@@ -94,12 +94,16 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     const CoreRangeSet& receiver_cores,
     uint32_t ring_size,
     BufferType buffer_type) :
-    device_(device), sender_core_(sender_core), receiver_cores_(receiver_cores), ring_size_(ring_size) {
+    device_(device),
+    sender_core_(sender_core),
+    receiver_cores_(receiver_cores),
+    ring_size_(ring_size),
+    // Quasar reserves lane slots up front; active count starts at 1 and is raised by the first
+    // multi-thread consumer Attach / multi-producer relay. WH/BH stay single-lane.
+    credit_lane_capacity_(
+        (device != nullptr && device->arch() == tt::ARCH::QUASAR) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u),
+    active_credit_lanes_(1) {
     initialize_prefetcher_pipe(device, sender_core, receiver_cores_, sender_cores_, all_cores_);
-    // Quasar reserves lane slots up front; active count starts at 1 and is raised when a
-    // multi-producer relay is created (num_producers). WH/BH stay single-lane.
-    credit_lane_capacity_ = (device_->arch() == tt::ARCH::QUASAR) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u;
-    active_credit_lanes_ = 1;
     try {
         setup_buffers(buffer_type);
     } catch (...) {
@@ -181,6 +185,23 @@ void PrefetcherPipeImpl::write_config_to_device() {
             TT_FATAL(
                 detail::WriteToDeviceL1(target_device, core, config_address_, page_copy),
                 "Failed to write PrefetcherPipe config page to core {} on device {}",
+                core.str(),
+                target_device->id());
+        }
+    }
+}
+
+void PrefetcherPipeImpl::write_config_word_to_device(uint32_t word_idx) {
+    TT_FATAL(device_ != nullptr, "PrefetcherPipe device cannot be null");
+    const uint32_t word_addr = config_address_ + word_idx * static_cast<uint32_t>(sizeof(uint32_t));
+    for (const auto& [core, page] : config_pages_) {
+        TT_FATAL(word_idx < page.size(), "PrefetcherPipe config page too short for word {}", word_idx);
+        std::vector<uint32_t> word{page[word_idx]};
+        for (IDevice* target_device : device_->get_devices()) {
+            TT_FATAL(
+                detail::WriteToDeviceL1(target_device, core, word_addr, word),
+                "Failed to write PrefetcherPipe config word {} to core {} on device {}",
+                word_idx,
                 core.str(),
                 target_device->id());
         }
@@ -297,7 +318,33 @@ void PrefetcherPipeImpl::set_active_credit_lanes(uint32_t num_lanes) {
             "PrefetcherPipe config page too short to hold num_credit_lanes");
         page[PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES] = active_credit_lanes_;
     }
-    write_config_to_device();
+    // Only word[9] changes. config_pages_ is the Create-time image: the device owns the
+    // checkpoint, counters and cursors after the first launch, so rewriting whole pages here
+    // would silently reset persisted pipe state.
+    write_config_word_to_device(PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES);
+}
+
+void PrefetcherPipeImpl::validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const {
+    TT_FATAL(num_lanes >= 1, "PrefetcherPipe lane count must be >= 1");
+    if (num_lanes == 1) {
+        return;
+    }
+    // Lane mode stripes entry i to lane i % P and acknowledges whole entries only: the ring
+    // must be an exact multiple of the entry, and the entry count a multiple of P, or the
+    // trailing gap / a partial stripe is never credited and the sender stalls
+    // (lane_capacity_units asserts the same on device).
+    TT_FATAL(
+        ring_size_ % entry_size == 0,
+        "PrefetcherPipe with {} credit lanes requires entry_size {} to divide ring_size {}",
+        num_lanes,
+        entry_size,
+        ring_size_);
+    TT_FATAL(
+        (ring_size_ / entry_size) % num_lanes == 0,
+        "PrefetcherPipe ring holds {} entries of {} bytes, which is not a multiple of {} credit lanes",
+        ring_size_ / entry_size,
+        entry_size,
+        num_lanes);
 }
 
 PrefetcherPipe::PrefetcherPipe(

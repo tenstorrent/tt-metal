@@ -1213,7 +1213,12 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 config.num_entries,
                 config.num_producers);
             capacity = config.num_entries / config.num_producers;
-            stride_in_entries = 1;
+            // Each producer owns num_entries / num_producers slots. Default: one contiguous block per
+            // producer. Relay DFBs borrow a PrefetcherPipe / CrossNode ring whose producer h (pipe
+            // credit lane h) owns entries h, h+P, ..., so interleave instead (stride P) to keep the
+            // TC layout in step with the ring. TC counts are unaffected; consumers still round-robin
+            // one TC per producer and now see entries in ring order.
+            stride_in_entries = config.is_relay ? config.num_producers : 1;
             break;
         default: TT_FATAL(false, "Invalid access pattern {}", (uint32_t)config.cap);
     }
@@ -1853,7 +1858,8 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                 config.num_entries,
                 config.num_producers);
             capacity = config.num_entries / config.num_producers;
-            dfb->stride_in_entries = 1;
+            // See compute_capacity_and_stride: relay rings are lane-interleaved, so stride P.
+            dfb->stride_in_entries = config.is_relay ? config.num_producers : 1;
             break;
         default: TT_FATAL(false, "Invalid access pattern", (uint32_t)config.cap);
     }

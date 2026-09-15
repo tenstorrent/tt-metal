@@ -377,6 +377,11 @@ public:
     const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
 
+    // Finalize-time check for `kernel_group`: on every receiver core of an attached
+    // PrefetcherPipe, some Quasar DM kernel must run exactly P = pipe active credit lanes
+    // threads (hart tid binds to lane tid on device, where the guard is a debug-only ASSERT).
+    void validate_prefetcher_pipe_consumer_threads(const KernelGroup& kernel_group) const;
+
     // Mark a normal local DFB as the typed relay for a PrefetcherPipe this core participates in.
     // The local DFB borrows the PrefetcherPipe data buffer; its device_slot is emitted
     // only on receiver cores and consumed by PrefetcherPipe::bind_relay().
