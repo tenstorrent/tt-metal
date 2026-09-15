@@ -32,6 +32,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 W = 32  # one tile wide; the packed Sinkhorn state requires n*n <= W
 
@@ -144,14 +145,23 @@ def _mix(streams, coeffs):
     return y
 
 
-def _project(x, fn_T, norm_eps, ckc):
+def _project(x, fn_T, norm_eps, ckc, tp_sum=None, tp_factor=1):
     """[1,1,T,n*C] -> [1,1,T,K] = RMSNorm(x) @ fn_T.
 
     RMSNorm carries no learned weight, so its rsqrt commutes with the linear and is applied
     after it -- one [T,1] broadcast instead of a full [T,n*C] scale.
+
+    ``tp_sum`` is required once the streams are TP-sharded: the matmul is then a partial inner
+    product and the squares a partial sum, both over this chip's slice of n*C. Every TP chip needs
+    the same result -- each scales its own slice of every stream by the same scalar -- which is why
+    the reduction has to end replicated rather than scattered.
     """
     mixes_un = ttnn.matmul(x, fn_T, compute_kernel_config=ckc)
-    ms = ttnn.mean(ttnn.multiply(x, x), dim=-1, keepdim=True)
+    ss = ttnn.sum(ttnn.multiply(x, x), dim=-1, keepdim=True)
+    width = x.shape[-1] * tp_factor
+    if tp_sum is not None:
+        mixes_un, ss = tp_sum(mixes_un), tp_sum(ss)
+    ms = ttnn.multiply(ss, 1.0 / width)
     return ttnn.multiply(mixes_un, ttnn.rsqrt(ttnn.add(ms, norm_eps)))
 
 
@@ -171,22 +181,86 @@ class TtMHCWrap(LightweightModule):
     The H matrices are not stored: they are recomputed from X every forward pass.
     """
 
-    def __init__(self, device, cfg, fn: torch.Tensor, base: torch.Tensor, scale: torch.Tensor, dtype=ttnn.float32):
+    def __init__(
+        self,
+        device,
+        cfg,
+        fn: torch.Tensor,
+        base: torch.Tensor,
+        scale: torch.Tensor,
+        dtype=ttnn.float32,
+        tp_axis: int | None = None,
+        num_links: int = 1,
+        topology=ttnn.Topology.Linear,
+    ):
         # the fused parametrization op is fp32-only; reject here rather than fail deep in hc_pre
         assert dtype == ttnn.float32, f"TtMHCWrap is fp32-only (fused op requires FLOAT32), got {dtype}"
+        self.device = device
         self.cfg = cfg
         self.n = cfg.n
         self.iters = int(cfg.sinkhorn_iters)
         self.eps = float(cfg.eps)
         self.norm_eps = float(cfg.norm_eps)
         self.ckc = _compute_kernel_config()
-        # transposed so mixes = xnorm @ fn_T, matching the reference F.linear(xf, fn)
-        self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
+        # tp_axis is None on a single device, where nothing is sharded and no reduction is needed.
+        self.tp_axis = tp_axis
+        self.num_links = num_links
+        self.topology = topology
+        self.tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
+        self.tt_ccl = get_tt_ccl(device) if self.tp_factor > 1 else None
+        # transposed so mixes = xnorm @ fn_T, matching the reference F.linear(xf, fn).
+        #
+        # Under TP the rows are kept in their natural (stream, hidden, out) shape until after the
+        # shard: hidden is the axis TP splits, and a chip's packed streams are its OWN hidden slice of
+        # every stream. Sharding the 3D form on hidden hands each chip exactly those rows, in the
+        # right order, and the reshape then flattens (stream, local hidden) to match how _streams
+        # slices the activation. Flattening before the shard instead would give chip c stream c's
+        # whole set of rows -- still the right shape, paired with the wrong columns, and the sigmoids
+        # downstream stay plausible so nothing complains.
+        if self.tp_factor > 1:
+            assert cfg.dim % self.tp_factor == 0, (
+                f"the mHC projection splits hidden {cfg.dim} across the TP axis, which the factor "
+                f"{self.tp_factor} does not divide"
+            )
+            assert fn.shape[1] == self.n * cfg.dim, f"fn is {tuple(fn.shape)}, expected [*, {self.n * cfg.dim}]"
+            mix_hc, local = fn.shape[0], cfg.dim // self.tp_factor
+            self.fn_T = ttnn.from_torch(
+                fn.t().contiguous().reshape(1, self.n, cfg.dim, mix_hc),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                dtype=dtype,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=(None, 2)),
+            )
+            self.fn_T = ttnn.reshape(self.fn_T, [1, 1, self.n * local, mix_hc])
+        else:
+            self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
         self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
+
+    def _tp_sum(self, t):
+        """Sum ``t`` across the TP axis, leaving the result on every chip.
+
+        all_reduce rather than reduce_scatter because the 24 numbers feed per-token scalars that
+        every chip applies to its own slice of every stream. ttnn's all_reduce_async is itself
+        reduce_scatter + all_gather; the persistent semaphores come from TT_CCL because allocating
+        them per call leaks them in L1.
+        """
+        return ttnn.experimental.all_reduce_async(
+            t,
+            cluster_axis=self.tp_axis,
+            mesh_device=self.device,
+            barrier_semaphores=self.tt_ccl.barrier_semaphore_handles[self.tp_axis],
+            rs_global_semaphores=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+            ag_global_semaphores=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            num_links=self.num_links,
+            math_op=ttnn.ReduceType.Sum,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.topology,
+        )
 
     def project(self, x):
         """[1,1,T,n*C] -> mixes [1,1,T,mix_hc], the fused kernel's input."""
-        return _project(x, self.fn_T, self.norm_eps, self.ckc)
+        tp_sum = self._tp_sum if self.tp_factor > 1 else None
+        return _project(x, self.fn_T, self.norm_eps, self.ckc, tp_sum, self.tp_factor)
 
     def hc_pre(self, x):
         """[1,1,T,n*C] -> (y [1,1,T,C], post [1,1,T,n], comb [1,1,T,n*n]).
