@@ -1041,7 +1041,7 @@
   model: dit-common
   skus:
     wh_n150:
-      timeout: 60
+      timeout: 75
       tier: 1
     bh_quietbox_2:
       timeout: 115
