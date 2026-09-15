@@ -26,9 +26,11 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "api/debug/waypoint.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
+#include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/cyclic_dataflow_utils.hpp"
 
 #ifndef ENDPOINT_SYNC
 #define ENDPOINT_SYNC 0
@@ -84,18 +86,50 @@ void kernel_main() {
     constexpr uint32_t val_tiles = Bt * vWt;
     constexpr auto grad_key_args = TensorAccessorArgs<6>();
     constexpr auto grad_value_args = TensorAccessorArgs<grad_key_args.next_compile_time_args_offset()>();
+    // The packet-readiness semaphores, one per slot, after the accessor args.
+    constexpr uint32_t ready_imm_sem_id[2] = {
+        get_compile_time_arg_val(grad_value_args.next_compile_time_args_offset()),
+        get_compile_time_arg_val(grad_value_args.next_compile_time_args_offset() + 1u)};
 
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_6;
     constexpr uint32_t cb_grad_key = tt::CBIndex::c_20;
     constexpr uint32_t cb_grad_value = tt::CBIndex::c_23;
     constexpr uint32_t cb_scratch = tt::CBIndex::c_25;
     constexpr uint32_t cb_column_progress = tt::CBIndex::c_26;
+    // The packet's statistics, and the tiles this kernel makes of them for the
+    // compute kernel (see cyclic_dataflow_utils.hpp).
+    constexpr uint32_t cb_lse = tt::CBIndex::c_4;
+    constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
+    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;
+    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;
+    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_30;
+    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
     constexpr CyclicSchedule sched(kCores, kMaskMode);
     constexpr uint32_t kTimesteps = sched.num_timesteps();
 
-    generate_causal_mask_tile(cb_attn_mask);
+    // The compute kernel forms S^T, so its diagonal tile takes the transposed
+    // causal mask: live where the key index is at most the query index.
+    cyclic_dataflow::generate_transposed_causal_mask_tile(cb_attn_mask);
+    cyclic_dataflow::generate_ones_column_tile(tt::CBIndex::c_28);  // for the D remainder
+
+    // Slot-0 addresses of the packet's statistic buffers (this kernel never
+    // reserves them, so its write pointers stay at the base), and the reader's
+    // "statistics in L1" word.
+    const uint32_t interm_bytes = get_tile_size(cb_lse);
+    const uint32_t base_lse = get_write_ptr(cb_lse);
+    const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
+    const uint32_t stride_interm = Bt * interm_bytes;
+    volatile tt_l1_ptr uint32_t* ready_imm_sem[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[0])),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[1]))};
+    // The row-layout tiles are written in row 0 only, the remainder columns
+    // in column 0 only; zero them once so the rest holds zeros.
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * get_tile_size(cb_u_rem));
 
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
@@ -128,6 +162,35 @@ void kernel_main() {
         // Global timestep across slices; the progress word and the barrier
         // counter must keep rising across a slice boundary.
         const uint32_t g = s * kTimesteps + t;
+
+        // First the statistic tiles for this timestep, as soon as the reader
+        // has L and D in slot g mod 2: the compute kernel waits on nothing
+        // else to start its score pass. Before the column-gradient writes
+        // below, which wait on the compute kernel and so must not hold this up.
+        {
+            DeviceZoneScopedN("STAT-ROWS");
+            const uint32_t slot = g % 2u;
+            const bool forwarded = sched.producer(my_core, t).internal;
+            if (forwarded) {
+                // The producer's readiness write, the same one the reader
+                // waits on -- but the reader gets to it only after the previous
+                // timestep's dQ relay, and this is a timestep earlier.
+                WAYPOINT("STRW");
+                do {
+                    invalidate_l1_cache();
+                } while ((*ready_imm_sem[slot]) < g + 1u);
+                WAYPOINT("STRD");
+            } else {
+                cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
+                invalidate_l1_cache();
+            }
+            cyclic_dataflow::produce_statistic_tiles(
+                base_lse + slot * stride_interm, base_u_scalar + slot * stride_interm, Bt, interm_bytes,
+                cb_lse_row, cb_u_row, cb_lse_rem, cb_u_rem);
+            if (!forwarded) {
+                cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
+            }
+        }
 
         // The column gradients are handed over once per residency interval,
         // at its end -- which the schedule says is a column change or the

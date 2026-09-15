@@ -53,6 +53,7 @@
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/parity_snake.hpp"
+#include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/cyclic_dataflow_utils.hpp"
 
 // The forward is split, because only one of the packet's five fields depends
 // on this core's arithmetic. Q, dO, L and D are immutable -- the packet
@@ -204,6 +205,9 @@ void kernel_main() {
     constexpr uint32_t cb_grad_output = tt::CBIndex::c_3;
     constexpr uint32_t cb_lse = tt::CBIndex::c_4;
     constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
+    // The same statistics gathered into row 0 of a tile, for the compute
+    // kernel's row broadcast (it forms S^T); see cyclic_dataflow_utils.hpp.
+    // The column-layout tiles above still travel with the packet unchanged.
     constexpr uint32_t cb_grad_query_seed = tt::CBIndex::c_15;
     // Column state, still per timestep from DRAM, gradients included.
     constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -510,6 +514,15 @@ void kernel_main() {
                 noc_async_read_page(stat_base + (i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
             }
             noc_async_read_barrier();
+        }
+
+        // The writer makes the row-layout statistic tiles the compute kernel
+        // takes, off this core's forwarding path. For a forwarded packet it
+        // watches the readiness semaphore itself, which lands a whole timestep
+        // before this loop gets here; a DRAM load it can only learn of from us.
+        if (!producer.internal) {
+            cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
+            cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);
         }
 
         // The compute kernel can start on S, P, dP and dS now. It does not

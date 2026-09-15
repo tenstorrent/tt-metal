@@ -197,12 +197,24 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);        // K_j
     make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);        // V_j
     make_cb(tt::CBIndex::c_6, 1U, tt::DataFormat::Float16_b);          // causal mask
-    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);       // P
-    make_cb(tt::CBIndex::c_11, scoreT, tt::DataFormat::Float32);       // dP
-    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);       // dS
-    make_cb(tt::CBIndex::c_13, scoreT, tt::DataFormat::Float32);       // dS^T
-    make_cb(tt::CBIndex::c_14, scoreT, tt::DataFormat::Float32);       // P^T
-    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float32);         // dQ accumulator
+    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);       // P^T
+    make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);        // dQ seed, transposed, at streak starts
+    make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);           // transpose fence
+    // The statistics' remainders (see cyclic_dataflow_utils.hpp) and the
+    // ones column that carries -D's into the matmul.
+    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);      // L remainder, row layout
+    make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);    // -D remainder, column 0
+    make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);          // ones column
+    // The reader's "statistics are in L1" signal to the writer: two pages of
+    // nothing, one per packet slot.
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(2U * 64U, {{tt::CBIndex::c_31, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_31, 64U));
+    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);       // dS^T
+    make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
+    make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
+    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
     make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);         // dQ to the relay
     make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);         // dK seed
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
@@ -279,6 +291,11 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     for (const auto* t : {&grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
     }
+    // After the accessor args, where the kernel finds them by offset: the
+    // packet-readiness semaphores, which the writer polls to start on a
+    // timestep's statistics as soon as they land.
+    writer_args.push_back(ready_imm0_sem);
+    writer_args.push_back(ready_imm1_sem);
     const auto writer = CreateKernel(
         program, kWriterPath, region,
         DataMovementConfig{
@@ -293,11 +310,15 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // argument, so the statistic it subtracts is divided by this first.
     const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
+    // The dQ seed -- the packet's running accumulator, and its transposed
+    // scratch copy -- is unpacked straight into DST, so it keeps all 32 bits
+    // at every hop; through a Src register it would lose 13 of them per
+    // timestep, which was the dominant dQ error. Nothing else may take this
+    // mode: a buffer in it cannot also be read by a matmul, and these two are
+    // read only by copies.
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    // P is copied into DST for the elementwise dS chain, so it keeps Float32
-    // through the copy. Nothing else may: the transposed buffers feed matmul
-    // Src registers, which do not take Float32.
-    unpack_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
     const auto compute = CreateKernel(
         program, kComputePath, region,
         ComputeConfig{

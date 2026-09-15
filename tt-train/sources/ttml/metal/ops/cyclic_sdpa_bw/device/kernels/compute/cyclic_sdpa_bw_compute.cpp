@@ -58,6 +58,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose.h"
 #include "api/compute/transpose_dest.h"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/compute/sdpa_bw_compute_utils.hpp"
@@ -165,12 +166,45 @@ constexpr uint32_t Bt = get_compile_time_arg_val(7);
 constexpr uint32_t inv_scaler_bits = get_compile_time_arg_val(8);
 constexpr uint32_t score_tiles = Bt * Bt;
 
-// Score tiles are contiguous, with two shared scratch registers above them:
-// one for the row's broadcast statistic, one for the causal mask. Bt + 2
-// registers where per-tile scratch would need 2 * Bt, and it is what lets the
-// row's statistic be broadcast once rather than once per score tile.
+// The transposed orientation.
+//
+// Everything here is computed transposed: S^T = K Q^T, P^T = exp(S^T - L^T),
+// dP^T = V dO^T, dS^T = P^T (dP^T - D^T), and the gradients as
+//
+//     dV_j  += P^T  dO_i        dK_j += dS^T Q_i        dQ_i^T += K_j^T dS^T
+//
+// so that the two operands the column gradients need, P^T and dS^T, are what
+// the score pass produces, and no score tile is ever transposed. The matmul
+// can transpose its second operand for free, which gives S^T and dP^T
+// directly from the untransposed Q and dO. What has to be transposed instead
+// is small and rare: K^T once per residency interval (a bf16 block, through
+// the unpacker), and dQ at the ends of a streak, where it enters or leaves
+// the relay in DRAM's untransposed layout -- the packet carries dQ^T between
+// consumers. The statistics L and D are needed broadcast along rows of S^T,
+// which is a column broadcast in the old orientation and a row broadcast
+// here; the reader gathers them into row 0 of a tile for that.
+//
+// The whole of S^T, P^T, dP^T and dS^T for a column of the score grid is
+// formed inside the DST registers and packed once: P^T for the dV matmul and
+// dS^T for the dK and dQ matmuls. Nothing Float32 is ever copied from L1
+// back into DST, so no buffer needs the unpack-to-dest mode -- which matters,
+// because a buffer in that mode cannot also be read by a matmul.
+//
+// Score tiles are indexed (b, a) = (key tile, query tile), row-major, tile
+// b * Bt + a. A query tile a is a *column* of this grid, so the pass loops
+// over a on the outside and packs the column out of order into its row-major
+// place.
+
+// DST for one column of the score grid: P^T in registers 0..Bt-1 and dS^T in
+// Bt..2Bt-1, where the column's broadcast statistic and the causal mask lived
+// while the scores were being formed -- both are dead by the time dP^T is
+// started, so the two halves of the pass share the file. 2 Bt registers,
+// which is the whole Float32 file at Bt = 4.
 constexpr uint32_t score_reg(uint32_t b) {
     return b;
+}
+constexpr uint32_t grad_score_reg(uint32_t b) {
+    return Bt + b;
 }
 constexpr uint32_t stat_reg = Bt;
 constexpr uint32_t mask_reg = Bt + 1u;
@@ -184,24 +218,46 @@ constexpr uint32_t cb_key_operand = cb_key_scaled;
 #else
 constexpr uint32_t cb_key_operand = cb_key;
 #endif
+constexpr uint32_t cb_key_operand_t = tt::CBIndex::c_16;  // the same block, transposed, for dQ^T
 constexpr uint32_t cb_value = tt::CBIndex::c_2;
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_3;
+// L and D as they travel: one value per row in column 0. Not read here --
+// the row-layout copies below are -- but popped so the slots turn over.
 constexpr uint32_t cb_lse = tt::CBIndex::c_4;
 constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
-constexpr uint32_t cb_attn_mask = tt::CBIndex::c_6;
+// L and -D with the block's 32 values in row 0, one tile per row tile. D
+// arrives negated because it seeds the dP^T accumulation: the matmul adds
+// V dO^T onto it, which leaves dP^T - D^T without a subtraction.
+constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;
+constexpr uint32_t cb_neg_u_row = tt::CBIndex::c_14;
+// The Src registers keep 19 of a Float32's 32 bits, so a statistic arrives in
+// two parts: the value (top 19 bits kept) and the remainder those 19 bits
+// drop, which the register keeps 10 more bits of. L's remainder is a second
+// row-layout tile, subtracted after the first; -D's remainder is bfloat16 in
+// column 0 of a tile, and enters dP^T as one more product of the matmul,
+// against a column of ones -- a rank-one term that adds it along every row.
+constexpr uint32_t cb_lse_rem = tt::CBIndex::c_30;
+constexpr uint32_t cb_neg_u_rem = tt::CBIndex::c_29;
+constexpr uint32_t cb_ones_column = tt::CBIndex::c_28;
+constexpr uint32_t cb_attn_mask = tt::CBIndex::c_6;  // transposed causal
 constexpr uint32_t cb_slot_release = tt::CBIndex::c_7;
 
-// Intermediates.
-constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;
-constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;
-constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;
-constexpr uint32_t cb_grad_scores_transposed = tt::CBIndex::c_13;
-constexpr uint32_t cb_attn_weights_transposed = tt::CBIndex::c_14;
+// Intermediates, transposed. dP^T never leaves the registers: the score pass
+// forms dS^T = P^T (dP^T - D^T) in DST and packs P^T and dS^T once each.
+constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;   // P^T
+constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;         // dS^T
 
-// Each gradient: what the reader loaded, the accumulator, the writer's copy.
+// The row gradient: the packet's seed in, the packet's next hop out, and a
+// scratch copy of the seed transposed for the timesteps where it came from
+// DRAM as dQ rather than from the packet as dQ^T.
 constexpr uint32_t cb_grad_query_seed = tt::CBIndex::c_15;
-constexpr uint32_t cb_grad_query_accum = tt::CBIndex::c_16;
+constexpr uint32_t cb_grad_query_seed_t = tt::CBIndex::c_11;
 constexpr uint32_t cb_grad_query_out = tt::CBIndex::c_17;
+// A one-tile buffer whose push, made by the pack thread after the packs that
+// follow a dest-register transpose, is what the unpacker waits on before it
+// may feed the next matmul. See UPDATE-DQ.
+constexpr uint32_t cb_transpose_fence = tt::CBIndex::c_8;
+// Column gradients: what the reader loaded, the accumulator, the writer's copy.
 constexpr uint32_t cb_grad_key_seed = tt::CBIndex::c_18;
 constexpr uint32_t cb_grad_key_accum = tt::CBIndex::c_19;
 constexpr uint32_t cb_grad_key_out = tt::CBIndex::c_20;
@@ -209,11 +265,6 @@ constexpr uint32_t cb_grad_value_seed = tt::CBIndex::c_21;
 constexpr uint32_t cb_grad_value_accum = tt::CBIndex::c_22;
 constexpr uint32_t cb_grad_value_out = tt::CBIndex::c_23;
 
-// dS, dS^T and P^T out of one acquire region. dS must not be written to a CB
-// and read back to be transposed: the transposed buffers unpack in Default
-// mode, because matmul Src registers do not support Float32 unpack, so a
-// copy_tile out of one lands in DST in a layout the 32-bit transpose_dest
-// scrambles. copy_dest_values duplicates dS inside DST instead.
 #if FOLD_SCALE_INTO_KEY
 // pack_tiles_to_output with a multiply on the way through.
 //
@@ -271,24 +322,27 @@ void apply_mask_at(
     add_binary_tile(scores_reg, mask_register, scores_reg);
 }
 
-// Broadcast a row's statistic into DST. Split out of the softmax step because
-// it is the same for every column tile of the row: sdpa_bw folds the two
-// together, which is right when a row has one score tile and wasteful when it
-// has Bt of them.
-void broadcast_statistic_to_dst(
+// Broadcast a query tile's statistic (row 0 of its row-layout tile) down the
+// rows of DST. Once per column of the score grid, since every key tile of
+// the column shares it. The statistic goes through SrcB as it did through
+// the column broadcast before; same precision.
+void broadcast_statistic_rows_to_dst(
     const uint32_t tmp_reg, const uint32_t cb_statistics, const uint32_t stat_tile) {
     reconfig_data_format_srcb(cb_statistics);
-    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+    UNPACK((llk_unpack_A_init<BroadcastType::ROW, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_statistics)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           ckernel::DataCopyType::B2D,
           DST_ACCUM_MODE,
-          BroadcastType::COL>(cb_statistics)));
-    unary_bcast<BroadcastType::COL>(cb_statistics, stat_tile, tmp_reg);
+          BroadcastType::ROW>(cb_statistics)));
+    unary_bcast<BroadcastType::ROW>(cb_statistics, stat_tile, tmp_reg);
 }
 
-// P = exp(a(S - L/a)) for every score tile of one row, with the scale folded
-// into the exponential rather than applied to S beforehand.
+// P = exp(a(S - L/a)) for every score tile of one column, with the scale
+// folded into the exponential rather than applied to S beforehand, and L
+// subtracted in two parts: the broadcast register holds the value (19 bits),
+// then its remainder, each divided by the scale where the exponential
+// carries it.
 //
 // sdpa_exp_tile_scaled folds the whole FP32 scale into LREG12 at init time on
 // Blackhole -- one SFPU pass per score tile that no longer happens -- and
@@ -296,18 +350,22 @@ void broadcast_statistic_to_dst(
 // the caller supplies L/a and the identity exp(a(S - L/a)) = exp(aS - L) does
 // the rest. sdpa_fw already works this way, keeping its scores and its
 // running maximum unscaled.
-//
-// Both SFPU programs are configured once for the row rather than once per
-// tile, which is only possible because the subtracts and the exponentials are
-// no longer interleaved: an init between them would reprogram the unit.
-void subtract_and_exp_row(const uint32_t first_reg, const uint32_t count, const uint32_t broadcast_reg) {
+void subtract_statistic_column(const uint32_t first_reg, const uint32_t count, const uint32_t broadcast_reg) {
+#if !FOLD_SCALE_INTO_KEY
+    // The exponential carries the scale, so what it subtracts must be
+    // divided by it first.
+    binop_with_scalar_tile_init();
+    mul_unary_tile(broadcast_reg, inv_scaler_bits);
+#endif
     sub_binary_tile_init();
     for (uint32_t b = 0; b < count; ++b) {
         sub_binary_tile(first_reg + b, broadcast_reg, first_reg + b);
     }
+}
 
+void exp_column(const uint32_t first_reg, const uint32_t count) {
 #if FOLD_SCALE_INTO_KEY
-    // S already carries the scale, having come out of Q (aK)^T.
+    // S already carries the scale, having come out of (aK) Q^T.
     sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ false>();
 #else
     sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_bits>();
@@ -317,50 +375,28 @@ void subtract_and_exp_row(const uint32_t first_reg, const uint32_t count, const 
     }
 }
 
-// One tile pair of the block. The caller reserves and pushes the three
-// output buffers around the whole block, so this only packs.
-void grad_scores_and_transposes(uint32_t a, uint32_t b) {
-    const uint32_t score_tile = a * Bt + b;
-    const uint32_t transposed_tile = b * Bt + a;
-
-    constexpr uint32_t grad_reg = 0;
-    constexpr uint32_t attn_reg = 1;
-    constexpr uint32_t grad_keep_reg = 2;
-
-    tile_regs_acquire();
-    reconfig_data_format(cb_grad_attn_weights, cb_u_scalar);
-    sub_bcast_cols_init(cb_grad_attn_weights, cb_u_scalar);
-    sub_tiles_bcast_cols(cb_grad_attn_weights, cb_u_scalar, score_tile, a, grad_reg);
-
-    reconfig_data_format_srca(cb_grad_attn_weights, cb_attention_weights);
-    copy_init(cb_attention_weights);
-    copy_tile(cb_attention_weights, score_tile, attn_reg);
-
-    mul_binary_tile_init();
-    mul_binary_tile(grad_reg, attn_reg, grad_reg);
-#if !FOLD_SCALE_INTO_KEY
-    binop_with_scalar_tile_init();
-    mul_unary_tile(grad_reg, scaler_bits);
-#endif
-
-    copy_dest_values_init();
-    copy_dest_values<DataFormat::Float32>(grad_reg, grad_keep_reg);
-
-    transpose_dest_init</* is_32bit */ true>(cb_attention_weights);
-    transpose_dest</* is_32bit */ true>(grad_reg);
-    transpose_dest</* is_32bit */ true>(attn_reg);
-
-    tile_regs_commit();
-    tile_regs_wait();
-    // dS is indexed (row, column) and its transpose (column, row), so one of
-    // the two cannot be sequential: both transposed operands go out of order.
-    pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores);
-    pack_tile</* out_of_order */ true>(grad_keep_reg, cb_grad_scores, score_tile);
-    pack_reconfig_data_format(cb_grad_scores, cb_grad_scores_transposed);
-    pack_tile</* out_of_order */ true>(grad_reg, cb_grad_scores_transposed, transposed_tile);
-    pack_reconfig_data_format(cb_grad_scores_transposed, cb_attn_weights_transposed);
-    pack_tile</* out_of_order */ true>(attn_reg, cb_attn_weights_transposed, transposed_tile);
-    tile_regs_release();
+// K_j^T from the resident K_j (scaled where the scale is folded): Bt x qWt
+// bf16 tiles in, qWt x Bt out, each tile transposed by the unpacker on the
+// way into DST. Once per residency interval; it is what lets dQ^T be a plain
+// matmul with dS^T as its second operand, so no score tile is transposed.
+void transpose_key_block() {
+    cb_wait_front(cb_key_operand, Bt * qWt);
+    cb_reserve_back(cb_key_operand_t, Bt * qWt);
+    pack_reconfig_data_format(cb_key_operand_t);
+    reconfig_data_format_srca(cb_key_operand);
+    transpose_init(cb_key_operand);
+    for (uint32_t e = 0; e < qWt; ++e) {
+        for (uint32_t b = 0; b < Bt; ++b) {
+            tile_regs_acquire();
+            transpose_tile(cb_key_operand, b * qWt + e, /* register idx */ 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(/* register idx */ 0, cb_key_operand_t);  // tile e * Bt + b
+            tile_regs_release();
+        }
+    }
+    cb_push_back(cb_key_operand_t, Bt * qWt);
+    cb_wait_front(cb_key_operand_t, Bt * qWt);
 }
 
 }  // namespace
@@ -372,6 +408,7 @@ void kernel_main() {
     const uint32_t slice_count = get_arg_val<uint32_t>(1);
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
+    using ttml::metal::ops::cyclic_sdpa_bw::kNoCore;
     constexpr CyclicSchedule sched(kCores, kMaskMode);
     constexpr uint32_t kTimesteps = sched.num_timesteps();
 
@@ -391,8 +428,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_query, cb_key, cb_attention_weights);
     copy_init(cb_query);
-    matmul_init(cb_query, cb_key);
+    matmul_init(cb_key_operand, cb_query);
     cb_wait_front(cb_attn_mask, onetile);
+    cb_wait_front(cb_ones_column, onetile);
 
     for (uint32_t s = 0; s < slice_count; ++s) {
 #if COLUMN_RESIDENT
@@ -408,6 +446,18 @@ void kernel_main() {
         // Dense mode masks nothing, so a pair with i == j is an ordinary
         // full block there and must not take the triangular mask.
         const bool diagonal = (DENSE_MODE == 0) && (pair.i == pair.j);
+        // Where dQ_i stands in the relay. Inside a streak the packet carries
+        // dQ^T from the previous consumer and the next consumer wants dQ^T
+        // back; at a streak start the seed came from DRAM as dQ, and at a
+        // streak end dQ goes back to DRAM as dQ. Without the relay every
+        // timestep is both.
+#if COLUMN_RESIDENT
+        const bool seed_transposed = sched.producer(my_core, t).internal;
+        const bool emit_transposed = sched.next_consumer(pair.i, t) != kNoCore;
+#else
+        constexpr bool seed_transposed = false;
+        constexpr bool emit_transposed = false;
+#endif
 
 #if COLUMN_RESIDENT
         // Popped only when the column changes, which releases the storage for
@@ -419,6 +469,7 @@ void kernel_main() {
         if (column_changed && g > 0u) {
             cb_pop_front(cb_key, Bt * qWt);
             cb_pop_front(cb_value, Bt * vWt);
+            cb_pop_front(cb_key_operand_t, Bt * qWt);
 #if FOLD_SCALE_INTO_KEY
             cb_pop_front(cb_key_scaled, Bt * qWt);
 #endif
@@ -447,6 +498,7 @@ void kernel_main() {
         }
 #endif
         if (column_changed) {
+            transpose_key_block();
             if (visited[owned_slot] || SEED_COLUMN_GRADIENTS) {
                 // A revisit, or every visit when accumulating into the
                 // outputs: the interval starts from what is in DRAM.
@@ -465,6 +517,11 @@ void kernel_main() {
                 visited[owned_slot] = true;
             }
         }
+#else
+        // Without residency the column arrives every timestep, transposed
+        // copy included.
+        cb_wait_front(cb_key, Bt * qWt);
+        transpose_key_block();
 #endif
         {
             DeviceZoneScopedN("WAIT-PACKET");
@@ -472,163 +529,215 @@ void kernel_main() {
             cb_wait_front(cb_key, Bt * qWt);
             cb_wait_front(cb_value, Bt * vWt);
             cb_wait_front(cb_grad_output, Bt * vWt);
+            cb_wait_front(cb_lse_row, Bt);
+            cb_wait_front(cb_neg_u_row, Bt);
+            cb_wait_front(cb_lse_rem, Bt);
+            cb_wait_front(cb_neg_u_rem, Bt);
             cb_wait_front(cb_lse, Bt);
             cb_wait_front(cb_u_scalar, Bt);
         }
 
-        // ---- S = Q K^T / sqrt(d), masked when i == j, then P = exp(S - L).
-        // A row of tiles at a time: every column tile of the row is issued
-        // into DST before any is read back, so the matmul pipeline latency is
-        // paid once for the row rather than once per tile. At Bt = 1 that is
-        // one tile and the latency -- measured at 1.4 us against 0.076 for
-        // each tile issued behind it -- is entirely exposed.
+        // ---- The score pass, one column of the score grid at a time (one
+        // query tile against every key tile), entirely in the registers:
+        //
+        //   S^T  = K Q^T           (scale folded into K where exact), masked
+        //                          on the diagonal block,
+        //   P^T  = exp(S^T - L^T)  with the column's L broadcast once,
+        //   dP^T - D^T             by seeding the registers with -D and letting
+        //                          the matmul V dO^T accumulate on top,
+        //   dS^T = P^T (dP^T - D^T)  one SFPU multiply per tile,
+        //
+        // then P^T and dS^T are packed once each. dP^T is never written to L1
+        // and P^T is never read back into DST, which is what makes the pass
+        // cheaper than three: at Bt = 4 it is 32 packs a timestep instead of
+        // 64, and no copies. D is exact through this (it enters DST as a
+        // Float32 broadcast) where the FPU subtract it replaces rounded dP^T
+        // to 19 bits on the way in.
         {
         DeviceZoneScopedN("SCORES");
         cb_reserve_back(cb_attention_weights, score_tiles);
+        cb_reserve_back(cb_grad_scores, score_tiles);
+        // Both outputs are Float32; the previous pack may have been the bf16
+        // K^T. Once per timestep is enough.
+        pack_reconfig_data_format(cb_attention_weights);
         for (uint32_t a = 0; a < Bt; ++a) {
+            // reconfig_data_format takes (SrcA, SrcB); the matmul's first operand
+            // goes to SrcB and its second to SrcA.
             reconfig_data_format(cb_query, cb_key_operand);
-            matmul_init(cb_query, cb_key_operand, /* transpose */ 1);
+            matmul_init(cb_key_operand, cb_query, /* transpose */ 1);
             tile_regs_acquire();
             for (uint32_t b = 0; b < Bt; ++b) {
                 for (uint32_t k = 0; k < qWt; ++k) {
-                    matmul_tiles(
-                        cb_query, cb_key_operand, a * qWt + k, b * qWt + k, score_reg(b));
+                    matmul_tiles(cb_key_operand, cb_query, b * qWt + k, a * qWt + k, score_reg(b));
                 }
             }
             if (diagonal) {
-                apply_mask_at(
-                    score_reg(a), mask_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
+                // The diagonal tile of column a is key tile b = a.
+                apply_mask_at(score_reg(a), mask_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
             }
 
-            // One broadcast for the row, one scale of it, and one
-            // configuration of each SFPU program -- all per row rather than
-            // per score tile.
-            broadcast_statistic_to_dst(stat_reg, cb_lse, a);
-#if !FOLD_SCALE_INTO_KEY
-            // The exponential carries the scale, so what it subtracts must be
-            // divided by it first.
-            binop_with_scalar_tile_init();
-            mul_unary_tile(stat_reg, inv_scaler_bits);
-#endif
-            subtract_and_exp_row(score_reg(0), Bt, stat_reg);
+            broadcast_statistic_rows_to_dst(stat_reg, cb_lse_row, a);
+            subtract_statistic_column(score_reg(0), Bt, stat_reg);
+            broadcast_statistic_rows_to_dst(stat_reg, cb_lse_rem, a);
+            subtract_statistic_column(score_reg(0), Bt, stat_reg);
+            exp_column(score_reg(0), Bt);
             for (uint32_t b = 0; b < Bt; ++b) {
                 if (diagonal && b > a) {
-                    // Wholly above the diagonal. Zeroing P there lets every
-                    // later sum run over all of the block's tiles without
-                    // knowing about the triangle: dS inherits the zero
-                    // through its P factor.
+                    // Key tile after the query tile: wholly masked. Zeroing
+                    // P^T there lets every later sum run over all of the
+                    // block's tiles without knowing about the triangle,
+                    // since dS^T inherits the zero through its P^T factor.
                     binop_with_scalar_tile_init();
                     mul_unary_tile(score_reg(b), /* 0.0f */ 0u);
                 }
             }
+
+            // dP^T - D^T for the column: -D broadcast into every register of
+            // the second half (the statistic and mask registers are free by
+            // now), then V dO^T accumulated onto it. The FPU adds into DST.
+            for (uint32_t b = 0; b < Bt; ++b) {
+                broadcast_statistic_rows_to_dst(grad_score_reg(b), cb_neg_u_row, a);
+            }
+            reconfig_data_format(cb_grad_output, cb_value);
+            matmul_init(cb_value, cb_grad_output, /* transpose */ 1);
+            for (uint32_t b = 0; b < Bt; ++b) {
+                for (uint32_t k = 0; k < vWt; ++k) {
+                    matmul_tiles(cb_value, cb_grad_output, b * vWt + k, a * vWt + k, grad_score_reg(b));
+                }
+                // The remainder of -D, along every row: ones-column x (its
+                // column-0 tile)^T. Same formats as V and dO, so the same init.
+                matmul_tiles(cb_ones_column, cb_neg_u_rem, 0, a, grad_score_reg(b));
+            }
+            // dS^T = P^T (dP^T - D^T), and the softmax scale where K does not
+            // carry it.
+            mul_binary_tile_init();
+            for (uint32_t b = 0; b < Bt; ++b) {
+                mul_binary_tile(grad_score_reg(b), score_reg(b), grad_score_reg(b));
+            }
+#if !FOLD_SCALE_INTO_KEY
+            binop_with_scalar_tile_init();
+            for (uint32_t b = 0; b < Bt; ++b) {
+                mul_unary_tile(grad_score_reg(b), scaler_bits);
+            }
+#endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_data_format(cb_attention_weights);
             for (uint32_t b = 0; b < Bt; ++b) {
-                pack_tile</* out_of_order */ true>(
-                    score_reg(b), cb_attention_weights, a * Bt + b);
+                pack_tile</* out_of_order */ true>(score_reg(b), cb_attention_weights, b * Bt + a);
+                pack_tile</* out_of_order */ true>(grad_score_reg(b), cb_grad_scores, b * Bt + a);
             }
             tile_regs_release();
         }
         cb_push_back(cb_attention_weights, score_tiles);
+        cb_push_back(cb_grad_scores, score_tiles);
         cb_wait_front(cb_attention_weights, score_tiles);
+        cb_wait_front(cb_grad_scores, score_tiles);
         }
 
-        // ---- dP = dO V^T, the same shape
-        {
-            DeviceZoneScopedN("GRAD-WEIGHTS");
-            cb_reserve_back(cb_grad_attn_weights, score_tiles);
-            for (uint32_t a = 0; a < Bt; ++a) {
-                reconfig_data_format(cb_grad_output, cb_value);
-                matmul_init(cb_grad_output, cb_value, /* transpose */ 1);
-                tile_regs_acquire();
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    for (uint32_t k = 0; k < vWt; ++k) {
-                        matmul_tiles(cb_grad_output, cb_value, a * vWt + k, b * vWt + k, b);
-                    }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_attention_weights, cb_grad_attn_weights);
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    pack_tile</* out_of_order */ true>(b, cb_grad_attn_weights, a * Bt + b);
-                }
-                tile_regs_release();
-            }
-            cb_push_back(cb_grad_attn_weights, score_tiles);
-            cb_wait_front(cb_grad_attn_weights, score_tiles);
-        }
-
-        // ---- dS, with dS^T and P^T alongside, one tile pair at a time:
-        // elementwise work with three registers per tile and no latency to
-        // amortize.
-        {
-            DeviceZoneScopedN("GRAD-SCORES");
-            cb_reserve_back(cb_grad_scores, score_tiles);
-            cb_reserve_back(cb_grad_scores_transposed, score_tiles);
-            cb_reserve_back(cb_attn_weights_transposed, score_tiles);
-            for (uint32_t a = 0; a < Bt; ++a) {
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    grad_scores_and_transposes(a, b);
-                }
-            }
-            cb_push_back(cb_grad_scores, score_tiles);
-            cb_push_back(cb_grad_scores_transposed, score_tiles);
-            cb_push_back(cb_attn_weights_transposed, score_tiles);
-            cb_wait_front(cb_grad_scores, score_tiles);
-            cb_wait_front(cb_grad_scores_transposed, score_tiles);
-            cb_wait_front(cb_attn_weights_transposed, score_tiles);
-        }
-
-
-        // ---- dQ_i = (dQ_i from the packet) + dS K_j, straight from the seed
-        // to the outgoing packet. The seed tiles are copied into the DST
-        // registers first -- the seed buffer unpacks in Float32 mode, so
-        // nothing is lost on the way -- and the matmul accumulates on top of
-        // them, since the FPU adds into whatever DST holds. One pack per tile
-        // lands the sum in the relay's buffer. This replaces two L1 copies
-        // (seed into an accumulator, accumulator out again) and the
-        // packer's L1-accumulate dance that positioned them.
+        // ---- dQ_i^T = (dQ_i^T from the packet) + K_j^T dS^T, straight from the
+        // seed to the outgoing packet: the seed tiles are copied into the DST
+        // registers, transposed there if they came from DRAM as dQ, the
+        // matmul accumulates on top (the FPU adds into DST), and the result
+        // is transposed back before the pack if it goes to DRAM.
         {
             DeviceZoneScopedN("UPDATE-DQ");
             cb_wait_front(cb_grad_query_seed, Bt * qWt);
+            // A dest transpose must not overlap the unpack of a matmul operand
+            // into SrcB: the transpose has the unpacker mark SrcB valid for it
+            // and clears both sources when it is done, and an operand the
+            // unpacker had already run ahead and delivered for the next matmul
+            // is what gets cleared -- the dV update then sums zeros. So both
+            // transposes below sit behind a buffer handshake that the unpacker
+            // has to wait on before it may feed the next matmul: the seed is
+            // transposed into a scratch buffer of its own, and the emitted dQ
+            // is waited for before the dV update starts.
+            uint32_t seed_cb = cb_grad_query_seed;
+            if (!seed_transposed) {
+                DeviceZoneScopedN("SEED-T");
+                cb_reserve_back(cb_grad_query_seed_t, Bt * qWt);
+                pack_reconfig_data_format(cb_grad_query_seed_t);
+                reconfig_data_format_srca(cb_grad_output, cb_grad_query_seed);
+                for (uint32_t a = 0; a < Bt; ++a) {
+                    for (uint32_t e = 0; e < qWt; ++e) {
+                        tile_regs_acquire();
+                        // Both inits every tile: the transpose reprograms the
+                        // math MOP the copy needs.
+                        copy_init(cb_grad_query_seed);
+                        copy_tile(cb_grad_query_seed, a * qWt + e, /* register idx */ 0);
+                        transpose_dest_init</* is_32bit */ true>(cb_grad_query_seed);
+                        transpose_dest</* is_32bit */ true>(0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_tile</* out_of_order */ true>(0, cb_grad_query_seed_t, e * Bt + a);
+                        tile_regs_release();
+                    }
+                }
+                cb_push_back(cb_grad_query_seed_t, Bt * qWt);
+                cb_wait_front(cb_grad_query_seed_t, Bt * qWt);
+                seed_cb = cb_grad_query_seed_t;
+            }
             cb_reserve_back(cb_grad_query_out, Bt * qWt);
-            pack_reconfig_data_format(cb_attn_weights_transposed, cb_grad_query_out);
+            pack_reconfig_data_format(cb_grad_query_out);
             for (uint32_t a = 0; a < Bt; ++a) {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
                     tile_regs_acquire();
-                    // Seed: the previous SrcA operand was P (Float32), the
-                    // seed is Float32 in a different unpack mode.
-                    reconfig_data_format_srca(cb_attention_weights, cb_grad_query_seed);
-                    copy_init(cb_grad_query_seed);
+                    // The seed tiles, dQ^T in either buffer, go through SrcA as
+                    // they always did (Float32 in, Float32 out). The previous
+                    // SrcA operand was dO (bf16) for the first block and dS^T
+                    // (Float32) after that.
+                    reconfig_data_format_srca((a == 0u && k0 == 0u) ? cb_grad_output : cb_grad_scores, seed_cb);
+                    copy_init(seed_cb);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
-                        copy_tile(cb_grad_query_seed, a * qWt + k0 + bi, bi);
+                        copy_tile(seed_cb, (k0 + bi) * Bt + a, bi);
                     }
-                    reconfig_data_format_srca(cb_grad_query_seed, cb_key_operand);
-                    matmul_init(cb_grad_scores, cb_key_operand, /* transpose */ 0);
+                    // dQ^T[e][a] += sum_b K^T[e][b] dS^T[b][a]: K^T is the first
+                    // operand (bf16, SrcB), dS^T the second (Float32, SrcA).
+                    reconfig_data_format(/* SrcA */ cb_grad_scores, /* SrcB */ cb_key_operand_t);
+                    matmul_init(cb_key_operand_t, cb_grad_scores, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t b = 0; b < Bt; ++b) {
-                            matmul_tiles(
-                                cb_grad_scores,
-                                cb_key_operand,
-                                a * Bt + b,
-                                b * qWt + k0 + bi,
-                                bi);
+                            matmul_tiles(cb_key_operand_t, cb_grad_scores, (k0 + bi) * Bt + b, b * Bt + a, bi);
+                        }
+                    }
+                    if (!emit_transposed) {
+                        // Streak end: dQ goes back to DRAM untransposed. In the
+                        // registers, exact; nothing else of this acquire reads
+                        // the unpacker after this point, and the fence below
+                        // keeps the dV matmul's operands out of the way.
+                        transpose_dest_init</* is_32bit */ true>(cb_grad_query_out);
+                        for (uint32_t bi = 0; bi < block_size; ++bi) {
+                            transpose_dest</* is_32bit */ true>(bi);
                         }
                     }
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
-                        pack_tile(bi, cb_grad_query_out);
+                        const uint32_t e = k0 + bi;
+                        const uint32_t out_tile = emit_transposed ? e * Bt + a : a * qWt + e;
+                        pack_tile</* out_of_order */ true>(bi, cb_grad_query_out, out_tile);
                     }
                     tile_regs_release();
                 }
             }
             cb_push_back(cb_grad_query_out, Bt * qWt);
+            if (!emit_transposed) {
+                // The fence: pushed by the pack thread once the packs above,
+                // and so the transposes before them, are done; waited on by the
+                // unpacker before it unpacks anything for the dV matmul. The
+                // packet buffer itself cannot serve, since the relay reader pops
+                // it.
+                cb_reserve_back(cb_transpose_fence, 1);
+                cb_push_back(cb_transpose_fence, 1);
+                cb_wait_front(cb_transpose_fence, 1);
+                cb_pop_front(cb_transpose_fence, 1);
+            }
             cb_pop_front(cb_grad_query_seed, Bt * qWt);
+            if (!seed_transposed) {
+                cb_pop_front(cb_grad_query_seed_t, Bt * qWt);
+            }
         }
 
-        // ---- dV_j += P^T dO_i, summed over the block's row tiles
+        // ---- dV_j += P^T dO_i, summed over the block's query tiles
         {
             DeviceZoneScopedN("UPDATE-DV");
 #if COLUMN_RESIDENT
@@ -647,16 +756,12 @@ void kernel_main() {
             for (uint32_t b = 0; b < Bt; ++b) {
                 for (uint32_t k0 = 0; k0 < vWt; k0 += block_size) {
                     tile_regs_acquire();
-                    reconfig_data_format_srca(cb_grad_value_accum, cb_grad_output);
-                    matmul_init(cb_attn_weights_transposed, cb_grad_output, /* transpose */ 0);
+                    // SrcA takes the second operand (dO, bf16), SrcB the first (P^T, Float32).
+                    reconfig_data_format(cb_grad_output, cb_attention_weights);
+                    matmul_init(cb_attention_weights, cb_grad_output, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t a = 0; a < Bt; ++a) {
-                            matmul_tiles(
-                                cb_attn_weights_transposed,
-                                cb_grad_output,
-                                b * Bt + a,
-                                a * vWt + k0 + bi,
-                                bi);
+                            matmul_tiles(cb_attention_weights, cb_grad_output, b * Bt + a, a * vWt + k0 + bi, bi);
                         }
                     }
                     tile_regs_commit();
@@ -682,11 +787,7 @@ void kernel_main() {
         // ---- dK_j += dS^T Q_i. The reconfig arguments must name what the
         // previous operation actually left in the packer and in SrcA, because
         // those reconfigs are conditional and skip when the formats already
-        // match: naming cb_grad_output as the previous SrcA -- which is what
-        // sdpa_bw's own call site does, its previous operation being a
-        // different one -- leaves the unpacker in Float32 while this matmul
-        // needs Q in bfloat16, and dK comes out wrong while dQ and dV are
-        // fine. Here the previous operation is the dV update just above.
+        // match. Here the previous operation is the dV update just above.
         {
             DeviceZoneScopedN("UPDATE-DK");
 #if COLUMN_RESIDENT
@@ -702,11 +803,7 @@ void kernel_main() {
             constexpr uint32_t cb_prev_srca = cb_grad_output;
 #else
             // Here the previous operation is the dK seed copy just above,
-            // which packed to the accumulator and read the seed. Naming dO as
-            // the previous SrcA -- correct in the resident path -- makes the
-            // reconfig below look unnecessary, because dO and Q are both
-            // bfloat16, and leaves the unpacker in Float32 where the seed copy
-            // put it. dK then comes out wrong while dQ and dV are fine.
+            // which packed to the accumulator and read the seed.
             constexpr uint32_t cb_prev_pack = cb_grad_key_accum;
             constexpr uint32_t cb_prev_srca = cb_grad_key_seed;
 #endif
@@ -720,15 +817,10 @@ void kernel_main() {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
                     tile_regs_acquire();
                     reconfig_data_format_srca(cb_prev_srca, cb_query);
-                    matmul_init(cb_grad_scores_transposed, cb_query, /* transpose */ 0);
+                    matmul_init(cb_grad_scores, cb_query, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t a = 0; a < Bt; ++a) {
-                            matmul_tiles(
-                                cb_grad_scores_transposed,
-                                cb_query,
-                                b * Bt + a,
-                                a * qWt + k0 + bi,
-                                bi);
+                            matmul_tiles(cb_grad_scores, cb_query, b * Bt + a, a * qWt + k0 + bi, bi);
                         }
                     }
                     tile_regs_commit();
@@ -766,17 +858,17 @@ void kernel_main() {
 #if !COLUMN_RESIDENT
         cb_pop_front(cb_key, Bt * qWt);
         cb_pop_front(cb_value, Bt * vWt);
+        cb_pop_front(cb_key_operand_t, Bt * qWt);
 #endif
         cb_pop_front(cb_grad_output, Bt * vWt);
         cb_pop_front(cb_lse, Bt);
         cb_pop_front(cb_u_scalar, Bt);
+        cb_pop_front(cb_lse_row, Bt);
+        cb_pop_front(cb_neg_u_row, Bt);
+        cb_pop_front(cb_lse_rem, Bt);
+        cb_pop_front(cb_neg_u_rem, Bt);
         cb_pop_front(cb_attention_weights, score_tiles);
-        cb_pop_front(cb_grad_attn_weights, score_tiles);
-        // The helpers used to pop these; the loops above read them by index
-        // and leave them alone, so they are released here with the rest.
         cb_pop_front(cb_grad_scores, score_tiles);
-        cb_pop_front(cb_grad_scores_transposed, score_tiles);
-        cb_pop_front(cb_attn_weights_transposed, score_tiles);
 
 #if RELEASE_TOKEN
         // Slot t mod 2 is free now: every read of it is done.
