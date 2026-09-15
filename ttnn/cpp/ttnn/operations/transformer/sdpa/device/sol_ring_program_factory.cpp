@@ -30,7 +30,7 @@ namespace ttnn::prim {
 namespace {
 
 // Appends 5 compile-time args needed for a fabric MUX client worker kernel.
-void fabric_mux_connection_ct_args(
+void sol_ring_fabric_mux_connection_ct_args(
     const uint32_t num_workers_per_link,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& worker_ct_args) {
@@ -64,12 +64,12 @@ uint32_t allocate_per_core_semaphore(
 }
 
 // Number of runtime args appended per fabric MUX client worker. Kept in sync with the
-// pushes in fabric_mux_connection_rt_args() and its disconnected-connection counterpart.
-constexpr uint32_t kFabricMuxConnectionRtArgCount = 17;
+// pushes in sol_ring_fabric_mux_connection_rt_args() and its disconnected-connection counterpart.
+constexpr uint32_t kSolRingFabricMuxConnectionRtArgCount = 17;
 
-// Appends kFabricMuxConnectionRtArgCount runtime args for a fabric MUX client worker.
+// Appends kSolRingFabricMuxConnectionRtArgCount runtime args for a fabric MUX client worker.
 // Allocates 5 per-core semaphores on worker_logical_core for the connection state.
-void fabric_mux_connection_rt_args(
+void sol_ring_fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
     const CoreCoord& mux_logical_core,
@@ -287,7 +287,7 @@ tt::tt_metal::ProgramDescriptor build_sol_ring_program_descriptor(
     const auto device_grid = mesh_device->compute_with_storage_grid_size();
     CoreCoord user_grid =
         args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
-    const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
+    const bool mux_on_bottom_row = sol_ring_mux_on_bottom_row();
     // Bottom-row experiment: SDPA keeps every column but gives up the two bottom rows (row y-1
     // hosts the MUX kernels, row y-2 idles so the SDPA row count stays even for the direction
     // split). Default: SDPA keeps every row but gives up the last column to the MUX kernels.
@@ -1454,7 +1454,7 @@ tt::tt_metal::ProgramDescriptor build_sol_ring_program_descriptor(
     const uint32_t mid = mux_on_bottom_row ? sdpa_grid.x / 2 : sdpa_grid.y / 2;
     const uint32_t fabric_mux_col = user_grid.x - 1;  // Last column of user_grid (default placement)
     const uint32_t fabric_mux_row = user_grid.y - 1;  // Last row of user_grid (bottom-row placement)
-    const bool mux_top_cluster = exp_sdpa_mux_top_cluster();
+    const bool mux_top_cluster = sol_ring_mux_top_cluster();
     const std::vector<CoreCoord> mux_backward_logical_cores =
         mux_on_bottom_row ? std::vector<CoreCoord>{{0, fabric_mux_row}, {sdpa_grid.x - 1, fabric_mux_row}}
         : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 0}, {fabric_mux_col, 1}}
@@ -1512,7 +1512,8 @@ tt::tt_metal::ProgramDescriptor build_sol_ring_program_descriptor(
     // Fabric writer: columns sdpa_grid.x-2 and sdpa_grid.x-1 (backward and forward MUX clients)
     CoreRange mux_writer_range({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     auto writer_fabric_compile_time_args = writer_compile_time_args;
-    fabric_mux_connection_ct_args(num_mux_clients_per_group, mux_kernel_config, writer_fabric_compile_time_args);
+    sol_ring_fabric_mux_connection_ct_args(
+        num_mux_clients_per_group, mux_kernel_config, writer_fabric_compile_time_args);
 
     // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
     const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
@@ -1568,7 +1569,7 @@ tt::tt_metal::ProgramDescriptor build_sol_ring_program_descriptor(
     // Pass the full direction-half range across both MUX client columns so that
     // any AG sync semaphores would be allocated on ALL workers in each direction group.
     // This ensures every core (both term-masters and non-masters) has the same number of
-    // semaphores allocated before fabric_mux_connection_rt_args runs, keeping
+    // semaphores allocated before sol_ring_fabric_mux_connection_rt_args runs, keeping
     // termination_sync IDs consistent.
     CoreRange all_backward_clients({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, num_workers_per_link - 1});
     CoreRange all_forward_clients({sdpa_grid.x - 2, num_workers_per_link}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
@@ -1723,16 +1724,16 @@ tt::tt_metal::ProgramDescriptor build_sol_ring_program_descriptor(
 
             const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
                                        (link < mux_forward_logical_cores.size());
-            // fabric_mux_connection_rt_args appends to a std::vector<uint32_t>; collect mux args
+            // sol_ring_fabric_mux_connection_rt_args appends to a std::vector<uint32_t>; collect mux args
             // separately and then merge into the RTArgList so BufferBinding entries above are preserved.
             std::vector<uint32_t> mux_writer_args;
-            mux_writer_args.reserve(kFabricMuxConnectionRtArgCount);
+            mux_writer_args.reserve(kSolRingFabricMuxConnectionRtArgCount);
             if (link_in_range) {
                 const CoreCoord& mux_core =
                     is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
                 const bool valid =
                     row_forwards && (is_backward ? backward_coord.has_value() : forward_coord.has_value());
-                fabric_mux_connection_rt_args(
+                sol_ring_fabric_mux_connection_rt_args(
                     valid,
                     is_term_master,
                     mux_core,
@@ -1921,7 +1922,7 @@ void SolRingMeshWorkloadFactory::override_runtime_arguments(
     auto* mesh_device = tensor_args.input_q.device();
     const CoreCoord user_grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                                 : mesh_device->compute_with_storage_grid_size();
-    const CoreCoord sdpa_grid = exp_sdpa_mux_on_bottom_row() ? CoreCoord{user_grid.x, user_grid.y - 2}
+    const CoreCoord sdpa_grid = sol_ring_mux_on_bottom_row() ? CoreCoord{user_grid.x, user_grid.y - 2}
                                                              : CoreCoord{user_grid.x - 1, user_grid.y};
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
     const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);

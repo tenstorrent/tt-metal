@@ -251,7 +251,7 @@ void SolRingDeviceOperation::validate_on_program_cache_miss(
     // column from x and bottom-row mode subtracts two rows from y, so an undersized
     // program-config grid would otherwise underflow unsigned here (and the num_q_chunks modulo
     // below would divide by zero) instead of failing with a clear error.
-    const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
+    const bool mux_on_bottom_row = sol_ring_mux_on_bottom_row();
     if (mux_on_bottom_row) {
         TT_FATAL(
             user_grid.y >= 3,

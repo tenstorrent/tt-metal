@@ -32,7 +32,7 @@ namespace ttnn::prim {
 // fabric all-gather rate. NOTE: the env var is not part of the program-cache key — use one setting
 // per process. Shared by the factory build, the cache-hit patch, and validation so all three
 // derive the same grid.
-inline bool exp_sdpa_mux_on_bottom_row() {
+inline bool sol_ring_mux_on_bottom_row() {
     static const bool enabled = std::getenv("TT_EXP_SDPA_MUX_BOTTOM_ROW") != nullptr;
     return enabled;
 }
@@ -42,7 +42,7 @@ inline bool exp_sdpa_mux_on_bottom_row() {
 // 0..3, which sit 1..4 NoC hops from the eth row (all Blackhole eth cores are at physical row 1) —
 // instead of the spread rows 0 / mid-1 / mid / last, whose farthest core is ~10 hops away.
 // Isolates the MUX->eth distance effect at a fixed schedule.
-inline bool exp_sdpa_mux_top_cluster() {
+inline bool sol_ring_mux_top_cluster() {
     static const bool enabled = std::getenv("TT_EXP_SDPA_MUX_TOP_CLUSTER") != nullptr;
     return enabled;
 }

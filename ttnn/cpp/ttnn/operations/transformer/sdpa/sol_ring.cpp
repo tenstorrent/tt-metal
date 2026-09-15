@@ -8,6 +8,16 @@
 
 namespace ttnn::transformer {
 
+namespace {
+// A joint tensor with no rows is how callers spell "absent"; the op wants nullopt.
+std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) {
+    if (t.has_value() && t->logical_shape()[-2] == 0) {
+        return std::nullopt;
+    }
+    return t;
+}
+}  // namespace
+
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
