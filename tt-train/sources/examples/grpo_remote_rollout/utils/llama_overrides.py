@@ -6,85 +6,14 @@ import ttnn
 import ttml
 
 from ttml.models import WeightTyingType
-from ttml.models.llama.gqattn import GroupedQueryAttention
 from ttml.models.llama import Llama
-from ttml.modules import RunMode
-
-
-class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
-    """Extends GroupQueryAttention. Swaps stock SDPA for scaled_dot_product_attention_composite
-    in both forward_no_kv and forward_kv. Needed because the completer emits non-broadcast masks
-    ((B, 1, S, S)) that only the composite kernel accepts, and to make the decode path
-    (KV-cache slice -> attention) actually work."""
-
-    def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        q = self.q_linear(input)
-        kv = self.kv_linear(input)
-
-        q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
-            q, kv, self.num_heads, self.num_groups
-        )
-
-        q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
-        k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
-
-        # Composite SDPA supports non-broadcast masks like (B, 1, S, S)
-        attention = ttml.ops.attention.scaled_dot_product_attention_composite(q_heads, k_heads, v_heads, mask)
-        attention = ttml.ops.multi_head_utils.heads_fusion(attention)
-
-        out = self.out_linear(attention)
-
-        # Match base behavior in training mode
-        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
-
-        return out
-
-    def forward_kv(
-        self,
-        input: ttml.autograd.Tensor,
-        mask: ttml.autograd.Tensor,
-        kv_cache: ttml.models.KvCache,
-        layer_idx: int,
-        new_tokens: int,
-    ) -> ttml.autograd.Tensor:
-        q = self.q_linear(input)
-        kv = self.kv_linear(input)
-
-        q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.grouped_heads_creation(
-            q, kv, self.num_heads, self.num_groups
-        )
-
-        token_pos = kv_cache.get_cache_position()
-        q_heads = ttml.ops.rope.rope(q_heads, self.rope_params, token_pos)
-        k_heads = ttml.ops.rope.rope(k_heads, self.rope_params, token_pos)
-
-        kv_cache.update(layer_idx, k_heads.get_value(), v_heads.get_value(), new_tokens)
-
-        k_cache = kv_cache.get_k_cache(layer_idx)
-        v_cache = kv_cache.get_v_cache(layer_idx)
-
-        token_end = [k_cache.shape[0], k_cache.shape[1], mask.shape()[-1], k_cache.shape[3]]
-        step = [1, 1, 1, 1]
-        k_cache_slice = ttnn.slice(k_cache, [0, 0, 0, 0], token_end, step)
-        v_cache_slice = ttnn.slice(v_cache, [0, 0, 0, 0], token_end, step)
-
-        k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
-        v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
-
-        # Change: composite SDPA in decode path
-        attention = ttml.ops.attention.scaled_dot_product_attention_composite(
-            q_heads, k_cache_to_process, v_cache_to_process, mask
-        )
-        attention = ttml.ops.multi_head_utils.heads_fusion(attention)
-        out = self.out_linear(attention)
-        return out
 
 
 class LlamaCompositeKV(Llama):
     """Extends Llama for 2 reasons:
-    1. Patches each block's .attention in place with the composite variant (so the full model
-       uses composite SDPA end-to-end).
+    1. Swaps every block's attention kernel for scaled_dot_product_attention_composite: the
+       completer emits non-broadcast masks ((B, 1, S, S)) that only the composite kernel accepts,
+       and it makes the decode path (KV-cache slice -> attention) actually work.
     2. Adds weights_ref_hf_dict() -- an HF-keyed export of live ttml ttnn.Tensor handles, shaped
        for tt-transformers' Transformer.update_weights(...). This is the ttml->ttt bridge format
        the remote-rollout weight sync depends on, and it doesn't exist upstream."""
@@ -93,17 +22,8 @@ class LlamaCompositeKV(Llama):
         super().__init__(config)
         self.create_name("Llama")
 
-        # do NOT rebuild self.blocks; patch attention in-place
-        for i, block in enumerate(self.blocks):
-            old = block.attention
-            block.attention = GroupedQueryAttentionCompositeKV(
-                embedding_size=old.embedding_size,
-                num_heads=old.num_heads,
-                num_groups=old.num_groups,
-                dropout=old.dropout_prob,
-                rope_params=old.rope_params,
-                bias_linears=config.attention_bias,
-            )
+        for block in self.blocks:
+            block.attention.sdpa = ttml.ops.attention.scaled_dot_product_attention_composite
 
     def weights_ref_hf_dict(self) -> dict[str, ttnn.Tensor]:
         """Export this ttml model's parameters as an HF-keyed dict of on-device
@@ -119,15 +39,19 @@ class LlamaCompositeKV(Llama):
         ``lm_head`` point at the same handle; safe because the consumer
         ``ttnn.copy``s into a separate destination and never aliases the source.
 
-        Most values are live handles into ttml's parameter store; do not mutate
-        ttml's parameters between this call and ``update_weights``. The K/V split
-        is the exception: ttml fuses K and V into one ``kv_linear/weight``
-        (K rows first, then V), so we expose them via two ``ttnn.slice`` calls
-        (newly allocated, ~64 MB total for Llama-3.2-1B-Instruct).
+        Norms, o_proj and down_proj are live handles into ttml's parameter
+        store; do not mutate ttml's parameters between this call and
+        ``update_weights``. The fused projections are the exception: ttml
+        stores Q, K and V as one ``qkv_linear/weight`` (rows Q, then K, then V)
+        and gate/up as one ``w_gate_up/weight`` (rows gate, then up), so
+        q/k/v_proj and gate/up_proj are ``ttnn.slice`` copies (newly allocated,
+        ~1.2 GB in total for Llama-3.2-1B-Instruct; freed with the dict).
 
         Single-device assumption: parameters must be replicated across the mesh
         (no DDP/TP shard mapper). The grpo single-device config satisfies this;
-        DDP/TP would need a host-side per-parameter concat first.
+        DDP/TP would need a host-side per-parameter concat first, and under TP
+        the fused weights are per-rank interleaved, which plain row slices do
+        not undo. The shape checks below reject a TP-sharded model.
         """
         cfg = self.config
         assert cfg.weight_tying == WeightTyingType.Enabled, (
@@ -150,6 +74,9 @@ class LlamaCompositeKV(Llama):
                 )
             return params[name].get_value()
 
+        def rows(weight: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
+            return ttnn.slice(weight, [0, 0, start, 0], [1, 1, end, H])
+
         out: dict[str, ttnn.Tensor] = {}
 
         # Tied: same handle exposed under both HF keys.
@@ -164,19 +91,24 @@ class LlamaCompositeKV(Llama):
             out[f"model.layers.{i}.input_layernorm.weight"] = get(f"{p}/attention_norm/gamma")
             out[f"model.layers.{i}.post_attention_layernorm.weight"] = get(f"{p}/mlp_norm/gamma")
 
-            out[f"model.layers.{i}.self_attn.q_proj.weight"] = get(f"{p}/attention/q_linear/weight")
+            qkv = get(f"{p}/attention/qkv_linear/weight")
+            qkv_shape = tuple(qkv.shape)
+            assert qkv_shape == (1, 1, H + 2 * kv_dim, H), (
+                f"qkv_linear shape mismatch at layer {i}: got {qkv_shape}, " f"expected (1, 1, {H + 2 * kv_dim}, {H})"
+            )
+            out[f"model.layers.{i}.self_attn.q_proj.weight"] = rows(qkv, 0, H)
+            out[f"model.layers.{i}.self_attn.k_proj.weight"] = rows(qkv, H, H + kv_dim)
+            out[f"model.layers.{i}.self_attn.v_proj.weight"] = rows(qkv, H + kv_dim, H + 2 * kv_dim)
             out[f"model.layers.{i}.self_attn.o_proj.weight"] = get(f"{p}/attention/out_linear/weight")
 
-            kv = get(f"{p}/attention/kv_linear/weight")
-            kv_shape = tuple(kv.shape)
-            assert kv_shape == (1, 1, 2 * kv_dim, H), (
-                f"kv_linear shape mismatch at layer {i}: got {kv_shape}, " f"expected (1, 1, {2 * kv_dim}, {H})"
+            gate_up = get(f"{p}/mlp/w_gate_up/weight")
+            gate_up_shape = tuple(gate_up.shape)
+            assert gate_up_shape[:2] == (1, 1) and gate_up_shape[2] % 2 == 0 and gate_up_shape[3] == H, (
+                f"w_gate_up shape mismatch at layer {i}: got {gate_up_shape}, " f"expected (1, 1, 2*I, {H})"
             )
-            out[f"model.layers.{i}.self_attn.k_proj.weight"] = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, kv_dim, H])
-            out[f"model.layers.{i}.self_attn.v_proj.weight"] = ttnn.slice(kv, [0, 0, kv_dim, 0], [1, 1, 2 * kv_dim, H])
-
-            out[f"model.layers.{i}.mlp.gate_proj.weight"] = get(f"{p}/mlp/w1/weight")
-            out[f"model.layers.{i}.mlp.up_proj.weight"] = get(f"{p}/mlp/w3/weight")
+            intermediate = gate_up_shape[2] // 2
+            out[f"model.layers.{i}.mlp.gate_proj.weight"] = rows(gate_up, 0, intermediate)
+            out[f"model.layers.{i}.mlp.up_proj.weight"] = rows(gate_up, intermediate, 2 * intermediate)
             out[f"model.layers.{i}.mlp.down_proj.weight"] = get(f"{p}/mlp/w2/weight")
 
         return out
