@@ -458,11 +458,11 @@ here: `mvlahovic/sdpa_revamp`, `mvlahovic/sdpa_revamp_topk`, `mvlahovic/sdpa_rev
 On Blackhole main tip the profiler-enabled `brisc.elf` is 0x2204 bytes against a 0x2200 firmware
 region, so a profiler build fails to link BRISC firmware on first device run. The fix is one constant
 in `tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h`, committed on
-`mvlahovic/analyze_sdpa_fresh` as `b2c7f9de8d2` ("bump the blackhole brisc firmware size so a profiler
-build fits") and present in neither `origin/main` nor the calibration branch:
+both measurement branches (`b2c7f9de8d2` on `mvlahovic/analyze_sdpa_fresh` and the same change as
+`b781c4ef94e` on `mvlahovic/sdpa_topk_harness`) and present in `origin/main` on neither:
 
 ```bash
-cd $TTM_FRESH
+cd $TTM        # or $TTM_FRESH, both branches carry it
 grep -n "define MEM_BRISC_FIRMWARE_SIZE" tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h
 ```
 
