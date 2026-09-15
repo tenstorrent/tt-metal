@@ -18,50 +18,50 @@ from .operations import apply_swiglu
 from .weights import ExpertWeights
 
 
-def _pick_in0_block_w(k, cap):
-    """Largest power-of-2 divisor of the K tile count, capped.
+def _pick_in0_block_w(k):
+    """K tiles per mcast round: half the K extent, i.e. two accumulating blocks.
 
-    The sparse_matmul inner loop runs K/in0_block_w mcast rounds per active expert, and at
-    in0_block_w=1 that sync dominates: measured per-active-expert cost on the decode shapes
-    drops 60 -> 9 us (gate_up, K=2048) and 21 -> 3 us (down_proj, K=512) as in0_block_w grows.
-    The cap bounds the in0/in1 circular buffers (in0_block_w * per_core_N tiles, double
-    buffered) and is set from where the measured curve flattens on each shape.
+    The sparse_matmul inner loop runs K/in0_block_w mcast rounds per active expert, and
+    in0_block_w=1 makes that sync dominate (measured 60 us per active expert on the gate_up
+    shape vs 9 at K/2). Folding all of K into one block instead disables packer_l1_acc
+    (which needs num_blocks > 1) and doubles the in1 buffer, which measured slower again
+    once per_core_N > 1. Swept on the decode shapes: gate_up K=2048 -> 32, down K=512 -> 8.
     """
     k_tiles = int(math.ceil(k / 32))
     bw = 1
-    while bw * 2 <= min(cap, k_tiles) and k_tiles % (bw * 2) == 0:
+    while bw * 2 <= k_tiles // 2 and k_tiles % (bw * 2) == 0:
         bw *= 2
     return bw
 
 
-def _build_sparse_matmul_config(m, n, in0_block_w=1):
-    """Program config for sparse_matmul (largest divisor of n_tiles fitting an 8x8 grid)."""
+def _build_sparse_matmul_config(m, n, in0_block_w=1, per_core_n=1):
+    """Program config for sparse_matmul: n_tiles/per_core_n cores on an 8-wide grid.
+
+    per_core_n also sets out_subblock_w — a 1x1 output subblock leaves the FPU running one
+    tile per pass, and widening it to 1x2 (half the cores, two N-tiles each) measured faster
+    on both decode shapes at every active-expert count swept. Falls back to one N-tile per
+    core when n_tiles does not split that way.
+    """
     n_tiles = int(math.ceil(n / 32))
-
-    best_cores = 1
-    best_cx, best_cy = 1, 1
-    for num_cores in range(1, min(65, n_tiles + 1)):
-        if n_tiles % num_cores != 0:
-            continue
-        for cy in range(1, 9):
-            if num_cores % cy == 0:
-                cx = num_cores // cy
-                if cx <= 8 and num_cores > best_cores:
-                    best_cores = num_cores
-                    best_cx, best_cy = cx, cy
-                    break
-
-    per_core_N = n_tiles // best_cores
+    if per_core_n > 1 and (n_tiles % per_core_n or n_tiles // per_core_n > 64):
+        per_core_n = 1
+    num_cores = n_tiles // per_core_n
+    best_cx = max(d for d in range(1, 9) if num_cores % d == 0)
+    best_cy = num_cores // best_cx
+    if best_cy > 8:
+        per_core_n, num_cores = 1, n_tiles
+        best_cx = max(d for d in range(1, 9) if num_cores % d == 0)
+        best_cy = num_cores // best_cx
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(best_cx, best_cy),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_w=per_core_n,
         out_block_h=1,
-        out_block_w=per_core_N,
+        out_block_w=per_core_n,
         per_core_M=max(32, m) // 32,
-        per_core_N=per_core_N,
+        per_core_N=per_core_n,
         fuse_batch=False,
         fused_activation=None,
         mcast_in0=True,
@@ -77,6 +77,7 @@ def decode_forward(
     tt_ccl=None,
     num_devices=1,
     topology=None,
+    reduce=True,
 ):
     """hidden_states [1,1,S,H] (S = decode batch), routing_weights [1,1,S,E]. Returns [1,1,S,H/tp]."""
     batch_size = hidden_states.shape[2]
@@ -111,10 +112,10 @@ def decode_forward(
     # widening the N-gridded core count (8 -> 32) vs the old intermediate-parallel layout; the
     # fused output feeds ttnn.swiglu directly as [up | gate].
     gate_up_config = _build_sparse_matmul_config(
-        batch_size, 2 * intermediate_size, _pick_in0_block_w(config.hidden_size, cap=64)
+        batch_size, 2 * intermediate_size, _pick_in0_block_w(config.hidden_size), per_core_n=2
     )
     down_config = _build_sparse_matmul_config(
-        batch_size, config.hidden_size, _pick_in0_block_w(intermediate_size, cap=8)
+        batch_size, config.hidden_size, _pick_in0_block_w(intermediate_size), per_core_n=2
     )
 
     up_gate = ttnn.sparse_matmul(
@@ -125,7 +126,11 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
-        dtype=ttnn.bfloat16,
+        # bfloat8_b output: the expanded [1,E,S,N] result is written, zero-filled and re-read by
+        # swiglu in full, so its width is pure data movement. gate/up weights are already
+        # bfloat4_b, so bf16 here bought no accuracy -- measured -81 us across the two sparse
+        # matmuls' fills, the swiglu chain and the expert sum, for 2e-4 of decode PCC.
+        dtype=ttnn.bfloat8_b,
     )
     # sparse_matmul returns rank 6 here: a dense [1,1,B,H] in0 contributes 2 batch dims and the
     # sparse [1,E,H,2I] weights another 2, so the result is [1,1,1,E,B,2I] -- EXPERT-major, with the
@@ -167,7 +172,7 @@ def decode_forward(
         output_tile=output_tile,
         program_config=down_config,
         is_input_a_sparse=True,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,  # see gate_up above; this output is summed over experts, then reduce-scattered
     )
 
     # Routing is already applied (above), so the experts just sum: [1,E,S,H] -> [1,1,S,H].
@@ -181,7 +186,7 @@ def decode_forward(
 
     # Row-parallel down_proj partials -> reduce-scatter (fractured along hidden dim=3),
     # matching Qwen36MLP._forward_tp so residual/DistributedNorm alignment holds.
-    if num_devices > 1:
+    if num_devices > 1 and reduce:
         next_states = tt_all_reduce(
             next_states,
             mesh_device,
