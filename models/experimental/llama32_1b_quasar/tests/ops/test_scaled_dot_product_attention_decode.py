@@ -38,11 +38,6 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 # reduction (batch1 = one K-chunk per core, combined across more cores) where merge bugs actually bite.
 DECODE_SEQ_CONFIGS = [
     (256, 128, 128),  # 2 K-chunks: nearest_n(129, 128) == 256
-    (384, 257, 128),  # 3 K-chunks: nearest_n(258, 128) == 384   [DIAG bisection]
-    (512, 385, 128),  # 4 K-chunks: nearest_n(386, 128) == 512   [DIAG bisection]
-    (640, 513, 128),  # 5 K-chunks: nearest_n(514, 128) == 640   [DIAG bisection]
-    (768, 641, 128),  # 6 K-chunks: nearest_n(642, 128) == 768   [DIAG bisection]
-    (896, 769, 128),  # 7 K-chunks: nearest_n(770, 128) == 896   [DIAG bisection]
     (1024, 896, 128),  # 8 K-chunks: nearest_n(897, 128) == 1024
 ]
 
