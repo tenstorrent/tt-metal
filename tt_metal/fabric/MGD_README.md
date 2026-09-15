@@ -44,6 +44,42 @@ link on a config-torused direction could face a peer that labels the axis
 differently and hang (issue #54650). An axis the MGD itself declares as `RING`
 keeps its boundary ports.
 
+### Per-mesh fabric config
+
+A mesh descriptor may declare the fabric config its meshes run with:
+
+```textproto
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels        { count: 2 }
+  fabric_config: FABRIC_2D_TORUS_Y
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 4 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels        { count: 2 }
+  fabric_config: FABRIC_2D
+}
+```
+
+Every rank owning a mesh resolves its fabric config by `mesh_id`, so all of them
+use the value the descriptor declares instead of a per-rank environment override.
+A mesh without `fabric_config` keeps following the process-wide fabric config.
+
+Rules:
+- Only the 2D values (`FABRIC_2D`, `FABRIC_2D_TORUS_X`, `FABRIC_2D_TORUS_Y`,
+  `FABRIC_2D_TORUS_XY`) can be declared; 1D fabric stays process-wide.
+- Declaring a 2D config while the process-wide config is 1D is rejected, as is an
+  inter-mesh link whose two endpoint meshes mix 1D and 2D configs.
+- As everywhere else, a fabric config may only restrict the topology the MGD
+  declares (torus → mesh), never add connections the descriptor does not have.
+- A single host cannot own two meshes with different fabric configs.
+
 
 ## Minimal workflow
 > This is currently TBD

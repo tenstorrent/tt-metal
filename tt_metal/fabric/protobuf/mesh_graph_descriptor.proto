@@ -178,6 +178,12 @@ message MeshDescriptor {
 
     // Optional list of explicit intra-mesh express links.
     repeated ExpressConnection express_connections = 7;
+
+    // Optional per-mesh fabric configuration. When set, every rank owning this mesh uses this
+    // configuration instead of the process-wide FabricConfig, which lets one descriptor mix
+    // meshes that need different 2D routing/deadlock-avoidance modes. Only 2D values are
+    // accepted; a process-wide 1D FabricConfig cannot be combined with a mesh that declares one.
+    optional FabricConfig fabric_config = 8;
 }
 
 // -----------------------------------------------------------------------------
@@ -460,6 +466,25 @@ enum Architecture {
     INVALID_ARCHITECTURE = 0;
     WORMHOLE_B0 = 1;
     BLACKHOLE = 2;
+}
+
+// FabricConfig selects the 2D routing mode of a single mesh. The names mirror
+// tt::tt_fabric::FabricConfig, but only the 2D values are expressible here: meshes in one
+// descriptor may differ in their 2D mode, while 1D configurations remain process-wide.
+// - FABRIC_2D: 2D routing without deadlock avoidance
+// - FABRIC_2D_TORUS_X / _Y / _XY: 2D routing with deadlock avoidance along the named axes
+// Example:
+//   mesh_descriptors {
+//     name: "M0"
+//     device_topology { dims: [ 4, 4 ] }
+//     fabric_config: FABRIC_2D_TORUS_Y
+//   }
+enum FabricConfig {
+    INVALID_FABRIC_CONFIG = 0;
+    FABRIC_2D = 1;
+    FABRIC_2D_TORUS_X = 2;
+    FABRIC_2D_TORUS_Y = 3;
+    FABRIC_2D_TORUS_XY = 4;
 }
 
 // Channels specify the per-connection lane count and enforcement policy.

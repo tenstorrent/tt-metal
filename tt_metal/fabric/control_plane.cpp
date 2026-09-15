@@ -436,6 +436,7 @@ void ControlPlane::init_control_plane(
         tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    this->adopt_local_mesh_fabric_config();
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
@@ -540,6 +541,40 @@ void ControlPlane::init_control_plane(
 
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
+}
+
+void ControlPlane::adopt_local_mesh_fabric_config() {
+    // A descriptor only selects among fabric modes; it never turns fabric on for a host that runs with
+    // fabric disabled or with a custom configuration.
+    if (!is_tt_fabric_config(this->fabric_config_)) {
+        return;
+    }
+
+    std::optional<FabricConfig> local_fabric_config;
+    for (const auto& mesh_id : this->local_mesh_binding_.mesh_ids) {
+        const auto mesh_fabric_config = this->mesh_graph_->get_fabric_config(mesh_id);
+        if (!mesh_fabric_config.has_value()) {
+            continue;
+        }
+        TT_FATAL(
+            !local_fabric_config.has_value() || *local_fabric_config == *mesh_fabric_config,
+            "ControlPlane: This host owns meshes with different fabric configs ({} and {}); a host can only serve "
+            "meshes that share one fabric config",
+            enchantum::to_string(*local_fabric_config),
+            enchantum::to_string(*mesh_fabric_config));
+        local_fabric_config = mesh_fabric_config;
+    }
+
+    if (!local_fabric_config.has_value() || *local_fabric_config == this->fabric_config_) {
+        return;
+    }
+
+    log_info(
+        tt::LogFabric,
+        "Using fabric config {} declared by the mesh graph descriptor for the local mesh, instead of {}",
+        enchantum::to_string(*local_fabric_config),
+        enchantum::to_string(this->fabric_config_));
+    this->fabric_config_ = *local_fabric_config;
 }
 
 void ControlPlane::init_control_plane_auto_discovery() {

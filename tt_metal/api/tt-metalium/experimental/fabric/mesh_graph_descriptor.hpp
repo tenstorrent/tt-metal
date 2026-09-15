@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <variant>
 #include <atomic>
+#include <optional>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -35,6 +36,7 @@ class GraphRef;
 class SwitchRef;
 enum Policy : int;
 enum RoutingDirection : int;
+enum FabricConfig : int;
 class LogicalFabricNodeId;
 class PhysicalAsicPosition;
 class AsicPinning;
@@ -231,6 +233,11 @@ public:
     proto::Architecture get_arch() const;
     uint32_t get_num_eth_ports_per_direction() const;
 
+    // FabricConfig declared by a mesh descriptor (`MeshDescriptor.fabric_config`), if any.
+    // std::nullopt means the mesh follows the process-wide FabricConfig. Only 2D configurations
+    // can be declared, so meshes of one descriptor may differ in their 2D mode only.
+    static std::optional<FabricConfig> get_declared_fabric_config(const proto::MeshDescriptor* mesh_desc);
+
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
     static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
@@ -290,6 +297,8 @@ private:
     static void validate_graph_topology_and_connections(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_pinnings(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_fabric_configs(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     static void validate_legacy_requirements(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
