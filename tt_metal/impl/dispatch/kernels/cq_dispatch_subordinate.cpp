@@ -171,6 +171,8 @@ extern "C" {
 volatile uint32_t last_wait_count = 0;
 #ifdef FDS_SIGNALLING
 volatile uint32_t last_go_token = 0;
+volatile uint32_t last_fds_go_pending_mask = 0;
+volatile uint32_t last_fds_open_round_mask = 0;
 #endif
 volatile uint32_t last_wait_stream = 0;
 constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
@@ -195,8 +197,11 @@ static std::array<uint32_t, max_num_worker_sems> open_round_worker_count = {0};
 static std::array<uint32_t, max_num_worker_sems> open_round_credited_count = {0};
 static uint32_t open_round_mask = 0;
 constexpr uint32_t kInitGoClearHoldCycles = 4096;
-constexpr uint32_t kFdsGoToken = 1;
-static bool open_round_uses_fds_go = false;
+// Placeholder pending measurement: hold each strobe level until every worker captures it.
+constexpr uint32_t kFdsGoStrobeHoldCycles = 512;
+static uint32_t fds_go_pending_mask = 0;
+static uint32_t fds_wire_token = 0;
+static uint32_t fds_wire_busy_until = 0;
 
 FORCE_INLINE
 void write_go_verified(uint32_t value) {
@@ -205,6 +210,33 @@ void write_go_verified(uint32_t value) {
         overlay::fds_signalling::dispatch_write_go(value);
     } while (overlay::fds_signalling::dispatch_read_go() != value);
     WAYPOINT("FGOD");
+}
+
+// Strobes queued go tokens onto the shared go wire as token, hold, zero, hold. Emits at once when
+// the wire is idle, otherwise queues behind the in-progress strobe. Timer compares wrap safely.
+FORCE_INLINE
+void service_fds_go_wire() {
+    if (fds_go_pending_mask == 0 && fds_wire_token == 0) {
+        return;
+    }
+    const uint32_t current_timestamp = get_timestamp_32b();
+    if (static_cast<int32_t>(current_timestamp - fds_wire_busy_until) < 0) {
+        return;
+    }
+    if (fds_wire_token != 0) {
+        write_go_verified(0);
+        fds_wire_token = 0;
+        last_go_token = 0;
+    } else {
+        const uint32_t sub_device_index = __builtin_ctz(fds_go_pending_mask);
+        const uint32_t go_token = sub_device_index + 1;
+        write_go_verified(go_token);
+        fds_wire_token = go_token;
+        last_go_token = go_token;
+        fds_go_pending_mask &= ~(1U << sub_device_index);
+    }
+    last_fds_go_pending_mask = fds_go_pending_mask;
+    fds_wire_busy_until = get_timestamp_32b() + kFdsGoStrobeHoldCycles;
 }
 #endif
 
@@ -261,12 +293,6 @@ void credit_open_rounds() {
             open_round_credited_count[sub_device_index] = completed_worker_count;
         }
         if (completed_worker_count == expected_worker_count) {
-            if (open_round_uses_fds_go) {
-                // Clear the wire only after wait_for_workers has observed every worker in this round.
-                write_go_verified(0);
-                last_go_token = 0;
-                open_round_uses_fds_go = false;
-            }
             open_round_mask &= ~sub_device_mask;
         }
 
@@ -339,6 +365,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #endif
 #ifdef FDS_SIGNALLING
         credit_open_rounds();
+        service_fds_go_wire();
 #endif
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, false);
@@ -389,6 +416,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
         update_worker_completion_count_on_dispatch_d();
 #ifdef FDS_SIGNALLING
         credit_open_rounds();
+        service_fds_go_wire();
 #endif
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
@@ -427,15 +455,15 @@ void open_worker_completion_round(uint32_t sub_device_index) {
 
     open_round_worker_count[sub_device_index] = workers_per_sub_device[sub_device_index];
     open_round_credited_count[sub_device_index] = 0;
-    open_round_uses_fds_go = false;
     open_round_mask |= sub_device_mask;
+    last_fds_open_round_mask = open_round_mask;
     WAYPOINT("FCLD");
 }
 #endif
 
-// In an FDS build, RUN_MSG_GO for a single sub-device uses FDS token 1 and DM0 receives it through a
-// machine-external interrupt before writing the worker mailbox signal byte. The wire is 0 outside a round.
-// All other go commands use the NOC path.
+// In an FDS build, RUN_MSG_GO uses the FDS go wire with token sub-device index + 1, strobed as token,
+// hold, zero, hold. DM0 receives it through a machine-external interrupt before writing the worker
+// mailbox signal byte. The wire is 0 outside a strobe. All other go commands use the NOC path.
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
@@ -452,6 +480,10 @@ void process_go_signal_mcast_cmd() {
         invalidate_l1_cache();
         // Update dispatch_d with the latest num_workers
         update_worker_completion_count_on_dispatch_d();
+#ifdef FDS_SIGNALLING
+        credit_open_rounds();
+        service_fds_go_wire();
+#endif
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -478,15 +510,13 @@ void process_go_signal_mcast_cmd() {
 #ifdef FDS_SIGNALLING
     wait_for_workers(wait_count, wait_stream);
     const bool use_fds_go = multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET &&
-                            (go_signal_value >> 24) == RUN_MSG_GO && num_worker_sems == 1 && num_unicasts == 0;
+                            (go_signal_value >> 24) == RUN_MSG_GO && num_unicasts == 0;
 
     if (use_fds_go) {
         DPRINT("DISPATCH_S: go FDS\n");
-        ASSERT(multicast_go_offset == 0);
-        open_worker_completion_round(0);
-        open_round_uses_fds_go = true;
-        last_go_token = kFdsGoToken;
-        write_go_verified(kFdsGoToken);
+        open_worker_completion_round(multicast_go_offset);
+        fds_go_pending_mask |= 1U << multicast_go_offset;
+        service_fds_go_wire();
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         DPRINT("DISPATCH_S: go NOC\n");
         uint64_t dst_noc_addr_multicast =
@@ -505,6 +535,8 @@ void process_go_signal_mcast_cmd() {
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
         if ((go_signal_value >> 24) == RUN_MSG_GO) {
             open_worker_completion_round(multicast_go_offset);
+        } else {
+            ASSERT((open_round_mask & (1U << multicast_go_offset)) == 0);
         }
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
@@ -555,6 +587,9 @@ void process_go_signal_mcast_cmd() {
 
     *aligned_go_signal_storage_uncached = go_signal_value;
     if constexpr (virtualize_unicast_cores) {
+#ifdef FDS_SIGNALLING
+        ASSERT(!virtualize_unicast_cores);
+#endif
         // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
         // This chip is virtualizing cores the go signal is unicasted to
         // In this case, the number of unicasts specified in the command can exceed
@@ -647,6 +682,10 @@ void set_num_worker_sems() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
 #ifdef FDS_SIGNALLING
     ASSERT(open_round_mask == 0);
+    ASSERT(fds_go_pending_mask == 0);
+    while (fds_wire_token != 0) {
+        service_fds_go_wire();
+    }
 #endif
     num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
@@ -776,6 +815,7 @@ void kernel_main() {
         device_print_dispatcher.execute();
 #endif
     }
+    fds_wire_busy_until = go_clear_start + kInitGoClearHoldCycles;
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
@@ -789,6 +829,10 @@ void kernel_main() {
         device_print_dispatcher.execute();
 #endif
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
+#ifdef FDS_SIGNALLING
+        credit_open_rounds();
+        service_fds_go_wire();
+#endif
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         // Upstream relays this command by NoC write, which does not snoop, so the header must be dropped before
         // it is read cached. CPU reads past this window carry their own invalidate; payload handed to
@@ -856,6 +900,11 @@ void kernel_main() {
                 if constexpr (telemetry_enabled) {
                     dispatch_telemetry_control->compute_terminate = 1;
                 }
+#ifdef FDS_SIGNALLING
+                while (fds_go_pending_mask != 0 || fds_wire_token != 0) {
+                    service_fds_go_wire();
+                }
+#endif
                 done = true;
                 break;
             default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
@@ -875,6 +924,11 @@ void kernel_main() {
             signal_realtime_profiler_and_switch(rt_profiler_msg);
         }
     }
+#ifdef FDS_SIGNALLING
+    while (fds_go_pending_mask != 0 || fds_wire_token != 0) {
+        service_fds_go_wire();
+    }
+#endif
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
 
