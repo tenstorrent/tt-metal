@@ -196,11 +196,8 @@ static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 static std::array<uint32_t, max_num_worker_sems> open_round_worker_count = {0};
 static std::array<uint32_t, max_num_worker_sems> open_round_credited_count = {0};
 static uint32_t open_round_mask = 0;
-constexpr uint32_t kInitGoClearHoldCycles = 4096;
-// Placeholder pending measurement: hold each strobe level until every worker captures it.
-constexpr uint32_t kFdsGoStrobeHoldCycles = 512;
 static uint32_t fds_go_pending_mask = 0;
-static uint32_t fds_wire_token = 0;
+static uint32_t fds_wire_token = overlay::fds_signalling::idle_group_id;
 static uint32_t fds_wire_busy_until = 0;
 
 FORCE_INLINE
@@ -216,27 +213,27 @@ void write_go_verified(uint32_t value) {
 // the wire is idle, otherwise queues behind the in-progress strobe. Timer compares wrap safely.
 FORCE_INLINE
 void service_fds_go_wire() {
-    if (fds_go_pending_mask == 0 && fds_wire_token == 0) {
+    if (fds_go_pending_mask == 0 && fds_wire_token == overlay::fds_signalling::idle_group_id) {
         return;
     }
     const uint32_t current_timestamp = get_timestamp_32b();
     if (static_cast<int32_t>(current_timestamp - fds_wire_busy_until) < 0) {
         return;
     }
-    if (fds_wire_token != 0) {
-        write_go_verified(0);
-        fds_wire_token = 0;
-        last_go_token = 0;
+    if (fds_wire_token != overlay::fds_signalling::idle_group_id) {
+        write_go_verified(overlay::fds_signalling::idle_group_id);
+        fds_wire_token = overlay::fds_signalling::idle_group_id;
+        last_go_token = overlay::fds_signalling::idle_group_id;
     } else {
         const uint32_t sub_device_index = __builtin_ctz(fds_go_pending_mask);
-        const uint32_t go_token = sub_device_index + 1;
+        const uint32_t go_token = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
         write_go_verified(go_token);
         fds_wire_token = go_token;
         last_go_token = go_token;
         fds_go_pending_mask &= ~(1U << sub_device_index);
     }
     last_fds_go_pending_mask = fds_go_pending_mask;
-    fds_wire_busy_until = get_timestamp_32b() + kFdsGoStrobeHoldCycles;
+    fds_wire_busy_until = get_timestamp_32b() + overlay::fds_signalling::go_strobe_hold_cycles;
 }
 #endif
 
@@ -280,8 +277,8 @@ void credit_open_rounds() {
     while (remaining_open_rounds != 0) {
         const uint32_t sub_device_index = __builtin_ctz(remaining_open_rounds);
         const uint32_t sub_device_mask = 1U << sub_device_index;
-        const uint32_t completed_worker_count =
-            overlay::fds_signalling::dispatch_read_group_count(sub_device_index + 1);
+        const uint32_t completed_worker_count = overlay::fds_signalling::dispatch_read_group_count(
+            overlay::fds_signalling::go_group_for_sub_device(sub_device_index));
         const uint32_t expected_worker_count = open_round_worker_count[sub_device_index];
         ASSERT(completed_worker_count <= expected_worker_count);
 
@@ -446,7 +443,8 @@ void open_worker_completion_round(uint32_t sub_device_index) {
     ASSERT((open_round_mask & sub_device_mask) == 0);
     ASSERT(workers_per_sub_device[sub_device_index] != 0);
 
-    uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(sub_device_index + 1);
+    uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(
+        overlay::fds_signalling::go_group_for_sub_device(sub_device_index));
     while (workers_with_stale_completion != 0) {
         const uint32_t worker_lane = __builtin_ctz(workers_with_stale_completion);
         overlay::fds_signalling::dispatch_clear_worker_status(worker_lane);
@@ -683,7 +681,7 @@ void set_num_worker_sems() {
 #ifdef FDS_SIGNALLING
     ASSERT(open_round_mask == 0);
     ASSERT(fds_go_pending_mask == 0);
-    while (fds_wire_token != 0) {
+    while (fds_wire_token != overlay::fds_signalling::idle_group_id) {
         service_fds_go_wire();
     }
 #endif
@@ -767,10 +765,11 @@ void kernel_main() {
     dispatch_s_atomic_cmd_buf_init();
 #ifdef FDS_SIGNALLING
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
-    overlay::fds_signalling::dispatch_config_filter_length(8);
-    overlay::fds_signalling::dispatch_config_interrupt_enable(0);
-    for (uint32_t group_id = 1; group_id <= max_num_worker_sems; ++group_id) {
-        overlay::fds_signalling::dispatch_config_group(group_id, 0xFFFFFFFF, 0);
+    overlay::fds_signalling::dispatch_config_filter_length(overlay::fds_signalling::filter_length);
+    overlay::fds_signalling::dispatch_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
+    for (uint32_t group_id = overlay::fds_signalling::idle_group_id + 1; group_id <= max_num_worker_sems; ++group_id) {
+        overlay::fds_signalling::dispatch_config_group(
+            group_id, overlay::fds_signalling::all_worker_lanes_mask, overlay::fds_signalling::dispatch_done_threshold);
     }
 #endif
     if constexpr (distributed_dispatcher) {
@@ -808,14 +807,14 @@ void kernel_main() {
     // go signal is sent — the stall-detection window is per-program, not per-dispatch_s.
 #endif
 #ifdef FDS_SIGNALLING
-    write_go_verified(0);
+    write_go_verified(overlay::fds_signalling::idle_group_id);
     const uint32_t go_clear_start = get_timestamp_32b();
-    while (get_timestamp_32b() - go_clear_start < kInitGoClearHoldCycles) {
+    while (get_timestamp_32b() - go_clear_start < overlay::fds_signalling::init_go_clear_hold_cycles) {
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
     }
-    fds_wire_busy_until = go_clear_start + kInitGoClearHoldCycles;
+    fds_wire_busy_until = go_clear_start + overlay::fds_signalling::init_go_clear_hold_cycles;
 #endif
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
@@ -901,7 +900,7 @@ void kernel_main() {
                     dispatch_telemetry_control->compute_terminate = 1;
                 }
 #ifdef FDS_SIGNALLING
-                while (fds_go_pending_mask != 0 || fds_wire_token != 0) {
+                while (fds_go_pending_mask != 0 || fds_wire_token != overlay::fds_signalling::idle_group_id) {
                     service_fds_go_wire();
                 }
 #endif
@@ -925,7 +924,7 @@ void kernel_main() {
         }
     }
 #ifdef FDS_SIGNALLING
-    while (fds_go_pending_mask != 0 || fds_wire_token != 0) {
+    while (fds_go_pending_mask != 0 || fds_wire_token != overlay::fds_signalling::idle_group_id) {
         service_fds_go_wire();
     }
 #endif
