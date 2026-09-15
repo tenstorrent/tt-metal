@@ -793,14 +793,21 @@ class CCLManager:
             neighbor_sems,
             [barrier_sem],
             num_links=num_links,
-            topology=self.topology,
+            # neighbor_pad resolves neighbours as a line; Ring leaves edge shards waiting
+            # for an unreachable startup-barrier count (tenstorrent/tt-metal#55512).
+            topology=ttnn.Topology.Linear,
             persistent_output_buffer=persistent_buf,
             logical_h=logical_h,
             t_front_pad=t_front_pad,
         )
 
     def reset_global_semaphores(self):
-        """Reset all global semaphores to 0"""
+        """Reset all global semaphores and their host-side ping-pong selectors.
+
+        Callers must synchronize the mesh before entering this method. Resetting only the device
+        values while retaining the host selectors can restart a shape-switched collective on the
+        opposite bank from its barrier semaphore and deadlock.
+        """
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
@@ -808,7 +815,13 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.rs_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self.rs_ping_pong_semaphores_fused[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self.exp_ring_ping_pong_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self.barrier_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
             # Lazily-allocated fused NP+Conv3d pools; skipped entirely until something asks for them.
             for pool in (
@@ -819,6 +832,16 @@ class CCLManager:
                 if pool is not None:
                     for sem in pool[axis]:
                         ttnn.reset_global_semaphore_value(sem, 0)
+
+        self.rs_ping_pong_idx = [0, 0]
+        self.rs_ping_pong_idx_fused = [0, 0]
+        self.ag_ping_pong_idx = [0, 0]
+        self.exp_ring_ping_pong_idx = [0, 0]
+        self.np_ping_pong_idx = [0, 0]
+        self.np_fused_ping_pong_idx = [0, 0]
+        self.sr_ping_pong_idx = [0, 0]
+        self.barrier_idx = [0, 0]
+        self.barrier_fused_idx = [0, 0]
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
