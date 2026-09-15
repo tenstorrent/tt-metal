@@ -375,7 +375,19 @@ void populateZoneSrcLocations(
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.contains(hash_16bit))) {
-            TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
+            // A 16-bit hash over this many zones collides by the birthday bound, and throwing here
+            // loses the whole capture: this runs inside MeshDevice::close, before results are
+            // written. Warn instead. The first entry wins, so any zone named below resolves to the
+            // other one's name -- check the list before trusting a measurement it mentions.
+            const auto& existing = hash_to_zone_src_locations.at(hash_16bit);
+            log_warning(
+                tt::LogMetal,
+                "Zone source location hash collision on 0x{:04x}: '{}' collides with '{},{},{}'",
+                hash_16bit,
+                zone_src_location,
+                existing.marker_name,
+                existing.source_file,
+                existing.source_line_num);
         }
 
         std::stringstream ss(zone_src_location);
