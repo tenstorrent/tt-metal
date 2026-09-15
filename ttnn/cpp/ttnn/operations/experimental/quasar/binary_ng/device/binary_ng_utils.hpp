@@ -153,6 +153,12 @@ struct NativeTuning {
                                       // needs the guarantee that no thread draws zero tiles, which
                                       // uneven tile counts removed
     uint32_t entries_per_thread = 2;  // per-thread ring depth; num_entries = this x max(producers, consumers)
+    uint32_t tiles_per_cycle = 0;     // EXPERIMENTAL override for num_tiles_per_cycle (COMPUTE side);
+                                      // 0 = use the derived value. Needs entries_per_thread >= 2x this,
+                                      // or wait_front never completes and the op hangs
+    uint32_t dm_batch = 1;            // EXPERIMENTAL tiles per barrier in the reader/writer. Same
+                                      // capacity rule. Independent of tiles_per_cycle: a ring lets
+                                      // producer and consumer transact at different granularities
     uint32_t reader_threads = 1;      // R
     uint32_t compute_threads = 1;     // C -- must be 1, 2 or 4
     uint32_t writer_threads = 1;      // W

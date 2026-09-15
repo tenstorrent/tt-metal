@@ -926,6 +926,10 @@ const NativeTuning& native_tuning() {
         t.enabled = env_bool("TTNN_QSR_NATIVE");
         t.implicit_sync = env_bool("TTNN_QSR_IMPLICIT_SYNC");
         t.entries_per_thread = env_u32("TTNN_QSR_ENTRIES_PER_THREAD", 2, kMaxEntriesPerThread);
+        // EXPERIMENTAL: 0 keeps the derived value. env_u32 rejects 0, so read it separately.
+        t.tiles_per_cycle =
+            std::getenv("TTNN_QSR_TILES_PER_CYCLE") == nullptr ? 0u : env_u32("TTNN_QSR_TILES_PER_CYCLE", 1, 8);
+        t.dm_batch = env_u32("TTNN_QSR_DM_BATCH", 1, 8);
         t.reader_threads = env_u32("TTNN_QSR_READER_THREADS", 1, kMaxThreads);
         t.compute_threads = env_u32("TTNN_QSR_COMPUTE_THREADS", 1, kMaxThreads);
         t.writer_threads = env_u32("TTNN_QSR_WRITER_THREADS", 1, kMaxThreads);
@@ -966,11 +970,13 @@ const NativeTuning& native_tuning() {
         // number.
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={}. Sync is EXPLICIT.",
+            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} tiles_per_cycle={}. "
+            "Sync is EXPLICIT.",
             t.reader_threads,
             t.compute_threads,
             t.writer_threads,
-            t.entries_per_thread);
+            t.entries_per_thread,
+            t.tiles_per_cycle);
         return t;
     }();
     return tuning;

@@ -647,7 +647,9 @@ what the 176.5 cyc/tile "compute" roof is actually made of (per Neo, per tile)
 ```
 
 ⇒ the `C` roof is a **DFB-delivery roof wearing a compute label**. Consequences: more Neos cannot lower
-it much (matching the recorded `C=2→4` = 0.3%), and the levers that *can* are fewer Tensix instructions
+it much **once it stops binding** (the recorded `C=2→4` = 0.3% is an `R=1` figure, where the reader
+binds; where compute still binds it pays — `2,2,2`→`2,4,2` is 88.25→82.53, 6.5%), and the levers that
+*can* lower the roof itself are fewer Tensix instructions
 per tile or cheaper DFB handshakes — which is precisely §10.6's 56% call-batching lever, not more `C`.
 This also generalises §5.0.1's "the Tensix is starved" from the 2-DM baseline to the tuned config: it
 is not a baseline artifact, it survives 4x more DM cores and 4x more Neos.
@@ -844,7 +846,13 @@ matters.** Multi-tile batching (`num_tiles_per_cycle` up to 8, the hardware limi
 caps adding Neos, because both levers shrink the same term.
 
 So there are **two batching levers and they attack different terms** — do not quote one's mechanism as
-the other's payoff:
+the other's payoff. **They are also two distinct values, not one.** A DFB ring permits producer and
+consumer to transact at different granularities (`wait_front(N)` blocks until N entries exist, however
+they arrived), so all four combinations of (reader batch, compute batch) are coherent. In the current
+code the reader has **no batch parameter at all** — `constexpr uint32_t onetile = 1`
+(`reader_no_bcast_dfb.cpp:32`) — while `num_tiles_per_cycle` is a compile-time arg to the *compute*
+kernel only. What they share is two constraints, so they cannot be swept independently: ring capacity
+must hold both parties' working sets, and both face the same non-contiguity at stride > 1.
 
 | lever | shrinks | worth at `4,4,2` interleaved | where it pays | craq-sim verdict |
 |---|---|---|---|---|
@@ -866,8 +874,7 @@ the 2.36 KB issue/transport knee is the first-order win, but how much further `Q
 ~144 B/cyc/cluster at Q=1 against the cluster curve's ~25. **Reconciling those two, or deriving one from
 the source study, is a prerequisite to quoting any read-path saturation figure.**
 
-**`num_tiles_per_cycle` on the native path is 1 unconditionally, and three things stack to keep it there
-(corrected 2026-09-10 — an earlier draft of this section wrongly said n = 8 "already runs" here):**
+**`num_tiles_per_cycle` on the native path is 1 unconditionally, and three things stack to keep it there:**
 
 1. **It is not a knob.** No env var sets it. It is derived:
    `n = 1; if (all_borrowed) n = min(is_sfpu ? 2 : 8, c_full_shard_tiles);`
@@ -1005,7 +1012,7 @@ kept verbatim as history, per the same rule.
 
 | expectation | source | result | verdict |
 |---|---|---|---|
-| Kill criterion — stop if threads deliver <1.3x | design §2.4 | **4.000x** from threads | cleared 3x over |
+| Go/no-go threshold — stop if threads deliver <1.3x | design §2.4 | **4.000x** from threads | cleared 3x over |
 | Capture >=50% of the 149.1 cyc/tile headroom | design §2.3.2 (gate metric — pre-implementation basis by definition) | 94.6% span / ~101% marginal | far exceeded; marginal >100% because native `4,4,2` (44.00) undercuts the 45.25 floor, which was measured on the old arm at `C=1` |
 | Threads must deliver 2.83x for the ceiling | status, M0-entry plan table (history) | 4.000x, the ceiling exactly | exceeded |
 | Combination law: additive was the default; `max()` needed justifying | design §2.3.2 | envelope 8155 vs additive 20,340 at T=160 | **`max()` confirmed — additive killed by 2.5x** |
@@ -1027,7 +1034,789 @@ Two rows deserve more than their checkmarks:
   design §2.2 should not be read as a bound on multi-Neo configs. Practically: craq-sim has nothing left
   to give on this op.
 
-### 5.0.7 Open questions (moved from the tutorial page, 2026-09-10)
+### 5.0.8 MEASURED 2026-09-10: batching works at stride 1, corrupts above it, and pays ~1%
+
+Both steps of §5.0.7's experiment ran, via a new `TTNN_QSR_TILES_PER_CYCLE` override that reaches the
+batched path on interleaved operands (the `all_borrowed` branch cannot). Depth held at 4 for both arms so
+`N` is isolated from ring depth.
+
+**Step 1 — `1,1,1`, stride 1: WORKS.** Bit-exact at 64, 96, 33, 97, 31 tiles — including the odd counts
+that exercise the restored remainder branch. **The interleaved producer-1/consumer-N mechanism is sound**;
+that is the part unbuilt on every architecture, and it is now built and validated.
+
+| `1,1,1`, depth 4 | 60 t/c | 120 | 180 | marginal | prologue | span @ 40 t/c |
+|---|---:|---:|---:|---:|---:|---:|
+| N=1 | 11363 | 21953 | 32543 | **176.50** | 773 | **7833** |
+| N=2 | 11039 | 20939 | 30839 | **165.00** | 1139 | **7739** |
+| N=4 (depth 8) | 11203 | 21075 | 30943 | 164.50 | 1333 | — |
+
+Both arms exactly linear (identical 60-cycle steps). **Three results:**
+
+1. **The roofline predicted this and hit it to the digit.** `max(165.0/R, 176.5/C, 83.5/W)` says that once
+   the `C` term falls, the marginal lands on `Rc = 165.0`. Measured **165.00**. The model is
+   *mechanism-agnostic* about how `C` shrinks — batching and adding Neos are interchangeable to it. Note
+   this bounds the batched compute chain only at `<= 165`; the reader floor hides its true value, so
+   §5.0.5's `131/n + 45` decomposition is **consistent but still not pinned**.
+2. **N=2 is the stopping point, now measured.** N=4 gives 164.50 — 0.3%, about what the depth change
+   4 → 8 contributes by itself. Everything past N=2 is inaccessible headroom, as predicted.
+3. **The prologue cost was badly underweighted, and it nearly cancels the gain.** Prologue rises
+   **773 → 1139 (+366, +47%)**. So **7.0% throughput gain becomes 1.2% latency gain** at the 1280-tile
+   benchmark shape (7833 → 7739, both measured, both exactly on the fitted line). This is the
+   throughput-vs-latency rule of status §3 in its sharpest form yet.
+
+**Step 2 — `4,4,2`, stride 4: CORRUPTS.** With the guard bypassed, output is wrong at
+**(N-1)/N** — 49.9% at N=2 (128 and 1280 tiles), 69.9% at N=4 (predicted 75%; misplaced writes wrap
+inside the thread's own region, so some land correctly by accident).
+
+⇒ **The pack path is not stride-aware, and the `TT_FATAL` was protecting a real defect.** The unpack side
+explicitly applies stride (`offset_address = stride_size * tile_index`, `cb_api.h:146`); the pack side
+spaces tiles contiguously, so at stride 4 every tile but the first lands in a sibling's slot. **An earlier
+draft of §5.0.7 suggested the guard was over-broad and should test the pairing ratio instead of `max()` —
+that was wrong twice: `stride_in_entries = max(P,C)` is exactly what the guard tests, and the guard is
+load-bearing.** The bypass has been removed; `4,4,2` + N=2 now throws as it should.
+
+**`4,4,2` timing, taken with the guard bypassed.** Output is corrupt there, but a broken dataflow still
+executes the full trip count, so the *timing* is real (§10's rule: measure the region your model cannot
+see). Depth 4 both arms:
+
+| `4,4,2`, depth 4 | 60 t/c | 120 | 180 | marginal | prologue |
+|---|---:|---:|---:|---:|---:|
+| N=1 | 3759 | 6405 | 9053 | **44.12** | 1112 |
+| N=2 | 3911 | 6417 | 8923 | **41.77** | 1405 |
+
+41.77 is the DM floor `max(165.0/4, 83.5/2) = 41.75` — the second exact out-of-sample hit for the
+roofline. **Break-even** is `Δprologue / Δmarginal` = `293 / 2.35` = **125 tiles/cluster**, and the
+measured spans straddle it: 60 t/c is **4.0% worse**, 120 t/c 0.2% worse, 180 t/c 1.4% better. At the
+40 t/c benchmark shape the fit puts N=2 **6.9% worse**.
+
+**Structural conclusion, platform-independent.** Batching buys marginal cost with fixed cost, so a
+break-even size always exists at `Δprologue / Δmarginal` — and the scaling is perverse: **the more threads
+already in play, the smaller `Δmarginal`, so the larger the tensor needed to repay the same fixed cost.**
+At `1,1,1` the saving is 11.50 cyc/tile and break-even is 32 t/c; at `4,4,2` it is 2.35 cyc/tile and
+break-even is 125. Same pattern as adding non-binding Neos (§8: `C 2→4` does not pay below ~440-740 t/c).
+
+**These numbers do NOT transfer to silicon, and craq-sim is not a valid stop signal for this lever.**
+Design §2.4 already classifies batching as **two-sided, net direction unknown**; the prologue term adds a
+third unknown rather than resolving it:
+
+| effect | direction on silicon |
+|---|---|
+| DM terms rise (we sustain ~10% of achievable NoC in-flight, §5.0.4) | **less** value — at `4,4,2` compute binds over the DM floor by only 5.6%, so any larger relative DM growth stops it binding and the lever is worth **zero** |
+| credit ops cost real coherence traffic, not instruction counts | **more** value — the chain is 74% credit work, so it may inflate faster than the DM terms and bind harder |
+| pipeline fill in the prologue is a real DRAM round trip, ~0 here | **less** value — the fixed-cost penalty is understated, though a bigger body could shrink its relative share |
+
+⇒ **Do not use the negative craq-sim result to retire this lever.** What is established: the mechanism
+works at stride 1, the cap mechanism is confirmed, the instruction-count half does not pay at the
+benchmark shape, and **the pack path corrupts above stride 1** — the last being a real defect on every
+platform. The substrate ask is specific and small: **make the pack path apply `stride_size` per tile
+index, mirroring the unpack path.** Its value is clearest for the sharded/fused case, where the DM terms
+vanish and the compute term keeps binding. The unexamined lever remains the dataflow side, where `RD_RSV`
+is 70.9 of the reader's 165 cyc/tile — a body saving ~5x larger, so its break-even should be far more
+favourable.
+
+Harness: `TTNN_QSR_TILES_PER_CYCLE` (experimental, unstaged) + `debug/perf/util_rcw.py`.
+
+---
+
+### 5.0.9 MEASURED 2026-09-10: batch ALL THREE stages and it is worth 27%, not 7%
+
+§5.0.8 batched compute only. This adds `TTNN_QSR_DM_BATCH` — a batched reader and writer, `n` tiles per
+`async_read_barrier` / `async_write_barrier`, with each entry addressed at `i * get_stride_size()`. All
+four arms at `1,1,1`, depth 4, bit-exact where they ran:
+
+| `1,1,1` | depth | marginal | prologue | span @ 40 t/c | throughput | latency @ 40 t/c |
+|---|---:|---:|---:|---:|---:|---:|
+| dm=1, N=1 — baseline | 4 | 176.50 | 773 | 7833 | — | — |
+| dm=1, N=2 — compute only | 4 | 165.00 | 1139 | 7739 | +7.0% | +1.2% |
+| **dm=2, N=1 — dataflow only** | 4 | **176.50** | 831 | — | **0.0%** | — |
+| dm=2, N=2 — all three | 4 | 139.00 | 1139 | 6699 | +27.0% | +16.9% |
+| dm=4, N=4 — all three | 8 | 113.50 | 1246 | 5788 | +55.5% | +35.3% |
+| **dm=8, N=8 — all three** | 16 | **97.39** | 1466 | **5363** | **+81.2%** | **+46.1%** |
+
+**Bit-exact at every N**, across 64/96/33/97/31/1280 tiles. Batching pays all the way to the DST limit of
+8, with diminishing but substantial increments: marginal falls 37.5, then 25.5, then 16.1. Fitting the
+N=2 and N=8 points gives `marginal ~= 111/N + 83.5`, whose asymptote sits suspiciously close to
+`Wc = 83.5` — suggestive, not established, and worth a look if this is ever pushed past 8.
+
+**Tail-batch quantisation, and it briefly looked like curvature.** At N=8 the 60→120→180→240 segment
+slopes are 99.83 / 94.95 / 99.83 — not monotonic. `Tc = 120, 240` are exact multiples of 8; `Tc = 60, 180`
+leave a 4-tile tail that pays a full handshake for half a batch. Fitting the clean multiples gives 97.39,
+matching the 3-point least-squares fit, so the marginal holds. **Consequence for shape choice: at large N,
+per-cluster counts that are not multiples of N carry a tail penalty** — the 40 t/c benchmark shape happens
+to divide by 8 exactly.
+
+**1. Dataflow-only batching returns exactly zero** — the marginal does not move off 176.50 to the digit.
+The reader was not the bottleneck, so making it cheaper changes nothing. Third independent confirmation of
+the roofline, and the cleanest: a lever that should obviously help, returning precisely 0 because it
+targets a non-binding stage.
+
+**2. All three together at N=8 is +81% throughput, against 7.0% for compute-only** — and the reason is
+the roofline again. Compute-only stops dead at the reader floor (165.00); batching the reader *moves the
+floor*. Neither stage alone can do this. **This is the quantitative form of §10's "batch both sides".**
+
+**3. And the latency gain tracks it: +46.1% at the benchmark shape** (7833 → 5363, measured, not
+extrapolated). Break-even is `Δprologue / Δmarginal`, which for N=8 is `693 / 79.11` = **8.8
+tiles/cluster** — far below the 40 t/c shape, and better than N=2's 9.8 despite a larger prologue,
+because `Δmarginal` grows faster than the fixed cost does. Compute-only had 32; `4,4,2` compute-only had
+125. **The prologue problem of §5.0.8 was never about batching — it was about batching too little.**
+
+**Above `1,1,1` it fails, and the two failure modes classify differently** (§5.0.11):
+
+| | mechanism | legal usage? | verdict |
+|---|---|---|---|
+| **compute batching** | `get_output_tile_index` adds +1 entry per tile into an index whose converter divides by `stride_size_tiles`, so at stride > 1 consecutive tiles collapse onto one byte offset | **yes** — public API, documented access pattern, no restriction stated | **BUG, filed** |
+| **dataflow batching** | `push_back(n)` credits ONE tile counter and rotates `tc_idx` once, and a DM kernel can address only the active TC (`get_local_*` exposes `tc_slots[tc_idx]`) | **no** — placing n entries across n TCs is not expressible | **do not use; guard is permanent** |
+
+⇒ **The two knobs are used together or not at all** — compute must not pop more than the reader pushes,
+so compute-only batching is a diagnostic arm, never a shipping config. That makes the legal space for
+batching the intersection of the two rules: compute needs `R <= C and W <= C`, dataflow needs
+`C <= R and C <= W`, so **both together require `R == C == W`, i.e. `1,1,1` and `2,2,2` only.**
+`4,4,2` and every other config is **N=1 permanently**, not pending a fix.
+
+⇒ **One substrate ask: make the pack path apply `stride_size_tiles` per tile index.** `cb_api.h:146`
+already does exactly this on the unpack side, with the comment "per-tile spacing is `stride_size`, not
+`entry_size`". That single fix delivers **`2,2,2` N=8** — the only configuration batching can reach, and
+one that is **10% slower than the `4,4,2` N=1 default in absolute throughput**. So the fix is not on our
+critical path; it converts batching from unusable into an engine-constrained option.
+
+**Do not carry forward a `4,4,2` batching projection.** Earlier drafts of this section estimated 24-27
+cyc/tile there by scaling the `1,1,1` cut, then a bound of [1.05x, 1.81x]. Both are moot: `4,4,2` N=8 is
+not legal usage, so no fix makes it reachable. The batched-writer-constant probe at `4,4,1` that would
+have narrowed that range is withdrawn with it.
+
+Harness: `TTNN_QSR_DM_BATCH` + `debug/perf/batch_check.py` (both experimental, unstaged).
+
+---
+
+### 5.0.10 The whole picture at N=8 — batching IS the in-flight lever
+
+Batching does not merely amortise credit calls. The batched reader issues all `N` reads on `in0` and all
+`N` on `in1` **before** its `async_read_barrier`, so those transfers are concurrently outstanding. `Q`
+goes from 1 to `N`, which is exactly the in-flight axis §5.0.4/§10.6 identified as the large unpriced
+lever:
+
+| config | reads outstanding | airborne per cluster | fraction of NoC peak (`f = Q·N/(k+Q·N)`, `k ≈ 112 KB`) | runs? |
+|---|---:|---:|---:|---|
+| `1,1,1`, N=1 | 2 | 4 KB | 3.4% | yes |
+| **`1,1,1`, N=8** | 16 | 32 KB | **22.2%** | **yes — the only measured N=8** |
+| `4,4,2`, N=1 | 8 | 16 KB | 12.5% | yes |
+| `4,4,2`, N=8 | 64 | 128 KB | 53.3% | **NO — illegal combination, see §5.0.11** |
+
+**Read the fourth row as arithmetic on a configuration that cannot execute.** `4,4,2` N=8 is rejected by
+the factory guard and corrupts when the guard is bypassed, so its 128 KB / 53.3% is what the model says
+*would* be airborne, not a state anything has reached. **The in-flight rise actually achieved is
+3.4% → 22.2%, on one thread.** Do not quote 12.5% → 53.3% as the batching result: that attaches a blocked
+config's projection to a `1,1,1` measurement.
+
+§5.0.4 put the 50%-of-peak target at "~112 KB airborne, about 10 tiles per thread against the one we
+have". **Nothing has reached that.** `1,1,1` N=8 delivers 16 tiles airborne per cluster against the ~56
+that target needs; the config that would reach it is the blocked one. Consequence for how §5.0.9's number
+should be read: **the measured +81% at `1,1,1` is the instruction-count half only, so on the dataflow side
+it is a FLOOR, not a ceiling** — craq-sim charges nothing for transfers and cannot price the `Q` increase
+at all. That floor argument stands on its own and does not need the `4,4,2` projection.
+
+This also resolves why the dataflow-only arm returned exactly 0.0%: **two different zeros.** On the
+instruction-count axis it is a genuine zero (the reader was not the binding stage, so `max()` ignores it).
+On the in-flight axis it is the simulator declining to answer. On silicon that arm would return something
+positive even though craq-sim says nothing moved.
+
+**Two roofs arrive together at `4,4,2`, N=8** (marginal projected ~25 from §5.0.9's 44.8% cut):
+
+| quantity | N=1 | N=8 |
+|---|---:|---:|
+| NoC demand per cluster vs the 256 B/cyc port | 139.6 B/cyc = 54% | **245.8 B/cyc = 96%** |
+| device-wide DRAM **demand** | 4468 B/cyc | 7864 B/cyc |
+
+**The NoC port saturates at 96%** — the first roof in this whole analysis to actually bind, and the one
+figure here with a real denominator (`NOC_PAYLOAD_WIDTH`, `noc_parameters.h:390`).
+
+**THERE IS NO DRAM DENOMINATOR — do not manufacture one.** An earlier version of this section compared
+the 4468 B/cyc demand against "~3858 B/cyc available" and reported **1.16x over**, with a **"DRAM-feasible
+floor of ~51 cyc/tile"**. Both are artifacts and are withdrawn:
+
+- **3858 B/cyc is not a supply figure.** It is §5.0.4's *demand* at a different operating point
+  (`4,4,2`, T=160: `3 × 5120 × 2048 = 31.46 MB` over an 8155-cycle span). So "1.16x over" compared two
+  demands — `6144 × 32 / 44.00 = 4468` against `6144 × 32 / 50.97 = 3857` — and the ratio is just
+  `50.97 / 44.00`.
+- **~51 cyc/tile is not a DRAM roof.** `8155 / 160 = 50.97` is span/T, the *average* cost per tile, which
+  is `marginal + prologue/T = 44.12 + 1106/160 = 51.03`. It differs from the marginal by prologue
+  amortisation and nothing else. §5.0.6 states this identity directly.
+
+What §5.0.4 actually established stands, and is a plausibility flag rather than a ceiling: a device-wide
+demand of ~3857 B/cyc attributed to the descriptor's 2 DRAM views implies **1929 B/cyc per channel, about
+1.9 TB/s at 1 GHz — implausible for real hardware.** So these operating points are very likely
+unreachable on silicon for a DRAM-interleaved shape. **By how much is unknown**, and it stays unknown
+until a denominator exists: `noc_estimator` has no Quasar arch, so the path is running
+`tests/tt_metal/tt_metal/data_movement/` on Quasar hardware (§5.0.4, "where a real denominator comes
+from"). The descriptor supplies **capacity only — 2 × 1 GB DRAM views — never bandwidth.**
+
+**Compute does not change in character.** 8 math instructions per output tile, spread over `C` engines:
+
+| config | per-engine arithmetic | issue efficiency | idle |
+|---|---:|---:|---:|
+| `1,1,1` N=1 | 8.0 instr/tile | 4.5% | 95.5% |
+| `1,1,1` N=8 | 8.0 | 8.2% | **91.8%** |
+| `4,4,2` N=1 | 2.0 | 4.5% | 95.5% |
+| `4,4,2` N=8 | 2.0 | 8.0% | **92.0%** |
+
+Batching doubles the arithmetic fraction and moves nothing structural: **the FPU stays ~92% idle at every
+setting.** Arithmetic intensity is 12x below machine balance (§5.0.2), so no batching makes this
+arithmetic-bound. The op is delivery-bound everywhere on the legal space.
+
+⇒ **Production recommendation: threading is the bigger lever, but batching buys resource efficiency and
+that is the more useful thing.** Two comparisons, and they say different things. **At equal N, threading
+dominates** — `1,1,1` at N=8 reaches only 97.39, which loses even to `2,2,2` *unbatched* at 88.25, so
+eight-way batching on one thread is beaten by two plain threads and N is never a substitute for thread
+count. **But batching lets a cheaper config nearly match a bigger one:**
+
+| config | marginal | engines | throughput per engine | basis |
+|---|---:|---:|---:|---|
+| `4,4,2` N=1 | 44.12 | 6 DM + 4 Neo = 10 | 1.00x | measured |
+| `2,2,2` N=8 | 48.70 | 4 DM + 2 Neo = **6** | **1.51x** | projected (firm) |
+
+`2,2,2` at N=8 delivers **90% of the throughput on 60% of the engines**. On a shared cluster — or any time
+other work wants to be co-resident — that is the better trade, and it is the strongest argument batching
+has. But state it as a trade, not an upgrade: **48.70 against 44.12 is 10% less throughput**, and
+`4,4,2` N=1 remains the best config measured and the default. Do not frame N=8 as either a top-up on the
+frontier config or a replacement for it.
+
+**Zoom out: N>1 requires the two operand shapes to be EQUAL.** Any broadcast, of either kind, puts N
+back to 1 — but by different routes, and the distinction matters because the flag name misleads:
+
+| kind | why N is forced to 1 |
+|---|---|
+| **subtile** (ROW/COL/SCALAR) | the tile is not consumed 1:1; compute indexes *inside* it, so the batch cannot be formed. The Quasar factory states this directly (`factory:663-665`) |
+| **outer-dim** (leading N/C/D/nD) | handled by the reader re-reading a tile through zeroed strides — but only the **interleaved** reader does that (`reader_interleaved_no_bcast.cpp`, `#else` branch, cascade bounded by `dst_num_tiles`). Under `#if SRC_SHARDED` the reader pushes `src_num_tiles`, its own shard, with no duplication — and N>1 is gated on sharding |
+
+**Mind the two conditions and which way the implication runs.** The kernel named `no_bcast` is selected
+on `SubtileBroadcastType::NONE`, and that is the *broader* condition:
+
+```
+shapes equal   ⊂   subtile broadcast == NONE
+```
+
+Equal shapes always imply subtile NONE, so the `no_bcast` kernel serves them — but **NONE does not imply
+equal shapes**, because an outer-dim broadcast passes it. The kernel is named for the wider set it
+covers, not for the narrower one N needs. Production's gate is
+`subtile_broadcast_type == NONE && a_sharded && b_sharded && c_sharded`
+(`binary_ng_program_factory.cpp:1016-1040`), and **the sharding half is what narrows NONE down to equal
+shapes**: `is_native_L1_sharding` admits all-three-sharded only via the branch guarded by
+`a.logical_shape() == b->logical_shape()` (`binary_ng_utils.cpp:806`, comment: *"no broadcast on any
+dimension"*); the other sharded branch requires `!b_is_sharded`. Net:
+
+| case | N | why |
+|---|---:|---|
+| any broadcast, either kind | **1** | see the table above |
+| DRAM-interleaved, shapes equal | **1** | never implemented on WH/BH — the gate requires sharding |
+| **L1-sharded, shapes equal** | **8** | the only paying case (2 for SFPU, reason undocumented) |
+
+**On the Quasar path neither broadcast kind is supported yet**, so all of the above is forward-looking:
+
+| kind | Quasar native today | roadmap |
+|---|---|---|
+| outer-dim | **not supported** — `a_dims_are_output_dims && b_dims_are_output_dims` (`factory:1044-1047`) rejects it, because `kernels_qsr/` collapsed the stride cascade to `page = start_tile_id + k` | **2.1 / F13** — a regression to restore, not a feature to add |
+| subtile | **not supported** | **2.2 / F8**, gated on `#51291` |
+
+Every measurement in §5.0.8-§5.0.11 is therefore on dense shapes. **Implication for F13:** restoring the
+cascade brings back outer-dim broadcast on the *interleaved* path, where N is 1 regardless — so F13 and
+the batch knob do not interact. They would only interact if a future sharded path wanted both, which
+needs a compute-side index mapping that does not exist today.
+
+In the paying row the reader has almost nothing to do, since the operand is already resident: it pushes
+the tiles and stops, so the whole gain is compute-side. **One case of three — N=1 is the norm**, which is
+the honest frame for §5.0.8-§5.0.11 as a whole.
+
+Two consequences. **The experiment was instrumentation first** — varying N is how the per-tile credit
+constant gets separated from the rest of the chain, and that is what pinned the `C` roof as a *delivery*
+roof rather than an arithmetic one (§5.0.5). Read the 1.81x as a measurement of the cost model.
+
+**But the missing row is an opportunity for Quasar, and it is cheap.** Because WH/BH gate multi-tile on
+sharding, *DRAM-interleaved no-broadcast N>1 has never been implemented on any architecture* — and the
+Quasar factory is being written now, so it can be the first. The gap is a single branch:
+
+```cpp
+uint32_t num_tiles_per_cycle = 1;                       // factory:578-581, today
+if (all_borrowed) {
+    num_tiles_per_cycle = std::min<uint32_t>(is_sfpu ? 2u : 8u, c_full_shard_tiles);
+}
+```
+
+That is the production policy already ported — including the SFPU cap of 2 — and it covers the sharded
+row only. The experimental knob exists precisely to "reach the batched path on interleaved operands,
+which the `all_borrowed` branch above cannot". Making it permanent is: **extend that `if` with an
+interleaved + no-broadcast + `R == C == W` branch, and derive `entries_per_thread = 2N` instead of
+defaulting to 2.** The kernels are already written and measured bit-exact across
+64/96/33/97/31/384/416/544/1280/1312 tiles.
+
+**Reach, stated honestly, because it does not help the default config.** `1,1,1` works today; `2,2,2`
+follows the pack fix; `4,4,2` never (dataflow batching there is not expressible). And `1,1,1` at N=8 is
+*strictly worse* than `4,4,2` at N=1 — higher prologue **and** higher marginal — so nobody choosing on
+speed alone would run it. The case for landing it is completeness and readiness: it closes a
+cross-architecture gap, it is a correct generalisation of a policy already in the factory, it is gated so
+the default is untouched, and the alternative is that a measured result evaporates with an unstaged env
+knob.
+
+**Why 48.70 is a firm projection.** `2,2,2` divides all three roofs by exactly 2, so
+`marginal(2,2,2,N) = marginal(1,1,1,N)/2` holds under the fitted model whatever binds — validated at N=1
+to 0.5% (88.00 predicted vs 88.43 measured). The 48.70 is that identity applied to a *measured* N=8
+aggregate, and it already carries whatever the writer batching cost, since 97.39 was measured with all
+three stages batched. Nothing else about it is extrapolated.
+
+**`4,4,2` is N=1 permanently, so there is no `4,4,2` batching number to quote.** Dataflow batching there
+needs the writer's two tile counters addressed from a DM kernel, which the DFB API cannot express
+(§5.0.11) — not a defect awaiting a fix. And since the two knobs only ship together, the compute-only
+figure is not a configuration either. For completeness, the reason it would have been small anyway:
+
+| config | reader | compute | writer | binds | spread |
+|---|---:|---:|---:|---:|---:|
+| `1,1,1` | 165.00 | **176.50** | 83.50 | cmp | 2.11x |
+| `2,2,2` | 82.50 | **88.25** | 41.75 | cmp | 2.11x |
+| `4,4,2` | 41.25 | **44.12** | 41.75 | cmp | **1.07x** |
+
+Batching compresses only roofs with slack above the next one down, and at `4,4,2` the three sit within 7%
+of each other — threading already reached the balanced state batching exists to produce. **That is a
+reason not to want it there, independent of legality.** `2,2,2` keeps the 2.11x spread, which is why the
+same lever is worth 1.81x there and nothing at the frontier.
+
+**So batching's value is NOT "a bit more throughput at `4,4,2`" — it is reaching a given throughput on
+fewer engines.** The roof-balance argument above says only that batching adds little *on top of* the
+frontier config; it says nothing against using batching to hit near-frontier throughput from `2,2,2`,
+which is what the table shows. Batching is also worth most where DRAM is out of the picture — L1-sharded
+operands and fused chains (F3) — since a DRAM-interleaved `4,4,2` is very likely transport-limited on
+silicon (§5.0.10: demand is implausible, magnitude unknown), clipping
+most of what batching could add there but not on a resident-L1 path.
+
+**Open: `4,4,2` N=1 vs `2,2,2` N=8 is a 1.11x throughput gap, so the choice is a policy question, not a
+perf question.** Pick `4,4,2` N=1 to minimise latency on a dedicated cluster; pick `2,2,2` N=8 to maximise
+throughput per engine when the cluster is shared. `2,2,2` N=8 needs tt-metal#56194 first: today its
+compute half silently corrupts 50% of each batch, and our `TT_FATAL` is what keeps that from escaping.
+
+**Blocker, root-caused to one line — tt-metal#56194.** `get_output_tile_index` (`hw/ckernels/quasar/metal/llk_api/
+llk_pack_tile_api.h:58-74`) computes the within-batch tile address as `wr_entry_idx + output_tile_index`
+— **+1 entry per tile.** But that index is consumed by `dfb_slot_cursor_offset_units`, which converts with
+`(delta_entries / stride_size_tiles) * stride_size`, i.e. it *divides* by stride. At stride 1 the two
+agree. At stride > 1 the division truncates: tile `i` lands at `floor(i/S) * stride_size`, so a batch of
+`N` covers only `ceil(N/S)` distinct slots and loses **`1 - ceil(N/S)/N`** of its tiles. That predicts
+every measured rate — stride 4 at N=2 puts both tiles at offset 0 (50% predicted, 49.9% measured),
+stride 2 at N=8 collides them in pairs (50%, 50.0%), stride 4 at N=8 in groups of four (75%, 74.9%).
+The batch *base* is correct —
+`dfb_advance_slot` already does `wr_entry_idx += num_tiles * stride_size_tiles`. Only the per-tile step
+inside the batch was missed, and `cb_api.h:146` does it right on the unpack side with the comment
+"per-tile spacing is `stride_size`, not `entry_size`". **Earlier drafts hedged this as "pack or unpack,
+not decidable from any correct config" — reading the code settles it without needing a config.**
+
+---
+
+### 5.0.11 MEASURED 2026-09-10: localising the multi-thread batching failure
+
+A matrix over (R,C,W) x which-stage-batches, each case in its own process with a 240 s cap and tile counts
+chosen so every batching stage forms at least one FULL batch of 8. Guards bypassed; correctness is not
+expected above stride 1 — the point is which failure MODE appears where.
+
+| R,C,W | batched | stride in / out | result |
+|---|---|---:|---|
+| 1,1,1 | both | 1 / 1 | **OK** |
+| 1,1,2 | dataflow | 1 / 2 | CORRUPT 99.9% — **void row, see below** |
+| 1,1,2 | compute | 1 / 2 | CORRUPT 99.9% — **void row** |
+| **2,2,2** | **dataflow** | **2 / 2** | **OK — bit-exact** |
+| 2,2,2 | compute | 2 / 2 | CORRUPT 50.0% |
+| 4,4,2 | dataflow | 4 / 4 | CORRUPT 87.4% |
+| 4,4,2 | compute | 4 / 4 | CORRUPT 74.9% |
+
+**Three earlier claims die here.**
+
+1. **"It hangs" was shape-specific.** No case in this matrix deadlocks; all complete, either clean or
+   corrupt. §5.0.9's hangs came from particular tile counts, not from batching per se.
+2. **`1,1,2` is a void control.** With **no batching at all** it is already **CORRUPT 50.0%** — `C=1 <
+   max(R,W)=2` makes it one of the 18 pre-existing corrupt configs (§4). Nothing it does under batching is
+   attributable to batching.
+3. **The wrap hypothesis is refuted.** Raising `entries_per_thread` 16 → 32 at `4,4,2` gave results
+   **identical to the digit** (87.4 / 74.9 / 93.7%). The thread's region spans
+   `(capacity-1)*stride*entry_size + entry_size`, which at depth 16 and stride 4 is 124928 B against a
+   batch of 8 needing 59392 B — it never wrapped. So `entries_per_thread >= 2N` stands and the
+   "wrap-aware per-entry address" ask of §5.0.9 is **WITHDRAWN**.
+
+**Dataflow batching is bit-exact at `2,2,2` — a real multi-thread config at stride 2.** So stride > 1 is
+not the barrier. The discriminator is **`num_tcs_to_rr`**, how many transaction counters a thread
+round-robins through (`dataflow_buffer.cpp:1260-1286`); the kernel interface carries a base address **per
+TC** (`base_addr[tc]`, `tc_slots[tc_idx]`), and our batched walk steps `i * stride` from a single base:
+
+| config | reader `C>=R ? C/R : 1` | compute | writer `C>=W ? C/W : 1` | predicts |
+|---|---:|---:|---:|---|
+| 1,1,1 | 1 | 1 | 1 | OK ✓ |
+| 2,2,2 | 1 | 1 | 1 | OK ✓ |
+| 4,4,2 | 1 | 1 | **2** | dataflow fails ✓ |
+
+⇒ **Two independent failures, and they are different KINDS, not two bugs:**
+
+- **Compute batching — a BUG in the metal LLK pack path.** `2,2,2` isolates it cleanly: every role is
+  single-TC, no wrap, stride 2, and compute batching still corrupts 50%. Root cause is
+  `get_output_tile_index` adding +1 entry per tile into an index that `dfb_slot_cursor_offset_units`
+  divides by `stride_size_tiles` (§5.0.10 has the derivation and the matching corruption rates). Public
+  API, documented STRIDED pattern, no restriction stated, wrong data out — **filed as tt-metal#56194**, in
+  `hw/ckernels/quasar/metal/llk_api/` — NOT tt-llk and NOT craq-sim.** It is integer arithmetic, so silicon
+  behaves identically; craq-sim is only where it was observed.
+- **Dataflow batching — NOT A BUG; the operation is not expressible.** `push_back(n)` credits the current
+  tile counter by `n` and rotates `tc_idx` by exactly 1 (`dataflow_buffer.inl:203`), `reserve_back` does
+  not rotate at all (`:140`), and a DM kernel can address only the **active** TC — `get_local_*` exposes
+  `tc_slots[tc_idx]` and nothing else. So spreading a batch across `num_tcs_to_rr` counters cannot be
+  written with today's API. The DFB *did* consider batched multi-TC: the `broadcast_tc` / BLOCKED branch
+  posts `num_entries` to all N counters and deliberately skips the rotate — handled for broadcast only.
+  **Our guard is correct and permanent**, not a placeholder. The one thing worth filing here is the
+  **missing assert**: `push_back(n>1)` with `num_tcs_to_rr > 1` should fail loudly instead of
+  silently mis-crediting.
+
+**Consequence — and this is what makes the legal space so small.** The two knobs ship together or not at
+all (compute must not pop more than the reader pushes), so batching needs compute's TCs at 1
+(`R <= C and W <= C`) **and** the DM roles' TCs at 1 (`C <= R and C <= W`). Opposite constraints;
+intersection `R == C == W`; with `C in {1,2,4}` and `R+W <= 6` that is **`1,1,1` and `2,2,2`, full stop.**
+Every other config including `4,4,2` is **N=1 permanently.** Measured at `2,2,2`, depth 16:
+
+| `2,2,2` | marginal | prologue |
+|---|---:|---:|
+| no batching | 88.43 | 864 |
+| dataflow batched N=8 | **87.43** | 1458 |
+
+**1.1% on the marginal, and a net loss at any real shape** once +594 prologue is paid — exactly as the
+roofline requires: `Cc/C = 176.5/2 = 88.25` and compute is not batched, so **compute binds at 88.25 either
+way**. The reader term falls to 48.70 and the writer to 28.05, both irrelevant because neither was binding.
+
+⇒ **The 1.81x at `1,1,1` is the only measured batching win, and it exists solely because `1,1,1` is the
+one config where the LLK bug cannot fire (stride 1 on both rings).** Compute is the binding stage
+everywhere on the legal space (§8), so **the entire lever is gated on the single LLK fix** — which
+delivers exactly one further configuration, **`2,2,2` N=8**, which is slower than the `4,4,2` N=1
+default in absolute throughput and earns its place only on engines-per-tile (§5.0.10: 90% of the
+throughput on 60% of the engines). **Batching is therefore not on the critical path**; `4,4,2` N=1 is the
+default and no fix changes that. **The multi-TC walk fix we had
+planned is cancelled**, not deferred: its only beneficiaries were `4,4,2`-shaped configs, which the
+API cannot support at any batch size.
+
+Harness: `debug/perf/hang_matrix.py` (experimental, unstaged).
+
+---
+
+### 5.0.12 2026-09-15: which ceiling binds — and why DRAM cannot be ranked yet
+
+Three ceilings appear across §5.0.2-§5.0.10. Two have real denominators; the third does not, and that
+asymmetry is the whole finding.
+
+| ceiling | scope | denominator | status |
+|---|---|---|---|
+| **issue rate** | per DM core; `R + W` per cluster | ≤ 62 B/cyc, ~24 measured (O2O, BH-calibrated) | **binds today** at `4,4,2` N=1 |
+| **NoC port** | **per cluster** — each of the 32 has its own | 256 B/cyc, `noc_parameters.h:390` | 54% used at N=1, 96% at N=8 |
+| **DRAM** | **device-wide** — all 32 clusters share one pool | **none exists** | **unrankable** |
+
+**The scope distinction is real and survives everything below.** The NoC scales with cluster count, DRAM
+does not, so a per-cluster figure and a device-wide one are never directly comparable. This op moves
+`3 × 2048 = 6144 B` per output tile, so `n` active clusters at `m` cyc/tile demand `n × 6144/m` B/cyc
+from one pool.
+
+**But the ranking cannot be completed, because there is no DRAM denominator.** `quasar_32_arch.yaml`
+gives 2 × 1 GB DRAM **views** — capacity, not bandwidth — and `noc_estimator`'s `Architecture` enum has
+no Quasar (§5.0.4). Any "% of DRAM" figure here would be invented. What can be said:
+
+- **Demand is implausibly high.** ~3857 B/cyc device-wide at `4,4,2` T=160 implies ~1929 B/cyc per
+  channel across the descriptor's two views, roughly 1.9 TB/s each. Real channels are far below that, so
+  **these operating points are very likely unreachable on silicon for DRAM-interleaved shapes.**
+- **The magnitude is unknown.** Nothing in this branch's measurements bounds it.
+
+**A cluster-count escape does not exist, and this is worth stating because it looks like one.** For a
+fixed tensor, using fewer clusters gives each more tiles: total bytes are unchanged and wall time rises.
+With `n` clusters at `m` cyc/tile over `T_total` tiles, wall time is `T_total · m / n` while demand is
+`n · 6144 / m`. If a device-wide supply `S` caps demand, then `n/m ≤ S/6144`, so:
+
+```
+wall time  >=  T_total * 6144 / S      — independent of cluster count AND of threading
+```
+
+**A device-wide bandwidth ceiling cannot be dodged by any (R,C,W) or any grid size.** Only two things
+move it: moving fewer bytes (L1-sharded operands, fusion), or more bandwidth. A small tensor is not an
+exception — it finishes sooner because there is less work, not because it found headroom.
+
+### The model, with the unknown left as a parameter
+
+Not knowing `S` is no reason to leave the roof unmodelled — it is a reason to carry it as a symbol and
+invert the question. Four terms, three of them known:
+
+```
+  D(m)     = n · d · tile_bytes / m            device-wide DRAM demand, B/cyc
+  m_dram   = n · d · tile_bytes / (S · η)      the DRAM-feasible marginal
+  m_si     = max( m_roofline , m_dram )        what silicon would deliver
+  wall     ≥ T_total · d · tile_bytes / (S · η)
+```
+
+| symbol | meaning | value |
+|---|---|---|
+| `n` | clusters concurrently active | ≤ 32 |
+| `d` | how many of `{in0, in1, out}` live in DRAM | **3** interleaved, 2 with one operand sharded, **0** fully resident |
+| `tile_bytes` | 2048 (bf16) | known |
+| `m_roofline` | `max(165/R, 176.5/C, 83.5/W)` | measured, §5.0.5 |
+| **`S`** | **device DRAM peak bandwidth** | **UNKNOWN for Quasar** |
+| **`η`** | **achieved fraction of peak** | **unknown; rises with outstanding requests** |
+
+**Note the wall-time floor contains neither `n` nor `R,C,W`.** That is the formal statement of why a
+device-wide ceiling cannot be dodged by threading or by grid size: substituting `n/m ≤ S·η/(d·tile_bytes)`
+into `wall = T_total·m/n` eliminates both. Only `d` and `S·η` move it.
+
+### Inverting it: what each config REQUIRES
+
+Rather than guess `S`, compute the supply each configuration needs. Full grid, `d = 3`, `η = 1` (so these
+are floors — a real `η < 1` scales them up by `1/η`):
+
+| config | marginal | required `S` | at 1 GHz |
+|---|---:|---:|---:|
+| `1,1,1` | 176.50 | 1114 B/cyc | 1.11 TB/s |
+| `2,2,1` / `2,2,2` | 88.25 | 2228 | 2.23 TB/s |
+| `2,4,2` | 82.53 | 2382 | 2.38 TB/s |
+| **`4,4,2`** | **44.12** | **4456** | **4.46 TB/s** |
+| `4,4,2` at N=8 (projected) | 24.35 | 8074 | 8.07 TB/s |
+
+Read it the other way and it becomes a decision table — **when the real `S` is known, read off the row**:
+
+| if `S·η` is… | DRAM-feasible marginal | configs that survive unclipped |
+|---|---:|---|
+| 1000 B/cyc | 196.6 | none — even `1,1,1` is transport-bound |
+| 1500 | 131.1 | `1,1,1` only |
+| 3000 | 65.5 | everything except `4,4,2` |
+| **5000** | **39.3** | **all 13, including `4,4,2`** |
+
+⇒ **The whole question reduces to one threshold: `S·η ≥ 4456 B/cyc` and `4,4,2` is unclipped; below it,
+the frontier config is transport-bound and the 4.00x is not deliverable on a DRAM-interleaved shape.**
+
+### Two levers the model exposes that a single number would hide
+
+1. **`d` is a lever, and the biggest one.** Sharding one operand takes `d` from 3 to 2, dropping the
+   requirement for `4,4,2` from 4456 to **2971 B/cyc**; full residency takes `d` to 0 and removes the
+   roof entirely. **This is the same conclusion F3 keeps arriving at from other directions** — it is not
+   only where batching pays, it is where the DRAM roof stops existing.
+2. **`η` is where batching acts.** More outstanding reads means more banks in flight, so a higher
+   achieved fraction of the same peak. Batching does not move `S`; it moves how much of `S` is realised.
+   That is the precise form of §5.0.10's "reach the roof more efficiently".
+
+### EVALUATED 2026-09-15: the spec exists, and it is decisive
+
+`S` is not unknown after all — it is just not in this repo. **Quasar is GDDR7**, and *Grendel I Packages*
+(Confluence, Packaging space) gives the per-SKU bandwidth:
+
+| SKU | @32 Gbps | @28 Gbps | note |
+|---|---:|---:|---|
+| MK bring-up | 2 × 128 = **256 GB/s** | 224 GB/s | **2 channels — this is what craq-sim's descriptor models** |
+| **QSR1.A1 (GDL-A01)** | 8 × 128 = **1.0 TB/s** (target) | 875 GB/s | the production part |
+| QSR3.A2 | 12 × 128 = 1.5 TB/s | 1.3 TB/s (target) | |
+
+So the descriptor's 2 DRAM views are not arbitrary — they model the **bring-up board**, not production.
+Clocks come from the *Quasar HAS* Table 9 (preliminary): NoC **0.76 / 1.33 / 1.55 GHz** at 0.55/0.75/0.95 V.
+
+**Evaluated at the nominal point** — 1.33 GHz, 1.0 TB/s, `η = 0.75` (the O2O study's "max effective is
+75%") — the DRAM-feasible marginal is **349 cyc/tile**, against craq-sim's 176.50 at `1,1,1` and 44.12 at
+`4,4,2`.
+
+**Swept over all 18 corners** (3 clocks × 3 SKUs × 2 efficiencies), where "survives" means the config is
+already slow enough that DRAM keeps up:
+
+| config | survives in |
+|---|---|
+| `1,1,1` | **4 of 18** — and every one needs the 0.55 V clock or the 12-channel SKU, three of the four need η = 1.0 |
+| `2,2,2` | **0 of 18** |
+| `4,4,2` | **0 of 18** |
+
+⇒ **For DRAM-interleaved bf16 operands this op is DRAM-bound at every legal configuration, and the 4.00x
+threading gain does not reach the wall clock on silicon.** It remains a sound instruction-and-issue
+result — that is what craq-sim measures and what §5.0.5 predicts — but it is not deliverable in this
+memory configuration. Note also that "`1,1,1` survives" is not good news: it survives because it demands
+so little, not because the memory supplies much.
+
+The sharpest single figure: at nominal, each cluster's share of DRAM is **17.6 B/cyc — 6.9% of its own
+256 B/cyc NoC port**, and a *single* DM core issuing at the measured ~24 B/cyc already exceeds its
+cluster's entire DRAM allowance. Four readers are ~5x oversubscribed before any threading argument starts.
+
+### This is a property of the OP, not of Quasar — WH and BH are worse
+
+Same model, same `d = 3`, across architectures (DRAM and core counts from *Matmul Introduction*,
+Confluence):
+
+| arch | DRAM | clock | B/cyc | units | per unit | **per engine** | DRAM floor |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Wormhole N150 | 288 GB/s | 1.00 | 288 | 64 cores | 4.5 | 4.5 | **1365 cyc/tile** |
+| Wormhole Galaxy | 336 | 1.00 | 336 | 64 | 5.2 | 5.2 | 1170 |
+| Blackhole Galaxy | 512 | 1.35 | 379 | 110 | 3.4 | **3.4** | **1782** |
+| Quasar QSR1.A1 | 1000 | 1.33 | 752 | 32 clusters | 23.5 | 5.9 | **261** |
+| Quasar QSR3.A2 | 1500 | 1.33 | 1128 | 32 | 35.2 | 8.8 | 174 |
+
+A bf16 add moves 6 B and does 1 FLOP per element. **Per compute engine, DRAM supplies 3-6 B/cyc — under
+one element per cycle — while a Tensix FPU retires ~1024.** The op is DRAM-starved by three orders of
+magnitude on every generation. Three consequences:
+
+1. **Blackhole is *worse* per core than Wormhole** — 3.4 vs 4.5 B/cyc. BH added 1.7x the cores against
+   1.8x the bandwidth at 1.35x the clock, so per core per cycle it went backwards. **For a DRAM-bound
+   elementwise op, adding cores has never helped on any generation.** That is the cross-architecture form
+   of §5.0.12's cluster-count invariant.
+2. **Quasar's improvement is smaller than the per-cluster figure suggests.** 23.5 B/cyc per cluster is 5x
+   a Wormhole core, but a cluster holds 4 Neos — per engine it is 5.9 vs 4.5, only **1.3x**. Bandwidth
+   roughly tracked the compute increase; the starvation ratio barely moved.
+3. **Which is why elementwise ops are fused in production.** A standalone add paying a full DRAM round
+   trip is bandwidth-bound on any hardware. Our threading and batching work is not wasted — it applies
+   exactly where the operands are *already resident*.
+
+⇒ **Strongest argument yet for F3, and it is not the one we had.** It is not that sharding is faster, or
+that batching pays there: **sharding (`d = 0`) is the only regime in which this op is not
+bandwidth-bound at all.** Everything measured in §5.0.5-§5.0.11 is only observable on silicon there.
+
+### Consequence: the NoC can never bind, and ~4 clusters is the right placement
+
+Sweeping cluster count against both ceilings (QSR1.A1, 1.33 GHz, `η = 0.75`, `d = 3`):
+
+| clusters | DRAM used | NoC port used | marginal | wall, cyc per *total* tile |
+|---:|---:|---:|---:|---:|
+| 1 | 25% | 54% | 44.12 | **44.12** |
+| 2 | 49% | 54% | 44.12 | 22.06 |
+| **4** | **99%** | 54% | **44.12** | **11.03** |
+| 8 | 198% | 54% | 87.2 | 10.90 |
+| 32 | 790% | 54% | 348.7 | **10.90** |
+
+**1. The NoC port never binds for DRAM-sourced traffic — at any grid size.** Port utilisation is **54% in
+every row**: per-cluster demand is set by the marginal, not by how many clusters exist, so `n` cancels.
+A cluster's DRAM allowance at full grid is 23.5 B/cyc against a 256 B/cyc port — it cannot physically
+pull enough from DRAM to stress its own port.
+
+**But the NoC does not simply take over when DRAM drops out.** That depends on where the operand sits,
+and there are three cases:
+
+| operand placement | DRAM | NoC | what binds |
+|---|---|---|---|
+| DRAM-interleaved | **binds** | 54% — cannot bind | DRAM, at every thread count |
+| **L1-sharded, matching grid** (all three co-resident — *borrowed*) | **zero** | **zero** | **the compute chain, `176.5/C`** |
+| L1-sharded, non-matching grid | zero | **NoC read** | the 256 B/cyc port |
+
+**In the borrowed case the reader and writer do no transfer work at all** — the factory says so directly:
+`DataflowBufferSpec::borrowed_from (reader/writer do no NoC work)` (`factory:46`), with all three operands
+co-resident L1 shards on one grid. Unpack from L1, compute, pack to L1. **Zero DRAM *and* zero NoC.**
+(This sharpens §5.0.4's "L1-sharded operands remove that term and put the 256 B/cyc port roof back in
+charge" — true for a *non-matching* grid, where the shard is still NoC-read, but not for the borrowed
+case, where there is no transfer to price.)
+
+⇒ **Which inverts this branch's standing caveat for exactly that configuration.** Everywhere else our
+numbers are upper bounds because craq-sim has no transport model. In the borrowed case there *is* no
+transport, so the missing model costs nothing: the `176.5/C` roof is the real governing limit and the
+4.00x is a **prediction**, not a ceiling. **craq-sim is not a compromised instrument for the
+fully-resident case — it is the right one.**
+
+⇒ **The NoC roof arrives with broadcast, not before.** A broadcast operand must be fetched from wherever
+it lives (multicast, or read across clusters), so the port becomes live at milestone 2 — outer-dim 2.1 /
+F13, subtile 2.2 / F8. That is also the first point at which Quasar's 4x NoC width over BH has anything
+to pay for itself on.
+
+**2. One cluster makes the simulated marginal real, at 4x the wall time.** At `n = 1` DRAM falls to 25%
+and the issue rate becomes the binder, so 44.12 cyc/tile is genuinely achievable — craq-sim is modelling
+the right thing there. But wall time is 44.12 against the optimum's 11.03.
+
+**3. ~4 clusters is the placement, and it is 99% of the full grid.** Four clusters saturate DRAM *while
+still running at full simulated speed*: 11.03 cyc per total tile against 32 clusters' 10.90. **The other
+28 clusters contribute about 1%.** That is the operational form of the wall-time invariant — past the
+saturation point wall time is pinned at `total_bytes / (S·η)` and extra clusters merely run slower each.
+
+⇒ **Recommendation for a DRAM-interleaved shape: place the op on ~4 clusters, not 32.** Same wall time,
+28 clusters freed for concurrent work or fusion. **And threading matters *more* in that placement, not
+less** — with 4 clusters you want maximum threads per cluster, which is exactly `4,4,2`. The
+configuration we tuned is right; the **grid** is what is oversized. Caveat: "~4" scales with `S·η`, so
+it is order-of-magnitude while the shape of the conclusion is not.
+
+⇒ **Still open, and now narrower:** the numbers above are targets and preliminary clocks, not silicon.
+Running `tests/tt_metal/tt_metal/data_movement/` on Quasar hardware and adding the arch to
+`noc_estimator` would give measured `S·η` directly. But it can only move the magnitude — every corner of
+the sweep already agrees on the direction.
+
+---
+
+### 5.0.7 Next action and open questions
+
+> **SCOPE OF EVERY MEASUREMENT IN §5.0.1-§5.0.6: `num_tiles_per_cycle = 1`.** The roofline constants,
+> the 4.00x/2.69x gains, the zone split, the occupancy figures — all of it is the unbatched compute
+> chain. Nothing here measures batched compute, because the configuration cannot currently be built.
+
+**NEXT ACTION — raise `num_tiles_per_cycle` from 1.** Two independent things pin it, and both are ours:
+
+1. **Capacity — and `N > capacity` HANGS, it does not merely slow.** The compute kernel needs N available
+   on `in0`, N on `in1` *and* N free on `out` (`wait_front(n)` ×2 + `reserve_back(n)`); if N exceeds any of
+   those capacities the wait is never satisfiable. So `N <= capacity` is a **correctness** bound and
+   `N <= capacity/2` is what buys overlap. `capacity = num_entries / max(P,C)`
+   (`dataflow_buffer.cpp:1139`) and the factory sets `in_entries = entries_per_thread * max(R,C)`, so for
+   the input DFBs **per-thread capacity == `entries_per_thread`** exactly. Double buffering a batch of N
+   therefore needs **`entries_per_thread >= 2N`**: today's default of 2 permits only N=1, before any other
+   rule is consulted. N=2 needs depth 4, N=8 needs depth 16 — all inside the knob's range (measured
+   working to 16, ceiling 63 at `4,4,2`).
+
+   **The reader's batch is NOT the reference.** A compute batch larger than the reader's push size is both
+   legal and, wherever the `C` term binds, the objective: steady-state throughput is `min(stage rates)`,
+   which batch granularity does not change, and shrinking the compute chain hands the bottleneck to the
+   reader by design (at `4,4,2`, `C` 44.12 → reader 41.25). Compute idling in `wait_front` is then spare
+   capacity, not lost work. The genuine cost of a large N is **pipeline fill** — nothing is produced until
+   N tiles exist, which lengthens a prologue already worth 38% of span at the benchmark shape. So N trades
+   steady-state cost/tile against small-tensor latency; it is not bounded by what the reader does.
+2. **Stride, and the guard tests it correctly.** `stride_in_entries = max(num_producers, num_consumers)`
+   (`dataflow_buffer.cpp:1140`) — **not** the pairing ratio; that is `num_tcs_to_rr`, a transaction-counter
+   round-robin count and a different quantity. So our `TT_FATAL`'s `max(R,C)` and `max(C,W)` *are* the two
+   rings' strides, and the guard is right. At `4,4,2` both rings have **stride 4**: each thread's entries
+   are interleaved with its siblings', so a batch of N is non-contiguous by construction. **This is
+   inherent to interleaved operands** — a real NoC-filled ring is shared by `R` producers, so multi-thread
+   implies stride > 1.
+
+**Why sharded is the easy case.** With `borrowed_from` set, the DFB is backed by the resident L1 shard and
+"reader/writer do no NoC work" (factory :46, :648) — there is no ring for producers to share, so stride
+collapses and a batch of 8 is just 8 tiles of an already-present shard. That is exactly what
+`all_borrowed` gates. Note the `TT_FATAL` still applies: sharded + N=8 is legal only at `1,1,1`, since at
+`4,4,2` the strides are 4 regardless of borrowing.
+
+**What the WH/BH precedent does and does not cover.** Production `binary_ng` sets
+`num_tiles_per_cycle = 8` (FPU, 16-bit) whenever the broadcast type is `NONE` **and** all three tensors
+are sharded (`binary_ng_program_factory.cpp:1018-1040`). That establishes one thing: `llk_pack` can pack a
+batch of 8 out of DST into a **contiguous** CB. It establishes **nothing about the interleaved
+configuration**, which was never implemented or tested on WH/BH either — so nothing anywhere exercises a
+producer pushing 1 while the consumer waits for N, input-ring sizing for that case, or the pipeline fill
+it implies. **Interleaved + N > 1 is unbuilt on every architecture**; on Quasar we would be first.
+
+Two unknowns, then, and they must not be moved together: (a) does interleaved producer-1/consumer-N work
+at all, and (b) does the **strided** address walk survive the pack path — CBs are contiguous, so WH/BH
+never probe it. Everything else on the Quasar side is verified stride-aware: the pointer/credit math
+(`wr_ptr += n * stride_size`, `.inl:189,198,243`), the scoped-lock walk over n entries (`.inl:454-470`),
+and explicitly the unpack-side tile addressing (`offset_address = stride_size * tile_index`,
+`cb_api.h:146`, commented *"Per-tile spacing is stride_size, not entry_size"*).
+
+**Two independent gates, and only one is a Quasar problem.** WH/BH require `NONE` broadcast AND all-sharded;
+the sharding half is a *conservative gate nobody revisited for interleaved* (the code comments the `1` as
+"Conservative default", and notes of SFPU that 4 "should handle... only 2 works, need further
+investigation"). The broadcast half is real and independently asserted in both Quasar factories: **subtile
+broadcast requires `num_tiles_per_cycle == 1` regardless of sharding**, because the broadcast operand is
+reused across tiles, so "advance every DFB by N" is wrong for it. Our slice is no-broadcast, so only the
+sharding-shaped gate and the stride question apply.
+
+**Experiment, in two steps so the two unknowns stay separated** (not yet run):
+
+| step | config | stride | isolates | change needed |
+|---|---|---:|---|---|
+| **1** | `1,1,1` interleaved, `entries_per_thread=4`, N=2 | **1** (contiguous) | interleaved producer-1/consumer-N, the part no arch has built | make the assignment reachable for interleaved + raise depth. **The `TT_FATAL` passes unmodified** — `max(1,1) == 1` |
+| **2** | `4,4,2` interleaved, `entries_per_thread=4`, N=2 | 4 | the strided walk, given step 1 passed | additionally relax the `TT_FATAL` |
+
+**Both steps test the MECHANISM, not the payoff, and that is deliberate.** They batch compute only, and
+§10's lever table already measured why one-sided batching cannot pay: reader-only batching returned
+**1.08x** even though `RD_RSV` falls as `1/n`, because the writer stayed per-tile and floored the span.
+Whichever stage keeps per-tile granularity becomes the new floor — the `max()` law of §5.0.3 applied to
+overheads instead of roofs. **A payoff measurement requires batching reader, compute and writer
+together**, which is a larger change and a separate step 3. Sizing for it: `RD_RSV` is **70.9 of the
+reader's 165 cyc/tile (43%)** against `RD_BAR`'s 8.0, so the reader-side prize is the `reserve_back`
+calls, not the barrier — and it is far larger than the compute side's ~6% interleaved cap. Guideline when
+that is built: `N_reader <= N_compute` (compute proceeds at `N_compute`; larger producer chunks only delay
+its start), with equality the natural point. Measurement caveat: the SUM zones are per-*call* and so
+**flatter** batching (1.21x instrumented vs 1.08x clean) — quote the clean number.
+
+Step 1 is the smallest change that answers the harder question first, and it needs no guard relaxation.
+**It also tests the withdrawn `131/45` chain decomposition:** at `1,1,1` the `C` term binds at 176.5
+against the reader's 165, so the model predicts the chain falls to ~110.9, the reader takes over, and the
+marginal lands near 165 — a **~7%** gain. Either outcome converts an unverifiable model into a data point.
+Step 2's reading: corruption localised to the packed output confirms the strided pack path as the blocker;
+bit-exact means the guard was inherited caution and the lever is available.
+
+**Open questions.**
 
 Q1-Q4 feed the emulator campaign (design §7.5); Q5-Q6 are platform/tooling asks. They live here rather
 than on the tutorial page so answers can land — strike through and date them here — without the published

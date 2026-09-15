@@ -17,7 +17,249 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
-# ► Week of 2026-09-03 — Milestone 1.0 shipped; 1.1 measured 34/34; a main regression found
+# ► Week of 2026-09-10 — batching measured; DRAM priced against the real spec and the op is memory-bound
+
+## 1. TL;DR
+
+- **Multi-tile batching measured on craq-sim: +81.2% throughput / +46.1% latency at `1,1,1`**
+  (176.50 → 97.39 cyc/tile), all three stages batched at N=8, **bit-exact at every N and every shape
+  tested**. This was scheduled as M2.6/F15 and marked emulator-only; it was pulled forward and craq-sim
+  priced it after all (slide 2).
+- **Its legal space is two configurations, and that is permanent.** The two batch knobs ship together,
+  and their constraints are opposites, so batching requires `R == C == W` — `1,1,1` and `2,2,2`, nothing
+  else. **`4,4,2` is an N=1 config permanently**, not pending a fix.
+- **`4,4,2` at N=1 remains the best configuration measured and stays the default.** Nothing this week
+  beats it, and batching cannot: the one config batching would unlock, `2,2,2` at N=8, projects to
+  **48.70 cyc/tile against `4,4,2`'s measured 44.12 — 10% SLOWER in absolute throughput**, buying 40%
+  fewer engines for it. That makes it an option for engine-constrained placement, not an upgrade.
+- **One defect filed: tt-metal#56194** — the metal LLK pack path ignores the DFB ring stride when
+  batching, silently corrupting up to `1 - ceil(N/S)/N` of every batch. Root-caused to one line, with
+  the sibling code that does it correctly. **Real bug, NOT on our critical path** (slide 3).
+- **Latest `main` qualified against latest craq-sim, and a device-open regression found: tt-metal#55838**
+  — filed 09-08, **fixed and closed 09-09** (slide 4).
+- Reader/writer kernel walk rewritten to remove per-batch arithmetic: shipped path unchanged to the
+  digit, N=8 path 97.39 → **93.53** cyc/tile.
+- **DRAM priced against the real spec, and it changes the headline (slide 6).** Quasar is GDDR7 at
+  **1.0 TB/s** (QSR1.A1 target). At nominal the DRAM-feasible marginal is **349 cyc/tile** — so for
+  DRAM-interleaved operands **this op is memory-bound at every legal config and the 4.00x does not reach
+  the wall clock**. WH and BH are worse per engine. **L1-sharded (F3) is the only regime where any of
+  this work is observable on silicon.**
+
+---
+
+## 2. Batching measured — and the legal space collapses to two configs
+
+Held ring depth at `2N` throughout so double-buffering *in units of batches* is constant and the only
+variable is tiles per credit exchange. At `1,1,1`, bf16 interleaved `add`:
+
+| `1,1,1` | depth | marginal | prologue | span @ 40 t/c | throughput | latency @ 40 t/c |
+|---|---:|---:|---:|---:|---:|---:|
+| dm=1, N=1 — baseline | 4 | 176.50 | 773 | 7833 | — | — |
+| dm=1, N=2 — compute only | 4 | 165.00 | 1139 | 7739 | +7.0% | +1.2% |
+| **dm=2, N=1 — dataflow only** | 4 | **176.50** | 831 | — | **0.0%** | — |
+| dm=2, N=2 — all three | 4 | 139.00 | 1139 | 6699 | +27.0% | +16.9% |
+| dm=4, N=4 — all three | 8 | 113.50 | 1246 | 5788 | +55.5% | +35.3% |
+| **dm=8, N=8 — all three** | 16 | **97.39** | 1466 | **5363** | **+81.2%** | **+46.1%** |
+
+**The two single-stage rows are diagnostics, not configurations.** Batching one stage alone is never
+shippable — compute must not consume faster than the reader supplies — and they are in the table only
+because each lands on a value the roofline *predicts exactly*, which is what makes the N=8 row credible:
+compute-only sits on the reader roof (165.00), having stopped binding and handed the pipeline over;
+dataflow-only returns *exactly* 0.0%, because `max()` ignores a non-binding stage. Break-even also
+improves with N (8.8 t/c at N=8), so the prologue objection to batching was really an objection to
+batching *too little*.
+
+**Why only two configs.** Compute batching needs compute's tile counters at 1 (`R <= C and W <= C`);
+dataflow batching needs the data-movement roles' at 1 (`C <= R and C <= W`). Opposite constraints. The
+knobs cannot be used separately — compute must not consume faster than the reader supplies — so both
+must hold, giving `R == C == W`; with `C in {1,2,4}` and `R + W <= 6` that is `1,1,1` and `2,2,2`.
+
+**`4,4,2` is out, and not only on legality.** Dataflow batching there needs a DM kernel to address the
+writer's two tile counters, which the DFB API cannot express — `get_local_*` exposes only the active one.
+Wanting it there was weak anyway: batching compresses roofs that have slack above the next one down, and
+`4,4,2`'s three roofs sit within **7%** of each other, which is the balanced state batching exists to
+produce. `2,2,2` keeps the 2.11x spread, which is why the same lever is worth 1.81x there and ~nothing at
+the frontier. **Threading is the primary lever; batching buys the same throughput on fewer engines.**
+
+**And N itself is a narrow knob — this was instrumentation, not a lever hunt.** **N>1 requires the two
+operand shapes to be EQUAL and the operands L1-sharded.** Any broadcast puts N back to 1: subtile because
+compute indexes inside the tile, outer-dim because it is handled by the *interleaved* reader re-reading
+through zeroed strides, while N>1 is gated on sharding and the sharded reader pushes only its own shard
+(`reader_interleaved_no_bcast.cpp`, `#if SRC_SHARDED`). Mind which way the implication runs: our `no_bcast` kernel is
+selected on `SubtileBroadcastType::NONE`, which is the **broader** condition — `shapes equal` ⊂
+`subtile NONE`, so the kernel serves equal shapes, but NONE does **not** imply equal shapes (an outer-dim
+broadcast passes it). What narrows NONE down to equal shapes in production's gate is the sharding half:
+`is_native_L1_sharding` admits all-three-sharded only when `a.logical_shape() == b->logical_shape()`
+(`binary_ng_utils.cpp:806`). So: any broadcast → N=1;
+DRAM-interleaved → N=1 (never implemented anywhere); **L1-sharded with equal shapes → N=8**, one case of
+three, where the reader merely pushes resident tiles and the whole gain is compute-side. **Our kernels
+support neither broadcast kind yet** (outer-dim 2.1 / F13, subtile 2.2 / F8), so every measurement this
+week is on dense shapes. Varying N is how the per-tile credit constant gets separated from the rest of
+the chain — which is what pinned the `C` roof as a delivery roof — so read 1.81x as a cost-model
+measurement first.
+
+**Net effect on what we ship: none.** `4,4,2` at N=1 was the best config before this experiment and
+still is. Batching's only reachable configuration is slower than the default in absolute terms, so this
+week's 1.81x is a result about the cost model, plus an option to hold in reserve — not a perf win to
+land. Keep `4,4,2` N=1 as the default.
+
+Three claims retired: a planned multi-TC walk fix (its only beneficiaries were `4,4,2`-shaped configs), a
+`[1.05x, 1.81x]` projection for `4,4,2` that assumed a configuration which cannot ship, and the framing
+of `2,2,2` N=8 as a deliverable rather than an option.
+
+---
+
+## 3. tt-metal#56194 — batched pack ignores the DFB ring stride
+
+**Filed. Not ours, not blocking.** Batching more than one tile per credit exchange writes tiles to the
+wrong L1 offsets whenever the ring is strided, silently corrupting most of each batch. It is in the
+metal-side LLK pack layer (`hw/ckernels/quasar/metal/llk_api/`) — not tt-llk, not craq-sim — and it is
+plain integer arithmetic, so silicon behaves the same way.
+
+Nothing we ship touches it: `4,4,2` at N=1 has stride 4 but batch 1, and the defect needs both above 1.
+It matters as a **latent trap for the next caller** — the API offers a batched pack, STRIDED is a
+documented pattern, and no test in the DFB suite combines them.
+
+Root cause, corruption-rate model and the predicted-vs-measured check are in the issue and in
+`QUASAR_NATIVE_RESEARCH.md` §5.0.10-§5.0.11.
+
+---
+
+## 4. Latest `main` qualified against latest craq-sim — tt-metal#55838 filed and fixed
+
+Re-qualified the branch's premises against current `main` with a current craq-sim, rather than continuing
+to measure at the pre-merge anchor. That surfaced a hard stop: **#54415's mechanical rename of the
+overlay constants (`NOC_V2_* -> NOC_OVERLAY_*`) left `NOC_V2_WR_RESP_VC` dangling at two sites**, so
+every Quasar JIT firmware build failed and **no Quasar device could be opened at all** on `main`.
+
+| | |
+|---|---|
+| sites | `quasar/noc_nonblocking_api_v2.h:377` (`noc_fast_atomic_cas4`), `test_kernels/dataflow/noc_atomic_ops_probe.cpp:24` |
+| regression range | last good `19c654e02b8^`, first bad `19c654e02b8` (#54415) |
+| filed / closed | **2026-09-08 / 2026-09-09** |
+
+**Why the PR's own verification could not catch it.** #54415 checked byte-identity of compiled V2
+objects, which is a sound check that structurally cannot cover these two sites: `noc_fast_atomic_cas4` is
+a template nothing instantiates, so it emits no object code, and the probe kernel is JIT-compiled only
+when that one test runs. It is a hard error rather than a silent one because the device toolchain is
+GCC 15.1.0, which enforces two-phase lookup on non-dependent names in uninstantiated template bodies.
+
+With the two-line fix applied locally, firmware built, the device opened, and the `binary_ng` Quasar
+suite reproduced the pre-#54415 reference measurements **exactly** — so the rename disturbed nothing else.
+
+**This is the second time a new `main` presented as "Quasar is broken" and the cause was a JIT firmware
+build failure at device-open** (`NOC_API_V1` from #51597 was the first). Standing rule extended: on any
+rebase, open a device *before* interpreting any test result.
+
+---
+
+## 5. Roofline analysis — what the model now says
+
+Consolidated the perf reasoning into a single user-facing roofline page, and the analysis produced three
+results that change how numbers get quoted:
+
+1. **Batching and threading act on different parts of the model.** Threading divides every roof; batching
+   shrinks the constants. So batching's value is a function of how *unbalanced* a config already is, and
+   it decays exactly as threading does its job. This is why 1.81x at `1,1,1` does not transfer to
+   `4,4,2`, and why guessing by scaling the cut was wrong.
+2. **Batching is the in-flight lever, and craq-sim cannot price that half.** With the barrier hoisted, N
+   reads are concurrently outstanding rather than one, so bytes airborne go 4 KB → 32 KB at `1,1,1`
+   (3.4% → 22.2% of the saturation model). craq-sim charges nothing for transfers, so **on the dataflow
+   side +81.2% is a floor, not a ceiling.**
+3. **A named lever is still untried.** The company's O2O study puts the issue/transport crossover at
+   ~2.36 KB and our tile is 2048 B — just below it. Batching raises the *number* of outstanding requests;
+   it does **not** cross that knee, since each request is still one 2 KB tile. Coalescing two tiles into
+   one 4 KB read is a separate, unbuilt change.
+
+**Reporting basis, now labelled at point of use.** Three categories were being conflated and are now
+distinguished wherever a number appears: *measured*, *projected* (with the assumption named), and
+**illegal combination — shown for illustration**. Concretely: the 12.5% → 53% in-flight rise and the
+`4,4,2` N=8 operating point both belong to a configuration that cannot execute, so neither is a result.
+The figures that survive are `1,1,1`'s — the in-flight rise achieved is **3.4% → 22.2%**.
+
+---
+
+## 6. DRAM priced against the real spec — the op is memory-bound on silicon
+
+Pinned the missing denominator from company sources rather than the repo. **Quasar is GDDR7: QSR1.A1 is
+8 × 128 = 1.0 TB/s (target), QSR3.A2 is 12 × 128 = 1.5 TB/s, and the bring-up board is 2 × 128 =
+256 GB/s** (*Grendel I Packages*, Confluence) — the bring-up figure being exactly the 2-channel
+descriptor craq-sim carries. Clocks from the *Quasar HAS* Table 9 (preliminary): NoC 0.76 / 1.33 / 1.55 GHz.
+
+At nominal (1.33 GHz, 1.0 TB/s, η = 0.75) the **DRAM-feasible marginal is 349 cyc/tile**, against
+craq-sim's 176.50 at `1,1,1` and 44.12 at `4,4,2`. Swept over all 18 corners of (3 clocks × 3 SKUs ×
+2 efficiencies): **`2,2,2` and `4,4,2` survive in 0 of 18**; `1,1,1` in 4, each needing the 0.55 V clock
+or the 12-channel SKU. Each cluster's DRAM share is **17.6 B/cyc — 6.9% of its own 256 B/cyc NoC port**,
+and one DM core at the measured ~24 B/cyc already exceeds it.
+
+⇒ **For DRAM-interleaved operands this op is memory-bound at every legal config, and the 4.00x does not
+reach the wall clock.** It stands as an instruction-and-issue result; it is not deliverable in that
+memory configuration.
+
+**And this is the op, not the chip — WH and BH are worse per engine:**
+
+| arch | DRAM | per engine | DRAM floor |
+|---|---:|---:|---:|
+| Wormhole N150 | 288 GB/s | 4.5 B/cyc | 1365 cyc/tile |
+| Blackhole Galaxy | 512 | **3.4** | **1782** |
+| Quasar QSR1.A1 | 1000 | 5.9 | 261 |
+
+**Blackhole is worse per core than Wormhole** — 1.7x the cores against 1.8x the bandwidth at 1.35x the
+clock. **For a DRAM-bound elementwise op, adding cores has never helped on any generation.** Quasar's
+per-engine gain over WH is only 1.3x; bandwidth tracked the compute increase.
+
+**Two consequences worth acting on.** Sweeping cluster count against both ceilings: **the NoC port reads
+54% at every grid size** — per-cluster demand is set by the marginal, so the cluster count cancels, and a
+cluster cannot pull enough from DRAM to stress its own port. **But the NoC does not take over when DRAM
+drops out — with all three operands borrowed (co-resident L1 shards on a matching grid) the reader and
+writer do no transfer work at all** (`factory:46`), so DRAM *and* NoC are both zero and the compute chain
+`176.5/C` is the only thing left. A NoC read returns only for a *non-matching* shard grid, or with
+broadcast at milestone 2. **Consequence worth noting: in the borrowed case craq-sim's missing transport
+model costs nothing, because there is no transport — the 4.00x is a prediction there, not a ceiling.** And **~4 clusters saturate DRAM while still running at the full
+simulated 44.12**: 11.03 cyc per total tile against the full grid's 10.90, so **28 of 32 clusters
+contribute ~1%**.
+
+⇒ **Placement recommendation for a DRAM-interleaved shape: ~4 clusters, not 32.** Same wall time, 28
+clusters freed for concurrent work or fusion. **Threading matters more in that placement, not less** —
+with four clusters you want maximum threads on each, which is exactly `4,4,2`. The config we tuned is
+right; the **grid** is oversized. It is a worker-grid argument, not a kernel change, so it is the
+cheapest thing on the list to test.
+
+⇒ **Strongest argument yet for F3, and not the one we had.** Not that sharding is faster or that batching
+pays there: **with all three operands borrowed the op touches neither DRAM nor the NoC**, so it is the
+only regime where this op is not transport-bound at all — and therefore the only one where anything
+measured in weeks 1-3 is observable on silicon, *and* the only one where craq-sim is a predictive
+instrument rather than an upper bound. Full derivation: research §5.0.12.
+
+---
+
+## 7. Next
+
+**The critical path is the milestone ladder, and slide 6 sharpens which rung matters.** `4,4,2` N=1 is
+the default and the best config; the perf question for M1 is closed on instruction count. But since a
+DRAM-interleaved shape is memory-bound on silicon regardless of threading, **F3 (sharded/borrowed) is
+promoted from a coverage item to the item that makes the M1 result visible at all.**
+
+1. **Resume the M1 ladder: F2 (sub, mul) → F3 (sharded/borrowed) → F4 (mixed layouts).** F3 is also where
+   batching would pay most if it ever pays — a borrowed L1 shard has no producer filling a ring, so the
+   stride obstruction does not arise there at all.
+2. **Rebase onto current `main`** now that #55838 is closed and the multi-thread hang is fixed upstream.
+   Then re-run the known-good sanity case before taking any measurement.
+3. **Decide whether the batching knobs ship — and consider making interleaved N>1 permanent while the
+   code is fresh.** `TTNN_QSR_TILES_PER_CYCLE` / `TTNN_QSR_DM_BATCH` and the batched kernels are
+   unstaged and unreviewed; `code-review-tt` before any staging. Promoting them from env knobs to a
+   factory branch (interleaved + no-broadcast + `R == C == W`, with `entries_per_thread = 2N`) is small
+   and gated so the default is untouched — and it would make Quasar the first architecture to support
+   the case, which no other has. It buys no speed at `4,4,2`, so this is a completeness call.
+4. **Quasar craq-sim CI** — still blocked on the craq-sim release process. #54415 and #56194 are both
+   defects a sim merge gate would have caught.
+5. **tt-metal#56194** — filed, not blocking us. Offer a regression test alongside it, since the gap is
+   coverage as much as code. Revisit batching only if F3 changes the arithmetic or an engine-constrained
+   placement makes `2,2,2` worth its 10% throughput cost.
+
+---
+
+# ► Week of 2026-09-03 — Milestone 1.0 shipped; 1.1 measured 34/34; a main regression found (since fixed)
 
 ## 1. TL;DR
 
@@ -29,9 +271,10 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
   tt-metal#55276 (chained-DFB corruption — the 18-config data corruption).
 - **Milestone 1.1 correctness is answered: 34 of 34 bit-exact**, full coverage matrix, on a
   **one-line** kernel fix. Uneven tile counts work, **including zero-work threads** (slide 3).
-- **A third defect found, in main itself:** multi-threaded Quasar DFB **hangs** on `origin/main` while
-  passing at our pre-merge anchor. Attributed by bisection, not yet root-caused (slide 4). **This is now
-  the critical path** — M1.1 cannot land until it is fixed.
+- **A third defect found, in main itself:** multi-threaded Quasar DFB **hung** on `origin/main` while
+  passing at our pre-merge anchor. Attributed by bisection (slide 4). **RESOLVED 2026-09-10 — fixed
+  upstream on latest main.** Not rebasing yet: the branch runs clean at its anchor, so the rebase is
+  scheduling, not a blocker. M1.1 is no longer gated on it.
 
 Also: reviewed the 1.0 perf analysis for inaccuracies and corrected the docs in place
 
@@ -156,7 +399,12 @@ headers. Reproduced on the untouched upstream nightly test. The impl-selection g
 commit only meant to hide the *zeroing* API, and used the correct skip-pattern for `noc_zero_dram.inl`
 but not for the other two.
 
-**4.2 Multi-threaded DFB hangs on main — ATTRIBUTED by bisection, not root-caused.**
+**4.2 Multi-threaded DFB hangs on main — ATTRIBUTED by bisection. RESOLVED upstream 2026-09-10.**
+
+> **Resolution:** fixed on latest main; multi-threaded Quasar DFB runs again. The bisection record below
+> is kept because it is how the defect was localised, and because the *reason it went unnoticed* has not
+> changed: no CI gate runs Quasar multi-thread on craq-sim (§1). The branch is not rebased — it runs clean
+> at its anchor, so the rebase is scheduling rather than a blocker.
 
 Same test, same simulator (`ad401613`), same env; the only variable is the commit:
 
@@ -209,7 +457,7 @@ is current, before taking any new measurement.
 
 # ► Week of 2026-08-27 — Milestone 1 measured
 
-## 1. TL;DR — kill criterion cleared, premise validated
+## 1. TL;DR — go/no-go threshold cleared, premise validated
 
 The founding question was whether Quasar's idle engines are worth exploiting for elementwise ops: the
 baseline used **2 of 6** DM cores and **1 of 4** Tensix. Answer: **yes**, by a wide margin.
@@ -529,7 +777,7 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | 2.3 | F9 | mixed broadcast | keep the ROW-via-LLK / COL-via-reader-fill hybrid |
 | 2.4 | F10 | tensor-scalar | writer fills `in1` once |
 | 2.5 | F14 | **per-operand reader allocation** | **emulator-only** — no roofline gain (per-core reads are `T/2` either way); the case is DRAM/NoC locality, which craq-sim cannot price. Hypothesis: tile-split pairs `in0[k]`/`in1[k]` on the **same bank**. Proportional allocation matters from F4 (mixed layouts) onward, not just broadcast. STRIDED rule limits splits to `p in {1,2,4}` at `C=4` |
-| 2.6 | F15 | **in-flight concurrency** (`implicit_sync`, ring depth, batching) | **emulator-only, same campaign as F14** — craq-sim says <=1.10x / 1.02x / 1.08x but two of three are **floors**: latency-hiding levers, and craq-sim has no latency. One axis, not three (`capacity >= 2n`). Writer batching is a known negative |
+| 2.6 | F15 | **in-flight concurrency** (`implicit_sync`, ring depth, batching) | **batching PULLED FORWARD and measured on craq-sim: 1.81x at `1,1,1`, n=1 -> n=8** (research §5.0.8-§5.0.11) — the "no latency to hide" reasoning held for `implicit_sync` and ring depth, not for batching. **The two knobs ship together, and together they are legal only at `R == C == W` — so `1,1,1` and `2,2,2`, full stop.** Compute batching needs `R <= C and W <= C`, dataflow batching needs `C <= R and C <= W`; opposite constraints. **`4,4,2` is n=1 permanently** — dataflow batching there needs a DM kernel to address the writer's 2 tile counters, which the DFB API cannot express (not a defect). **So the deliverable is `2,2,2` n=8: 48.70 cyc/tile projected vs `4,4,2` n=1's measured 44.12 — 90% of the throughput on 60% of the engines (6 vs 10).** **It is not "blocked" — it DATA-CORRUPTS, silently.** At `2,2,2` n=8 the dataflow half is bit-exact; the compute half writes 50% of each batch to the wrong L1 offset and returns wrong data with no error, hang or warning. Our factory `TT_FATAL`s so the corruption cannot escape, which is the only reason it looks like a refusal. ONE bug: the metal LLK pack path adds +1 entry per tile where the cursor converter divides by `stride_size_tiles`, so a batch of n at stride S covers only `ceil(n/S)` slots (**tt-metal#56194**, `hw/ckernels/quasar/metal/llk_api/llk_pack_tile_api.h:58-74`). `implicit_sync` and ring depth remain emulator-only, same campaign as F14. One axis, not three (`capacity >= 2n`). Writer batching is a known negative |
 | **3.0** | — | **milestone 3 — once F10 lands** | broadcast-complete; the rest is the long tail |
 | 3.1 | F11 | row-major | 16-byte RM shard-width alignment |
 | 3.2 | F12 | where / quantization / int32 | own kernel families; int32 blocked on the DFB-compute bug |
@@ -729,7 +977,7 @@ emulator.
 
 ---
 
-## 8. Kill criterion
+## 8. Go/no-go threshold
 
 > **The criterion is on thread parallelism as a whole.** If `R`/`W` *and* `C` together fail to clear ~1.3x on
 > craq-sim (total under ~1.5x), stop and report that rather than proceeding to the 12 roadmap follow-ons.
@@ -759,7 +1007,7 @@ early estimates were overturned once run — writing the plan earlier would have
    make it compile, link and be selectable; Milestone 0 reproduces 8549 to prove the copy is faithful.
 2. **Milestone 1 is the thread sweep** — `R`/`W` immediately, `C` as soon as #1678 lands. This is the first
    question the implementation answers, not the last, because it either validates the premise or triggers the
-   kill criterion.
+   go/no-go threshold.
 3. One emulator campaign afterwards, sweeping in-flight concurrency and thread counts — the only place the
    latency-hiding levers can be valued at all.
 
@@ -770,7 +1018,7 @@ early estimates were overturned once run — writing the plan earlier would have
 **Phase-1 admitted slice:** no-broadcast tensor-tensor, TILE 32x32, **bf16**, FPU `add`, all three operands
 **DRAM-interleaved**, no activations, **even divisibility**. Everything below widens that.
 
-**All twelve are gated on the kill criterion (slide 8).** If thread parallelism does not pay, none start.
+**All twelve are gated on the go/no-go threshold (slide 8).** If thread parallelism does not pay, none start.
 
 **Label order is not priority order** — labels are stable identifiers, so they do not get renumbered when
 priority changes. **F6 (MX formats) is the lowest priority of the twelve; do it last.** And **F1 is not
