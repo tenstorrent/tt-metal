@@ -138,6 +138,9 @@ void kernel_main() {
     DataflowBuffer dfb_mask_in_obj(dfb_mask_in);
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_out);
     matmul_init(dfb_q_in, dfb_k_in);
+    // Reset the Quasar pack-operand tracker so the first pack_reconfig_out re-points via pack_init
+    // regardless of the post-startup packer state. No-op on WH/BH.
+    reset_pack_operand_tracking();
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
