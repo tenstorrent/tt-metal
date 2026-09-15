@@ -19,6 +19,7 @@ from ...layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_o
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, LayerNorm
 from ...utils import cache
+from ...utils.matmul import register_matmul_configs
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
 from .attention_sd35 import SD35JointAttention
@@ -539,6 +540,21 @@ class SD35Checkpoint:
         quant_config = SD35QuantProfile.from_env()
         if quant_config is not None:
             logger.info(f"SD3.5 DiT quantization enabled: {quant_config}")
+            # Device-swept block sizes for the dominant per-device spatial DiT matmuls on the 4-chip
+            # 2x2 (11x10 grid) config. These have no swept entry and otherwise fall to the generic
+            # 8x8x8 fallback; the swept blockings are ~1.4-1.6x faster in isolation. The 8-tile
+            # subblocks require bf16 dest (fp32_dest_acc=False), which every quant profile uses, so
+            # they are only registered on a quantized run (the bf16/HiFi path keeps its 4-tile dest).
+            register_matmul_configs(
+                {
+                    "11x10": {
+                        (2048, 2432, 3648): (4, 4, 12, (2, 4)),  # to_qkv spatial — 1.64x
+                        (2048, 2432, 4864): (4, 8, 16, (1, 8)),  # ff1 spatial    — 1.41x
+                        (2048, 4864, 2432): (4, 8, 8, (1, 8)),  # ff2 spatial    — 1.56x
+                        (2048, 2432, 1216): (6, 4, 8, (1, 8)),  # to_out spatial — 1.16x
+                    },
+                }
+            )
 
         model = SD35Transformer2DModel(
             sample_size=c.sample_size,
