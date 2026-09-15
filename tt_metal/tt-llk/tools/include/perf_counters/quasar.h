@@ -34,7 +34,6 @@ constexpr std::array<Entry, 3> fpu_counters LLK_PERF_TABLE_SECTION = {
     {{PerfCounterType::FPU_COUNTER, 0},
      {PerfCounterType::SFPU_COUNTER, 1},
      {PerfCounterType::MATH_COUNTER, 257}}};
-inline constexpr std::size_t NUM_FPU_COUNTERS = 3;
 
 // TDMA_UNPACK: sels 2/256/257 are dead on A0 (fidelity off) and 258 duplicates 3. Three unpackers per thread:
 // sel 9 is unpacker2/thread0 and sel 10 unpacker0/thread1; both and the odd-TID writes read 0 on every op swept so far.
@@ -57,7 +56,6 @@ constexpr std::array<Entry, 18> unpack_counters LLK_PERF_TABLE_SECTION = {
      {PerfCounterType::SRCB_WRITE_TID_EVEN, 264},
      {PerfCounterType::SRCA_WRITE_TID_ODD, 265},
      {PerfCounterType::SRCB_WRITE_TID_ODD, 266}}};
-inline constexpr std::size_t NUM_UNPACK_COUNTERS = 18;
 
 // TDMA_PACK shares the 21-slice readout with unpack: pack is slices 11-18; request slices 12-17 are tied to 0 on A0
 // and the live pack-side grants are slices 11, 15 and 16.
@@ -67,7 +65,6 @@ constexpr std::array<Entry, 5> pack_counters LLK_PERF_TABLE_SECTION = {
      {PerfCounterType::DEST_READ_GRANTED_0, 267},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
-inline constexpr std::size_t NUM_PACK_COUNTERS = 5;
 
 // INSTRN: sel = class*4+thread (cfg,sync,thcon,xsearch,instissue,math,unpack,pack), 32-35 any-stall per thread, 36-50
 // thread-ORed backend stalls; grants (>= 256) are ibuffer dequeues. Xsearch is tied to 0 (its grants alias
@@ -124,11 +121,10 @@ constexpr std::array<Entry, 51> instrn_counters LLK_PERF_TABLE_SECTION = {
      {PerfCounterType::THREAD_INSTRUCTIONS_1, 257},
      {PerfCounterType::THREAD_INSTRUCTIONS_2, 258},
      {PerfCounterType::THREAD_INSTRUCTIONS_3, 259}}};
-inline constexpr std::size_t NUM_INSTRN_COUNTERS = 51;
 // clang-format on
 
 // No L1 counter bank and no L1 mux on Quasar.
-inline constexpr std::uint32_t L1_MUX_MASK   = 0;
+inline constexpr std::uint32_t L1_MUX_MASK     = 0;
 inline constexpr std::uint8_t L1_MUX_POSITIONS = 0;
 
 // l1_client CSR selection = subport*8 + event (subports 0-3 TRISC, 4 THCON, 5-24 unpack, 25-36 pack; events 0

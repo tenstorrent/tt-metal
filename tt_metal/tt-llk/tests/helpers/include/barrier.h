@@ -97,7 +97,10 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
 
 #else // ARCH_QUASAR
 
-// Quasar has no free semaphore, so it gets an L1 rendezvous; trisc.cpp supplies the address.
+// Quasar gets an L1 rendezvous instead of the semaphore pair above; trisc.cpp supplies the address. The core
+// has 32 Tensix semaphores (tt_tensix_pkg.sv SEM_COUNT, reachable from a TRISC as 4 banks of 8) and the LLK
+// claims two of them, so a free pair does exist: moving to it would keep the waiters off L1, which the poll
+// backoff below only mitigates.
 extern volatile std::uint32_t* barrier_slots;
 
 // A waiting thread polls an L1 word, and on an isolate run type three threads do so for the whole
