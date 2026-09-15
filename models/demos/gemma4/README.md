@@ -333,7 +333,8 @@ HF_MODEL=google/gemma-4-31b-it \
   pytest "models/demos/gemma4/demo/text_demo.py::test_demo" -k "1x8 and prefill_128" -s
 ```
 
-With DFlash (traced):
+With DFlash (traced steady-state loop; prefill is ALSO traced by default when the prompt
+fits in one chunk, `MAX_SEQ_LEN <= 2048` — see the op-level fixes table above):
 
 ```bash
 HF_MODEL=google/gemma-4-31b-it \
@@ -354,8 +355,48 @@ env var/argv string at `MAX_ARG_STRLEN` (128 KiB), which a real prompt long enou
 a large ISL will exceed (`GEMMA4_DFLASH_PROMPT` alone TT_FATALs the *shell*, "Argument list too
 long", before Python ever runs).
 
-Measured on T3K (1×8), a short coding-instruction prompt, all three default-on fixes enabled,
-across the ISL buckets DFlash currently supports:
+Prefill-trace controls (see [Traced prefill](#traced-prefill-why-and-its-current-single-chunk-limit)
+above for the mechanism):
+
+```bash
+# Force the old eager prefill path (e.g. to bisect a regression against it)
+GEMMA4_DFLASH_PREFILL_TRACE=0 pytest models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
+
+# Reproduce the capture-vs-replay timing split (runs prefill twice; adds a throwaway call)
+GEMMA4_DFLASH_PREFILL_TRACE_BENCH=1 pytest models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
+```
+
+##### Profiling
+
+Five Tracy/device-profiler scripts, each isolating one piece of the session
+(`models/demos/gemma4/scripts/`) — all need `HF_MODEL` set, all print the resulting CSV path
+plus the matching `tt-perf-report` command at the end:
+
+```bash
+# Full session (prefill + steady-state loop, real end-to-end tok/s) — start here
+./models/demos/gemma4/scripts/run_dflash_profile.sh
+
+# Prefill only — "first part" of the session
+./models/demos/gemma4/scripts/run_dflash_prefill_profile.sh --tt-perf-report
+
+# Drafter only — synthetic context, no target model
+./models/demos/gemma4/scripts/run_dflash_drafter_profile.sh --tt-perf-report
+
+# Verify only — "part after drafter"; reuses DFlashFusedDecoder's own real buffers
+./models/demos/gemma4/scripts/run_dflash_verify_profile.sh --tt-perf-report
+
+# Drafter + target decode_forward together, in one capture
+./models/demos/gemma4/scripts/run_dflash_combined_profile.sh --tt-perf-report
+```
+
+All five default to a device-only capture (raw timing, no op names — not usable by
+`tt-perf-report`); pass `--tt-perf-report` for a host-Tracy capture with full op attribution
+(`--single` / `--repeat N` control iteration count where applicable). See each script's own
+header comment for its specific env knobs.
+
+Measured on T3K (1×8), a short coding-instruction prompt, the three op-level fixes enabled
+(prefill trace doesn't apply here — the original measurement predates it and this row's real
+ISL exceeds the single-chunk limit anyway), across the ISL buckets DFlash currently supports:
 
 | Real prompt tokens | Baseline (no DFlash) | DFlash + trace | Speedup |
 |---|---|---|---|
@@ -372,6 +413,49 @@ reach that many real tokens) that's off-distribution from what the drafter was t
 chat/instruct prompts) — expect a real deployment's acceptance rate at a given ISL to differ
 from these numbers; they demonstrate the *mechanism* works correctly at scale, not a
 production acceptance-rate forecast.
+
+##### Full ISL sweep: baseline vs DFlash (T3K, 31B)
+
+Same `-k` bucket format as [Per-ISL performance on Wormhole T3K](#per-isl-performance-on-wormhole-t3k)
+above, run after the traced-prefill change, for direct comparison. Baseline uses
+`tests/e2e/test_isl_sweep.py`'s standard prompt files; DFlash uses a Gutenberg-derived
+quote-extraction prompt scaled to hit each ISL target (not the same files, since DFlash has no
+batch-8/batch-32 concurrent mode and no bucket past its own ISL ceiling) — `ms/tok` /
+`tok/s/user` are the post-prefill decode-loop rate in both, so they're comparable; `TTFT` is
+each run's own prefill wall time.
+
+**Baseline (no DFlash):**
+
+| ISL bucket (`-k`) | ISL | Batch | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
+|---|---:|:-:|---:|---:|---:|
+| `batch-1` | 128 | 1 | 88.5 | 43.38 | 23.05 |
+| `batch-8` | 128 | 8 | 697.7 | 48.33 | 20.69 |
+| `batch-32` | 128 | 32 | 2,764.3 | 63.90 | 15.65 |
+| `long-context-4k` | 4k | 1 | 5,101.8 | 45.60 | 21.93 |
+| `long-context-32k` | 32k | 1 | 43,664.2 | 49.34 | 20.27 |
+| `long-context-64k` | 64k | 1 | 82,027.4 | 53.59 | 18.66 |
+| `long-context-128k` | 128k | 1 | 131,126.6 | 59.12 | 16.91 |
+| `long-context-256k` | 256k | 1 | **OOM** — see [Supported ISL range](#supported-isl-range-and-why-its-not-the-full-262144-hf-declares) | — | — |
+
+**DFlash (traced):**
+
+| ISL bucket | ISL | Batch | 31B TTFT (ms) | 31B ms/tok | 31B tok/s/user |
+|---|---:|:-:|---:|---:|---:|
+| `batch-1`-equiv | 44 | 1 | 2,202 | 15.08 | 66.3 |
+| `long-context-4k`-equiv | 3,808 | 1 | 2,457 | 10.64 | 94.0 |
+| ~8k (extra) | 7,548 | 1 | 11,852 | 27.10 | 36.9 |
+| ~16k (extra) | 14,780 | 1 | 20,223 | 33.33 | 30.0 |
+| ~24k (extra) | 22,145 | 1 | 24,274 | 39.84 | 25.1 |
+| `batch-8` / `batch-32` | — | 8 / 32 | not supported — DFlash has no concurrent-batch mode | | |
+| `long-context-32k` / `64k` / `128k` / `256k` | — | 1 | not supported — exceeds DFlash's verified ~24.7k ISL ceiling on T3K | | |
+
+The 4k row was originally measured at TTFT=80.2s — a clear outlier, *longer* than the 8k row's
+TTFT despite half the tokens. Confirmed as a one-time kernel/cache-build tax, not a real cost:
+an isolated 2-pass re-run hit it AGAIN on the first (cold) pass — 81.8s — then dropped to 2.46s
+on the second (warm) pass in the same process, matching this table's monotonic trend across
+buckets. Acceptance rate and generated tokens were identical both passes (correctness
+unaffected); only wall-clock prefill time was inflated. The table above reports the warm
+number. Moral: always run a fresh shape combination at least twice before trusting its TTFT.
 
 #### Acceptance rate depends on prompt *structure*, not just ISL
 

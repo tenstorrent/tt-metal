@@ -86,6 +86,9 @@ DEFAULT_PROMPT = (
 # that way.
 MAX_SEQ_LEN = int(os.environ.get("GEMMA4_DFLASH_MAX_SEQ_LEN", 2048))
 PAGE_BLOCK_SIZE = 64
+# Target model's own max_prefill_chunk_size (2048 on WH T3K) -- see the block
+# above re: why GEMMA4_DFLASH_MAX_SEQ_LEN must be a multiple of this.
+PREFILL_CHUNK_SIZE = 2048
 # Traced prefill (single-chunk only, MAX_SEQ_LEN <= one prefill chunk). ON BY
 # DEFAULT as of 2026-09-11 -- validated on real hardware: acceptance rate
 # (mean accepted-drafts/iter) is IDENTICAL to eager prefill, confirming the
@@ -108,7 +111,7 @@ PAGE_BLOCK_SIZE = 64
 # position, so a captured trace replayed once per chunk would overwrite the
 # same buffer slot on every chunk instead of accumulating across the full
 # prompt -- see the dflash_capture_taps docstring in tt/model.py. The
-# MAX_SEQ_LEN <= 2048 gate below auto-falls-back to eager for that case.
+# MAX_SEQ_LEN <= PREFILL_CHUNK_SIZE gate below auto-falls-back to eager for that case.
 GEMMA4_DFLASH_PREFILL_TRACE = os.environ.get("GEMMA4_DFLASH_PREFILL_TRACE", "1") == "1"
 
 
@@ -291,12 +294,12 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     # (python-side clone-append) -- a traced replay skips that hook entirely,
     # so this is the only correct mode outside the single-chunk case above.
     n_taps = len(drafter.target_layer_ids)
-    use_prefill_trace = GEMMA4_DFLASH_PREFILL_TRACE and MAX_SEQ_LEN <= 2048
+    use_prefill_trace = GEMMA4_DFLASH_PREFILL_TRACE and MAX_SEQ_LEN <= PREFILL_CHUNK_SIZE
     if GEMMA4_DFLASH_PREFILL_TRACE and not use_prefill_trace:
         logger.warning(
             f"GEMMA4_DFLASH_PREFILL_TRACE=1 but MAX_SEQ_LEN={MAX_SEQ_LEN} exceeds one prefill chunk "
-            "(2048) -- multi-chunk traced prefill isn't supported yet (see the tap-buffer comment "
-            "above). Falling back to eager prefill."
+            f"({PREFILL_CHUNK_SIZE}) -- multi-chunk traced prefill isn't supported yet (see the "
+            "tap-buffer comment above). Falling back to eager prefill."
         )
 
     if use_prefill_trace:
