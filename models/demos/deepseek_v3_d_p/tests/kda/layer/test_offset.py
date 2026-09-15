@@ -499,3 +499,63 @@ def test_worst_case_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDe
         ttnn.deallocate(input_state.recurrent)
         ttnn.deallocate(input_state.convolution)
         ttnn.deallocate(hidden_tt)
+
+
+def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device: ttnn.MeshDevice) -> None:
+    config, weights, _, _, _ = _reference_case()
+    layer = _build_layer(mesh_device, config, weights, 0, 1)
+    hidden = torch.randn(1, 3 * SEQUENCE, config.hidden_size, generator=torch.Generator().manual_seed(941)).to(
+        torch.bfloat16
+    )
+    state = layer.allocate_state(batch_size=1)
+    reference_state = None
+    for chunk in range(3):
+        actual_start = SEQUENCE // 2 + 32 + chunk * SEQUENCE
+        part = hidden[:, chunk * SEQUENCE : (chunk + 1) * SEQUENCE]
+        expected_output, reference_state = kda_forward_reference(part, weights, config, reference_state)
+        permutation = _mla_row_permutation(actual_start, 2, SEQUENCE // 2)
+        input_tt = _to_sp_input(part[:, permutation, :], mesh_device, 0)
+        previous = state
+        before = [
+            ttnn.to_torch(shard).clone()
+            for tensor in (previous.recurrent, previous.convolution)
+            for shard in ttnn.get_device_tensors(tensor)
+        ]
+        if chunk:
+            assert all(torch.count_nonzero(tensor) for tensor in before), "continuation needs nonzero caller carries"
+        output = None
+        try:
+            with ttnn.manage_config("throw_exception_on_fallback", True):
+                output, state = layer.forward(input_tt, previous, actual_start)
+            _assert_matches_reference(
+                output_tt=output,
+                state=state,
+                permutation=permutation,
+                expected_output=expected_output.to(torch.bfloat16),
+                expected_state=reference_state,
+                mesh_device=mesh_device,
+                sp_axis=0,
+                tp_axis=1,
+                config=config,
+                label=f"split continuation chunk={chunk} start={actual_start}",
+            )
+            after = [
+                ttnn.to_torch(shard)
+                for tensor in (previous.recurrent, previous.convolution)
+                for shard in ttnn.get_device_tensors(tensor)
+            ]
+            for index, (old, new) in enumerate(zip(before, after, strict=True)):
+                assert_bit_identical(old, new, name=f"caller carry shard={index}")
+            for old, new in ((previous.recurrent, state.recurrent), (previous.convolution, state.convolution)):
+                assert all(
+                    a.buffer_address() != b.buffer_address()
+                    for a, b in zip(ttnn.get_device_tensors(old), ttnn.get_device_tensors(new), strict=True)
+                )
+        finally:
+            if output is not None:
+                ttnn.deallocate(output)
+            ttnn.deallocate(input_tt)
+            ttnn.deallocate(previous.recurrent)
+            ttnn.deallocate(previous.convolution)
+    ttnn.deallocate(state.recurrent)
+    ttnn.deallocate(state.convolution)
