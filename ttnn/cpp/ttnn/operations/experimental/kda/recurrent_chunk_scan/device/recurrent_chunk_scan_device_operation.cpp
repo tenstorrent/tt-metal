@@ -85,14 +85,6 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         attrs.groups_per_head,
         attrs.batch_heads);
     TT_FATAL(
-        attrs.chunk_start < attrs.num_chunks &&
-            attrs.chunk_start + (attrs.chunk_count == 0 ? 0 : attrs.chunk_count) <= attrs.num_chunks,
-        "{}: chunk range [{}, +{}) must fit in {} chunks",
-        operation_name,
-        attrs.chunk_start,
-        attrs.chunk_count,
-        attrs.num_chunks);
-    TT_FATAL(
         attrs.wrap_chunk < attrs.groups_per_head * attrs.num_chunks,
         "{}: wrap_chunk {} must be inside the local chunk count {}",
         operation_name,
@@ -137,10 +129,6 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(
             attrs.emit_tail_summaries || (!in.wrap_indicator.has_value() && attrs.wrap_chunk == 0),
             "{}: ordinary summaries do not accept wrap controls; use emit_tail_summaries",
-            operation_name);
-        TT_FATAL(
-            !attrs.emit_tail_summaries || (attrs.chunk_start == 0 && attrs.chunk_count == 0),
-            "{}: tail summaries require the complete chunk range",
             operation_name);
         TT_FATAL(
             !attrs.emit_tail_summaries || in.wrap_indicator.has_value(),
@@ -241,8 +229,6 @@ std::vector<Tensor> recurrent_chunk_scan(
     RecurrentChunkScanMode mode,
     uint32_t groups_per_head,
     uint32_t wrap_chunk,
-    uint32_t chunk_start,
-    uint32_t chunk_count,
     bool emit_tail_summaries,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
@@ -259,8 +245,6 @@ std::vector<Tensor> recurrent_chunk_scan(
             .value_dim = value_shape[3],
             .groups_per_head = groups_per_head,
             .wrap_chunk = wrap_chunk,
-            .chunk_start = chunk_start,
-            .chunk_count = chunk_count,
             .emit_tail_summaries = emit_tail_summaries,
             .mode = mode,
             .output_mem_config = output_mem_config,

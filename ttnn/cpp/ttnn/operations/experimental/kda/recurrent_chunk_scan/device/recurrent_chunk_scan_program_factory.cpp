@@ -218,8 +218,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())},
              {"emit_tail_summaries", static_cast<uint32_t>(segmented_summary)},
              {"groups_per_head", attrs.groups_per_head}},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"head", "value_block", "num_chunks", "active_chunks", "reset_chunk", "chunk_start"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks", "reset_chunk"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
     if (!summary) {
@@ -366,7 +365,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt", Vt},
              {"summary_pair", static_cast<uint32_t>(summary)},
              {"emit_tail_summaries", static_cast<uint32_t>(segmented_summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"active_chunks", "reset_chunk"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "reset_chunk"}},
         .hw_config = std::move(compute_hw),
     };
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
@@ -381,18 +380,11 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         const uint32_t split_in_group = attrs.wrap_chunk % NC;
         // Every device executes the same chunk schedule. The reader uses its
         // local wrap-indicator shard only to route the reset carry.
-        const uint32_t chunk_start = attrs.chunk_start;
         const uint32_t reset_chunk = group == wrap_group ? split_in_group : 0;
-        const uint32_t active_chunks = attrs.chunk_count == 0 ? (NC - chunk_start) : attrs.chunk_count;
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"head", head},
-             {"value_block", value_block},
-             {"num_chunks", NC},
-             {"active_chunks", active_chunks},
-             {"reset_chunk", reset_chunk},
-             {"chunk_start", chunk_start}});
+            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}, {"reset_chunk", reset_chunk}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
@@ -403,9 +395,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"wrap_group", wrap_group},
              {"split_in_group", split_in_group}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values,
-            core,
-            {{"active_chunks", active_chunks}, {"reset_chunk", reset_chunk}});
+            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}, {"reset_chunk", reset_chunk}});
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {

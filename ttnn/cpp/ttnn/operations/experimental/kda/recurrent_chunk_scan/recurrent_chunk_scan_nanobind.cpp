@@ -114,10 +114,6 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         Keyword Args:
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
-            chunk_start (int, optional): First chunk of the half-open range each
-                group summarizes. Defaults to 0.
-            chunk_count (int, optional): Chunks in that range, 0 meaning to the
-                end. Defaults to 0.
             wrap_indicator (ttnn.Tensor, optional): Required device-local scalar
                 in segmented mode. Ordinary summaries reject wrap controls.
             wrap_chunk (int, optional): Strictly interior boundary in the local
@@ -152,8 +148,6 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("wrap_indicator") = nb::none(),
         nb::arg("wrap_chunk") = 0,
         nb::arg("groups_per_head") = 1,
-        nb::arg("chunk_start") = 0,
-        nb::arg("chunk_count") = 0,
         nb::arg("emit_tail_summaries") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());

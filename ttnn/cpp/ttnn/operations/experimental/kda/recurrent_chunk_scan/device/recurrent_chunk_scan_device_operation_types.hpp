@@ -25,11 +25,6 @@ struct RecurrentChunkScanParams {
     uint32_t groups_per_head;
     // Local chunk at which the causal stream restarts; 0 means no wrap.
     uint32_t wrap_chunk;
-    // Half-open chunk range this pass consumes, so a caller can summarize a
-    // sub-range without slicing the prepared terms. chunk_count 0 means "to the
-    // end". Both uniform across the mesh.
-    uint32_t chunk_start;
-    uint32_t chunk_count;
     // SUMMARY mode may additionally publish one tail transform per folded
     // group. The ordinary two-output contract stays unchanged when false.
     bool emit_tail_summaries;

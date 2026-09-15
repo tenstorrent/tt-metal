@@ -657,46 +657,17 @@ def test_no_wrap_is_untouched_by_the_tail_state_input(device):
 
 
 @run_for_blackhole()
-@pytest.mark.parametrize("wrap_chunk", [3, 5, 11])
-def test_summary_covers_only_the_requested_chunk_range(device, wrap_chunk):
-    """A range-restricted summary equals the transform over exactly those chunks.
-
-    The host uses two disjoint ranges to get a wrapped chip's two piece
-    transforms while touching every chunk once, so both pieces are checked
-    against the oracle on the corresponding sub-protocol.
-    """
-    batch_heads, num_chunks, dim = 2, 16, 32
-    protocol = host_protocol(batch_heads, num_chunks, dim, dim)
-    device_terms = device_protocol(protocol, device)
-
-    for name, chunk_start, chunk_count, piece in (
-        ("head", 0, wrap_chunk, tuple(t[:, :wrap_chunk] for t in protocol)),
-        ("tail", wrap_chunk, 0, tuple(t[:, wrap_chunk:] for t in protocol)),
-    ):
-        outputs = run_summary(device_terms, chunk_start=chunk_start, chunk_count=chunk_count)
-        assert tuple(outputs[0].shape) == (batch_heads, dim, dim)
-        expected_a, expected_b = summary_oracle(piece)
-        assert_outputs_accurate(
-            [expected_a, expected_b],
-            [outputs[0], outputs[1]],
-            names=["A", "B"],
-            context=f"{name} range w{wrap_chunk}/{num_chunks}",
-        )
-
-
-@run_for_blackhole()
 @pytest.mark.parametrize("wrap_chunk", [3, 8, 13])
-def test_disjoint_ranges_compose_to_the_whole_partition(device, wrap_chunk):
-    """Composing the two piece transforms must reproduce the whole-range one.
-
-    This is the invariant the host relies on to publish a non-wrapped chip's
-    whole-partition transform without summarizing it a third time.
-    """
+def test_segmented_parts_compose_to_the_whole_partition(device, wrap_chunk):
+    """The device-produced head and tail compose to the ordinary summary."""
     batch_heads, num_chunks, dim = 2, 16, 32
     device_terms = device_protocol(host_protocol(batch_heads, num_chunks, dim, dim), device)
 
-    head_a, head_b = (ttnn.to_torch(t).float() for t in run_summary(device_terms, chunk_count=wrap_chunk))
-    tail_a, tail_b = (ttnn.to_torch(t).float() for t in run_summary(device_terms, chunk_start=wrap_chunk))
+    indicator = to_device(torch.ones(1, 1, 1), device)
+    head_a, head_b, tail_a, tail_b = (
+        ttnn.to_torch(t).float()
+        for t in run_summary(device_terms, wrap_indicator=indicator, wrap_chunk=wrap_chunk, emit_tail_summaries=True)
+    )
 
     assert_outputs_accurate(
         [tail_a @ head_a, tail_a @ head_b + tail_b],

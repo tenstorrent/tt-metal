@@ -89,9 +89,6 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
         ttnn::experimental::prim::RecurrentChunkScanMode::RECURRENT,
         groups_per_head,
         wrap_chunk,
-        // The scan always runs the whole local partition; only a summary takes a range.
-        /*chunk_start=*/0,
-        /*chunk_count=*/0,
         /*emit_tail_summaries=*/false,
         output_memory_config,
         kernel_config);
@@ -108,8 +105,6 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<ttnn::Tensor>& wrap_indicator,
     uint32_t wrap_chunk,
     uint32_t groups_per_head,
-    uint32_t chunk_start,
-    uint32_t chunk_count,
     bool emit_tail_summaries,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -130,8 +125,6 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         ttnn::experimental::prim::RecurrentChunkScanMode::SUMMARY,
         groups_per_head,
         wrap_chunk,
-        chunk_start,
-        chunk_count,
         emit_tail_summaries,
         output_memory_config,
         kernel_config);

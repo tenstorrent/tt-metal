@@ -192,22 +192,14 @@ def _summarize_chunk_groups(
     groups_per_head: int = 1,
     wrap_indicator: ttnn.Tensor | None = None,
     wrap_chunk: int = 0,
-    chunk_start: int = 0,
-    chunk_count: int = 0,
     emit_tail_summaries: bool = False,
 ) -> _GroupSummaries:
-    """Summarize a half-open chunk range of every group, in the op's own FP32.
-
-    ``chunk_count`` 0 runs to the end. A range lets a caller summarize a piece of
-    the partition without slicing the prepared terms.
-    """
+    """Summarize every chunk of each folded group in the operation's FP32."""
     summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups_per_head,
         wrap_indicator=wrap_indicator,
         wrap_chunk=wrap_chunk,
-        chunk_start=chunk_start,
-        chunk_count=chunk_count,
         emit_tail_summaries=emit_tail_summaries,
         memory_config=summary_memory_config,
         # Summary generation is part of chunk preparation; the affine-prefix
