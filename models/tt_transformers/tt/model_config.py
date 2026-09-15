@@ -3815,7 +3815,11 @@ class ModelArgs:
                 k % (ttnn.TILE_SIZE * num_cores) == 0
             ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
             # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
-        if not self.is_galaxy and self.prefetcher is None:
+        # Multi-shard in0 blocks (#55444) were tuned and validated on Blackhole. On Wormhole T3K the
+        # widened block lowered the Llama 3.1-8B decode token-0 PCC from 0.876 to 0.822 (gate 0.86,
+        # models/tt_transformers/tests/test_model.py, bisected to #55444), so Wormhole keeps the stock
+        # shard-width block until the multi-shard gather path is validated there.
+        if not self.is_galaxy and self.prefetcher is None and self.arch_name == "blackhole":
             in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
         else:
             in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
