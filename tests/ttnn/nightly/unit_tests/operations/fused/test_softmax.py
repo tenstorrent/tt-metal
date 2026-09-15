@@ -95,3 +95,30 @@ def test_transformer_attention_softmax_inplace_large_kernel_stress(
                 f"output differs from iteration 0 (max abs delta "
                 f"{(first_output - output_tensor).abs().max().item()})"
             )
+
+
+# A softmax row must sum to 1. The metrics the other tests here use cannot see a violation of it:
+# PCC is invariant under a uniform per-row scale, and atol=0.04 is orders of magnitude above values
+# of order 1/w. With the SUM reduce accumulating in a 16-bit Dest this measured 0.865 at w=8192
+# while test_large_softmax passed at the same shapes.
+#
+# The shapes span both kernels and both ranks. The estimator in
+# softmax_program_factory_attention_optimized.cpp switches to the large kernel once the circular
+# buffers reach 90% of L1, which on these rows sits above w=8192, so w=32768 exercises the
+# accumulator that round-trips through L1 once per pass and the shorter rows do not.
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 32, 1024), (1, 32, 8192), (1, 1, 32, 2048), (1, 1, 32, 8192), (1, 1, 32, 32768), (1, 1, 32, 128000)],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_softmax_rows_are_normalised(device, shape, dtype):
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random(shape, -1, 1, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.softmax(input_tensor, dim=-1, numeric_stable=True)))
+
+    row_sums = output_tensor.to(torch.float32).sum(-1)
+    assert torch.allclose(
+        row_sums, torch.ones_like(row_sums), atol=0.02
+    ), f"row sums range [{float(row_sums.min()):.5f}, {float(row_sums.max()):.5f}], expected 1.0"
