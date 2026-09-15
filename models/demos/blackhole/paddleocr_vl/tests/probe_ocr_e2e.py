@@ -38,8 +38,8 @@ from models.demos.blackhole.paddleocr_vl.tt.model import Transformer
 from models.demos.blackhole.paddleocr_vl.tt.vision.model import DropInVisionTransformer
 from models.demos.blackhole.paddleocr_vl.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.blackhole.paddleocr_vl.tt.weight_mapping import map_vision_state_dict
+from models.demos.qwen3_vl.tt.generator import Generator as VLGenerator
 from models.tt_transformers.tt.common import get_padded_prefill_len
-from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import ModelArgs
 
 DEMO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "demo"))
@@ -122,7 +122,10 @@ def main() -> int:
             state_dict=device_sd,
             weight_cache_path=text_args.weight_cache_path(ttnn.bfloat8_b),
         )
-        generator = Generator([text_model], [text_args], mesh)
+        # qwen3_vl's Generator, the same one the vLLM path uses: it owns the
+        # last_token_idx % 32 row selection and update_rope_deltas, so probe and
+        # server exercise one code path rather than two.
+        generator = VLGenerator(text_model, text_args, mesh, tokenizer=text_args.tokenizer)
 
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
@@ -185,22 +188,16 @@ def main() -> int:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
             logits = generator.prefill_forward_single_user_text(
-                embeds_tt,
+                ttnn.unsqueeze(embeds_tt, 0) if len(embeds_tt.shape) == 2 else embeds_tt,
                 page_table=None,
                 user_id=0,
                 last_token_idx=prompt_len - 1,
                 rot_mats=(cos, sin),
                 kv_cache=None,
             )
-            # After an image, a user's text positions continue from an offset that
-            # depends on how far the image's 3D positions advanced. RotarySetup adds
-            # this to every decode position (qwen3_vl/tt/rope.py:158). The base
-            # Generator has no setter, so write it where the setup reads it.
-            rs = text_model.rope_setup
-            deltas = [int(rope_deltas.reshape(-1)[0].item())]
-            rs.rope_deltas = torch.tensor(deltas + [0] * (rs.batch_size - len(deltas)), dtype=torch.int32)
+            generator.update_rope_deltas([int(rope_deltas.reshape(-1)[0].item())])
 
-            token = int(to_torch_logits(logits, mesh, text_args.vocab_size, row=(prompt_len - 1) % 32).argmax().item())
+            token = int(to_torch_logits(logits, mesh, text_args.vocab_size).argmax().item())
             generated = [token]
 
             # ---- decode ------------------------------------------------------

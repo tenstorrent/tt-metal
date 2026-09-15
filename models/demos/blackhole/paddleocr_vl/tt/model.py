@@ -6,7 +6,10 @@
 Needs no new kernels (ERNIE-4.5-0.3B is Llama-shaped GQA, PCC 0.989 against
 HuggingFace); only ``prepare_inputs_prefill`` differs, since image tokens
 arrive pre-embedded and M-RoPE tables come from the host (see
-``tt/common.py``) rather than the decoder's own rope setup.
+``tt/common.py``). Follows qwen3_vl's generator contract, not
+tt_transformers', since the served endpoint needs its ``update_rope_deltas``
+and ``last_token_idx % 32`` handling; see the commit history for why the two
+contracts are incompatible.
 """
 
 from __future__ import annotations
@@ -68,6 +71,7 @@ class Transformer(TTTransformer):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        deepstack_visual_embeds=None,
         **kwargs,
     ):
         """Prefill inputs from pre-spliced embeddings and host rotary tables.
@@ -76,6 +80,8 @@ class Transformer(TTTransformer):
         ``rot_mats`` is the host ``(cos, sin)`` pair covering at least
         ``start_pos + S`` positions; it is sliced here rather than in the caller
         so chunked prefill can advance ``start_pos`` without rebuilding tables.
+
+        Returns qwen3_vl's five-tuple; see the module docstring.
         """
         assert rot_mats is not None, "PaddleOCR-VL prefill needs host M-RoPE tables; see tt/common.py"
         assert isinstance(rot_mats[0], torch.Tensor) and isinstance(rot_mats[1], torch.Tensor)
@@ -117,12 +123,23 @@ class Transformer(TTTransformer):
         else:
             tt_chunk_start_idx = None
 
-        # Six-tuple to match the base contract; no sliding-window local rope here.
+        # qwen3_vl's order: (input, rot_mats, page_table, chunk_page_table, deepstack).
+        # chunk_start_idx is built above for parity with the base class but has no
+        # slot in this contract; the chunked path passes start_pos instead.
+        del tt_chunk_start_idx
         return (
             tokens_embd,
             tt_rot_mats_prefill,
-            None,
             tt_page_table,
             tt_chunk_page_table,
-            tt_chunk_start_idx,
+            deepstack_visual_embeds,
         )
+
+    def ttnn_prefill_forward(self, x, *args, deepstack_visual_embeds=None, **kwargs):
+        """Swallow the deepstack argument qwen3_vl's generator always passes.
+
+        This model has no deepstack embeddings, and the base signature does not
+        accept the keyword, so it is dropped here rather than in the caller.
+        """
+        assert deepstack_visual_embeds is None, "PaddleOCR-VL has no deepstack path"
+        return super().ttnn_prefill_forward(x, *args, **kwargs)

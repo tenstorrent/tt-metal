@@ -1,0 +1,8 @@
+{
+  "arch": "PaddleOCRVLForConditionalGeneration",
+  "main_class": "tt_paddleocr_vl:PaddleOCRVLForConditionalGeneration",
+  "hf_model": "PaddlePaddle/PaddleOCR-VL-1.6",
+  "adapter": "models/demos/blackhole/paddleocr_vl/tt/generator_vllm.py",
+  "registered_as": "TTPaddleOCRVLForConditionalGeneration",
+  "notes": "Self-contained bundle for vllm_tt_plugin.platform.register_tt_models() -> _register_models_from_extra_dir(). Point EXTRA_MODELS_DIR at the parent vllm_bundle/ directory. 'arch' is this checkpoint's config.json architecture; the plugin prefixes it with TT. 'main_class' resolves through the sibling shim module, which is importable because the plugin appends this folder to sys.path. Single Blackhole die (MESH_DEVICE=P150), one image per request, batch 1."
+}
