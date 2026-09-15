@@ -977,9 +977,10 @@ void kernel_main() {
                 }
 
                 if constexpr (sparse_frames_enabled == 1) {
-                    // Different cores in the same head/batch/gqa chain handle different q_chunks with potentially
-                    // different sparse_frame_mask rows — if reader skipped per-q_chunk, chain participants would
-                    // disagree per k_chunk and chain sync would break.
+                    // If any Q frame in the shard attends this k_frame, the reader must push
+                    // this k_chunk — even when the q_chunk it's currently serving doesn't attend it.
+                    // Since chain cores share one multicast K/V stream while serving different q_chunks,
+                    // all must agree on what was pushed.
                     if (!kv_chunk_is_joint && !shard_attends_nothing) {
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
