@@ -122,7 +122,9 @@ class Writer:
         with open(self._done, "a") as handle:
             handle.write(nodeid + "\n")
 
-    def request_recovery(self, case: str, variant: str) -> None:
+    def request_recovery(
+        self, case: str, variant: str, skip_family: bool = True
+    ) -> None:
         """Ask the supervisor to take this worker off the core it just hung.
 
         Eight workers share one card, so resetting from in here would take the
@@ -133,6 +135,10 @@ class Writer:
         replaces it on one of the card's spare cores, and only resetting the card
         when there are none of those left.
 
+        A hang skips sibling parameters because they usually hit the same site.
+        A failed perturbation still gives up its dirty core, but passes False so
+        sibling cases continue on the replacement worker.
+
         """
         if self.root is None:
             return
@@ -140,6 +146,7 @@ class Writer:
             "worker": self.worker,
             "case": case,
             "variant": variant,
+            "skip_family": skip_family,
             # Carried because killing this process is how the core is given up,
             # and the supervisor cannot look the pid up from a heartbeat: parking
             # publishes DONE, and a DONE worker is deliberately not in the live set.

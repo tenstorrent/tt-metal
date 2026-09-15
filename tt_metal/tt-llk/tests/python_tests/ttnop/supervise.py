@@ -257,12 +257,19 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             heartbeat.clear_recovery_request(request_path)
             name = request.get("worker", "?")
             label = request.get("variant") or "an unknown variant"
-            skip_hang_family(root, request.get("case", ""), all_ids, config.report_dir)
+            skip_family = request.get("skip_family", True)
+            if skip_family:
+                skip_hang_family(
+                    root, request.get("case", ""), all_ids, config.report_dir
+                )
+            reason = "hung" if skip_family else "dirtied the core"
             if evicted < budget and evict(root, request):
                 evicted += 1
-                log(f"{name} hung on {label}; killed, xdist replaces it on a spare")
+                log(f"{name} {reason} on {label}; killed, xdist replaces it on a spare")
             else:
-                log(f"{name} hung on {label}; no spare core left, resetting the card")
+                log(
+                    f"{name} {reason} on {label}; no spare core left, resetting the card"
+                )
                 return "wedged", None, records
 
         for worker in heartbeat.stalled(workers, WEDGE_TIMEOUT):

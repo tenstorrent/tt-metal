@@ -48,17 +48,24 @@ def _hb() -> heartbeat.Writer:
     return _writer
 
 
-def _hang_closes_case(nodeid: str, variant: str) -> None:
-    """Close a case out on a hang, and ask to be moved off the core it cost us."""
+def _recovery_closes_case(
+    nodeid: str, variant: str, result: str, skip_family: bool
+) -> None:
+    """Persist a failed case and ask to be moved off its untrusted core."""
     global _parked
     writer = _hb()
     # Save a result before done/recovery: the supervisor may kill us immediately.
-    writer.record_result(nodeid, "failed", message=f"hang: {variant}")
+    writer.record_result(nodeid, "failed", message=f"{result}: {variant}")
     writer.mark_done(nodeid)
-    writer.request_recovery(nodeid, variant)
+    writer.request_recovery(nodeid, variant, skip_family=skip_family)
     # Nobody is watching an unsupervised run, so there is no recovery coming and
     # nothing to wait for.
     _parked = writer.enabled
+
+
+def _hang_closes_case(nodeid: str, variant: str) -> None:
+    """Close a hung case and skip siblings that would likely hang another core."""
+    _recovery_closes_case(nodeid, variant, "hang", skip_family=True)
 
 
 def _park() -> None:
@@ -429,6 +436,12 @@ def pytest_runtest_call(item):
             )
             outcome.force_exception(
                 AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
+            )
+            # A failed perturbation can leave dest or semaphores dirty. Move the
+            # worker to a spare core, but keep sibling parameters queued because
+            # they are different timing windows rather than the same hang.
+            _recovery_closes_case(
+                item.nodeid, failures[0], "perturbation", skip_family=False
             )
     finally:
         unwatch()
