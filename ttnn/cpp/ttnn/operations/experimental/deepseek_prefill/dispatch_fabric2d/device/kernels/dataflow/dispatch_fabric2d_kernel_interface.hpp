@@ -107,6 +107,22 @@ constexpr uint32_t FWD_EXTRA_BYTES = FORWARDING_METADATA_SIZE;
 // What the next hop actually consumes out of that tail.
 constexpr uint32_t FWD_USED_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
 
+// One multicast destination, packed into a word: the page it lands on, how many hops away that chip
+// is, and which top-k slot it came from. Under fan-out a token reaches several pages on several chips
+// and each needs its own slot, so the single meta[2] of the unicast path cannot carry it.
+constexpr uint32_t FO_PAGE_BITS = 20;
+constexpr uint32_t FO_HOP_BITS = 5;
+constexpr uint32_t FO_SLOT_BITS = 4;
+constexpr uint32_t FO_HOP_SHIFT = FO_PAGE_BITS;
+constexpr uint32_t FO_SLOT_SHIFT = FO_PAGE_BITS + FO_HOP_BITS;
+constexpr uint32_t FO_PAGE_MASK = (1u << FO_PAGE_BITS) - 1u;
+constexpr uint32_t FO_HOP_MASK = (1u << FO_HOP_BITS) - 1u;
+static_assert(FO_PAGE_BITS + FO_HOP_BITS + FO_SLOT_BITS <= 32);
+
+// Destinations one multicast page can carry. A token reaches at most one page per top-k pick, so this
+// is the top-k bound rather than anything about the ring.
+constexpr uint32_t FO_MAX_DESTS = 8;
+
 // Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
 
