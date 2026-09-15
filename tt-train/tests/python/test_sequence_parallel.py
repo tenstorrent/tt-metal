@@ -17,7 +17,7 @@ from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraConfig, LoraModel
 from ttml.parallel import TPStrategy, is_sequence_parallel
-from ttml.testing import assert_within_ulp
+from bf16_ulp import assert_within_bf16_ulp
 
 TP_AXIS_SIZE = 2  # the 'tp' extent of conftest's tp_mesh fixture
 
@@ -102,7 +102,7 @@ def assert_same_grads(sp_model, tp_model, label: str = "") -> None:
         if not tp_param.get_requires_grad():
             continue
         assert sp_params[name].is_grad_initialized(), f"{name}: SP grad missing"
-        assert_within_ulp(
+        assert_within_bf16_ulp(
             per_rank(sp_params[name].get_grad_tensor()),
             per_rank(tp_param.get_grad_tensor()),
             f"grad {name} {label}",
@@ -131,7 +131,7 @@ class TestMatchesTensorParallel:
         tp_logits, sp_logits = per_rank(tp_model(ids, mask)), per_rank(sp_model(ids, mask))
 
         assert tp_logits.std() > 1e-3, "logits are ~constant; agreement would prove nothing"
-        assert_within_ulp(sp_logits, tp_logits, f"logits {placement.name} batch={batch}", MAX_ULP)
+        assert_within_bf16_ulp(sp_logits, tp_logits, f"logits {placement.name} batch={batch}", MAX_ULP)
 
     @pytest.mark.parametrize("placement", PLACEMENTS, ids=lambda p: p.name)
     def test_gradients_after_sync(self, placement):
