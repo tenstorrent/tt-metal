@@ -18,6 +18,10 @@
 //      local L1 to the metadata-output tensor (only the worker owning page 0).
 //   3. Copy this worker's [start_page, end_page) slice of the backing tensor
 //      into the output tensor, page-by-page, via a single-slot scratch CB.
+//      When `overhang_size_bytes > 0` each staged page is drained into TWO
+//      tensors instead of one -- the leading bytes to `tokens`, the trailing
+//      `overhang_size_bytes` to `overhang` -- so the caller gets the head and
+//      tail of every row as separate tensors for the price of the same read.
 //   4. Atomic-inc the consumed_counter on the service core. The service core
 //      polls for exactly `num_workers` acks per transfer.
 
@@ -41,6 +45,46 @@ constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(3);
 // consumed
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(5);
+// Optional split. 0 = the whole page goes to `tokens`, i.e. exactly the pre-split behaviour.
+constexpr uint32_t overhang_size_bytes = get_compile_time_arg_val(6);
+constexpr uint32_t trunk_size_bytes = page_size - overhang_size_bytes;
+
+// Page copy, factored into a template for the same reason as snapshot_metadata below: an
+// `if constexpr` inside the non-template kernel_main still type-checks its discarded branch, so
+// building the overhang TensorAccessor there would be compiled (off a base address of 0) even
+// when the split is disabled.
+template <uint32_t OverhangSize, uint32_t OverhangAccessorOffset, typename BackingT, typename OutputT>
+inline void copy_pages(
+    const Noc& noc,
+    const BackingT& backing,
+    const OutputT& tokens_out,
+    CircularBuffer& scratch_cb,
+    uint32_t start_page,
+    uint32_t end_page) {
+    // read_barrier before write so we don't issue a write off an unwritten L1 region;
+    // write_barrier before reusing the single CB slot for the next page.
+    if constexpr (OverhangSize == 0) {
+        for (uint32_t p = start_page; p < end_page; ++p) {
+            noc.async_read(backing, scratch_cb, page_size, {.page_id = p}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            noc.async_write(scratch_cb, tokens_out, page_size, {.offset_bytes = 0}, {.page_id = p});
+            noc.async_write_barrier();
+        }
+    } else {
+        constexpr auto overhang_accessor_args = TensorAccessorArgs<OverhangAccessorOffset>();
+        auto overhang_out = TensorAccessor(overhang_accessor_args, get_arg_val<uint32_t>(7));
+        for (uint32_t p = start_page; p < end_page; ++p) {
+            noc.async_read(backing, scratch_cb, page_size, {.page_id = p}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            // Both destination pages are indexed by the SAME page id: the two output tensors differ
+            // from the backing tensor only in the width of their last dim, so page p of each holds
+            // the corresponding piece of backing page p.
+            noc.async_write(scratch_cb, tokens_out, trunk_size_bytes, {.offset_bytes = 0}, {.page_id = p});
+            noc.async_write(scratch_cb, overhang_out, OverhangSize, {.offset_bytes = trunk_size_bytes}, {.page_id = p});
+            noc.async_write_barrier();
+        }
+    }
+}
 
 // Metadata snapshot, factored into a template so the metadata-disabled case
 // (MetadataSize == 0) is never instantiated. In a plain `if constexpr` inside
@@ -51,7 +95,7 @@ template <uint32_t MetadataSize, uint32_t MetadataAccessorOffset>
 inline void snapshot_metadata(const Noc& noc, uint32_t start_page) {
     if constexpr (MetadataSize > 0) {
         if (start_page == 0) {
-            const uint32_t metadata_output_addr = get_arg_val<uint32_t>(7);
+            const uint32_t metadata_output_addr = get_arg_val<uint32_t>(8);
             constexpr auto metadata_accessor_args = TensorAccessorArgs<MetadataAccessorOffset>();
             auto metadata_out = TensorAccessor(metadata_accessor_args, metadata_output_addr);
             // Single-page write: the metadata tensor is exactly one page of
@@ -74,11 +118,15 @@ void kernel_main() {
     const uint32_t start_page = get_arg_val<uint32_t>(5);
     const uint32_t end_page = get_arg_val<uint32_t>(6);
 
-    // TensorAccessorArgs blocks: backing, output, then (when metadata is
-    // enabled) metadata output. The host packs them back-to-back starting at
-    // CT-arg index 6.
-    constexpr auto backing_accessor_args = TensorAccessorArgs<6>();
+    // TensorAccessorArgs blocks: backing, tokens, overhang, then (when metadata is enabled)
+    // metadata output. The host packs them back-to-back starting at CT-arg index 7. The overhang
+    // block is always present (a duplicate of the tokens block when the split is off), which is
+    // what keeps the metadata offset below a fixed expression.
+    constexpr auto backing_accessor_args = TensorAccessorArgs<7>();
     constexpr auto output_accessor_args = TensorAccessorArgs<backing_accessor_args.next_compile_time_args_offset()>();
+    constexpr uint32_t overhang_accessor_offset = output_accessor_args.next_compile_time_args_offset();
+    constexpr uint32_t metadata_accessor_offset =
+        TensorAccessorArgs<overhang_accessor_offset>().next_compile_time_args_offset();
 
     auto backing = TensorAccessor(backing_accessor_args, backing_tensor_addr);
     auto output = TensorAccessor(output_accessor_args, output_tensor_addr);
@@ -100,19 +148,11 @@ void kernel_main() {
     //    metadata output tensor on DRAM. Gated on `start_page == 0` so a
     //    multi-worker run only emits one write per coord — every worker's L1
     //    holds the same metadata (multicast), so picking one is fine.
-    snapshot_metadata<metadata_size_bytes, output_accessor_args.next_compile_time_args_offset()>(noc, start_page);
+    snapshot_metadata<metadata_size_bytes, metadata_accessor_offset>(noc, start_page);
 
-    // 3. Copy this worker's slice of the backing tensor into the output. Use
-    //    the scratch CB as a per-page staging area. read_barrier before write
-    //    so we don't issue a write off an unwritten L1 region; write_barrier
-    //    before reusing the slot for the next page.
-    for (uint32_t p = start_page; p < end_page; ++p) {
-        noc.async_read(backing, scratch_cb, page_size, {.page_id = p}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-
-        noc.async_write(scratch_cb, output, page_size, {.offset_bytes = 0}, {.page_id = p});
-        noc.async_write_barrier();
-    }
+    // 3. Copy this worker's slice of the backing tensor into the output(s), using the scratch CB as
+    //    a per-page staging area.
+    copy_pages<overhang_size_bytes, overhang_accessor_offset>(noc, backing, output, scratch_cb, start_page, end_page);
 
     // 4. Ack the service core. Exactly one inc per worker per transfer; the
     //    service core's poll checks (cur - last_consumed) == num_workers.

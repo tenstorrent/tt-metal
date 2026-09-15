@@ -1,0 +1,12 @@
+{
+  "env": {
+    "PREFILL_MODEL": "glm_5_2",
+    "PREFILL_NUM_LAYERS": "78",
+    "PREFILL_KV_ONLY_LAST_LAYER": "0",
+    "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32",
+    "PREFILL_MTP_LEVELS": "4",
+    "PREFILL_USE_TRACE": "0",
+    "PREFILL_HF_MODEL": "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8",
+    "TT_GLM52_MTP_TTNN_CACHE": "/mnt/models/deepseek-prefill-cache/glm52_mtp_ttnn_cache"
+  }
+}
