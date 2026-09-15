@@ -50,10 +50,11 @@ def assert_within_bf16_ulp(got, expected, label: str, max_ulp: float, max_ulp_p9
     """Assert ``got`` matches ``expected`` to ``max_ulp`` bf16 ULP at the peak and, if given, to
     ``max_ulp_p99`` at the 99th percentile of the per-element errors.
 
-    Per-element errors are measured in ULP at each ``expected`` value's own magnitude, so where
-    the oracle is zero or tiny any residual counts as a huge error and can carry the p99 with it.
-    Oracles with such elements (masks, padding, activation tails) need a looser ``max_ulp_p99``,
-    or none.
+    Per-element errors are relative: each is measured at its own ``expected`` value's spacing.
+    Where a correct result passes through zero by cancellation (a gradient near an activation's
+    root, masked or padded positions), the absolute error left by the intermediates dwarfs that
+    spacing, and once such elements exceed 1% of the tensor the p99 measures the problem's
+    conditioning, not the kernel. Loosen ``max_ulp_p99`` for those outputs, or omit it.
     """
     try:
         ulp, ulp_p99 = bf16_ulp_error(got, expected)
