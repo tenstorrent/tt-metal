@@ -247,6 +247,8 @@ TEST(PipelineBuilderMockTest, GraphCapacity) {
         fabric_config = FabricConfig::FABRIC_2D_TORUS_Y;
     }
 
+    const auto setup_start = std::chrono::steady_clock::now();
+    log_info(tt::LogFabric, "Pipeline test control-plane setup starting");
     auto& context = tt::tt_metal::MetalContext::instance();
     context.get_cluster().configure_ethernet_cores_for_fabric_routers(
         fabric_config, std::numeric_limits<uint8_t>::max());
@@ -255,6 +257,10 @@ TEST(PipelineBuilderMockTest, GraphCapacity) {
     context.initialize_fabric_config();
     const auto& control_plane = context.get_control_plane();
     const auto layouts = build_submesh_layouts_from_mgd(control_plane.get_mesh_graph());
+    log_info(
+        tt::LogFabric,
+        "Pipeline test control-plane setup finished: {:.3f}s",
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count());
     ASSERT_GE(layouts.size(), 2u);
     // Model-equivalent placement graphs only: no weights, programs, or MeshDevice.
     // A smaller graph searches all supplied submeshes, leaving the rest unused.

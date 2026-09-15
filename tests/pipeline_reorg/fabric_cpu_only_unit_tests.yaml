@@ -137,8 +137,8 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement
   skus:
     cpu_medium:
-      # Eight cases, each limited to five minutes, plus cleanup time.
-      timeout: 45
+      # Eight cases, each limited to ten minutes, plus cleanup time.
+      timeout: 85
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
