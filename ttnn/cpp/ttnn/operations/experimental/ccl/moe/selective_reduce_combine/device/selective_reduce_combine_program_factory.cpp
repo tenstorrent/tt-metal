@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
 #include <ranges>
 #include <vector>
 
@@ -19,6 +20,66 @@
 
 namespace ttnn::experimental::prim {
 namespace detail {
+
+FusedSourceBufferLayout compute_fused_source_buffer_layout(
+    const uint32_t source_shard_height,
+    const uint32_t source_shard_width,
+    const uint32_t token_segment_width,
+    const uint32_t source_buffer_size_bytes,
+    const uint32_t token_segment_size_bytes,
+    const uint32_t num_buffers) {
+    TT_FATAL(source_shard_height > 0, "Fused source shard height must be positive");
+    TT_FATAL(source_shard_width > 0, "Fused source shard width must be positive");
+    TT_FATAL(token_segment_width > 0, "Fused source token segment width must be positive");
+    TT_FATAL(source_buffer_size_bytes > 0, "Fused source buffer size must be positive");
+    TT_FATAL(token_segment_size_bytes > 0, "Fused source token segment size must be positive");
+    TT_FATAL(num_buffers > 0, "Fused source buffer count must be positive");
+    TT_FATAL(
+        source_shard_height % num_buffers == 0,
+        "Fused source shard height ({}) must be divisible by the buffer count ({})",
+        source_shard_height,
+        num_buffers);
+    TT_FATAL(
+        source_shard_width % token_segment_width == 0,
+        "Fused source shard width ({}) must be divisible by the token segment width ({})",
+        source_shard_width,
+        token_segment_width);
+    TT_FATAL(
+        token_segment_size_bytes % token_segment_width == 0,
+        "Fused source token segment size ({} B) must be a whole number of bytes per element over its width ({})",
+        token_segment_size_bytes,
+        token_segment_width);
+
+    // A ring entry is source_shard_height / num_buffers shard rows; each shard row is
+    // source_shard_width / token_segment_width token segments. Producer and writer both
+    // step through the shard in token-segment rows, so that is the unit of rows_per_buffer.
+    const uint64_t segments_per_shard_row = source_shard_width / token_segment_width;
+    const uint64_t rows_per_buffer = (source_shard_height / num_buffers) * segments_per_shard_row;
+    const uint64_t buffer_block_size_bytes = rows_per_buffer * token_segment_size_bytes;
+    const uint64_t circular_buffer_size_bytes = buffer_block_size_bytes * num_buffers;
+    const uint64_t element_size_bytes = token_segment_size_bytes / token_segment_width;
+    const uint64_t shard_size_bytes = uint64_t(source_shard_height) * source_shard_width * element_size_bytes;
+    TT_FATAL(
+        circular_buffer_size_bytes == shard_size_bytes,
+        "Fused source ring ({} B) must cover the shard exactly ({} B)",
+        circular_buffer_size_bytes,
+        shard_size_bytes);
+    TT_FATAL(
+        circular_buffer_size_bytes <= source_buffer_size_bytes,
+        "Fused source circular buffer size ({} B) exceeds its L1 buffer bank ({} B)",
+        circular_buffer_size_bytes,
+        source_buffer_size_bytes);
+    TT_FATAL(
+        circular_buffer_size_bytes <= std::numeric_limits<uint32_t>::max(),
+        "Fused source circular buffer size ({} B) exceeds uint32_t",
+        circular_buffer_size_bytes);
+
+    return {
+        .rows_per_buffer = static_cast<uint32_t>(rows_per_buffer),
+        .buffer_block_size_bytes = static_cast<uint32_t>(buffer_block_size_bytes),
+        .circular_buffer_size_bytes = static_cast<uint32_t>(circular_buffer_size_bytes),
+    };
+}
 
 std::vector<uint32_t> data_parallel_split(
     uint32_t token_size_bytes, const uint32_t max_packet_size_bytes, const uint32_t num_data_parallel_cores) {
@@ -381,27 +442,27 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_segment_buffer_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
 
-    constexpr auto double_buffer = 2;
-    const auto num_buffers = (double_buffer_source) ? double_buffer : experts_per_device;
-
-    // TODO (AFM) this is an ugly kludge until we can get GPT-OSS on the mainline op #43645
     uint32_t expert_token_segment_buffer_block_size_bytes;
+    uint32_t buffer_size_bytes;
     if (double_buffer_source) {
-        // slightly awkward. we want the token dimension but the underlying shape might not represent the data layout.
-        //  This is in line with the assumption that tokens are split across the entirety of the shard, regardless of
-        //  number of tokens
-        const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();
-        const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
-                                             (hidden_size / num_data_parallel_cores / double_buffer) /
-                                             num_token_parallel_cores;
-
-        expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
+        constexpr uint32_t num_buffers = 2;
+        const auto& source_shard_shape = input_tensor.memory_config().shard_spec()->shape;
+        // Block stride in token-segment rows (hidden_size / num_data_parallel_cores wide), the unit
+        // the writer and moe_compute's dm1 both step in; must match the producer's call.
+        const auto fused_source_layout = detail::compute_fused_source_buffer_layout(
+            source_shard_shape[0],
+            source_shard_shape[1],
+            hidden_size / num_data_parallel_cores,
+            input_tensor.buffer()->aligned_size_per_bank(),
+            token_segment_buffer_size_bytes,
+            num_buffers);
+        expert_token_segment_buffer_block_size_bytes = fused_source_layout.buffer_block_size_bytes;
+        buffer_size_bytes = fused_source_layout.circular_buffer_size_bytes;
     } else {
         expert_token_segment_buffer_block_size_bytes =
             token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
+        buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
     }
-
-    const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * num_buffers;
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     // input sharded buffer
