@@ -121,9 +121,16 @@ def test_sol_attn_chunk_stride_is_in_the_program_hash(device, b, nh, seq, d):
     q, k, v = _qkv(b, nh, seq, d, seed=3)
     dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
-    dense = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, chunk_keep_every=1))
+    # sparse FIRST: the process's first compile has no cache entry, so a dense-looking result here
+    # means the knob never reached the factory -- a plumbing fault the cache cannot explain. A later
+    # 1-vs-4 collision, by contrast, is the stride missing from the program hash.
     sparse = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, chunk_keep_every=4))
+    parent = ttnn.to_torch(ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False))
+    assert not torch.equal(
+        parent, sparse
+    ), "keep_every=4 on a fresh compile equals dense; the knob is not reaching the factory"
+    dense = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, chunk_keep_every=1))
     assert not torch.equal(
         dense, sparse
-    ), "keep_every=1 and 4 gave identical output; the stride is not reaching the program hash"
+    ), "keep_every=1 and 4 gave identical output; the stride is missing from the program hash"
     assert torch.isfinite(sparse.float()).all(), "skipped-chunk output must still normalise"
