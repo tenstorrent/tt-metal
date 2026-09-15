@@ -2235,6 +2235,14 @@ void sdpa_inner_loop(
                  * dfb_exp_max_diff = torch.exp((dfb_prev_max - dfb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
+                // Re-point the packer to the EMD output BEFORE sub_exp_block, which packs via a bare
+                // pack_tile (no internal pack_reconfig_out). On Quasar the packer is sticky-dest and is
+                // still latched to alias_mm2_cur_out from the QK@V matmul above (line 2211 + the matmul
+                // that inherits it); without this the EMD is written to the OUT_IM ring instead of
+                // dfb_exp_max_diff, so every downstream correction consumer (fma sum merge, MM2 rescale)
+                // reads garbage → multi-chunk PCC ~0.03 while seq128 (no correction) passes. Line 2230
+                // above only reconfigures the UNPACKers. Mirrors sdpa_decode's sub_exp_block preamble.
+                pack_reconfig_out(dfb_exp_max_diff);
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
                 DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
