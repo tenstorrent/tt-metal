@@ -78,7 +78,7 @@ def test_log_sigmoid_range(device, h, w, low, high):
     # 1.43 for the corrected kernel -- a 1.5x gap, too thin to hang a bfloat16
     # threshold on, and thinner still on the linspace here. That guard is the fp32
     # test in test_unary_fp32.py, where the same defect is ~1.3e5 ULP.
-    assert_with_ulp(torch_output_tensor, output_tensor, 3)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=3)
 
 
 def test_log_sigmoid_bfloat16_special_values(device):
@@ -104,7 +104,9 @@ def test_log_sigmoid_bfloat16_special_values(device):
     )
     output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
 
-    assert_with_ulp(torch_output_tensor, output_tensor, 3, allow_nonfinite=True)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=3, allow_nonfinite=True
+    )
 
 
 @pytest.mark.parametrize("h", [64])

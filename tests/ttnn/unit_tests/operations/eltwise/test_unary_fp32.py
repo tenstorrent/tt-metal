@@ -317,7 +317,7 @@ def test_log_sigmoid(device, h, w, low, high):
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
 
-    assert_with_ulp(torch_output_tensor, output_tensor, 4)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=4)
 
 
 def test_log_sigmoid_float32_special_values(device):
@@ -348,4 +348,6 @@ def test_log_sigmoid_float32_special_values(device):
     # a lane that came back as a finite 0.0 is the specific regression guarded here,
     # and a ULP check on a NaN reference would not distinguish it.
     assert torch.isnan(output_tensor.flatten()[:2]).all(), "log_sigmoid(NaN) must be NaN"
-    assert_with_ulp(torch_output_tensor, output_tensor, 4, allow_nonfinite=True)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=4, allow_nonfinite=True
+    )
