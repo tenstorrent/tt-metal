@@ -88,7 +88,6 @@ class TtPrefillRuntimeConfig:
     # KV dedup: also shard the KV/index caches across tp_axis, so each of the sp*tp devices stores a
     # distinct 1/(sp*tp) slice instead of tp copies. Must match how the caches were allocated and how the
     # KV chunk address table was built; sparse (DSA) path only.
-    tp_shard_kv: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -249,7 +248,6 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
-            tp_shard_kv=self.config.tp_shard_kv,
         )
         self.model_built = True
 
@@ -957,7 +955,6 @@ class TtPrefillRuntime:
             mesh_shape=self.config.mesh_shape,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
-            tp_shard_kv=self.config.tp_shard_kv,
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
@@ -975,11 +972,14 @@ class TtPrefillRuntime:
         not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
         ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
         read-back."""
-        # The `[:, :1]` below keeps ONE TP column, which is a full replica only when TP-replicated. Under
-        # KV dedup each column holds a distinct 1/tp of its row, so it would drop (tp-1)/tp of the tokens.
-        assert not self.config.tp_shard_kv, (
+        # The `[:, :1]` below keeps ONE TP column, which is a full replica only when TP-replicated. The
+        # sparse (DSA) path always TP-dedups, so each column holds a distinct 1/tp of its row and this
+        # would drop (tp-1)/tp of the tokens. Keyed on the index cache because that is what makes a model
+        # sparse here (dense models pass kv_caches.index=None and keep TP-replicated KVPE).
+        assert kv_caches.index is None, (
             "read_slot_kv (and the pairwise dst==src migration validation built on it) has no TP-sharded "
-            "host reconstruction. Use the mock-migration producer read-back to validate a TP-sharded cache."
+            "host reconstruction, and every sparse/DSA model TP-dedups its caches. Use the mock-migration "
+            "producer read-back to validate a sparse model's cache."
         )
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
