@@ -332,3 +332,38 @@ def test_bw_pow_preallocated_output_wins_over_memory_config(input_shapes, expone
         f"{result[0].memory_config().buffer_type}"
     )
     assert preallocated.memory_config().buffer_type == ttnn.BufferType.L1
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0])
+def test_bw_unary_pow_zero_input_boundary(input_shapes, exponent, device):
+    """Regression test for #56383: pow_bw at input == 0 with full spectrum of exponents."""
+    in_data = torch.zeros(input_shapes)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # Test with both positive and zero incoming gradient to verify no NaN generation
+    grad_data = torch.linspace(0.0, 4.0, in_data.numel()).reshape(input_shapes)
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
+
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_function(grad_data, in_data, exponent)
+    torch_output = ttnn.to_torch(tt_output_tensor_on_device[0])
+
+    if exponent < 1.0:
+        # At input == 0 and exponent < 1.0, derivative diverges to +inf; no NaN should occur
+        assert not torch.isnan(torch_output).any(), "must not produce NaN at input == 0 for exponent < 1.0"
+        assert torch.isinf(torch_output).all(), "must safely produce +inf at input == 0 for exponent < 1.0"
+    else:
+        # At input == 0 and exponent >= 1.0, derivative is well-defined and finite
+        assert torch.isfinite(golden_tensor[0]).all(), "golden tensor must be finite at input == 0 for exponent >= 1.0"
+        assert torch.isfinite(torch_output).all(), "device output must be finite, not +inf, for exponent >= 1.0"
+
+        if exponent == 1.0:
+            assert torch.allclose(torch_output, grad_data, atol=1e-2, rtol=1e-2), "grad at exp=1.0 must equal incoming grad"
+        else:
+            assert torch.allclose(torch_output, torch.zeros_like(torch_output), atol=1e-2), "grad at exp > 1.0 must be 0"
+
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor, pcc=0.99)
+    assert status
+
