@@ -5730,6 +5730,10 @@ class TestPythonStackTraceImport:
         conn.close()
 
 
+class _ModelTensor(torch.Tensor):
+    """A torch.Tensor subclass defined outside the torch package, as model-side wrappers are."""
+
+
 _FROM_TORCH_CONVERSION_CASES = pytest.mark.parametrize(
     "make_tensor, dtype",
     [
@@ -5739,8 +5743,20 @@ _FROM_TORCH_CONVERSION_CASES = pytest.mark.parametrize(
         (lambda: torch.zeros((8, 8), dtype=torch.float32).T.unsqueeze(0), ttnn.bfloat16),
         # Control: needs no conversion at all, so it passed even while the tracer was on.
         (lambda: torch.rand((8, 8), dtype=torch.bfloat16), ttnn.bfloat16),
+        # Model weights as loaded: a torch.nn.Parameter is itself a torch.Tensor subclass, so it takes the
+        # normalization branch in from_torch on every model; it must keep converting.
+        (lambda: torch.nn.Parameter(torch.rand((8, 8), dtype=torch.float32)), ttnn.bfloat16),
+        # A subclass from outside torch: nanobind cannot convert it directly (the raw ttnn.Tensor constructor
+        # fails on this input), so from_torch has to hand it over as a plain torch.Tensor.
+        (lambda: torch.zeros((8, 8), dtype=torch.float32).T.as_subclass(_ModelTensor), ttnn.bfloat16),
     ],
-    ids=["requires_grad", "noncontiguous_float32_to_bfloat16", "no_conversion"],
+    ids=[
+        "requires_grad",
+        "noncontiguous_float32_to_bfloat16",
+        "no_conversion",
+        "parameter_float32_to_bfloat16",
+        "foreign_subclass_noncontiguous_float32_to_bfloat16",
+    ],
 )
 
 
