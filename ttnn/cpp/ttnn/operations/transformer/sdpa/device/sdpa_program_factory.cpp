@@ -643,8 +643,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
@@ -707,8 +706,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
     // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args

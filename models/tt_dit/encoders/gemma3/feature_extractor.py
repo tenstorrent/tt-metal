@@ -6,7 +6,7 @@
 hidden states, concat, rescale, and dual aggregate_embed projection into the
 video/audio feature dims the connectors consume.
 
-Reference: ltx_core.text_encoders.gemma.feature_extractor.FeatureExtractorV2
+Reference: ltx_core.text_encoders.gemma3.feature_extractor.FeatureExtractorV2
 """
 
 from __future__ import annotations

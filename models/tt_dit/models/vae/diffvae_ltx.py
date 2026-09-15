@@ -1,0 +1,1235 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""LTX-2.5 DiffVAE video decoder: deterministic stages.
+
+Every block is 3D neighborhood attention over a local window. Stages 1-4 deterministically
+upsample the latent into a context volume; the diffusion stage that turns noise plus that
+context into pixels lives in :mod:`diffvae_ltx_stage5`.
+
+Submodules are named to mirror the checkpoint's own keys (``attn.qkv``, ``mlp.w_gate``, ...).
+"""
+
+from __future__ import annotations
+
+import math
+import os
+
+import torch
+
+import ttnn
+
+from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ...layers.module import Module, ModuleList
+from ...layers.neighborhood_attention import (
+    neighborhood_attention_3d_bricked_w_sharded,
+    neighborhood_attention_3d_linear_order,
+)
+from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
+from ...layers.normalization import RMSNorm
+from ...utils import timing_tree
+from ...utils.memory_log import log_ccl_cache, log_dram
+from ...utils.tracing import traced_function
+from .diffvae_ltx_stage5 import TILE
+from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
+
+#: Executors that take this chip's W-band and reassemble the window across the shard seam.
+#: Membership here is what W-shards a deterministic stage.
+W_SHARDED_BACKENDS = frozenset({"bricked_sp_w_sharded"})
+
+
+def stages_backend_from_env(default: str = "bricked_sp_w_sharded") -> str:
+    """``DIFFVAE_STAGES_BACKEND``: the executor for the W-sharded deterministic stages 1-3."""
+    return os.environ.get("DIFFVAE_STAGES_BACKEND") or default
+
+
+def decoder_config(path) -> dict:
+    """The decoder's architecture block, read from the checkpoint's safetensors metadata."""
+    import json
+    import struct
+
+    with open(path, "rb") as handle:
+        length = struct.unpack("<Q", handle.read(8))[0]
+        header = json.loads(handle.read(length))
+    vae = json.loads(header["__metadata__"]["config"])["vae"]
+    config = dict(vae["decoder"])
+    for key in ("in_channels", "out_channels", "patch_size", "head_dim", "model_output_type"):
+        if key in vae:
+            config[key] = vae[key]
+    for key in ("stage_kernels", "upsamples", "stage5_kernel"):
+        if key in config:
+            config[key] = _tuplify(config[key])
+    for key in ("stage_channels", "stage_depths"):
+        if key in config:
+            config[key] = tuple(config[key])
+    return config
+
+
+def _tuplify(value):
+    return tuple(_tuplify(v) if isinstance(v, list) else v for v in value)
+
+
+def rope_tables(
+    dims: tuple[int, int, int],
+    rope_dim_split: tuple[int, int, int],
+    *,
+    mesh_device,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """``(cos, sin)`` of shape ``(1, T, H, W, 1, head_dim // 2)`` for the permuted layout.
+
+    Each axis contributes ``width // 2`` columns in T, H, W order, matching
+    :func:`rope_permutation`. Positions are local to the volume: a global phase cancels inside
+    the window's softmax, so local and absolute positions give the same attention.
+    """
+    t, h, w = dims
+    cos_columns, sin_columns = [], []
+    for axis, (length, width) in enumerate(zip(dims, rope_dim_split)):
+        angle = axis_angles(torch.arange(length), width, ROPE_BASE)
+        shape = [1, 1, 1, angle.shape[-1]]
+        shape[axis] = length
+        cos_columns.append(angle.cos().reshape(shape).expand(t, h, w, angle.shape[-1]))
+        sin_columns.append(angle.sin().reshape(shape).expand(t, h, w, angle.shape[-1]))
+
+    def upload(columns):
+        table = torch.cat(columns, dim=-1).reshape(1, t, h, w, 1, -1)
+        return ttnn.from_torch(table, device=mesh_device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    return upload(cos_columns), upload(sin_columns)
+
+
+#: Bytes one pointwise chunk may hold. Bounds the SwiGLU's 4x-wide intermediates by the chunk
+#: instead of the volume.
+CHUNK_BYTES = 1 << 30
+
+
+def _chunk_rows(width: int, *, dtype_bytes: int = 2) -> int:
+    """Rows whose ``width``-wide intermediate fits :data:`CHUNK_BYTES`, tile-aligned."""
+    rows = CHUNK_BYTES // (width * dtype_bytes)
+    return max(TILE, rows // TILE * TILE)
+
+
+def _pointwise_in_chunks(x: ttnn.Tensor, fn, *, width: int) -> ttnn.Tensor:
+    """Apply the pointwise ``fn`` to row chunks of ``(rows, ·)`` ``x``. **Consumes** ``x``.
+
+    ``width`` is the widest intermediate ``fn`` builds per row. A single chunk runs whole so
+    short videos pay no concat.
+    """
+    rows, columns = int(x.shape[-2]), int(x.shape[-1])
+    step = _chunk_rows(width)
+    if step >= rows:
+        out = fn(x)
+        ttnn.deallocate(x)
+        return out
+
+    parts = []
+    for start in range(0, rows, step):
+        chunk = ttnn.slice(x, [start, 0], [min(start + step, rows), columns])
+        parts.append(fn(chunk))
+        ttnn.deallocate(chunk)
+    ttnn.deallocate(x)
+    joined = ttnn.concat(parts, dim=-2)
+    for part in parts:
+        ttnn.deallocate(part)
+    return joined
+
+
+def _consume(x: ttnn.Tensor, op, *args) -> ttnn.Tensor:
+    """``op(x, *args)``, freeing ``x`` unless ``op`` handed it straight back. Only for ops that copy."""
+    out = op(x, *args)
+    if out is not x:
+        ttnn.deallocate(x)
+    return out
+
+
+def _consume_pair(op, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+    """``op(a, b)``, freeing both operands."""
+    out = op(a, b)
+    ttnn.deallocate(a)
+    ttnn.deallocate(b)
+    return out
+
+
+def apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    """Rotate a permuted ``(1, T, H, W, heads, head_dim)`` tensor using contiguous halves. **Consumes** ``x``.
+
+    The two output halves are built one after the other so at most two products are live at once.
+    """
+    shape = list(x.shape)
+    half = shape[-1] // 2
+    low = ttnn.slice(x, [0] * len(shape), shape[:-1] + [half])
+    high = ttnn.slice(x, [0] * (len(shape) - 1) + [half], shape[:-1] + [2 * half])
+    ttnn.deallocate(x)
+
+    first = _consume_pair(ttnn.subtract, ttnn.multiply(low, cos), ttnn.multiply(high, sin))
+    second = _consume_pair(ttnn.add, ttnn.multiply(low, sin), ttnn.multiply(high, cos))
+    ttnn.deallocate(low)
+    ttnn.deallocate(high)
+
+    rotated = ttnn.concat([first, second], dim=-1)
+    ttnn.deallocate(first)
+    ttnn.deallocate(second)
+    return rotated
+
+
+class NeighborhoodAttention(Module):
+    """3D neighborhood attention with absolute RoPE, matching upstream's parameter shell."""
+
+    def __init__(
+        self,
+        dim: int,
+        kernel_size: tuple[int, int, int],
+        *,
+        head_dim: int = 64,
+        mesh_device=None,
+        na3d_backend: str = "linear_order",
+        ccl_manager=None,
+        sp_axis: int | None = None,
+        tp_axis: int | None = None,
+    ):
+        super().__init__()
+        assert dim % head_dim == 0, f"dim={dim} not divisible by head_dim={head_dim}"
+        self.dim = dim
+        self.head_dim = head_dim
+        self.num_heads = dim // head_dim
+        self.kernel_size = tuple(kernel_size)
+        self.scale = head_dim**-0.5
+        self.mesh_device = mesh_device
+        # "linear_order": grouped gather + dense masked attention with the passed-in device_plan.
+        # "bricked_sp_w_sharded": this chip's W-shard through the bricked executor (halo exchange
+        # over sp_axis via ccl_manager).
+        self.na3d_backend = na3d_backend
+        self.ccl_manager = ccl_manager
+        self.sp_axis = sp_axis
+        # TP-over-heads on the orthogonal mesh axis, only under the W-sharded backend.
+        self.tp_axis = tp_axis
+        self.rope_dim_split = default_rope_dim_split(head_dim)
+
+        # DIFFVAE_DET_COLPAR_QKV=1: shard the fused qkv weight on its output axis so each chip's
+        # matmul computes only its own heads. Implies fused_qkv.
+        self.colpar_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_COLPAR_QKV") == "1"
+        # DIFFVAE_DET_FUSED_QKV=1: one fused qkv matmul split by nlp_create_qkv_heads, partitioning
+        # the heads over tp_axis first so the norms, scale and RoPE run on heads/tp. Not gated on
+        # tp_axis: at tp=1 the partition is skipped and the TILE (B, NH, S, HD) layout stands alone.
+        self.fused_qkv = self.colpar_qkv or os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1"
+        # DIFFVAE_DET_FUSED_ROPE=1: one rotary_embedding_hf per lane, applied while still TILE. The
+        # weight fold already puts q/k in HF's rotate_half convention; it needs full-width cos/sin.
+        self.fused_rope = self.fused_qkv and os.environ.get("DIFFVAE_DET_FUSED_ROPE") == "1"
+        self._fused_rope_cache: dict = {}
+        self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
+        if self.fused_qkv:
+            assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
+        # The bricked executor never slices heads itself under TP, so on that backend this block
+        # partitions the heads in every projection form.
+        self.bricked = self.na3d_backend == "bricked_sp_w_sharded"
+        self.heads_local = self.num_heads // self.tp if (self.fused_qkv or self.bricked) else self.num_heads
+
+        if self.fused_qkv:
+            qkv_linear = {"bias": True, "mesh_device": mesh_device}
+            if self.colpar_qkv:
+                qkv_linear["weight_mesh_axes"] = [None, tp_axis]
+                qkv_linear["bias_mesh_axes"] = [None, tp_axis]
+            self.qkv = Linear(dim, 3 * dim, **qkv_linear)
+        else:
+            self.to_q = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+            self.to_k = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+            self.to_v = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+        self.proj = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+        self.q_norm = RMSNorm(head_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+        self.k_norm = RMSNorm(head_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Split (or regroup) the shipped fused ``qkv`` and fold the RoPE reordering into q/k."""
+        perm = rope_permutation(self.rope_dim_split)
+
+        def reorder_head_dim(tensor: torch.Tensor) -> torch.Tensor:
+            return tensor.reshape(self.num_heads, self.head_dim, *tensor.shape[1:])[:, perm].reshape(tensor.shape)
+
+        def device_major(fused: torch.Tensor) -> torch.Tensor:
+            """Reorder ``[q_all | k_all | v_all]`` rows to ``[dev][q|k|v][heads/tp]``, so a contiguous
+            column shard is this chip's own ``[q | k | v]`` as ``nlp_create_qkv_heads`` expects."""
+            rest = fused.shape[1:]
+            grouped = fused.reshape(3, self.tp, self.dim // self.tp, *rest)
+            axes = (1, 0, 2, *range(3, 3 + len(rest)))
+            return grouped.permute(*axes).reshape(3 * self.dim, *rest)
+
+        for leaf in ("weight", "bias"):
+            key = f"qkv.{leaf}"
+            if key in state:
+                q, k, v = state.pop(key).chunk(3, dim=0)
+                q, k = reorder_head_dim(q), reorder_head_dim(k)
+                if self.fused_qkv:
+                    state[key] = device_major(torch.cat([q, k, v], dim=0))
+                else:
+                    state[f"to_q.{leaf}"] = q
+                    state[f"to_k.{leaf}"] = k
+                    state[f"to_v.{leaf}"] = v
+        for key in ("q_norm.weight", "k_norm.weight"):
+            if key in state:
+                state[key] = state[key][perm]
+
+    def _fused_rope_tables(self, cos: ttnn.Tensor, sin: ttnn.Tensor, tokens: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``(cos, sin)`` as ``rotary_embedding_hf`` wants them: full head_dim (halves doubled), flat, TILE."""
+        key = (tokens, int(cos.shape[-1]))
+        cached = self._fused_rope_cache.get(key)
+        if cached is None:
+
+            def prepare(table: ttnn.Tensor) -> ttnn.Tensor:
+                doubled = ttnn.concat([table, table], dim=-1)
+                flat = ttnn.reshape(doubled, (1, 1, tokens, self.head_dim))
+                out = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(doubled)
+                return out
+
+            cached = (prepare(cos), prepare(sin))
+            self._fused_rope_cache[key] = cached
+        return cached
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        dims: tuple[int, int, int],
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        device_plan: NA3DDevicePlan,
+    ) -> ttnn.Tensor:
+        t, h, w = dims
+        tokens = t * h * w
+        heads = self.heads_local
+        q, k, v = self._project_qkv(x, tokens)
+        q, k = self._norm_and_scale(q, k)
+
+        if self.fused_rope:
+            with timing_tree.span(self.mesh_device, "qkv-rope (fused op)", category=timing_tree.NORM_ROPE, deep=True):
+                cos_full, sin_full = self._fused_rope_tables(cos, sin, tokens)
+                q = _consume(q, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+                k = _consume(k, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+
+        # Untilize before splitting out the head axis: TILE pads both of the last two dims to 32,
+        # so a trailing (heads, head_dim) in TILE costs many times its own size.
+        shape = (1, t, h, w, heads, self.head_dim)
+
+        def to_volume(part: ttnn.Tensor) -> ttnn.Tensor:
+            part = _consume(part, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            if self.fused_qkv:
+                part = _consume(part, ttnn.permute, (0, 2, 1, 3))
+            return ttnn.reshape(part, shape)
+
+        with timing_tree.span(self.mesh_device, "qkv-to-volume", category=timing_tree.RESHAPE, deep=True):
+            q, k, v = (to_volume(part) for part in (q, k, v))
+        if not self.fused_rope:
+            with timing_tree.span(self.mesh_device, "qkv-rope (unfused)", category=timing_tree.NORM_ROPE, deep=True):
+                q = apply_rope(q, cos, sin)
+                k = apply_rope(k, cos, sin)
+
+        attended = self._attend(q, k, v, dims=dims, device_plan=device_plan)
+        return self._out_proj(attended, tokens)
+
+    @timing_tree.span("mesh_device", "qkv-proj", category=timing_tree.PROJ, deep=True)
+    def _project_qkv(self, x: ttnn.Tensor, tokens: int) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Project ``x`` to per-head q, k, v, this chip's heads only. **Consumes** ``x``."""
+        heads = self.heads_local
+        if self.fused_qkv:
+            flat = self.qkv(x)
+            ttnn.deallocate(x)
+            qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
+            if not self.colpar_qkv and self.tp > 1:
+                partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
+                ttnn.deallocate(qkv)
+                qkv = partitioned
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
+            )
+            ttnn.deallocate(qkv)
+            return q, k, v
+
+        heads_shape = (tokens * heads, self.head_dim)
+
+        def own_heads(part: ttnn.Tensor) -> ttnn.Tensor:
+            """This chip's contiguous head block of a ``(tokens, dim)`` projection under TP."""
+            if self.tp == 1 or not self.bricked:
+                return part
+            rows = ttnn.reshape(part, (1, 1, tokens, self.dim))
+            partitioned = ttnn.mesh_partition(rows, dim=3, cluster_axis=self.tp_axis)
+            ttnn.deallocate(part)
+            return partitioned
+
+        q, k, v = (ttnn.reshape(own_heads(project(x)), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
+        ttnn.deallocate(x)
+        return q, k, v
+
+    @timing_tree.span("mesh_device", "qkv-norm", category=timing_tree.NORM_ROPE, deep=True)
+    def _norm_and_scale(self, q: ttnn.Tensor, k: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        return ttnn.multiply(self.q_norm(q), self.scale), self.k_norm(k)
+
+    @timing_tree.span(
+        "mesh_device", lambda self, *a, **k: f"attention {self.na3d_backend}", category=timing_tree.SDPA, deep=True
+    )
+    def _attend(self, q, k, v, *, dims: tuple[int, int, int], device_plan: NA3DDevicePlan) -> ttnn.Tensor:
+        t, h, w = dims
+        if self.na3d_backend == "bricked_sp_w_sharded":
+            # q/k/v are this chip's W-slice, so `dims` here is local; the executor is told the full W.
+            sp = int(list(q.device().shape)[self.sp_axis])
+            return neighborhood_attention_3d_bricked_w_sharded(
+                q,
+                k,
+                v,
+                dims=(t, h, w * sp),
+                kernel_size=self.kernel_size,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+                scale=1.0,
+                tp_axis=self.tp_axis,
+                heads_presharded=True,
+                stride=(1, 1, 1),
+            )
+        return neighborhood_attention_3d_linear_order(
+            q,
+            k,
+            v,
+            kernel_size=self.kernel_size,
+            scale=1.0,
+            device_plan=device_plan,
+            ccl_manager=self.ccl_manager,
+        )
+
+    @timing_tree.span("mesh_device", "out-proj", category=timing_tree.PROJ, deep=True)
+    def _out_proj(self, attended: ttnn.Tensor, tokens: int) -> ttnn.Tensor:
+        attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
+        out = self.proj(attended)
+        ttnn.deallocate(attended)
+        return out
+
+
+class SwiGLU(Module):
+    """``w_down(silu(w_gate(x)) * w_up(x))``, biasless, as upstream ships it."""
+
+    def __init__(self, dim: int, hidden_dim: int, *, mesh_device=None, tp_axis=None, ccl_manager=None):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.dim = dim
+        self.tp_axis = tp_axis
+        self.ccl_manager = ccl_manager
+        # DIFFVAE_DET_TP_MLP=1: gate/up column-parallel and w_down row-parallel over tp_axis.
+        # Implies the packed weight.
+        self.tp_mlp = tp_axis is not None and os.environ.get("DIFFVAE_DET_TP_MLP") == "1"
+        # DIFFVAE_DET_FUSED_SWIGLU=1: one [up | gate] GEMM whose epilogue emits silu(gate) * up.
+        self.fused = self.tp_mlp or os.environ.get("DIFFVAE_DET_FUSED_SWIGLU") == "1"
+
+        if self.tp_mlp:
+            self.gate_up = ColParallelLinear(
+                dim,
+                hidden_dim,
+                bias=False,
+                activation_fn="swiglu",
+                mesh_device=mesh_device,
+                mesh_axis=tp_axis,
+                ccl_manager=ccl_manager,
+            )
+            self.w_down = RowParallelLinear(
+                hidden_dim, dim, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis, ccl_manager=ccl_manager
+            )
+        elif self.fused:
+            self.gate_up = Linear(dim, hidden_dim, bias=False, activation_fn="swiglu", mesh_device=mesh_device)
+            self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
+        else:
+            self.w_gate = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
+            self.w_up = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
+            self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Pack the shipped ``w_gate``/``w_up`` into the fused ``[up | gate]`` weight.
+
+        ``up`` first: ``prepare_for_fused_swiglu``'s default ordering is ``[up (N) | gate (N)]``.
+        """
+        if not self.fused:
+            return
+        gate = state.pop("w_gate.weight", None)
+        up = state.pop("w_up.weight", None)
+        if gate is not None and up is not None:
+            state["gate_up.weight"] = torch.cat([up, gate], dim=0)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """**Consumes** ``x``. Row-chunked: the hidden intermediates are 4x the activation."""
+        width = self.hidden_dim // self.mlp_shards
+        return _pointwise_in_chunks(x, self._project, width=width)
+
+    @property
+    def mlp_shards(self) -> int:
+        return int(list(self.gate_up.mesh_device.shape)[self.tp_axis]) if self.tp_mlp else 1
+
+    def _project(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.fused:
+            hidden = self.gate_up(x)
+            if self.tp_mlp:
+                # The all_gather below names dim 3 absolutely, so the tensor must be rank 4 here.
+                hidden = ttnn.reshape(hidden, (1, 1, hidden.shape[-2], hidden.shape[-1]))
+            # use_persistent_buffer=False: RowParallelLinear otherwise returns the CCL manager's
+            # cached reduce-scatter buffer, which the deallocate below would destroy under it.
+            out = self.w_down(hidden, use_persistent_buffer=False) if self.tp_mlp else self.w_down(hidden)
+            ttnn.deallocate(hidden)
+            if self.tp_mlp:
+                gathered = self.ccl_manager.all_gather(out, dim=3, mesh_axis=self.tp_axis, use_hyperparams=False)
+                ttnn.deallocate(out)
+                out = ttnn.reshape(gathered, (gathered.shape[-2], self.dim))
+            return out
+
+        gate = ttnn.silu(self.w_gate(x))
+        up = self.w_up(x)
+        product = ttnn.multiply(gate, up)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        out = self.w_down(product)
+        ttnn.deallocate(product)
+        return out
+
+
+class NABlock(Module):
+    """Pre-norm block: neighborhood attention then SwiGLU, both with residual adds."""
+
+    def __init__(
+        self,
+        dim: int,
+        kernel_size: tuple[int, int, int],
+        *,
+        head_dim: int = 64,
+        mesh_device=None,
+        na3d_backend: str = "linear_order",
+        ccl_manager=None,
+        sp_axis: int | None = None,
+        tp_axis: int | None = None,
+    ):
+        super().__init__()
+        # Upstream rounds the 4x MLP ratio up to a multiple of 16.
+        hidden = (int(dim * 4.0) + 15) // 16 * 16
+        self.norm1 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+        self.attn = NeighborhoodAttention(
+            dim,
+            kernel_size,
+            head_dim=head_dim,
+            mesh_device=mesh_device,
+            na3d_backend=na3d_backend,
+            ccl_manager=ccl_manager,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+        )
+        self.norm2 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+        self.mlp = SwiGLU(dim, hidden, mesh_device=mesh_device, tp_axis=tp_axis, ccl_manager=ccl_manager)
+        self.mesh_device = mesh_device
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        dims: tuple[int, int, int],
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        device_plan: NA3DDevicePlan,
+    ) -> ttnn.Tensor:
+        attended = self._attention(x, dims=dims, cos=cos, sin=sin, device_plan=device_plan)
+        x = ttnn.add(x, attended)
+        ttnn.deallocate(attended)
+        projected = self._mlp(x)
+        x = ttnn.add(x, projected)
+        ttnn.deallocate(projected)
+        return x
+
+    @timing_tree.span("mesh_device", "attention", category=timing_tree.ATTENTION, deep=True)
+    def _attention(self, x, *, dims, cos, sin, device_plan) -> ttnn.Tensor:
+        return self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
+
+    @timing_tree.span("mesh_device", "mlp", category=timing_tree.MLP, deep=True)
+    def _mlp(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.mlp(self.norm2(x))
+
+
+class LinearPixelShuffleUpsample(Module):
+    """Channel-expanding Linear then a channels-last 3D pixel shuffle.
+
+    The checkpoint packs the projection's output channels as ``(c p1 p2 p3)``. The rows are
+    reordered at load to ``(p1 p2 p3 c)`` (see ``channel_permutation``) so the shuffle keeps the
+    channel axis innermost.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        stride: tuple[int, int, int],
+        out_channels_reduction_factor: int = 1,
+        *,
+        mesh_device=None,
+    ):
+        super().__init__()
+        self.stride = tuple(stride)
+        span = self.stride[0] * self.stride[1] * self.stride[2]
+        self.proj_out_channels = span * in_channels // out_channels_reduction_factor
+        self.out_channels = self.proj_out_channels // span
+        self.proj = Linear(in_channels, self.proj_out_channels, bias=True, mesh_device=mesh_device)
+
+    def channel_permutation(self) -> torch.Tensor:
+        """Row order taking the checkpoint's ``(c p1 p2 p3)`` output channels to ``(p1 p2 p3 c)``.
+
+        Channels innermost is not cosmetic: with a stride factor of 2 innermost, ROW_MAJOR rounds
+        that extent up to a full 32-element face and the tensor occupies 16x its own size.
+        """
+        p1, p2, p3 = self.stride
+        index = torch.arange(self.proj_out_channels).reshape(self.out_channels, p1, p2, p3)
+        return index.permute(1, 2, 3, 0).reshape(-1)
+
+    def _shuffle(self, projected: ttnn.Tensor, t: int, h: int, w: int, drop_leading_frame: bool) -> ttnn.Tensor:
+        """Pixel-shuffle a ROW_MAJOR ``(t*h*w, proj_out_channels)`` projection into ``(t'*h*p2*w*p3, c)``
+        in TILE. **Consumes** ``projected``; returns the tile tensor and the output frame count."""
+        p1, p2, p3 = self.stride
+        c = self.out_channels
+        projected = _consume(
+            projected, lambda v: ttnn.permute(ttnn.reshape(v, (t, h, w, p1, p2, p3, c)), (0, 3, 1, 4, 2, 5, 6))
+        )
+        out_t = t * p1
+        rows = (h * p2) * (w * p3)
+        if p1 == 2 and drop_leading_frame:
+            # The temporal shuffle emits a duplicate first frame; dropping it preserves the causal
+            # 1:2 mapping. Only the slab holding the true t=0 has one.
+            projected = _consume(
+                projected, lambda v: ttnn.slice(ttnn.reshape(v, (out_t, rows, c)), [1, 0, 0], [out_t, rows, c])
+            )
+            out_t -= 1
+        projected = _consume(projected, lambda v: ttnn.to_layout(ttnn.reshape(v, (out_t * rows, c)), ttnn.TILE_LAYOUT))
+        return projected, out_t
+
+    def forward(
+        self, x: ttnn.Tensor, *, dims: tuple[int, int, int], drop_leading_frame: bool = True
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """``x`` is ``(tokens, in_channels)``; returns ``(tokens', out_channels)`` and new dims.
+
+        The shuffle maps each source frame to its own output frames, so when the widened projection
+        would exceed :data:`CHUNK_BYTES` the volume is processed in source-frame slabs. A slab
+        boundary must be tile-aligned (``h*w`` a multiple of TILE); otherwise it runs whole.
+        """
+        t, h, w = dims
+        p1, p2, p3 = self.stride
+        hw = h * w
+        slab = max(1, CHUNK_BYTES // (hw * self.proj_out_channels * 2))
+
+        if slab >= t or hw % TILE != 0:
+            projected = _consume(self.proj(x), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            out, out_t = self._shuffle(projected, t, h, w, drop_leading_frame)
+            return out, (out_t, h * p2, w * p3)
+
+        in_channels = int(x.shape[-1])
+        parts: list[ttnn.Tensor] = []
+        out_t_total = 0
+        for start in range(0, t, slab):
+            st = min(start + slab, t) - start
+            x_slab = ttnn.slice(x, [start * hw, 0], [(start + st) * hw, in_channels])
+            projected = _consume(self.proj(x_slab), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(x_slab)
+            part, part_t = self._shuffle(projected, st, h, w, drop_leading_frame and start == 0)
+            parts.append(part)
+            out_t_total += part_t
+        joined = ttnn.concat(parts, dim=-2)
+        for part in parts:
+            ttnn.deallocate(part)
+        return joined, (out_t_total, h * p2, w * p3)
+
+
+class DeterministicStages(Module):
+    """Stages 1-4: NA blocks and upsamples that turn the latent into the stage-5 context.
+
+    ``conv_in`` lives here so the latent's per-channel denormalization can be folded into it:
+    ``conv_in(x * std + mean)`` is a Linear with ``std`` scaled into the weight columns and
+    ``W @ mean`` added to the bias.
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        stage_channels: tuple[int, ...],
+        stage_depths: tuple[int, ...],
+        stage_kernels: tuple[tuple[int, int, int], ...],
+        upsamples: tuple[tuple[tuple[int, int, int], int], ...],
+        head_dim: int = 64,
+        mesh_device=None,
+        ccl_manager=None,
+        na3d_backend: str | None = None,
+        sp_axis: int | None = None,
+        tp_axis: int | None = None,
+    ):
+        super().__init__()
+        assert len(upsamples) == len(stage_channels) - 1, "one upsample between consecutive stages"
+        self.stage_kernels = stage_kernels
+        self.head_dim = head_dim
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        # Under a W-sharded backend the activation is W-sharded from stage 1 on (stage 0's W is not
+        # divisible by the mesh axis, so it stays replicated). DIFFVAE_DET_NA3D_BACKEND reaches
+        # stages 1-4 only; stage 5 is selected by DIFFVAE_STAGE5_BACKEND.
+        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_DET_NA3D_BACKEND", "linear_order")
+        assert self.na3d_backend in {"linear_order"} | W_SHARDED_BACKENDS, (
+            f"unknown NA3D backend {self.na3d_backend!r}; expected one of "
+            f"{sorted({'linear_order'} | W_SHARDED_BACKENDS)}"
+        )
+        self.sp_axis = sp_axis
+        self.tp_axis = tp_axis
+        self._w_sharded = self.na3d_backend in W_SHARDED_BACKENDS
+        self.sp = int(list(mesh_device.shape)[sp_axis]) if self._w_sharded else 1
+        if self._w_sharded:
+            assert sp_axis is not None and ccl_manager is not None, f"{self.na3d_backend} needs sp_axis + ccl_manager"
+        self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
+
+        def block_backend(stage: int) -> str:
+            if self._w_sharded and stage == 0:
+                return "linear_order"
+            return self.na3d_backend
+
+        self.block_backend = block_backend
+
+        self.det_stages = ModuleList(
+            [
+                ModuleList(
+                    [
+                        NABlock(
+                            stage_channels[stage],
+                            stage_kernels[stage],
+                            head_dim=head_dim,
+                            mesh_device=mesh_device,
+                            na3d_backend=block_backend(stage),
+                            ccl_manager=ccl_manager if self._w_sharded and stage > 0 else None,
+                            sp_axis=sp_axis if self._w_sharded and stage > 0 else None,
+                            tp_axis=tp_axis if self._w_sharded and stage > 0 else None,
+                        )
+                        for _ in range(stage_depths[stage])
+                    ]
+                )
+                for stage in range(len(upsamples))
+            ]
+        )
+        self.upsamples = ModuleList(
+            [
+                LinearPixelShuffleUpsample(
+                    stage_channels[stage], upsamples[stage][0], upsamples[stage][1], mesh_device=mesh_device
+                )
+                for stage in range(len(upsamples))
+            ]
+        )
+        self._plan_cache: dict[tuple, NA3DDevicePlan] = {}
+        self._rope_cache: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+
+    def _plan(self, dims: tuple[int, int, int], kernel: tuple[int, int, int]) -> NA3DDevicePlan:
+        key = (dims, kernel)
+        if key not in self._plan_cache:
+            self._plan_cache[key] = build_device_plan(
+                plan_na3d(dims, kernel), mesh_device=self.mesh_device, ccl_manager=self.ccl_manager
+            )
+        return self._plan_cache[key]
+
+    def _rope(self, dims: tuple[int, int, int]) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if dims not in self._rope_cache:
+            self._rope_cache[dims] = rope_tables(
+                dims, default_rope_dim_split(self.head_dim), mesh_device=self.mesh_device
+            )
+        return self._rope_cache[dims]
+
+    def state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
+        """Load ``decoder.*`` tensors from an LTX-2.5 video-VAE safetensors file, folding
+        ``per_channel_statistics`` into ``conv_in`` when present."""
+        from safetensors import safe_open
+
+        state: dict[str, torch.Tensor] = {}
+        stats: dict[str, torch.Tensor] = {}
+        with safe_open(str(path), "pt") as handle:
+            for key in handle.keys():
+                if key.startswith("per_channel_statistics."):
+                    stats[key[len("per_channel_statistics.") :]] = handle.get_tensor(key).float()
+                    continue
+                if not key.startswith("decoder."):
+                    continue
+                name = key[len("decoder.") :]
+                if name.startswith(("conv_in.", "det_stages.", "upsamples.")):
+                    stage = name.split(".")[1] if name.startswith("det_stages.") else None
+                    if stage is not None and int(stage) >= len(self.det_stages):
+                        continue
+                    state[name] = handle.get_tensor(key).float()
+
+        if statistics and "std-of-means" in stats:
+            weight, bias = state["conv_in.weight"], state["conv_in.bias"]
+            std, mean = stats["std-of-means"], stats["mean-of-means"]
+            state["conv_in.weight"] = weight * std[None, :]
+            state["conv_in.bias"] = bias + weight @ mean
+
+        for index, upsample in enumerate(self.upsamples):
+            order = upsample.channel_permutation()
+            for leaf in ("weight", "bias"):
+                key = f"upsamples.{index}.proj.{leaf}"
+                state[key] = state[key][order]
+
+        return state
+
+    def load_checkpoint(self, path, *, statistics: bool = True) -> None:
+        self.load_state_dict(self.state_from_checkpoint(path, statistics=statistics))
+
+    @timing_tree.span("mesh_device", "reshard: replicated -> W-sharded", category=timing_tree.RESHAPE)
+    def _wshard(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
+        """Reshard a replicated ``(T*H*W, ch)`` volume into this chip's W-band ``(T*H*(W/sp), ch)``.
+        **Consumes** ``x``."""
+        t, h, w = dims
+        ch = int(x.shape[-1])
+        rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(x)
+        vol = ttnn.reshape(rm, (t, h, w, ch))
+        band = ttnn.mesh_partition(vol, dim=2, cluster_axis=self.sp_axis)
+        ttnn.deallocate(rm)
+        flat = ttnn.reshape(band, (t * h * (w // self.sp), ch))
+        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+
+    @timing_tree.span("mesh_device", "det -> replicated context gather", category=timing_tree.ALLGATHER)
+    def _wgather(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
+        """Gather a W-sharded ``(T*H*(W/sp), ch)`` band back to the replicated ``(T*H*W, ch)`` volume.
+        **Consumes** ``x``."""
+        t, h, w = dims
+        ch = int(x.shape[-1])
+        w_local = w // self.sp
+        vol = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (t, h, w_local, ch))
+        ttnn.deallocate(x)
+        full = self.ccl_manager.all_gather(vol, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+        return ttnn.to_layout(ttnn.reshape(full, (t * h * w, ch)), ttnn.TILE_LAYOUT)
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        dims: tuple[int, int, int],
+        drop_leading_frame: bool = True,
+        stages: int | None = None,
+        gather_output: bool = True,
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """``x`` is ``(tokens, in_channels)`` channels-last in TILE layout, normalized latent.
+
+        ``dims`` is always the FULL ``(T, H, W)``. ``gather_output=False`` skips the final
+        all-gather and returns this chip's W-band ``(T*H*(W/sp), ch)`` for stage 5 to consume directly.
+        """
+        x = self._conv_in(x)
+        count = len(self.upsamples) if stages is None else stages
+        sharded = False
+        for stage in range(count):
+            x, dims, sharded = self._run_stage(x, stage, dims, sharded=sharded, drop_leading_frame=drop_leading_frame)
+        if sharded and gather_output:
+            x = self._wgather(x, dims)
+            log_dram(self.mesh_device, f"det gathered to replicated {dims}")
+        return x, dims
+
+    @timing_tree.span("mesh_device", "conv_in (denorm folded)", category=timing_tree.MLP)
+    def _conv_in(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.conv_in(x)
+
+    @timing_tree.span(
+        "mesh_device", lambda self, x, stage, dims, **k: f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"
+    )
+    def _run_stage(
+        self, x: ttnn.Tensor, stage: int, dims: tuple[int, int, int], *, sharded: bool, drop_leading_frame: bool
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int], bool]:
+        """One deterministic stage. Returns the activation, its FULL out-dims, and whether it is W-sharded."""
+        t, h, w = dims
+        stage_sharded = self._w_sharded and stage > 0
+        if stage_sharded:
+            assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
+            if not sharded:
+                x = self._wshard(x, dims)
+                sharded = True
+        local_dims = (t, h, w // self.sp) if stage_sharded else dims
+        cos, sin, plan = self._stage_setup(stage, dims, stage_sharded)
+        x = self._run_blocks(x, stage, local_dims, cos, sin, plan, stage_sharded)
+        x, out_dims = self._upsample(x, stage, local_dims, drop_leading_frame)
+        if stage_sharded:
+            out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)
+        log_dram(self.mesh_device, f"det stage {stage} upsampled to {out_dims} sharded={stage_sharded}")
+        return x, out_dims, sharded
+
+    @timing_tree.span(
+        "mesh_device",
+        lambda self, stage, *a: f"stage {stage + 1} setup: rope tables + plan",
+        category=timing_tree.SETUP,
+    )
+    def _stage_setup(self, stage: int, dims: tuple[int, int, int], stage_sharded: bool):
+        cos, sin = self._rope(dims)
+        if stage_sharded:
+            cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
+            sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
+        plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
+        return cos, sin, plan
+
+    @timing_tree.span(
+        "mesh_device",
+        lambda self, x, stage, *a: f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}",
+    )
+    def _run_blocks(self, x: ttnn.Tensor, stage: int, local_dims, cos, sin, plan, stage_sharded: bool) -> ttnn.Tensor:
+        for index, block in enumerate(self.det_stages[stage]):
+            x = block(x, dims=local_dims, cos=cos, sin=sin, device_plan=plan)
+            log_dram(self.mesh_device, f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}")
+        return x
+
+    @timing_tree.span("mesh_device", lambda self, x, stage, *a: f"upsample {stage + 1}", category=timing_tree.UPSAMPLE)
+    def _upsample(self, x: ttnn.Tensor, stage: int, local_dims, drop_leading_frame: bool):
+        return self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
+
+
+class DiffVAEDecoder(Module):
+    """The whole LTX-2.5 diffusion video decoder: deterministic stages then the diffusion stage.
+
+    Takes the same normalized latent the conv decoder takes and returns pixels.
+
+    Two temporal adjustments frame the deterministic stages: before stage 1 the last latent frame
+    is replicated :attr:`ghost_latent_frames` times to give the attention a trailing border, and
+    after stage 4 that appendix is cropped back off. Apply the pad without the crop and the video
+    grows spurious frames.
+    """
+
+    supports_yuv = True
+
+    #: Stage-5 activations are too large to share the mesh with a resident DiT, so the pipeline
+    #: evicts the DiT before decode. Overridden below when stage 5 is sharded.
+    requires_exclusive_residency = True
+
+    def __init__(
+        self,
+        config: dict,
+        *,
+        mesh_device,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        ccl_manager=None,
+        stage5_na3d_backend: str | None = None,
+        stage5_sp_axis: int | None = None,
+        stage5_tp_axis: int | None = None,
+        stages_na3d_backend: str | None = None,
+        stages_sp_axis: int | None = None,
+        stages_tp_axis: int | None = None,
+    ):
+        super().__init__()
+        from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
+
+        # A sharded stage 5 holds a fraction of the volume per chip and can sit beside a resident
+        # DiT, which also keeps the DiT's captured trace valid. DIFFVAE_EXCLUSIVE=1 forces eviction.
+        if stage5_sp_axis is not None:
+            self.requires_exclusive_residency = os.environ.get("DIFFVAE_EXCLUSIVE") == "1"
+
+        self.config = config
+        self.mesh_device = mesh_device
+        self._timestep = None
+        # Set True by the pipeline after warm-up: forward() then captures the device half of the
+        # decode as a ttnn trace on its first call and replays it after.
+        self._vae_traced = False
+        self.ccl_manager = ccl_manager
+        self.patch_size = config["patch_size"]
+        self.out_channels = config["out_channels"]
+        self.in_channels = config["in_channels"]
+        self.stage5_kernel = config["stage5_kernel"]
+        # Upstream: (stage_kernels[0][0] // 2) * 2 latent frames of trailing replication.
+        self.ghost_latent_frames = (config["stage_kernels"][0][0] // 2) * 2
+        # Composed temporal upscale of the four upsamples.
+        self.time_scale = math.prod(stride[0] for stride, _ in config["upsamples"])
+
+        self.stages = DeterministicStages(
+            in_channels=config["in_channels"],
+            stage_channels=config["stage_channels"],
+            stage_depths=config["stage_depths"],
+            stage_kernels=config["stage_kernels"],
+            upsamples=config["upsamples"],
+            head_dim=config["head_dim"],
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            na3d_backend=stages_na3d_backend,
+            sp_axis=stages_sp_axis,
+            tp_axis=stages_tp_axis,
+        )
+        self.stage5 = DiffVAEStage5(
+            DiffVAEStage5Config(
+                dim=config["stage_channels"][-1],
+                head_dim=config["head_dim"],
+                kernel_size=config["stage5_kernel"],
+                context_channels=config["stage_channels"][-1],
+                mlp_hidden=4 * config["stage_channels"][-1],
+                num_blocks=config["stage_depths"][-1],
+                patch_size=config["patch_size"],
+                out_channels=config["out_channels"],
+                timestep_scale_multiplier=config["timestep_scale_multiplier"],
+            ),
+            mesh_device=mesh_device,
+            dtype=dtype,
+            ccl_manager=ccl_manager,
+            na3d_backend=stage5_na3d_backend,
+            sp_axis=stage5_sp_axis,
+            tp_axis=stage5_tp_axis,
+        )
+        # When both halves W-shard on the same axis, the context is handed over W-sharded instead
+        # of gathered and re-sharded.
+        self._wsharded_handoff = (
+            self.stages._w_sharded and self.stage5._w_sharded and self.stages.sp_axis == self.stage5.sp_axis
+        )
+        self.dtype = dtype
+
+    def parameter_layout(self) -> str:
+        """Which parameters this decoder has, as a token for the weight-cache path.
+
+        The fusion flags change the parameter SET (one fused ``qkv`` or three projections, one
+        packed ``gate_up`` or two), so a cache written under one flag set does not load under
+        another. Read off the built modules rather than the environment.
+        """
+
+        def stage_token(blocks) -> str:
+            block = blocks[0]
+            return f"q{1 if block.attn.fused_qkv else 3}m{1 if block.mlp.fused else 2}"
+
+        det = "-".join(stage_token(self.stages.det_stages[i]) for i in range(len(self.stages.det_stages)))
+        stage5 = f"q{1 if self.stage5.diff_blocks[0].attn.fused_qkv else 3}"
+        return f"det-{det}_s5-{stage5}"
+
+    def torch_state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
+        """One state dict for the whole decoder, keyed for :meth:`load_torch_state_dict`.
+
+        Kept separate from applying it so the weights can go through the tt_dit disk cache.
+        """
+        from safetensors import safe_open
+
+        state = {f"stages.{k}": v for k, v in self.stages.state_from_checkpoint(path, statistics=statistics).items()}
+
+        prefixes = ("diff_blocks.", "shared_adaln.", "t_embedder.", "conv_in_x_t.", "conv_out.", "norm_out.")
+        with safe_open(str(path), "pt") as handle:
+            for key in handle.keys():
+                if not key.startswith("decoder."):
+                    continue
+                name = key[len("decoder.") :]
+                if name.startswith(prefixes):
+                    state[f"stage5.{name}"] = handle.get_tensor(key).float()
+        return state
+
+    def load_checkpoint(self, path, *, statistics: bool = True) -> None:
+        """Load both halves from one LTX-2.5 video-VAE safetensors file, bypassing the cache."""
+        self.load_torch_state_dict(self.torch_state_from_checkpoint(path, statistics=statistics))
+
+    def context_frames(self, latent_frames: int) -> int:
+        """Stage-5 temporal extent for a latent of ``latent_frames``, after pad and crop."""
+        padded = latent_frames + self.ghost_latent_frames
+        # Each temporal upsample doubles then drops its duplicate leading frame, so the
+        # composed map is causal: n -> time_scale * (n - 1) + 1.
+        grown = self.time_scale * (padded - 1) + 1
+        return max(grown - self.ghost_latent_frames * self.time_scale, self.stage5_kernel[0])
+
+    @timing_tree.span("mesh_device", "det stages TOTAL (forward_context)")
+    def forward_context(
+        self, latent: torch.Tensor, *, gather_output: bool = True, latent_tt: ttnn.Tensor | None = None
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
+        """Deterministic stages on a ``(B, C, T, H, W)`` normalized latent, ghost cropped.
+
+        ``gather_output=False`` returns the context W-sharded (this chip's band). ``dims`` is
+        always the FULL ``(T, H, W)``.
+
+        ``latent_tt`` supplies the raw latent already on device, in the ROW_MAJOR ``(1, C, T, H*W)``
+        form the device-preproc path uploads. A trace refuses host-to-device writes during capture,
+        so the upload has to happen outside the captured region. ``latent`` is then read for its
+        shape only, and the caller keeps ownership of the buffer.
+        """
+        batch, channels, t, h, w = latent.shape
+        assert batch == 1, f"batched decode is not implemented; got batch={batch}"
+        assert channels == self.in_channels, f"latent has {channels} channels, expected {self.in_channels}"
+
+        ghost = self.ghost_latent_frames
+        if os.environ.get("DIFFVAE_DEVICE_PREPROC") == "1":
+            # Upload the latent as-is; the ghost pad and channels-last flatten run on device.
+            with timing_tree.span(self.mesh_device, "host->mesh: upload latent (raw)", category=timing_tree.HOST_XFER):
+                raw = latent_tt
+                if raw is None:
+                    raw = ttnn.from_torch(
+                        latent.reshape(1, channels, t, h * w).contiguous(),
+                        device=self.mesh_device,
+                        dtype=self.dtype,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+
+            with timing_tree.span(self.mesh_device, "device: ghost pad + flatten", category=timing_tree.RESHAPE):
+                last = ttnn.slice(raw, [0, 0, t - 1, 0], [1, channels, t, h * w])
+                parts = [raw] + [last] * ghost
+                padded_tt = ttnn.concat(parts, dim=2)
+                if latent_tt is None:
+                    ttnn.deallocate(raw)
+                ttnn.deallocate(last)
+                moved = ttnn.permute(padded_tt, (0, 2, 3, 1))
+                ttnn.deallocate(padded_tt)
+                x = ttnn.to_layout(ttnn.reshape(moved, ((t + ghost) * h * w, channels)), ttnn.TILE_LAYOUT)
+                ttnn.deallocate(moved)
+        else:
+            with timing_tree.span(
+                self.mesh_device, "host: ghost pad + permute/flatten", category=timing_tree.HOST_COMPUTE
+            ):
+                padded = torch.cat([latent, latent[:, :, -1:].expand(-1, -1, ghost, -1, -1)], dim=2)
+                tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
+            with timing_tree.span(self.mesh_device, "host->mesh: upload TILE", category=timing_tree.HOST_XFER):
+                x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
+
+        x, dims = self.stages(x, dims=(t + ghost, h, w), gather_output=gather_output)
+        sharded_out = self.stages._w_sharded and not gather_output
+        w_eff = dims[2] // self.stages.sp if sharded_out else dims[2]
+        keep = self.context_frames(t)
+        with timing_tree.span(self.mesh_device, "ghost crop on T", category=timing_tree.RESHAPE):
+            if keep < dims[0]:
+                channels_out = self.config["stage_channels"][-1]
+                # The crop is on T, which the W-shard leaves untouched.
+                frames = ttnn.reshape(
+                    ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * w_eff, channels_out)
+                )
+                ttnn.deallocate(x)
+                cropped = ttnn.slice(frames, [0, 0, 0], [keep, dims[1] * w_eff, channels_out])
+                ttnn.deallocate(frames)
+                x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * w_eff, channels_out)), ttnn.TILE_LAYOUT)
+                ttnn.deallocate(cropped)
+                dims = (keep, dims[1], dims[2])
+        return x, dims
+
+    @timing_tree.span("mesh_device", "decode TOTAL", root=True)
+    def decode(
+        self,
+        latent: torch.Tensor,
+        *,
+        noise: torch.Tensor | None = None,
+        seed: int = 0,
+        latent_tt: ttnn.Tensor | None = None,
+        device_out: bool = False,
+        output_type: str = "float",
+    ) -> torch.Tensor | ttnn.Tensor:
+        """Normalized ``(B, C, T, H, W)`` latent to ``(B, 3, T', H', W')`` pixels.
+
+        ``noise`` is an input: stage 5 predicts x0 from it in a single step. Pass it to compare
+        against a reference that drew its own.
+
+        ``latent_tt`` and ``device_out`` move the two host boundaries out of the way so the whole
+        decode can be captured as one trace. See :meth:`forward_context` and
+        :meth:`DiffVAEStage5.forward`.
+        """
+        out, _ = self._decode(
+            latent, noise=noise, seed=seed, latent_tt=latent_tt, device_out=device_out, output_type=output_type
+        )
+        return out
+
+    def _decode(self, latent, *, noise, seed, latent_tt, device_out, output_type):
+        """:meth:`decode`, also returning the stage-5 grid the pixel pull needs."""
+        from .diffvae_ltx_stage5 import Grid
+
+        context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
+        grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
+        channels_out = self.config["stage_channels"][-1]
+        with timing_tree.span(self.mesh_device, "context reshape for stage 5", category=timing_tree.RESHAPE):
+            if self._wsharded_handoff:
+                w_local = grid.w // self.stages.sp
+                context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
+            else:
+                context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
+
+        # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device.
+        if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
+            shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
+            with timing_tree.span(
+                self.mesh_device, f"host: noise randn {tuple(shape)}", category=timing_tree.HOST_COMPUTE
+            ):
+                noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
+
+        # default_num_inference_steps is 1 on this checkpoint, so the timestep is [1.0]. Uploaded
+        # once and kept: a trace refuses host-to-device writes during capture.
+        if self._timestep is None:
+            self._timestep = ttnn.from_torch(
+                torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            )
+        timestep = self._timestep
+        out = self.stage5.forward(
+            context,
+            noise,
+            timestep,
+            grid,
+            context_sharded=self._wsharded_handoff,
+            seed=seed,
+            device_out=device_out,
+            output_type=output_type,
+        )
+        log_dram(self.mesh_device, "decode done")
+        log_ccl_cache(self.stage5.ccl_manager, "decode done")
+        return out, grid
+
+    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    def decode_device(self, raw: ttnn.Tensor, t: int, h: int, w: int, seed: int):
+        """The device half of the decode: raw latent buffer in, this chip's pixel volume out.
+
+        Everything between the two host boundaries, so that it captures as one ttnn trace. ``raw``
+        is the ``(1, C, T, H*W)`` ROW_MAJOR upload the device-preproc path reads. Returns the volume
+        and the stage-5 grid ``(T', H', W')`` as plain ints, which the tracer passes through.
+        """
+        shape_only = torch.empty(1, self.in_channels, t, h, w)
+        vol, grid = self._decode(shape_only, noise=None, seed=seed, latent_tt=raw, device_out=True, output_type="float")
+        return vol, grid.t, grid.h, grid.w
+
+    def _pixels_traced(self, latent: torch.Tensor, *, seed: int, output_type: str):
+        """One decode through the captured trace (captured on the first call), pixels on the host.
+
+        The latent is uploaded to a fresh buffer each call; the tracer copies it into the trace's
+        own input buffer, so the fresh one is freed afterwards, except on the capture call, where
+        the fresh buffer IS the trace's input and has to stay.
+        """
+        from .diffvae_ltx_stage5 import Grid
+
+        for flag in ("DIFFVAE_DEVICE_PREPROC", "DIFFVAE_DEVICE_NOISE", "DIFFVAE_DEVICE_UNPATCHIFY"):
+            if os.environ.get(flag) != "1":
+                msg = f"a traced DiffVAE decode needs {flag}=1: the host work it replaces cannot sit inside a trace"
+                raise ValueError(msg)
+        if timing_tree.ENABLED:
+            msg = "TT_DIT_STAGE_TIMING=1 synchronises the mesh inside every span, which a trace capture cannot hold"
+            raise RuntimeError(msg)
+
+        b, c, t, h, w = latent.shape
+        key = (c, t, h, w, seed)
+        tracer = type(self).decode_device._tracers_keyed.get(self, {}).get(key)
+        capturing = tracer is None or not tracer.trace_captured
+        raw = ttnn.from_torch(
+            latent.reshape(1, c, t, h * w).contiguous(),
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        vol, gt, gh, gw = self.decode_device(raw, t, h, w, seed, traced=True, tracer_trace_key=key)
+        if not capturing:
+            ttnn.deallocate(raw)
+        return self.stage5.pull_pixels(vol, Grid(batch=1, t=gt, h=gh, w=gw), output_type, release=False)
+
+    def forward(
+        self,
+        latent: torch.Tensor,
+        *,
+        output_type: str = "float",
+        noise: torch.Tensor | None = None,
+        seed: int = 0,
+    ) -> torch.Tensor:
+        """``decode`` behind the pipeline's decoder signature.
+
+        ``output_type`` matches ``LTXVideoDecoder.forward``: ``float`` keeps ``[-1, 1]``, ``rgb``
+        maps it to planar uint8, ``yuv`` converts and gathers YUV 4:2:0 on device (needs
+        ``DIFFVAE_DEVICE_UNPATCHIFY=1``).
+        """
+        # DIFFVAE_TRACED=0 keeps this decoder eager inside an otherwise traced pipeline.
+        if self._vae_traced and os.environ.get("DIFFVAE_TRACED", "1") != "0":
+            if noise is not None:
+                msg = "a traced decode draws its noise on device; a caller-supplied noise cannot enter the trace"
+                raise ValueError(msg)
+            pixels = self._pixels_traced(latent, seed=seed, output_type="yuv" if output_type == "yuv" else "float")
+            if output_type == "yuv":
+                return pixels
+        elif output_type == "yuv":
+            return self.decode(latent, noise=noise, seed=seed, output_type="yuv")
+        else:
+            pixels = self.decode(latent, noise=noise, seed=seed)
+        if output_type == "float":
+            return pixels
+        if output_type == "rgb":
+            return pixels.add(1.0).mul(0.5 * 255.0).clamp(0.0, 255.0).to(torch.uint8)
+        raise ValueError(f"unknown output_type {output_type!r}")
+
+    def release_trace(self) -> None:
+        """Free every captured decode trace (on shutdown, or before re-warming)."""
+        for tracer in type(self).decode_device._tracers_keyed.get(self, {}).values():
+            tracer.release_trace()
