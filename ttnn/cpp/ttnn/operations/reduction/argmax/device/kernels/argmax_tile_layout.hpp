@@ -238,7 +238,7 @@ void process_input_tile(
         }
 
         // Offset to the face within the tile
-        uint32_t face_offset = face_id * face_size;
+        const uint32_t face_offset = face_id * face_size;
         volatile tt_l1_ptr DTYPE* face_ptr = src_ptr + face_offset;
 
         // Go over the rows of the face. Update the maximum values in each row.
@@ -254,7 +254,7 @@ void process_input_tile(
             // Go over elements in the current row, current face.
             for (uint32_t col = 0; col < cols_to_process; col++) {
                 // Index within the face
-                uint32_t index = row * face_width + col;
+                const uint32_t index = (row * face_width) + col;
 
                 DTYPE value = face_ptr[index];
 
@@ -267,7 +267,7 @@ void process_input_tile(
 
                 if (new_max) {
                     const bool is_left_side_face = (face_id == 0 || face_id == 2);
-                    const uint32_t new_arg_max = tile_x * ctx.tile_width + (is_left_side_face ? 0 : face_width) + col;
+                    const uint32_t new_arg_max = (tile_x * ctx.tile_width) + (is_left_side_face ? 0 : face_width) + col;
                     curr_max = value;
                     curr_arg_max = new_arg_max;
                 }
@@ -290,7 +290,7 @@ void process_input_tile(
  * @note The location of where values are stored is managed by the OutputContext object
  */
 template <bool keepdim>
-void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputContext& ctx) {
+void collect_row_major_output(const uint32_t new_values[], uint32_t count, OutputContext& ctx) {
     const uint32_t curr_collected = ctx.collected_count;
 
     if constexpr (keepdim) {
@@ -303,7 +303,7 @@ void collect_row_major_output(uint32_t new_values[], uint32_t count, OutputConte
     auto* dfb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_dfb_addr);
 
     for (uint32_t idx = 0; idx < count; idx++) {
-        uint32_t write_index = curr_collected + idx;
+        const uint32_t write_index = curr_collected + idx;
         if constexpr (keepdim) {
             // Accumulate into the on stack array
             stack_ptr[write_index] = new_values[idx];
@@ -332,7 +332,7 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
     uint32_t output_page_id = output_ctx.output_page_id;
 
     auto dst_dfb_addr = output_ctx.output_dfb_addr;
-    CoreLocalMem<uint32_t> dst_dfb_mem(dst_dfb_addr);
+    const CoreLocalMem<uint32_t> dst_dfb_mem(dst_dfb_addr);
 
     uint32_t sent_count = 0;
     while (collected_count > 0) {

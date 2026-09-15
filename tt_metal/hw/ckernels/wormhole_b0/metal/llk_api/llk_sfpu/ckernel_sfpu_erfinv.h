@@ -7,7 +7,9 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#if !defined(TT_POLY_LLK_DISABLE)
 #include "ckernel_sfpu_erfinv_bf16.h"
+#endif
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 
@@ -46,31 +48,41 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void calculate_erfinv() {
-    constexpr int ITERATIONS = 8;
-    if constexpr (is_fp32_dest_acc_en) {
-        // fp32 destination: preserve the pre-existing Winitzki path.
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat result = calculate_erfinv_body<false>(in);
-            in = sfpi::dst_reg[0];  // reload due to register pressure
-            sfpi::dst_reg[0] = sfpi::copysgn(result, in);
-            sfpi::dst_reg++;
-        }
-    } else {
-        calculate_erfinv_bf16<ITERATIONS>();
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_erfinv_tt_poly_baseline() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = calculate_erfinv_body<false>(in);
+        in = sfpi::dst_reg[0];  // reload due to register pressure
+        sfpi::dst_reg[0] = sfpi::copysgn(result, in);
+        sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool use_tt_poly_bf16 = false>
+inline void calculate_erfinv() {
+    constexpr int ITERATIONS = 8;
+#if defined(TT_POLY_LLK_DISABLE)
+    calculate_erfinv_tt_poly_baseline<APPROXIMATION_MODE, ITERATIONS>();
+#else
+    if constexpr (use_tt_poly_bf16) {
+        ckernel::sfpu::ttpoly::calculate<ttpoly_generated::ErfinvBf16Config, ITERATIONS>();
+    } else {
+        calculate_erfinv_tt_poly_baseline<APPROXIMATION_MODE, ITERATIONS>();
+    }
+#endif
+}
+
+template <bool APPROXIMATION_MODE, bool use_tt_poly_bf16 = false>
 void erfinv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (is_fp32_dest_acc_en) {
-        // Winitzki `calculate_erfinv_body` hardcodes `calculate_log_body<false, false, false>`,
-        // so keep this log_init instantiation literally (do not forward dest-acc).
+#if defined(TT_POLY_LLK_DISABLE)
+    log_init<false, false, false>();
+#else
+    if constexpr (!use_tt_poly_bf16) {
         log_init<false, false, false>();
     }
+#endif
 }
 
 }  // namespace sfpu

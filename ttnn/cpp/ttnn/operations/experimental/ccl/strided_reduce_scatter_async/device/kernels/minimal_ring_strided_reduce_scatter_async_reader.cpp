@@ -462,6 +462,16 @@ void kernel_main() {
 #endif
     }
 
+#ifdef FUSE_MM_OP_SIGNALER
+    if constexpr (mm_window_blocks > 0) {
+        // The window credits above are non-posted atomics. Wait for their acks before exiting: the
+        // firmware asserts that no non-posted atomics are outstanding at kernel end (watcher trips
+        // "NCRISC detected an inter-kernel data race" otherwise), and an ack landing after the next
+        // program starts could corrupt a freshly zeroed credit counter.
+        noc_obj.async_atomic_barrier();
+    }
+#endif
+
     // Explicit cleanup: guarantee the semaphore is 0 when this kernel exits
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

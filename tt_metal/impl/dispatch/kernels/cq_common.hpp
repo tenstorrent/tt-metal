@@ -14,7 +14,6 @@
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
-#include <limits>
 #include <array>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface

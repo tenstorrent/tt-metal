@@ -3983,17 +3983,20 @@ class TestRecordPythonOperation:
         assert len(g._python_io_data) == 1
         assert reserved["arguments"]["bias"] == "1"
 
-    def test_populate_failure_keeps_the_reserved_record(self, expect_error):
+    def test_populate_failure_keeps_the_reserved_record(self, expect_error, monkeypatch):
         import ttnn.graph as g
 
-        class Boom:
-            def __str__(self):
-                raise RuntimeError("stringify failed")
+        reserved = g.append_python_io_record("ttnn.add")
 
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("stringify failed")
+
+        monkeypatch.setattr(g, "_safe_arg_str", boom)
         with expect_error(RuntimeError, "stringify failed"):
-            g.record_python_operation("ttnn.add", (Boom(),), {})
+            g.record_python_operation("ttnn.add", (1,), {}, record=reserved)
         assert len(g._python_io_data) == 1
-        assert g._python_io_data[0]["name"] == "ttnn.add"
+        assert g._python_io_data[0] is reserved
+        assert reserved["name"] == "ttnn.add"
 
     def test_python_stack_trace_captured_when_enabled(self):
         import ttnn.graph as g

@@ -59,6 +59,15 @@ template <typename... Ts>
     return table[i];
 }
 
+inline bool graph_capture_blocks_dispatch() {
+    if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
+        if (auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get())) {
+            return processor_hooks->get_block();
+        }
+    }
+    return false;
+}
+
 template <typename device_operation_t>
 auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
@@ -284,12 +293,14 @@ void handle_mesh_adapter_cache_hit(
         using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
-        if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
-            WorkloadFactory::apply_descriptor(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-        } else {
-            WorkloadFactory::override_runtime_arguments(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+        if (!graph_capture_blocks_dispatch()) {
+            if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+                WorkloadFactory::apply_descriptor(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            } else {
+                WorkloadFactory::override_runtime_arguments(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            }
         }
 
         enqueue_mesh_workload<mesh_device_operation_t>(
@@ -339,14 +350,7 @@ void create_and_cache_mesh_workload(
             // buffer addresses are invalid (address=0). Caching such programs would
             // cause issues when later running in NORMAL mode.
             // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
-            bool hook_blocks = false;
-            if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
-                auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get());
-                if (processor_hooks) {
-                    hook_blocks = processor_hooks->get_block();
-                }
-            }
-            bool should_cache = program_cache.is_enabled() && !hook_blocks;
+            bool should_cache = program_cache.is_enabled() && !graph_capture_blocks_dispatch();
             if (should_cache) {
                 program_cache.insert(
                     program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});

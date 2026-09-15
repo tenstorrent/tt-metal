@@ -92,10 +92,14 @@ class TtCompressorUtils:
         ttnn.copy_host_to_device_tensor(host, buf)
         return buf
 
-    def build_rope_table(self, count: int, stride: int):
-        """Build replicated cos/sin tables for compressed or token positions."""
+    def build_rope_table(self, count: int, stride: int, layer_type: str = "compress"):
+        """Build replicated cos/sin tables for compressed or token positions.
+
+        ``layer_type`` picks the reference's rope variant: "compress" is the YaRN-scaled table the
+        HCA/CSA layers share with their compressor, "main" the plain theta=10000 one a sliding-only
+        layer uses (``DeepseekV4Attention.rope_layer_type``)."""
         positions = (torch.arange(count) * stride).unsqueeze(0)
-        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type="compress")
+        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions.to(torch.long), layer_type=layer_type)
         return tuple(self.from_torch(t.repeat_interleave(2, dim=-1)) for t in (cos, sin))
 
     def rope_index_base(self, rows: int):
