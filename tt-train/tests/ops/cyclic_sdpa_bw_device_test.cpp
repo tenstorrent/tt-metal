@@ -1193,6 +1193,212 @@ TEST(CyclicSdpaBwDenseOpTest, BarrierAndEndpointAgreeBitwise) {
     }
 }
 
+// ---------------------------------------------------------- distinct slices
+// Every slice-loop test above repeats one problem across its slices, which
+// cannot see a slice reading another slice's rows. This gives each (batch,
+// head) slice its own problem and checks each against its own reference.
+namespace {
+
+void check_op_distinct_slices(uint32_t batch, uint32_t heads, uint32_t C, uint32_t Bt, bool dense = false) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t N = 2u * C * Bt * kTile;
+    const uint32_t d = 64u;
+    const uint32_t slices = batch * heads;
+    std::vector<Reference> refs;
+    for (uint32_t sl = 0; sl < slices; ++sl) {
+        // Different data per slice: the generators are seeded by a salt, so
+        // vary the problem by reusing the two reference builders alternately
+        // and scaling by the slice index.
+        Reference r = dense ? make_dense_reference(N, d) : make_reference(N, d, /* positive */ (sl % 2u) == 1u);
+        refs.push_back(std::move(r));
+    }
+    const auto stack = [&](auto field) {
+        xt::xarray<float> out = xt::zeros<float>({batch, heads, N, d});
+        for (uint32_t b = 0; b < batch; ++b) {
+            for (uint32_t h = 0; h < heads; ++h) {
+                xt::view(out, b, h, xt::all(), xt::all()) = field(refs[b * heads + h]);
+            }
+        }
+        return out;
+    };
+    const auto stack_stat = [&](auto field) {
+        xt::xarray<float> out = xt::zeros<float>({batch, heads, N, kTile});
+        for (uint32_t b = 0; b < batch; ++b) {
+            for (uint32_t h = 0; h < heads; ++h) {
+                xt::view(out, b, h, xt::all(), xt::all()) = xt::view(field(refs[b * heads + h]), 0, 0, xt::all(), xt::all());
+            }
+        }
+        return out;
+    };
+    const auto query = ttml::core::from_xtensor(stack([](const Reference& r) { return r.Q; }), device);
+    const auto key = ttml::core::from_xtensor(stack([](const Reference& r) { return r.K; }), device);
+    const auto value = ttml::core::from_xtensor(stack([](const Reference& r) { return r.V; }), device);
+    const auto grad_output = ttml::core::from_xtensor(stack([](const Reference& r) { return r.dO; }), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        stack_stat([](const Reference& r) { return r.lse_tile; }), device);
+    const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        stack_stat([](const Reference& r) { return r.u_tile; }), device);
+    const auto [grad_query, grad_key, grad_value] = ttml::metal::cyclic_sdpa_bw(
+        query, key, value, grad_output, lse, row_scalar, Bt, false,
+        dense ? ttml::metal::AttentionMaskType::None : ttml::metal::AttentionMaskType::Causal);
+    const auto dQ = ttml::core::to_xtensor(grad_query);
+    const auto dK = ttml::core::to_xtensor(grad_key);
+    const auto dV = ttml::core::to_xtensor(grad_value);
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t h = 0; h < heads; ++h) {
+            const auto& r = refs[b * heads + h];
+            const std::string at = " slice (" + std::to_string(b) + ", " + std::to_string(h) + ")";
+            const auto got = [&](const xt::xarray<float>& x) {
+                return xt::xarray<float>(xt::view(x, b, h, xt::all(), xt::all()));
+            };
+            const auto close = [&](const xt::xarray<float>& x, const xt::xarray<float>& want, const char* name) {
+                const float scale = xt::amax(xt::abs(want))();
+                const float err = xt::amax(xt::abs(x - want))();
+                EXPECT_LT(err, 0.06F * scale) << name << at << ": max error " << err << " against scale " << scale;
+            };
+            close(got(dQ), r.dQ, "dQ");
+            close(got(dK), r.dK, "dK");
+            close(got(dV), r.dV, "dV");
+        }
+    }
+}
+
+}  // namespace
+
+TEST(CyclicSdpaBwOpTest, DistinctSlicesShortBlocks) {
+    check_op_distinct_slices(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 1);
+}
+
+TEST(CyclicSdpaBwOpTest, DistinctSlicesTallBlocks) {
+    check_op_distinct_slices(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 2);
+}
+
+TEST(CyclicSdpaBwOpTest, DistinctSlicesTallBlocksOneBatch) {
+    check_op_distinct_slices(/* batch */ 1, /* heads */ 4, /* C */ 2, /* Bt */ 2);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, DistinctSlicesTallBlocks) {
+    check_op_distinct_slices(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 2, /* dense */ true);
+}
+
+// Running the op twice into the same accumulators doubles every gradient.
+// dQ's seed is non-zero the second time, which nothing else here exercises:
+// every other test seeds dQ from zeros.
+namespace {
+void check_accumulate_twice(uint32_t batch, uint32_t heads, uint32_t C, uint32_t Bt, bool dense = false) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t N = 2u * C * Bt * kTile;
+    const uint32_t d = 64u;
+    const uint32_t slices = batch * heads;
+    const auto ref = dense ? make_dense_reference(N, d) : make_reference(N, d);
+    const auto q = ttml::core::from_xtensor(as_4d_repeated(ref.Q, slices), device);
+    const auto k = ttml::core::from_xtensor(as_4d_repeated(ref.K, slices), device);
+    const auto v = ttml::core::from_xtensor(as_4d_repeated(ref.V, slices), device);
+    const auto dO = ttml::core::from_xtensor(as_4d_repeated(ref.dO, slices), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.lse_tile, slices), device);
+    const auto u = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.u_tile, slices), device);
+    auto acc_q = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+    auto acc_k = ttnn::zeros_like(k, ttnn::DataType::FLOAT32);
+    auto acc_v = ttnn::zeros_like(v, ttnn::DataType::FLOAT32);
+    for (int pass = 0; pass < 2; ++pass) {
+        std::tie(acc_q, acc_k, acc_v) = ttml::metal::cyclic_sdpa_bw(
+            q, k, v, dO, lse, u, Bt, false,
+            dense ? ttml::metal::AttentionMaskType::None : ttml::metal::AttentionMaskType::Causal,
+            /* accumulate */ true, acc_q, acc_k, acc_v);
+    }
+    const auto dQ = ttml::core::to_xtensor(acc_q);
+    const auto dK = ttml::core::to_xtensor(acc_k);
+    const auto dV = ttml::core::to_xtensor(acc_v);
+    for (uint32_t g = 0; g < slices; ++g) {
+        const std::string at = " slice " + std::to_string(g);
+        expect_close(dQ, 2.0F * ref.dQ, 0.06F, "dQ" + at, g);
+        expect_close(dK, 2.0F * ref.dK, 0.06F, "dK" + at, g);
+        expect_close(dV, 2.0F * ref.dV, 0.06F, "dV" + at, g);
+    }
+}
+}  // namespace
+
+TEST(CyclicSdpaBwOpTest, AccumulateTwiceDoublesShortBlocks) {
+    check_accumulate_twice(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 1);
+}
+TEST(CyclicSdpaBwOpTest, AccumulateTwiceDoublesTallBlocks) {
+    check_accumulate_twice(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 2);
+}
+TEST(CyclicSdpaBwOpTest, AccumulateTwiceDoublesTallBlocksOneSlice) {
+    check_accumulate_twice(/* batch */ 1, /* heads */ 1, /* C */ 2, /* Bt */ 2);
+}
+TEST(CyclicSdpaBwOpTest, AccumulateTwiceDoublesTallBlocksFourHeads) {
+    check_accumulate_twice(/* batch */ 1, /* heads */ 4, /* C */ 2, /* Bt */ 2);
+}
+TEST(CyclicSdpaBwDenseOpTest, AccumulateTwiceDoublesTallBlocks) {
+    check_accumulate_twice(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 2, /* dense */ true);
+}
+TEST(CyclicSdpaBwDenseOpTest, AccumulateTwiceDoublesTallBlocksFourHeads) {
+    check_accumulate_twice(/* batch */ 1, /* heads */ 4, /* C */ 2, /* Bt */ 2, /* dense */ true);
+}
+TEST(CyclicSdpaBwDenseOpTest, AccumulateTwiceDoublesShortBlocks) {
+    check_accumulate_twice(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 1, /* dense */ true);
+}
+
+// What a ring step sequence does on one chip: the same Q, dO and statistics
+// against one key chunk under the causal schedule, then against another
+// chunk under the dense one, dQ accumulating across the two launches. Checked
+// against the two launches run separately and summed.
+namespace {
+void check_mini_ring(uint32_t batch, uint32_t heads, uint32_t C, uint32_t Bt) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t N = 2u * C * Bt * kTile;
+    const uint32_t d = 64u;
+    const uint32_t slices = batch * heads;
+    const auto own = make_reference(N, d);
+    const auto visiting = make_dense_reference(N, d);
+    const auto q = ttml::core::from_xtensor(as_4d_repeated(own.Q, slices), device);
+    const auto dO = ttml::core::from_xtensor(as_4d_repeated(own.dO, slices), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(own.lse_tile, slices), device);
+    const auto u = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(own.u_tile, slices), device);
+    const auto kA = ttml::core::from_xtensor(as_4d_repeated(own.K, slices), device);
+    const auto vA = ttml::core::from_xtensor(as_4d_repeated(own.V, slices), device);
+    const auto kB = ttml::core::from_xtensor(as_4d_repeated(visiting.K, slices), device);
+    const auto vB = ttml::core::from_xtensor(as_4d_repeated(visiting.V, slices), device);
+    using Mask = ttml::metal::AttentionMaskType;
+
+    const auto separate = [&](const ttnn::Tensor& k, const ttnn::Tensor& v, Mask mask) {
+        const auto [dq, dk, dv] = ttml::metal::cyclic_sdpa_bw(q, k, v, dO, lse, u, Bt, false, mask);
+        return ttml::core::to_xtensor(dq);
+    };
+    const xt::xarray<float> want = separate(kA, vA, Mask::Causal) + separate(kB, vB, Mask::None);
+
+    auto acc_q = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+    auto acc_kA = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+    auto acc_vA = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+    auto acc_kB = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+    auto acc_vB = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+    std::tie(acc_q, acc_kA, acc_vA) =
+        ttml::metal::cyclic_sdpa_bw(q, kA, vA, dO, lse, u, Bt, false, Mask::Causal, true, acc_q, acc_kA, acc_vA);
+    std::tie(acc_q, acc_kB, acc_vB) =
+        ttml::metal::cyclic_sdpa_bw(q, kB, vB, dO, lse, u, Bt, false, Mask::None, true, acc_q, acc_kB, acc_vB);
+    const auto got = ttml::core::to_xtensor(acc_q);
+    const float rms = std::sqrt(xt::mean(xt::square(got - want))()) / (std::sqrt(xt::mean(xt::square(want))()) + 1e-12F);
+    EXPECT_LT(rms, 2e-3F) << "dQ accumulated over a causal launch and a dense launch, rel RMS " << rms;
+}
+}  // namespace
+
+TEST(CyclicSdpaBwOpTest, MiniRingTallBlocksFourHeads) {
+    check_mini_ring(/* batch */ 1, /* heads */ 4, /* C */ 2, /* Bt */ 2);
+}
+TEST(CyclicSdpaBwOpTest, MiniRingShortBlocksFourHeads) {
+    check_mini_ring(/* batch */ 1, /* heads */ 4, /* C */ 2, /* Bt */ 1);
+}
+TEST(CyclicSdpaBwOpTest, MiniRingTallBlocksOneSlice) {
+    check_mini_ring(/* batch */ 1, /* heads */ 1, /* C */ 2, /* Bt */ 2);
+}
+TEST(CyclicSdpaBwOpTest, MiniRingTallBlocksOneCore) {
+    check_mini_ring(/* batch */ 1, /* heads */ 4, /* C */ 1, /* Bt */ 2);
+}
+TEST(CyclicSdpaBwOpTest, MiniRingTallBlocksThreeHeads) {
+    check_mini_ring(/* batch */ 1, /* heads */ 3, /* C */ 2, /* Bt */ 2);
+}
+
 // ---------------------------------------------------------- chunk pairs
 // Sub-problems as chunk pairs: the local sequence is two chunks back to back,
 // and a launch names which (query chunk, key chunk) pairs to run. This is

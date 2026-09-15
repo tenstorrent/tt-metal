@@ -85,6 +85,7 @@ namespace {
 
 using ttml::ttnn_fixed::distributed::RingShiftDirection;
 using ttml::ttnn_fixed::distributed::RingShiftTransport;
+using ttml::metal::ops::RingLayout;
 
 constexpr uint32_t kExpectedChips = 8U;
 
@@ -547,14 +548,60 @@ xt::xarray<float> block_diagonal_reference(
     return out;
 }
 
+size_t cp_size_of() {
+    return ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+}
+
+//: The zigzag dealing of a sequence to d chips, as a permutation of rows.
+//
+// The sequence is 2d chunks and chip r holds chunks r and 2d - 1 - r back to
+// back. Reordering the full tensor so that its r-th contiguous d-th is
+// exactly that lets the ordinary contiguous shard mapper place it; the
+// inverse puts gathered results back in sequence order.
+xt::xarray<float> zigzag_order(const xt::xarray<float>& x, const size_t d) {
+    const size_t N = x.shape()[2];
+    const size_t n = N / (2 * d);
+    xt::xarray<float> out = xt::zeros<float>(x.shape());
+    for (size_t r = 0; r < d; ++r) {
+        for (const auto [slot, chunk] : {std::pair{0UL, r}, std::pair{1UL, 2 * d - 1 - r}}) {
+            const size_t dst = (2 * r + slot) * n;
+            xt::view(out, xt::all(), xt::all(), xt::range(dst, dst + n), xt::all()) =
+                xt::view(x, xt::all(), xt::all(), xt::range(chunk * n, chunk * n + n), xt::all());
+        }
+    }
+    return out;
+}
+
+xt::xarray<float> zigzag_unorder(const xt::xarray<float>& y, const size_t d) {
+    const size_t N = y.shape()[2];
+    const size_t n = N / (2 * d);
+    xt::xarray<float> out = xt::zeros<float>(y.shape());
+    for (size_t r = 0; r < d; ++r) {
+        for (const auto [slot, chunk] : {std::pair{0UL, r}, std::pair{1UL, 2 * d - 1 - r}}) {
+            const size_t src = (2 * r + slot) * n;
+            xt::view(out, xt::all(), xt::all(), xt::range(chunk * n, chunk * n + n), xt::all()) =
+                xt::view(y, xt::all(), xt::all(), xt::range(src, src + n), xt::all());
+        }
+    }
+    return out;
+}
+
 void run_ring_attention(
     const size_t batch,
     const size_t num_heads,
     const size_t seq_len,
     const size_t head_dim,
     const bool test_backward,
-    const RingShiftTransport transport = RingShiftTransport::Fifo) {
+    const RingShiftTransport transport = RingShiftTransport::Fifo,
+    const RingLayout layout = RingLayout::Contiguous,
+    const ttml::ops::distributed::RingBackwardKind kind = ttml::ops::distributed::RingBackwardKind::TwoPass,
+    const uint32_t rows_per_block_tiles = 1U) {
     using namespace ttml;
+    const bool zigzag = layout == RingLayout::Zigzag;
+    // How the host lays the sequence out for the chips, and how it reads the
+    // chips' results back into sequence order.
+    const auto to_chips = [&](const xt::xarray<float>& x) { return zigzag ? zigzag_order(x, cp_size_of()) : x; };
+    const auto from_chips = [&](const xt::xarray<float>& x) { return zigzag ? zigzag_unorder(x, cp_size_of()) : x; };
 
     auto* device = &autograd::ctx().get_device();
     const auto& pctx = autograd::ctx().get_parallelism_context();
@@ -583,20 +630,22 @@ void run_ring_attention(
 
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
     auto query_tensor = autograd::create_tensor(
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(query_xt, device, ttnn::Layout::TILE, mapper.get()),
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            to_chips(query_xt), device, ttnn::Layout::TILE, mapper.get()),
         /* requires_grad */ true);
     auto key_tensor = autograd::create_tensor(
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(key_xt, device, ttnn::Layout::TILE, mapper.get()),
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(to_chips(key_xt), device, ttnn::Layout::TILE, mapper.get()),
         /* requires_grad */ true);
     auto value_tensor = autograd::create_tensor(
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(value_xt, device, ttnn::Layout::TILE, mapper.get()),
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            to_chips(value_xt), device, ttnn::Layout::TILE, mapper.get()),
         /* requires_grad */ true);
 
     // Causal masking is generated on device from the mask type; the op rejects
     // an explicit mask tensor in CP mode.
     auto output_tensor = ops::distributed::ring_attention_sdpa(
         query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal,
-        ops::distributed::RingBackwardKind::TwoPass, /*rows_per_block_tiles=*/1U, transport);
+        kind, rows_per_block_tiles, transport, layout);
 
     const auto per_device_output = core::to_xtensor<float>(output_tensor->get_value(), core::IdentityComposer{});
     // The two mesh rows are replicas of one another. Checking them against
@@ -611,7 +660,7 @@ void run_ring_attention(
     }
 
     const auto gathered_output =
-        gather_cp(per_device_output, batch, num_heads, seq_len, head_dim, seq_per_device);
+        from_chips(gather_cp(per_device_output, batch, num_heads, seq_len, head_dim, seq_per_device));
     const float fw_rtol = 1e-2F;
     const float fw_atol = 5e-1F;
     EXPECT_TRUE(xt::allclose(ref.output, gathered_output, fw_rtol, fw_atol))
@@ -635,19 +684,19 @@ void run_ring_attention(
     const auto ref_grads =
         reference_backward(query_xt, key_xt, value_xt, ref.weights, grad_output_xt, ref.scale);
 
-    output_tensor->set_grad(
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_output_xt, device, ttnn::Layout::TILE, mapper.get()));
+    output_tensor->set_grad(core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        to_chips(grad_output_xt), device, ttnn::Layout::TILE, mapper.get()));
     output_tensor->backward();
 
-    const auto gathered_dQ = gather_cp(
+    const auto gathered_dQ = from_chips(gather_cp(
         core::to_xtensor<float>(query_tensor->get_grad(), core::IdentityComposer{}),
-        batch, num_heads, seq_len, head_dim, seq_per_device);
-    const auto gathered_dK = gather_cp(
+        batch, num_heads, seq_len, head_dim, seq_per_device));
+    const auto gathered_dK = from_chips(gather_cp(
         core::to_xtensor<float>(key_tensor->get_grad(), core::IdentityComposer{}),
-        batch, num_heads, seq_len, head_dim, seq_per_device);
-    const auto gathered_dV = gather_cp(
+        batch, num_heads, seq_len, head_dim, seq_per_device));
+    const auto gathered_dV = from_chips(gather_cp(
         core::to_xtensor<float>(value_tensor->get_grad(), core::IdentityComposer{}),
-        batch, num_heads, seq_len, head_dim, seq_per_device);
+        batch, num_heads, seq_len, head_dim, seq_per_device));
 
     // The same grading the Galaxy suite uses, and for the same reasons:
     // uniform(0, 2) inputs make rowsum(dO o O) large against the (dP - u)
@@ -658,13 +707,75 @@ void run_ring_attention(
     const float rtol = 3e-2F;
     const float atol = 5e-2F;
     const float dk_atol = std::max(atol, 2e-2F * xt::amax(xt::abs(ref_grads.dK))());
-    const auto report = [](const xt::xarray<float>& expected, const xt::xarray<float>& got) {
-        return "max_abs_diff=" + std::to_string(xt::amax(xt::abs(got - expected))()) +
-               " ref_amax=" + std::to_string(xt::amax(xt::abs(expected))());
+    const auto report = [&](const xt::xarray<float>& expected, const xt::xarray<float>& got) {
+        const xt::xarray<float> diff = xt::abs(got - expected);
+        const auto flat = static_cast<size_t>(std::distance(diff.begin(), std::max_element(diff.begin(), diff.end())));
+        const size_t row = (flat / expected.shape()[3]) % expected.shape()[2];
+        const auto rel_rms = [](const xt::xarray<float>& e, const xt::xarray<float>& g) {
+            return std::sqrt(xt::mean(xt::square(g - e))()) / (std::sqrt(xt::mean(xt::square(e))()) + 1e-12F);
+        };
+        std::string per_chip;
+        for (size_t c = 0; c < cp_size; ++c) {
+            const size_t r0 = c * seq_per_device;
+            const size_t r1 = (c + 1) * seq_per_device;
+            per_chip += " chip" + std::to_string(c) + "=" +
+                        std::to_string(rel_rms(
+                            xt::xarray<float>(xt::view(expected, xt::all(), xt::all(), xt::range(r0, r1), xt::all())),
+                            xt::xarray<float>(xt::view(got, xt::all(), xt::all(), xt::range(r0, r1), xt::all()))));
+        }
+        return "max_abs_diff=" + std::to_string(xt::amax(diff)()) + " at row " + std::to_string(row) +
+               " ref_amax=" + std::to_string(xt::amax(xt::abs(expected))()) +
+               " rel_rms=" + std::to_string(rel_rms(expected, got)) + " per chip (sequence order):" + per_chip;
     };
-    EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, rtol, atol)) << "dQ: " << report(ref_grads.dQ, gathered_dQ);
-    EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, rtol, dk_atol)) << "dK: " << report(ref_grads.dK, gathered_dK);
-    EXPECT_TRUE(xt::allclose(ref_grads.dV, gathered_dV, rtol, atol)) << "dV: " << report(ref_grads.dV, gathered_dV);
+    if (kind == ttml::ops::distributed::RingBackwardKind::TwoPass) {
+        EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, rtol, atol)) << "dQ: " << report(ref_grads.dQ, gathered_dQ);
+        EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, rtol, dk_atol))
+            << "dK: " << report(ref_grads.dK, gathered_dK);
+        EXPECT_TRUE(xt::allclose(ref_grads.dV, gathered_dV, rtol, atol)) << "dV: " << report(ref_grads.dV, gathered_dV);
+    } else {
+        // The cyclic kinds are graded as compare_backward_implementations
+        // grades them: by root-mean-square against the reference, with the
+        // max only as a coarse net. In this uniform(0, 2) regime the softmax
+        // is nearly one-hot and dQ is small for late rows, so a max over 10^5
+        // elements is a statistic about the unluckiest one; measured, the
+        // cyclic dQ max lands at 5-7% of scale where two-pass lands at 3-5%,
+        // with both at an RMS under 2% of scale.
+        const auto grade = [&](const xt::xarray<float>& want, const xt::xarray<float>& got, const char* name) {
+            const float scale = xt::amax(xt::abs(want))();
+            const float rms = std::sqrt(xt::mean(xt::square(got - want))());
+            // Where the large errors are, by (batch, head, tile row): a whole
+            // wrong tile hides inside the RMS but not here.
+            {
+                const auto sh = want.shape();
+                std::ostringstream where;
+                size_t tiles_over = 0;
+                for (size_t b = 0; b < sh[0]; ++b) {
+                    for (size_t h = 0; h < sh[1]; ++h) {
+                        for (size_t t0 = 0; t0 < sh[2]; t0 += 32) {
+                            const xt::xarray<float> d = xt::abs(
+                                xt::view(got, b, h, xt::range(t0, t0 + 32), xt::all()) -
+                                xt::view(want, b, h, xt::range(t0, t0 + 32), xt::all()));
+                            const float m = xt::amax(d)();
+                            if (m > 0.1F * scale) {
+                                ++tiles_over;
+                                if (tiles_over <= 12) {
+                                    where << " (b" << b << ",h" << h << ",rows " << t0 << "-" << t0 + 31 << ": max "
+                                          << m << ", " << xt::sum(xt::cast<int>(d > 0.1F * scale))() << " elems)";
+                                }
+                            }
+                        }
+                    }
+                }
+                std::cout << "  " << name << " tiles with an element over 10% of scale: " << tiles_over << where.str()
+                          << "\n";
+            }
+            EXPECT_LE(rms, 0.02F * scale) << name << ": rms " << rms << " on scale " << scale << "; " << report(want, got);
+            EXPECT_LE(xt::amax(xt::abs(got - want))(), 0.25F * scale) << name << ": " << report(want, got);
+        };
+        grade(ref_grads.dQ, gathered_dQ, "dQ");
+        grade(ref_grads.dK, gathered_dK, "dK");
+        grade(ref_grads.dV, gathered_dV, "dV");
+    }
 }
 
 }  // namespace
@@ -697,6 +808,31 @@ TEST_F(LoudboxRingSDPATest, LargerBatchCausalBackward) {
 // on the direct transport: six shifts a step, both dtypes, both directions.
 TEST_F(LoudboxRingSDPATest, CausalBackwardWithDirectShifts) {
     run_ring_attention(1, 4, seq_for(128), 64, /*test_backward=*/true, RingShiftTransport::Direct);
+}
+
+// The zigzag layout: two chunks per chip, both live pairs a step, no chip
+// skipping. The host deals the sequence out in zigzag order and reads the
+// results back into sequence order, so the reference is the same dense one.
+TEST_F(LoudboxRingSDPATest, ZigzagCausalForward) {
+    run_ring_attention(1, 4, seq_for(128), 64, /*test_backward=*/false, RingShiftTransport::Direct, RingLayout::Zigzag);
+}
+
+TEST_F(LoudboxRingSDPATest, ZigzagCausalBackwardTwoPass) {
+    run_ring_attention(1, 4, seq_for(128), 64, /*test_backward=*/true, RingShiftTransport::Direct, RingLayout::Zigzag);
+}
+
+TEST_F(LoudboxRingSDPATest, ZigzagCausalBackwardCyclicInPlace) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    run_ring_attention(
+        1, 4, seq_for(128), 64, /*test_backward=*/true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        Kind::CyclicInPlace, /*Bt*/ 1U);
+}
+
+TEST_F(LoudboxRingSDPATest, ZigzagCausalBackwardCyclicWithTallBlocks) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    run_ring_attention(
+        2, 3, seq_for(256), 64, /*test_backward=*/true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        Kind::CyclicInPlace, /*Bt*/ 2U);
 }
 
 // ------------------------------------------- the two backward implementations
@@ -821,6 +957,8 @@ void compare_backward_implementations(
         const float scale = amax(*refs[k]);
         const float two_pass_max = amax(*refs[k] - *tps[k]);
         const float cyclic_max = amax(*refs[k] - *cys[k]);
+        std::cout << "    max |error| vs reference  " << names[k] << ": two-pass " << two_pass_max << " cyclic "
+                  << cyclic_max << " on scale " << scale << "\n";
         EXPECT_LE(two_pass_max, 0.25F * scale) << names[k] << ": two-pass is far from the reference";
         EXPECT_LE(cyclic_max, 0.25F * scale) << names[k] << ": cyclic is far from the reference";
 
@@ -911,6 +1049,24 @@ void compare_backward_implementations(
 
 }  // namespace
 
+// Tall blocks on more than one core per slice. The tall-block case above
+// is C = 1, where the relay never forwards; these put the block height and
+// the relay together, which is what the ring runs at any real size.
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithTallBlocksOnTwoCores) {
+    compare_backward_implementations(1, 4, seq_for(256), 64, /* Bt */ 2);
+}
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithTallBlocksOnFourCores) {
+    compare_backward_implementations(1, 4, seq_for(512), 64, /* Bt */ 2);
+}
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithTallestBlocks) {
+    compare_backward_implementations(1, 4, seq_for(512), 64, /* Bt */ 4);
+}
+// Batch 2, three heads, tall blocks on two cores: the shape the zigzag tests
+// use, on the contiguous layout, both implementations against the reference.
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeAtBatchTwo) {
+    compare_backward_implementations(2, 3, seq_for(256), 64, /* Bt */ 2);
+}
+
 TEST_F(LoudboxRingSDPATest, BothBackwardsAgree) {
     compare_backward_implementations(1, 4, seq_for(64), 64, /* Bt */ 1);
 }
@@ -949,7 +1105,8 @@ double time_ring_backward(
     ttml::ops::distributed::RingBackwardKind kind = ttml::ops::distributed::RingBackwardKind::TwoPass,
     uint32_t rows_per_block_tiles = 1U,
     RingShiftTransport transport = RingShiftTransport::Fifo,
-    uint32_t samples_to_take = 5U) {
+    uint32_t samples_to_take = 5U,
+    RingLayout layout = RingLayout::Contiguous) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
@@ -970,7 +1127,7 @@ double time_ring_backward(
             to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
         auto out = ops::distributed::ring_attention_sdpa(
             query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles,
-            transport);
+            transport, layout);
         out->set_grad(to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())));
         tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
 
@@ -1095,6 +1252,48 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareOnTheWholeGrid) {
     }
 }
 
+// The layouts against each other: contiguous, where the last chip does
+// 2d - 1 times the first's work and sets the pace, and zigzag, where every
+// chip does the same two half-size blocks a step. Both kinds on both
+// layouts, direct shifts, median of five, ms. Rows per chip is the whole
+// local sequence; under zigzag a chunk is half of it, so the cyclic C is
+// rows / (4 Bt 32) there.
+TEST_F(LoudboxRingSDPATest, DISABLED_CompareLayouts) {
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    std::cout << "ring backward on " << cp_size << " chips, contiguous against zigzag, direct shifts, median of five\n";
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    for (const auto& cfg : std::vector<std::array<size_t, 4>>{
+             // heads, rows per chip, head dim, Bt for the cyclic kind
+             {4, 1024, 64, 1},
+             {4, 2048, 64, 2},
+             {4, 4096, 64, 2},
+             {4, 4096, 64, 4},
+             {4, 8192, 64, 4},
+             {10, 5632, 64, 4},  // zigzag chunk 2816: C = 11, ten groups, the whole grid
+             {1, 16384, 64, 4},
+         }) {
+        const size_t heads = cfg[0], rows = cfg[1], d = cfg[2];
+        const auto Bt = static_cast<uint32_t>(cfg[3]);
+        const size_t seq_len = rows * cp_size;
+        if (rows % (4U * Bt * 32U) != 0U) {
+            continue;
+        }
+        const auto run = [&](Kind kind, RingLayout layout) {
+            return time_ring_backward(1, heads, seq_len, d, kind, Bt, RingShiftTransport::Direct, 5U, layout) * 1e3;
+        };
+        const double tp_c = run(Kind::TwoPass, RingLayout::Contiguous);
+        const double cy_c = run(Kind::CyclicInPlace, RingLayout::Contiguous);
+        const double tp_z = run(Kind::TwoPass, RingLayout::Zigzag);
+        const double cy_z = run(Kind::CyclicInPlace, RingLayout::Zigzag);
+        const auto pct = [](double a, double b) { return (b / a - 1.0) * 100.0; };
+        std::cout << "  heads=" << heads << " rows/chip=" << rows << " d=" << d << " Bt=" << Bt
+                  << ": two-pass contiguous " << tp_c << " | two-pass zigzag " << tp_z << " (" << pct(tp_c, tp_z)
+                  << "%) | cyclic in-place contiguous " << cy_c << " (" << pct(tp_c, cy_c) << "%) | cyclic in-place zigzag "
+                  << cy_z << " (" << pct(tp_c, cy_z) << "% vs two-pass contiguous, " << pct(cy_c, cy_z)
+                  << "% vs cyclic contiguous, " << pct(tp_z, cy_z) << "% vs two-pass zigzag)\n";
+    }
+}
+
 // One whole backward per implementation and transport, with the phase
 // profile in ring_attention_sdpa switched on (TTML_RING_PROFILE), so the
 // whole-backward total above can be split into kernel, accumulate, shift
@@ -1110,14 +1309,19 @@ TEST_F(LoudboxRingSDPATest, DISABLED_ProfileOneBackward) {
         rows_per_chip = std::strtoul(env, nullptr, 10);
     }
     using Kind = ttml::ops::distributed::RingBackwardKind;
+    // TTML_LOUDBOX_PROFILE_LAYOUT=zigzag profiles the zigzag layout instead.
+    RingLayout layout = RingLayout::Contiguous;
+    if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_LAYOUT"); env != nullptr && std::string(env) == "zigzag") {
+        layout = RingLayout::Zigzag;
+    }
     for (const auto transport : {RingShiftTransport::Fifo, RingShiftTransport::Direct}) {
         for (const auto kind : {Kind::TwoPass, Kind::Cyclic, Kind::CyclicInPlace}) {
-            std::cout << "== " << rows_per_chip << " rows/chip, "
+            std::cout << "== " << (layout == RingLayout::Zigzag ? "zigzag, " : "") << rows_per_chip << " rows/chip, "
                       << (kind == Kind::TwoPass ? "two-pass" : kind == Kind::Cyclic ? "cyclic" : "cyclic in-place")
                       << ", " << (transport == RingShiftTransport::Fifo ? "fifo" : "direct")
                       << " shifts (second profile is the timed one)\n";
-            const double seconds =
-                time_ring_backward(1, 4, rows_per_chip * cp_size, 64, kind, /* Bt */ 4U, transport, /* samples */ 1U);
+            const double seconds = time_ring_backward(
+                1, 4, rows_per_chip * cp_size, 64, kind, /* Bt */ 4U, transport, /* samples */ 1U, layout);
             std::cout << "   unprofiled-style total (with profile syncs): " << seconds * 1e3 << " ms\n";
         }
     }
