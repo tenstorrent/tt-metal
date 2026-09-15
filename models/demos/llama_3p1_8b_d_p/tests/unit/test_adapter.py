@@ -368,11 +368,13 @@ def test_adapter_allocates_a_cache_the_runtime_accepts(mesh_device, device_param
     # compile() must warm EVERY KV-length bucket, not just chunk 0: each cached_len is a different
     # program, so warming one bucket moves the JIT stall into the middle of a served request
     # instead of removing it. Counted through the completion sink, which fires once per layer per
-    # chunk — 1024 / 256 = 4 buckets.
+    # chunk — 1024 / 256 = 4 chunk-aligned buckets, plus one deliberately non-chunk-aligned bucket
+    # (tt-blaze#4148): a continuation resumes at aligned_resume_length, a multiple of 32, and takes
+    # the rotated branch of the block-cyclic map, so it is a served path and belongs in warm-up.
     warmed = []
     runtime.set_layer_completion_sink(lambda layer_idx, request_id: warmed.append(layer_idx))
     runtime.compile(cache)
-    expected_buckets = params.max_seq_len // params.chunk_size
+    expected_buckets = params.max_seq_len // params.chunk_size + 1
     assert (
         len(warmed) == expected_buckets * params.num_layers
     ), f"compile() warmed {len(warmed) / params.num_layers:g} bucket(s), expected {expected_buckets}"

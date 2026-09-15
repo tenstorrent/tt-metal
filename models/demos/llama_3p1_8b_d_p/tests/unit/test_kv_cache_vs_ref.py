@@ -128,8 +128,6 @@ def test_aligned_resume_rounds_down_and_never_leaves_a_hole():
     assert rounded_up == 96 and rounded_up > prev, "round-up would start past the written prefix"
 
 
-@pytest.mark.parametrize("sp", [1, 2, 4])
-@pytest.mark.parametrize("chunk_size, max_seq_len", [(128, 512), (256, 1024), (128, 1024)])
 @pytest.mark.parametrize("sp", [2, 4])
 @pytest.mark.parametrize("chunk_local", [32, 64, 256])
 def test_rotated_chip_positions_matches_the_deepseek_original(sp, chunk_local):
@@ -194,6 +192,8 @@ def test_rotated_chip_positions_is_contiguous_only_when_chunk_aligned():
     assert off_by_one_tile != contiguous, "a 32-aligned non-chunk-aligned offset must not be contiguous"
 
 
+@pytest.mark.parametrize("sp", [1, 2, 4])
+@pytest.mark.parametrize("chunk_size, max_seq_len", [(128, 512), (256, 1024), (128, 1024)])
 def test_blockcyclic_positions_is_a_permutation(sp, chunk_size, max_seq_len):
     """The block-cyclic inverse maps cache rows to global positions bijectively.
 

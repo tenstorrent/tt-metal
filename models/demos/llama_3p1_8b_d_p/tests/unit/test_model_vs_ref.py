@@ -315,8 +315,18 @@ def test_chunk_input_matches_the_engine_h2d_geometry(mesh_device, device_params,
     runtime, _kv_cache, config = _build(mesh_device, chunk_size=chunk_size, max_seq_len=1024)
     tokens = runtime.make_chunk_input(list(range(chunk_size)))
 
+    # make_global_spec is the *global* geometry (sp, 1, chunk/sp); a sharded tensor reports its
+    # per-chip shape. They agree exactly when sharding dim 0 across the sp rows turns the former
+    # into the latter, which is the contract being pinned.
     want = make_global_spec(tuple(mesh_device.shape), chunk_size)
-    assert tuple(tokens.shape) == tuple(want.shape), f"shape {tuple(tokens.shape)} != engine {tuple(want.shape)}"
+    sp = config.sp_factor
+    want_global = tuple(want.shape)
+    assert want_global == (sp, 1, chunk_size // sp), f"engine spec {want_global} is not sp-major"
+    assert tuple(tokens.shape) == (
+        1,
+        1,
+        chunk_size // sp,
+    ), f"per-chip shape {tuple(tokens.shape)} is not the sp-shard of the engine's {want_global}"
     assert tokens.dtype == want.dtype == ttnn.uint32
     assert tokens.layout == want.layout == ttnn.ROW_MAJOR_LAYOUT
 
