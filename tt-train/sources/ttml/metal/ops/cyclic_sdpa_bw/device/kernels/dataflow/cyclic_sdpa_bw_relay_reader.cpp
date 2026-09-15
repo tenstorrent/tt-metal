@@ -421,6 +421,7 @@ void kernel_main() {
         // operations using that storage complete before it is reused.
         const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != j);
         if (column_changed) {
+            DeviceZoneScopedN("LOAD-COL");
             read_tiles_by_row(cb_key, key, col_row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
             read_tiles_by_row(cb_value, value, col_val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
         }
@@ -447,6 +448,7 @@ void kernel_main() {
                 } while ((*release_sem) < g);
 #endif
                 WAYPOINT("COLD");
+                DeviceZoneScopedN("LOAD-COL-SEEDS");
                 read_tiles_by_row(
                     cb_grad_key_seed, grad_key, col_row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
                 read_tiles_by_row(

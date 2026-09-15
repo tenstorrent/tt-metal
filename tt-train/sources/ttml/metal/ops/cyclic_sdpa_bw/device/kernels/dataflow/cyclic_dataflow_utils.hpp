@@ -372,4 +372,15 @@ inline void zero_tile(uint32_t l1_addr, uint32_t bytes) {
     }
 }
 
+// A region zeroed through the NOC: local writes replicating a tile that is
+// already zero. The RISC stores a word every few cycles (48 KB of statistic
+// tiles took 55 us at Bt = 4, on the launch's critical path); the NOC moves
+// 32 bytes a cycle. The caller issues its barrier.
+inline void zero_region_via_noc(uint32_t dst_l1, uint32_t bytes, uint32_t zero_src_l1, uint32_t src_bytes) {
+    for (uint32_t off = 0; off < bytes; off += src_bytes) {
+        const uint32_t n = (bytes - off < src_bytes) ? (bytes - off) : src_bytes;
+        noc_async_write(zero_src_l1, get_noc_addr(dst_l1 + off), n);
+    }
+}
+
 }  // namespace cyclic_dataflow

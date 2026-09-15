@@ -123,12 +123,6 @@ void kernel_main() {
     // The compute kernel forms S^T, so its diagonal tile takes the transposed
     // causal mask, in additive form (0 or -inf): live where the key index is
     // at most the query index.
-    cyclic_dataflow::generate_causal_mask_tiles(cb_attn_mask);
-    // The compute kernel adds the mask with an accumulating FPU add whose
-    // second operand is this zero tile: the fence buffer's page, never
-    // written by anyone else (only its push and pop counters are used).
-    cyclic_dataflow::zero_tile(get_write_ptr(tt::CBIndex::c_8), get_tile_size(tt::CBIndex::c_8));
-    cyclic_dataflow::generate_ones_column_tile(tt::CBIndex::c_28);  // for the D remainder
 
     // Slot-0 addresses of the packet's statistic buffers (this kernel never
     // reserves them, so its write pointers stay at the base), and the reader's
@@ -147,10 +141,25 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[1]))};
     // The row tiles are written in row 0 only, the remainder columns in
     // column 0 only, by this thread alone: zero them once.
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * rem_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * rem_bytes);
+    {
+        DeviceZoneScopedN("WRITER-INIT");
+        // The zero tile (the fence buffer's page, never written by anyone
+        // else) by RISC stores, then the statistic tiles zeroed from it
+        // through the NOC -- only row 0 of each is ever written by this
+        // thread -- while the RISC makes the mask and ones tiles.
+        const uint32_t zero_l1 = get_write_ptr(tt::CBIndex::c_8);
+        const uint32_t zero_bytes = get_tile_size(tt::CBIndex::c_8);
+        cyclic_dataflow::zero_tile(zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes, zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes, zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(get_write_ptr(cb_lse_rem), 2u * Bt * rem_bytes, zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(get_write_ptr(cb_u_rem), 2u * Bt * rem_bytes, zero_l1, zero_bytes);
+        // The compute kernel forms S^T, so its diagonal tile takes the
+        // transposed causal mask, in additive form (0 or -inf).
+        cyclic_dataflow::generate_causal_mask_tiles(cb_attn_mask);
+        cyclic_dataflow::generate_ones_column_tile(tt::CBIndex::c_28);  // for the D remainder
+        noc_async_write_barrier();
+    }
 
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
