@@ -322,6 +322,135 @@ class SpeculativeDecoder:
         cache[key] = out
         return out
 
+    # ── re-stage the captured page tables (dynamic block tables) ─────────────
+    def _restage(self, dev, row):
+        """Copy ``row`` into an EXISTING device page-table buffer, in place.
+
+        Widths are fixed at capture, so the row is clipped or zero-padded to the
+        buffer's width -- the same contract the model's prefill traces use. A
+        padded tail is only safe because it sits past the live top, where the
+        mask is NEG; see _pv_tables_per_layer on why the table must never be
+        WIDER than its mask.
+        """
+        if dev is None or row is None:
+            return
+        if not isinstance(dev, ttnn.Tensor):
+            # A TORCH per-layer table (see _page_tables_per_layer): the model
+            # converts it to a device tensor INSIDE the graph, so the copy the
+            # trace replays was made at capture and cannot be reached from here.
+            # Mutating the host tensor would change nothing. Reported once,
+            # because it bounds what this refresh fixes -- see
+            # refresh_page_tables.
+            if not getattr(self, "_restage_warned", False):
+                from loguru import logger as _lg
+
+                self._restage_warned = True
+                _lg.warning(
+                    "MTP verify: per-layer page tables passed as torch tensors are "
+                    "baked into the fused trace at capture and are NOT re-staged; "
+                    "the drafter may read stale full-attention blocks as the "
+                    "request grows (acceptance, not correctness -- the verify's "
+                    "own tables are re-staged)"
+                )
+            return
+        w = int(dev.shape[-1])
+        rows = int(dev.shape[0]) if len(dev.shape) > 1 else 1
+        flat = row.reshape(-1).to(torch.int64)
+        if int(flat.numel()) < w:
+            flat = torch.cat([flat, torch.zeros(w - int(flat.numel()), dtype=flat.dtype)])
+        host = flat[:w].to(torch.int32).reshape(1, w).repeat(rows, 1)
+        h = ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
+        ttnn.copy_host_to_device_tensor(h, dev)
+        h.deallocate(True)
+
+    def refresh_page_tables(self, page_table_torch):
+        """Re-stage every captured page table from the CURRENT block table.
+
+        The fused verify trace binds its page tables at capture, which is correct
+        for a caller whose table never changes (the demo pre-allocates an
+        identity table for the whole run). A vLLM block table is not that: its
+        WIDTH is fixed at max_num_blocks_per_req but its CONTENT grows, because
+        the KV manager allocates a block only every ``block_size`` tokens. A
+        session captured at prefill therefore holds the prompt's blocks and
+        zeros past them, so once generation crosses out of the prompt's last
+        block the verify reads -- and writes -- the null block.
+
+        Two kinds of state go stale, not one:
+
+        * the DEVICE tables the trace reads (``d_pt``/``v_pt`` flat,
+          ``d_ptl``/``v_ptl`` per layer, ``pv_ptl`` packed per layer, and the
+          drafter's shared-KV tables), and
+        * ``_pv_pages_t``, the HOST map that resolves a hot-block index to a
+          physical block id for the per-iteration ``pv_hot``/``pv_embed``
+          uploads (_pv_block, _pv_host_inputs). Those uploads happen every
+          replay, but they were computed through a map built once in _pv_setup,
+          so refreshing only the device tables would leave the writes pointed at
+          the wrong physical block.
+
+        WHAT THIS DOES NOT REACH. ``_page_tables_per_layer`` returns TORCH
+        tensors, which the model converts to device tensors inside the graph, so
+        the copies the trace replays were made at capture. On the packed path
+        that affects ``d_ptl`` only -- the drafter's own per-layer decode tables
+        -- because the verify reads ``pv_ptl`` and the drafter's shared-KV
+        tables, both of which are persistent device buffers and are re-staged
+        here. So committed tokens follow the CURRENT blocks (the verify is
+        authoritative), while the drafter can still draft against stale
+        full-attention blocks as a request grows: that costs acceptance, not
+        correctness. Fixing it means giving the fused trace device-resident
+        per-layer tables, which is a change to a builder the demo path shares.
+
+        Cheap enough for every step: a handful of small host->device copies of
+        fixed width, and the caller only calls it when the row actually changes.
+        Counterpart of DFlashFusedDecoder.refresh_page_tables.
+        """
+        if page_table_torch is None:
+            return
+        self.page_table_torch = page_table_torch
+        flat = (page_table_torch[0] if page_table_torch.dim() > 1 else page_table_torch).to(torch.int64)
+        installed = getattr(self.target, "_active_page_tables_per_layer", None)
+        # 1. host map behind the per-iteration hot-block uploads
+        if getattr(self, "_pv_ready", False):
+            self._pv_pages_t = {lt: flat for lt in self._pv_ring}
+            if installed:
+                for lt, idx in (getattr(self, "_pv_ring_rep", None) or {}).items():
+                    pt = installed[idx] if idx < len(installed) else None
+                    if pt is not None and hasattr(pt, "dim"):
+                        self._pv_pages_t[lt] = (pt[0] if pt.dim() > 1 else pt).to(torch.int64)
+        # 2. the packed per-layer tables, cached by (type, width)
+        for (lt, _w), dev in (getattr(self, "_pv_pt_cache", None) or {}).items():
+            self._restage(dev, self._pv_pages_t.get(lt, flat) if getattr(self, "_pv_pages_t", None) else flat)
+        # 3. the drafter's shared-KV tables (per layer type)
+        for out in (getattr(self, "_shared_pt_cache", None) or {}).values():
+            for lt, dev in (out or {}).items():
+                src = flat
+                if installed and getattr(self.target, "last_kv_layer_by_type", None):
+                    idx = self.target.last_kv_layer_by_type.get(lt)
+                    pt = installed[idx] if (idx is not None and idx < len(installed)) else None
+                    if pt is not None and hasattr(pt, "dim"):
+                        src = (pt[0] if pt.dim() > 1 else pt).to(torch.int64)
+                self._restage(dev, src)
+        # 4. the fused trace's own flat + per-layer tables
+        tr = getattr(self, "_fused_trace", None)
+        if not tr:
+            return
+        self._restage(tr.get("d_pt"), flat)
+        self._restage(tr.get("v_pt"), flat)
+        for key in ("d_ptl", "v_ptl", "pv_ptl"):
+            lst = tr.get(key)
+            if not lst:
+                continue
+            seen = set()
+            for i, dev in enumerate(lst):
+                if dev is None or id(dev) in seen:
+                    continue
+                seen.add(id(dev))
+                src = flat
+                if installed and i < len(installed):
+                    pt = installed[i]
+                    if pt is not None and hasattr(pt, "dim"):
+                        src = (pt[0] if pt.dim() > 1 else pt).to(torch.int64)
+                self._restage(dev, src)
+
     def _page_tables_per_layer(self, batch, user_idx=0):
         """Per-layer page tables replicated to ``batch`` verify rows (bounded KV).
 
@@ -565,6 +694,7 @@ class SpeculativeDecoder:
                 )
             self._pv_ring.setdefault(lt, int(mod) if mod is not None else None)
             _ring_rep.setdefault(lt, i)
+            self._pv_ring_rep = _ring_rep
             if i in target.kv_shared_layer_map:
                 continue  # shares source layer's cache+staging; skips KV writes
             # GEMMA4_PV_FALLBACK_WRITE=1: debug bisect -- skip staging so
@@ -1507,6 +1637,20 @@ class SpeculativeDecoder:
         tr["vhidden"] = vh
         self._fused_trace = tr
 
+    def _free_tensor_tree(self, v):
+        """Deallocate a tensor, or every tensor in a dict/list of them."""
+        if hasattr(v, "deallocate"):
+            try:
+                v.deallocate(True)
+            except Exception:
+                pass
+        elif isinstance(v, dict):
+            for t in v.values():
+                self._free_tensor_tree(t)
+        elif isinstance(v, (list, tuple)):
+            for t in v:
+                self._free_tensor_tree(t)
+
     def _hidden_row_to_device(self, row):
         """Read the verify hidden, slice row `row`, and copy it into tr["h"].
 
@@ -1629,6 +1773,140 @@ class SpeculativeDecoder:
 
     # ── serving (step-wise fused trace; vLLM B=1 sessions) ───────────────────
 
+    # ── serving WIDTH SET: capture per width, select per step ────────────────
+    def _fused_width_inputs(self, anchor_pos, s_k):
+        """Allocate the WIDTH-DEPENDENT packed-verify inputs for one ``S_k``.
+
+        Everything else the fused body reads -- the anchor token, the recurrent
+        hidden, the drafter/verify position tensors and the flat + per-layer page
+        tables -- is width-independent, so a width set allocates these per width
+        and shares the rest. See serving_setup_widths.
+        """
+        P_v = self.draft_len + 1
+        h = self._pv_host_inputs(anchor_pos, P_v, s_k=s_k, h_repeat=False)
+        return {
+            "pv": True,
+            "pv_S_k": s_k,
+            "pv_pos": self._pv_from_torch(h["pos"], ttnn.uint32),
+            "pv_mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "pv_mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "pv_embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
+            "pv_hot": {lt: self._pv_from_torch(t, ttnn.int32) for lt, t in h["hot_t"].items()},
+            "pv_ptl": self._pv_tables_per_layer(s_k),
+        }
+
+    def srv_width_for(self, pos):
+        """Narrowest captured width that covers a verify block at ``pos``.
+
+        ``None`` means no captured width covers it; the caller must not replay,
+        because the packed verify would attend past the mask its trace was
+        captured with.
+        """
+        recs = getattr(self, "_srv_widths", None)
+        if not recs:
+            return None
+        need = int(pos) + self.draft_len + 2  # P_v rows at pos..pos+K, plus one
+        fits = [w for w in recs if w >= need]
+        return min(fits) if fits else None
+
+    def _srv_capture_width(self, s_k, at_pos):
+        """Capture one more width for the live session, sharing its buffers.
+
+        The compile pass writes the same KV positions with the same tokens the
+        next replay will, so it is idempotent mid-session -- the same property
+        that makes capture safe at session start.
+        """
+        import time as _time
+
+        from loguru import logger as _lg
+
+        t0 = _time.time()
+        tr = dict(self._srv_shared)
+        tr.update(self._fused_width_inputs(at_pos, s_k))
+        vx, vidx, vh = self._fused_body(tr)
+        ttnn.synchronize_device(self.mesh_device)
+        vx.deallocate(True)
+        vidx.deallocate(True)
+        vh.deallocate(True)
+        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        vx, vidx, vh = self._fused_body(tr)
+        ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+        tr["id"] = tid
+        tr["verify_x"] = vx
+        tr["vidx"] = vidx
+        tr["vhidden"] = vh
+        self._srv_widths[s_k] = tr
+        _lg.info(f"[spec-trace] captured verify width S_k={s_k} in {_time.time()-t0:.2f}s (at position {at_pos})")
+        return tr
+
+    def serving_setup_widths(self, anchor_token, anchor_pos, widths):
+        """Capture one fused trace per verify WIDTH for a serving session.
+
+        ``serving_setup`` captures a SINGLE trace whose ``S_k`` covers
+        ``anchor_pos + max_new_tokens``, which makes that horizon a hard
+        generation budget: past it the caller has to end the request, because
+        the packed verify would attend past the mask it was captured with. The
+        width set replaces the budget with a MIGRATION -- ``serving_step``
+        selects the narrowest covering width each iteration and moves to a wider
+        trace when the request outgrows the one it is on.
+
+        It is also cheaper per iteration than one wide capture would be. The
+        masks are rebuilt on the host and uploaded EVERY replay at ``[1, 1, P_v,
+        S_k]`` (~3.1 MB at 256k), so sizing one trace to the whole context would
+        pay the widest upload on every iteration of every request; selecting the
+        narrowest covering width pays only what the current position needs.
+
+        The width-independent buffers are allocated ONCE here and bound by every
+        width's trace, so a migration moves no state: the recurrent hidden, the
+        anchor and the KV all carry over untouched.
+
+        ``widths`` is the LADDER, not the set to capture now. Only the rung this
+        prompt needs is captured here, so a request pays exactly the one capture
+        it pays today; the rest are captured on first crossing. Capturing the
+        whole ladder up front would be ~2.6 s per rung on a per-request capture
+        path, which is the wrong place to spend it -- moving the whole set to
+        warmup (as the dFlash twin does) is the follow-up that removes both the
+        crossing stall and the per-request capture.
+        """
+        from loguru import logger as _lg
+
+        if not self._fused_packed_enabled():
+            raise NotImplementedError("the serving width set is packed-verify only")
+        K = self.draft_len
+        self._pv_a_prev = -1
+        self._use_trace = False
+        anchor_hidden = self.seed(anchor_token, anchor_pos)
+        self._use_trace = True
+        v_pos = [anchor_pos + 1 + j for j in range(K)] if self._fused_reseed else [anchor_pos + j for j in range(K + 1)]
+        d_pu, d_pi = self._pos_tensors([anchor_pos])
+        v_pu, v_pi = self._pos_tensors(v_pos)
+        shared = {
+            "anchor_tok": self._tokens_tensor([anchor_token]),
+            "h": ttnn.clone(anchor_hidden),
+            "d_pu": d_pu,
+            "d_pi": d_pi,
+            "d_pt": self._page_table(1),
+            "v_pu": v_pu,
+            "v_pi": v_pi,
+            "v_pt": self._page_table(K if self._fused_reseed else K + 1),
+            "d_ptl": self._page_tables_per_layer(1),
+            "v_ptl": self._page_tables_per_layer(K if self._fused_reseed else K + 1),
+        }
+        anchor_hidden.deallocate(True)
+        self._pv_setup()
+        self._pv_seed_staging(anchor_pos)
+        self._srv_shared = shared
+        self._srv_widths = {}
+        self._srv_ladder = sorted(int(w) for w in widths)
+        need = anchor_pos + K + 2
+        w0 = next((w for w in self._srv_ladder if w >= need), None)
+        if w0 is None:
+            raise ValueError(f"the verify width ladder {self._srv_ladder} does not cover anchor position {anchor_pos}")
+        self._fused_trace = self._srv_capture_width(w0, anchor_pos)
+        self._srv_first = True
+        _lg.info(f"[spec-trace] fused verify WIDTH SET: ladder={self._srv_ladder}, active S_k={w0}")
+        return w0
+
     def serving_setup(self, anchor_token, anchor_pos, max_new_tokens):
         """Capture the fused trace once for a serving session (B=1).
 
@@ -1651,6 +1929,30 @@ class SpeculativeDecoder:
         cur_pos) exactly as the traced generate loop does.
         """
         K = self.draft_len
+        # WIDTH SET: move to the narrowest captured width that covers this
+        # position before touching any buffer, so the per-replay uploads below
+        # land in the width the replay will actually use. Nothing else moves --
+        # the recurrent hidden, anchor and page tables are shared by every
+        # width (serving_setup_widths).
+        if getattr(self, "_srv_widths", None) is not None and getattr(self, "_srv_ladder", None):
+            w = self.srv_width_for(cur_pos)
+            if w is None:
+                # Outgrew every width captured so far: take the next rung off
+                # the ladder. This is the migration that replaces the horizon
+                # budget -- the old code had the CALLER end the request here.
+                need = cur_pos + K + 2
+                w = next((r for r in self._srv_ladder if r >= need), None)
+                if w is None:
+                    raise ValueError(
+                        f"position {cur_pos} is past the verify width ladder "
+                        f"{self._srv_ladder}; the ladder must cover max_model_len"
+                    )
+                self._srv_capture_width(w, cur_pos)
+            if self._fused_trace is not self._srv_widths[w]:
+                from loguru import logger as _lg
+
+                _lg.info(f"[spec-trace] verify width {self._fused_trace['pv_S_k']} -> {w} at position {cur_pos}")
+                self._fused_trace = self._srv_widths[w]
         tr = self._fused_trace
         if not self._srv_first:
             h_tok = self._host_tokens([cur_token])
@@ -1701,7 +2003,31 @@ class SpeculativeDecoder:
         return committed, m
 
     def serving_release(self):
-        """Release the session's fused trace + persistent inputs (best effort)."""
+        """Release the session's fused trace(s) + persistent inputs (best effort).
+
+        With a width set there are several records that SHARE their
+        width-independent buffers, so each tensor is freed exactly once: the
+        per-width entries and outputs per record, then the shared set.
+        """
+        recs = getattr(self, "_srv_widths", None)
+        if recs:
+            self._srv_widths = None
+            self._fused_trace = None
+            shared = getattr(self, "_srv_shared", None) or {}
+            self._srv_shared = None
+            shared_ids = {id(v) for v in shared.values()}
+            for rec in recs.values():
+                try:
+                    ttnn.release_trace(self.mesh_device, rec["id"])
+                except Exception:
+                    pass
+                for k, v in rec.items():
+                    if k == "id" or id(v) in shared_ids:
+                        continue
+                    self._free_tensor_tree(v)
+            for v in shared.values():
+                self._free_tensor_tree(v)
+            return
         tr = getattr(self, "_fused_trace", None)
         self._fused_trace = None
         if not tr:
