@@ -1963,6 +1963,66 @@ class SpecReject:
     supported_k: tuple = ()
 
 
+def dflash_pv_bucket_ladder(max_context, horizon=None, verify=None, max_rungs=None):
+    """The ENUMERABLE set of packed-verify buckets a dFlash server can serve.
+
+    ``DFlashFusedDecoder.pv_bucket`` keys the fused trace on
+    ``round_up_1024(start + horizon + P_v + 64)``, i.e. on the PROMPT LENGTH, so
+    a 256K server has ~258 possible buckets -- far too many to pre-capture. That
+    is why capture is per session today.
+
+    The set becomes enumerable because a bucket captured LARGER than a request
+    needs is numerically EXACT for it: ``_pv_setup`` caps S_k at capture and
+    masks every column past the live top to NEG ("columns past the live top are
+    NEG -> exact; the captured program never changes shape"). So a coarse ladder
+    plus round-UP serves every prompt length, and the only cost of rounding up
+    is wasted verify width.
+
+    The ladder doubles from the smallest useful rung to the largest a request
+    can reach, which bounds the waste at <2x the exact bucket while keeping the
+    rung count logarithmic in the context (10 rungs at 256K).
+
+    Pure: config-time arithmetic, no device and no model instance. Returns
+    ascending 1024-aligned bucket sizes.
+    """
+    horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048") if horizon is None else horizon)
+    verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5") if verify is None else verify)
+    p_v = verify + 1
+    tail = horizon + p_v + 64  # what pv_bucket adds on top of ``start``
+
+    def _round(n):
+        return ((int(n) + 1023) // 1024) * 1024
+
+    smallest = _round(tail)  # a zero-length prompt still needs the tail
+    largest = _round(int(max_context) + tail)
+    ladder, rung = [], smallest
+    while rung < largest:
+        ladder.append(rung)
+        rung = _round(rung * 2)
+    ladder.append(largest)
+    if max_rungs is not None and len(ladder) > int(max_rungs):
+        # Keep the largest rungs: dropping a SMALL rung only costs wasted verify
+        # width on short prompts, while dropping the largest would leave long
+        # prompts with no bucket that fits.
+        ladder = ladder[-int(max_rungs) :]
+    return ladder
+
+
+def dflash_bucket_for(start, ladder):
+    """Smallest ladder rung that covers ``start``'s exact bucket, or None.
+
+    None means the request is longer than the ladder covers and must fall back
+    to a per-session capture.
+    """
+    horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
+    verify = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
+    need = int(start) + horizon + verify + 1 + 64
+    for rung in ladder:
+        if rung >= need:
+            return rung
+    return None
+
+
 def _dflash_drafter_config(snapshot):
     """Read the drafter checkpoint's HF config. Pure: file read, no device."""
     import json as _json
