@@ -44,7 +44,7 @@ _PRESETS: dict[tuple[int, ...], dict] = {
     # 4-chip (single 4-chip cfg-submesh): cfg is disabled (factor 1) because the
     # encoder/VAE require the cfg-submesh to be exactly 4 chips (reshaped to 1x4).
     # DiT runs sp2 x tp2 on the 2x2 mesh. T5 is auto-disabled (reshape path).
-    (2, 2): {"cfg": (1, 0), "sp": (2, 0), "tp": (2, 1), "num_links": 1},
+    (2, 2): {"cfg": (1, 0), "sp": (2, 0), "tp": (2, 1), "num_links": 2},
     (2, 4): {"cfg": (2, 1), "sp": (2, 0), "tp": (2, 1), "num_links": 1},
     (4, 8): {"cfg": (2, 1), "sp": (4, 0), "tp": (4, 1), "num_links": 4},
 }
