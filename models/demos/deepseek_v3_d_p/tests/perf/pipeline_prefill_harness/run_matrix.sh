@@ -97,7 +97,31 @@ for cfg in $CONFIGS; do
     # broken, every remaining cell fails with a confusing topology-mapper error and the whole matrix is
     # wasted. So verify health after a failure and ABORT rather than cascade.
     if [ "$rc" != "0" ]; then
-      OTHER=$(ps -eo user,pcpu,cmd --no-headers | awk -v u="$USER" '$1!=u && $2>50' | grep -icE "pytest|python" || true)
+      # `/proc` is mounted hidepid=invisible on these boxes, so `ps` can only ever show your OWN
+      # processes. The previous guard tested `$1 != $USER`, which zero rows can satisfy -- OTHER was
+      # always 0, this branch was unreachable, and the script reset UNCONDITIONALLY on any cell
+      # failure. Measured 2026-09-15: it fired twice into another user's live 4-rank run.
+      #
+      # Attribution is exactly what hidepid denies, so check the SHAPE of the driver's pid files
+      # instead -- you do not need to know whose run it is to know not to reset. Idle baseline is
+      # ONE pid listed on all 32 chips (the root tt_telemetry_collector); a live 4-rank galaxy run
+      # is four distinct pids at 8 chips each. Also refuse if a per-run prefill descriptor belongs
+      # to someone else: those are mode 600 and created/removed per run.
+      #
+      # Do NOT test TT_UMD_LOCK.* -- they are mode 666, shared, and persist across runs, so they
+      # sit there owned by whoever opened a chip first and would block every legitimate reset.
+      # (Verified: locks dated 19:19 owned by another user, while our own cell ran fine at 20:35.)
+      # Count, never branch on a pipeline's exit status. `grep -qv` on EMPTY input was observed
+      # returning 0 in one shell and 1 in another, which makes an exit-code guard non-deterministic
+      # -- and an exit-code guard that could never be true is what the original defect WAS.
+      OTHER=0
+      DISTINCT=$(for d in /proc/driver/tenstorrent/[0-9]*; do cat "$d/pids" 2>/dev/null; done \
+        | sort -u | awk 'NF{c++} END{print c+0}')
+      if [ "${DISTINCT:-0}" -gt 1 ]; then OTHER=1; fi
+      FOREIGN=$(ls -l /dev/shm 2>/dev/null \
+        | awk -v me="$(id -un)" '$3!=me && $9 ~ /tt_prefill_|tt_h2d_stream_service/ {c++} END{print c+0}')
+      if [ "${FOREIGN:-0}" -gt 0 ]; then OTHER=1; fi
+      echo "[matrix] reset guard: distinct chip holders=$DISTINCT foreign prefill descriptors=$FOREIGN -> OTHER=$OTHER"
       if [ "${OTHER:-0}" = "0" ]; then
         # -glx_reset is the one that actually recovers this box: its CPLD is below v1.16, so tt-smi -r
         # is effectively a no-op here (the tool says so itself and points at -glx_reset). It takes
