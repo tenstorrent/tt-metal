@@ -21,9 +21,15 @@ _MESHES = ["1x2", "1x4", "1x8"]
 
 # Measured on a real T3K, bit-reproducible (paired runs agreed to every decimal
 # and survived a board reset). (clean base 9d83ad5c8c7, this branch).
+# The branch column was re-measured after the bf16-weight + dtype-gated
+# HiFi3 + fp32-dest-acc change (see precision_overrides.json "_comment_wh_bf16").
+# 1x8 went all-bf16; 1x2 took shared_mlp + lm_head (DRAM-bound, attention cannot
+# fit). 1x4 was deliberately left on all-bfp8 and is bit-unchanged to every
+# decimal, which is what pins the guarantee that the change is a no-op wherever
+# the weights stay bfp8. Both prefill and decode improved on both bf16 meshes.
 _WH_MEASURED = {
-    "test_full_model": {"1x2": (0.9550, 0.9780), "1x4": (0.9613, 0.9591), "1x8": (0.9514, 0.9507)},
-    "test_full_model_decode": {"1x2": (0.9610, 0.9742), "1x4": (0.9737, 0.9643), "1x8": (0.9735, 0.9647)},
+    "test_full_model": {"1x2": (0.9550, 0.9894), "1x4": (0.9613, 0.9591), "1x8": (0.9514, 0.9896)},
+    "test_full_model_decode": {"1x2": (0.9610, 0.9824), "1x4": (0.9737, 0.9643), "1x8": (0.9735, 0.9835)},
 }
 # The regression this coverage exists to catch: prefill island ON.
 _REGRESSED = {
