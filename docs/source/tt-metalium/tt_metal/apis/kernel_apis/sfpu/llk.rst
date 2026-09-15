@@ -886,6 +886,16 @@ There is no ABI and none of the vector types can be passed on the stack.
 Therefore, all function calls must be inlined.  To ensure this use
 ``sfpi_inline``, which is defined to ``__attribute__((always_inline))`` on GCC.
 
+Return Inside ``v_if``
+----------------------
+
+Do not ``return`` inside a ``v_if``.  ``return`` is a RISC-V instruction, so it
+is not predicated: it exits the whole function for every vector lane and skips
+the matching ``v_endif`` (unbalanced CC stack).  There is no per-lane early
+out.  Handle special cases with predicated assignment instead
+(``v_if (cond) { result = x; } v_endif;``) and let later stores overwrite.
+A scalar ``if`` can still ``return``, because that is real RISC-V control flow.
+
 Register Spilling
 -----------------
 
@@ -909,6 +919,7 @@ Limitations
 -----------
 
   * Forgetting a ``v_endif`` results in mismatched {} error which can be confusing (however, catches the case where a ``v_endif`` is missing!)
+  * ``return`` inside a ``v_if`` is not a per-lane early out; it exits the whole function and skips ``v_endif``
   * In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code
   * Keeping too many variables alive at once requires register spilling which is not implemented and causes a compiler abort
   * The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.
