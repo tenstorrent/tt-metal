@@ -11,6 +11,7 @@
 #include "impl/buffers/h2d_socket_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -53,6 +54,10 @@ constexpr const char* kBenchmarkActiveWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PRE
 constexpr const char* kBenchmarkPolicyEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY";
 constexpr const char* kBenchmarkHighWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT";
 constexpr const char* kBenchmarkMediumWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT";
+constexpr const char* kBenchmarkIdleWeightsEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_WEIGHTS";
+constexpr const char* kBenchmarkActiveWeightsEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHTS";
+constexpr const char* kBenchmarkForceRequestSyncEnv =
+    "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FORCE_REQUEST_SYNC";
 
 constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
@@ -71,6 +76,34 @@ uint32_t get_benchmark_mpfe_weight(const char* env_name, uint32_t default_weight
     return static_cast<uint32_t>(value[0] - '0');
 }
 
+std::array<uint32_t, 3> get_benchmark_mpfe_weights(const char* env_name) {
+    const char* value = std::getenv(env_name);
+    TT_FATAL(
+        value != nullptr && std::strlen(value) == 5 && value[1] == ',' && value[3] == ',' && value[0] >= '0' &&
+            value[0] <= '7' && value[2] >= '0' && value[2] <= '7' && value[4] >= '0' && value[4] <= '7',
+        "{} must contain free,noc1,ordinary weights in the form 0,0,7; got '{}'",
+        env_name,
+        value == nullptr ? "" : value);
+    return {
+        static_cast<uint32_t>(value[0] - '0'),
+        static_cast<uint32_t>(value[2] - '0'),
+        static_cast<uint32_t>(value[4] - '0'),
+    };
+}
+
+bool get_benchmark_force_request_sync() {
+    const char* value = std::getenv(kBenchmarkForceRequestSyncEnv);
+    if (value == nullptr) {
+        return false;
+    }
+    TT_FATAL(
+        (value[0] == '0' || value[0] == '1') && value[1] == '\0',
+        "{} must be 0 or 1; got '{}'",
+        kBenchmarkForceRequestSyncEnv,
+        value);
+    return value[0] == '1';
+}
+
 struct MpfePolicy {
     uint32_t free_sender_idle_weight;
     uint32_t free_sender_active_weight;
@@ -81,6 +114,26 @@ struct MpfePolicy {
 };
 
 MpfePolicy get_mpfe_policy() {
+    const char* idle_weights_override = std::getenv(kBenchmarkIdleWeightsEnv);
+    const char* active_weights_override = std::getenv(kBenchmarkActiveWeightsEnv);
+    TT_FATAL(
+        (idle_weights_override == nullptr) == (active_weights_override == nullptr),
+        "{} and {} must be set together",
+        kBenchmarkIdleWeightsEnv,
+        kBenchmarkActiveWeightsEnv);
+    if (idle_weights_override != nullptr) {
+        TT_FATAL(
+            std::getenv(kBenchmarkPolicyEnv) == nullptr && std::getenv(kBenchmarkHighWeightEnv) == nullptr &&
+                std::getenv(kBenchmarkMediumWeightEnv) == nullptr &&
+                std::getenv(kBenchmarkActiveWeightEnv) == nullptr,
+            "{} and {} cannot be combined with named policy or individual weight settings",
+            kBenchmarkIdleWeightsEnv,
+            kBenchmarkActiveWeightsEnv);
+        const auto idle = get_benchmark_mpfe_weights(kBenchmarkIdleWeightsEnv);
+        const auto active = get_benchmark_mpfe_weights(kBenchmarkActiveWeightsEnv);
+        return {idle[0], active[0], idle[1], active[1], idle[2], active[2]};
+    }
+
     const char* policy = std::getenv(kBenchmarkPolicyEnv);
     const uint32_t high_weight = get_benchmark_mpfe_weight(kBenchmarkHighWeightEnv, 7);
 
@@ -627,6 +680,9 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
     const MpfePolicy mpfe_policy = get_mpfe_policy();
+    const bool synchronize_after_request =
+        mpfe_policy.ordinary_idle_weight != mpfe_policy.ordinary_active_weight ||
+        get_benchmark_force_request_sync();
 
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
@@ -684,6 +740,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 is_coordinator ? mpfe_policy.free_sender_active_weight : mpfe_policy.noc1_sender_active_weight,
                 mpfe_policy.ordinary_idle_weight,
                 mpfe_policy.ordinary_active_weight,
+                static_cast<uint32_t>(synchronize_after_request),
             };
 
             KernelHandle kernel_id = CreateKernel(

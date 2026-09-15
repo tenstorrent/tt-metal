@@ -233,6 +233,7 @@ void kernel_main() {
     constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(8);
     constexpr uint32_t ordinary_idle_mpfe_weight = get_compile_time_arg_val(9);
     constexpr uint32_t ordinary_active_mpfe_weight = get_compile_time_arg_val(10);
+    constexpr bool synchronize_after_request = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -851,7 +852,7 @@ void kernel_main() {
         store_sender_state(state, iface);
 
         set_mpfe_weight(own_mpfe_port, own_idle_mpfe_weight);
-        if constexpr (ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight) {
+        if constexpr (synchronize_after_request) {
             // The ordinary-operation slot is shared by both senders in this bank.
             // Restore its idle value only after both have completed this request,
             // otherwise the faster sender could remove the peer's active policy.

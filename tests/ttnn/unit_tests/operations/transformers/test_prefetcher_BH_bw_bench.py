@@ -54,6 +54,11 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     make_recv_contig_weight as _make_recv_contig_weight,
     require_tensor_prefetcher,
 )
+from tests.ttnn.unit_tests.operations.transformers.mpfe_benchmark_utils import (
+    append_benchmark_jsonl,
+    policy_result_fields,
+    resolve_mpfe_benchmark_policy,
+)
 
 
 pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
@@ -202,32 +207,6 @@ def _gbps(bytes_total: float, elapsed_s: float) -> float:
     return bytes_total / elapsed_s / 1e9
 
 
-def _mpfe_policy_description() -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
-    """Return policy and effective (sender 0, sender 1, ordinary) weights."""
-    policy = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY", "dynamic-007")
-    high_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT", "7"))
-    medium_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT", "3"))
-    active_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT", "0"))
-    assert 0 <= high_weight <= 7
-    assert 0 <= medium_weight <= 7
-    assert 0 <= active_weight <= 7
-
-    policies = {
-        "dynamic-007": ((high_weight, high_weight, high_weight), (active_weight, active_weight, high_weight)),
-        "dynamic-000": ((0, 0, 0), (0, 0, high_weight)),
-        "static-000": ((0, 0, 0), (0, 0, 0)),
-        "static-777": ((high_weight, high_weight, high_weight), (high_weight, high_weight, high_weight)),
-        "static-007": ((0, 0, high_weight), (0, 0, high_weight)),
-        "static-037": ((0, medium_weight, high_weight), (0, medium_weight, high_weight)),
-        "static-770": ((high_weight, high_weight, 0), (high_weight, high_weight, 0)),
-    }
-    assert policy in policies, f"unknown MPFE policy {policy!r}"
-    if policy == "static-037":
-        assert medium_weight <= high_weight, "MEDIUM_WEIGHT must not exceed HIGH_WEIGHT"
-    idle, active = policies[policy]
-    return policy, idle, active
-
-
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
@@ -260,7 +239,7 @@ def test_mpfe_priority_contention(device):
     page_size = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
     ordinary_read_bytes = int(os.environ.get("BENCH_ORDINARY_READ_BYTES", page_size))
     trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "20"))
-    policy, idle_weights, active_weights = _mpfe_policy_description()
+    policy = resolve_mpfe_benchmark_policy()
 
     assert trace_repeats > 0
     assert ordinary_read_bytes > 0 and ordinary_read_bytes % 64 == 0
@@ -301,8 +280,9 @@ def test_mpfe_priority_contention(device):
     )
 
     logger.info(
-        f"[mpfe_contention] setup policy={policy} "
-        f"idle(sender0/sender1/ordinary)={idle_weights} active={active_weights} "
+        f"[mpfe_contention] setup policy={policy.name} "
+        f"idle(free/noc1/ordinary)={policy.idle_weights} active={policy.active_weights} "
+        f"request_sync={policy.request_sync} "
         f"banks={num_dram_banks} "
         f"K={K} N={N} ring={ring_size} repeats={trace_repeats}"
     )
@@ -403,18 +383,45 @@ def test_mpfe_priority_contention(device):
     ordinary_read_cycles = sorted(unpack_u64(words, 2) for words in timing_words)
     total_cycles = sorted(unpack_u64(words, 4) for words in timing_words)
     middle = len(timing_words) // 2
+    prefetch_gbps = _gbps(prefetch_bytes, elapsed)
+    ordinary_gbps = _gbps(ordinary_bytes, elapsed)
+    combined_gbps = _gbps(prefetch_bytes + ordinary_bytes, elapsed)
     logger.info(
-        f"[mpfe_contention] policy={policy} "
-        f"idle(sender0/sender1/ordinary)={idle_weights} active={active_weights} "
+        f"[mpfe_contention] policy={policy.name} "
+        f"idle(free/noc1/ordinary)={policy.idle_weights} active={policy.active_weights} "
+        f"request_sync={policy.request_sync} "
         f"banks={num_dram_banks} dual_senders=True "
         f"K={K} N={N} ring={ring_size} repeats={trace_repeats} elapsed={elapsed * 1e3:.2f}ms "
-        f"prefetch={_gbps(prefetch_bytes, elapsed):.2f}GB/s "
-        f"ordinary={_gbps(ordinary_bytes, elapsed):.2f}GB/s "
-        f"combined={_gbps(prefetch_bytes + ordinary_bytes, elapsed):.2f}GB/s "
+        f"prefetch={prefetch_gbps:.2f}GB/s "
+        f"ordinary={ordinary_gbps:.2f}GB/s "
+        f"combined={combined_gbps:.2f}GB/s "
         f"last_replay_cycles(wait/read/total median)="
         f"{prefetch_wait_cycles[middle]}/{ordinary_read_cycles[middle]}/{total_cycles[middle]} "
         f"last_replay_cycles(wait/read/total max)="
         f"{prefetch_wait_cycles[-1]}/{ordinary_read_cycles[-1]}/{total_cycles[-1]}"
+    )
+    append_benchmark_jsonl(
+        {
+            "benchmark": "mpfe_contention",
+            **policy_result_fields(policy),
+            "num_dram_banks": num_dram_banks,
+            "dual_senders": True,
+            "k": K,
+            "n": N,
+            "ring_size": ring_size,
+            "trace_repeats": trace_repeats,
+            "ordinary_read_bytes": ordinary_read_bytes,
+            "elapsed_ms": elapsed * 1e3,
+            "prefetch_gbps": prefetch_gbps,
+            "ordinary_gbps": ordinary_gbps,
+            "combined_gbps": combined_gbps,
+            "prefetch_wait_cycles_median": prefetch_wait_cycles[middle],
+            "ordinary_read_cycles_median": ordinary_read_cycles[middle],
+            "total_cycles_median": total_cycles[middle],
+            "prefetch_wait_cycles_max": prefetch_wait_cycles[-1],
+            "ordinary_read_cycles_max": ordinary_read_cycles[-1],
+            "total_cycles_max": total_cycles[-1],
+        }
     )
 
 

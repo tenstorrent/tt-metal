@@ -32,6 +32,17 @@ subchannel, and the final slot is ordinary-operation traffic.
 The older `TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT=0..7` sweep
 remains available with `dynamic-007`. Do not combine it with another policy.
 
+For arbitrary experiments without adding another named policy, set both generic
+tuples in free-sender/NOC1-sender/ordinary order:
+
+```bash
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_WEIGHTS=0,2,5
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHTS=0,3,7
+```
+
+Tuple overrides cannot be combined with a named policy or individual weight
+settings.
+
 Stopping the Tensor Prefetcher restores all three hardware weights to `0/0/0`,
 regardless of the selected benchmark policy.
 
@@ -53,9 +64,9 @@ numbers:
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_sanity.sh
 ```
 
-It runs the production default and every named policy in separate processes,
-including custom high, medium, and active weights. Each case performs initial
-and final byte validation and verifies that the Tensor Prefetcher stops cleanly.
+It runs the production default, every named policy, a generic tuple, and a
+forced-synchronization baseline in separate processes. Each case performs
+initial and final byte validation and verifies that the Tensor Prefetcher stops cleanly.
 Set `BENCH_TRACE_REPEATS` to change the default two replays, or append pytest
 arguments such as `--timeout=60`.
 
@@ -87,6 +98,31 @@ pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_b
 
 The test reports the effective idle and active tuples, total elapsed time,
 Tensor Prefetcher bandwidth, ordinary-read bandwidth, and combined bandwidth.
+
+Set `TT_METAL_BENCHMARK_RESULT_JSONL` to append the same metrics as one JSON
+object per run:
+
+```bash
+TT_METAL_BENCHMARK_RESULT_JSONL=$PWD/generated/mpfe-results.jsonl \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=dynamic-000 \
+BENCH_TRACE_REPEATS=50 \
+pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
+```
+
+To isolate the cost of the per-request sender synchronization used by
+`dynamic-000`, compare `static-007` with and without forced synchronization.
+Both runs use identical weights, so their difference measures synchronization
+overhead rather than MPFE weighting:
+
+```bash
+for force_sync in 0 1; do
+  TT_METAL_BENCHMARK_RESULT_JSONL=$PWD/generated/mpfe-sync-overhead.jsonl \
+  TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=static-007 \
+  TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FORCE_REQUEST_SYNC=$force_sync \
+  BENCH_TRACE_REPEATS=50 \
+  pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
+done
+```
 
 ## End-to-end matmul test
 

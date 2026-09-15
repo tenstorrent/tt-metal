@@ -56,6 +56,11 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     make_recv_contig_weight as _make_recv_contig_weight,
     require_tensor_prefetcher,
 )
+from tests.ttnn.unit_tests.operations.transformers.mpfe_benchmark_utils import (
+    append_benchmark_jsonl,
+    policy_result_fields,
+    resolve_mpfe_benchmark_policy,
+)
 
 
 pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
@@ -254,15 +259,6 @@ def _flops_per_matmul(k: int) -> int:
     # Use the unpadded K and N: padded zeros aren't useful flops. (Callers pass _K or
     # _K_padded depending on what they have at hand; either way swap in _K_ORIG.)
     return 2 * _M * _K_ORIG * _N_ORIG
-
-
-def _mpfe_policy_label() -> str:
-    policy = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY", "dynamic-007")
-    high_weight = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT", "7")
-    if policy == "static-037":
-        medium_weight = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT", "3")
-        return f"{policy}[medium={medium_weight},high={high_weight}]"
-    return f"{policy}[high={high_weight}]"
 
 
 @pytest.mark.parametrize(
@@ -475,10 +471,22 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     # Use unpadded K in the TFLOP/s formula so it's comparable across paths (worker-core uses
     # _K directly; padding to ring-aligned K is wasted work that doesn't count as useful flops).
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
+    policy = resolve_mpfe_benchmark_policy()
     logger.info(
-        f"[dram_core][{op_name}] policy={_mpfe_policy_label()} "
+        f"[dram_core][{op_name}] policy={policy.name} idle={policy.idle_weights} active={policy.active_weights} "
         f"trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
         f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
+    )
+    append_benchmark_jsonl(
+        {
+            "benchmark": "dram_core_matmul",
+            **policy_result_fields(policy),
+            "operation": op_name,
+            "trace_repeats": trace_repeats,
+            "elapsed_ms": elapsed * 1e3,
+            "per_matmul_us": per_matmul_us,
+            "tflops": tflops,
+        }
     )
 
 
@@ -720,10 +728,25 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     weight_bytes = k_padded * _N * _DTYPE_BYTES
     gbps = weight_bytes * trace_repeats / elapsed / 1e9
     dist_id = "shard_contiguous" if is_shard_contiguous else "round_robin"
+    policy = resolve_mpfe_benchmark_policy()
     logger.info(
-        f"[dram_core_rc][{op_name}] policy={_mpfe_policy_label()} "
+        f"[dram_core_rc][{op_name}] policy={policy.name} idle={policy.idle_weights} active={policy.active_weights} "
         f"dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
         f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s"
+    )
+    append_benchmark_jsonl(
+        {
+            "benchmark": "dram_core_recv_contig_matmul",
+            **policy_result_fields(policy),
+            "operation": op_name,
+            "distribution": dist_id,
+            "dual_senders": dual_senders,
+            "trace_repeats": trace_repeats,
+            "elapsed_ms": elapsed * 1e3,
+            "per_matmul_us": per_matmul_us,
+            "tflops": tflops,
+            "weight_gbps": gbps,
+        }
     )
 
 
