@@ -4,7 +4,7 @@
   "title": "Fabric debug snapshot",
   "description": "Live fabric-router values captured by ttexalens on one host.",
   "type": "object",
-  "required": ["snapshot_version", "kind", "captured_at", "manifest", "samples"],
+  "required": ["snapshot_version", "kind", "captured_at", "manifest", "provenance", "raw", "samples"],
   "properties": {
     "snapshot_version": {
       "description": "Incremented on breaking changes.",
@@ -23,6 +23,12 @@
     "manifest": {
       "$ref": "#/$defs/manifest_reference"
     },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "raw": {
+      "$ref": "#/$defs/raw_file"
+    },
     "samples": {
       "description": "One sample in v1. An array is used so later polling support is additive.",
       "type": "array",
@@ -33,6 +39,58 @@
     }
   },
   "$defs": {
+    "provenance": {
+      "type": "object",
+      "description": "Best-effort host and capture-tool provenance. owner_alive is null when /proc permissions prevent a trustworthy answer.",
+      "required": ["ttexalens_version", "tt_umd_version", "hostname", "owner_alive", "argv"],
+      "properties": {
+        "ttexalens_version": { "type": "string" },
+        "tt_umd_version": { "type": "string" },
+        "hostname": { "type": "string" },
+        "owner_alive": { "type": ["boolean", "null"] },
+        "argv": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "raw_file": {
+      "type": "object",
+      "description": "Sidecar holding concatenated raw blobs. file is the basename next to the snapshot JSON.",
+      "required": ["file", "size", "sha256"],
+      "properties": {
+        "file": { "type": "string" },
+        "size": { "type": "integer", "minimum": 0 },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "blob": {
+      "type": "object",
+      "required": ["address", "size", "offset", "sha256", "status"],
+      "properties": {
+        "address": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 0 },
+        "offset": { "type": ["integer", "null"], "minimum": 0 },
+        "sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "status": { "$ref": "#/$defs/status" },
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "required": ["my_mesh_id", "my_device_id", "matches_manifest"],
+      "properties": {
+        "my_mesh_id": { "type": ["integer", "null"] },
+        "my_device_id": { "type": ["integer", "null"] },
+        "matches_manifest": { "type": ["boolean", "null"] }
+      }
+    },
     "manifest_reference": {
       "type": "object",
       "description": "Identifies the manifest used for target selection. sha256 is the file-to-file pairing (hash of the manifest bytes as read). The path is informational only and must not be used to merge files after they have been copied. run.written_at is not copied; the hash already identifies the file.",
@@ -115,7 +173,20 @@
     "router_sample": {
       "type": "object",
       "description": "Live values read from one fabric-router ERISC.",
-      "required": ["id", "physical_chip_id", "ok", "error", "health", "streams"],
+      "required": [
+        "id",
+        "physical_chip_id",
+        "asic_id",
+        "asic_id_matches_physical",
+        "status",
+        "error",
+        "health",
+        "lifecycle",
+        "liveness",
+        "streams",
+        "blobs",
+        "identity"
+      ],
       "properties": {
         "id": {
           "$ref": "#/$defs/endpoint"
@@ -124,8 +195,17 @@
           "description": "ttexalens device id on the host that performed this capture.",
           "type": "integer"
         },
-        "ok": {
-          "type": "boolean"
+        "asic_id": {
+          "description": "ASIC unique id copied from the manifest, or null for an older manifest.",
+          "type": ["string", "null"],
+          "pattern": "^0x[0-9a-f]{16}$"
+        },
+        "asic_id_matches_physical": {
+          "description": "Whether ASIC-id and physical-chip-id lookup selected the same ttexalens device; null when the manifest has no ASIC id.",
+          "type": ["boolean", "null"]
+        },
+        "status": {
+          "$ref": "#/$defs/status"
         },
         "error": {
           "description": "Null on success; otherwise a description of why this intended router could not be read.",
@@ -134,31 +214,103 @@
         "health": {
           "$ref": "#/$defs/health"
         },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle"
+        },
+        "liveness": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/liveness_sample"
+          }
+        },
         "streams": {
-          "description": "Raw overlay values keyed by numeric stream id encoded as a JSON string. Stream names are deliberately deferred to the per-router ABI.",
+          "$ref": "#/$defs/stream_bracket"
+        },
+        "blobs": {
           "type": "object",
-          "patternProperties": {
-            "^(?:[0-9]|[12][0-9]|3[01])$": {
-              "$ref": "#/$defs/stream_sample"
-            }
-          },
-          "additionalProperties": false
+          "additionalProperties": {
+            "$ref": "#/$defs/blob"
+          }
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
         }
       }
     },
     "health": {
       "type": "object",
-      "required": ["reset", "wall_clock"],
+      "required": ["reset", "reset_bits", "wall_clock"],
       "properties": {
         "reset": {
           "description": "Raw ETH_RISC_RESET register value, or null if unreadable.",
           "type": ["integer", "null"]
+        },
+        "reset_bits": {
+          "type": "object",
+          "required": ["erisc0", "erisc1"],
+          "properties": {
+            "erisc0": { "type": ["boolean", "null"] },
+            "erisc1": {
+              "description": "Null on single-ERISC architectures.",
+              "type": ["boolean", "null"]
+            }
+          }
         },
         "wall_clock": {
           "description": "64-bit wall clock assembled as high << 32 | low, or null if unreadable.",
           "type": ["integer", "null"]
         }
       }
+    },
+    "lifecycle": {
+      "type": "object",
+      "description": "Small lifecycle words read explicitly before the later raw image pass.",
+      "required": ["edm_status", "termination_signal", "go_signal"],
+      "properties": {
+        "edm_status": { "type": ["integer", "null"] },
+        "termination_signal": { "type": ["integer", "null"] },
+        "go_signal": {
+          "description": "High-byte signal field from the first packed go_msg_t word.",
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 255
+        }
+      }
+    },
+    "liveness_sample": {
+      "type": "object",
+      "required": ["t", "heartbeat", "wall_clock"],
+      "properties": {
+        "t": { "type": "string", "format": "date-time" },
+        "heartbeat": { "type": ["integer", "null"] },
+        "wall_clock": { "type": ["integer", "null"] }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "unreadable", "reset", "torn", "unknown", "unsupported"]
+    },
+    "stream_bracket": {
+      "description": "Overlay stream values read before and after the HAL image. torn is true when any id's value moved.",
+      "type": "object",
+      "required": ["pre", "post", "torn"],
+      "properties": {
+        "pre": { "$ref": "#/$defs/stream_map" },
+        "post": { "$ref": "#/$defs/stream_map" },
+        "torn": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "stream_map": {
+      "description": "Raw overlay values keyed by numeric stream id encoded as a JSON string. Stream names are deliberately deferred to the per-router ABI.",
+      "type": "object",
+      "patternProperties": {
+        "^(?:[0-9]|[12][0-9]|3[01])$": {
+          "$ref": "#/$defs/stream_sample"
+        }
+      },
+      "additionalProperties": false
     },
     "stream_sample": {
       "type": "object",

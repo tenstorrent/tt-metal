@@ -13,6 +13,13 @@ from typing import Any
 
 
 SUPPORTED_MANIFEST_VERSION = 1
+HAL_BLOB_NAMES = (
+    "unreserved",
+    "fabric_telemetry",
+    "routing_table",
+    "go_msg",
+    "launch",
+)
 
 
 class ManifestError(ValueError):
@@ -28,6 +35,7 @@ class RouterTarget:
         chip_id,
         eth_chan,
         physical_chip_id,
+        asic_id,
         logical_core,
         virtual_core,
         direction,
@@ -40,6 +48,7 @@ class RouterTarget:
         self.chip_id = chip_id
         self.eth_chan = eth_chan
         self.physical_chip_id = physical_chip_id
+        self.asic_id = asic_id
         self.logical_core = logical_core
         self.virtual_core = virtual_core
         self.direction = direction
@@ -86,19 +95,43 @@ class FabricManifest:
             f"no local router (mesh_id={mesh_id}, chip_id={chip_id}, eth_chan={eth_chan})"
         )
 
-    def stream_regs_for_router(self, mesh_id: int, chip_id: int, eth_chan: int) -> tuple[int, ...]:
-        """Enabled overlay stream ids for the named router's layout, sorted uniquely."""
+    def stream_regs_for_router(
+        self,
+        mesh_id: int,
+        chip_id: int,
+        eth_chan: int,
+        enabled_only: bool = False,
+    ) -> tuple[int, ...]:
+        """Allocated overlay stream ids for the named router's layout, sorted uniquely.
+
+        Capture peeks allocated ids (including disabled) so a non-zero disabled
+        stream is visible. Pass *enabled_only* to restrict to enabled ids.
+        """
         layout = self.router_layout(mesh_id, chip_id, eth_chan)
         stream_ids: set[int] = set()
         for region in layout["regions"]:
             if (
                 region.get("backing") == "stream_reg"
                 and region.get("allocated")
-                and region.get("enabled")
                 and "stream_id" in region
+                and (not enabled_only or region.get("enabled"))
             ):
                 stream_ids.add(region["stream_id"])
         return tuple(sorted(stream_ids))
+
+    def hal_regions(self) -> tuple[tuple[str, int, int], ...]:
+        """Ordered HAL blobs capture should dump: (name, base, size)."""
+        regions = []
+        for name in HAL_BLOB_NAMES:
+            block = _require_object(self.hal[name], f"manifest.hal.{name}")
+            regions.append(
+                (
+                    name,
+                    _require_int(block["base"], f"manifest.hal.{name}.base"),
+                    _require_int(block["size"], f"manifest.hal.{name}.size"),
+                )
+            )
+        return tuple(regions)
 
 
 def _require_object(value: Any, location: str) -> dict[str, Any]:
@@ -220,6 +253,17 @@ def _enumerate_local_router_targets(data: dict[str, Any]) -> tuple[RouterTarget,
                 _required(chip, "physical_chip_id", chip_location),
                 f"{chip_location}.physical_chip_id",
             )
+            raw_asic_id = _required(chip, "asic_id", chip_location)
+            if raw_asic_id is None:
+                asic_id = None
+            else:
+                asic_id_string = _require_string(raw_asic_id, f"{chip_location}.asic_id")
+                try:
+                    asic_id = int(asic_id_string, 16)
+                except ValueError as error:
+                    raise ManifestError(
+                        f"{chip_location}.asic_id must be a hexadecimal integer string"
+                    ) from error
             routers = _require_array(
                 _required(chip, "routers", chip_location),
                 f"{chip_location}.routers",
@@ -264,6 +308,7 @@ def _enumerate_local_router_targets(data: dict[str, Any]) -> tuple[RouterTarget,
                         chip_id=chip_id,
                         eth_chan=eth_chan,
                         physical_chip_id=physical_chip_id,
+                        asic_id=asic_id,
                         logical_core=_require_coord(
                             _required(router, "logical_core", router_location),
                             f"{router_location}.logical_core",

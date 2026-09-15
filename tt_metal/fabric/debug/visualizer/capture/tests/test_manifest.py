@@ -74,10 +74,10 @@ def required_blocks() -> dict:
     return {
         "hal": {
             "unreserved": {"base": 0, "size": 1024},
-            "go_msg": region,
-            "launch": region,
-            "fabric_telemetry": region,
-            "routing_table": region,
+            "go_msg": {"base": 4000, "size": 36},
+            "launch": {"base": 5000, "size": 16},
+            "fabric_telemetry": {"base": 2000, "size": 16},
+            "routing_table": {"base": 3000, "size": 64},
             "router_state": region,
             "router_command": region,
             "eth_fw_mailbox": region,
@@ -143,6 +143,7 @@ def chip(
     physical_chip_id: int | None,
     routers: list[dict],
     master_router_chan: int | None = None,
+    asic_id: str | None = None,
 ) -> dict:
     if master_router_chan is None:
         master_router_chan = (routers[0]["eth_chan"] if routers else 0) if is_local else None
@@ -150,7 +151,7 @@ def chip(
         "fabric_chip_id": chip_id,
         "mesh_coord": [0, chip_id],
         "physical_chip_id": physical_chip_id,
-        "asic_id": None,
+        "asic_id": asic_id,
         "is_local": is_local,
         "master_router_chan": master_router_chan,
         "routers": routers,
@@ -249,6 +250,37 @@ class ManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, "physical_chip_id must be an integer"):
             self.load(data)
 
+    def test_parses_local_chip_asic_id(self):
+        loaded = self.load(
+            manifest(
+                [
+                    chip(
+                        0,
+                        is_local=True,
+                        physical_chip_id=4,
+                        asic_id="0x0000000000001234",
+                        routers=[router(1)],
+                    )
+                ]
+            )
+        )
+        self.assertEqual(loaded.router_targets[0].asic_id, 0x1234)
+
+    def test_rejects_malformed_asic_id(self):
+        data = manifest(
+            [
+                chip(
+                    0,
+                    is_local=True,
+                    physical_chip_id=4,
+                    asic_id="not-hex",
+                    routers=[router(1)],
+                )
+            ]
+        )
+        with self.assertRaisesRegex(ManifestError, "must be a hexadecimal integer string"):
+            self.load(data)
+
     def test_rejects_unsupported_manifest_version(self):
         data = manifest([])
         data["manifest_version"] = 123456
@@ -290,9 +322,25 @@ class ManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, "lies outside UNRESERVED"):
             self.load(data)
 
+    def test_hal_regions_are_ordered_and_skip_zero_later(self):
+        loaded = self.load(manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])]))
+        self.assertEqual(
+            loaded.hal_regions()[0],
+            ("unreserved", 0, 1024),
+        )
+        names = [name for name, _, _ in loaded.hal_regions()]
+        self.assertEqual(
+            names,
+            ["unreserved", "fabric_telemetry", "routing_table", "go_msg", "launch"],
+        )
+
     def test_stream_regs_for_router(self):
         loaded = self.load(manifest([chip(0, is_local=True, physical_chip_id=4, routers=[router(1)])]))
-        self.assertEqual(loaded.stream_regs_for_router(0, 0, 1), (22,))
+        self.assertEqual(loaded.stream_regs_for_router(0, 0, 1), (22, 23))
+        self.assertEqual(
+            loaded.stream_regs_for_router(0, 0, 1, enabled_only=True),
+            (22,),
+        )
         self.assertEqual(
             loaded.router_layout(0, 0, 1),
             loaded.layouts[MINIMAL_LAYOUT_ID],

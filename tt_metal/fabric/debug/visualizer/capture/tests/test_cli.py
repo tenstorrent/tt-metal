@@ -6,12 +6,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 import jsonschema
 
 from tt_metal.fabric.debug.visualizer.capture.cli import capture, parse_args
-from tt_metal.fabric.debug.visualizer.capture.tests.test_peek import FakeDevice, FakeLoc, fixture_manifest
+from tt_metal.fabric.debug.visualizer.capture.tests.test_peek import (
+    FakeContext,
+    FakeDevice,
+    FakeLoc,
+    fixture_manifest,
+)
 
 SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_debug_snapshot_schema.json"
 
@@ -31,18 +35,34 @@ class CliTest(unittest.TestCase):
             manifest_path.write_text(json.dumps(fixture_manifest()), encoding="utf-8")
 
             device = FakeDevice(4, [FakeLoc((0, 0)), FakeLoc((0, 1))])
-            context = SimpleNamespace(devices={4: device})
+            context = FakeContext({4: device})
 
             snapshot = capture(
                 manifest_path,
                 output_path,
                 init_ttexalens=lambda: context,
                 read_from_device=lambda location, address, device_id, size, live_context: 0,
+                provenance={
+                    "ttexalens_version": "test",
+                    "tt_umd_version": "test",
+                    "hostname": "test-host",
+                    "owner_alive": False,
+                    "argv": ["capture"],
+                },
+                liveness_samples=1,
+                liveness_interval=0,
             )
 
             self.assertTrue(output_path.is_file())
             self.assertEqual(json.loads(output_path.read_text(encoding="utf-8")), snapshot)
             self.assertEqual(len(snapshot["samples"][0]["routers"]), 1)
+            self.assertTrue((temp_path / "snapshot.bin").is_file())
+            self.assertEqual(snapshot["raw"]["file"], "snapshot.bin")
+            self.assertEqual(snapshot["raw"]["size"], (temp_path / "snapshot.bin").stat().st_size)
+            self.assertEqual(
+                set(snapshot["samples"][0]["routers"][0]["streams"]["pre"]),
+                {"22", "23"},
+            )
 
             schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
             jsonschema.Draft202012Validator(
