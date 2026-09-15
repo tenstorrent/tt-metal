@@ -1236,6 +1236,33 @@
   team: models
   budget_type: e2e
 
+# ── XTTS-v2 ────────────────────────────────────────────────────────
+# End-to-end voice-cloning TTS: the demo renders the default text with the default reference voice
+# (auto-downloaded) through the fully-traced path and writes generated/xtts_demo/xtts_demo.wav.
+# Blackhole P150 only. Paired with the gated perf baseline, which asserts setup / decode ms-per-code
+# / vocoder ms-per-code / RTF against the measured P150 numbers (see the model's README).
+- name: xtts-v2 e2e tests
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/xtts/requirements.txt
+    pytest models/experimental/xtts/tests/perf/test_e2e_perf.py --timeout=900
+    # Empty-generation regressions live here, after the perf test has compiled the pipeline they
+    # share: 118 s here against 294 s in the unit job.
+    pytest models/experimental/xtts/tests/pcc/test_empty_generation.py --timeout=900
+    python models/experimental/xtts/demo/xtts_demo.py
+  model: xtts-v2
+  model_family: XTTS
+  skus:
+    bh_p150b_civ2:
+      # Measured 9m20s / 9m08s / 9m00s across runs 34453045104, 34444464755, 34450411323.
+      # 15 min leaves ~5.5 min for a first-run 1.9 GB weight download on a fresh runner.
+      timeout: 15
+      tier: 3
+      release_ready: false
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: shield
+  budget_type: e2e
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
