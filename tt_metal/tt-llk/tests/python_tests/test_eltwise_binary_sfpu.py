@@ -870,6 +870,30 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    mathop=[MathOperation.SfpuIsclose],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_isclose_special_values(formats, dest_acc, mathop):
+    pairs = [
+        (float("inf"), float("inf")),
+        (-float("inf"), -float("inf")),
+        (float("inf"), -float("inf")),
+        (float("nan"), float("nan")),
+        (1.0, float("nan")),
+        (1.0, float("inf")),
+        (1.0, -float("inf")),
+    ]
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(pairs, torch.float32),
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[MathOperation.SfpuLogsigmoid],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
