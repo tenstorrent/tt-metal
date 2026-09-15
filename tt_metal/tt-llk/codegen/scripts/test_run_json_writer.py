@@ -175,7 +175,8 @@ regression_tests:
     assert manifest["manifest_id"] == expected
 
 
-def test_required_verification_seals_ttnn_as_an_independent_suite(tmp_path):
+@pytest.mark.parametrize("k_filter", [None, "bf4b and HiFi3"])
+def test_required_verification_seals_ttnn_as_an_independent_suite(tmp_path, k_filter):
     analysis = """\
 ## Scope
 arch_scope:
@@ -203,6 +204,10 @@ reproduction_tests:
 - arch: blackhole
   test: tests/python_tests/test_reduce.py::test_reduce
 """
+    if k_filter:
+        analysis = analysis.replace(
+            "::test_reduce\n", f"::test_reduce -k '{k_filter}'\n"
+        )
     proc, output = _required_manifest(tmp_path, analysis, plan)
     requirements = json.loads(output.read_text())["requirements"]
     assert proc.returncode == 0
@@ -211,9 +216,28 @@ reproduction_tests:
     assert requirements[1]["selector"] == {
         "test": "tests/ttnn/unit_tests/operations/test_reduce.py",
         "test_id": "tests/ttnn/unit_tests/operations/test_reduce.py::test_reduce",
-        "k": None,
+        "k": k_filter,
     }
     assert "route=llk+ttnn" in proc.stdout
+
+    # The same selector must survive reading, result reduction, and resealing.
+    manifest = json.loads(output.read_text())
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    for requirement in requirements:
+        result = _sealed_result(manifest, requirement)
+        (results / f"{requirement['requirement_id']}.json").write_text(
+            json.dumps(result)
+        )
+    reduced = _reduce(tmp_path, output)
+    assert reduced.returncode == 0, reduced.stderr
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "success"
+    _required_manifest(tmp_path, analysis, plan, "--supersedes-reason", "retry")
+    revised = json.loads(output.read_text())
+    assert revised["revision"] == 2
+    assert revised["parent_manifest_id"] == manifest["manifest_id"]
+    assert revised["requirements"] == requirements
 
 
 def test_required_verification_rejects_missing_ttnn_coverage(tmp_path):
@@ -3161,3 +3185,53 @@ def test_qsr_wrapper_reaps_previous_lock_owner_and_only_its_failed_job(tmp_path)
     assert f"--tag {first} --force" in lines[1]
     assert f"--tag {second} --force" in lines[2]
     assert peer not in log.read_text()
+
+
+@pytest.mark.parametrize(
+    "node, k_filter, summary",
+    [
+        ("", "", "4 tests collected"),
+        ("::test_exact", "", "2 tests collected"),
+        ("", "keep", "2/4 tests collected"),
+        ("::test_exact", "keep", "1/2 tests collected"),
+    ],
+)
+def test_local_pytest_target_preserves_node_and_filter(
+    tmp_path, node, k_filter, summary
+):
+    import shlex
+
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+    (tmp_path / "test_probe.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.parametrize('value', ['keep', 'drop'])\n"
+        "def test_exact(value): pass\n"
+        "@pytest.mark.parametrize('value', ['keep', 'drop'])\n"
+        "def test_other(value): pass\n"
+    )
+    source = RUN_TEST.read_text()
+    target_function = (
+        source[source.index("_build_target() {") :].split("\n}", 1)[0] + "\n}"
+    )
+    script = (
+        target_function
+        + "\n_build_target\n"
+        + shlex.quote(sys.executable)
+        + ' -m pytest --collect-only --verbosity=-1 "${TARGET[@]}"'
+    )
+    proc = subprocess.run(
+        ["bash", "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "TEST_FILE": "test_probe.py",
+            "TEST_ID": "test_probe.py" + node if node else "",
+            "K_FILTER": k_filter,
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            "PYTEST_ADDOPTS": "",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert summary in proc.stdout

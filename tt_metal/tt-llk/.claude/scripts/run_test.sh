@@ -450,12 +450,11 @@ _lock_artifact_entry() {
   }
 }
 
-# The pytest target selector (file, -k filter, or a single parametrize id).
+# Apply the optional -k filter to the selected file or node.
 _build_target() {
   TARGET=()
-  if   [[ -n "$TEST_ID"  ]]; then TARGET=("$TEST_ID")
-  elif [[ -n "$K_FILTER" ]]; then TARGET=(-k "$K_FILTER" "$TEST_FILE")
-  else                            TARGET=("$TEST_FILE"); fi
+  [[ -z "$K_FILTER" ]] || TARGET+=(-k "$K_FILTER")
+  TARGET+=("${TEST_ID:-$TEST_FILE}")
 }
 
 # Perform a pure collection pass. conftest explicitly skips device/runtime

@@ -1144,7 +1144,6 @@ def _load_predeclared_waiver_policy(
                     selector[field] is not None and not isinstance(selector[field], str)
                     for field in ("test_id", "k")
                 )
-                or (selector["test_id"] is not None and selector["k"] is not None)
             ):
                 raise ValueError("waiver policy requirement identity is invalid")
         replacement = item["replacement"]
@@ -1220,7 +1219,10 @@ def _verify_manifest_waiver_policy(manifest: dict[str, Any], worktree: Path) -> 
 
 
 def _load_required_manifest(path: Path) -> dict[str, Any]:
-    doc = json.loads(path.read_text(encoding="utf-8"))
+    return _validate_required_manifest(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
     fields = {
         "schema",
         "version",
@@ -1244,7 +1246,7 @@ def _load_required_manifest(path: Path) -> dict[str, Any]:
             {key: value for key, value in doc.items() if key != "manifest_id"}
         )
     ):
-        raise ValueError(f"invalid required-verification manifest: {path}")
+        raise ValueError("invalid required-verification manifest")
     if not isinstance(doc["run_id"], str) or not doc["run_id"]:
         raise ValueError("required-verification run_id must be nonempty")
     if not re.fullmatch(r"attempt-\d{3,}", doc["attempt_id"] or ""):
@@ -1306,7 +1308,6 @@ def _load_required_manifest(path: Path) -> dict[str, Any]:
                 selector[field] is not None and not isinstance(selector[field], str)
                 for field in ("test_id", "k")
             )
-            or (selector["test_id"] is not None and selector["k"] is not None)
         ):
             raise ValueError("required-verification selector is invalid")
         for field in ("minimum_selected", "minimum_executed"):
@@ -1730,7 +1731,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             selector = replacement_spec["selector"]
             selector_text = selector["test_id"] or selector["test"]
             if selector["k"] is not None:
-                selector_text = f"{selector['test']} -k {shlex.quote(selector['k'])}"
+                selector_text = f"{selector_text} -k {shlex.quote(selector['k'])}"
             normalized = _normalize_pytest_selector(
                 selector_text, replacement_spec["architecture"], worktree
             )
@@ -1861,6 +1862,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     revision_path = revisions / f"revision-{revision:03d}.json"
     if revision_path.exists():
         raise ValueError(f"manifest revision already exists: {revision_path}")
+    _validate_required_manifest(doc)
     _atomic_write(revisions, doc, destination=revision_path)
     _atomic_write(output.parent, doc, destination=output)
     suites = {item["suite"] for item in requirements}
@@ -2275,7 +2277,6 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
             selector[field] is not None and not isinstance(selector[field], str)
             for field in ("test_id", "k")
         )
-        or (selector["test_id"] is not None and selector["k"] is not None)
     ):
         raise ValueError("verification result selector is invalid")
     provenance = result["provenance"]

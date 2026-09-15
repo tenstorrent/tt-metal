@@ -1053,12 +1053,12 @@ import json, sys
 print(json.load(open(sys.argv[1])).get("runner_pool") or "prod")
 PY
 )" || return 1
+    manifest="$(sg REQUIRED_VERIFICATION_MANIFEST)"
+    [ -f "$manifest" ] || {
+        echo "verification manifest is missing: ${manifest:-unset}" >&2
+        return 1
+    }
     if [ "$pool" = audit ]; then
-        manifest="$(sg REQUIRED_VERIFICATION_MANIFEST)"
-        [ -f "$manifest" ] || {
-            echo "audit verification manifest is missing: ${manifest:-unset}" >&2
-            return 1
-        }
         rj reduce-verification \
             --manifest "$manifest" \
             --results-dir "$_L/verification-results" \
@@ -1069,22 +1069,23 @@ PY
         return $?
     fi
 
-    patch="$(python - "$_L/run.json" "$arches" "$route" <<'PY'
+    patch="$(python - "$_L/run.json" "$arches" "$manifest" "$_ORCH_SCRIPTS" <<'PY'
 import json
 import sys
 
-run_path, arches_json, route = sys.argv[1:4]
+from pathlib import Path
+
+run_path, arches_json, manifest_path, scripts = sys.argv[1:5]
+sys.path.insert(0, scripts)
+from run_json_writer import _load_required_manifest
+
+manifest = _load_required_manifest(Path(manifest_path))
 with open(run_path) as f:
     run = json.load(f)
 
 arches = json.loads(arches_json)
-required = tuple(route.split("+"))
-if (
-    not required
-    or len(set(required)) != len(required)
-    or any(suite not in {"llk", "metal", "ttnn"} for suite in required)
-):
-    raise ValueError(f"invalid functional verification route: {route}")
+if manifest["run_id"] != run["run_id"]:
+    raise ValueError("verification manifest belongs to another run")
 failure_priority = ("ENV_ERROR", "COMPILE_FAILED", "TESTS_FAILED", "SIM_ISA_GAP")
 existing = run.get("arch_results") or {}
 updates = {}
@@ -1107,6 +1108,13 @@ for arch in arches:
         )
         continue
 
+    required = [
+        suite for suite in ("llk", "metal", "ttnn")
+        if any(item["architecture"] == arch and item["suite"] == suite
+               for item in manifest["requirements"])
+    ]
+    if not required:
+        raise ValueError(f"no functional verification requirements for {arch}")
     suite_results = current.get("suite_results") or {}
     verdicts = []
     reasons = []
@@ -1166,7 +1174,7 @@ for arch in arches:
     updates[arch] = {
         "status": "done",
         "verdict": combined,
-        "verification_route": route,
+        "verification_route": "+".join(required),
         "tests_total": arch_total,
         "tests_passed": arch_passed,
         "obstacle": "; ".join(reasons) or None,
@@ -1531,21 +1539,19 @@ execute_step_write_generated_patch() {
 
     base="$(sg GIT_COMMIT)"
     if ! git -C "$wt" rev-parse --verify "${base}^{commit}" >/dev/null 2>&1; then
-        ss OBSTACLE "packaging failed: invalid base commit"
-        execute_step_mark_status failed
+        ss PACKAGING_ERROR "packaging failed: invalid base commit"
         echo "PACKAGING_FAILED: invalid base commit '$base'" >&2
         return 1
     fi
     ss BASE_COMMIT "$base"
 
     if ! git -C "$wt" -c advice.addIgnoredFile=false add -A -- "${pathspec[@]}"; then
-        ss OBSTACLE "packaging failed: could not stage the complete fix"
-        execute_step_mark_status failed
+        ss PACKAGING_ERROR "packaging failed: could not stage the complete fix"
         echo "PACKAGING_FAILED: git add failed" >&2
         return 1
     fi
 
-    cf="$(git -C "$wt" diff --cached --name-only)"
+    cf="$(git -C "$wt" diff --cached --name-only "$base")"
     ss CHANGED_FILES "$cf"
     cfj="$(CF="$cf" python -c "import json,os;print(json.dumps([l for l in os.environ['CF'].splitlines() if l]))")"
     ss CHANGED_FILES_JSON "$cfj" --json
@@ -1556,20 +1562,19 @@ execute_step_write_generated_patch() {
         [ "$mode" = multi ] && cm="AI issue-solver: multi-arch fix #${num} ${title}"
         if ! git -C "$wt" -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
             commit -q -m "$cm"; then
-            ss OBSTACLE "packaging failed: could not commit the complete fix"
-            execute_step_mark_status failed
+            ss PACKAGING_ERROR "packaging failed: could not commit the complete fix"
             echo "PACKAGING_FAILED: git commit failed; fix remains staged" >&2
             return 1
         fi
-        fix="$(git -C "$wt" rev-parse HEAD)"
     fi
+    # A retry may find that the previous attempt already committed the fix.
+    [ -z "$cf" ] || fix="$(git -C "$wt" rev-parse HEAD)"
     ss FIX_COMMIT "$fix"
 
     if [ -n "$fix" ] && [ "$fix" != "$base" ]; then
         packaged="$(git -C "$wt" diff --name-only "$base" "$fix")"
         if [ "$packaged" != "$cf" ]; then
-            ss OBSTACLE "packaging failed: committed paths do not match the staged fix"
-            execute_step_mark_status failed
+            ss PACKAGING_ERROR "packaging failed: committed paths do not match the staged fix"
             echo "PACKAGING_FAILED: staged and committed path sets differ" >&2
             return 1
         fi
@@ -1577,22 +1582,19 @@ execute_step_write_generated_patch() {
         tmp_patch="$_L/.generated.patch.$$"
         if ! git -C "$wt" diff --binary "$base" "$fix" > "$tmp_patch"; then
             rm -f "$tmp_patch"
-            ss OBSTACLE "packaging failed: could not create generated.patch"
-            execute_step_mark_status failed
+            ss PACKAGING_ERROR "packaging failed: could not create generated.patch"
             echo "PACKAGING_FAILED: git diff failed" >&2
             return 1
         fi
         if [ ! -s "$tmp_patch" ]; then
             rm -f "$tmp_patch"
-            ss OBSTACLE "packaging failed: generated.patch is empty"
-            execute_step_mark_status failed
+            ss PACKAGING_ERROR "packaging failed: generated.patch is empty"
             echo "PACKAGING_FAILED: generated.patch is empty" >&2
             return 1
         fi
         if ! _disk_guard mv "$tmp_patch" "$_L/generated.patch"; then
             rm -f "$tmp_patch"
-            ss OBSTACLE "packaging failed: could not publish generated.patch"
-            execute_step_mark_status failed
+            ss PACKAGING_ERROR "packaging failed: could not publish generated.patch"
             echo "PACKAGING_FAILED: could not publish generated.patch" >&2
             return 1
         fi
@@ -1600,6 +1602,7 @@ execute_step_write_generated_patch() {
         rm -f "$_L/generated.patch"
     fi
 
+    ss PACKAGING_ERROR ""
     echo "FIX_COMMIT=${fix:-none} CHANGED=$(printf '%s' "$cf" | grep -c . || true)"
 }
 
@@ -1646,6 +1649,16 @@ PY
                 execute_step_mark_status failed test_failure
             fi
         fi
+    fi
+
+    # Packaging errors belong to packaging, so a successful retry cannot erase
+    # a verification obstacle or leave the run failed solely by the old error.
+    local packaging_error; packaging_error="$(sg PACKAGING_ERROR)"
+    if [ -n "$packaging_error" ]; then
+        local obstacle; obstacle="$(sg OBSTACLE)"
+        ss OBSTACLE "${obstacle:+${obstacle}; }${packaging_error}"
+        ss FINAL_MESSAGE "$packaging_error"
+        execute_step_mark_status failed
     fi
 
     # Functional success covers only the selected tests. The existing reviewer

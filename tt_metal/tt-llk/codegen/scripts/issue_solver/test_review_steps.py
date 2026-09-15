@@ -386,7 +386,9 @@ def test_route_extracts_and_seals_ttnn_state(tmp_path, worktree):
 
 
 # ── execute_step_combine_verification_results ────────────────────────────────
-def _combine_case(tmp_path, worktree, suite_results, route="llk", audit=False):
+def _combine_case(
+    tmp_path, worktree, suite_results, route="llk", audit=False, quasar=False
+):
     log_dir = tmp_path / "combine-log"
     log_dir.mkdir()
     state = {
@@ -394,49 +396,59 @@ def _combine_case(tmp_path, worktree, suite_results, route="llk", audit=False):
         "VERIFY_ROUTE": route,
         "TARGET_ARCHES_JSON": ["blackhole"],
     }
-    if audit:
-        suites = tuple(route.split("+"))
-        requirements = [
-            {
-                "requirement_id": f"blackhole:{suite}:1",
-                "architecture": "blackhole",
-                "suite": suite,
-                "backend": "silicon",
-                "selector": {
-                    "test": "test_reduce.py" if suite == "llk" else "LLK.Reduce",
-                    "test_id": None,
-                    "k": None,
-                },
-                "minimum_selected": 1,
-                "minimum_executed": 1,
-                "required_measurements": [],
-            }
-            for suite in suites
-        ]
-        manifest = {
-            "schema": "tt.issue-solver.required-verification",
-            "version": 1,
-            "manifest_id": "0" * 64,
-            "run_id": "run-1",
-            "attempt_id": "attempt-001",
-            "expected_base_sha": "a" * 40,
-            "revision": 1,
-            "parent_manifest_id": None,
-            "supersedes_reason": None,
-            "requirements": requirements,
-            "waivers": [],
+    suites = tuple(route.split("+"))
+    requirements = [
+        {
+            "requirement_id": f"blackhole:{suite}:1",
+            "architecture": "blackhole",
+            "suite": suite,
+            "backend": "silicon",
+            "selector": {
+                "test": "test_reduce.py" if suite == "llk" else "LLK.Reduce",
+                "test_id": None,
+                "k": None,
+            },
+            "minimum_selected": 1,
+            "minimum_executed": 1,
+            "required_measurements": [],
         }
-        payload = json.dumps(
-            {key: value for key, value in manifest.items() if key != "manifest_id"},
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode()
-        manifest["manifest_id"] = hashlib.sha256(payload).hexdigest()
-        manifest_path = log_dir / "required_verification_manifest.json"
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        state["REQUIRED_VERIFICATION_MANIFEST"] = str(manifest_path)
+        for suite in suites
+    ]
+    if quasar:
+        state["TARGET_ARCHES_JSON"].append("quasar")
+        requirements.append(
+            {
+                **requirements[0],
+                "requirement_id": "quasar:llk:1",
+                "architecture": "quasar",
+                "suite": "llk",
+                "backend": "quasar",
+            }
+        )
+    manifest = {
+        "schema": "tt.issue-solver.required-verification",
+        "version": 1,
+        "manifest_id": "0" * 64,
+        "run_id": "run-1",
+        "attempt_id": "attempt-001",
+        "expected_base_sha": "a" * 40,
+        "revision": 1,
+        "parent_manifest_id": None,
+        "supersedes_reason": None,
+        "requirements": requirements,
+        "waivers": [],
+    }
+    payload = json.dumps(
+        {key: value for key, value in manifest.items() if key != "manifest_id"},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode()
+    manifest["manifest_id"] = hashlib.sha256(payload).hexdigest()
+    manifest_path = log_dir / "required_verification_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    state["REQUIRED_VERIFICATION_MANIFEST"] = str(manifest_path)
     (log_dir / "state.json").write_text(json.dumps(state), encoding="utf-8")
     llk = worktree / "tt_metal" / "tt-llk"
     (llk / ".codegen_run_state.json").write_text(
@@ -452,6 +464,11 @@ def _combine_case(tmp_path, worktree, suite_results, route="llk", audit=False):
         ),
         encoding="utf-8",
     )
+    if quasar:
+        run_path = log_dir / "run.json"
+        run = json.loads(run_path.read_text())
+        run["arch_results"]["quasar"] = {"suite_results": {"llk": suite_results["llk"]}}
+        run_path.write_text(json.dumps(run))
     result = _bash("execute_step_combine_verification_results", llk)
     return result, json.loads((log_dir / "run.json").read_text())
 
@@ -882,6 +899,127 @@ def test_dispositions_reject_duplicate_actionable_ids(tmp_path, worktree):
     )
     assert r.returncode != 0
     assert "duplicate disposition" in r.stdout + r.stderr
+
+
+def test_combine_uses_architecture_requirements_not_global_route(tmp_path, worktree):
+    passed = {
+        "status": "done",
+        "verdict": "SUCCESS",
+        "tests_total": 3,
+        "tests_passed": 3,
+    }
+    result, run = _combine_case(
+        tmp_path,
+        worktree,
+        {"llk": passed, "ttnn": passed},
+        route="llk+ttnn",
+        quasar=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert run["arch_results"]["quasar"]["verdict"] == "SUCCESS"
+    assert run["arch_results"]["quasar"]["verification_route"] == "llk"
+    assert run["arch_results"]["blackhole"]["verification_route"] == "llk+ttnn"
+    assert run["tests_passed"] == 9
+
+
+@pytest.mark.parametrize("verification_status", ["success", "failed"])
+@pytest.mark.parametrize("retry", [False, True])
+def test_packaging_failure_and_retry_preserve_verification(
+    tmp_path, worktree, verification_status, retry
+):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            },
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    llk = worktree / "tt_metal/tt-llk"
+    log_dir = tmp_path / "combine-log"
+    (worktree / ".gitignore").write_text(".codegen_run_state.json\n")
+    source = worktree / "fix.cpp"
+    source.write_text("base\n")
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(worktree), *args], text=True
+        ).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.com")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    # Include a fix committed before packaging, as well as an uncommitted fix.
+    (worktree / "earlier.cpp").write_text("earlier fix\n")
+    git("add", "-A")
+    git("commit", "-qm", "earlier fix")
+    source.write_text("complete fix\n")
+    state_path = log_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    obstacle = "Wormhole unavailable" if verification_status == "failed" else ""
+    state.update(
+        {
+            "RUN_MODE": "single",
+            "RUN_KIND": "issue",
+            "ISSUE_NUMBER": "1",
+            "ISSUE_TITLE": "fix",
+            "TARGET_ARCH": "blackhole",
+            "GIT_COMMIT": base,
+            "OBSTACLE": obstacle,
+        }
+    )
+    state_path.write_text(json.dumps(state))
+    (log_dir / "review_result.json").write_text(
+        json.dumps(
+            {
+                "verdict": "clean",
+                "blocking_total": 0,
+                "requirements_complete": True,
+            }
+        )
+    )
+    hook = worktree / ".git/hooks/pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+    failed = _bash(
+        f"execute_step_mark_status {verification_status}; execute_step_write_generated_patch",
+        llk,
+    )
+    assert failed.returncode != 0
+    state = json.loads(state_path.read_text())
+    assert "could not commit" in state["PACKAGING_ERROR"]
+    assert state["OBSTACLE"] == obstacle
+    assert state["STATUS"] == verification_status
+    if retry:
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        for _ in range(2):
+            packaged = _bash("execute_step_write_generated_patch", llk)
+            assert packaged.returncode == 0, packaged.stderr
+            state = json.loads(state_path.read_text())
+            assert state["PACKAGING_ERROR"] == ""
+            assert state["OBSTACLE"] == obstacle
+            assert state["FIX_COMMIT"] == git("rev-parse", "HEAD")
+            assert set(state["CHANGED_FILES_JSON"]) == {"fix.cpp", "earlier.cpp"}
+            assert (log_dir / "generated.patch").read_text().strip() == git(
+                "diff", "--binary", base, "HEAD"
+            )
+    finalized = _bash("refresh_cost() { :; }; execute_step_finalize_run", llk)
+    assert finalized.returncode == 0, finalized.stderr
+    run = json.loads((log_dir / "run.json").read_text())
+    assert run["status"] == (verification_status if retry else "failed")
+    if retry:
+        assert run["obstacle"] == (obstacle or None)
+    else:
+        assert "packaging failed" in run["obstacle"]
+        assert obstacle in run["obstacle"]
 
 
 if __name__ == "__main__":
