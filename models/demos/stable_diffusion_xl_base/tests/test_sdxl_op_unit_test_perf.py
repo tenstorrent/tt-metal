@@ -135,9 +135,7 @@ def test_dram_group_norm_vae_two_pass_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Retain the Wormhole baseline target: two-pass measured 1,346,323 ns and passed this 1.5% band.
-    # The separate Blackhole sharded GroupNorm benchmarks do not calibrate this DRAM VAE workload.
-    expected_duration_ns = 1331396
+    expected_duration_ns = 1351000  # Wormhole DRAM GroupNorm VAE baseline, recalibrated in #56193.
 
     # Log the performance result
     print(

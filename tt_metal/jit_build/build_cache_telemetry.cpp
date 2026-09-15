@@ -6,17 +6,24 @@
 
 #include <atomic>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
+
+#include "env_lib.hpp"
 
 namespace tt::tt_metal {
 
 // --- TelemetryToken ---
 
-TelemetryToken::TelemetryToken(std::string name) : name_(std::move(name)) {}
+TelemetryToken::TelemetryToken(std::string name, std::string unit) : name_(std::move(name)), unit_(std::move(unit)) {}
 
 void TelemetryToken::set_recording_enabled(bool enabled) {
     recording_enabled_.store(enabled, std::memory_order_release);
@@ -38,6 +45,14 @@ TelemetryTokenData TelemetryToken::snapshot() const {
     return data_;
 }
 
+void TelemetryToken::set_single_sample(double value) {
+    if (!recording_enabled_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    std::lock_guard lk(data_mutex_);
+    data_ = {.count = 1, .total = value, .min_val = value, .max_val = value};
+}
+
 // --- BuildCacheTelemetry ---
 
 struct BuildCacheTelemetryImpl {
@@ -49,9 +64,18 @@ struct BuildCacheTelemetryImpl {
 
     std::mutex token_registry_mutex;
     std::vector<TelemetryToken*> registered_tokens;
+
+    // Endpoints of the JIT build window, as steady_clock nanoseconds. Sentinels are ordered so
+    // that last < first means "no build activity recorded", which dump_metrics() treats as
+    // nothing to report.
+    std::atomic<int64_t> build_window_first_ns{std::numeric_limits<int64_t>::max()};
+    std::atomic<int64_t> build_window_last_ns{std::numeric_limits<int64_t>::min()};
 };
 
-BuildCacheTelemetry::BuildCacheTelemetry() { enable(); }
+BuildCacheTelemetry::BuildCacheTelemetry() {
+    enable();
+    build_window_token_ = &get_or_register_metric("jit_build_window");
+}
 
 BuildCacheTelemetry::~BuildCacheTelemetry() {
     // Dump metrics here rather than via std::atexit. The atexit handler is registered inside
@@ -71,6 +95,14 @@ BuildCacheTelemetry::~BuildCacheTelemetry() {
 BuildCacheTelemetry& BuildCacheTelemetry::inst() {
     static BuildCacheTelemetry instance;
     return instance;
+}
+
+TelemetryToken& per_target_telemetry_token(
+    std::string_view metric_name, std::string_view target_name, std::string_view unit) {
+    std::string key(metric_name);
+    key += '.';
+    key += target_name;
+    return BuildCacheTelemetry::inst().get_or_register_metric(key, unit);
 }
 
 void BuildCacheTelemetry::enable() {
@@ -176,6 +208,35 @@ uint32_t BuildCacheTelemetry::get_jit_once_dedup_count() const {
     return impl_->jit_once_dedup_count.load(std::memory_order_acquire);
 }
 
+void BuildCacheTelemetry::note_build_window(
+    std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end) {
+    if (!impl_) {
+        return;
+    }
+    const auto to_ns = [](std::chrono::steady_clock::time_point tp) {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
+    };
+    const int64_t start_ns = to_ns(start);
+    const int64_t end_ns = to_ns(end);
+
+    // Concurrent builds each widen their own end of the window, so both endpoints need a
+    // read-modify-write rather than a plain store.
+    int64_t first = impl_->build_window_first_ns.load(std::memory_order_relaxed);
+    while (start_ns < first &&
+           !impl_->build_window_first_ns.compare_exchange_weak(first, start_ns, std::memory_order_relaxed)) {
+    }
+    int64_t last = impl_->build_window_last_ns.load(std::memory_order_relaxed);
+    while (end_ns > last &&
+           !impl_->build_window_last_ns.compare_exchange_weak(last, end_ns, std::memory_order_relaxed)) {
+    }
+}
+
+ScopedBuildWindow::ScopedBuildWindow() : start_(std::chrono::steady_clock::now()) {}
+
+ScopedBuildWindow::~ScopedBuildWindow() {
+    BuildCacheTelemetry::inst().note_build_window(start_, std::chrono::steady_clock::now());
+}
+
 void BuildCacheTelemetry::log_compile_summary() const {
     if (!impl_) {
         return;
@@ -207,10 +268,35 @@ void BuildCacheTelemetry::log_compile_summary() const {
         genfiles);
 }
 
-TelemetryToken& BuildCacheTelemetry::register_metric(const std::string& name) {
+TelemetryToken& BuildCacheTelemetry::get_or_register_metric(
+    const std::string& name, std::optional<std::string_view> unit) {
     std::lock_guard lk(owned_tokens_mutex_);
-    owned_tokens_.push_back(std::make_unique<TelemetryToken>(name));
+    auto [it, inserted] = tokens_by_name_.try_emplace(name, nullptr);
+    if (!inserted) {
+        // A mismatch means two call sites are feeding one stream values of different kinds, which
+        // mislabels the dump. That is a bug worth shouting about, but telemetry is a diagnostic
+        // subsystem: aborting the process over a metric label would take down every JIT build for
+        // a mistake that costs nothing but a wrong unit in one log line. Keep the unit the stream
+        // was registered with and warn once per name, so a build loop cannot flood the log.
+        if (unit.has_value() && it->second->unit() != *unit) {
+            if (unit_conflict_warned_.insert(name).second) {
+                log_warning(
+                    tt::LogBuildKernels,
+                    "Telemetry metric '{}' is registered with unit '{}' but was requested with unit '{}'; keeping "
+                    "'{}'. Values from these call sites are being aggregated into one stream.",
+                    name,
+                    it->second->unit(),
+                    *unit,
+                    it->second->unit());
+            }
+        }
+        return *it->second;
+    }
+    owned_tokens_.push_back(
+        unit.has_value() ? std::make_unique<TelemetryToken>(name, std::string(*unit))
+                         : std::make_unique<TelemetryToken>(name));
     auto* token = owned_tokens_.back().get();
+    it->second = token;
     token->set_recording_enabled(impl_ != nullptr);
     if (impl_) {
         std::lock_guard reg_lk(impl_->token_registry_mutex);
@@ -226,8 +312,25 @@ void BuildCacheTelemetry::dump_metrics() const {
 
     log_compile_summary();
 
+    // Serialize dumps before reading the endpoints so an older snapshot cannot overwrite a
+    // newer one. Replace the single window sample: appending it would count the same build
+    // activity again on each explicit dump and once more at process exit.
     std::lock_guard lk(impl_->token_registry_mutex);
+    const int64_t first_ns = impl_->build_window_first_ns.load(std::memory_order_relaxed);
+    const int64_t last_ns = impl_->build_window_last_ns.load(std::memory_order_relaxed);
+    if (build_window_token_ != nullptr && last_ns >= first_ns) {
+        build_window_token_->set_single_sample(static_cast<double>(last_ns - first_ns) / 1e6);
+    }
+
     log_info(tt::LogBuildKernels, "JIT telemetry: {} registered TelemetryTokens", impl_->registered_tokens.size());
+
+    // One info line per token, and the per-target metrics register dozens of them, so every
+    // tt-metal process would print a wall of output at exit. Off by default; opt in with
+    // TT_METAL_LOG_JIT_TELEMETRY=1, mirroring the TT_METAL_LOG_KERNEL_COMPILE gate in build.cpp.
+    static const bool log_tokens = tt::parse_env<bool>("TT_METAL_LOG_JIT_TELEMETRY", false);
+    if (!log_tokens) {
+        return;
+    }
 
     for (const auto* token : impl_->registered_tokens) {
         const TelemetryTokenData snap = token->snapshot();
@@ -235,15 +338,22 @@ void BuildCacheTelemetry::dump_metrics() const {
             continue;
         }
         const double mean_val = snap.total / static_cast<double>(snap.count);
-        log_trace(
+        // Byte counts are whole numbers; three decimals would just be trailing zeros.
+        const int precision = token->unit() == "B" ? 0 : 3;
+        log_info(
             tt::LogBuildKernels,
-            "JIT telemetry [{}]: count={}, total={:.3f}ms, min={:.3f}ms, max={:.3f}ms, mean={:.3f}ms",
+            "JIT telemetry [{}] ({}): count={}, total={:.{}f}, min={:.{}f}, max={:.{}f}, mean={:.{}f}",
             token->name(),
+            token->unit(),
             snap.count,
             snap.total,
+            precision,
             snap.min_val,
+            precision,
             snap.max_val,
-            mean_val);
+            precision,
+            mean_val,
+            precision);
     }
 }
 

@@ -355,6 +355,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"HtWt", HtWt},
             {"use_welford", 1u},
             {"enable_fp32_sfpu", 0u},
+            // The two-pass reader uses its own streaming/replay batching policy.
+            {"tiles_per_batch", 1u},
+            // Two-pass never splits the H axis; {1, Ht} selects the reader's un-split path.
+            {"num_h_slices", 1u},
+            {"slice_Ht", Ht},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     } else {
