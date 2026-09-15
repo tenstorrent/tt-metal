@@ -14,9 +14,17 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs the element-wise IEEE nextafter operation y = nextafter(x0, x1): the representable value
- * adjacent to x0 in the direction of x1, or x0 itself when the two are equal. The step is one ULP at
- * x0's own magnitude, so the float32 and bfloat16 destinations need separate entry points.
+ * Performs the element-wise nextafter operation y = nextafter(x0, x1): the representable value
+ * adjacent to x0 in the direction of x1, or x1 itself when the two are equal -- which is what makes
+ * nextafter(+0, -0) return -0. The step is one ULP at x0's own magnitude, so the float32 and
+ * bfloat16 destinations need separate entry points.
+ *
+ * Two deliberate departures from IEEE 754, both properties of the SFPU rather than of this op:
+ * a result in the subnormal range is flushed, so nextafter(0.0f, 1.0f) returns +0.0 rather than the
+ * smallest denormal; and on a bfloat16 destination a NaN result is delivered as infinity, since a
+ * bfloat16 tile does not carry a NaN through the compute path at all (ttnn.multiply of a bfloat16
+ * NaN by 1.0 returns infinity for the same reason). A NaN operand does propagate as NaN on a
+ * float32 destination.
  * Output overwrites first operand in DST.
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
  * compute engine.
@@ -32,6 +40,14 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nextafter_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    // One float32 ULP is a step of 1 in the dest register, which sits below bfloat16 precision and
+    // is discarded when a 16-bit DEST is packed -- the op would silently return its input. binary_ng
+    // never selects this combination, but this is a public compute API, so fail at compile time
+    // rather than leave a user kernel built with DST_ACCUM_MODE == 0 with a no-op.
+    static_assert(
+        is_fp32_dest_acc_en,
+        "nextafter_binary_tile steps one float32 ULP and requires a float32 DEST; use "
+        "nextafter_bf16_binary_tile for a 16-bit DEST");
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

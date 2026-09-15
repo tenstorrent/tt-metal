@@ -58,7 +58,11 @@ def test_nextafter_direction_and_equality(device, dtype):
 
     values = torch.tensor([1.0, -1.0, 3.5, -3.5, 1e30, -1e30, 1e-30, -1e-30], dtype=torch_dtype)
     a = values.repeat(3).reshape(1, 1, 1, -1).expand(1, 1, 32, 24).contiguous()
-    b = torch.cat([values + 10.0, values - 10.0, values]).reshape(1, 1, 1, -1).expand(1, 1, 32, 24).contiguous()
+    # The target has to scale with the operand rather than sit a fixed distance away. One ULP of
+    # 1e30 is about 2**76 in float32, so a fixed +/- 10.0 is absorbed entirely and those columns
+    # would silently retest the equality case instead of a step -- which is the large-exponent
+    # regime the fixed-epsilon bug this op had lived in.
+    b = torch.cat([values * 2, values * 0.5, values]).reshape(1, 1, 1, -1).expand(1, 1, 32, 24).contiguous()
 
     expected = torch.nextafter(a, b)
 
@@ -97,6 +101,53 @@ def test_nextafter_signed_zeros(device):
     assert torch.equal(actual_sign, expected_sign), "zero results must carry the target's sign"
 
 
+def test_nextafter_nan_propagates(device):
+    """A NaN in either operand must come back as NaN, not as a stepped finite value.
+
+    float32 only: a bfloat16 tile does not carry a NaN through the compute path at all, and that
+    is not specific to this op -- ttnn.multiply of a bfloat16 NaN by 1.0 also returns infinity.
+    The kernel classifies NaN on the integer pattern because SFPSETCC is unspecified for a NaN
+    comparand: before the guard, nextafter(1.0, NaN) stepped and returned 1.0000001.
+    """
+    nan, inf = float("nan"), float("inf")
+    a = torch.tensor([[1.0, 2.0, nan, nan, -3.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
+    b = torch.tensor([[nan, nan, 1.0, nan, nan, nan, inf, 2.0]], dtype=torch.float32)
+
+    ttnn_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))[0, : a.numel()]
+    expected = torch.nextafter(a, b)[0]
+
+    assert torch.equal(actual.isnan(), expected.isnan()), f"NaN pattern differs: {actual}"
+    finite = ~expected.isnan()
+    assert torch.equal(actual[finite], expected[finite]), f"finite lanes differ: {actual[finite]}"
+
+
+@pytest.mark.parametrize(
+    "shape_b", [(1, 1, 32, 1), (1, 1, 1, 32), (1, 1, 1, 1)], ids=["col_bcast", "row_bcast", "scalar_bcast"]
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_nextafter_broadcast(device, shape_b, dtype):
+    """The broadcast kernels are selected purely by shape, so same-shape tests never reach them.
+
+    The broadcast operand takes a pack/unpack round trip through an L1 CB before the SFPU op, and
+    only the first operand is bit-stepped, so this still has to be exact.
+    """
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    a = torch.rand((1, 1, 32, 32), dtype=torch_dtype) * 200 - 100
+    b = torch.rand(shape_b, dtype=torch_dtype) * 300 - 150
+
+    expected = torch.nextafter(a, b.expand_as(a))
+
+    ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))
+
+    in_scope = _in_scope(a, expected)
+    assert_with_ulp(expected_result=expected[in_scope], actual_result=actual[in_scope], ulp_threshold=0)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_nextafter_rejects_block_float(device, dtype, expect_error):
     """A bfloat16 ULP is not the next representable block-float value, so these are not accepted.
@@ -124,8 +175,10 @@ def test_nextafter_exhaustive_bfloat16(device, toward):
     ttnn_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))
 
-    # Of the 65536 patterns, 256 are inf/NaN and 256 are zero or subnormal; one more drops out
-    # at the end of the ladder, where the last normal steps to infinity.
+    # Of the 65536 patterns, 256 are inf/NaN and 256 are zero or subnormal. One more drops out at
+    # each end: +/-SMALLEST_NORMAL stepping toward zero lands on the largest subnormal, which the
+    # SFPU flushes. Nothing steps to infinity here, since the target is capped at the largest
+    # finite bfloat16 and nextafter never overshoots it.
     in_scope = _in_scope(a, expected)
     assert in_scope.sum() == 65023, f"expected 65023 normal patterns in scope, got {in_scope.sum()}"
 

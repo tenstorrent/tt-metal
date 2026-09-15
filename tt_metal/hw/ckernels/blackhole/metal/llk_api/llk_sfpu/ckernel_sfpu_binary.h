@@ -141,7 +141,6 @@ inline void calculate_sfpu_binary(
             // Kept flat, with every value declared up front: the sfpi predication pass does not
             // survive a v_if nested inside a v_else here.
             sfpi::vInt bits = sfpi::as<sfpi::vInt>(in0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
             // A step of zero leaves in0 alone, which is what in0 == in1 wants.
             sfpi::vInt step = 0;
             // The bit pattern grows away from zero for either sign, so the direction of the step
@@ -164,14 +163,29 @@ inline void calculate_sfpu_binary(
             // carries the same construction for the same reason.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
+            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
             v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
             v_endif;
             v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
             v_endif;
             // Equal operands return the target, so two zeros return in1's zero, which is not
-            // always in0's: nextafter(+0, -0) is -0. This runs last because the two guards above
-            // compare in1 against zero, which is itself unspecified when in1 is negative zero.
+            // always in0's: nextafter(+0, -0) is -0. This runs after the two guards above because
+            // they compare in1 against zero, which is itself unspecified when in1 is negative zero.
             v_if(mag_a == 0.0f && mag_b == 0.0f) { result = in1; }
+            v_endif;
+            // A NaN in either operand has to propagate, and nothing above arranges that: SFPSETCC
+            // is specified only for a comparand that is neither negative zero nor NaN, so the
+            // direction predicates decide arbitrarily here. Measured on silicon, nextafter(1.0f,
+            // NaN) stepped its operand and returned 1.0000001 rather than NaN. Classify on the
+            // integer pattern instead -- exponent all ones with a non-zero mantissa -- the same
+            // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
+            // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
+            // both entry points unchanged. Last, so it wins over the direction and zero arms.
+            constexpr int32_t kInfBits = 0x7F800000;
+            constexpr int32_t kAbsMask = 0x7FFFFFFF;
+            v_if((bits & kAbsMask) > kInfBits) { result = nan; }
+            v_endif;
+            v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
             v_endif;
         }
 
