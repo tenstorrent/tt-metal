@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <ostream>
 #include <queue>
@@ -754,29 +755,70 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::validate_fabric_config_across_ranks() {
+    using tt::tt_metal::distributed::multihost::ReduceOp;
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
     const auto rank = static_cast<uint32_t>(*distributed_context.rank());
 
     TT_FATAL(!this->local_mesh_binding_.mesh_ids.empty(), "Local mesh binding must be initialized before validation");
+    TT_FATAL(
+        *this->local_mesh_binding_.host_rank != *MESH_HOST_RANK_UNSET,
+        "Local mesh host rank must be initialized before validation");
 
     static_assert(
         std::is_trivially_copyable_v<MeshFabricConfigObservation>,
         "MeshFabricConfigObservation is exchanged as raw bytes between ranks");
 
-    MeshFabricConfigObservation local_observation{
-        .mesh_id = this->local_mesh_binding_.mesh_ids.front(),
-        .rank = rank,
-        .mesh_host_rank = *this->local_mesh_binding_.host_rank,
-        .fabric_config = this->fabric_config_};
+    uint32_t local_binding_count = static_cast<uint32_t>(this->local_mesh_binding_.mesh_ids.size());
+    uint32_t max_binding_count = 0;
+    distributed_context.all_reduce(
+        ttsl::Span<uint32_t>(&local_binding_count, 1), ttsl::Span<uint32_t>(&max_binding_count, 1), ReduceOp::MAX);
 
-    std::vector<MeshFabricConfigObservation> observations(world_size);
+    std::vector<MeshFabricConfigObservation> local_observations(max_binding_count);
+    for (uint32_t i = 0; i < local_binding_count; ++i) {
+        local_observations[i] = MeshFabricConfigObservation{
+            .mesh_id = this->local_mesh_binding_.mesh_ids[i],
+            .rank = rank,
+            .mesh_host_rank = *this->local_mesh_binding_.host_rank,
+            .fabric_config = this->fabric_config_};
+    }
+
+    std::vector<uint32_t> binding_counts(world_size);
     distributed_context.all_gather(
-        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_observation), sizeof(MeshFabricConfigObservation)),
-        ttsl::as_writable_bytes(ttsl::Span<MeshFabricConfigObservation>{observations.data(), observations.size()}));
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_binding_count), sizeof(uint32_t)),
+        ttsl::as_writable_bytes(ttsl::Span<uint32_t>{binding_counts.data(), binding_counts.size()}));
+
+    std::vector<MeshFabricConfigObservation> gathered_observations(world_size * max_binding_count);
+    distributed_context.all_gather(
+        ttsl::Span<std::byte>(
+            reinterpret_cast<std::byte*>(local_observations.data()),
+            local_observations.size() * sizeof(MeshFabricConfigObservation)),
+        ttsl::as_writable_bytes(
+            ttsl::Span<MeshFabricConfigObservation>{gathered_observations.data(), gathered_observations.size()}));
+
+    std::vector<MeshFabricConfigObservation> observations;
+    observations.reserve(std::accumulate(binding_counts.begin(), binding_counts.end(), static_cast<uint32_t>(0)));
+    for (uint32_t gathered_rank = 0; gathered_rank < world_size; ++gathered_rank) {
+        const uint32_t count = binding_counts[gathered_rank];
+        TT_FATAL(
+            count > 0 && count <= max_binding_count,
+            "Invalid mesh-binding count {} received from rank {}",
+            count,
+            gathered_rank);
+        const auto rank_offset = static_cast<size_t>(gathered_rank) * max_binding_count;
+        observations.insert(
+            observations.end(),
+            gathered_observations.begin() + rank_offset,
+            gathered_observations.begin() + rank_offset + count);
+    }
 
     std::string observed_values;
     for (const auto& observation : observations) {
+        TT_FATAL(
+            observation.mesh_host_rank != *MESH_HOST_RANK_UNSET,
+            "mesh_host_rank must be set for all gathered observations (rank {}, mesh {})",
+            observation.rank,
+            *observation.mesh_id);
         observed_values += fmt::format(
             "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
             *observation.mesh_id,
