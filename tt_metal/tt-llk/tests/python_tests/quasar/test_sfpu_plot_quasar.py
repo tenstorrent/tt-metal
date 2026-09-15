@@ -254,6 +254,16 @@ CASES = [
         approx_mode=ApproximationMode.Yes,
         name="Reciprocal-bf16-approx-exhaustive",
     ),
+    # batched fp32 demo: every fp32 value in [1.0, 1.002] (~16.8k values, 17
+    # tiles) swept in 4-tile batches — the fp32 Dest capacity — and joined.
+    # Exercises the batching loop on the simulator in a few runs; the WH/BH
+    # file's full-octave [1.0, 2.0] sweep (2^23 values) would take hours here.
+    Case(
+        op=MathOperation.Reciprocal,
+        spec=StimuliSpec.ulp_sweep(low=1.0, high=1.002),
+        fmt=FP32,
+        name="Reciprocal-fp32-exhaustive-batched",
+    ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-5.0, high=5.0),
     #      approx_mode=ApproximationMode.Yes, expect_pass=False),
