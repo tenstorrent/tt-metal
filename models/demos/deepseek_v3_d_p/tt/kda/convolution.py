@@ -17,12 +17,9 @@ def exchange_convolution_carry(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
-    ``partition_carry`` is BF16 row-major DRAM with shape
-    ``[B, 3, Q_local + K_local + V_local]`` for ordinary input and
-    ``[B, 6, Q_local + K_local + V_local]`` for split input. In split mode,
-    plane zero (rows 0:3) seeds the physical head and plane one (rows 3:6)
-    seeds the physical tail on the boundary rank. ``final_carry`` always
-    contains three history rows. ``partition_carry`` differs by SP rank: the chronologically
+    Both outputs are BF16 row-major DRAM tensors with shape
+    ``[B, 3, Q_local + K_local + V_local]``. ``partition_carry`` differs by SP
+    rank: the chronologically
     first chip receives ``initial_carry`` and every other chip receives its
     chronological predecessor's tail. ``final_carry`` is the global stream tail
     replicated across SP. Channels remain sharded across TP.
@@ -55,7 +52,14 @@ def exchange_split_convolution_carry(
     topology: OffsetTopology,
     wrap_indicator: ttnn.Tensor,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Exchange both three-row history planes using the layer's split selector."""
+    """Exchange both history planes using the layer's split selector.
+
+    The BF16 row-major DRAM partition carry has shape ``[B, 6, channels]``.
+    Plane zero (rows 0:3) seeds the physical head; plane one (rows 3:6) seeds
+    the physical tail on the boundary rank. The final carry has shape
+    ``[B, 3, channels]`` and is replicated across SP, with channels sharded
+    across TP. Inputs are read only.
+    """
     tiled_tail = ttnn.experimental.kda.pack_convolution_carry(
         projected_qkv,
         wrap_indicator,
