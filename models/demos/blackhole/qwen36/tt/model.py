@@ -1326,7 +1326,9 @@ class Qwen36Model:
             )
             # reset_state allocates against self.B, so set B=1 first.
             dn.B = 1
-            dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
+            self._reset_state_keep_hist(
+                dn
+            )  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
             dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
         return prev
 
@@ -1351,6 +1353,21 @@ class Qwen36Model:
             dn._zero_conv0 = zero0_b
             dn._stable_state = stable_b
 
+    @staticmethod
+    def _reset_state_keep_hist(dn):
+        """reset_state for a SCRATCH build: detach the batched fused plain-decode conv history (conv_hist_packed, read by the
+        parked decode traces at a baked address) so the width-row zero buffer reset_state stores cannot replace it (a shape
+        mismatch would deallocate the batched buffer and strand every trace on the freed address); the scratch never
+        decodes, so its own packed buffer is dropped right after."""
+        keep = (dn.conv_hist_packed, dn._hist_packed_valid)
+        dn.conv_hist_packed = None
+        try:
+            dn.reset_state()
+        finally:
+            if dn.conv_hist_packed is not None:
+                ttnn.deallocate(dn.conv_hist_packed)
+            dn.conv_hist_packed, dn._hist_packed_valid = keep
+
     def _ensure_gdn_prefill_scratch(self):
         """Allocate the PERSISTENT B=1 GDN prefill scratch once (idempotent).
 
@@ -1370,7 +1387,9 @@ class Qwen36Model:
             # (batched) ones, so save+restore the batched bindings and keep the scratch handles alive.
             saved = (dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state)
             dn.B = 1
-            dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
+            self._reset_state_keep_hist(
+                dn
+            )  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
             scratch.append((dn, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0))
             dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state = saved
         self._gdn_prefill_scratch = scratch
@@ -1822,7 +1841,12 @@ class Qwen36Model:
         # 1 = clone + slice/concat/copy row write (~600 small ops/request, ~28 ms); 2 = ttnn.fill_cache for the recurrent
         # state (one indexed in-place write per layer, no clone) + masked ttnn.where row write for the conv taps.
         try:
-            _dev_copy = int(os.environ.get("QWEN36_GDN_SLOT_DEVICE_COPY", "0") or 0)
+            # QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY (default 0 = the host round trip) is THIS path's knob. The device-side modes
+            # were measured to leave a served request's first decode steps on a stale conv window (the masked-where tap
+            # write does not land the row on the traced prefill's tile-padded outputs, and later requests still drifted
+            # from the eager decode even with a corrected row write), while the host path reproduces the eager decode
+            # request after request; the ~90 ms host copy per request buys exactness.
+            _dev_copy = int(os.environ.get("QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY", "0") or 0)
         except ValueError:
             _dev_copy = 0
         # QWEN36_PREFILL_LOGITS_FAST=1: read the [1, vocab] logits row from ONE device instead of all replicas.
@@ -1872,16 +1896,17 @@ class Qwen36Model:
                         ttnn.fill_cache(rec_b, rec_src, slot)  # in place: rec_b[slot] = scratch state
                         if rec_src is not dn.rec_state:
                             ttnn.deallocate(rec_src)
-                        mask = self._gdn_slot_row_mask(conv_b[0], slot)  # [1, B, 1] one-hot row
+                        # Conv taps through the same slice/concat/copy row write the host path uses (_write_index; consumes
+                        # the clone) -- NOT a broadcast ttnn.where over the tile-padded tensors the traced prefill leaves
+                        # behind, which did not land the row (measured on the batch branch: every layer's taps differed
+                        # from the scratch after the copy while the recurrent state matched).
                         for m in range(dn.K):
-                            src = dn.conv_states[m]
-                            if src.dtype != conv_b[m].dtype:
-                                src = ttnn.typecast(src, conv_b[m].dtype)
-                            new = ttnn.where(mask, src, conv_b[m])  # row `slot` <- src, other rows kept
-                            ttnn.copy(new, conv_b[m])
-                            ttnn.deallocate(new)
-                            if src is not dn.conv_states[m]:
-                                ttnn.deallocate(src)
+                            c = ttnn.clone(dn.conv_states[m])
+                            if c.dtype != conv_b[m].dtype:
+                                c_c = ttnn.typecast(c, conv_b[m].dtype)
+                                ttnn.deallocate(c)
+                                c = c_c
+                            dn._write_index(conv_b[m], c, slot, dim=1)
                     _t["prefill"] += _t2 - _t1
                     _t["logits"] += _t3 - _t2
                     _t["snapshot"] += _tp() - _t3
@@ -1956,8 +1981,6 @@ class Qwen36Model:
         try:
             prev_by_dn = {p[0]: p for p in prev}
             B = prev_by_dn[dn_states[0]][2].shape[0]
-            for slot in range(B):
-                self._gdn_slot_row_mask(prev_by_dn[dn_states[0]][3][0], slot)
             for dn in dn_states:
                 _, _, rec_b, conv_b = prev_by_dn[dn][:4]
                 rec_src = (
@@ -1966,16 +1989,15 @@ class Qwen36Model:
                 ttnn.fill_cache(rec_b, rec_src, 0)
                 if rec_src is not dn.rec_state:
                     ttnn.deallocate(rec_src)
-                mask = self._gdn_slot_row_mask(conv_b[0], 0)
-                for m in range(dn.K):
-                    src = dn.conv_states[m]
-                    if src.dtype != conv_b[m].dtype:
-                        src = ttnn.typecast(src, conv_b[m].dtype)
-                    new = ttnn.where(mask, src, conv_b[m])
-                    ttnn.copy(new, conv_b[m])
-                    ttnn.deallocate(new)
-                    if src is not dn.conv_states[m]:
-                        ttnn.deallocate(src)
+                # The tap row write (_write_index) has per-slot program shapes: compile every slot now.
+                for slot in range(B):
+                    for m in range(dn.K):
+                        c = ttnn.clone(dn.conv_states[m])
+                        if c.dtype != conv_b[m].dtype:
+                            c_c = ttnn.typecast(c, conv_b[m].dtype)
+                            ttnn.deallocate(c)
+                            c = c_c
+                        dn._write_index(conv_b[m], c, slot, dim=1)
         finally:
             self._unbind_gdn_prefill_scratch(prev)
         ttnn.synchronize_device(self.mesh_device)
@@ -3354,7 +3376,7 @@ class Qwen36Model:
             dn = layer.attention
             prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
             dn.B = bg
-            dn.reset_state()  # builds rec_state [bg,Nv,Dk,Dv], conv_states[*] [1,bg,D], carry, zero0
+            self._reset_state_keep_hist(dn)  # builds rec_state [bg,Nv,Dk,Dv], conv_states[*] [1,bg,D], carry, zero0
             dn._stable_state = True  # forward_prefill_batched writes state in place under this flag
         return prev
 
