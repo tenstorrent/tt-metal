@@ -40,35 +40,6 @@ KV_DEDUP_UNSTRIPE_MODE = os.environ.get("TT_MLA_KV_DEDUP_UNSTRIPE", "gather")
 # "none" is a DIAGNOSTIC: plain gather and no decode, so the slab reaches ring_mla rank-major.
 # Must produce wrong output -- if it does not, the decode is not taking effect.
 assert KV_DEDUP_UNSTRIPE_MODE in ("gather", "reader", "none"), KV_DEDUP_UNSTRIPE_MODE
-# A fabric only wraps the axis its torus flag names (see ccl_common.cpp get_axis_topology).
-_SNAKE_CLOSING_TORUS_CONFIGS = {
-    0: (ttnn.FabricConfig.FABRIC_2D_TORUS_Y, ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
-    1: (ttnn.FabricConfig.FABRIC_2D_TORUS_X, ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
-}
-
-
-def _snake_ring_can_close(mesh_shape) -> bool:
-    """Whether SOME snake orientation closes its ring on a direct physical hop.
-
-    Mirrors the orientation search in resolve_mesh_ring_plan (mesh_ring_plan.cpp). The ring order is a
-    boustrophedon, so its last device is (rows-1, 0) for a Row snake and (0, cols-1) for a Column one:
-    the closing edge always spans the WHOLE closing axis. That edge is a direct hop only when the axis
-    is a torus ring, or its extent is 2 -- in which case the "wrap" is just the neighbour. An odd extent
-    has no boustrophedon cycle at all and the op skips that orientation.
-
-    Checked here because the op does not degrade on an unclosable ring: it TT_FATALs
-    ("neighbor unicast requires a host-proved direct physical line/ring").
-
-    Conservative in one direction only: the fabric flag names an axis, but the closing link must also be
-    physically wired, which the op verifies (is_axis_wrap_wired) and Python cannot see."""
-    fabric_config = ttnn.get_fabric_config()
-    for closing_axis in (0, 1):
-        extent = mesh_shape[closing_axis]
-        if extent % 2 != 0:
-            continue
-        if extent == 2 or fabric_config in _SNAKE_CLOSING_TORUS_CONFIGS[closing_axis]:
-            return True
-    return False
 
 
 class ttMLA:
