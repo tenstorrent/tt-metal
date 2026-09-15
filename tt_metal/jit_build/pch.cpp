@@ -12,8 +12,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include <unistd.h>
-
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
@@ -75,7 +73,7 @@ std::string ensure_pch(
     // would truncate it, and a concurrent process could then build its .gch from the truncated
     // text: a PCH that GCC accepts but that holds nothing, so every later compile reparses the
     // standard headers while the cache looks populated.
-    const fs::path header_temp = fmt::format("{}.{}.tmp", header.string(), ::getpid());
+    const fs::path header_temp = utils::FileRenamer::generate_temp_path(header);
     fs::copy_file(umbrella, header_temp, fs::copy_options::overwrite_existing, ec);
     if (ec) {
         log_warning(tt::LogBuildKernels, "Skipping the shared PCH: cannot stage {}: {}", header.string(), ec.message());
@@ -112,7 +110,7 @@ std::string ensure_pch(
 
     // Compile to a private name and rename into place, so concurrent processes sharing one
     // cache cannot observe a half-written .gch.
-    const fs::path temp = fmt::format("{}.{}.tmp", gch.string(), ::getpid());
+    const fs::path temp = utils::FileRenamer::generate_temp_path(gch);
     args.push_back(temp.string());
 
     const std::string log_path = (dir / "build.log").string();
