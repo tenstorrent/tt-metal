@@ -68,10 +68,11 @@ ALWI void tile_regs_wait() {
  * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel
  * configuration.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
-    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
-    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+    PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
 
 // new APIs, TODO: migrate all kernels to these
@@ -79,13 +80,15 @@ ALWI void release_dst() {
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  */
-ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<DST_ACCUM_MODE>())); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>())); }
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release() {
-    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
 
 }  // namespace ckernel

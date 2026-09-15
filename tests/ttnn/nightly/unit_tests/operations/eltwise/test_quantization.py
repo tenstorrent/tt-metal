@@ -651,10 +651,103 @@ def test_requantize_uint8_upper_saturation(device):
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
-@pytest.mark.parametrize("in_dtype,in_q_max", [(ttnn.int32, 127), (ttnn.uint8, 255)])
-@pytest.mark.parametrize("out_dtype,out_q_max", [(ttnn.int32, 127), (ttnn.uint8, 255)])
-def test_requant_uint8_mixed_dtype_per_tensor_2d(device, in_dtype, in_q_max, out_dtype, out_q_max):
-    """Test requant across int32/uint8 input and output dtype combinations (per-tensor)"""
+@pytest.mark.parametrize("x0", [32, 128])
+@pytest.mark.parametrize("x1", [32, 128])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_quant_dequant_requant_int8_per_tensor_2d(device, x0, x1, input_dtype):
+    """Test quantize, dequantize and requantize (per-tensor) for int8"""
+    torch.manual_seed(0)
+    input_tr = torch.rand(x0, x1, dtype=torch.float32)
+    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
+
+    quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.qint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.int8)
+    assert quantized_tt.dtype == ttnn.int8
+    result_q = ttnn.to_torch(quantized_tt)
+    check_pcc(quantized_tr.int_repr(), result_q, False)
+    check_match_ratio(quantized_tr, result_q, ttnn.int8)
+
+    dequantized_tr = torch.dequantize(quantized_tr)
+    dequantized_tt = ttnn.dequantize(quantized_tt, scale, zero_point, dtype=input_dtype)
+    result_dq = ttnn.to_torch(dequantized_tt)
+    check_pcc(dequantized_tr, result_dq, False)
+    check_match_ratio(dequantized_tr, result_dq, input_dtype)
+
+    scale_r, zero_point_r = calculate_scale_zero_point_per_tensor(input_tr, -100, 100)
+    requantized_tt = ttnn.requantize(quantized_tt, scale, zero_point, scale_r, zero_point_r, dtype=ttnn.int8)
+    assert requantized_tt.dtype == ttnn.int8
+    rederequantized_tt = ttnn.dequantize(requantized_tt, scale_r, zero_point_r, dtype=input_dtype)
+    result_rq = ttnn.to_torch(rederequantized_tt)
+    check_pcc(input_tr, result_rq, True)
+    check_match_ratio(input_tr, result_rq, input_dtype)
+
+
+def test_quantize_int8_saturation(device):
+    """Test quantize int8 saturation at both ends, to -128 and 127"""
+    input_tr = torch.tensor(
+        [
+            [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 5.0],
+            [0.0, -0.2, -0.4, -0.6, -0.8, -1.0, -2.0, -5.0],
+        ],
+        dtype=torch.float32,
+    )
+    scale, zero_point = 1.0 / 127.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), -128, 127).to(torch.int8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.int8)
+    assert out_tt.dtype == ttnn.int8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize(
+    "in_dtype,q_values,in_scale",
+    [
+        (ttnn.int32, [0, 50, 100, 120, 127, 200, 1000, -50, -100, -120, -127, -200, -1000], 1.0),
+        (ttnn.int8, [-128, -100, -32, -1, 0, 1, 32, 100, 127], 4.0),
+    ],
+)
+def test_requantize_int8_output_saturation(device, in_dtype, q_values, in_scale):
+    """Test requantize saturating both ends of an int8 output, from an int32 and an int8 input"""
+    q_in = torch.tensor([q_values], dtype=torch.int32 if in_dtype == ttnn.int32 else torch.int8)
+    in_zp, out_scale, out_zp = 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale + out_zp), -128, 127).to(
+        torch.int8
+    )
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.int8)
+    assert out_tt.dtype == ttnn.int8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_dequantize_int8_edge_cases(device):
+    """Test dequantize on fixed int8 boundary values against the exact float output"""
+    q_in = torch.tensor([[-128, -100, -1, 0, 1, 100, 127]], dtype=torch.int8)
+    scale, zero_point = 0.5, -10
+    expected = (q_in.to(torch.float32) - zero_point) * scale
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.dequantize(q_in_tt, scale, zero_point, dtype=ttnn.float32)
+    assert out_tt.dtype == ttnn.float32
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize(
+    "in_dtype,in_q_max",
+    [(ttnn.int32, 127), (ttnn.int8, 127), (ttnn.uint8, 255)],
+)
+@pytest.mark.parametrize(
+    "out_dtype,out_q_max",
+    [(ttnn.int32, 127), (ttnn.int8, 127), (ttnn.uint8, 255)],
+)
+def test_requant_mixed_dtype_per_tensor_2d(device, in_dtype, in_q_max, out_dtype, out_q_max):
+    """Test requant across int32/int8/uint8 input and output dtype combinations (per-tensor)"""
     torch.manual_seed(0)
     input_tr = torch.rand(64, 64, dtype=torch.float32)
 
@@ -817,6 +910,59 @@ def test_dequantize_per_channel_scalar_zero_point_uint8(device, shape, out_dtype
 
 
 @pytest.mark.parametrize("shape", [(64, 96), (128, 128), (3, 64, 160)])
+@pytest.mark.parametrize("out_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("zero_point", [0, -128, 127])
+def test_dequantize_per_channel_scalar_zero_point_int8(device, shape, out_dtype, zero_point):
+    """Per-channel dequantize of an int8 input with a scalar zp: fused vs composite vs golden."""
+    torch.manual_seed(0)
+    q_tr = torch.randint(-128, 128, shape, dtype=torch.int32)
+    q_tt = ttnn.from_torch(q_tr.to(torch.int8), dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+
+    rank = len(shape)
+    for axis in range(-rank, rank):
+        axis_n = (axis + rank) % rank
+        axis_size = shape[axis_n]
+        scale_vec = torch.rand(axis_size, dtype=torch.float32) * 0.05 + 0.005
+        zp_vec = torch.full((axis_size,), zero_point, dtype=torch.int32)
+
+        scale_tt = ttnn.from_torch(scale_vec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        zp_vec_tt = ttnn.from_torch(zp_vec, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+        bshape = [1] * rank
+        bshape[axis_n] = axis_size
+        golden = (q_tr.to(torch.float32) - zero_point) * scale_vec.reshape(bshape)
+
+        dq_fused = ttnn.dequantize(q_tt, scale_tt, zero_point, axis=axis, dtype=out_dtype)
+        dq_comp = ttnn.dequantize(q_tt, scale_tt, zp_vec_tt, axis=axis, dtype=out_dtype)
+        dq_fused_tr = ttnn.to_torch(dq_fused)
+        check_pcc(ttnn.to_torch(dq_comp), dq_fused_tr, False)
+        check_dequant_matches_composite(ttnn.to_torch(dq_comp), dq_fused_tr, out_dtype)
+        check_pcc(golden, dq_fused_tr, False)
+        check_match_ratio(golden, dq_fused_tr, out_dtype)
+
+
+@pytest.mark.parametrize("shape", [(32, 128), (64, 96)])
+@pytest.mark.parametrize("scale", [0.5, 0.02])
+def test_quantize_int8_tensor_zero_point_saturates(device, shape, scale):
+    """quantize -> int8 through the composite must saturate, not collapse to the sign."""
+    torch.manual_seed(0)
+    x = torch.linspace(-300.0, 300.0, shape[0] * shape[1], dtype=torch.float32).reshape(shape)
+    xt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    zp_t = ttnn.from_torch(
+        torch.tensor([3], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    composite = ttnn.to_torch(ttnn.quantize(xt, scale, zp_t, dtype=ttnn.int8))
+    fast = ttnn.to_torch(ttnn.quantize(xt, scale, 3, dtype=ttnn.int8))
+    assert torch.equal(composite, fast), "tensor-zero-point quantize diverges from the fast path"
+
+    got = composite.to(torch.float32)
+    assert got.min() >= -128 and got.max() <= 127
+    # A sign-collapse regression shows up as the output taking only {-1, 0, 127}.
+    assert len(torch.unique(got)) > 3, f"output collapsed to {torch.unique(got).tolist()}"
+
+
+@pytest.mark.parametrize("shape", [(64, 96), (128, 128), (3, 64, 160)])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("zero_point", [0, 5, -7])
 def test_quantize_per_channel_scalar_zero_point(device, shape, input_dtype, zero_point):
@@ -863,7 +1009,8 @@ def test_quantize_per_channel_scalar_zero_point(device, shape, input_dtype, zero
 @pytest.mark.parametrize("shape", [(64, 96), (128, 128), (3, 64, 160)])
 @pytest.mark.parametrize("in_zero_point", [0, 5])
 @pytest.mark.parametrize("out_zero_point", [0, -7])
-def test_requantize_per_channel_scalar_zero_point(device, shape, in_zero_point, out_zero_point):
+@pytest.mark.parametrize("input_dtype", [ttnn.int32, ttnn.int8])
+def test_requantize_per_channel_scalar_zero_point(device, shape, in_zero_point, out_zero_point, input_dtype):
     """Requantize with per-channel scales and scalar zero-points.
 
     This combination is not a tensor-only per-channel requantize, so it decomposes into
@@ -874,7 +1021,7 @@ def test_requantize_per_channel_scalar_zero_point(device, shape, in_zero_point, 
     torch.manual_seed(0)
     # Bounded so that (q - z_in) * s_in / s_out + z_out cannot leave the int8 range.
     q_tr = torch.randint(-90, 91, shape, dtype=torch.int32)
-    q_tt = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    q_tt = ttnn.from_torch(q_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     rank = len(shape)
     for axis in range(-rank, rank):
@@ -897,13 +1044,28 @@ def test_requantize_per_channel_scalar_zero_point(device, shape, in_zero_point, 
         ratio = (in_scale_vec / out_scale_vec).reshape(bshape)
         golden = torch.round((q_tr.to(torch.float32) - in_zero_point) * ratio) + out_zero_point
 
-        rq_fused = ttnn.requantize(q_tt, in_scale_tt, in_zero_point, out_scale_tt, out_zero_point, axis=axis)
-        rq_comp = ttnn.requantize(q_tt, in_scale_tt, in_zp_tt, out_scale_tt, out_zp_tt, axis=axis)
-        rq_fused_tr = ttnn.to_torch(rq_fused)
-        check_pcc(golden, rq_fused_tr, False)
-        check_pcc(ttnn.to_torch(rq_comp), rq_fused_tr, True)
-        check_within_one_lsb(ttnn.to_torch(rq_comp), rq_fused_tr)
-        check_match_ratio(golden, rq_fused_tr.to(torch.float32), ttnn.float32)
+        rq_fused = ttnn.to_torch(
+            ttnn.requantize(q_tt, in_scale_tt, in_zero_point, out_scale_tt, out_zero_point, axis=axis)
+        )
+        rq_comp = ttnn.to_torch(ttnn.requantize(q_tt, in_scale_tt, in_zp_tt, out_scale_tt, out_zp_tt, axis=axis))
+        check_pcc(golden, rq_fused, False)
+        check_pcc(rq_comp, rq_fused, True)
+        check_within_one_lsb(rq_comp, rq_fused)
+        check_match_ratio(golden, rq_fused.to(torch.float32), ttnn.float32)
+
+        # int8 cannot widen with a plain typecast (#50401), so both routes above go through a
+        # scale-1 dequantize instead. int32 is the reference: the same values must requantize
+        # identically in either input dtype.
+        if input_dtype == ttnn.int8:
+            q_i32 = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+            rq_i32 = ttnn.to_torch(
+                ttnn.requantize(q_i32, in_scale_tt, in_zero_point, out_scale_tt, out_zero_point, axis=axis)
+            )
+            assert torch.equal(rq_fused, rq_i32), "int8 per-channel requantize diverges from int32"
+            rq_comp_i32 = ttnn.to_torch(
+                ttnn.requantize(q_i32, in_scale_tt, in_zp_tt, out_scale_tt, out_zp_tt, axis=axis)
+            )
+            assert torch.equal(rq_comp, rq_comp_i32), "int8 all-tensor per-channel requantize diverges from int32"
 
 
 def test_quantize_per_channel_scalar_zero_point_saturation(device):
@@ -945,50 +1107,149 @@ def test_quantize_per_channel_scalar_zero_point_saturation(device):
     assert comp_tr.abs().max().item() > 127
 
 
-# uint8 input combined with a tensor zero-point used to abort with
-#   "Input tensor A dtype DataType::UINT8 is not supported for binary operation BinaryOpType::SUB"
-# because the composite fallback subtracted the zero-point straight off the uint8 input, and SUB
-# has no uint8 operand support. The scalar-zero-point paths feed the DEQUANT LLK (which does take
-# uint8), and the per-channel composite used to widen to float32 first, so only the per-tensor
-# combination was broken; collapsing the per-channel branch into it made the widening mandatory.
-# Widening to int32 first makes it agree bit-for-bit with the same quantized values presented as
-# int32.
+NARROW_INPUT_DTYPES = [(ttnn.uint8, torch.uint8, 0, 256), (ttnn.int8, torch.int8, -128, 128)]
+
+
+@pytest.mark.parametrize("input_dtype,torch_dtype,q_lo,q_hi", NARROW_INPUT_DTYPES)
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("scale_dim", [0, 1])
 @pytest.mark.parametrize("zero_point", [0, 7, 255])
-def test_dequant_uint8_input_with_tensor_zero_point(device, output_dtype, scale_dim, zero_point):
+def test_dequant_narrow_input_with_tensor_zero_point(
+    device, input_dtype, torch_dtype, q_lo, q_hi, output_dtype, scale_dim, zero_point
+):
     torch.manual_seed(0)
     scale = 0.02
 
-    q_tr = torch.randint(0, 256, (2, 3, 64, 96), dtype=torch.int32)
-    q_uint8 = ttnn.from_torch(q_tr.to(torch.uint8), dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    q_tr = torch.randint(q_lo, q_hi, (2, 3, 64, 96), dtype=torch.int32)
+    q_narrow = ttnn.from_torch(q_tr.to(torch_dtype), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     q_int32 = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
     scale_arg = convert_scalar_to_ttnn_tensor(device, scale, scale_dim, ttnn.float32)
     zero_point_tt = convert_scalar_to_ttnn_tensor(device, zero_point, 1, ttnn.int32)
 
-    from_uint8 = ttnn.to_torch(ttnn.dequantize(q_uint8, scale_arg, zero_point_tt, dtype=output_dtype))
+    from_narrow = ttnn.to_torch(ttnn.dequantize(q_narrow, scale_arg, zero_point_tt, dtype=output_dtype))
     from_int32 = ttnn.to_torch(ttnn.dequantize(q_int32, scale_arg, zero_point_tt, dtype=output_dtype))
 
-    assert torch.equal(from_uint8, from_int32)
+    assert torch.equal(from_narrow, from_int32)
+
+    # int32 is only a reference, so also pin the absolute value. -128 is the byte the sign-magnitude
+    # misread collapses onto 0, and randint over the full range always covers it at this size.
+    if output_dtype == ttnn.float32:
+        assert torch.equal(from_narrow, (q_tr.to(torch.float32) - zero_point) * scale)
 
 
-# requantize with a tensor zero-point falls through to the dequantize composite, so a uint8
-# input hit the same abort one level down.
-@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint8])
-def test_requant_uint8_input_with_tensor_zero_point(device, output_dtype):
+@pytest.mark.parametrize("input_dtype,torch_dtype,q_lo,q_hi", NARROW_INPUT_DTYPES)
+@pytest.mark.parametrize("narrow_output", [False, True])
+def test_requant_narrow_input_with_tensor_zero_point(
+    device, input_dtype, torch_dtype, q_lo, q_hi, narrow_output, expect_error
+):
     torch.manual_seed(0)
     in_scale, in_zero_point = 0.02, 7
     out_scale, out_zero_point = 0.05, 3
 
-    q_tr = torch.randint(0, 256, (2, 3, 64, 96), dtype=torch.int32)
-    q_uint8 = ttnn.from_torch(q_tr.to(torch.uint8), dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    q_tr = torch.randint(q_lo, q_hi, (2, 3, 64, 96), dtype=torch.int32)
+    q_narrow = ttnn.from_torch(q_tr.to(torch_dtype), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     q_int32 = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
     in_zp_tt = convert_scalar_to_ttnn_tensor(device, in_zero_point, 1, ttnn.int32)
     out_zp_tt = convert_scalar_to_ttnn_tensor(device, out_zero_point, 1, ttnn.int32)
 
-    from_uint8 = ttnn.to_torch(ttnn.requantize(q_uint8, in_scale, in_zp_tt, out_scale, out_zp_tt, dtype=output_dtype))
+    output_dtype = input_dtype if narrow_output else ttnn.int32
+    # An int8 output is rejected here on purpose: reading int8 is handled, but the decomposed
+    # composite narrows with a typecast, which is not int8-safe (#50401). Pin the guard so that
+    # relaxing it has to come with QUANT-LLK narrowing.
+    if output_dtype == ttnn.int8:
+        with expect_error(RuntimeError, "only supports int32 output"):
+            ttnn.requantize(q_narrow, in_scale, in_zp_tt, out_scale, out_zp_tt, dtype=output_dtype)
+        return
+
+    from_narrow = ttnn.to_torch(ttnn.requantize(q_narrow, in_scale, in_zp_tt, out_scale, out_zp_tt, dtype=output_dtype))
     from_int32 = ttnn.to_torch(ttnn.requantize(q_int32, in_scale, in_zp_tt, out_scale, out_zp_tt, dtype=output_dtype))
 
-    assert torch.equal(from_uint8, from_int32)
+    assert torch.equal(from_narrow, from_int32)
+
+
+def test_quantize_tensor_zero_point_honors_memory_config(device):
+    """Composite (tensor zero-point) path must honor caller memory_config.
+
+    Regression for the DRAM-input / L1-output case: without forwarding
+    memory_config into the final typecast, the output incorrectly stays in DRAM.
+    """
+    torch.manual_seed(0)
+    input_tr = torch.rand(64, 128, dtype=torch.float32)
+    axis = 1
+    scale, zero_point = calculate_scale_zero_point_per_channel(input_tr, axis, -128, 127)
+
+    input_tt = ttnn.from_torch(
+        input_tr,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    scale_tt = ttnn.from_torch(scale, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    zero_point_tt = ttnn.from_torch(zero_point, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    quantized_tt = ttnn.quantize(
+        input_tt,
+        scale_tt,
+        zero_point_tt,
+        axis=axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    assert (
+        quantized_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
+    ), f"expected L1 output, got {quantized_tt.memory_config()}"
+
+
+@pytest.mark.parametrize(
+    "use_tensor_scale,axis",
+    [
+        (True, 1),  # Tensor+Tensor per-channel composite arm
+        (False, None),  # float+Tensor per-tensor composite arm
+    ],
+)
+def test_quantize_tensor_zero_point_honors_output_tensor(device, use_tensor_scale, axis):
+    """Composite path must write into a preallocated INT32 output_tensor."""
+    torch.manual_seed(0)
+    input_tr = torch.rand(64, 128, dtype=torch.float32)
+
+    input_tt = ttnn.from_torch(
+        input_tr,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if use_tensor_scale:
+        scale, zero_point = calculate_scale_zero_point_per_channel(input_tr, axis, -128, 127)
+        scale_arg = ttnn.from_torch(scale, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        zero_point_tt = ttnn.from_torch(zero_point, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
+        scale_arg = scale
+        zero_point_tt = convert_scalar_to_ttnn_tensor(device, zero_point, 1, ttnn.int32)
+
+    output_tt = ttnn.zeros(
+        input_tr.shape,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    quantized_tt = ttnn.quantize(
+        input_tt,
+        scale_arg,
+        zero_point_tt,
+        axis=axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_tensor=output_tt,
+    )
+    assert quantized_tt.buffer_address() == output_tt.buffer_address(), (
+        f"expected output to alias preallocated tensor "
+        f"(got {quantized_tt.buffer_address()} vs {output_tt.buffer_address()})"
+    )
+    assert (
+        quantized_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
+    ), f"expected L1 output, got {quantized_tt.memory_config()}"

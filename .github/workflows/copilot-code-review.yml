@@ -1,0 +1,39 @@
+name: "Copilot Code Review Setup Steps"
+
+# Pins Copilot code review to the environment it already uses today.
+#
+# Without this file, Copilot code review falls back to copilot-setup-steps.yml:
+# "If your repository does not have a copilot-code-review.yml file, Copilot code
+# review will use the copilot-setup-steps.yml file instead."
+# https://docs.github.com/en/copilot/how-tos/copilot-on-github/set-up-copilot/configure-runners
+#
+# Since copilot-setup-steps.yml is being pointed at an internal build runner and
+# the tt-metal CI build image, that fallback would silently drag code review onto
+# the build pool too. Code review runs on every PR and needs none of the
+# toolchain or ccache, so this file keeps it on ubuntu-latest.
+#
+# This is a no-op relative to current behaviour - it reproduces what
+# copilot-setup-steps.yml did before the coding-agent experiment.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-code-review.yml
+
+jobs:
+  # The job MUST be called 'copilot-setup-steps' even in this file.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install gh-aw extension
+        # Keep in lockstep with copilot-setup-steps.yml and with the version the
+        # repo's .lock.yml files were compiled with (v0.86.2).
+        uses: github/gh-aw-actions/setup-cli@6aab9e5b5c91c615506061f09bedd81a23babe3c # v0.86.2
+        with:
+          version: v0.86.2

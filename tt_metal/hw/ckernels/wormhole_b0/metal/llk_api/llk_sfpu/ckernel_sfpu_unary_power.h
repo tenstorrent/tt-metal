@@ -27,11 +27,12 @@ namespace sfpu {
  *
  * @param base The base value (sfpi::vFloat vector), can be any floating point number
  * @param pow The exponent/power value (sfpi::vFloat vector), can be any floating point number
- * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent >= 0 (skips zero-base check for optimization)
+ * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent >= 0 (zero base maps to 0 rather than NaN)
  *
  * @return sfpi::vFloat Result of base**pow
  *
  * Special Cases:
+ * - base = 0, pow > 0: Returns 0
  * - base = 0, pow < 0: Returns NaN (undefined)
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
@@ -114,14 +115,6 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
 
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
 
-    // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
-    if constexpr (!IS_POSITIVE_EXPONENT) {
-        v_if(abs_base == 0.f) {
-            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
-        }
-        v_endif;
-    }
-
     // Negative base handling (for both positive and negative exponents)
     v_if(base < 0.0f) {
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
@@ -142,6 +135,20 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
         v_endif;
     }
     v_endif;
+
+    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // Must follow the sign branch: SFPU `<` is sign-bit based, so v_if(base < 0)
+    // fires on -0 and would replace the 0 result with NaN for non-integer p.
+    // pow == 0 falls through the guard and keeps 1.
+    if constexpr (IS_POSITIVE_EXPONENT) {
+        v_if(abs_base == 0.f && pow > 0.f) { y = 0.0f; }
+        v_endif;
+    } else {
+        v_if(abs_base == 0.f) {
+            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+        }
+        v_endif;
+    }
 
     // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
     // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
@@ -295,14 +302,6 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
     sfpi::vFloat y = _sfpu_pow2_f32_accurate_hilo_(z_hi, z_lo);
 
-    // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
-    if constexpr (!IS_POSITIVE_EXPONENT) {
-        v_if(abs_base == 0.f) {
-            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
-        }
-        v_endif;
-    }
-
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
@@ -322,6 +321,20 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
         v_endif;
     }
     v_endif;
+
+    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // Must follow the sign branch: SFPU `<` is sign-bit based, so v_if(base < 0)
+    // fires on -0 and would replace the 0 result with NaN for non-integer p.
+    // pow == 0 falls through the guard and keeps 1.
+    if constexpr (IS_POSITIVE_EXPONENT) {
+        v_if(abs_base == 0.f && pow > 0.f) { y = 0.0f; }
+        v_endif;
+    } else {
+        v_if(abs_base == 0.f) {
+            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+        }
+        v_endif;
+    }
 
     return y;
 }

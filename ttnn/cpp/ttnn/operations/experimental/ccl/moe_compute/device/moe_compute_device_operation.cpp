@@ -187,12 +187,15 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         combine_data_parallel_cores);
 
     // dm1 auto-splits each ring A2A transfer into enough noc_async_write_one_packet calls
-    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step is even
-    // (required by the round-up formula used in MoeRingConfig::in2_tiles_per_step).
+    // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step matches
+    // the round-up formula used in MoeRingConfig::in2_tiles_per_step.
     const uint32_t tiles_per_step_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
+    const uint32_t tiles_per_step = moe_ring::even_stride_at_least_a2a_width(tiles_per_step_raw);
     TT_FATAL(
-        tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+        tiles_per_step >= moe_ring::W2_TILES_PER_A2A_ITER_W && tiles_per_step % 2 == 0,
+        "tiles_per_step ({}) must be even and >= W2_TILES_PER_A2A_ITER_W ({})",
+        tiles_per_step,
+        moe_ring::W2_TILES_PER_A2A_ITER_W);
 
     const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     TT_FATAL(

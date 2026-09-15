@@ -17,6 +17,15 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 from ttnn import replicate_tensor_to_mesh_mapper
 
 
+def get_batch_size_per_device_group(
+    batch_size: int, use_qk_fused: bool, num_devices: int, mesh_shape: Tuple[int, ...], shard_batch_to_mesh_dim: int
+) -> int:
+    batch_size_per_device_group = (
+        max(batch_size // mesh_shape[shard_batch_to_mesh_dim], 1) if num_devices == 32 else batch_size
+    )
+    return batch_size_per_device_group * (2 if use_qk_fused else 1)
+
+
 # Copied from DeepseekV3RotaryEmbedding: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py#L114
 class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, max_position_embeddings: int, base: float, device: Optional[Any] = None) -> None:
@@ -355,6 +364,7 @@ def get_rot_mats(
     rope_scaling: Optional[RopeScaling],
     datatype: Any = ttnn.bfloat16,
     rot_mats_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    nope: bool = False,
 ) -> List[ttnn.Tensor]:
     cos_matrix, sin_matrix = compute_gather_cos_sin(
         dhead=head_dim,
@@ -362,6 +372,12 @@ def get_rot_mats(
         theta=theta,
         rope_scaling=rope_scaling,
     )
+    if nope:
+        # NoPE layers (e.g. EXAONE-4.x full-attention layers): rotary must be the
+        # identity. x*cos + rotate_half(x)*sin with cos=1, sin=0 is exactly x, for
+        # every rotary op variant, so keep the shapes/layout and neutralize content.
+        cos_matrix = torch.ones_like(cos_matrix)
+        sin_matrix = torch.zeros_like(sin_matrix)
 
     cos_matrix = ttnn.from_torch(
         cos_matrix,
@@ -753,6 +769,7 @@ class RotarySetup(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,
         prefetcher: Optional[Prefetcher] = None,
+        nope: bool = False,
     ) -> None:
         super().__init__()
 
@@ -767,12 +784,13 @@ class RotarySetup(LightweightModule):
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
-        if self.num_devices == 32:
-            self.batch_size_per_device_group = max(
-                self.doubled_batch_size // list(device.shape)[shard_batch_to_mesh_dim], 1
-            )
-        else:
-            self.batch_size_per_device_group = self.doubled_batch_size
+        self.batch_size_per_device_group = get_batch_size_per_device_group(
+            self.original_batch_size,
+            use_qk_fused,
+            self.num_devices,
+            tuple(device.shape) if self.is_mesh_device else (),
+            shard_batch_to_mesh_dim,
+        )
         # Always use (8, 8) on wormhole (compute_with_storage_grid_size returns (8, 9) on Galaxy)
         self.core_grid = (
             device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
@@ -788,6 +806,7 @@ class RotarySetup(LightweightModule):
             rope_scaling=rope_scaling,
             datatype=datatype,
             rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT,
+            nope=nope,
         )
 
         self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats(
@@ -798,6 +817,7 @@ class RotarySetup(LightweightModule):
             rope_scaling=rope_scaling,
             datatype=datatype,
             rot_mats_layout=ttnn.TILE_LAYOUT,
+            nope=nope,
         )
 
         def get_batch_grid(batch_size, core_grid, start_core, batch_size_per_device_group, prefetcher):

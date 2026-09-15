@@ -165,12 +165,12 @@ double time_avg_us(ttnn::distributed::MeshDevice* device, Fn&& fn) {
     for (uint32_t i = 0; i < kNumWarmup; ++i) {
         fn();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < kNumMeasure; ++i) {
         fn();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t1 = std::chrono::high_resolution_clock::now();
     return std::chrono::duration<double, std::micro>(t1 - t0).count() / static_cast<double>(kNumMeasure);
 }

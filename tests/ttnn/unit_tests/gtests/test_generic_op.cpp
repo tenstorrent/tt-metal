@@ -1234,7 +1234,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         ttnn::global_semaphore::create_global_semaphore(mesh_device_.get(), available_cores, 0),
         ttnn::global_semaphore::create_global_semaphore(mesh_device_.get(), available_cores, 0),
     };
-    tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device_, std::nullopt, {});
 
     // Fixed core layout for all devices
     CoreCoord mux_fwd_core = {0, 0};

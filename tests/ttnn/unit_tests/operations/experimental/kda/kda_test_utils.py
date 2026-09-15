@@ -3,8 +3,10 @@
 """Dependency-light numerical assertions shared by KDA tests."""
 
 from __future__ import annotations
+from collections.abc import Callable, Sequence
 
 import torch
+import ttnn
 
 
 def _finiteness(name: str, tensor: torch.Tensor) -> tuple[list[str], str]:
@@ -87,3 +89,63 @@ def assert_bit_identical(expected: torch.Tensor, actual: torch.Tensor, *, name: 
     actual_bytes = actual.detach().contiguous().reshape(-1).view(torch.uint8)
     if not torch.equal(expected_bytes, actual_bytes):
         raise AssertionError(f"{name} bit patterns differ")
+
+
+def collect_accuracy_and_determinism_results(
+    device: ttnn.Device,
+    run: Callable[[], Sequence[ttnn.Tensor]],
+    *,
+    count: int = 3,
+) -> tuple[tuple[ttnn.Tensor, ...], tuple[torch.Tensor, ...], torch.Tensor]:
+    """Run repeatedly, retaining only first outputs and one device-side mismatch marker."""
+    if count <= 1:
+        raise ValueError("count must be greater than one")
+
+    reference_outputs = tuple(run())
+    if not reference_outputs:
+        raise ValueError("run must return at least one output")
+    mismatch_scratch = tuple(
+        ttnn.empty(
+            output.shape,
+            dtype=ttnn.bfloat16,
+            layout=output.layout,
+            device=device,
+            memory_config=output.memory_config(),
+        )
+        for output in reference_outputs
+    )
+    mismatch_marker = None
+    for _ in range(1, count):
+        outputs = tuple(run())
+        if len(outputs) != len(reference_outputs):
+            for output in outputs:
+                ttnn.deallocate(output)
+            raise ValueError("run returned a different number of outputs")
+        for reference, output, scratch in zip(reference_outputs, outputs, mismatch_scratch, strict=True):
+            if (
+                output.shape != reference.shape
+                or output.dtype != reference.dtype
+                or output.layout != reference.layout
+                or output.memory_config() != reference.memory_config()
+            ):
+                for repeat_output in outputs:
+                    ttnn.deallocate(repeat_output)
+                raise ValueError("run returned output with different metadata")
+            ttnn.ne(reference, output, dtype=ttnn.bfloat16, output_tensor=scratch)
+            current_mismatch = ttnn.max(scratch)
+            ttnn.deallocate(output)
+            if mismatch_marker is None:
+                mismatch_marker = current_mismatch
+            else:
+                updated_marker = ttnn.maximum(mismatch_marker, current_mismatch)
+                ttnn.deallocate(mismatch_marker)
+                ttnn.deallocate(current_mismatch)
+                mismatch_marker = updated_marker
+
+    assert mismatch_marker is not None
+    reference_outputs_host = tuple(ttnn.to_torch(output).clone() for output in reference_outputs)
+    mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
+    for scratch in mismatch_scratch:
+        ttnn.deallocate(scratch)
+    ttnn.deallocate(mismatch_marker)
+    return reference_outputs, reference_outputs_host, mismatch_marker_host

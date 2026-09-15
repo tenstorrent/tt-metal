@@ -122,7 +122,7 @@ struct EltwiseAdd {
             // ================================================================
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
 
-            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::cb_in0, CTArgs::cb_in1);
+            reconfig_full_operand(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
             add_init(CTArgs::cb_in0, CTArgs::cb_in1);
 
