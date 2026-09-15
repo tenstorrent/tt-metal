@@ -245,10 +245,8 @@ constexpr uint32_t cb_key_operand = cb_key;
 constexpr uint32_t cb_key_operand_t = tt::CBIndex::c_16;  // the same block, transposed, for dQ^T
 constexpr uint32_t cb_value = tt::CBIndex::c_2;
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_3;
-// L and D as they travel: one value per row in column 0. Not read here --
-// the row-layout copies below are -- but popped so the slots turn over.
-constexpr uint32_t cb_lse = tt::CBIndex::c_4;
-constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
+// L and D as loaded, one value per row in column 0, are dataflow-side
+// scratch (c_4, c_5); this kernel takes only the prepared tiles below.
 // L and -D with the block's 32 values in row 0, one tile per row tile. D
 // arrives negated because it seeds the dP^T accumulation: the matmul adds
 // V dO^T onto it, which leaves dP^T - D^T without a subtraction.
@@ -554,12 +552,20 @@ void kernel_main() {
         const bool diagonal = (DENSE_MODE == 0) && (pair.i == pair.j);
         // Where dQ_i stands in the relay. Inside a streak the packet carries
         // dQ^T from the previous consumer and the next consumer wants dQ^T
-        // back; at a streak start the seed came from DRAM as dQ, and at a
-        // streak end dQ goes back to DRAM as dQ. Without the relay every
-        // timestep is both.
+        // back; at a row's first streak start the seed came from DRAM as dQ,
+        // and at its last streak end dQ goes back to DRAM as dQ. Without the
+        // relay every timestep is both.
 #if COLUMN_RESIDENT
-        const bool seed_transposed = sched.producer(my_core, t).internal;
-        const bool emit_transposed = sched.next_consumer(pair.i, t) != kNoCore;
+        // A spill that a later streak of the same row will reload -- inside
+        // this launch -- stays in the packet's transposed tile order, so only
+        // a row's very first seed (the op's dQ input) and its very last spill
+        // (the op's dQ output) are transposed. The reloading core knows the
+        // order from the same schedule; the DRAM pages are the same either
+        // way, only the tiles' order within the block differs.
+        const bool seed_transposed =
+            sched.producer(my_core, t).internal || sched.is_later_streak_start(pair.i, t);
+        const bool emit_transposed =
+            sched.next_consumer(pair.i, t) != kNoCore || sched.has_later_active(pair.i, t);
 #else
         constexpr bool seed_transposed = false;
         constexpr bool emit_transposed = false;
@@ -618,17 +624,27 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("WAIT-PACKET");
-            cb_wait_front(cb_query, Bt * qWt);
-            cb_wait_front(cb_key, Bt * qWt);
-            cb_wait_front(cb_value, Bt * vWt);
-            cb_wait_front(cb_grad_output, Bt * vWt);
-            cb_wait_front(cb_neg_lse_row, Bt);
-            cb_wait_front(cb_neg_u_row, Bt);
-            cb_wait_front(cb_neg_lse_rem_row, Bt);
-            cb_wait_front(cb_neg_lse_rem, Bt);
-            cb_wait_front(cb_neg_u_rem, Bt);
-            cb_wait_front(cb_lse, Bt);
-            cb_wait_front(cb_u_scalar, Bt);
+            {
+                DeviceZoneScopedN("W-Q");
+                cb_wait_front(cb_query, Bt * qWt);
+            }
+            {
+                DeviceZoneScopedN("W-KV");
+                cb_wait_front(cb_key, Bt * qWt);
+                cb_wait_front(cb_value, Bt * vWt);
+            }
+            {
+                DeviceZoneScopedN("W-DO");
+                cb_wait_front(cb_grad_output, Bt * vWt);
+            }
+            {
+                DeviceZoneScopedN("W-ROWS");
+                cb_wait_front(cb_neg_lse_row, Bt);
+                cb_wait_front(cb_neg_u_row, Bt);
+                cb_wait_front(cb_neg_lse_rem_row, Bt);
+                cb_wait_front(cb_neg_lse_rem, Bt);
+                cb_wait_front(cb_neg_u_rem, Bt);
+            }
         }
 
         // ---- The score pass, one column of the score grid at a time (one
@@ -1015,8 +1031,6 @@ void kernel_main() {
 #endif
 #endif
         cb_pop_front(cb_grad_output, Bt * vWt);
-        cb_pop_front(cb_lse, Bt);
-        cb_pop_front(cb_u_scalar, Bt);
         cb_pop_front(cb_neg_lse_row, Bt);
         cb_pop_front(cb_neg_u_row, Bt);
         cb_pop_front(cb_neg_lse_rem_row, Bt);

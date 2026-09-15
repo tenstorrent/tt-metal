@@ -2348,15 +2348,85 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariantsWithTallBlocks) {
 // judged on: a 4x4 group at each block height (the profile's shape), the
 // whole 11x10 grid at each block height (the schedule's cap), two 55-core
 // groups, and d = 128. Endpoint variant, median of five enqueues.
+// The ring's own launches on one chip, through the op: four heads, a
+// 4096-row chunk pair on the zigzag layout (two 2048-row chunks), Bt = 4.
+// The diagonal step is the two causal triangles in one launch, the dense
+// step the block (1, 0). Median of five enqueues; with
+// TT_METAL_DEVICE_PROFILER=1 the zones say where a launch's time goes.
+// RING_LAUNCH_ROWS overrides the rows per chip, RING_LAUNCH_HEADS the heads.
+TEST(CyclicSdpaBwTimingTest, DISABLED_ProfileRingLaunch) {
+    using namespace ttml::metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    uint32_t rows = 4096;
+    uint32_t heads = 4;
+    if (const char* e = std::getenv("RING_LAUNCH_ROWS"); e != nullptr && *e != '\0') {
+        rows = static_cast<uint32_t>(std::atoi(e));
+    }
+    if (const char* e = std::getenv("RING_LAUNCH_HEADS"); e != nullptr && *e != '\0') {
+        heads = static_cast<uint32_t>(std::atoi(e));
+    }
+    uint32_t Bt = 4;
+    if (const char* e = std::getenv("RING_LAUNCH_BT"); e != nullptr && *e != '\0') {
+        Bt = static_cast<uint32_t>(std::atoi(e));
+    }
+    // RING_LAUNCH_KIND=diagonal or dense runs only that launch (for a profile).
+    const char* kind = std::getenv("RING_LAUNCH_KIND");
+    const std::string only = (kind != nullptr) ? kind : "";
+    const uint32_t d = 64;
+    const auto ref = make_reference_inputs_only(rows, d);
+    const auto q = ttml::core::from_xtensor(as_4d_repeated(ref.Q, heads), device);
+    const auto k = ttml::core::from_xtensor(as_4d_repeated(ref.K, heads), device);
+    const auto v = ttml::core::from_xtensor(as_4d_repeated(ref.V, heads), device);
+    const auto dO = ttml::core::from_xtensor(as_4d_repeated(ref.dO, heads), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.lse_tile, heads), device);
+    const auto u = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.u_tile, heads), device);
+    const xt::xarray<float> zeros = xt::zeros<float>({1u, heads, rows, d});
+    auto dq = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+    auto dk = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+    auto dv = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+    const auto time = [&](const char* name, AttentionMaskType mask, std::vector<uint32_t> rc, std::vector<uint32_t> cc) {
+        const auto once = [&]() {
+            cyclic_sdpa_bw(
+                q, k, v, dO, lse, u, Bt, /* use_barrier */ false, mask, /* accumulate */ true, dq, dk, dv,
+                /* max_groups */ 0, /* sequence_chunks */ 2, rc, cc);
+            tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        };
+        once();  // warm: compile
+        std::vector<double> samples;
+        for (int i = 0; i < 5; ++i) {
+            const auto t0 = std::chrono::steady_clock::now();
+            once();
+            samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() * 1e6);
+        }
+        std::sort(samples.begin(), samples.end());
+        std::cout << "  " << name << " heads=" << heads << " rows=" << rows << " Bt=" << Bt << ": " << samples[2]
+                  << " us (min " << samples[0] << ")\n";
+    };
+    if (only.empty() || only == "diagonal") {
+        time("diagonal step (0,0),(1,1) causal", AttentionMaskType::Causal, {0u, 1u}, {0u, 1u});
+    }
+    if (only.empty() || only == "dense") {
+        time("dense step (1,0)", AttentionMaskType::None, {1u}, {0u});
+    }
+    if (std::getenv("TT_METAL_DEVICE_PROFILER") != nullptr) {
+        // The device profiler flushes its zones on close.
+        ttml::autograd::ctx().close_device();
+    }
+}
+
 TEST(CyclicSdpaBwTimingTest, DISABLED_BenchRelay) {
     struct Shape {
         uint32_t C, w, h, Bt, d, groups;
     };
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     std::cout << "cyclic_sdpa_bw relay, endpoint variant, us (median of 5)\n";
+    // The last three are the ring's own launch shape at 4096 rows per chip
+    // on the zigzag layout: 2048-row chunks, Bt = 4, C = 8 -- alone, and
+    // eight such slices side by side as four heads x two chunk pairs run.
     for (const auto s : {Shape{16, 4, 4, 1, 64, 1}, Shape{16, 4, 4, 2, 64, 1}, Shape{16, 4, 4, 4, 64, 1},
                          Shape{16, 4, 4, 4, 128, 1}, Shape{55, 11, 5, 2, 64, 2}, Shape{55, 11, 5, 4, 64, 2},
-                         Shape{110, 11, 10, 1, 64, 1}, Shape{110, 11, 10, 2, 64, 1}, Shape{110, 11, 10, 4, 64, 1}}) {
+                         Shape{110, 11, 10, 1, 64, 1}, Shape{110, 11, 10, 2, 64, 1}, Shape{110, 11, 10, 4, 64, 1},
+                         Shape{8, 2, 4, 4, 64, 1}, Shape{8, 2, 4, 4, 64, 8}, Shape{8, 2, 4, 2, 64, 8}}) {
         if (s.w > grid.x || s.h > grid.y) {
             continue;
         }
