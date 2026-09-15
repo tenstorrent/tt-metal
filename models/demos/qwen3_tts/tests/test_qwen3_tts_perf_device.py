@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""End-to-end performance gate for qwen3_tts on Wormhole.
+"""End-to-end performance gate for qwen3_tts on Wormhole and Blackhole.
 
 Runs the full TTS demo (warmup + trace capture + inference) once per module and
 asserts two timings from the inference pass:
@@ -10,16 +10,18 @@ asserts two timings from the inference pass:
 
 Warmup and trace-capture cost are excluded — only the inference numbers are checked.
 
-The steady frame is goldened PER SKU, because N150 and N300 are not the same speed
-and one band cannot hold both: N300 runs the frame faster (its matmuls are half the
-size) but noisier (per-layer CCLs), while N150 is slower and almost perfectly
-repeatable. See STEADY_GOLDEN_MS. The SKU test that does not match MESH_DEVICE
-skips, so exactly one steady gate runs per invocation.
+The steady frame is goldened PER SKU, because the SKUs are not the same speed and one
+band cannot hold them: N300 runs the frame faster (its matmuls are half the size) but
+noisier (per-layer CCLs), N150 is slower and almost perfectly repeatable, and P150
+(Blackhole) is faster than both. See STEADY_GOLDEN_MS. The SKU tests that do not match
+this run skip, so exactly one steady gate runs per invocation.
 
-Run:
+Run (the SKU is detected from the arch; MESH_DEVICE overrides it):
     MESH_DEVICE=N300 pytest -s -v models/demos/qwen3_tts/tests/test_qwen3_tts_perf_device.py
     MESH_DEVICE=N150 pytest -s -v models/demos/qwen3_tts/tests/test_qwen3_tts_perf_device.py
+    pytest -s -v models/demos/qwen3_tts/tests/test_qwen3_tts_perf_device.py   # P150
 """
+
 import os
 from pathlib import Path
 
@@ -30,11 +32,33 @@ import pytest
 # bound covers both SKUs (N150 prefills slightly faster than N300).
 PREFILL_MS_UPPER_BOUND = 22.0
 
-# Which SKU this run measures. MESH_DEVICE is the same knob the demo uses to pick its
-# mesh shape (N150=(1,1), N300=(1,2), T3K=(1,8)); unset selects the legacy single-chip
-# ttnn.open_device path, which takes the same is_n150() fast paths as a 1x1 mesh and is
-# therefore goldened as N150.
-SKU = os.environ.get("MESH_DEVICE") or "N150"
+
+def _detect_sku() -> str:
+    """Which SKU this run measures.
+
+    MESH_DEVICE is the same knob the demo uses to pick its mesh shape (N150=(1,1),
+    N300=(1,2), T3K=(1,8)), so an explicit setting always wins. Unset selects the
+    legacy single-chip ttnn.open_device path, and which golden that deserves depends
+    on the ARCH, not on the env: a Blackhole P150 also runs unset, and used to be
+    measured against the Wormhole N150 golden — it failed for being ~4.4 ms too FAST,
+    which is why this is derived rather than defaulted. ttnn.get_arch_name() reads the
+    arch without opening a device, so it is safe at import time where the skipif marks
+    below are evaluated; if it cannot (no device visible), fall back to the old default.
+    """
+    explicit = os.environ.get("MESH_DEVICE")
+    if explicit:
+        return explicit
+    try:
+        from models.common.utility_functions import is_blackhole
+
+        if is_blackhole():
+            return "P150"
+    except Exception:
+        pass
+    return "N150"
+
+
+SKU = _detect_sku()
 
 # Steady AR-step ms per SKU: (expected ms/frame, fractional margin). The band is
 # BIDIRECTIONAL — a faster model breaks it too, so re-golden rather than widen.
@@ -47,9 +71,15 @@ SKU = os.environ.get("MESH_DEVICE") or "N150"
 #   N300  faster per frame (each chip's matmuls are half the size) but noisy, because
 #         every layer carries collectives whose small-payload timings swing; hence the
 #         looser margin. Take medians, not single runs, when re-goldening this one.
+#   P150  Blackhole, single chip. Fastest of the three and, like N150, no CCLs in the
+#         layer, so it is repeatable and takes the same tight margin. Goldened from the
+#         median of 5 fresh-process runs (35.06 / 35.31 / 35.37 / 35.41 / 35.63 ms):
+#         median 35.37, full spread 1.6 %, worst deviation from the median 0.9 %. The
+#         3 % band is [34.34, 36.46], which clears the observed range by ~0.7 ms a side.
 STEADY_GOLDEN_MS = {
     "N150": (39.8, 0.03),
     "N300": (37.9, 0.05),
+    "P150": (35.4, 0.03),
 }
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -103,11 +133,16 @@ def _assert_steady_ms(demo_run, sku: str) -> None:
     )
 
 
-@pytest.mark.skipif(SKU != "N150", reason=f"N150 steady golden; this run is MESH_DEVICE={SKU}")
+@pytest.mark.skipif(SKU != "N150", reason=f"N150 steady golden; this run is {SKU}")
 def test_steady_ms_per_frame_n150(demo_run):
     _assert_steady_ms(demo_run, "N150")
 
 
-@pytest.mark.skipif(SKU != "N300", reason=f"N300 steady golden; this run is MESH_DEVICE={SKU}")
+@pytest.mark.skipif(SKU != "N300", reason=f"N300 steady golden; this run is {SKU}")
 def test_steady_ms_per_frame_n300(demo_run):
     _assert_steady_ms(demo_run, "N300")
+
+
+@pytest.mark.skipif(SKU != "P150", reason=f"P150 steady golden; this run is {SKU}")
+def test_steady_ms_per_frame_p150(demo_run):
+    _assert_steady_ms(demo_run, "P150")
