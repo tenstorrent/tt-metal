@@ -144,7 +144,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const bool controlled_wrap = in.wrap_indicator.has_value();
     const bool segmented_summary = summary && attrs.emit_tail_summaries;
     const uint32_t summary_wrap_kv = summary && controlled_wrap ? Vt : 1;
-    const uint32_t controlled_wrap_kv = controlled_wrap ? kv : 1;
+    // Recurrent wrap consumes a full tail state even without a device indicator.
+    const uint32_t tail_state_tiles = (segmented_summary || (!summary && attrs.wrap_chunk != 0)) ? kv : 1;
     constexpr uint32_t controlled_wrap_k = 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(state_dfb_name, kv, fp32),
@@ -171,7 +172,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         // summary and recurrent wrap payload simultaneously.
         make_dfb(summary_head_output_dfb_name, summary_wrap_kv, fp32),
         make_dfb(summary_head_state_dfb_name, summary_wrap_kv, fp32),
-        make_dfb(tail_state_dfb_name, controlled_wrap_kv, fp32),
+        make_dfb(tail_state_dfb_name, tail_state_tiles, fp32),
         make_dfb(wrap_mask_dfb_name, controlled_wrap_k, fp32),
         make_dfb(wrap_control_dfb_name, 1, fp32),
         make_dfb(summary_identity_tile_dfb_name, 1, fp32),
