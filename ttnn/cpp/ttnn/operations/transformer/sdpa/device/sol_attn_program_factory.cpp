@@ -750,7 +750,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
         k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
         static_cast<uint32_t>(is_windowed),           // arg 34: K-range narrowing (bounds from the ctrl CB)
-        args.chunk_keep_every,                        // arg 35: block-sparse chunk stride; 0 = dense
+        operation_attributes.chunk_keep_every,        // arg 35: block-sparse chunk stride; 0 = dense
     };
 
     std::map<std::string, std::string> defines_map;
