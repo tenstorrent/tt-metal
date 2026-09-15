@@ -22,6 +22,12 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
            fmt == DataFormat::MxFp6P || fmt == DataFormat::MxFp4 || fmt == DataFormat::MxInt8 ||
            fmt == DataFormat::MxInt4 || fmt == DataFormat::MxInt2;
 }
+
+// Float16_b -> Float32 does not need an SFPU op. By setting the Dest register mode to 32-bit, the datum
+// is already stored as a Float32 value in the Dest register, and the packer packs out Float32.
+inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
+    return src == DataFormat::Float16_b && dst == DataFormat::Float32;
+}
 }  // namespace detail
 #endif
 
@@ -80,7 +86,8 @@ ALWI void typecast_tile(uint32_t idst) {
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (effective_input_format != effective_output_format) {
+    constexpr bool is_sfpu_no_op = detail::_typecast_is_sfpu_no_op_(effective_input_format, effective_output_format);
+    if constexpr (effective_input_format != effective_output_format && !is_sfpu_no_op) {
         // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
@@ -415,7 +422,8 @@ ALWI void typecast_tile_init() {
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (effective_input_format != effective_output_format) {
+    constexpr bool is_sfpu_no_op = detail::_typecast_is_sfpu_no_op_(effective_input_format, effective_output_format);
+    if constexpr (effective_input_format != effective_output_format && !is_sfpu_no_op) {
         MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
     }
 #else
