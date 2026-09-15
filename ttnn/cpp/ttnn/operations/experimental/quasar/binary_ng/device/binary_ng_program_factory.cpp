@@ -446,8 +446,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // TODO: when handling mixed types, we must identify the appropriate dtype and pass it here to define the respective
     // LLK APIs
-    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
-                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    const auto gelu_fa = operation_attributes.gelu_fast_and_approximate;
+    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, gelu_fa)
+                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, gelu_fa);
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
