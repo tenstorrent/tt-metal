@@ -63,20 +63,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_tilize_init_wrapper_(
         formats.unpack_A_src, formats.unpack_A_dst, 1 /* ct_dim */, face_r_dim, false /* narrow_tile */, tilize_num_faces);
 
-#ifdef ARCH_WORMHOLE
     _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tilize_num_faces, face_r_dim);
-#else
-    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tilize_num_faces);
-#endif
 
     drain_cfg_writes();
 
     const std::uint32_t post_desc_word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    const std::uint32_t post_z_dim     = UPPER_HALFWORD(post_desc_word);
-    const std::uint32_t post_y_dim     = LOWER_HALFWORD(post_desc_word);
-    const std::uint32_t post_tile_x    = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
 
 #ifdef ARCH_WORMHOLE
+    const std::uint32_t post_tile_x = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
+
     // Tilize does not own the descriptor on WH: the word must be bit-identical.
     LLK_ASSERT(post_desc_word == pre_desc_word, "WH tilize uninit must leave the SrcA tile-descriptor Y/Z-dim word untouched");
 
@@ -85,17 +80,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // expectation would not be meaningful there.
     LLK_ASSERT(post_tile_x == canonical_unpA_tile_x_dim_cntx(face_r_dim), "tilize uninit must restore the canonical Tile_x_dim_cntx0");
 #else
+    const std::uint32_t post_z_dim = UPPER_HALFWORD(post_desc_word);
+    const std::uint32_t post_y_dim = LOWER_HALFWORD(post_desc_word);
+
     // BH tilize init writes the descriptor, so uninit must re-establish the
     // tilize operand's baseline; y_dim is still not tilize's to touch.
     LLK_ASSERT(post_z_dim == tilize_num_faces, "BH tilize uninit must re-establish descriptor Z-dim = tilize operand num_faces");
     LLK_ASSERT(post_y_dim == LOWER_HALFWORD(pre_desc_word), "tilize uninit must not disturb the descriptor Y-dim");
 #endif
-
-    // Silence unused-variable warnings on the arch whose asserts do not use these.
-    (void)post_desc_word;
-    (void)post_z_dim;
-    (void)post_y_dim;
-    (void)post_tile_x;
 }
 
 #endif
