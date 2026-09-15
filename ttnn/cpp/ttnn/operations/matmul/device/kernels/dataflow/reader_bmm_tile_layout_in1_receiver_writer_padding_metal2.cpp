@@ -1,107 +1,109 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file
-// serves the consumers still on the legacy API. Until the last of them migrates and this file is retired, changes here
-// likely belong in the fork too.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+#ifdef FUSE_OP_REDUCE_SCATTER
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
+
+// This is the Metal 2.0 fork of reader_bmm_tile_layout_in1_receiver_writer_padding.cpp, which still
+// sits beside it and still serves the matmul factories that have not been ported. Changes to either
+// copy should be evaluated for the other until the last legacy consumer migrates and the legacy copy
+// is retired.
+//
+// The binding and argument names below are this fork's interface: every factory that later ports
+// onto it inherits them and cannot rename them.
+
 void kernel_main() {
     // READER
-    uint32_t rt_args_idx = 0;
     // in1 mcast args
-    const uint32_t in1_mcast_sender_noc_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in1_mcast_sender_noc_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_mcast_sender_noc_x = get_arg(args::in1_mcast_sender_noc_x);
+    const uint32_t in1_mcast_sender_noc_y = get_arg(args::in1_mcast_sender_noc_y);
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
 
     // padding args (WRITER)
-    const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_num_nonzero_subblocks_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_num_nonzero_subblocks_h = get_arg(args::out_num_nonzero_subblocks_h);
+    const uint32_t out_last_num_nonzero_subblocks_h = get_arg(args::out_last_num_nonzero_subblocks_h);
+    const uint32_t out_last_subblock_h = get_arg(args::out_last_subblock_h);
+    const uint32_t padded_block_tiles_h_skip = get_arg(args::padded_block_tiles_h_skip);
 
-    const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_num_nonzero_subblocks_w = get_arg(args::out_num_nonzero_subblocks_w);
+    const uint32_t out_last_num_nonzero_subblocks_w = get_arg(args::out_last_num_nonzero_subblocks_w);
+    const uint32_t out_last_subblock_w = get_arg(args::out_last_subblock_w);
+    const uint32_t padded_subblock_tiles_addr_skip = get_arg(args::padded_subblock_tiles_addr_skip);
+    const uint32_t padded_block_tiles_w_skip = get_arg(args::padded_block_tiles_w_skip);
 
 #ifndef OUT_SHARDED
-    const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t last_num_blocks_h_dim = get_arg(args::last_num_blocks_h_dim);
+    const uint32_t last_num_blocks_w_dim = get_arg(args::last_num_blocks_w_dim);
 #endif
 
     // COMPILE TIME ARGS
     // READER
     // in1 block args
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(0);
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(1);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
+    constexpr auto num_blocks_inner_dim = get_arg(args::num_blocks_inner_dim);
+    constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
+    constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
     // in1 mcast args
     // batch args
-    constexpr uint32_t batch = get_compile_time_arg_val(6);
+    constexpr auto batch = get_arg(args::batch);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(7);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(12);
+    constexpr auto out_tensor_stride_w = get_arg(args::out_tensor_stride_w);
+    constexpr auto out_tensor_stride_h = get_arg(args::out_tensor_stride_h);
+    constexpr auto out_tensor_next_subblock_stride_w = get_arg(args::out_tensor_next_subblock_stride_w);
+    constexpr auto out_tensor_next_subblock_stride_h = get_arg(args::out_tensor_next_subblock_stride_h);
+    constexpr auto out_tensor_next_w_dim_block_stride = get_arg(args::out_tensor_next_w_dim_block_stride);
+    constexpr auto out_tensor_next_h_dim_block_stride = get_arg(args::out_tensor_next_h_dim_block_stride);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
+    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr auto out_subblock_tile_count = get_arg(args::out_subblock_tile_count);
 
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(16);  // if 0
+    constexpr auto MtNt = get_arg(args::MtNt);  // if 0
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
     // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
-
-    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
+    constexpr auto in3_block_w = get_arg(args::in3_block_w);
 #endif
-    constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(18));
 
-    constexpr auto out_args = TensorAccessorArgs<19>();
-    OpSignaler op_signaler;
-    if constexpr (fuse_op_reduce_scatter) {
-        op_signaler = OpSignaler(rt_args_idx);
-    }
-    // WRITER
-
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-
-    // WRITER
-    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
+#ifdef FUSE_OP_REDUCE_SCATTER
+    // NOT CONVERTED TO METAL 2.0 -- this block is preserved verbatim from the legacy kernel and is
+    // unreachable here: no Metal 2.0 factory may define FUSE_OP_REDUCE_SCATTER. OpSignaler consumes
+    // runtime arguments positionally through a `uint32_t& rt_args_idx` cursor, and Metal 2.0 kernels
+    // address their arguments by name, so there is no counter to hand it. Enabling this define will
+    // fail to compile (deliberately, and loudly) until OpSignaler gains a named-argument interface.
+    OpSignaler op_signaler = OpSignaler(rt_args_idx);
+#endif  // FUSE_OP_REDUCE_SCATTER
 
     const Noc noc;
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_out(dfb_id_out0);
-    Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    // dfb::in1 is the multicast destination for the weight blocks; dfb::out drains the compute
+    // kernel's packed output subblocks; dfb::bias receives the multicast bias row.
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+    Semaphore sender_sem(sem::in1_mcast_sender);
+    Semaphore receiver_sem(sem::in1_mcast_receiver);
 #ifdef FUSE_BIAS
-    DataflowBuffer dfb_in3(dfb_id_in3);
+    DataflowBuffer dfb_in3(dfb::bias);
 #endif
 
     // WRITER
@@ -109,7 +111,7 @@ void kernel_main() {
     const uint32_t output_single_tile_size_bytes = dfb_out.get_tile_size();
 
     // WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = TensorAccessor(tensor::out);
     // `s` is only consumed inside the `#ifndef OUT_SHARDED` write path below; mark it used so
     // sharded builds don't warn (-Wunused-but-set-variable).
     (void)s;
@@ -233,10 +235,10 @@ void kernel_main() {
         }
         out_tensor_start_tile_id += MtNt;
 
-        if (fuse_op_reduce_scatter) {
-            // Signal reduce_scatter to go
-            op_signaler.synchronize_workers_and_signal_op(0);
-        }
+#ifdef FUSE_OP_REDUCE_SCATTER
+        // Signal reduce_scatter to go
+        op_signaler.synchronize_workers_and_signal_op(0);
+#endif  // FUSE_OP_REDUCE_SCATTER
     }
 
 #ifdef OUT_SHARDED

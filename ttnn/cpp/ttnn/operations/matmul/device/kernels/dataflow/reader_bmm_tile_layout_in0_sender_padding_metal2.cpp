@@ -1,18 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// reader_bmm_tile_layout_in0_sender_padding_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -22,66 +16,75 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
+
+#ifdef FUSE_OP
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
+
+// This is the Metal 2.0 fork of reader_bmm_tile_layout_in0_sender_padding.cpp, which still sits
+// beside it and still serves the matmul factories that have not been ported. Changes to either copy
+// should be evaluated for the other until the last legacy consumer migrates and the legacy copy is
+// retired.
+//
+// The binding and argument names below are this fork's interface: every factory that later ports
+// onto it inherits them and cannot rename them.
+//
+// Three optional resource families are gated on preprocessor defines rather than on compile-time
+// argument values, because a Metal 2.0 binding token only exists when the host actually binds it:
+//   IN0_SHARDED                   -- in0 arrives in the resident dfb::in0 shard; no tensor binding
+//   IN0_EXTRACT_SHARD_SUB_BLOCKS  -- sub-blocks are pulled out of dfb::in0_sharded (implies IN0_SHARDED)
+//   SPARSITY                      -- the sparsity operand (dfb::sparsity + tensor::sparsity) is bound
+
 void kernel_main() {
-    uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
     // in0 mcast args
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg(args::in0_mcast_dest_noc_start_x);
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg(args::in0_mcast_dest_noc_start_y);
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg(args::in0_mcast_dest_noc_end_x);
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg(args::in0_mcast_dest_noc_end_y);
 
     // padding args
-    const uint32_t last_block_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t last_block_h = get_arg(args::last_block_h);
 
     // COMPILE TIME ARGS
     // in0 tensor args
-    constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_tensor_stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_tensor_next_inner_dim_block_stride = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_tensor_next_h_dim_block_stride = get_compile_time_arg_val(3);
+    constexpr auto in0_tensor_stride_w = get_arg(args::in0_tensor_stride_w);
+    constexpr auto in0_tensor_stride_h = get_arg(args::in0_tensor_stride_h);
+    constexpr auto in0_tensor_next_inner_dim_block_stride = get_arg(args::in0_tensor_next_inner_dim_block_stride);
+    constexpr auto in0_tensor_next_h_dim_block_stride = get_arg(args::in0_tensor_next_h_dim_block_stride);
     // in0 block args
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in0_block_h = get_compile_time_arg_val(5);
-    constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(7);
-    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(8);
+    constexpr auto in0_block_w = get_arg(args::in0_block_w);
+    constexpr auto in0_block_h = get_arg(args::in0_block_h);
+    constexpr auto in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
+    constexpr auto in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
+    constexpr auto in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
 
-    constexpr bool extract_shard_sub_blocks = static_cast<bool>(get_compile_time_arg_val(9));
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(11);
+    constexpr auto shard_width_in_tiles = get_arg(args::shard_width_in_tiles);
+    constexpr auto shard_height_in_tiles = get_arg(args::shard_height_in_tiles);
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(13);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(14);
+    constexpr auto num_blocks_inner_dim = get_arg(args::num_blocks_inner_dim);
+    constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
+    constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
+    constexpr auto in0_mcast_num_dests = get_arg(args::in0_mcast_num_dests);
+    constexpr auto in0_mcast_num_cores = get_arg(args::in0_mcast_num_cores);
     // batch args
-    constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
-    constexpr uint32_t in0_B = get_compile_time_arg_val(20);
-    constexpr uint32_t in1_B = get_compile_time_arg_val(21);
-    constexpr bool in0_reuse_in_CB = get_compile_time_arg_val(22) == 1;
+    constexpr auto MtKt = get_arg(args::MtKt);  // if 0
+    constexpr auto in0_B = get_arg(args::in0_B);
+    constexpr auto in1_B = get_arg(args::in1_B);
+    constexpr bool in0_reuse_in_dfb = get_arg(args::in0_reuse_in_dfb) == 1;
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(23);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(24);
+    constexpr auto batchB = get_arg(args::batchB);
+    constexpr auto sparsity_pagesize = get_arg(args::sparsity_pagesize);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = static_cast<bool>(get_compile_time_arg_val(25));
+    constexpr bool bcast_A = static_cast<bool>(get_arg(args::bcast_A));
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = static_cast<bool>(get_compile_time_arg_val(26));
-
-    constexpr bool fuse_op = static_cast<bool>(get_compile_time_arg_val(27));
-
-    constexpr auto in0_args = TensorAccessorArgs<28>();
-
-    constexpr auto sparsity_args = TensorAccessorArgs<decltype(in0_args)::next_compile_time_args_offset()>();
+    constexpr bool get_batch_from_reader = static_cast<bool>(get_arg(args::get_batch_from_reader));
 
     // Number of valid (non-zero sparsity) batches the receiver and compute kernels are configured to
     // process. When nnz is supplied (get_batch_from_reader == false), those kernels loop exactly
@@ -92,13 +95,12 @@ void kernel_main() {
     // known here at runtime, so we validate it on-device by counting the multicasts we actually issue and
     // asserting the contract holds -- surfacing a loud assert (under watcher) instead of a silent hang.
     // See https://github.com/tenstorrent/tt-metal/issues/45943.
-    [[maybe_unused]] constexpr uint32_t num_batch_compute =
-        get_compile_time_arg_val(decltype(sparsity_args)::next_compile_time_args_offset());
+    [[maybe_unused]] constexpr auto num_batch_compute = get_arg(args::num_batch_compute);
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
     // 0x2 is used to specify "IGNORE_BATCH" state, i.e. when the batch is not valid.
-    constexpr uint32_t IGNORE_BATCH = 0x2;
+    [[maybe_unused]] constexpr uint32_t IGNORE_BATCH = 0x2;
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -109,24 +111,27 @@ void kernel_main() {
     // broadcast (bcast_A) or already compact and advanced sequentially per iteration (!bcast_A).
     // Every factory that builds this kernel passes "num_active"; only the sparse matmul factory ever
     // sets it non-zero. 0 means not indexed, i.e. the unchanged dense sparsity-scan path.
-    constexpr uint32_t num_active = get_named_compile_time_arg_val("num_active");
+    constexpr auto num_active = get_arg(args::num_active);
     constexpr bool use_indices = num_active > 0;
     constexpr uint32_t batch_loop_lim = use_indices ? num_active : batchB_lim;
 
-    MatmulOpReceiver fused_op_receiver;
-    if constexpr (fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            true, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks_inner_dim,
-            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
-        );
-    }
+#ifdef FUSE_OP
+    // NOT CONVERTED TO METAL 2.0 -- this block is preserved verbatim from the legacy kernel and is
+    // unreachable here: no Metal 2.0 factory may define FUSE_OP. MatmulOpReceiver consumes runtime
+    // arguments positionally through a `uint32_t& rt_args_idx` cursor, and Metal 2.0 kernels address
+    // their arguments by name, so there is no counter to hand it. Enabling this define will fail to
+    // compile (deliberately, and loudly) until MatmulOpReceiver gains a named-argument interface.
+    MatmulOpReceiver fused_op_receiver = MatmulOpReceiver(
+        true, /* wait_for_op_signal */
+        rt_args_idx,
+        num_blocks_inner_dim,
+        in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+    );
+#endif  // FUSE_OP
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb::in0);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
+    // interleaved in0 buffer entries are sized to match (see the program factory). The NOC reads the
     // unpadded tile of data into each padded slot, and tiles are laid out / multicast at the padded
     // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
     constexpr uint32_t in0_aligned_tile_size_bytes =
@@ -138,12 +143,13 @@ void kernel_main() {
 #endif
 
     const Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    Semaphore<> sender_sem(get_compile_time_arg_val(15));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(16));
+    DataflowBuffer dfb_in0(dfb::in0);
+    Semaphore sender_sem(sem::in0_mcast_sender);
+    Semaphore receiver_sem(sem::in0_mcast_receiver);
 
 #ifdef IN0_SHARDED
-    // In case we need to send multiple blocks per shard, in0 sharded cb is cb2 and we extract the sub-blocks to cb0
+    // In case we need to send multiple blocks per shard, in0 sharded buffer is dfb::in0_sharded and we
+    // extract the sub-blocks to dfb::in0
     constexpr uint32_t shard_read_stride = shard_width_in_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
     constexpr uint32_t shard_num_tiles = shard_width_in_tiles * shard_height_in_tiles;
@@ -151,21 +157,22 @@ void kernel_main() {
         in0_tensor_next_h_dim_block_stride * in0_single_tile_size_bytes;
 
     uint32_t noc_shard_read_start_addr = 0;
-    if constexpr (extract_shard_sub_blocks) {
-        constexpr uint32_t dfb_id_in2 =
-            get_named_compile_time_arg_val("cb_in0_sharded");  // in0 sharded cb if extract_shard_sub_blocks
-        const DataflowBuffer dfb_in2(dfb_id_in2);
+#ifdef IN0_EXTRACT_SHARD_SUB_BLOCKS
+    {
+        const DataflowBuffer dfb_in2(dfb::in0_sharded);
         noc_shard_read_start_addr = dfb_in2.get_read_ptr();
     }
+#endif  // IN0_EXTRACT_SHARD_SUB_BLOCKS
 
 #else
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto s0 = TensorAccessor(tensor::in0);
 #endif  // IN0_SHARDED
 
+#ifdef SPARSITY
     // sparsity accessor
-    constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
-    DataflowBuffer dfb_sparsity(dfb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
+    DataflowBuffer dfb_sparsity(dfb::sparsity);
+    const auto s_sparsity = TensorAccessor(tensor::sparsity);
+#endif  // SPARSITY
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -178,23 +185,28 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 #endif  // SKIP_MCAST
 
-    uint32_t l1_write_addr_sparsity = 0;
+    [[maybe_unused]] uint32_t l1_write_addr_sparsity = 0;
+#ifdef SPARSITY
     if constexpr (batchB > 0 && !use_indices) {
         dfb_sparsity.reserve_back(1);
         l1_write_addr_sparsity = dfb_sparsity.get_write_ptr();
     }
+#endif  // SPARSITY
 
     // Counts the in0 multicasts actually issued (one per non-zero sparsity entry). Used to validate
     // count_nonzero(sparsity) == num_batch_compute when nnz is supplied (see num_batch_compute above).
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
     for (uint32_t b = 0; b < in0_B; ++b) {
+#ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
+#endif  // SPARSITY
 
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+#ifdef SPARSITY
             if constexpr (batchB > 0 && !use_indices) {
                 volatile auto is_batch_valid =
                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
@@ -238,6 +250,7 @@ void kernel_main() {
                     ASSERT(num_valid_batches <= num_batch_compute);
                 }
             }
+#endif  // SPARSITY
 
 #ifdef IN0_SHARDED
             uint32_t in0_tensor_current_h_dim_block_start_addr = noc_shard_read_start_addr;
@@ -250,10 +263,10 @@ void kernel_main() {
 #endif  // IN0_SHARDED
                     uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                        if constexpr (fuse_op) {
-                            fused_op_receiver.update_current_block_start_tile_id(
-                                block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
-                        }
+#ifdef FUSE_OP
+                        fused_op_receiver.update_current_block_start_tile_id(
+                            block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
+#endif  // FUSE_OP
 
                         // Operand 0
                         // Common for sharded and interleaved paths
@@ -267,7 +280,7 @@ void kernel_main() {
                             dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
 #endif                                                // SKIP_MCAST
 
-                        // Copy in0 block into CB, as the default kernel
+                        // Copy in0 block into the buffer, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
                         for (uint32_t h = 0; h < in0_block_h; ++h) {
                             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
@@ -285,7 +298,7 @@ void kernel_main() {
                                 if constexpr (in0_last_ktile_w > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
                                         noc.async_read_barrier();
-                                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                                        constexpr DataFormat in0_data_format = get_dataformat(dfb::in0);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(
                                             dfb_in0.get_write_ptr() + in0_write_offset);
                                     }
@@ -293,7 +306,7 @@ void kernel_main() {
                                 if constexpr (in0_last_ktile_h > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
                                         noc.async_read_barrier();
-                                        constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                                        constexpr DataFormat in0_data_format = get_dataformat(dfb::in0);
                                         pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(
                                             dfb_in0.get_write_ptr() + in0_write_offset);
                                     }
@@ -309,7 +322,8 @@ void kernel_main() {
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
 #else
-                        if constexpr (extract_shard_sub_blocks) {
+#ifdef IN0_EXTRACT_SHARD_SUB_BLOCKS
+                        {
                             uint32_t l1_write_addr_in0 = dfb_in0.get_write_ptr();
 
 #ifndef SKIP_MCAST
@@ -335,9 +349,10 @@ void kernel_main() {
                             in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
                             noc.async_read_barrier();
                         }
+#endif  // IN0_EXTRACT_SHARD_SUB_BLOCKS
 
                         {
-                            constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
+                            constexpr DataFormat in0_data_format = get_dataformat(dfb::in0);
                             const uint32_t in0_pad_base_addr = dfb_in0.get_write_ptr();
                             if constexpr (in0_last_ktile_w > 0) {
                                 if (block == num_blocks_inner_dim - 1) {
@@ -367,7 +382,7 @@ void kernel_main() {
                         sender_sem.wait(in0_mcast_num_dests);
                         sender_sem.set(0);
 
-                        // Now we have the block in the CB address, we can mcast to dests!
+                        // Now we have the block in the buffer's address, we can mcast to dests!
                         const MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
@@ -426,8 +441,8 @@ void kernel_main() {
         // 1 and in1_B > 1 in this case we originally had to replicate the in0 block for each batch, but with this
         // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
         // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
-        // CB so compute kernel thinks it has new data
-        if (in0_reuse_in_CB) {
+        // buffer so compute kernel thinks it has new data
+        if (in0_reuse_in_dfb) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
                     dfb_in0.reserve_back(in0_block_num_tiles);
@@ -438,6 +453,7 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 
+#ifdef SPARSITY
     // When nnz was supplied, the receiver and compute kernels loop exactly num_batch_compute times.
     // If we issued fewer multicasts than that (count_nonzero(sparsity) < num_batch_compute), those
     // kernels are now waiting on multicasts that will never arrive and the device would deadlock.
@@ -448,10 +464,11 @@ void kernel_main() {
         ASSERT(num_valid_batches == num_batch_compute);
     }
 
-    // For completeness, we empty the sparsity CB if it was reserved earlier
+    // For completeness, we empty the sparsity buffer if it was reserved earlier
     if constexpr (batchB > 0 && !use_indices) {
         dfb_sparsity.push_back(1);
         dfb_sparsity.wait_front(1);
         dfb_sparsity.pop_front(1);
     }
+#endif  // SPARSITY
 }

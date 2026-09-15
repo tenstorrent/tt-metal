@@ -1,18 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -20,81 +14,103 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
+
+#if defined(FUSE_OP_ALL_GATHER) || defined(FUSE_OP_REDUCE_SCATTER)
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#endif
+
+// This is the Metal 2.0 fork of reader_bmm_tile_layout_in1_sender_writer_padding.cpp, which still
+// sits beside it and still serves the matmul factories that have not been ported. Changes to either
+// copy should be evaluated for the other until the last legacy consumer migrates and the legacy copy
+// is retired.
+//
+// The binding and argument names below are this fork's interface: every factory that later ports
+// onto it inherits them and cannot rename them.
+//
+// Optional resource families are gated on preprocessor defines rather than on compile-time argument
+// values, because a Metal 2.0 binding token only exists when the host actually binds it:
+//   FUSE_BIAS / BIAS_SHARDED  -- dfb::bias, and tensor::bias on the non-sharded bias path
+//   IN1_SHARDED               -- in1 arrives in the resident dfb::in1 shard; no tensor binding
+//   IN1_DRAM_WIDTH_SHARDED    -- in1 is read bank-by-bank from DRAM using tensor::in1's base address
+//   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
+//   SPARSITY                  -- the sparsity operand (dfb::sparsity + tensor::sparsity) is bound
+//   OUT_SHARDED               -- output stays resident in dfb::out; the writer loop is compiled out
+//
+// The DRAM-width-sharded path reads a per-bank (stride_bytes, bank_id) list as runtime VARARGS: the
+// kernel reaches those by an index it advances two at a time, over a count that is itself a runtime
+// argument, so they are indexed-collection elements rather than distinct fields. Layout: entry 2*k
+// is bank k's stride in bytes, entry 2*k+1 is its bank id.
+
 void kernel_main() {
     // READER
-    uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
     // in1 mcast args
-    const uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-
-    // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_mcast_dest_noc_start_x = get_arg(args::in1_mcast_dest_noc_start_x);
+    const uint32_t in1_mcast_dest_noc_start_y = get_arg(args::in1_mcast_dest_noc_start_y);
+    const uint32_t in1_mcast_dest_noc_end_x = get_arg(args::in1_mcast_dest_noc_end_x);
+    const uint32_t in1_mcast_dest_noc_end_y = get_arg(args::in1_mcast_dest_noc_end_y);
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
 
     // padding args (READER)
-    const uint32_t last_block_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t last_block_w = get_arg(args::last_block_w);
     // padding args (WRITER)
-    const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_num_nonzero_subblocks_h = get_arg(args::out_num_nonzero_subblocks_h);
+    const uint32_t out_last_subblock_h = get_arg(args::out_last_subblock_h);
+    const uint32_t padded_block_tiles_h_skip = get_arg(args::padded_block_tiles_h_skip);
+    const uint32_t out_num_nonzero_subblocks_w = get_arg(args::out_num_nonzero_subblocks_w);
+    const uint32_t out_last_num_nonzero_subblocks_w = get_arg(args::out_last_num_nonzero_subblocks_w);
+    const uint32_t out_last_subblock_w = get_arg(args::out_last_subblock_w);
+    const uint32_t padded_subblock_tiles_addr_skip = get_arg(args::padded_subblock_tiles_addr_skip);
+    const uint32_t padded_block_tiles_w_skip = get_arg(args::padded_block_tiles_w_skip);
 
     // COMPILE TIME ARGS
     // READER
     // in1 tensor args
-    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(2);
-    constexpr uint32_t in1_tensor_next_w_dim_block_stride = get_compile_time_arg_val(3);
+    constexpr auto in1_tensor_stride_w = get_arg(args::in1_tensor_stride_w);
+    constexpr auto in1_tensor_stride_h = get_arg(args::in1_tensor_stride_h);
+    constexpr auto in1_tensor_next_block_stride = get_arg(args::in1_tensor_next_block_stride);
+    constexpr auto in1_tensor_next_w_dim_block_stride = get_arg(args::in1_tensor_next_w_dim_block_stride);
     // in1 block args
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_block_h = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(6);
+    constexpr auto in1_block_w = get_arg(args::in1_block_w);
+    constexpr auto in1_block_h = get_arg(args::in1_block_h);
+    constexpr auto in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);
+    constexpr auto num_blocks_inner_dim = get_arg(args::num_blocks_inner_dim);
+    constexpr auto num_blocks_w_dim = get_arg(args::num_blocks_w_dim);
+    constexpr auto num_blocks_h_dim = get_arg(args::num_blocks_h_dim);
 
     // in1 mcast args
-    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(12);
-    constexpr uint32_t in1_mcast_num_cores = get_compile_time_arg_val(13);
+    constexpr auto in1_mcast_num_dests = get_arg(args::in1_mcast_num_dests);
+    constexpr auto in1_mcast_num_cores = get_arg(args::in1_mcast_num_cores);
     // batch args
-    constexpr uint32_t KtNt = get_compile_time_arg_val(14);
-    constexpr uint32_t batch = get_compile_time_arg_val(15);
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(16);
+    constexpr auto KtNt = get_arg(args::KtNt);
+    constexpr auto batch = get_arg(args::batch);
+    constexpr auto bcast_B = get_arg(args::bcast_B);
     // sparsity args
-    constexpr uint32_t batchB = get_compile_time_arg_val(17);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(18);
+    constexpr auto batchB = get_arg(args::batchB);
+    constexpr auto sparsity_pagesize = get_arg(args::sparsity_pagesize);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(19);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(20);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(21);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(23);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(24);
+    constexpr auto out_tensor_stride_w = get_arg(args::out_tensor_stride_w);
+    constexpr auto out_tensor_stride_h = get_arg(args::out_tensor_stride_h);
+    constexpr auto out_tensor_next_subblock_stride_w = get_arg(args::out_tensor_next_subblock_stride_w);
+    constexpr auto out_tensor_next_subblock_stride_h = get_arg(args::out_tensor_next_subblock_stride_h);
+    constexpr auto out_tensor_next_w_dim_block_stride = get_arg(args::out_tensor_next_w_dim_block_stride);
+    constexpr auto out_tensor_next_h_dim_block_stride = get_arg(args::out_tensor_next_h_dim_block_stride);
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(26);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(27);
+    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
+    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
+    constexpr auto out_subblock_tile_count = get_arg(args::out_subblock_tile_count);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
+    constexpr auto MtNt = get_arg(args::MtNt);  // if 0
     // Don't need batch; same as batch from READER args
-    constexpr bool compact_output = get_compile_time_arg_val(32);
+    constexpr bool compact_output = get_arg(args::compact_output);
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -103,101 +119,87 @@ void kernel_main() {
     // operand. Each iteration gathers the weights of group indices[i] and writes its result to COMPACT
     // output slot i, so there is no sparsity scan and no skipped slot.
     //
-    // The id list rides in the sparsity operand's plumbing (accessor args, `sparsity_addr` runtime arg,
-    // sparsity DataflowBuffer): the sparsity mask itself is never read in this mode, so reusing those
-    // slots keeps the compile-time arg layout of this shared kernel unchanged.
+    // The id list rides in the sparsity operand's plumbing (tensor binding, sparsity DataflowBuffer):
+    // the sparsity mask itself is never read in this mode, so reusing those slots keeps this shared
+    // kernel's binding set unchanged.
     //
     // Every factory that builds this kernel passes "num_active"; only the sparse matmul factory ever
     // sets it non-zero. 0 means not indexed, i.e. the unchanged dense sparsity-scan path.
-    constexpr uint32_t num_active = get_named_compile_time_arg_val("num_active");
+    constexpr auto num_active = get_arg(args::num_active);
     constexpr bool use_indices = num_active > 0;
     constexpr uint32_t batch_loop_lim = use_indices ? num_active : batchB_lim;
 
+    const Noc noc;
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+    Semaphore sender_sem(sem::in1_mcast_sender);
+    Semaphore receiver_sem(sem::in1_mcast_receiver);
+
 #ifdef FUSE_BIAS
     // in3 mcast args
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in3_tensor_start_tile_id = get_arg(args::in3_tensor_start_tile_id);
 
-    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
+    constexpr auto in3_tensor_stride_w = get_arg(args::in3_tensor_stride_w);
 
-    constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
-    // Use the CB page size (padded to the DRAM alignment by the factory) for DRAM reads
+    DataflowBuffer dfb_in3(dfb::bias);
+    // Use the DFB entry size (padded to the DRAM alignment by the factory) for DRAM reads
     // and L1 write strides, NOT the raw tile size. On Blackhole, the DRAM read alignment
     // is 64B, so a sub-64B tile (e.g. 32B for a (1,16) bf16 bias tile) cannot be read
     // directly from DRAM, and 32B-strided L1 writes land at non-64B-aligned addresses
-    // that disagree with the 64B-aligned DRAM source. The factory pads the CB page to
-    // 64B; the unpacker still reads the actual 32B tile from the padded page via tile
-    // dims. For tiles already >= dram_alignment (e.g. 32x32 bf16 = 2048B), the page size
+    // that disagree with the 64B-aligned DRAM source. The factory pads the entry to
+    // 64B; the unpacker still reads the actual 32B tile from the padded entry via tile
+    // dims. For tiles already >= dram_alignment (e.g. 32x32 bf16 = 2048B), the entry size
     // equals the tile size, so this is a no-op. Mirrors how in0/in1 readers walk at the
     // aligned stride.
-    const uint32_t bias_single_tile_size_bytes = get_local_cb_interface(dfb_id_in3).fifo_page_size;
+    const uint32_t bias_single_tile_size_bytes = dfb_in3.get_entry_size();
 
 #ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
-    // Bias accessor will be defined later after TensorAccessor args
+    const auto s3 = TensorAccessor(tensor::bias);
 #endif  // BIAS_SHARDED
-#else
-    rt_args_idx += 2;  // Skip over placeholders
 #endif  // FUSE_BIAS
 #ifndef OUT_SHARDED
-    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t last_num_blocks_w_dim = get_arg(args::last_num_blocks_w_dim);
 #endif  // OUT_SHARDED
 
-    constexpr bool fuse_op_all_gather = static_cast<bool>(get_compile_time_arg_val(30));
-    constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(31));
-
-    MatmulOpReceiver fused_op_receiver;
-    OpSignaler op_signaler;
-    if constexpr (fuse_op_all_gather) {
-        fused_op_receiver = MatmulOpReceiver(
-            false, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks_inner_dim,
-            in1_block_h /* tiles_per_block (in the same dimension */
-        );
-    } else if constexpr (fuse_op_reduce_scatter) {
-        op_signaler = OpSignaler(rt_args_idx);
-    }
-
-    constexpr auto in1_args = TensorAccessorArgs<33>();
-    constexpr auto sparsity_args = TensorAccessorArgs<decltype(in1_args)::next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<decltype(sparsity_args)::next_compile_time_args_offset()>();
-#ifdef FUSE_BIAS
-    constexpr auto bias_args = TensorAccessorArgs<decltype(out_args)::next_compile_time_args_offset()>();
-    constexpr auto after_bias_offset = decltype(bias_args)::next_compile_time_args_offset();
-#else
-    constexpr auto after_bias_offset = decltype(out_args)::next_compile_time_args_offset();
-#endif  // FUSE_BIAS
+#ifdef FUSE_OP_ALL_GATHER
+    // NOT CONVERTED TO METAL 2.0 -- this block is preserved verbatim from the legacy kernel and is
+    // unreachable here: no Metal 2.0 factory may define FUSE_OP_ALL_GATHER. MatmulOpReceiver consumes
+    // runtime arguments positionally through a `uint32_t& rt_args_idx` cursor, and Metal 2.0 kernels
+    // address their arguments by name, so there is no counter to hand it. Enabling this define will
+    // fail to compile (deliberately, and loudly) until MatmulOpReceiver gains a named-argument
+    // interface.
+    MatmulOpReceiver fused_op_receiver = MatmulOpReceiver(
+        false, /* wait_for_op_signal */
+        rt_args_idx,
+        num_blocks_inner_dim,
+        in1_block_h /* tiles_per_block (in the same dimension */
+    );
+#endif  // FUSE_OP_ALL_GATHER
+#ifdef FUSE_OP_REDUCE_SCATTER
+    // NOT CONVERTED TO METAL 2.0 -- see the FUSE_OP_ALL_GATHER note above; OpSignaler has the same
+    // positional-runtime-argument interface and the same blocker.
+    OpSignaler op_signaler = OpSignaler(rt_args_idx);
+#endif  // FUSE_OP_REDUCE_SCATTER
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_WIDTH_SHARDED
-    const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx++)));
-    tt_l1_ptr uint32_t* current_dram_bank_id =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx++)));
+    const uint32_t vc = get_arg(args::vc);
+    const uint32_t num_dram_shards_to_read = get_arg(args::num_dram_shards_to_read);
+    const uint32_t dram_tensor_start_offset = get_arg(args::dram_tensor_start_offset);
 
-    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(after_bias_offset);
-    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(after_bias_offset + 1);
+    constexpr auto in1_dram_block_num_tiles = get_arg(args::in1_dram_block_num_tiles);
+    constexpr auto in1_block_w_dram_bytes = get_arg(args::in1_block_w_dram_bytes);
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifdef IN1_DRAM_HEIGHT_SHARDED
-    constexpr uint32_t in1_KtNt_per_batch = get_compile_time_arg_val(after_bias_offset);        // K*N tiles per batch
-    constexpr uint32_t in1_batches_per_bank = get_compile_time_arg_val(after_bias_offset + 1);  // batches per DRAM bank
-#endif  // IN1_DRAM_HEIGHT_SHARDED
+    constexpr auto in1_KtNt_per_batch = get_arg(args::in1_KtNt_per_batch);      // K*N tiles per batch
+    constexpr auto in1_batches_per_bank = get_arg(args::in1_batches_per_bank);  // batches per DRAM bank
+#endif                                                                          // IN1_DRAM_HEIGHT_SHARDED
 
-#ifdef FUSE_BIAS
-#ifndef BIAS_SHARDED
-    const auto s3 = TensorAccessor(bias_args, in3_tensor_addr);
-#endif  // BIAS_SHARDED
-#endif  // FUSE_BIAS
-
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
+    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb::in1);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in1 CB pages are sized to match (see the program factory). On the plain interleaved
+    // interleaved in1 buffer entries are sized to match (see the program factory). On the plain interleaved
     // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
     // multicast at the padded stride. No-op when already aligned. The sharded / DRAM-sharded paths
     // keep their natural (unpadded) stride.
@@ -210,17 +212,7 @@ void kernel_main() {
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 #endif
 
-    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
-
-    const Noc noc;
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_out(dfb_id_out0);
-    Semaphore<> sender_sem(get_compile_time_arg_val(10));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(11));
-#ifdef FUSE_BIAS
-    DataflowBuffer dfb_in3(dfb_id_in3);
-#endif
+    constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb::out);
 
 //  READER
 #ifdef IN1_SHARDED
@@ -229,24 +221,31 @@ void kernel_main() {
 #elif !defined(ENABLE_GLOBAL_CB)
     uint32_t l1_write_addr_in1;
 
-    [[maybe_unused]] const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+    [[maybe_unused]] const auto s1 = TensorAccessor(tensor::in1);
+    // The DRAM-sharded paths below address banks directly rather than paging through the accessor,
+    // so they need in1's raw base address. It comes off the binding, never through a runtime arg.
+    [[maybe_unused]] const uint32_t in1_tensor_addr = s1.get_bank_base_address();
 #endif  // IN1_SHARDED / ENABLE_GLOBAL_CB
 
 #ifdef ENABLE_GLOBAL_CB
+    // NOT CONVERTED TO METAL 2.0 -- a GlobalCircularBuffer ("remote CB") is not a DataflowBuffer and
+    // has no Metal 2.0 analog yet (GlobalDataflowBuffer is unimplemented), so this tensor-prefetcher
+    // path is preserved verbatim and no Metal 2.0 factory may define ENABLE_GLOBAL_CB.
     constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
-    const uint32_t in1_fifo_tiles = get_local_cb_interface(dfb_id_in1).fifo_num_pages;
+    const uint32_t in1_fifo_tiles = dfb_in1.get_total_num_entries();
 #endif
 
     //  WRITER
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = TensorAccessor(tensor::out);
     // `s` is only consumed inside the `#ifndef OUT_SHARDED` write path below; mark it used so
     // sharded builds don't warn (-Wunused-but-set-variable).
     (void)s;
 
+#ifdef SPARSITY
     // sparsity accessor
-    constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
-    DataflowBuffer dfb_sparsity(dfb_id_sparsity);
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
+    DataflowBuffer dfb_sparsity(dfb::sparsity);
+    const auto s_sparsity = TensorAccessor(tensor::sparsity);
+#endif  // SPARSITY
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -259,7 +258,8 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 #endif  // SKIP_MCAST
 
-    uint32_t l1_write_addr_sparsity = 0;
+    [[maybe_unused]] uint32_t l1_write_addr_sparsity = 0;
+#ifdef SPARSITY
     if constexpr (batchB > 0) {
         dfb_sparsity.reserve_back(1);
         l1_write_addr_sparsity = dfb_sparsity.get_write_ptr();
@@ -272,6 +272,7 @@ void kernel_main() {
         noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
     }
+#endif  // SPARSITY
 
 #ifdef IN1_DRAM_WIDTH_SHARDED
     constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
@@ -293,16 +294,19 @@ void kernel_main() {
         uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
+#ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
+#endif  // SPARSITY
 
         // Indexed/gather mode writes to compact output slots, so capture this outer batch's output
         // base and index it by the compact slot (the loop counter) each iteration.
         [[maybe_unused]] const uint32_t out_base_tile_id = out_tensor_start_tile_id;
 
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+#ifdef SPARSITY
             if constexpr (use_indices) {
                 // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
                 // compact output slot bB. Every iterated group is active, so nothing is skipped.
@@ -322,6 +326,7 @@ void kernel_main() {
                     continue;
                 }
             }
+#endif  // SPARSITY
 
             const uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
@@ -341,10 +346,10 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                        if constexpr (fuse_op_all_gather) {
-                            fused_op_receiver.update_current_block_start_tile_id(
-                                block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
-                        }
+#ifdef FUSE_OP_ALL_GATHER
+                        fused_op_receiver.update_current_block_start_tile_id(
+                            block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
+#endif  // FUSE_OP_ALL_GATHER
 #if defined(ENABLE_GLOBAL_CB)
                         // The tensor prefetcher pushes this receiver's K-blocks in natural order.
                         // Keep one block of lookahead: publish the current block to compute, then
@@ -364,7 +369,7 @@ void kernel_main() {
 
                         AllocatorBank<AllocatorBankType::DRAM> dram_bank;
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint32_t shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
+                            uint32_t shard_bank_id = get_vararg(next_bank_id_and_dram_stride_index + 1);
                             uint32_t shard_base_addr = in1_tensor_addr;
                             if (i == 0) {
                                 shard_base_addr += dram_tensor_start_offset;
@@ -378,8 +383,7 @@ void kernel_main() {
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr() + l1_write_addr_in1_offset;
                             uint32_t in1_block_w_dram =
-                                in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] /
-                                in1_single_tile_size_bytes;
+                                get_vararg(next_bank_id_and_dram_stride_index) / in1_single_tile_size_bytes;
 
                             for (uint32_t m = 0; m < in1_block_h; ++m) {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
@@ -398,8 +402,7 @@ void kernel_main() {
                                 l1_read_addr_in1 += in1_block_w_dram_bytes;
                                 l1_write_addr_in1 += in1_block_w_bytes;
                             }
-                            l1_write_addr_in1_offset +=
-                                in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index];
+                            l1_write_addr_in1_offset += get_vararg(next_bank_id_and_dram_stride_index);
                             next_bank_id_and_dram_stride_index += 2;
                         }
                         l1_read_addr_in1_offset += in1_dram_block_size_bytes;
@@ -446,7 +449,7 @@ void kernel_main() {
                         const uint64_t in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
-                        // Copy in1 block into CB, as the default kernel
+                        // Copy in1 block into the buffer, as the default kernel
                         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
                         for (uint32_t h = 0; h < in1_block_h; ++h) {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
@@ -477,7 +480,7 @@ void kernel_main() {
                         sender_sem.wait(in1_mcast_num_dests);
                         sender_sem.set(0);
 
-                        // Now we have the block in the CB address, we can mcast to dests!
+                        // Now we have the block in the buffer's address, we can mcast to dests!
                         const MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
@@ -550,9 +553,12 @@ void kernel_main() {
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
+                        // Bank-direct reads need bias's raw base address; it comes off the binding.
+                        const uint32_t in3_tensor_addr = s3.get_bank_base_address();
+
                         AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint32_t bias_shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
+                            uint32_t bias_shard_bank_id = get_vararg(next_bank_id_and_dram_stride_index + 1);
                             uint32_t bias_shard_base_addr = in3_tensor_addr;
                             if (i == 0) {
                                 // dram_tensor_start_offset is in in1 tile bytes; convert to
@@ -569,11 +575,10 @@ void kernel_main() {
 
                             uint32_t l1_read_addr_in3 = 0;
                             l1_write_addr_in3 = dfb_in3.get_write_ptr() + l1_write_addr_in3_offset;
-                            // in1_block_w_dram_stride_bytes is in in1 tile bytes, so divide
+                            // the stride vararg is in in1 tile bytes, so divide
                             // by in1_single_tile_size_bytes (not bias) to get the tile count.
                             uint32_t in3_block_w_dram =
-                                in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] /
-                                in1_single_tile_size_bytes;
+                                get_vararg(next_bank_id_and_dram_stride_index) / in1_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
                                 noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
@@ -593,7 +598,7 @@ void kernel_main() {
                         }
                         noc.async_read_barrier();
 #else
-                        // Copy in1 block into CB, as the default kernel
+                        // Copy in1 block into the buffer, as the default kernel
                         uint32_t in3_tensor_tile_id = in3_tensor_current_w_dim_block_tile_id;
                         for (uint32_t w = 0; w < in1_block_w; ++w) {
                             if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
@@ -620,7 +625,7 @@ void kernel_main() {
                         sender_sem.wait(in1_mcast_num_dests);
                         sender_sem.set(0);
 
-                        // Now we have the block in the CB address, we can mcast to dests!
+                        // Now we have the block in the buffer's address, we can mcast to dests!
                         const MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
@@ -750,10 +755,10 @@ void kernel_main() {
 #endif
         }
 
-        if (fuse_op_reduce_scatter) {
-            // Signal reduce_scatter to go
-            op_signaler.synchronize_workers_and_signal_op(0);
-        }
+#ifdef FUSE_OP_REDUCE_SCATTER
+        // Signal reduce_scatter to go
+        op_signaler.synchronize_workers_and_signal_op(0);
+#endif  // FUSE_OP_REDUCE_SCATTER
     }
 
 #ifdef OUT_SHARDED

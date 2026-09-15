@@ -144,10 +144,9 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
         std::vector<Tensor> matmul_output_tensors = {output_tensors.mm};
-        ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+        ttnn::prim::matmul_multi_core_reuse_mcast_2d_override_runtime_arguments_helper(
             program,
             shared_vars.matmul_shared_variables,
-            args.matmul_struct,
             {.input_tensors = {tensor_args.input, tensor_args.weight},
              .optional_input_tensors = {tensor_args.bias},
              .optional_output_tensors = {output_tensors.mm}},
