@@ -312,41 +312,32 @@ def _scan_chunks(
     return _ScanResult(output=output, final_state=final_states)
 
 
-def _distributed_fragment_prefix(
-    fragment_transforms: list[tuple[ttnn.Tensor, ttnn.Tensor]],
+def _distributed_prefix(
+    transform: _AffineTransform,
     initial_state: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    order: tuple[tuple[int, int], ...],
-    sp_size: int,
+    order: tuple[int, ...],
     compute_config: ttnn.DeviceComputeKernelConfig,
-) -> tuple[list[ttnn.Tensor], ttnn.Tensor]:
-    """Compose fragment affine summaries in chronological order.
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Compose one affine transform per chip in chronological order.
 
-    ``fragment_transforms`` holds this chip's summaries in local fragment order;
-    ``order`` lists ``(chip, fragment)`` chronologically. One fragment per chip is
-    the whole-partition case and reduces exactly to composing over SP rank order
-    when the boundary chip is rank zero.
-
-    Entry states are returned per local fragment, delivered by ``mesh_partition``
-    so each device receives only its own.
+    The entry tensor is stored by physical rank before mesh partitioning, while
+    the carry advances in chronological rank order. Return local entry and the
+    replicated final carry on each independent TP line.
     """
-    per_chip = len(fragment_transforms)
-    transform_a, transform_b = fragment_transforms[0]
+    transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
     value_dim = transform_b.shape[-1]
     output_memory = KDA_OUTPUT_MEMORY_CONFIG
     working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
 
-    packed_fragments = []
-    for fragment_a, fragment_b in fragment_transforms:
-        # Precision boundary: FP32 composition is transported as BF16.
-        transport_a = ttnn.typecast(fragment_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-        transport_b = ttnn.typecast(fragment_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
-        transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
-        transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
-        packed_fragments.append(ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory))
-    packed = packed_fragments[0] if per_chip == 1 else ttnn.concat(packed_fragments, dim=0, memory_config=output_memory)
+    # Precision boundary: FP32 composition is transported as BF16.
+    transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+    transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+    transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
+    transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
+    packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
     gathered = ttnn.all_gather(
         packed,
         dim=0,
@@ -356,9 +347,8 @@ def _distributed_fragment_prefix(
 
     carry = ttnn.to_memory_config(initial_state, working_memory)
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
-    entry_states: list[ttnn.Tensor | None] = [None] * (sp_size * per_chip)
-    for chip, fragment in order:
-        index = chip * per_chip + fragment
+    entry_states: dict[int, ttnn.Tensor] = {}
+    for index in order:
         # Stored by physical slot so mesh_partition still hands each device its
         # own entry states, while the carry advances chronologically.
         entry_states[index] = carry
@@ -386,27 +376,18 @@ def _distributed_fragment_prefix(
         )
         carry = ttnn.add(carry, b_for_carry, memory_config=working_memory)
 
-    replicated_entries = ttnn.concat(entry_states, dim=0, memory_config=output_memory)
+    replicated_entries = ttnn.concat(
+        [entry_states[chip] for chip in range(len(order))], dim=0, memory_config=output_memory
+    )
     local_entries = ttnn.mesh_partition(
         replicated_entries,
         dim=0,
         cluster_axis=sequence_parallel_axis,
         memory_config=output_memory,
     )
-    entries = [
-        ttnn.reshape(
-            ttnn.slice(
-                local_entries,
-                (fragment, 0, 0, 0),
-                (fragment + 1, batch_heads, key_dim, value_dim),
-                memory_config=output_memory,
-            ),
-            (batch_heads, key_dim, value_dim),
-        )
-        for fragment in range(per_chip)
-    ]
+    entry = ttnn.reshape(local_entries, (batch_heads, key_dim, value_dim))
     final_state = ttnn.reshape(ttnn.to_memory_config(carry, output_memory), (batch_heads, key_dim, value_dim))
-    return entries, final_state
+    return entry, final_state
 
 
 def _last_group_state(
@@ -515,15 +496,13 @@ def _scan_grouped_chunks(
             compute_kernel_config=compute_config.affine_prefix,
         )
         # One transform per chip, composed in chronological chip order.
-        entries, distributed_final_state = _distributed_fragment_prefix(
-            [(partition_a, partition_b)],
+        prefix_initial_state, distributed_final_state = _distributed_prefix(
+            _AffineTransform(partition_a, partition_b),
             initial_state,
             sequence_parallel_axis=sequence_parallel_axis,
-            order=tuple((chip, 0) for chip in topology.chip_order),
-            sp_size=topology.sp_size,
+            order=topology.chip_order,
             compute_config=compute_config.affine_prefix,
         )
-        prefix_initial_state = entries[0]
         prefix_memory_config = KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG
         if split:
             # The prefix stops after the wrap head and every ordinary partition,
