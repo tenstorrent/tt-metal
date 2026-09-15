@@ -50,22 +50,79 @@ constexpr uint32_t kFirstMpfePort = 1;
 constexpr uint32_t kMpfePortSum = 1 + 2 + 3;
 constexpr uint32_t kProductionActiveMpfeWeight = 0;
 constexpr const char* kBenchmarkActiveWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT";
+constexpr const char* kBenchmarkPolicyEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY";
+constexpr const char* kBenchmarkHighWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT";
 
 constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
 
-uint32_t get_active_mpfe_weight() {
-    const char* value = std::getenv(kBenchmarkActiveWeightEnv);
+uint32_t get_benchmark_mpfe_weight(const char* env_name, uint32_t default_weight) {
+    const char* value = std::getenv(env_name);
     if (value == nullptr) {
-        return kProductionActiveMpfeWeight;
+        return default_weight;
     }
     TT_FATAL(
         value[0] >= '0' && value[0] <= '7' && value[1] == '\0',
         "{} must be one digit from 0 through 7, got '{}'",
-        kBenchmarkActiveWeightEnv,
+        env_name,
         value);
     return static_cast<uint32_t>(value[0] - '0');
+}
+
+struct MpfePolicy {
+    uint32_t own_idle_weight;
+    uint32_t own_active_weight;
+    uint32_t ordinary_idle_weight;
+    uint32_t ordinary_active_weight;
+};
+
+MpfePolicy get_mpfe_policy() {
+    const char* policy = std::getenv(kBenchmarkPolicyEnv);
+    const uint32_t high_weight = get_benchmark_mpfe_weight(kBenchmarkHighWeightEnv, 7);
+
+    if (policy == nullptr || std::strcmp(policy, "dynamic-007") == 0) {
+        return {
+            .own_idle_weight = high_weight,
+            .own_active_weight =
+                get_benchmark_mpfe_weight(kBenchmarkActiveWeightEnv, kProductionActiveMpfeWeight),
+            .ordinary_idle_weight = high_weight,
+            .ordinary_active_weight = high_weight,
+        };
+    }
+
+    TT_FATAL(
+        std::getenv(kBenchmarkActiveWeightEnv) == nullptr,
+        "{} cannot be combined with {}={}",
+        kBenchmarkActiveWeightEnv,
+        kBenchmarkPolicyEnv,
+        policy);
+
+    if (std::strcmp(policy, "dynamic-000") == 0) {
+        return {
+            .own_idle_weight = 0,
+            .own_active_weight = 0,
+            .ordinary_idle_weight = 0,
+            .ordinary_active_weight = high_weight,
+        };
+    }
+    if (std::strcmp(policy, "static-000") == 0) {
+        return {0, 0, 0, 0};
+    }
+    if (std::strcmp(policy, "static-777") == 0) {
+        return {high_weight, high_weight, high_weight, high_weight};
+    }
+    if (std::strcmp(policy, "static-007") == 0) {
+        return {0, 0, high_weight, high_weight};
+    }
+    if (std::strcmp(policy, "static-770") == 0) {
+        return {high_weight, high_weight, 0, 0};
+    }
+
+    TT_THROW(
+        "{} must be one of dynamic-007, dynamic-000, static-000, static-777, static-007, or static-770; got '{}'",
+        kBenchmarkPolicyEnv,
+        policy);
 }
 
 uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, uint32_t bank_id, const CoreCoord& sender_logical_core) {
@@ -549,7 +606,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
-    const uint32_t active_mpfe_weight = get_active_mpfe_weight();
+    const MpfePolicy mpfe_policy = get_mpfe_policy();
 
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
@@ -603,7 +660,10 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
                 shutdown_semaphore_id,
-                active_mpfe_weight,
+                mpfe_policy.own_idle_weight,
+                mpfe_policy.own_active_weight,
+                mpfe_policy.ordinary_idle_weight,
+                mpfe_policy.ordinary_active_weight,
             };
 
             KernelHandle kernel_id = CreateKernel(

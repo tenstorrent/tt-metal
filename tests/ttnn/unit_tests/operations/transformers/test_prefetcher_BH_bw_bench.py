@@ -202,6 +202,27 @@ def _gbps(bytes_total: float, elapsed_s: float) -> float:
     return bytes_total / elapsed_s / 1e9
 
 
+def _mpfe_policy_description() -> tuple[str, tuple[int, int, int], tuple[int, int, int]]:
+    """Return policy and effective (sender 0, sender 1, ordinary) weights."""
+    policy = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY", "dynamic-007")
+    high_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT", "7"))
+    active_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT", "0"))
+    assert 0 <= high_weight <= 7
+    assert 0 <= active_weight <= 7
+
+    policies = {
+        "dynamic-007": ((high_weight, high_weight, high_weight), (active_weight, active_weight, high_weight)),
+        "dynamic-000": ((0, 0, 0), (0, 0, high_weight)),
+        "static-000": ((0, 0, 0), (0, 0, 0)),
+        "static-777": ((high_weight, high_weight, high_weight), (high_weight, high_weight, high_weight)),
+        "static-007": ((0, 0, high_weight), (0, 0, high_weight)),
+        "static-770": ((high_weight, high_weight, 0), (high_weight, high_weight, 0)),
+    }
+    assert policy in policies, f"unknown MPFE policy {policy!r}"
+    idle, active = policies[policy]
+    return policy, idle, active
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
@@ -215,8 +236,9 @@ def test_mpfe_priority_contention(device):
     against that bank. The first and last layers are byte-validated; only cached
     contention-consumer trace replays are timed.
 
-    Run each active weight in a fresh process via
-    TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT=0..7.
+    Run each policy in a fresh process via
+    TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY. Nominal weight 7 can
+    be swept independently with TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT.
     """
     if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") is not None:
         pytest.skip("MPFE contention benchmark requires fast dispatch")
@@ -233,7 +255,7 @@ def test_mpfe_priority_contention(device):
     page_size = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
     ordinary_read_bytes = int(os.environ.get("BENCH_ORDINARY_READ_BYTES", page_size))
     trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "20"))
-    active_weight = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT", "0")
+    policy, idle_weights, active_weights = _mpfe_policy_description()
 
     assert trace_repeats > 0
     assert ordinary_read_bytes > 0 and ordinary_read_bytes % 64 == 0
@@ -274,7 +296,9 @@ def test_mpfe_priority_contention(device):
     )
 
     logger.info(
-        f"[mpfe_contention] setup active_weight={active_weight} banks={num_dram_banks} "
+        f"[mpfe_contention] setup policy={policy} "
+        f"idle(sender0/sender1/ordinary)={idle_weights} active={active_weights} "
+        f"banks={num_dram_banks} "
         f"K={K} N={N} ring={ring_size} repeats={trace_repeats}"
     )
 
@@ -375,7 +399,9 @@ def test_mpfe_priority_contention(device):
     total_cycles = sorted(unpack_u64(words, 4) for words in timing_words)
     middle = len(timing_words) // 2
     logger.info(
-        f"[mpfe_contention] active_weight={active_weight} banks={num_dram_banks} dual_senders=True "
+        f"[mpfe_contention] policy={policy} "
+        f"idle(sender0/sender1/ordinary)={idle_weights} active={active_weights} "
+        f"banks={num_dram_banks} dual_senders=True "
         f"K={K} N={N} ring={ring_size} repeats={trace_repeats} elapsed={elapsed * 1e3:.2f}ms "
         f"prefetch={_gbps(prefetch_bytes, elapsed):.2f}GB/s "
         f"ordinary={_gbps(ordinary_bytes, elapsed):.2f}GB/s "

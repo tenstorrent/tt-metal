@@ -256,6 +256,12 @@ def _flops_per_matmul(k: int) -> int:
     return 2 * _M * _K_ORIG * _N_ORIG
 
 
+def _mpfe_policy_label() -> str:
+    policy = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY", "dynamic-007")
+    high_weight = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT", "7")
+    return f"{policy}[high={high_weight}]"
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
@@ -467,7 +473,8 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     # _K directly; padding to ring-aligned K is wasted work that doesn't count as useful flops).
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
     logger.info(
-        f"[dram_core][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
+        f"[dram_core][{op_name}] policy={_mpfe_policy_label()} "
+        f"trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
         f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
     )
 
@@ -711,7 +718,8 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     gbps = weight_bytes * trace_repeats / elapsed / 1e9
     dist_id = "shard_contiguous" if is_shard_contiguous else "round_robin"
     logger.info(
-        f"[dram_core_rc][{op_name}] dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"[dram_core_rc][{op_name}] policy={_mpfe_policy_label()} "
+        f"dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
         f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s"
     )
 
