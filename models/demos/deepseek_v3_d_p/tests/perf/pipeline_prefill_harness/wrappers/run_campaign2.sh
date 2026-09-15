@@ -53,6 +53,68 @@ CFGS=${CFGS:-"1rank pp4"}
 HARD_STOP=${HARD_STOP:-$(( $(date +%s) + 86400 ))}
 left(){ echo $(( HARD_STOP - $(date +%s) )); }
 
+# ---------------------------------------------------------------------------------------------
+# SETTLE GATE.  run_matrix.sh starts the next cell ~1 s after the previous one returns, and a
+# 16-cell two-pass matrix has ~32 such transitions.  Two distinct things can go wrong there and
+# session 1 hit both:
+#
+#   a) OUR OWN previous process has not released its chips yet ->
+#      `RuntimeError: Sysmem mapped at unexpected NOC address (likely a stale process holding
+#      sysmem)`.  It is a race, not a persistent fault -- the identical 1-second gap worked on the
+#      cold pass -- so it needs a wait, not a retry.  That failure also left the galaxy unable to
+#      map an 8x4 mesh and cost a glx_reset.
+#
+#   b) ANOTHER USER's run is live.  The harness uses a FIXED service id (`ds_prefill`), so two
+#      concurrent runs cannot coexist: session 1 lost two cells this way, one to
+#      `Sysmem mapped at unexpected NOC address` and one to `PermissionError` on
+#      /dev/shm/tt_prefill_layer_acks_ds_prefill (mode 600, someone else's, /dev/shm sticky).
+#      So WAIT for them rather than crashing into them -- a concurrent run blocks us only for its
+#      duration.
+#
+# Attribution is impossible here (`/proc` is hidepid=invisible), so both checks are SHAPE checks.
+# For (a) that is not a limitation but the mechanism: the only PIDs we can see ARE our own, so a
+# visible holder that is not the single root telemetry daemon is ours.  For (b) the idle baseline
+# is ONE pid listed on all 32 chips (root tt_telemetry_collector); a live 4-rank run is four
+# distinct pids at 8 chips each.  Count, never branch on a pipeline's exit status.
+#
+# Do NOT use `fuser /dev/tenstorrent/*` (own-processes-only, prints empty while someone holds all
+# 32), and do NOT test TT_UMD_LOCK.* (mode 666, shared, persistent -- owned by whoever opened a
+# chip first, so it would block every legitimate run).
+SETTLE_TRIES=${SETTLE_TRIES:-60}      # x10s = 10 min
+SETTLE_QUIET=${SETTLE_QUIET:-15}      # seconds of grace after the chips report clear
+
+settle(){ # $1 = what we are about to run, for the log
+  local tries=0 holders foreign
+  while [ "$tries" -lt "$SETTLE_TRIES" ]; do
+    holders=$(for d in /proc/driver/tenstorrent/[0-9]*; do cat "$d/pids" 2>/dev/null; done \
+      | sort -u | awk 'NF{c++} END{print c+0}')
+    foreign=$(ls -l /dev/shm 2>/dev/null \
+      | awk -v me="$(id -un)" '$3!=me && $9 ~ /tt_prefill_|tt_h2d_stream_service/ {c++} END{print c+0}')
+    if [ "${holders:-0}" -le 1 ] && [ "${foreign:-0}" -eq 0 ]; then
+      echo "[c2] settle: galaxy idle by shape (chip holders=$holders foreign descriptors=$foreign);"\
+           "grace ${SETTLE_QUIET}s before $1"
+      sleep "$SETTLE_QUIET"
+      return 0
+    fi
+    # holders==0 is NOT idle: when the fabric goes down the telemetry daemon dies with it and the
+    # pid files empty.  That is a wedged-board signature and check_board.sh is the right arbiter,
+    # so fall through to it rather than treating it as free.
+    if [ "${holders:-0}" -eq 0 ]; then
+      echo "[c2] settle: NO chip holders at all, not even the root telemetry daemon --"\
+           "that is a wedged-fabric signature, not an idle board; letting check_board.sh decide"
+      sleep "$SETTLE_QUIET"
+      return 0
+    fi
+    echo "[c2] settle: waiting before $1 (chip holders=$holders foreign descriptors=$foreign,"\
+         "$(( (SETTLE_TRIES - tries) * 10 / 60 ))m budget left)"
+    sleep 10
+    tries=$((tries+1))
+  done
+  echo "[c2] settle: TIMEOUT after $(( SETTLE_TRIES * 10 / 60 ))m -- chip holders=$holders"\
+       "foreign descriptors=$foreign.  Something is still holding the galaxy; refusing to run $1."
+  return 1
+}
+
 stamp(){ # $1=tag $2=before|after
   if "$HARNESS/check_board.sh" >/dev/null 2>&1; then echo BOARD_OK > "$RES/$1.board.$2"
   else echo BOARD_BAD > "$RES/$1.board.$2"; fi
@@ -75,6 +137,11 @@ for isl in $ISLS_ORDER; do
       echo "[c2] STOP before $tag: $(( $(left)/60 ))m left, needs ~$(( need/60 ))m"; break 3
     fi
 
+    if ! settle "$tag"; then
+      echo "[c2] ABORT: the galaxy never went idle before $tag. A run started now would either hit"
+      echo "[c2]        'Sysmem mapped at unexpected NOC address' or collide on the fixed service id."
+      exit 3
+    fi
     stamp "$tag" before
     if [ "$(cat "$RES/$tag.board.before")" != BOARD_OK ]; then
       echo "[c2] ABORT: board unhealthy BEFORE $tag -- a number measured now would be silently 2-5x slow."
@@ -99,6 +166,9 @@ for isl in $ISLS_ORDER; do
       fi
       # Keep pass 1 so the cold-vs-warm delta stays auditable; pass 2 keeps the plain tag.
       [ "$pass" = 1 ] && { rm -rf "$RES/$tag.pass1"; mv "$RES/$tag" "$RES/$tag.pass1"; }
+      # pass 1 -> pass 2 is itself one of the ~32 transitions, and it is the one that matters most:
+      # pass 2 is the REPORTED number, so a stale-sysmem crash here costs the cell.
+      [ "$pass" = 1 ] && { settle "$tag pass 2" || { echo "[c2] ABORT: no settle before $tag pass 2"; exit 3; }; }
     done
     stamp "$tag" after
   done

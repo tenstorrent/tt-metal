@@ -26,6 +26,7 @@ Gates (handoff section 4). Any failure exits non-zero with GATE FAIL on stderr.
     2  JIT cache stats 100% hits present
     3  no rank-level Python failure in the log
     5  interval closure: sum(per-chunk intervals) == last_chunk_end - first_chunk_start
+   11  the stamp is event-sourced (`source=event`), not a silent fallback to sentinel receipt
    10  tail sanity: the last chunk is not wildly out of line with the others. `last_chunk_end` is
         stamped on SENTINEL RECEIPT, so on a pipeline it is max(own completion, sentinel arrival)
         and every upstream `_forward_shutdown` delays it. Warm that is noise; cold it over-reported
@@ -42,6 +43,7 @@ import sys
 CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([0-9.]+) slot=(-?\d+) \[(\d+),(\d+)\)")
 E2E_V2 = re.compile(
     r"\[pp rank (\d+)\] E2E_CLOCK_V2 first_compute_start=([0-9.na/]+) last_chunk_end=([0-9.]+) chunks=(\d+)"
+    r"(?: source=(\w+))?"
 )
 E2E_V1 = re.compile(r"\[pp rank (\d+)\] E2E_CLOCK first_compute_start=([0-9.na/]+) last_compute_end=([0-9.]+)")
 DRAIN_GAP = re.compile(r"\[pp rank (\d+)\] E2E_DRAIN_GAP gap_ms=([0-9.-]+)")
@@ -71,7 +73,7 @@ def parse(path):
         chunks.setdefault(int(rk), []).append((int(c), float(t), int(st), int(en)))
     for rk in chunks:
         chunks[rk].sort()
-    v2 = {int(r): (a, float(b), int(n)) for r, a, b, n in E2E_V2.findall(txt)}
+    v2 = {int(r): (a, float(b), int(n), src or "") for r, a, b, n, src in E2E_V2.findall(txt)}
     v1 = {int(r): (a, float(b)) for r, a, b in E2E_V1.findall(txt)}
     gaps = {int(r): float(g) for r, g in DRAIN_GAP.findall(txt)}
     jit = [(int(a), int(b), float(c)) for a, b, c in JIT.findall(txt)]
@@ -140,7 +142,7 @@ def main():
         print("\nRESULT: unmeasurable (old metric only).")
         raise SystemExit(1 if FAILS else 0)
 
-    _, end, v2_chunks = v2[last]
+    _, end, v2_chunks, src_last = v2[last]
     m_last = reqs[last][-1][1]  # measured request, on the last rank
     m_first = reqs[0][-1][1]  # measured request, on rank 0
     starts = [t for _, t in m_last]
@@ -151,6 +153,34 @@ def main():
         abs(closure) < 5.0,
         f"interval closure: {len(ivs)} intervals for {n_chunks} chunks, "
         f"sum {sum(ivs):.1f} ms vs span {(end - starts[0])*1000.0:.1f} ms, delta {closure:+.3f} ms",
+    )
+
+    # GATE 11 -- the stamp's PROVENANCE, not its level.
+    #
+    # `e45f2b1c616` records each chunk's end on a ttnn event from a watcher thread. If recording or
+    # synchronizing an event fails, the runner does NOT fail the run -- it silently falls back to
+    # stamping on shutdown-sentinel receipt, which is the exact contamination the fix removed. The
+    # fallback is reported only in this one field, so it has to be asserted: a `source=sentinel`
+    # cell is inflated by however long the sentinel took to walk the ranks (measured 451 ms warm,
+    # 5.5 s in one run), and NO other gate sees it -- closure still holds to +/-0.000 ms, and gate 8
+    # is one-sided, so an inflated PP latency only moves it further into the passing region.
+    #
+    # An ABSENT field is not a pass. It means the log predates the event watcher, i.e. it was
+    # produced by `91fba285b16` (drain stamp only), which is a different code state than the one
+    # the contract names -- admission rules 2 and 5.
+    srcs = {rk: t[3] for rk, t in v2.items()}
+    fellback = sorted(rk for rk, sc in srcs.items() if sc and sc != "event")
+    gate(
+        11,
+        src_last == "event",
+        f"stamp provenance on rank {last}: "
+        + (
+            f"source={src_last}"
+            if src_last
+            else "NO source= field -- this log predates the event watcher (metric fix is only "
+            "partially applied); the contract requires source=event"
+        )
+        + (f"; ranks that fell back to the sentinel: {fellback}" if fellback else ""),
     )
 
     # GATE 10 -- the tail the metric is still exposed to, and the reason it must be asserted.
@@ -278,6 +308,7 @@ def main():
                     fill_ms=fill,
                     intervals_ms=ivs,
                     closure_ms=closure,
+                    stamp_source=src_last,
                     gates_failed=FAILS,
                 )
             )
