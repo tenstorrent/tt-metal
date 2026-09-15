@@ -1230,7 +1230,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNonL1TensorParameterFails) {
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBOversizedFails) {
-    // DFB total bytes exceed the TensorParameter's packed size: 1*32*sizeof(bfloat16) = 64 bytes,
+    // DFB total bytes exceed the TensorParameter's per-bank allocation. The default parameter is
+    // interleaved, where per-bank collapses to the whole tensor: 1*32*sizeof(bfloat16) = 64 bytes,
     // so 128 bytes of DFB (entry_size 64, num_entries 2) overruns.
     ProgramSpec spec = MakeBorrowedDFBProgramSpec(
         "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/2);
@@ -1238,7 +1239,44 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBOversizedFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
+            ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBShardLargerThanWholeTensorSucceeds) {
+    // Regression: a borrowed DFB is sized for ONE shard, so it must be validated against the
+    // backing buffer's per-bank allocation -- not the tensor's packed size, which is whole-tensor
+    // and unpadded. A row-major sharded tensor pads on width only, so a 1x32 bf16 tensor with a
+    // 32x32 shard on one core packs to 64 bytes while allocating 32 * 64 = 2048 bytes per bank.
+    // Sizing the DFB at the shard (the convention every sharded op follows) used to be rejected
+    // as "larger than its borrowed TensorParameter (64 bytes)".
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/32);
+    spec.tensor_parameters = {MakeShardedTensorParameter(
+        "borrowed_tensor",
+        tt::tt_metal::Shape{1, 32},
+        {32, 32},
+        /*num_cores=*/1,
+        tt::tt_metal::Layout::ROW_MAJOR)};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBLargerThanShardStillFails) {
+    // Companion to the above: widening the bound to the per-bank allocation must not disarm the
+    // check. Same tensor (2048 bytes per bank), but a DFB of 64 * 64 = 4096 bytes still overruns.
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/64, /*dfb_num_entries=*/64);
+    spec.tensor_parameters = {MakeShardedTensorParameter(
+        "borrowed_tensor",
+        tt::tt_metal::Shape{1, 32},
+        {32, 32},
+        /*num_cores=*/1,
+        tt::tt_metal::Layout::ROW_MAJOR)};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is larger than the per-bank allocation of its borrowed TensorParameter")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SemaphoresSucceed) {

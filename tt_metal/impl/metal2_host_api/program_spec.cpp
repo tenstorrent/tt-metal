@@ -14,6 +14,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>  // HalMemType, for the borrowed-DFB per-bank sizing check
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt-metalium/allocator.hpp>
@@ -1609,17 +1610,27 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "required). Both L1 and L1_SMALL are accepted.",
             dfb.unique_id,
             tp_name);
-        // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
-        // available at spec time, so we can't query the per-bank allocation; the precise per-bank
-        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_args.cpp), where
-        // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
-        // here against the full-tensor size and still fail per-bank later. By design.
+        // Spec-time sizing check. A borrowed DFB lives in ONE core's slice of the backing buffer,
+        // so the bound is that buffer's per-bank allocation -- not compute_packed_buffer_size_bytes(),
+        // which is both whole-tensor and unpadded and so under-reports a single shard whenever the
+        // shard spec over-covers the logical data. Row-major sharded tensors are the common case:
+        // they align on width only (create_default_alignment_rm), so their height never pads up to
+        // the shard height, and a tensor can be legally smaller than one of its own shards.
+        //
+        // TensorSpec yields the per-bank figure without a Buffer: both sharded branches of
+        // compute_consumed_memory_bytes_per_bank take pages-per-bank from the shard spec or the
+        // distribution spec and never read num_banks, so passing 1 is exact for them. Only the
+        // interleaved branch uses num_banks -- a device property not available here -- and there
+        // num_banks=1 degrades to the whole-tensor bound, i.e. the conservative value this check
+        // used previously. The exact check still fires at attach time in AttachBorrowedDFBBuffers
+        // (program_run_args.cpp) against Buffer::aligned_size_per_bank().
         const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
-        const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+        const size_t tensor_bytes =
+            tensor_spec.compute_consumed_memory_bytes_per_bank(hal.get_alignment(HalMemType::L1), /*num_banks=*/1);
         TT_FATAL(
             dfb_bytes <= tensor_bytes,
-            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than its borrowed TensorParameter '{}' "
-            "({} bytes).",
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than the per-bank allocation of its "
+            "borrowed TensorParameter '{}' ({} bytes).",
             dfb.unique_id,
             dfb.entry_size,
             dfb.num_entries,
