@@ -47,6 +47,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    bool fanout,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config);
 }  // namespace ttnn::prim
