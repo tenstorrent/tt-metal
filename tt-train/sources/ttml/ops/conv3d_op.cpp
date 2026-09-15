@@ -453,8 +453,9 @@ Conv3dGeometry validate_and_build_geometry(
         throw std::invalid_argument(fmt::format(
             "conv3d: weight must have rank 5 with layout [C_out, C_in, kD, kH, kW], got shape {}", weight_shape));
     }
-    if (!ttnn::is_device_tensor(input_value) || !ttnn::is_device_tensor(weight_value)) {
-        throw std::invalid_argument("conv3d: input and weight must be on device");
+    if (!ttnn::is_device_tensor(input_value) || !input_value.is_allocated() || !ttnn::is_device_tensor(weight_value) ||
+        !weight_value.is_allocated()) {
+        throw std::invalid_argument("conv3d:: input and weight must be allocated on device");
     }
     if (input_value.dtype() != ttnn::DataType::BFLOAT16 && input_value.dtype() != ttnn::DataType::FLOAT32) {
         throw std::invalid_argument(
@@ -500,9 +501,12 @@ Conv3dGeometry validate_and_build_geometry(
             groups,
             geometry.C_in / groups));
     }
-    if (geometry.N == 0U || geometry.in_size[0] == 0U || geometry.in_size[1] == 0U || geometry.in_size[2] == 0U) {
-        throw std::invalid_argument(
-            fmt::format("conv3d: batch and spatial sizes must be non-zero, got input shape {}", input_shape));
+    if (geometry.N == 0U || geometry.C_in == 0U || geometry.C_out == 0U || geometry.in_size[0] == 0U ||
+        geometry.in_size[1] == 0U || geometry.in_size[2] == 0U) {
+        throw std::invalid_argument(fmt::format(
+            "conv3d: batch, channel, and spatial sizes must be non-zero, got input shape {} and weight shape {}",
+            input_shape,
+            weight_shape));
     }
     for (size_t i = 0; i < 3; ++i) {
         if (geometry.kernel[i] == 0U) {
@@ -618,8 +622,12 @@ void validate_prepared_weight(
             prepared.transposed.size(),
             groups));
     }
-    if (prepared.c_in_block == 0U) {
-        throw std::invalid_argument("conv3d: prepared weight has no C_in block; build it with prepare_conv3d_weight");
+    const uint32_t expected_c_in_block = geometry.c_in_block();
+    if (prepared.c_in_block != expected_c_in_block) {
+        throw std::invalid_argument(fmt::format(
+            "conv3d: prepared weight has C_in block {}, expected {} for this kernel",
+            prepared.c_in_block,
+            expected_c_in_block));
     }
     const GroupGeometry group = geometry.per_group();
     const uint32_t kvol = geometry.kernel_volume();
@@ -688,9 +696,10 @@ autograd::TensorPtr conv3d_impl(
 
     auto out = autograd::create_tensor(to_layout_of(output, input_value));
 
-    auto transposed_weights = std::make_shared<std::vector<PreparedWeight>>(std::move(weights.transposed));
+    // Only caller-supplied transposed forms are kept across backward calls; their validity is the caller's contract.
+    auto caller_transposed = std::make_shared<const std::vector<PreparedWeight>>(std::move(weights.transposed));
 
-    autograd::GradFunction grad = [input, weight, bias, out, geometry, transposed_weights]() {
+    autograd::GradFunction grad = [input, weight, bias, out, geometry, caller_transposed]() {
         const auto& grad_output = out->get_grad();
         const auto& input_value = input->get_value();
         const auto& weight_value = weight->get_value();
@@ -698,14 +707,17 @@ autograd::TensorPtr conv3d_impl(
         auto grad_output_row_major = to_row_major(grad_output);
 
         if (input->get_requires_grad()) {
-            if (transposed_weights->empty()) {
-                *transposed_weights = prepare_group_weights(to_row_major(weight_value), geometry, /*transposed=*/true);
+            // Built from the weight's current value on every call, like every other op's closure reads its
+            // parameters at backward time, so a retained graph never computes dX from a stale weight.
+            std::vector<PreparedWeight> built;
+            const std::vector<PreparedWeight>* transposed = caller_transposed.get();
+            if (transposed->empty()) {
+                built = prepare_group_weights(to_row_major(weight_value), geometry, /*transposed=*/true);
+                transposed = &built;
             }
             auto group_grads = map_groups(geometry.groups, [&](uint32_t g) {
                 return conv3d_input_grad(
-                    slice_channels(grad_output_row_major, g * group.C_out, group.C_out),
-                    (*transposed_weights)[g],
-                    group);
+                    slice_channels(grad_output_row_major, g * group.C_out, group.C_out), (*transposed)[g], group);
             });
             input->add_grad(to_layout_of(concat_or_single(group_grads, /*dim=*/4), input_value));
         }
