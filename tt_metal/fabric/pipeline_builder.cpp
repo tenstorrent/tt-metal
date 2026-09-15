@@ -5,7 +5,6 @@
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <map>
 #include <queue>
@@ -15,8 +14,6 @@
 #include <tuple>
 #include <utility>
 #include <vector>
-
-#include <tt-logger/tt-logger.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt-metalium/experimental/fabric/control_plane.hpp"
@@ -225,13 +222,7 @@ GraphLayoutResult detail::resolve_graph_layout_with_connections(
     }
 
     // Discover physical connections between all submesh pairs
-    const auto discovery_start = std::chrono::steady_clock::now();
-    log_info(tt::LogFabric, "Pipeline link discovery starting: {} stages, {} submeshes", nodes.size(), num_submeshes);
     const auto submesh_links = direct_links ? *direct_links : discover_submesh_links(chips);
-    log_info(
-        tt::LogFabric,
-        "Pipeline link discovery finished: {:.3f}s",
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - discovery_start).count());
 
     GraphLayoutResult result = detail::resolve_pipeline_placement(
         stage_order, edges, submesh_links, stage_chip_counts, chips, stage_pipeline_core_counts);
@@ -625,17 +616,9 @@ GraphLayoutResult resolve_pipeline_placement(
     const std::map<std::string, uint32_t>& stage_chip_counts,
     const std::vector<std::vector<InternalChip>>& chips,
     const std::map<std::string, uint32_t>& capacity_overrides) {
-    const auto search_start = std::chrono::steady_clock::now();
-    log_info(tt::LogFabric, "Pipeline placement search starting");
     PlacementSearch search{stage_order, edges, submesh_links, stage_chip_counts, chips, capacity_overrides};
     search.prepare_search();
-    const bool placed = search.place_stages(0);
-    log_info(
-        tt::LogFabric,
-        "Pipeline placement search finished: {:.3f}s, feasible={}",
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - search_start).count(),
-        placed);
-    if (!placed) {
+    if (!search.place_stages(0)) {
         std::string error =
             "resolve_graph_layout: no valid submesh assignment found; exact placement/link search exhausted: "
             "no assignment satisfies connectivity, shape, and pipeline-core capacity constraints";

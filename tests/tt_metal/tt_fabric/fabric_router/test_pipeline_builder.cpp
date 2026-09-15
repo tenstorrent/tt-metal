@@ -22,8 +22,6 @@
 #include <utility>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
-
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include "impl/context/metal_context.hpp"
@@ -326,19 +324,12 @@ TEST(PipelineBuilderMockTest, GraphCapacity) {
         fabric_config = FabricConfig::FABRIC_2D_TORUS_Y;
     }
 
-    const auto setup_start = std::chrono::steady_clock::now();
-    log_info(tt::LogFabric, "Pipeline test control-plane setup starting");
     auto& context = tt::tt_metal::MetalContext::instance();
     context.get_cluster().configure_ethernet_cores_for_fabric_routers(
         fabric_config, std::numeric_limits<uint8_t>::max());
     context.set_default_fabric_topology();
     context.set_fabric_config(fabric_config, FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     context.initialize_fabric_config();
-    log_info(
-        tt::LogFabric,
-        "Pipeline test control-plane setup finished: {:.3f}s",
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count());
-
     // Initialization is collective; placement uses only local control-plane data.
     const auto& world = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (*world->rank() == 0) {
