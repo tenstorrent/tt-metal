@@ -126,7 +126,11 @@ FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t sr
     // (e.g. a loop re-reading the same scratch buffer) could otherwise be read before it ever reaches L2. The
     // uncached alias reads TL1 directly, so no source-side cache invalidation is needed. (The DEST side stays
     // cached: flush_l2_cache_range() below probes the L1 D$, so dirty destination lines are still written back.)
-    src_read_addr = src_l1_addr + MEM_L1_UNCACHED_BASE;
+    // DataflowBuffer pointers already use the uncached alias on Quasar DM cores.
+    src_read_addr =
+        (src_l1_addr >= MEM_L1_UNCACHED_BASE && src_l1_addr < MEM_L1_UNCACHED_BASE + MEM_L1_SIZE)
+            ? src_l1_addr
+            : src_l1_addr + MEM_L1_UNCACHED_BASE;
 #endif
     // Cast the L1 address (uint32_t) to a pointer through uintptr_t: a bare (void*)(uint32_t) is an
     // int-to-pointer cast that -Werror=int-to-pointer-cast rejects on Quasar (64-bit pointers). uintptr_t
