@@ -9,6 +9,7 @@ from helpers.constraints import get_perf_math_operations
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
+    _flush_product_underflow,
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
@@ -344,10 +345,19 @@ def test_eltwise_binary_reuse_dest_quasar(
                     else:
                         dest = srcA * srcB
 
-            # Hardware flushes subnormals as the math unit writes Dest, so a product the
-            # Dest format can only hold as a subnormal reads back as zero.
-            tiny = torch.finfo(internal_dtype).tiny
-            dest = torch.where(dest.abs() < tiny, torch.zeros_like(dest), dest)
+            # Hardware decides a product has underflowed from the two Src exponents, before
+            # the mantissa product can carry into the next binade -- one binade coarser than
+            # "the result is subnormal in Dest". Same rule as EltwiseBinaryGolden's.
+            if mathop == MathOperation.Elwmul:
+                dest = _flush_product_underflow(
+                    srcA_m if eltwise_golden is not None else srcA,
+                    srcB_m if eltwise_golden is not None else srcB,
+                    dest,
+                    15 if internal_dtype == torch.float16 else 127,
+                )
+            else:
+                tiny = torch.finfo(internal_dtype).tiny
+                dest = torch.where(dest.abs() < tiny, torch.zeros_like(dest), dest)
             golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
     if is_perf and perf_report is None:
