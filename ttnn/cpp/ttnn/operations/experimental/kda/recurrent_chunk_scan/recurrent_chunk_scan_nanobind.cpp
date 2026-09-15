@@ -21,19 +21,20 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             S_{n+1} = final_decay_n * S_n + k_dec_t_n @ U_n
 
         Args:
-            v_beta (ttnn.Tensor): Prepared values ``[B*H, N, 32, V]``.
-            kd (ttnn.Tensor): Prepared decayed keys ``[B*H, N, 32, K]``.
-            q_decay (ttnn.Tensor): Prepared decayed queries ``[B*H, N, 32, K]``.
+            v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
+            kd (ttnn.Tensor): Prepared decayed keys ``[B*H*G, N, 32, K]``.
+            q_decay (ttnn.Tensor): Prepared decayed queries ``[B*H*G, N, 32, K]``.
             intra (ttnn.Tensor): Causal within-chunk interactions
-                ``[B*H, N, 32, 32]`` in FLOAT32.
+                ``[B*H*G, N, 32, 32]`` in FLOAT32.
             k_dec_t (ttnn.Tensor): Prepared transposed key term
-                ``[B*H, N, K, 32]``.
+                ``[B*H*G, N, K, 32]``.
             final_decay (ttnn.Tensor): End-of-chunk state decay
-                ``[B*H, N, K, 1]``.
+                ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
-                ``[B*H, N, 32, 32]`` in FLOAT32.
-            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H, K, V]``
-                in FLOAT32.
+                ``[B*H*G, N, 32, 32]`` in FLOAT32.
+            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H*G, K, V]``
+                in FLOAT32, with group folded into the leading dimension.
+                Tail state is unfolded: one ``[K,V]`` matrix per ``B*H``.
 
         Keyword Args:
             tail_state (ttnn.Tensor, optional): Carry to reload at ``wrap_chunk``,
@@ -53,7 +54,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
-                outputs ``Y[B*H,N,32,V]`` and FLOAT32 final state ``S[B*H,K,V]``.
+                outputs ``Y[B*H*G,N,32,V]`` and FLOAT32 final state ``S[B*H*G,K,V]``.
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be
