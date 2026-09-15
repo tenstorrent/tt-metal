@@ -80,6 +80,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("expert_dispatch_table"),
         nb::arg("expert_token_counts"),
         nb::arg("expert_region_offsets"),
+        nb::arg("fanout_reach") = std::nullopt,
         nb::arg("experts_per_chip"),
         nb::arg("num_routed_experts"),
         nb::arg("num_experts_per_tok"),
