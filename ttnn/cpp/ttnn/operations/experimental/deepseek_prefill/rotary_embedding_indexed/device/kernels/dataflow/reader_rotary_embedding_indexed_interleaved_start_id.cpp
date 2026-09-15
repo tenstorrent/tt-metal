@@ -37,6 +37,8 @@ void kernel_main() {
     auto seq_t_start = get_arg(args::seq_t_start);
     auto seq_t_end = get_arg(args::seq_t_end);
 
+    const auto head_start = get_arg(args::head_start);
+    const auto head_end = get_arg(args::head_end);
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
@@ -138,7 +140,7 @@ void kernel_main() {
         uint32_t sin_cos_row_cnt = 0;
         bool done_sin_cos = false;
 
-        for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
+        for (uint32_t head_num = head_start; head_num < head_end; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
 #if RELOAD_IMPL == 1
                 dfb_sin.reserve_back(Wt);
