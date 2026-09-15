@@ -16,6 +16,7 @@ from fuser.l1_operation import L1Operation
 class MatmulUnpacker(Unpacker):
     granularity = InvocationGranularity.BLOCK
     per_block_init = True
+    reverse_operands = True
 
     golden_fn = staticmethod(unpack_matmul_golden)
 
@@ -58,14 +59,24 @@ class MatmulUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        operand_a, operand_b = self.physical_operands(compute_unit)
+        face_r_dim_a = operand_a.tile_shape.face_r_dim
+        face_r_dim_b = operand_b.tile_shape.face_r_dim
+        num_faces_a = operand_a.tile_shape.total_num_faces()
+        num_faces_b = operand_b.tile_shape.total_num_faces()
+        partial_face_a = str(operand_a.tile_shape.total_row_dim() < 32).lower()
+        partial_face_b = str(operand_b.tile_shape.total_row_dim() < 32).lower()
         rt_dim = block.block_rows
         ct_dim = block.block_cols
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         transpose = compute_unit.transpose_within_face.cpp_enum_value
 
-        return f"_llk_unpack_AB_matmul_init_<>({transpose}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
+        return (
+            f"_llk_unpack_AB_matmul_init_<>({transpose}, {ct_dim}, {rt_dim}, {kt_dim}, "
+            f"{face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b}, "
+            f"{partial_face_a}, {partial_face_b});\n"
+        )
 
     def unpack(
         self,
@@ -88,8 +99,9 @@ class MatmulUnpacker(Unpacker):
             operation.max_output_dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        src_a_partial_face = compute_unit.src_a.partial_face.cpp_enum_value
-        src_b_partial_face = compute_unit.src_b.partial_face.cpp_enum_value
+        operand_a, operand_b = self.physical_operands(compute_unit)
+        src_a_partial_face = str(operand_a.tile_shape.total_row_dim() < 32).lower()
+        src_b_partial_face = str(operand_b.tile_shape.total_row_dim() < 32).lower()
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
 

@@ -44,8 +44,11 @@ class PackUntilize(Packer):
         full_ct_dim = pack_node.output.tile_count_x
         face_r_dim = pack_node.output.tile_shape.face_r_dim
         num_faces = pack_node.output.tile_shape.total_num_faces()
+        dest_sync = operation.dest_sync.cpp_enum_value
 
+        # Switch layouts without resetting the current Dest half-bank.
         return (
+            f"_llk_init_packer_dest_offset_registers_<{dest_sync}, PackMode::Untilize>({face_r_dim});\n"
             f"_llk_pack_untilize_init_<{block_ct_dim}, {full_ct_dim}>(\n"
             f"    {config.sentinel.pack_dst_format}, {face_r_dim}, {num_faces}\n"
             f");\n"
@@ -76,4 +79,8 @@ class PackUntilize(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        return "_llk_pack_untilize_uninit_();\n"
+        dest_sync = operation.dest_sync.cpp_enum_value
+        return (
+            "_llk_pack_untilize_uninit_();\n"
+            f"_llk_init_packer_dest_offset_registers_<{dest_sync}, PackMode::Default>();\n"
+        )
