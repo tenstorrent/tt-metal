@@ -250,6 +250,31 @@ def test_bw_unary_pow_edge_case_exponents(device, input_shapes, exponent, high1,
 
 
 @pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("exponent", [1.0, 2.0, 3.0])
+def test_bw_pow_zero_input_finite_gradient(input_shapes, exponent, device):
+    """Regression for #56383: input == 0 must use the golden's `input < 0` mask, not `input <= 0`.
+
+    The golden (`unary_backward.py::_golden_function` for `pow_bw`) only substitutes `+inf`
+    where `input < 0`; `input == 0` keeps the ordinary finite gradient
+    (`d/dx[x^exponent] = exponent * x^(exponent-1)`, which is 0 for exponent >= 2 and 1 for
+    exponent == 1). The device kernel previously used `ttnn::lez(input)` (`input <= 0`), so
+    `input == 0` was silently overwritten with `+inf` instead.
+    """
+    in_data = torch.zeros(input_shapes)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, seed=1)
+
+    tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
+
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden_tensor = golden_function(grad_data, in_data, exponent)
+
+    assert torch.isfinite(golden_tensor[0]).all(), "golden itself should be finite at input == 0"
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor, pcc=0.99)
+    assert status
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
 @pytest.mark.parametrize("exponent", [0.0, 2.0])
 def test_bw_pow_writes_through_preallocated_input_grad(input_shapes, exponent, device):
     """The caller's preallocated input_grad must be written, not replaced.
