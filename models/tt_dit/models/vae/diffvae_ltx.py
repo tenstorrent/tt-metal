@@ -3,14 +3,11 @@
 
 """LTX-2.5 DiffVAE video decoder: deterministic stages.
 
-The 2.5 video VAE replaces the convolutional decoder with a diffusion one, and it is not a
-convnet — every block is 3D neighborhood attention over a local window (:mod:`layers.neighborhood_attention_plan`).
-Stages 1-4 here deterministically upsample the latent into a context volume; the diffusion
-stage that turns noise plus that context into pixels lives alongside.
+Every block is 3D neighborhood attention over a local window. Stages 1-4 deterministically
+upsample the latent into a context volume; the diffusion stage that turns noise plus that
+context into pixels lives in :mod:`diffvae_ltx_stage5`.
 
-Submodules are named to mirror the checkpoint's own keys (``attn.qkv``, ``mlp.w_gate``, ...)
-so loading needs no key remapping beyond the two transformations the values themselves
-require: splitting the fused QKV, and the RoPE reordering described in :func:`rope_permutation`.
+Submodules are named to mirror the checkpoint's own keys (``attn.qkv``, ``mlp.w_gate``, ...).
 """
 
 from __future__ import annotations
@@ -35,32 +32,18 @@ from ...utils.tracing import traced_function
 from .diffvae_ltx_stage5 import TILE, log_ccl_cache, log_dram
 from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
 
-#: The executors that take this chip's W-band and reassemble the window across the shard seam:
-#: the bricked executor stage 5 runs (halo exchange, 32-site bricks, the dedicated neighborhood op).
-#: Membership here is what W-shards a deterministic stage. The older strided executor
-#: ("op_sp_w_sharded", full-W K/V all-gather + retile in natural order) was deleted on 2026-09-11
-#: after the bricked one measured faster on every stage at matching PCC.
+#: Executors that take this chip's W-band and reassemble the window across the shard seam.
+#: Membership here is what W-shards a deterministic stage.
 W_SHARDED_BACKENDS = frozenset({"bricked_sp_w_sharded"})
 
 
 def stages_backend_from_env(default: str = "bricked_sp_w_sharded") -> str:
-    """``DIFFVAE_STAGES_BACKEND``: the executor for the W-sharded deterministic stages 1-3.
-
-    Kept apart from ``DIFFVAE_STAGE5_BACKEND`` so the two halves of the decode can be moved
-    independently. The bricked executor is the default: measured at 1080p (`s34x60`, TP4) on
-    2026-09-11 it ran stages 2/3/4 in 213/149/423 ms against the since-deleted strided executor's
-    288/205/746 ms, at 99.997-99.998 % PCC per block and 99.992 % on the full-decode gate.
-    """
+    """``DIFFVAE_STAGES_BACKEND``: the executor for the W-sharded deterministic stages 1-3."""
     return os.environ.get("DIFFVAE_STAGES_BACKEND") or default
 
 
 def decoder_config(path) -> dict:
-    """The decoder's architecture block, read from the checkpoint's safetensors metadata.
-
-    Read rather than hardcoded: the shapes here (stage channels, depths, kernels, upsample
-    strides) drive module construction, and a checkpoint whose config disagreed with baked-in
-    constants would otherwise fail as a confusing shape error at load.
-    """
+    """The decoder's architecture block, read from the checkpoint's safetensors metadata."""
     import json
     import struct
 
@@ -95,9 +78,8 @@ def rope_tables(
     """``(cos, sin)`` of shape ``(1, T, H, W, 1, head_dim // 2)`` for the permuted layout.
 
     Each axis contributes ``width // 2`` columns in T, H, W order, matching
-    :func:`rope_permutation`. Positions are 0-based and local to the volume: a neighborhood
-    window never crosses a tile, and a global phase cancels inside the window's softmax, so
-    local and absolute positions give the same attention.
+    :func:`rope_permutation`. Positions are local to the volume: a global phase cancels inside
+    the window's softmax, so local and absolute positions give the same attention.
     """
     t, h, w = dims
     cos_columns, sin_columns = [], []
@@ -115,11 +97,8 @@ def rope_tables(
     return upload(cos_columns), upload(sin_columns)
 
 
-#: Bytes one pointwise chunk may hold. Everything in a deterministic block except the attention
-#: gather is pointwise in the site axis, and the widths involved are multiples of the activation:
-#: the SwiGLU's hidden width is 4x, so its three intermediates come to 30 GiB where the block's own
-#: activation is 2.5 GiB at 6s 1920x1088. Chunking bounds that by the chunk instead of the volume.
-#: A GiB keeps per-chunk dispatch negligible against a 2.6M-row volume.
+#: Bytes one pointwise chunk may hold. Bounds the SwiGLU's 4x-wide intermediates by the chunk
+#: instead of the volume.
 CHUNK_BYTES = 1 << 30
 
 
@@ -132,9 +111,8 @@ def _chunk_rows(width: int, *, dtype_bytes: int = 2) -> int:
 def _pointwise_in_chunks(x: ttnn.Tensor, fn, *, width: int) -> ttnn.Tensor:
     """Apply the pointwise ``fn`` to row chunks of ``(rows, ·)`` ``x``. **Consumes** ``x``.
 
-    ``width`` is the widest intermediate ``fn`` builds per row, which is what sets the chunk size.
-    Running whole is kept as a distinct path so short videos pay nothing: a single chunk would
-    otherwise add a concat of the entire output.
+    ``width`` is the widest intermediate ``fn`` builds per row. A single chunk runs whole so
+    short videos pay no concat.
     """
     rows, columns = int(x.shape[-2]), int(x.shape[-1])
     step = _chunk_rows(width)
@@ -156,12 +134,7 @@ def _pointwise_in_chunks(x: ttnn.Tensor, fn, *, width: int) -> ttnn.Tensor:
 
 
 def _consume(x: ttnn.Tensor, op, *args) -> ttnn.Tensor:
-    """``op(x, *args)``, freeing ``x`` unless ``op`` handed it straight back.
-
-    Only for ops that copy — retiling, permuting, slicing. Leaving ``x`` to Python's next rebind
-    keeps a second copy of the volume live across the following allocation, and at 6s 1920x1088
-    those copies are 10 GiB each.
-    """
+    """``op(x, *args)``, freeing ``x`` unless ``op`` handed it straight back. Only for ops that copy."""
     out = op(x, *args)
     if out is not x:
         ttnn.deallocate(x)
@@ -169,7 +142,7 @@ def _consume(x: ttnn.Tensor, op, *args) -> ttnn.Tensor:
 
 
 def _consume_pair(op, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
-    """``op(a, b)``, freeing both operands. These are half-volume tensors at full resolution."""
+    """``op(a, b)``, freeing both operands."""
     out = op(a, b)
     ttnn.deallocate(a)
     ttnn.deallocate(b)
@@ -177,11 +150,9 @@ def _consume_pair(op, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """Rotate a permuted ``(1, T, H, W, heads, head_dim)`` tensor using contiguous halves.
+    """Rotate a permuted ``(1, T, H, W, heads, head_dim)`` tensor using contiguous halves. **Consumes** ``x``.
 
-    **Consumes** ``x``, and builds the two output halves one after the other rather than as one
-    expression. The single-expression form keeps all four products live at once, which at 6s
-    1920x1088 is 5 GiB of temporaries on top of the halves and the result.
+    The two output halves are built one after the other so at most two products are live at once.
     """
     shape = list(x.shape)
     half = shape[-1] // 2
@@ -216,73 +187,45 @@ class NeighborhoodAttention(Module):
         tp_axis: int | None = None,
     ):
         super().__init__()
-        # No ccl_manager here for the gather path: the deterministic stages build their device plans
-        # up front and pass them in, and a sharded plan carries the manager that reassembles it. The
-        # W-sharded bricked backend does need one (plus sp_axis), so it can be supplied here.
         assert dim % head_dim == 0, f"dim={dim} not divisible by head_dim={head_dim}"
         self.dim = dim
         self.head_dim = head_dim
         self.num_heads = dim // head_dim
         self.kernel_size = tuple(kernel_size)
         self.scale = head_dim**-0.5
-        self.mesh_device = mesh_device  # only for the deep-profile spans; nothing else reads it here
-        # NA3D executor: "linear_order" (grouped gather + dense masked attention with the passed-in
-        # device_plan) or "bricked_sp_w_sharded" (this chip's W-shard through the bricked executor:
-        # halo exchange over sp_axis via ccl_manager, the dedicated neighborhood op).
+        self.mesh_device = mesh_device
+        # "linear_order": grouped gather + dense masked attention with the passed-in device_plan.
+        # "bricked_sp_w_sharded": this chip's W-shard through the bricked executor (halo exchange
+        # over sp_axis via ccl_manager).
         self.na3d_backend = na3d_backend
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
-        # TP-over-heads on the orthogonal mesh axis (only under the W-sharded backend): the attention head-
-        # slices q/k/v over tp_axis and gathers back before the out-proj -- makes the det stages 2-D
-        # (W-SP x TP-heads), tapping the axis they'd otherwise run replicated over. num_heads varies
-        # per stage (32/16/8/8) but all divide 4. The det RoPE tables broadcast over heads, so no rebuild.
+        # TP-over-heads on the orthogonal mesh axis, only under the W-sharded backend.
         self.tp_axis = tp_axis
         self.rope_dim_split = default_rope_dim_split(head_dim)
 
-        # DIFFVAE_DET_FUSED_QKV=1: keep the checkpoint's fused qkv as one matmul and split it with
-        # nlp_create_qkv_heads, partitioning the heads over tp_axis FIRST. The head split otherwise
-        # happens inside the attention, so q/k norm, the scale and both RoPEs run on all the heads
-        # and three quarters of that is then discarded; partitioning up front makes them 1/tp.
-        # DIFFVAE_DET_COLPAR_QKV=1 goes further: shard the fused weight on its output axis so each
-        # chip's matmul only ever computes its own heads. The partition then has nothing to do --
-        # the output is born 3*dim/tp wide -- and nlp_create_qkv_heads splits it locally.
+        # DIFFVAE_DET_COLPAR_QKV=1: shard the fused qkv weight on its output axis so each chip's
+        # matmul computes only its own heads. Implies fused_qkv.
         self.colpar_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_COLPAR_QKV") == "1"
-        # Deliberately not gated on tp_axis. A TP axis is what the head *partition* needs; what
-        # fused RoPE needs is the (B, NH, S, HD) TILE layout nlp_create_qkv_heads emits, which a
-        # replicated stage wants just as much. At tp=1 the partition is skipped and the layout
-        # benefit stands alone -- this is what lets stage 1 reach the RoPE and qkv fast paths.
+        # DIFFVAE_DET_FUSED_QKV=1: one fused qkv matmul split by nlp_create_qkv_heads, partitioning
+        # the heads over tp_axis first so the norms, scale and RoPE run on heads/tp. Not gated on
+        # tp_axis: at tp=1 the partition is skipped and the TILE (B, NH, S, HD) layout stands alone.
         self.fused_qkv = self.colpar_qkv or os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1"
-        # DIFFVAE_DET_FUSED_ROPE=1: rotate with one rotary_embedding_hf per lane instead of the
-        # nine-op halves form. The weight fold already puts q/k in HF's rotate_half convention, so
-        # this is the same arithmetic; what it needs is a full-width cos/sin rather than the half
-        # tables that form implies. Applied while still TILE, which is also what lets q and k skip
-        # the ROW_MAJOR trip the hand-rolled version required.
+        # DIFFVAE_DET_FUSED_ROPE=1: one rotary_embedding_hf per lane, applied while still TILE. The
+        # weight fold already puts q/k in HF's rotate_half convention; it needs full-width cos/sin.
         self.fused_rope = self.fused_qkv and os.environ.get("DIFFVAE_DET_FUSED_ROPE") == "1"
-        # There is no flat (B, NH, S, HD) handoff any more. It existed so the strided executor could
-        # skip a permute; the bricked executor transposes to site-major either way, and the two
-        # handoffs measured equal on it (203 vs 200 ms across stages 2-4, 2026-09-11), so the block
-        # always builds the 6-D volume below.
         self._fused_rope_cache: dict = {}
         self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
         if self.fused_qkv:
             assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
-        # The bricked executor never slices heads itself under TP (its ``heads_presharded`` is a
-        # statement, not a request), so on that backend this block partitions the heads in every
-        # projection form, not only the fused one. The replicated linear-order executor has no TP axis and
-        # keeps every head.
+        # The bricked executor never slices heads itself under TP, so on that backend this block
+        # partitions the heads in every projection form.
         self.bricked = self.na3d_backend == "bricked_sp_w_sharded"
         self.heads_local = self.num_heads // self.tp if (self.fused_qkv or self.bricked) else self.num_heads
 
-        # Three projections rather than the checkpoint's fused one. Fused, the (rows, 3*dim) output
-        # and the three slices taken from it are live together -- six activations, 15 GiB at 6s
-        # 1920x1088 -- where separate matmuls hold three. The weight is split at load instead.
-        # Under fused_qkv the partition lands immediately after the matmul, so what is held is
-        # (rows, 3*dim) plus (rows, 3*dim/tp), not six full-width activations.
         if self.fused_qkv:
             qkv_linear = {"bias": True, "mesh_device": mesh_device}
             if self.colpar_qkv:
-                # device_major already orders the weight [dev][q|k|v][heads/tp], which is exactly
-                # what a contiguous column shard needs.
                 qkv_linear["weight_mesh_axes"] = [None, tp_axis]
                 qkv_linear["bias_mesh_axes"] = [None, tp_axis]
             self.qkv = Linear(dim, 3 * dim, **qkv_linear)
@@ -295,21 +238,15 @@ class NeighborhoodAttention(Module):
         self.k_norm = RMSNorm(head_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Split the shipped fused ``qkv`` into three projections and fold the RoPE reordering
-        into the q/k halves; v and the output projection are untouched."""
+        """Split (or regroup) the shipped fused ``qkv`` and fold the RoPE reordering into q/k."""
         perm = rope_permutation(self.rope_dim_split)
 
         def reorder_head_dim(tensor: torch.Tensor) -> torch.Tensor:
-            # Rows are head-major: (heads, head_dim, ...) — permute within each head.
             return tensor.reshape(self.num_heads, self.head_dim, *tensor.shape[1:])[:, perm].reshape(tensor.shape)
 
         def device_major(fused: torch.Tensor) -> torch.Tensor:
-            """Reorder ``[q_all | k_all | v_all]`` rows to ``[dev][q|k|v][heads/tp]``.
-
-            ``mesh_partition`` takes a contiguous slice of the output dim, so this is what makes
-            that slice this chip's own ``[q | k | v]`` — the layout ``nlp_create_qkv_heads`` then
-            expects. Sharding the shipped order instead would hand chip 0 all of q and part of k.
-            """
+            """Reorder ``[q_all | k_all | v_all]`` rows to ``[dev][q|k|v][heads/tp]``, so a contiguous
+            column shard is this chip's own ``[q | k | v]`` as ``nlp_create_qkv_heads`` expects."""
             rest = fused.shape[1:]
             grouped = fused.reshape(3, self.tp, self.dim // self.tp, *rest)
             axes = (1, 0, 2, *range(3, 3 + len(rest)))
@@ -331,12 +268,7 @@ class NeighborhoodAttention(Module):
                 state[key] = state[key][perm]
 
     def _fused_rope_tables(self, cos: ttnn.Tensor, sin: ttnn.Tensor, tokens: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``(cos, sin)`` as ``rotary_embedding_hf`` wants them: full head_dim, flat, TILE.
-
-        The halves form only needs ``head_dim/2`` columns; HF's carries each frequency twice, so
-        the table is its own halves concatenated. Cached because the stage hands the same tables to
-        every block, and this is otherwise three ops per block for a tensor that never changes.
-        """
+        """``(cos, sin)`` as ``rotary_embedding_hf`` wants them: full head_dim (halves doubled), flat, TILE."""
         key = (tokens, int(cos.shape[-1]))
         cached = self._fused_rope_cache.get(key)
         if cached is None:
@@ -369,23 +301,17 @@ class NeighborhoodAttention(Module):
 
         if self.fused_rope:
             with timing_tree.span(self.mesh_device, "qkv-rope (fused op)", category=timing_tree.NORM_ROPE, deep=True):
-                # Rotate here, before the volume reshape: the op wants TILE, and q/k are still in the
-                # (1, heads, tokens, head_dim) form create_heads emitted.
                 cos_full, sin_full = self._fused_rope_tables(cos, sin, tokens)
                 q = _consume(q, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
                 k = _consume(k, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
 
-        # Untilize before splitting out the head axis, never after. TILE rounds both of the last
-        # two dims up to 32, so a trailing (num_heads, head_dim) of (4, 64) is padded 8x: at
-        # 1920x1088 that turns a 1.35 GB activation into a 10.83 GB allocation, three times over
-        # for q/k/v, and it was what stopped a 6s decode. In ROW_MAJOR the same split is a pure
-        # stride change, and the attention gathers rows in ROW_MAJOR anyway.
+        # Untilize before splitting out the head axis: TILE pads both of the last two dims to 32,
+        # so a trailing (heads, head_dim) in TILE costs many times its own size.
         shape = (1, t, h, w, heads, self.head_dim)
 
         def to_volume(part: ttnn.Tensor) -> ttnn.Tensor:
             part = _consume(part, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
             if self.fused_qkv:
-                # create_heads emits (1, heads, tokens, head_dim); the volume wants heads innermost.
                 part = _consume(part, ttnn.permute, (0, 2, 1, 3))
             return ttnn.reshape(part, shape)
 
@@ -408,10 +334,6 @@ class NeighborhoodAttention(Module):
             ttnn.deallocate(x)
             qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
             if not self.colpar_qkv and self.tp > 1:
-                # The head partition lands here rather than inside the attention, so the norms, the
-                # scale and both RoPEs see heads/tp instead of computing every head and letting the
-                # attention discard all but this chip's. Under colpar_qkv the matmul already emitted
-                # only this chip's heads, so there is nothing to slice.
                 partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
                 ttnn.deallocate(qkv)
                 qkv = partitioned
@@ -424,11 +346,7 @@ class NeighborhoodAttention(Module):
         heads_shape = (tokens * heads, self.head_dim)
 
         def own_heads(part: ttnn.Tensor) -> ttnn.Tensor:
-            """This chip's contiguous head block of a ``(tokens, dim)`` projection under TP.
-
-            Only the bricked executor needs it here: handed every head, it would gather ``tp``
-            copies of them back and the out-proj would see ``tp * dim`` channels.
-            """
+            """This chip's contiguous head block of a ``(tokens, dim)`` projection under TP."""
             if self.tp == 1 or not self.bricked:
                 return part
             rows = ttnn.reshape(part, (1, 1, tokens, self.dim))
@@ -448,13 +366,9 @@ class NeighborhoodAttention(Module):
         "mesh_device", lambda self, *a, **k: f"attention {self.na3d_backend}", category=timing_tree.SDPA, deep=True
     )
     def _attend(self, q, k, v, *, dims: tuple[int, int, int], device_plan: NA3DDevicePlan) -> ttnn.Tensor:
-        """Run the executor this block was built for. Named after it so a stage is not one opaque row."""
         t, h, w = dims
         if self.na3d_backend == "bricked_sp_w_sharded":
-            # Full-stage spatial-W SP: q/k/v are this chip's W-slice, so `dims` here is local (w is
-            # W/sp). K/V are halo-exchanged in bricked order inside, and the dedicated neighborhood op
-            # runs over 32-site bricks. cos/sin were W-sharded the same way, so the RoPE used each
-            # column's global W.
+            # q/k/v are this chip's W-slice, so `dims` here is local; the executor is told the full W.
             sp = int(list(q.device().shape)[self.sp_axis])
             return neighborhood_attention_3d_bricked_w_sharded(
                 q,
@@ -466,10 +380,9 @@ class NeighborhoodAttention(Module):
                 ccl_manager=self.ccl_manager,
                 scale=1.0,
                 tp_axis=self.tp_axis,
-                heads_presharded=True,  # every projection form hands this executor its own heads
+                heads_presharded=True,
                 stride=(1, 1, 1),
             )
-        # Stage 0's path: the linear-order executor over the replicated volume.
         return neighborhood_attention_3d_linear_order(
             q,
             k,
@@ -497,14 +410,10 @@ class SwiGLU(Module):
         self.dim = dim
         self.tp_axis = tp_axis
         self.ccl_manager = ccl_manager
-        # DIFFVAE_DET_TP_MLP=1 shards hidden_dim over tp_axis. Every hidden column is independent
-        # until w_down contracts over it, so gate/up are column-parallel and w_down row-parallel;
-        # its reduce_scatter plus the all_gather below is an all-reduce, which is the one collective
-        # the split costs. Implies the packed weight, since the fused kernel is what consumes it.
+        # DIFFVAE_DET_TP_MLP=1: gate/up column-parallel and w_down row-parallel over tp_axis.
+        # Implies the packed weight.
         self.tp_mlp = tp_axis is not None and os.environ.get("DIFFVAE_DET_TP_MLP") == "1"
-        # DIFFVAE_DET_FUSED_SWIGLU=1 packs [up | gate] into one GEMM whose epilogue emits
-        # silu(gate) * up, so the separate silu and multiply passes over the 4x-wide hidden
-        # activation disappear along with their buffers.
+        # DIFFVAE_DET_FUSED_SWIGLU=1: one [up | gate] GEMM whose epilogue emits silu(gate) * up.
         self.fused = self.tp_mlp or os.environ.get("DIFFVAE_DET_FUSED_SWIGLU") == "1"
 
         if self.tp_mlp:
@@ -531,8 +440,7 @@ class SwiGLU(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Pack the shipped ``w_gate``/``w_up`` into the fused ``[up | gate]`` weight.
 
-        ``up`` first: ``Linear`` transposes before handing the packed weight to
-        ``prepare_for_fused_swiglu``, whose default ordering is ``[up (N) | gate (N)]``.
+        ``up`` first: ``prepare_for_fused_swiglu``'s default ordering is ``[up (N) | gate (N)]``.
         """
         if not self.fused:
             return
@@ -542,13 +450,7 @@ class SwiGLU(Module):
             state["gate_up.weight"] = torch.cat([up, gate], dim=0)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """**Consumes** ``x``.
-
-        Run in row chunks because this is where a block peaks: ``hidden_dim`` is 4x the
-        activation, so ``gate``, ``up`` and their product together are 12 activations, which at 6s
-        1920x1088 is 30 GiB against 31 GiB of usable DRAM. It is pointwise in the site axis, so
-        chunking is exact and needs no halo.
-        """
+        """**Consumes** ``x``. Row-chunked: the hidden intermediates are 4x the activation."""
         width = self.hidden_dim // self.mlp_shards
         return _pointwise_in_chunks(x, self._project, width=width)
 
@@ -560,16 +462,13 @@ class SwiGLU(Module):
         if self.fused:
             hidden = self.gate_up(x)
             if self.tp_mlp:
-                # w_down preserves its input rank, and the all_gather below names dim 3 absolutely,
-                # which only holds for a rank-4 tensor. Widen here so the gather stays valid. The
-                # reshape aliases its input, so the original must outlive it rather than be consumed.
+                # The all_gather below names dim 3 absolutely, so the tensor must be rank 4 here.
                 hidden = ttnn.reshape(hidden, (1, 1, hidden.shape[-2], hidden.shape[-1]))
             # use_persistent_buffer=False: RowParallelLinear otherwise returns the CCL manager's
             # cached reduce-scatter buffer, which the deallocate below would destroy under it.
             out = self.w_down(hidden, use_persistent_buffer=False) if self.tp_mlp else self.w_down(hidden)
             ttnn.deallocate(hidden)
             if self.tp_mlp:
-                # w_down reduce_scatters, so restore the full width the residual add expects.
                 gathered = self.ccl_manager.all_gather(out, dim=3, mesh_axis=self.tp_axis, use_hyperparams=False)
                 ttnn.deallocate(out)
                 out = ttnn.reshape(gathered, (gathered.shape[-2], self.dim))
@@ -616,7 +515,7 @@ class NABlock(Module):
         )
         self.norm2 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
         self.mlp = SwiGLU(dim, hidden, mesh_device=mesh_device, tp_axis=tp_axis, ccl_manager=ccl_manager)
-        self.mesh_device = mesh_device  # the deep-profile spans below need it to sync
+        self.mesh_device = mesh_device
 
     def forward(
         self,
@@ -635,9 +534,6 @@ class NABlock(Module):
         ttnn.deallocate(projected)
         return x
 
-    # Spans are deep: each costs two device syncs, and there are 16 deterministic blocks, so under a
-    # plain timing run they stay inert rather than inflate the very stage totals they explain. The
-    # norms sit inside their span (stage 5 keeps its modulate outside) rather than paying two more.
     @timing_tree.span("mesh_device", "attention", category=timing_tree.ATTENTION, deep=True)
     def _attention(self, x, *, dims, cos, sin, device_plan) -> ttnn.Tensor:
         return self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
@@ -650,11 +546,9 @@ class NABlock(Module):
 class LinearPixelShuffleUpsample(Module):
     """Channel-expanding Linear then a channels-last 3D pixel shuffle.
 
-    The checkpoint packs the projection's output channels as ``(c p1 p2 p3)`` with the output
-    channel outermost, so the shuffle is a reshape-and-transpose rather than a plain view.
-
-    The projection's rows are reordered at load to ``(p1 p2 p3 c)`` — see
-    ``channel_permutation`` — which lets the shuffle keep the channel axis innermost.
+    The checkpoint packs the projection's output channels as ``(c p1 p2 p3)``. The rows are
+    reordered at load to ``(p1 p2 p3 c)`` (see ``channel_permutation``) so the shuffle keeps the
+    channel axis innermost.
     """
 
     def __init__(
@@ -675,25 +569,18 @@ class LinearPixelShuffleUpsample(Module):
     def channel_permutation(self) -> torch.Tensor:
         """Row order taking the checkpoint's ``(c p1 p2 p3)`` output channels to ``(p1 p2 p3 c)``.
 
-        Applied to the projection's weight and bias at load, so it costs nothing at runtime and
-        the shuffle's reshape can keep the channel axis innermost. That placement is not
-        cosmetic: with a stride factor of 2 innermost, ROW_MAJOR rounds that extent up to a full
-        32-element face, so the tensor occupies 16x its own size — a 2.6 GB activation asks for
-        45 GB at 1920x1088, which is exactly how this was found.
+        Channels innermost is not cosmetic: with a stride factor of 2 innermost, ROW_MAJOR rounds
+        that extent up to a full 32-element face and the tensor occupies 16x its own size.
         """
         p1, p2, p3 = self.stride
         index = torch.arange(self.proj_out_channels).reshape(self.out_channels, p1, p2, p3)
         return index.permute(1, 2, 3, 0).reshape(-1)
 
     def _shuffle(self, projected: ttnn.Tensor, t: int, h: int, w: int, drop_leading_frame: bool) -> ttnn.Tensor:
-        """Pixel-shuffle a ROW_MAJOR ``(t*h*w, proj_out_channels)`` projection into ``(t', h*p2, w*p3,
-        c)`` flattened to ``(t'*..., c)`` in TILE. **Consumes** ``projected``; returns the tile tensor
-        and the output frame count. Each step allocates a second copy of the widened volume, so each
-        is freed the moment it dies.
-        """
+        """Pixel-shuffle a ROW_MAJOR ``(t*h*w, proj_out_channels)`` projection into ``(t'*h*p2*w*p3, c)``
+        in TILE. **Consumes** ``projected``; returns the tile tensor and the output frame count."""
         p1, p2, p3 = self.stride
         c = self.out_channels
-        # (t, h, w, p1, p2, p3, c) -> (t, p1, h, p2, w, p3, c), channels innermost throughout.
         projected = _consume(
             projected, lambda v: ttnn.permute(ttnn.reshape(v, (t, h, w, p1, p2, p3, c)), (0, 3, 1, 4, 2, 5, 6))
         )
@@ -701,7 +588,7 @@ class LinearPixelShuffleUpsample(Module):
         rows = (h * p2) * (w * p3)
         if p1 == 2 and drop_leading_frame:
             # The temporal shuffle emits a duplicate first frame; dropping it preserves the causal
-            # 1:2 (composed 1:8) mapping. Only the slab holding the true t=0 has one.
+            # 1:2 mapping. Only the slab holding the true t=0 has one.
             projected = _consume(
                 projected, lambda v: ttnn.slice(ttnn.reshape(v, (out_t, rows, c)), [1, 0, 0], [out_t, rows, c])
             )
@@ -714,13 +601,9 @@ class LinearPixelShuffleUpsample(Module):
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
         """``x`` is ``(tokens, in_channels)``; returns ``(tokens', out_channels)`` and new dims.
 
-        The projection widens the channels by the stride span, which at the last 6s 1920x1088
-        upsample is a single 10 GiB buffer (plus the permute's copy) -- past what fits, and what
-        OOMs a 6s decode. Since the shuffle maps each source frame to its own output frames
-        ``[t*p1, (t+1)*p1)`` independently, the volume is processed in source-frame slabs whenever
-        the projection would blow :data:`CHUNK_BYTES`, bounding the widened copy to one slab. Slabbing
-        needs a frame boundary to be tile-aligned (``h*w`` a multiple of TILE); the large upsamples
-        that need it satisfy that, and the small ones run whole.
+        The shuffle maps each source frame to its own output frames, so when the widened projection
+        would exceed :data:`CHUNK_BYTES` the volume is processed in source-frame slabs. A slab
+        boundary must be tile-aligned (``h*w`` a multiple of TILE); otherwise it runs whole.
         """
         t, h, w = dims
         p1, p2, p3 = self.stride
@@ -753,8 +636,8 @@ class DeterministicStages(Module):
     """Stages 1-4: NA blocks and upsamples that turn the latent into the stage-5 context.
 
     ``conv_in`` lives here so the latent's per-channel denormalization can be folded into it:
-    the decoder's first act is ``conv_in(x * std + mean)``, which is exactly a Linear with
-    ``std`` scaled into the weight columns and ``W @ mean`` added to the bias. Free and exact.
+    ``conv_in(x * std + mean)`` is a Linear with ``std`` scaled into the weight columns and
+    ``W @ mean`` added to the bias.
     """
 
     def __init__(
@@ -778,24 +661,15 @@ class DeterministicStages(Module):
         self.head_dim = head_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
-        # Spatial-W SP for the deterministic stages: when the backend is W-sharded (W_SHARDED_BACKENDS)
-        # the activation is W-sharded from stage 1 on (stage 0's W is not divisible by the mesh axis,
-        # so it stays replicated), then gathered back to a replicated context at the end -- so the
-        # handoff to stage 5 is unchanged. Defaults to the env override for the OOM diagnostic.
-        #
-        # DET_ in the name because this reaches stages 1-4 ONLY, alongside the other DIFFVAE_DET_*
-        # knobs. Stage 5 is selected separately by DIFFVAE_STAGE5_BACKEND; the two used to share the
-        # name DIFFVAE_NA3D_BACKEND, so setting it moved both halves of the decode at once.
+        # Under a W-sharded backend the activation is W-sharded from stage 1 on (stage 0's W is not
+        # divisible by the mesh axis, so it stays replicated). DIFFVAE_DET_NA3D_BACKEND reaches
+        # stages 1-4 only; stage 5 is selected by DIFFVAE_STAGE5_BACKEND.
         self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_DET_NA3D_BACKEND", "linear_order")
-        # The only validation of this name: the linear-order executor takes no backend argument, so
-        # without this a typo would silently run replicated on every stage.
         assert self.na3d_backend in {"linear_order"} | W_SHARDED_BACKENDS, (
             f"unknown NA3D backend {self.na3d_backend!r}; expected one of "
             f"{sorted({'linear_order'} | W_SHARDED_BACKENDS)}"
         )
         self.sp_axis = sp_axis
-        # TP-over-heads on the orthogonal axis for the W-sharded stages (2-D SP x TP): the det stages
-        # otherwise run replicated over this axis. Only applied to the W-sharded stages (1+).
         self.tp_axis = tp_axis
         self._w_sharded = self.na3d_backend in W_SHARDED_BACKENDS
         self.sp = int(list(mesh_device.shape)[sp_axis]) if self._w_sharded else 1
@@ -804,8 +678,6 @@ class DeterministicStages(Module):
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
         def block_backend(stage: int) -> str:
-            # Stage 0 runs replicated (its W is not shardable), on the linear-order executor, whose plan
-            # query-shards across the mesh. The rest shard over W on the configured executor.
             if self._w_sharded and stage == 0:
                 return "linear_order"
             return self.na3d_backend
@@ -859,11 +731,8 @@ class DeterministicStages(Module):
         return self._rope_cache[dims]
 
     def state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
-        """Load ``decoder.*`` tensors from an LTX-2.5 video-VAE safetensors file.
-
-        Also folds ``per_channel_statistics`` into ``conv_in`` when present, so the caller
-        hands us the same normalized latent the conv decoder takes.
-        """
+        """Load ``decoder.*`` tensors from an LTX-2.5 video-VAE safetensors file, folding
+        ``per_channel_statistics`` into ``conv_in`` when present."""
         from safetensors import safe_open
 
         state: dict[str, torch.Tensor] = {}
@@ -878,8 +747,6 @@ class DeterministicStages(Module):
                 name = key[len("decoder.") :]
                 if name.startswith(("conv_in.", "det_stages.", "upsamples.")):
                     stage = name.split(".")[1] if name.startswith("det_stages.") else None
-                    # det_stages holds the diffusion blocks' config slot as its last entry in
-                    # the config, but on disk only the deterministic stages appear here.
                     if stage is not None and int(stage) >= len(self.det_stages):
                         continue
                     state[name] = handle.get_tensor(key).float()
@@ -904,17 +771,13 @@ class DeterministicStages(Module):
     @timing_tree.span("mesh_device", "reshard: replicated -> W-sharded", category=timing_tree.RESHAPE)
     def _wshard(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
         """Reshard a replicated ``(T*H*W, ch)`` volume into this chip's W-band ``(T*H*(W/sp), ch)``.
-
-        A W-band is not a contiguous slice of the T-outer sequence, so the flat rows are viewed as a
-        ``(T, H, W, ch)`` volume, ``mesh_partition``ed on W, and flattened back in (t, h, w_local)
-        order. **Consumes** ``x``.
-        """
+        **Consumes** ``x``."""
         t, h, w = dims
         ch = int(x.shape[-1])
         rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(x)
         vol = ttnn.reshape(rm, (t, h, w, ch))
-        band = ttnn.mesh_partition(vol, dim=2, cluster_axis=self.sp_axis)  # (T, H, W/sp, ch)
+        band = ttnn.mesh_partition(vol, dim=2, cluster_axis=self.sp_axis)
         ttnn.deallocate(rm)
         flat = ttnn.reshape(band, (t * h * (w // self.sp), ch))
         return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
@@ -922,16 +785,13 @@ class DeterministicStages(Module):
     @timing_tree.span("mesh_device", "det -> replicated context gather", category=timing_tree.ALLGATHER)
     def _wgather(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
         """Gather a W-sharded ``(T*H*(W/sp), ch)`` band back to the replicated ``(T*H*W, ch)`` volume.
-
-        Chip order along ``sp_axis`` is W order, so the all-gather over the W dim rebuilds the full
-        volume with no reshuffle. **Consumes** ``x``.
-        """
+        **Consumes** ``x``."""
         t, h, w = dims
         ch = int(x.shape[-1])
         w_local = w // self.sp
         vol = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (t, h, w_local, ch))
         ttnn.deallocate(x)
-        full = self.ccl_manager.all_gather(vol, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)  # (T, H, W, ch)
+        full = self.ccl_manager.all_gather(vol, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
         return ttnn.to_layout(ttnn.reshape(full, (t * h * w, ch)), ttnn.TILE_LAYOUT)
 
     def forward(
@@ -945,13 +805,8 @@ class DeterministicStages(Module):
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
         """``x`` is ``(tokens, in_channels)`` channels-last in TILE layout, normalized latent.
 
-        Under spatial-W SP the activation is W-sharded from stage 1 on and gathered back to a
-        replicated volume before returning, so ``dims`` here is always the FULL ``(T, H, W)``.
-
-        ``gather_output=False`` skips that final all-gather and returns this chip's W-band
-        ``(T*H*(W/sp), ch)`` instead -- for the W-sharded det->stage-5 handoff, where stage 5 consumes
-        the band directly (same ``sp_axis``, same W order) rather than re-sharding a replicated context.
-        ``dims`` is still the FULL ``(T, H, W)``; the caller derives ``W/sp`` from ``self.sp``.
+        ``dims`` is always the FULL ``(T, H, W)``. ``gather_output=False`` skips the final
+        all-gather and returns this chip's W-band ``(T*H*(W/sp), ch)`` for stage 5 to consume directly.
         """
         x = self._conv_in(x)
         count = len(self.upsamples) if stages is None else stages
@@ -959,7 +814,7 @@ class DeterministicStages(Module):
         for stage in range(count):
             x, dims, sharded = self._run_stage(x, stage, dims, sharded=sharded, drop_leading_frame=drop_leading_frame)
         if sharded and gather_output:
-            x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
+            x = self._wgather(x, dims)
             log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
 
@@ -967,34 +822,29 @@ class DeterministicStages(Module):
     def _conv_in(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return self.conv_in(x)
 
-    # Labelled with the dims going IN: the out-dims do not exist until the upsample runs, and a span
-    # names itself at open so a leaked one is still identifiable.
     @timing_tree.span(
         "mesh_device", lambda self, x, stage, dims, **k: f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"
     )
     def _run_stage(
         self, x: ttnn.Tensor, stage: int, dims: tuple[int, int, int], *, sharded: bool, drop_leading_frame: bool
     ) -> tuple[ttnn.Tensor, tuple[int, int, int], bool]:
-        """One deterministic stage: the reshard at the stage-0 -> 1 boundary, tables and plan, the
-        blocks, the upsample. Returns the activation, its FULL out-dims, and whether it is W-sharded."""
+        """One deterministic stage. Returns the activation, its FULL out-dims, and whether it is W-sharded."""
         t, h, w = dims
         stage_sharded = self._w_sharded and stage > 0
         if stage_sharded:
             assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
             if not sharded:
-                x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
+                x = self._wshard(x, dims)
                 sharded = True
         local_dims = (t, h, w // self.sp) if stage_sharded else dims
         cos, sin, plan = self._stage_setup(stage, dims, stage_sharded)
         x = self._run_blocks(x, stage, local_dims, cos, sin, plan, stage_sharded)
         x, out_dims = self._upsample(x, stage, local_dims, drop_leading_frame)
         if stage_sharded:
-            out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
+            out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)
         log_dram(self.mesh_device, f"det stage {stage} upsampled to {out_dims} sharded={stage_sharded}")
         return x, out_dims, sharded
 
-    # Tables and plan are per-stage setup, not block work; timed apart so a stage's number is its
-    # blocks rather than its blocks plus whatever it had to build first.
     @timing_tree.span(
         "mesh_device",
         lambda self, stage, *a: f"stage {stage + 1} setup: rope tables + plan",
@@ -1008,8 +858,6 @@ class DeterministicStages(Module):
         plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
         return cos, sin, plan
 
-    # dim read from the input rather than after the blocks: NABlock is residual, so its channel
-    # count is unchanged by them.
     @timing_tree.span(
         "mesh_device",
         lambda self, x, stage, *a: f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}",
@@ -1028,23 +876,18 @@ class DeterministicStages(Module):
 class DiffVAEDecoder(Module):
     """The whole LTX-2.5 diffusion video decoder: deterministic stages then the diffusion stage.
 
-    Takes the same normalized latent the conv decoder takes and returns pixels, so it can drop
-    into the pipeline in its place.
+    Takes the same normalized latent the conv decoder takes and returns pixels.
 
-    Two temporal adjustments frame the deterministic stages and are easy to mistake for noise:
-    before stage 1 the last latent frame is replicated (:attr:`ghost_latent_frames` times) to
-    give NATTEN a trailing border, and after stage 4 that appendix is cropped back off. They
-    are inverse halves of one workaround — apply the pad without the crop and the video grows
-    16 spurious frames.
+    Two temporal adjustments frame the deterministic stages: before stage 1 the last latent frame
+    is replicated :attr:`ghost_latent_frames` times to give the attention a trailing border, and
+    after stage 4 that appendix is cropped back off. Apply the pad without the crop and the video
+    grows spurious frames.
     """
 
-    #: The conv decoder can hand back YUV 4:2:0 straight off the mesh; this one returns host
-    #: pixels, so the pipeline keeps the float export path when this decoder is installed.
     supports_yuv = True
 
-    #: Unlike the conv decoder, this one cannot share the mesh with the transformer: its stage-5
-    #: activations are ~8.5 GB at 1920x1088, against the ~2.6 GB a resident 22B DiT leaves free.
-    #: The pipeline therefore evicts the DiT before decode even under static loading.
+    #: Stage-5 activations are too large to share the mesh with a resident DiT, so the pipeline
+    #: evicts the DiT before decode. Overridden below when stage 5 is sharded.
     requires_exclusive_residency = True
 
     def __init__(
@@ -1064,26 +907,17 @@ class DiffVAEDecoder(Module):
         super().__init__()
         from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
 
-        # The ~8.5 GB that makes this decoder demand the mesh to itself is the REPLICATED figure:
-        # 78x272x480 sites x 256 channels x 2 B is ~5.2 GB for ONE stage-5 activation with every
-        # chip holding the whole volume. W-sharded over sp (and TP over heads) each chip holds
-        # about an eighth of that, which may well fit beside a resident 22B DiT.
-        #
-        # This matters beyond memory: eviction is what invalidates the transformer's CAPTURED
-        # TRACE, which is why traced + DiffVAE is refused outright under static loading. A sharded
-        # decoder that does not need the mesh to itself never evicts, so both can stay resident and
-        # traced -- the shape a serving loop wants. DIFFVAE_EXCLUSIVE=1 forces the old behaviour.
+        # A sharded stage 5 holds a fraction of the volume per chip and can sit beside a resident
+        # DiT, which also keeps the DiT's captured trace valid. DIFFVAE_EXCLUSIVE=1 forces eviction.
         if stage5_sp_axis is not None:
             self.requires_exclusive_residency = os.environ.get("DIFFVAE_EXCLUSIVE") == "1"
 
         self.config = config
         self.mesh_device = mesh_device
         self._timestep = None
-        # Set True by the pipeline after warm-up, as for the conv decoder: forward() then captures
-        # the device half of the decode as a ttnn trace on its first call and replays it after.
+        # Set True by the pipeline after warm-up: forward() then captures the device half of the
+        # decode as a ttnn trace on its first call and replays it after.
         self._vae_traced = False
-        # Without a manager every chip decodes the whole volume, which is correct but costs the
-        # mesh: memory per chip then scales with frame count rather than with frames/mesh size.
         self.ccl_manager = ccl_manager
         self.patch_size = config["patch_size"]
         self.out_channels = config["out_channels"]
@@ -1091,7 +925,7 @@ class DiffVAEDecoder(Module):
         self.stage5_kernel = config["stage5_kernel"]
         # Upstream: (stage_kernels[0][0] // 2) * 2 latent frames of trailing replication.
         self.ghost_latent_frames = (config["stage_kernels"][0][0] // 2) * 2
-        # Composed temporal upscale of the four upsamples, which is also the ghost's pixel cost.
+        # Composed temporal upscale of the four upsamples.
         self.time_scale = math.prod(stride[0] for stride, _ in config["upsamples"])
 
         self.stages = DeterministicStages(
@@ -1126,9 +960,8 @@ class DiffVAEDecoder(Module):
             sp_axis=stage5_sp_axis,
             tp_axis=stage5_tp_axis,
         )
-        # W-sharded det->stage-5 handoff: when BOTH halves W-shard on the same axis, the det stages
-        # hand their context over W-sharded instead of all-gathering it to a replicated volume that
-        # stage 5 would immediately re-shard. Both the det _wgather and stage-5 _wshard_context go away.
+        # When both halves W-shard on the same axis, the context is handed over W-sharded instead
+        # of gathered and re-sharded.
         self._wsharded_handoff = (
             self.stages._w_sharded and self.stage5._w_sharded and self.stages.sp_axis == self.stage5.sp_axis
         )
@@ -1137,13 +970,9 @@ class DiffVAEDecoder(Module):
     def parameter_layout(self) -> str:
         """Which parameters this decoder has, as a token for the weight-cache path.
 
-        The ``DIFFVAE_DET_*`` and ``DIFFVAE_S5_FUSED_QKV`` flags change the parameter SET, not just the
-        arithmetic: one fused ``qkv`` or three projections, one packed ``gate_up`` or ``w_gate`` +
-        ``w_up``. The weight cache is otherwise keyed by parallel config, mesh and dtype alone, so a
-        cache written under one flag set does not load under another. Per deterministic stage
-        ``q1``/``q3`` and ``m1``/``m2`` count the projections a block owns; stage 5 has ``q1``/``q3``.
-        Read off the built modules rather than the environment: a flag that never reaches a stage
-        (fused qkv without a TP axis, say) must not change its key.
+        The fusion flags change the parameter SET (one fused ``qkv`` or three projections, one
+        packed ``gate_up`` or two), so a cache written under one flag set does not load under
+        another. Read off the built modules rather than the environment.
         """
 
         def stage_token(blocks) -> str:
@@ -1157,10 +986,7 @@ class DiffVAEDecoder(Module):
     def torch_state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
         """One state dict for the whole decoder, keyed for :meth:`load_torch_state_dict`.
 
-        Kept separate from applying it so the weights can go through the tt_dit disk cache, which
-        wants a provider it can skip calling on a cache hit. Both halves come from the same file
-        but need different remapping (folded statistics, permuted upsample projections), so each
-        half maps its own keys and they are prefixed by attribute name here.
+        Kept separate from applying it so the weights can go through the tt_dit disk cache.
         """
         from safetensors import safe_open
 
@@ -1194,15 +1020,13 @@ class DiffVAEDecoder(Module):
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
         """Deterministic stages on a ``(B, C, T, H, W)`` normalized latent, ghost cropped.
 
-        ``gather_output=False`` returns the context W-sharded (this chip's band), for the W-sharded
-        det->stage-5 handoff. ``dims`` is always the FULL ``(T, H, W)``; the ghost crop is on ``T``,
-        which is orthogonal to the W-shard, so it just uses ``W/sp`` columns per chip when sharded.
+        ``gather_output=False`` returns the context W-sharded (this chip's band). ``dims`` is
+        always the FULL ``(T, H, W)``.
 
-        ``latent_tt`` supplies the raw latent already on device, in the ROW_MAJOR
-        ``(1, C, T, H*W)`` form the device-preproc path uploads. It exists for tracing: a trace
-        refuses host-to-device writes during capture, so the upload has to happen outside the
-        captured region and the buffer be handed in. ``latent`` is then read for its shape only,
-        and the caller keeps ownership of the buffer.
+        ``latent_tt`` supplies the raw latent already on device, in the ROW_MAJOR ``(1, C, T, H*W)``
+        form the device-preproc path uploads. A trace refuses host-to-device writes during capture,
+        so the upload has to happen outside the captured region. ``latent`` is then read for its
+        shape only, and the caller keeps ownership of the buffer.
         """
         batch, channels, t, h, w = latent.shape
         assert batch == 1, f"batched decode is not implemented; got batch={batch}"
@@ -1210,9 +1034,7 @@ class DiffVAEDecoder(Module):
 
         ghost = self.ghost_latent_frames
         if os.environ.get("DIFFVAE_DEVICE_PREPROC") == "1":
-            # Upload the latent as-is and do the ghost pad and channels-last flatten on device, so the
-            # only host step left before the pipeline is the transfer itself. The pad replicates the
-            # last frame, which is a slice plus a concat on the T axis.
+            # Upload the latent as-is; the ghost pad and channels-last flatten run on device.
             with timing_tree.span(self.mesh_device, "host->mesh: upload latent (raw)", category=timing_tree.HOST_XFER):
                 raw = latent_tt
                 if raw is None:
@@ -1230,7 +1052,7 @@ class DiffVAEDecoder(Module):
                 if latent_tt is None:
                     ttnn.deallocate(raw)
                 ttnn.deallocate(last)
-                moved = ttnn.permute(padded_tt, (0, 2, 3, 1))  # (1, T+ghost, H*W, C)
+                moved = ttnn.permute(padded_tt, (0, 2, 3, 1))
                 ttnn.deallocate(padded_tt)
                 x = ttnn.to_layout(ttnn.reshape(moved, ((t + ghost) * h * w, channels)), ttnn.TILE_LAYOUT)
                 ttnn.deallocate(moved)
@@ -1245,14 +1067,12 @@ class DiffVAEDecoder(Module):
 
         x, dims = self.stages(x, dims=(t + ghost, h, w), gather_output=gather_output)
         sharded_out = self.stages._w_sharded and not gather_output
-        w_eff = dims[2] // self.stages.sp if sharded_out else dims[2]  # local W columns per chip
+        w_eff = dims[2] // self.stages.sp if sharded_out else dims[2]
         keep = self.context_frames(t)
         with timing_tree.span(self.mesh_device, "ghost crop on T", category=timing_tree.RESHAPE):
             if keep < dims[0]:
                 channels_out = self.config["stage_channels"][-1]
-                # Each step here allocates a full copy of the uncropped volume, which at 1920x1088 is
-                # 2.7 GB against 31.8 GB of DRAM, so they are freed as they die rather than at GC. The
-                # crop is on T (frame axis), which the W-shard leaves untouched -- just use w_eff columns.
+                # The crop is on T, which the W-shard leaves untouched.
                 frames = ttnn.reshape(
                     ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * w_eff, channels_out)
                 )
@@ -1264,7 +1084,7 @@ class DiffVAEDecoder(Module):
                 dims = (keep, dims[1], dims[2])
         return x, dims
 
-    @timing_tree.span("mesh_device", "decode TOTAL", root=True)  # the tree hangs off this node
+    @timing_tree.span("mesh_device", "decode TOTAL", root=True)
     def decode(
         self,
         latent: torch.Tensor,
@@ -1277,15 +1097,12 @@ class DiffVAEDecoder(Module):
     ) -> torch.Tensor | ttnn.Tensor:
         """Normalized ``(B, C, T, H, W)`` latent to ``(B, 3, T', H', W')`` pixels.
 
-        ``noise`` is an input, not an implementation detail: stage 5 predicts x0 from it in a
-        single step. Pass it to compare against a reference that drew its own.
+        ``noise`` is an input: stage 5 predicts x0 from it in a single step. Pass it to compare
+        against a reference that drew its own.
 
         ``latent_tt`` and ``device_out`` move the two host boundaries out of the way so the whole
-        decode can be captured as one trace: the upload happens before the region and the PCIe pull
-        after it. See :meth:`forward_context` and :meth:`DiffVAEStage5.forward`.
-
-        The whole decode is one root span: the tree hangs off it, and its total is an honesty check
-        against the caller's own wall-clock measurement of the same call.
+        decode can be captured as one trace. See :meth:`forward_context` and
+        :meth:`DiffVAEStage5.forward`.
         """
         out, _ = self._decode(
             latent, noise=noise, seed=seed, latent_tt=latent_tt, device_out=device_out, output_type=output_type
@@ -1299,8 +1116,6 @@ class DiffVAEDecoder(Module):
         context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
         grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
         channels_out = self.config["stage_channels"][-1]
-        # W-sharded handoff: context is this chip's band; reshape to the local site count stage 5's
-        # W-sharded path expects and skip its re-shard (the det->stage-5 all-gather + re-shard both go).
         with timing_tree.span(self.mesh_device, "context reshape for stage 5", category=timing_tree.RESHAPE):
             if self._wsharded_handoff:
                 w_local = grid.w // self.stages.sp
@@ -1308,9 +1123,7 @@ class DiffVAEDecoder(Module):
             else:
                 context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
 
-        # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device in the patchified
-        # layout. Host generation is proportional to the OUTPUT volume, not the latent -- 908M floats at
-        # 1080p 6s -- and a caller supplying its own noise pays neither path.
+        # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device.
         if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
             shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
             with timing_tree.span(
@@ -1318,9 +1131,8 @@ class DiffVAEDecoder(Module):
             ):
                 noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
 
-        # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0]. Uploaded
-        # once and kept: a constant on the per-decode path is still a host-to-device write, which a
-        # trace refuses during capture.
+        # default_num_inference_steps is 1 on this checkpoint, so the timestep is [1.0]. Uploaded
+        # once and kept: a trace refuses host-to-device writes during capture.
         if self._timestep is None:
             self._timestep = ttnn.from_torch(
                 torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
@@ -1344,14 +1156,11 @@ class DiffVAEDecoder(Module):
     def decode_device(self, raw: ttnn.Tensor, t: int, h: int, w: int, seed: int):
         """The device half of the decode: raw latent buffer in, this chip's pixel volume out.
 
-        Everything between the two host boundaries -- ghost pad, conv_in, the deterministic stages,
-        the crop, stage 5 with its device-drawn noise, the channel trim and unpatchify -- so that it
-        captures as one ttnn trace; ``forward`` passes ``traced=True`` once the pipeline has flipped
-        ``_vae_traced``. ``raw`` is the ``(1, C, T, H*W)`` ROW_MAJOR upload the device-preproc path
-        reads. Returns the volume and the stage-5 grid ``(T', H', W')`` as plain ints, which the
-        tracer passes through.
+        Everything between the two host boundaries, so that it captures as one ttnn trace. ``raw``
+        is the ``(1, C, T, H*W)`` ROW_MAJOR upload the device-preproc path reads. Returns the volume
+        and the stage-5 grid ``(T', H', W')`` as plain ints, which the tracer passes through.
         """
-        shape_only = torch.empty(1, self.in_channels, t, h, w)  # forward_context reads it for its shape
+        shape_only = torch.empty(1, self.in_channels, t, h, w)
         vol, grid = self._decode(shape_only, noise=None, seed=seed, latent_tt=raw, device_out=True, output_type="float")
         return vol, grid.t, grid.h, grid.w
 
@@ -1359,7 +1168,7 @@ class DiffVAEDecoder(Module):
         """One decode through the captured trace (captured on the first call), pixels on the host.
 
         The latent is uploaded to a fresh buffer each call; the tracer copies it into the trace's
-        own input buffer, so the fresh one is freed afterwards -- except on the capture call, where
+        own input buffer, so the fresh one is freed afterwards, except on the capture call, where
         the fresh buffer IS the trace's input and has to stay.
         """
         from .diffvae_ltx_stage5 import Grid
@@ -1395,16 +1204,13 @@ class DiffVAEDecoder(Module):
         noise: torch.Tensor | None = None,
         seed: int = 0,
     ) -> torch.Tensor:
-        """``decode`` behind the pipeline's decoder signature, so this can stand in for the
-        conv decoder in ``decode_latents``.
+        """``decode`` behind the pipeline's decoder signature.
 
         ``output_type`` matches ``LTXVideoDecoder.forward``: ``float`` keeps ``[-1, 1]``, ``rgb``
-        maps it to planar uint8 the same way ``utils.tensor.float_to_uint8`` does on device.
-        ``yuv`` converts and gathers YUV 4:2:0 on device, which needs
-        ``DIFFVAE_DEVICE_UNPATCHIFY=1`` so the pixels exist on device in the first place.
+        maps it to planar uint8, ``yuv`` converts and gathers YUV 4:2:0 on device (needs
+        ``DIFFVAE_DEVICE_UNPATCHIFY=1``).
         """
-        # DIFFVAE_TRACED=0 keeps this decoder eager inside an otherwise traced pipeline, the
-        # configuration every traced pipeline number before 2026-09-15 was measured in.
+        # DIFFVAE_TRACED=0 keeps this decoder eager inside an otherwise traced pipeline.
         if self._vae_traced and os.environ.get("DIFFVAE_TRACED", "1") != "0":
             if noise is not None:
                 msg = "a traced decode draws its noise on device; a caller-supplied noise cannot enter the trace"

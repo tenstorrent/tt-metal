@@ -1,18 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
 """LTX-2.5 DiffVAE decoder stage 5.
 
-Stage 5 denoises patchified noised pixels ``x_t`` under a deterministic context volume
-produced by stages 1-4. It is a stack of ``DiffusionNABlock``s -- 3D neighborhood
-attention plus a SwiGLU MLP -- modulated by a shared AdaLN-Zero projection of the
-timestep embedding. With ``model_output_type="x0"`` and one inference step, a single
-pass of :meth:`DiffVAEStage5.forward` returns pixels.
+Stage 5 denoises patchified noised pixels ``x_t`` under the context volume produced by stages
+1-4: a stack of ``DiffusionNABlock``s (3D neighborhood attention plus a SwiGLU MLP) modulated
+by a shared AdaLN-Zero projection of the timestep embedding. With ``model_output_type="x0"``
+and one inference step, a single pass of :meth:`DiffVAEStage5.forward` returns pixels.
 
 Port of ``ltx_core.model.video_vae``: ``DiffusionVideoDecoder.forward_diff_step`` plus the
-``transformer/combined/`` pathway. The 3D neighborhood attention itself is not implemented
-here -- see :func:`neighborhood_attention_3d`.
+``transformer/combined/`` pathway.
 """
 
 from __future__ import annotations
@@ -61,9 +58,9 @@ __all__ = [
     "unpatchify",
 ]
 
-# Number of AdaLN-Zero chunks in the shared projection. Only 4 are consumed
-# (scale/shift for MSA and MLP); the 3 gate chunks exist for checkpoint shape
-# compatibility because static gates were folded into Linear weights at export.
+# AdaLN-Zero chunks in the shared projection. Only 4 are consumed (scale/shift for MSA and MLP);
+# the 3 gate chunks exist for checkpoint shape compatibility, the static gates having been folded
+# into Linear weights at export.
 NUM_ADALN_CHUNKS = 7
 
 TILE = 32
@@ -89,9 +86,8 @@ class DiffVAEStage5Config:
     dim: int = 256
     head_dim: int = 64
     kernel_size: tuple[int, int, int] = (11, 11, 11)
-    # Generalized Neighborhood Attention query-group stride, physical (t,h,w). (1,1,1) is the shipped
-    # architecture: standard neighborhood attention, every query centered on its own window. Anything
-    # larger shares one window across each group of queries, which the network was not trained for.
+    # Generalized Neighborhood Attention query-group stride, physical (t,h,w). (1,1,1) is the
+    # shipped architecture; anything larger shares one window across each group of queries.
     gna_stride: tuple[int, int, int] = (1, 1, 1)
     context_channels: int = 256
     mlp_hidden: int = 1024
@@ -120,16 +116,6 @@ class DiffVAEStage5Config:
     @property
     def resolved_gna_stride(self) -> tuple[int, int, int]:
         """``gna_stride``, or ``DIFFVAE_S5_GNA_STRIDE`` when the config is left at the default.
-
-        The single place stage 5 resolves its stride, so every backend below reads the same value
-        and the attention executors take it as an argument rather than reading the environment
-        themselves.
-
-        The knob is stage-5 scoped rather than decoder-wide because the deterministic stages have
-        smaller kernels: a stride legal for
-        stage 5's 11^3 window is rejected by a stage whose kernel is 7 ("neighborhood_stride t=8
-        must not exceed the effective kernel t=7"). That check reports OP-order axes, so a width
-        stride surfaces as `t`, which makes the message doubly confusing.
 
         An explicitly configured stride wins over the environment; (1,1,1) is the shipped
         architecture, so it is indistinguishable from "not configured".
@@ -160,25 +146,13 @@ class DiffVAEStage5Config:
 
 @dataclass(frozen=True)
 class NAKernel:
-    """Which NA3D executor stage 5 runs, and the layout decisions that follow from it.
-
-    Everything the W-SP path sets up -- the resharded context, the W-sharded RoPE tables, the local
-    W extent, the per-chip row count -- is identical whichever W-sharded backend runs; only the
-    attention call differs. Carrying that as a field rather than re-deriving it from the name means
-    the dispatch and the shapes cannot disagree, and putting a backend on the sharded path is a
-    one-line change in the table below instead of four scattered ones.
-
-    The other three fields used to be independent environment variables, which let combinations
-    exist that no executor honours: DIFFVAE_BRICKED_FLAT only ever countermanded
-    DIFFVAE_S5_FLAT_SEQ for one backend, and DIFFVAE_S5_KEEP_BRICKED did nothing off the bricked
-    path. As fields they are stated once, per kernel, where the reason for each is visible.
-    """
+    """Which NA3D executor stage 5 runs, and the layout decisions that follow from it."""
 
     #: The backend string callers select with (DIFFVAE_STAGE5_BACKEND, or the ctor kwarg).
     name: str
     #: Keep this chip's W-shard of the sequence through the whole stage.
     w_sharded: bool = False
-    #: Our op: sites in bricked order, one tile row per 3D brick.
+    #: Sites in bricked order, one tile row per 3D brick.
     bricked: bool = False
     #: Convert to bricked order once at stage entry and back at exit instead of per block.
     keep_bricked: bool = False
@@ -195,11 +169,7 @@ _NA_KERNELS: dict[str, NAKernel] = {
 
 
 def resolve_na_kernel(backend: str | NAKernel) -> NAKernel:
-    """The kernel record for a backend name. Rejects an unknown one HERE, at construction.
-
-    Left to itself an unknown name would survive the whole build -- weights included -- and only
-    surface on the first forward.
-    """
+    """The kernel record for a backend name. Rejects an unknown one at construction."""
     if isinstance(backend, NAKernel):
         return backend
     try:
@@ -220,20 +190,14 @@ def neighborhood_attention_3d(
     backend: str = "linear_order",
     gna_stride: tuple[int, int, int] | None = None,
 ) -> ttnn.Tensor:
-    """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors.
+    """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors, replicated.
 
     Q/K/V arrive already RMS-normed, RoPE'd and (for Q) pre-scaled, so ``scale`` is 1.0.
-    Returns ``(B, T, H, W, num_heads * head_dim)``. Mirrors upstream's
-    ``NAAttentionCallable`` contract.
+    Returns ``(B, T, H, W, num_heads * head_dim)``, the full volume on every chip.
 
-    With a ``ccl_manager`` the attention is split across the mesh instead of every chip
-    evaluating the whole volume; without one it runs replicated. Either way the result is the
-    full volume on every chip, so nothing downstream changes.
-
-    ``backend`` picks the executor: ``"linear_order"`` (default) keeps tokens in natural order and
-    is the path the ``ccl_manager`` split rides on; ``"bricked"`` is our op run replicated over the
-    whole volume (it ignores ``ccl_manager``), the oracle the W-sharded bricked path is compared
-    against.
+    ``"linear_order"`` keeps tokens in natural order and splits the attention across the mesh
+    when given a ``ccl_manager``; ``"bricked"`` runs the bricked op over the whole volume and
+    ignores ``ccl_manager``.
     """
     if backend == "bricked":
         return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=gna_stride)
@@ -250,9 +214,8 @@ def neighborhood_attention_3d(
 def patchify(x: torch.Tensor, patch_size: int) -> torch.Tensor:
     """Space-to-depth on ``(B, C, T, H, W)``; inverse of :func:`unpatchify`.
 
-    Channel order is ``(c, w_sub, h_sub)`` -- the W sub-index is the *outer* of the two
-    spatial ones, matching upstream's ``b c (f p) (h q) (w r) -> b (c p r q) f h w``
-    where ``q`` indexes H and ``r`` indexes W.
+    Channel order is ``(c, w_sub, h_sub)``: the W sub-index is the *outer* of the two spatial
+    ones, matching upstream's ``b c (f p) (h q) (w r) -> b (c p r q) f h w``.
     """
     batch, channels, t, h, w = x.shape
     p = patch_size
@@ -283,11 +246,11 @@ class _RopeParts(NamedTuple):
 
 @dataclass(frozen=True)
 class _RopeTables:
-    """The fused table as two broadcastable pieces instead of one volume-sized tensor.
+    """The RoPE table as two broadcastable pieces, or one fused bricked-order table.
 
-    ``frame`` is ``(1, 1, rows_per_frame, head_dim)`` and carries the H and W lanes, which are the
-    same in every frame; ``time`` is ``(1, t, 1, head_dim)`` and carries the T lanes, which are the
-    same at every site within a frame. See :func:`_build_rope_tables`.
+    ``frame`` is ``(1, 1, rows_per_frame, head_dim)`` and carries the H and W lanes; ``time`` is
+    ``(1, t, 1, head_dim)`` and carries the T lanes. When ``fused`` is set (bricked order) it is
+    the whole rotation and the two pieces are unused.
     """
 
     frame: _RopeParts
@@ -335,20 +298,13 @@ def _build_rope_tables(
     mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
 ) -> _RopeTables:
-    """Fused (T, H, W) absolute RoPE, factored into one frame and one row per frame. Replicated only:
-    the W-sharded kernel keeps bricked, so a W-shard always takes :func:`_build_bricked_rope_tables`.
+    """Absolute (T, H, W) RoPE factored into one frame piece and one row-per-frame piece. Replicated
+    only: a W-sharded stage 5 keeps bricked and takes :func:`_build_bricked_rope_tables`.
 
-    Upstream rotates in W-slabs of ``rope_num_tiles`` with running absolute offsets, which
-    is arithmetically one full-volume rotation over positions ``0..W-1``; the slabbing is
-    a Dynamo-shape concern only.
-
-    A row of the fused table is ``[T-lanes(t) | H-lanes(h) | W-lanes(w)]``, so the H and W lanes
-    repeat in every frame and the T lanes repeat at every site within a frame. Storing those two
-    pieces rather than their combination keeps the table off the critical memory path: the volume
-    form is a full activation per table, 9.7 GB each at 6s 1920x1088, and cos plus sin were more
-    than half of everything stage 5 held. Each piece is zero outside its own lanes, so
-    ``cos == frame.cos + time.cos`` exactly, and :func:`_apply_rope` distributes the multiply over
-    the two instead of reassembling the row.
+    A row of the full table is ``[T-lanes(t) | H-lanes(h) | W-lanes(w)]``, so the H and W lanes
+    repeat in every frame and the T lanes repeat at every site within a frame. Each piece is zero
+    outside its own lanes, so ``cos == frame.cos + time.cos`` exactly and :func:`_apply_rope`
+    distributes the multiply over the two instead of materialising a volume-sized table.
     """
     head_dim = sum(dim_split)
 
@@ -366,10 +322,9 @@ def _build_rope_tables(
         )
 
     def frame_piece(fn) -> ttnn.Tensor:
-        # q and k carry heads inside the row axis and the rotation is per-site, so each site's row
-        # repeats once per head.
+        # q and k carry heads inside the row axis, so each site's row repeats once per head.
         rows = (lanes(fn, 1, rows_h) + lanes(fn, 2, rows_w)).reshape(grid.h * grid.w, 1, head_dim)
-        full = rows.repeat(1, num_heads, 1)  # (H*W, num_heads, head_dim), rows ordered (h, w)
+        full = rows.repeat(1, num_heads, 1)
         return upload(full, (1, 1, grid.h * grid.w * num_heads, head_dim))
 
     def time_piece(fn) -> ttnn.Tensor:
@@ -393,11 +348,8 @@ def _build_bricked_rope_tables(
     dtype: ttnn.DataType,
     w_shard: tuple[int, int] | None = None,
 ) -> _RopeTables:
-    """Fused RoPE in bricked site order, one row per (site, head).
-
-    The factored frame/time form does not survive bricking: T, H and W are interleaved inside
-    each 32-site brick. Built once per stage, sliced per band on ``T_br``.
-    """
+    """Fused RoPE in bricked site order, one row per (site, head). The factored frame/time form
+    does not survive bricking. Built once per stage, sliced per band on ``T_br``."""
     head_dim = sum(dim_split)
     brick_time, brick_height, brick_width = brick
 
@@ -487,13 +439,9 @@ def _apply_rope(
 ) -> ttnn.Tensor:
     """Rotate ``x`` at ``(1, frames, rows_per_frame, head_dim)``. **Consumes** ``x``.
 
-    ``x * cos`` is evaluated as ``x * frame.cos + x * time.cos``, the two pieces broadcasting over
-    the frame axis and the row axis respectively. That is two extra multiplies against not
-    materialising a table the size of the activation, and it holds no more live tensors than the
-    fused form did.
-
-    Bricked-order tables are fused (site order permutes T/H/W together, so the factoring does
-    not survive). ``tables.fused`` is then the whole rotation, same shape as ``x``.
+    With factored tables ``x * cos`` is evaluated as ``x * frame.cos + x * time.cos``, the two
+    pieces broadcasting over the frame axis and the row axis respectively. A fused (bricked) table
+    is the whole rotation, same shape as ``x``.
     """
     swapped = ttnn.matmul(x, pair_swap, compute_kernel_config=compute_kernel_config)
     if tables.fused is not None:
@@ -515,30 +463,20 @@ def _apply_rope(
 
 
 def _reshape_retiled(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
-    """Reshape across the tile grid via ROW_MAJOR, where layout is a pure stride change.
-
-    A TILE tensor cannot be reshaped in either of the last two dims without re-tiling,
-    which ``ttnn.reshape`` will not do.
-    """
+    """Reshape across the tile grid via ROW_MAJOR; ``ttnn.reshape`` will not re-tile the last two dims."""
     shape = tuple(shape)
     if tuple(x.shape) == shape:
         return x
     rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     out = ttnn.to_layout(ttnn.reshape(rm, shape), ttnn.TILE_LAYOUT)
-    # The untilized copy is dead once `out` exists, and at 1920x1088 it is 1.7 GB. Left to
-    # refcounting it survives long enough to matter: stage 5 calls this six times per block.
-    # Guarded because a ROW_MAJOR input is returned as-is, and that one belongs to the caller.
+    # A ROW_MAJOR input is returned as-is by to_layout, and that one belongs to the caller.
     if rm is not x:
         ttnn.deallocate(rm)
     return out
 
 
 def log_ccl_cache(ccl_manager, label: str) -> None:
-    """Under ``DIFFVAE_MEM_LOG``, itemise the CCL manager's persistent buffers by kind and shape.
-
-    The ping-pong pool keeps two buffers per shape it has ever served and never frees them, so the
-    DRAM a decode leaves behind is mostly here; ``log_dram`` shows the total, this shows what it is.
-    """
+    """Under ``DIFFVAE_MEM_LOG``, itemise the CCL manager's persistent ping-pong buffers by kind and shape."""
     if not os.environ.get("DIFFVAE_MEM_LOG") or ccl_manager is None:
         return
     rows = []
@@ -552,12 +490,7 @@ def log_ccl_cache(ccl_manager, label: str) -> None:
 
 
 def log_dram(mesh_device, label: str) -> None:
-    """Log allocated DRAM when ``DIFFVAE_MEM_LOG`` is set.
-
-    Peak memory is what stops this decoder at full resolution, and it is not obvious from the
-    source which tensors are still resident: an allocation failure names the op that asked for
-    memory, never the ones holding it. This makes the residency curve visible per block.
-    """
+    """Log allocated DRAM when ``DIFFVAE_MEM_LOG`` is set."""
     if not os.environ.get("DIFFVAE_MEM_LOG"):
         return
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
@@ -572,13 +505,9 @@ def log_dram(mesh_device, label: str) -> None:
 def _release_intermediates(tensors: Sequence[ttnn.Tensor], *, keep: ttnn.Tensor) -> None:
     """Free every distinct buffer among ``tensors`` except the one ``keep`` is using.
 
-    ``ttnn.reshape`` hands back a NEW Python object that may be a VIEW over its input's buffer,
-    and ``ttnn.deallocate`` defaults to ``force=True``. So the ``a is not b`` guard used elsewhere
-    in this file is not enough: two distinct objects can name one buffer, and the guard then frees
-    memory a live tensor is still reading, or frees the same buffer twice. In _brick_activation
-    that returned a stage-5 activation whose sites were half the bricked volume and half whatever
-    the next allocation had written over it -- end-to-end PCC 2%, and invisible to a unit test
-    because nothing allocated afterwards. Compare BUFFERS, which is what is being freed.
+    ``ttnn.reshape`` may hand back a new Python object that is a VIEW over its input's buffer, and
+    ``ttnn.deallocate`` defaults to ``force=True``, so an ``a is not b`` guard can free memory a
+    live tensor still reads. Compare buffers, which is what is being freed.
     """
     seen = {keep.buffer_address()} if keep.is_allocated() else set()
     for tensor in tensors:
@@ -592,13 +521,10 @@ def _release_intermediates(tensors: Sequence[ttnn.Tensor], *, keep: ttnn.Tensor)
 
 
 def _reshape_row_major(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
-    """Reshape and leave the result in ROW_MAJOR, for consumers that want it that way.
+    """Reshape and leave the result in ROW_MAJOR.
 
-    Tilizing a shape whose second-to-last dim is small is expensive out of proportion to the
-    data: TILE rounds both of the last two dims up to 32, so a trailing ``(num_heads, head_dim)``
-    of ``(4, 64)`` costs 8x its own size — 13 GB for a 1.7 GB activation at 1920x1088. The
-    neighborhood-attention primitive gathers rows in ROW_MAJOR anyway, so tilizing here only to
-    have it undone was paying that padding for nothing.
+    TILE pads both of the last two dims to 32, so a trailing ``(num_heads, head_dim)`` in TILE
+    costs many times its own size; the attention gathers rows in ROW_MAJOR anyway.
     """
     return ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), tuple(shape))
 
@@ -642,19 +568,16 @@ def _align_down(value: int, step: int) -> int:
 def _bands(t: int, *, frames: int | None, kernel: int, align: int = 1) -> tuple[_Band, ...]:
     """Split ``t`` frames into bands of ``frames``, each with the halo its windows reach into.
 
-    ``frames=None``, or a band long enough to cover everything, gives one band whose halo is
-    empty: every slice downstream is then a no-op and the volume runs whole, which is what short
-    videos and the parity tests do.
+    ``frames=None``, or a band covering everything, gives one band with an empty halo, so every
+    slice downstream is a no-op.
 
-    The halo comes from :func:`window_bounds`, the rule the attention plan itself is built from,
-    rather than from half the kernel: a query within half a kernel of either end has its window
-    shifted inward instead of truncated, so it reaches as far as ``kernel - 1`` frames the other
-    way. Taking the bound from the shared function also means a band's local windows are the global
-    ones shifted by ``pad_lo``, so the attention masks a band builds are the volume's own.
+    The halo comes from :func:`window_bounds` rather than half the kernel: a query within half a
+    kernel of either end has its window shifted inward instead of truncated, so it reaches as far
+    as ``kernel - 1`` frames the other way. A band's local windows are then the global ones
+    shifted by ``pad_lo``.
 
     ``align`` rounds lo / pad_lo down and pad_hi / layout_hi up to a multiple of the brick's T
-    extent, so those cuts stay contiguous in bricked order. The cheap extra cost is at most
-    ``align - 1`` frames of halo per band edge (3 at brick ``(8, 2, 2)`` with window radius 5).
+    extent, so those cuts stay contiguous in bricked order.
     """
     t_layout = _align_up(t, align)
     if frames is None or frames >= t:
@@ -677,11 +600,7 @@ def _bands(t: int, *, frames: int | None, kernel: int, align: int = 1) -> tuple[
 
 
 def _slice_rows(x: ttnn.Tensor, lo: int, hi: int) -> ttnn.Tensor:
-    """Rows ``[lo, hi)`` of a ``(1, batch, rows, ·)`` tensor, or ``x`` itself if that is every row.
-
-    Returning the input unsliced matters for more than speed: it keeps the single-band path free of
-    copies, so running unslabbed costs exactly what it did before bands existed.
-    """
+    """Rows ``[lo, hi)`` of a ``(1, batch, rows, ·)`` tensor, or ``x`` itself if that is every row."""
     shape = tuple(x.shape)
     if (lo, hi) == (0, shape[-2]):
         return x
@@ -701,7 +620,7 @@ def _modulate(x: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) -> ttnn.Te
 
 
 def _modulate_consuming(x: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) -> ttnn.Tensor:
-    """``_modulate`` that frees ``x`` and its own intermediate, for volume-sized inputs."""
+    """``_modulate`` that frees ``x`` and its own intermediate."""
     scaled = ttnn.multiply(x, ttnn.add(scale, 1.0))
     ttnn.deallocate(x)
     out = ttnn.add(scaled, shift)
@@ -710,7 +629,7 @@ def _modulate_consuming(x: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) 
 
 
 def _add_consuming(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
-    """``a + b``, freeing both operands. Residual adds are where a block's copies pile up."""
+    """``a + b``, freeing both operands."""
     out = ttnn.add(a, b)
     ttnn.deallocate(a)
     ttnn.deallocate(b)
@@ -745,8 +664,7 @@ class _TimestepEmbedder(Module):
         self.mlp = TimestepEmbedding(256, t_emb_dim, act_fn="silu", dtype=dtype, mesh_device=mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # The checkpoint ships a bare Sequential (mlp.0 / mlp.2), not upstream's own
-        # timestep_embedder.linear_{1,2} spelling; upstream's loader renames it too.
+        # The checkpoint ships a bare Sequential (mlp.0 / mlp.2), not linear_{1,2}.
         for src, dst in (("0", "linear_1"), ("2", "linear_2")):
             for leaf in ("weight", "bias"):
                 key = f"mlp.{src}.{leaf}"
@@ -775,24 +693,15 @@ class _NeighborhoodAttention3D(Module):
         self.config = config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
-        # Which NA3D executor runs: "linear_order"/"bricked" run the attention replicated (whole volume
-        # on every chip); "bricked_sp_w_sharded" keeps this chip's W-shard of the
-        # sequence through the whole attention (K/V reached internally), for full-stage spatial-W SP.
         # Resolved by the stage and handed down, so the three levels cannot pick different backends.
         self.kernel = resolve_na_kernel(na3d_backend)
         self.sp_axis = sp_axis
-        # TP-over-heads on a second mesh axis (only meaningful under a w_sharded kernel): the
-        # attention runs on heads/tp of the heads per chip, gathered back before the output
-        # projection.
+        # TP-over-heads on a second mesh axis, only meaningful under a w_sharded kernel.
         self.tp_axis = tp_axis
         self.scale = config.head_dim**-0.5
 
-        # DIFFVAE_TP_PROJ=1: make the qkv projections COLUMN-PARALLEL over the TP axis (shard the
-        # weight on the head-output dim). Each chip then computes only its heads' q/k/v -- a local
-        # matmul, no comms -- instead of all heads redundantly, and feeds the attention already
-        # head-sharded (its internal head-slice is skipped; the existing head all-gather still runs
-        # before the replicated out-proj). qkv is 3 of the 4 projections, so this reclaims the bulk
-        # of the ~0.9s redundant projection compute without adding an all-reduce.
+        # DIFFVAE_TP_PROJ=1: column-parallel qkv over the TP axis, so each chip computes only its
+        # heads' q/k/v and feeds the attention already head-sharded. The out-proj stays replicated.
         self.tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
         tp = int(list(mesh_device.shape)[tp_axis]) if self.tp_proj else 1
         assert not self.tp_proj or config.num_heads % tp == 0, f"num_heads={config.num_heads} not divisible by tp={tp}"
@@ -801,11 +710,9 @@ class _NeighborhoodAttention3D(Module):
         linear = {"bias": True, "mesh_device": mesh_device, "dtype": dtype}
         qkv_linear = dict(linear)
         if self.tp_proj:
-            qkv_linear["weight_mesh_axes"] = [None, tp_axis]  # shard the output (heads) over the TP axis
+            qkv_linear["weight_mesh_axes"] = [None, tp_axis]
             qkv_linear["bias_mesh_axes"] = [None, tp_axis]
-        # DIFFVAE_S5_FUSED_QKV=1: keep the checkpoint's own fused qkv as one matmul instead of
-        # splitting it into three. Three column-parallel projections are 256->64 each, a narrow GEMM;
-        # fused it is one 256->192. The split then costs three slices of the packed output.
+        # DIFFVAE_S5_FUSED_QKV=1: one fused qkv matmul, split by slicing the packed output.
         self.fused_qkv = os.environ.get("DIFFVAE_S5_FUSED_QKV", "0") == "1"
         if self.fused_qkv:
             self.qkv = Linear(config.dim, 3 * config.dim, **qkv_linear)
@@ -813,7 +720,7 @@ class _NeighborhoodAttention3D(Module):
             self.to_q = Linear(config.dim, config.dim, **qkv_linear)
             self.to_k = Linear(config.dim, config.dim, **qkv_linear)
             self.to_v = Linear(config.dim, config.dim, **qkv_linear)
-        self.proj = Linear(config.dim, config.dim, **linear)  # out-proj stays replicated (full width in)
+        self.proj = Linear(config.dim, config.dim, **linear)
 
         norm = {
             "norm_eps": config.norm_eps,
@@ -841,11 +748,10 @@ class _NeighborhoodAttention3D(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Checkpoints ship one Linear(dim, 3*dim) under qkv.*; the split is [q | k | v]
-        # along the output dim.
+        # Checkpoints ship one Linear(dim, 3*dim) under qkv.*, split [q | k | v] along the output dim.
         if self.fused_qkv:
-            # Kept fused, but regrouped: a contiguous column shard must be one device's own heads of
-            # all three of q, k and v, where the shipped order would give device 0 nothing but q.
+            # Regrouped so a contiguous column shard is one device's own heads of all three of q, k
+            # and v, where the shipped order would give device 0 nothing but q.
             cfg = self.config
             hd, hl = cfg.head_dim, self.heads_local
             devices = cfg.num_heads // hl
@@ -875,7 +781,7 @@ class _NeighborhoodAttention3D(Module):
             state[f"to_v.{leaf}"] = fused[2 * d :].clone()
 
     def _rope(self, x: ttnn.Tensor, tables: _RopeTables) -> ttnn.Tensor:
-        """**Consumes** ``x``, which callers pass as a temporary."""
+        """**Consumes** ``x``."""
         return _apply_rope(x, tables, pair_swap=self.pair_swap, compute_kernel_config=self.swap_compute_config)
 
     def _projected(self, projection, y: ttnn.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
@@ -901,12 +807,11 @@ class _NeighborhoodAttention3D(Module):
     ) -> ttnn.Tensor:
         """``y``: ``(1, batch, sites, dim)``. Returns the same shape.
 
-        ``grid`` is always the FULL ``(T, H, W)``. Under spatial-W SP (``bricked_sp_w_sharded``) ``y`` is
-        this chip's W-shard, so the local W extent is ``W/sp``; the shapes below use that while the
-        attention is still told the full W (its executor gathers the missing columns). ``tables``
-        must be W-sharded to match ``y`` in that mode (frame piece over this chip's H×(W/sp) rows).
+        ``grid`` is always the FULL ``(T, H, W)``. Under a W-sharded kernel ``y`` is this chip's
+        W-shard, so the local W extent is ``W/sp`` while the attention is told the full W.
+        ``tables`` must be W-sharded to match.
 
-        ``brick`` set means ``y`` is already in bricked site order (stage 5 keep-bricked): Q/K/V stay
+        ``brick`` set means ``y`` is already in bricked site order (keep-bricked): Q/K/V stay
         bricked, RoPE uses the fused bricked table, and the op is told ``already_bricked``.
         """
         cfg = self.config
@@ -923,11 +828,8 @@ class _NeighborhoodAttention3D(Module):
             if brick is not None
             else grid.t * grid.h * w_local
         )
-        # Frames are a separate axis rather than folded into the rows, which is what lets the RoPE
-        # pieces broadcast: the H/W piece over frames, the T piece over the rows within one. Under
-        # column-parallel qkv (tp_proj) the projections already emit only this chip's heads, so the
-        # per-head shapes use the local head count and the attention is told the heads are presharded.
-        # Bricked RoPE is fused -- one row per (site, head) -- so the T axis collapses.
+        # Frames are a separate axis so the factored RoPE pieces can broadcast. Bricked RoPE is
+        # fused (one row per site and head), so the T axis collapses.
         heads = self.heads_local
         heads_shape = (
             (1, 1, sites_local * heads, cfg.head_dim)
@@ -944,12 +846,8 @@ class _NeighborhoodAttention3D(Module):
             return out
 
         if brick is not None:
-            # Already bricked: RoPE output is (1, 1, sites*heads, hd); fold back to (B, heads, sites, hd).
-            # A RELABEL, not a copy -- the executor reads the same site-major buffer back out as
-            # (B, 1, sites, heads*hd). So nothing is freed here: ttnn.reshape hands back a new
-            # wrapper over the SAME buffer, and deallocating the input takes the reshape's memory
-            # with it (under TP the shapes already match, where it took the tensor's device too and
-            # crashed outright; above one head it silently returned half-overwritten activations).
+            # A relabel, not a copy: ttnn.reshape hands back a new wrapper over the SAME buffer, so
+            # the input must not be deallocated by object identity (see _release_intermediates).
             def to_bricked_seq(x: ttnn.Tensor) -> ttnn.Tensor:
                 target = (grid.batch, heads, sites_local, cfg.head_dim)
                 if tuple(x.shape) == target:
@@ -962,9 +860,7 @@ class _NeighborhoodAttention3D(Module):
         else:
             prep = to_volume
 
-        # Built and consumed one at a time. Holding q, k and v plus each one's untilized copy
-        # and RoPE temporaries is what exhausts DRAM at full resolution -- which is also why the
-        # fused path slices its packed output a lane at a time rather than all three up front.
+        # Lanes are built and consumed one at a time to bound peak DRAM.
         if self.fused_qkv:
             with timing_tree.span(self.mesh_device, "qkv-proj", category=timing_tree.PROJ, deep=True):
                 packed = self.qkv(y)
@@ -985,9 +881,7 @@ class _NeighborhoodAttention3D(Module):
                 v = prep(lane(2))
                 ttnn.deallocate(packed)
         else:
-            # Still one lane at a time (see above): the spans name each step without hoisting any
-            # projection past the norm/rope that consumes it, so peak DRAM is unchanged. All three
-            # lanes share a label, so the tree pools them into one row per step with n=3.
+
             def lane_unfused(projection, norm, *, scale=None, rope=True):
                 with timing_tree.span(self.mesh_device, "qkv-proj", category=timing_tree.PROJ, deep=True):
                     part = self._projected(projection, y, heads_shape)
@@ -1006,14 +900,10 @@ class _NeighborhoodAttention3D(Module):
             k = lane_unfused(self.to_k, self.k_norm)
             v = lane_unfused(self.to_v, None)
 
-        # The one place the executor is chosen. Everything that used to guard these arms -- the
-        # W-shard membership test, the flat-sequence opt-in, its per-backend override -- is now a
-        # field of the record being matched, so no two of them can disagree.
         match self.kernel.name:
             case "bricked_sp_w_sharded":
-                # Our op: this chip's W-shard plus the halo its windows reach into, and a per-device
-                # gather table carrying where that shard sits in the global volume. Window placement
-                # stays global, so a query near a shard seam still sees a full window.
+                # This chip's W-shard plus the halo its windows reach into. Window placement stays
+                # global, so a query near a shard seam still sees a full window.
                 from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
 
                 out = neighborhood_attention_3d_bricked_w_sharded(
@@ -1032,8 +922,6 @@ class _NeighborhoodAttention3D(Module):
                     stride=cfg.resolved_gna_stride,
                 )
             case _:
-                # Replicated: the whole volume on every chip. The module-level wrapper above picks
-                # gather or the unsharded bricked executor from the same name.
                 out = neighborhood_attention_3d(
                     q,
                     k,
@@ -1073,9 +961,6 @@ class DiffusionNABlock(Module):
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
-        # Resolve the backend once so the block and its attention agree on whether the sequence is
-        # W-sharded: under a w_sharded kernel the per-chip tensor holds only H*(W/sp) rows per frame,
-        # so the block's own frame slicing must use the local rows-per-frame, not the full W.
         self.kernel = resolve_na_kernel(na3d_backend)
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -1101,8 +986,7 @@ class DiffusionNABlock(Module):
             tp_axis=tp_axis,
         )
         self.norm2 = RMSNorm(config.dim, **norm)
-        # Fused [up | gate] projection: Linear's swiglu path packs the two halves into
-        # one GEMM and emits silu(gate) * up.
+        # Fused [up | gate] projection whose epilogue emits silu(gate) * up.
         self.mlp_gate_up = Linear(
             config.dim, config.mlp_hidden, bias=False, activation_fn="swiglu", mesh_device=mesh_device, dtype=dtype
         )
@@ -1130,34 +1014,24 @@ class DiffusionNABlock(Module):
         tables: tuple[_RopeTables, ...],
         brick: tuple[int, int, int] | None = None,
     ) -> list[ttnn.Tensor]:
-        """``x``: the volume as one ``(1, batch, band rows, dim)`` tensor per band, and the return
-        is the updated volume in the same form. **Consumes** ``x``; ``context`` is read by every
-        block and left alone.
+        """``x``: the volume as one ``(1, batch, band rows, dim)`` tensor per band; returns the
+        updated volume in the same form. **Consumes** ``x``; ``context`` is left alone.
 
         Attention is the only part that reads across sites, so each band runs on its own rows and
-        only the attention sees the band plus its halo, cropped back afterwards. Because the halo is
-        exactly what :func:`window_bounds` reaches (see :func:`_bands`), a padded band's local
-        windows are the volume's own shifted by ``pad_lo``, so every query kept sees the window it
-        would have seen whole and the crop is exact. One band is the whole volume with an empty
-        halo, so that path is unchanged.
-
-        Written as a sequence with each temporary freed as it dies rather than as nested
-        expressions, which is worth the verbosity: the nested form holds five or six band-sized
-        tensors at once and that is most of a block's peak. ``mod`` and its chunks are
-        ``(1, batch, 1, ·)``, so they cost nothing.
+        only the attention sees the band plus its halo, cropped back afterwards. Because the halo
+        is exactly what :func:`window_bounds` reaches, every query kept sees the window it would
+        have seen whole and the crop is exact.
         """
         dim = self.config.dim
-        # Adding the table to all 7 chunks and then reading 4 is upstream's
-        # _modulation: the gate chunks are computed and discarded.
+        # Adding the table to all 7 chunks and then reading 4 is upstream's _modulation.
         mod = ttnn.add(shared_modulation, self.scale_shift_table.data)
         scale_msa = _slice_last(mod, 0, dim)
         shift_msa = _slice_last(mod, dim, 2 * dim)
         scale_mlp = _slice_last(mod, 3 * dim, 4 * dim)
         shift_mlp = _slice_last(mod, 4 * dim, 5 * dim)
 
-        # Rows per frame on THIS chip. Under spatial-W SP the sequence is W-sharded, so a frame holds
-        # only H*(W/sp) rows here; the frame-granular band slicing below must use that local count.
-        # Bricked order groups sites by T_br, so the slice unit is one T-brick of sites instead.
+        # Rows per frame on THIS chip (H*(W/sp) under W-SP). In bricked order the slice unit is one
+        # T-brick of sites instead.
         if self.kernel.w_sharded:
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
             w_local = grid.w // sp
@@ -1165,13 +1039,10 @@ class DiffusionNABlock(Module):
         else:
             rows = sites_per_t_brick((grid.t, grid.h, grid.w), brick) if brick is not None else grid.h * grid.w
         frame_step = brick[0] if brick is not None else 1
-        # A local view of the volume so the caller's list is left alone; entries become None as
-        # this loop releases them.
+        # A local view of the volume; entries become None as this loop releases them.
         live: list[ttnn.Tensor | None] = list(x)
         out: list[ttnn.Tensor] = []
         for index, band in enumerate(bands):
-            # Bands own nothing they were handed: ``live`` is freed by this loop's own bookkeeping
-            # below, so anything derived from it is released here the moment it stops being read.
             with timing_tree.span(
                 self.mesh_device, "halo assemble (padded rows)", category=timing_tree.RESHAPE, deep=True
             ):
@@ -1200,9 +1071,8 @@ class DiffusionNABlock(Module):
 
             out.append(self._mlp(self._modulated("pre-mlp", self.norm2, y, scale_mlp, shift_mlp), y))
 
-            # A band's input rows are read as halo by its neighbours, so they die a beat after the
-            # band itself. Releasing them as soon as no band still to come reaches back that far is
-            # what keeps the volume from being resident twice while the new one is built up.
+            # A band's input rows are read as halo by its neighbours; release them once no band
+            # still to come reaches back that far.
             reach = bands[index + 1].pad_lo if index + 1 < len(bands) else bands[-1].pad_hi
             for other, entry in enumerate(live):
                 if entry is not None and bands[other].hi <= reach:
@@ -1274,8 +1144,7 @@ class DiffusionNABlock(Module):
         if len(parts) == 1:
             return parts[0]
         joined = ttnn.concat(parts, dim=-2)
-        # The halo slices are copies, but a part that happens to be a whole band is that band's own
-        # tensor, borrowed: the bands around this one still have to read it.
+        # A part that is a whole band is that band's own tensor, borrowed; the rest are copies.
         for part in parts:
             if not any(part is entry for entry in live):
                 ttnn.deallocate(part)
@@ -1304,11 +1173,8 @@ class _SharedAdaLNZero(Module):
         )
 
     def forward(self, t_emb: ttnn.Tensor, batch: int) -> ttnn.Tensor:
-        """``t_emb``: ``(1, 1, batch, t_emb_dim)``. Returns ``(1, batch, 1, 7 * dim)``.
-
-        Batch moves to dim 1 so a single size-1 site axis broadcasts the chunks over the
-        whole volume, which is upstream's ``(B, 1, 1, 1, C)`` view.
-        """
+        """``t_emb``: ``(1, 1, batch, t_emb_dim)``. Returns ``(1, batch, 1, 7 * dim)``, upstream's
+        ``(B, 1, 1, 1, C)`` view."""
         mod = self.proj(ttnn.silu(t_emb))
         if mod.dtype != self.out_dtype:
             mod = ttnn.typecast(mod, self.out_dtype)
@@ -1316,12 +1182,7 @@ class _SharedAdaLNZero(Module):
 
 
 class DiffVAEStage5(Module):
-    """The stage-5 diffusion stack: ``forward_diff_step`` plus patch packing.
-
-    ``patchify``/``unpatchify`` run on the host: both are 8-axis permutations in
-    channels-last pixel space that ttnn cannot express, and they sit at the module
-    boundary where a single transfer is cheap.
-    """
+    """The stage-5 diffusion stack: ``forward_diff_step`` plus patch packing."""
 
     def __init__(
         self,
@@ -1342,38 +1203,29 @@ class DiffVAEStage5(Module):
         self.ccl_manager = ccl_manager
         self.dtype = dtype
         self.modulation_dtype = modulation_dtype
-        # Spatial-W SP: under a w_sharded kernel the whole stage keeps its sequence W-sharded --
-        # context and x_t are uploaded/resharded over W, the blocks run 1/sp, and the tail output is
-        # gathered back over W in forward. This is the ONE place the backend is resolved; the blocks
-        # and their attention are handed the record, so no level can pick a different one.
+        # The ONE place the backend is resolved; the blocks and their attention are handed the record.
         self.kernel = resolve_na_kernel(na3d_backend or "linear_order")
         self.sp_axis = sp_axis
-        # TP-over-heads on a second mesh axis: only the per-head attention shards over it; every
-        # other op (context, RoPE, MLP, tail) stays replicated across tp_axis. Composes with the
-        # W-shard above -- the two use orthogonal mesh axes.
+        # TP-over-heads on a second mesh axis: only the per-head attention shards over it.
         self.tp_axis = tp_axis
         self._w_sharded = self.kernel.w_sharded
-        # Keep-bricked: convert once at stage entry and back at exit rather than per block. That 7-D
-        # permute was 735 ms of the decode on the one path that needs it.
         self._keep_bricked = self.kernel.keep_bricked
         self._brick: tuple[int, int, int] | None = None
-        # Under column-parallel qkv (DIFFVAE_TP_PROJ) the q/k carry only heads/tp per chip, so the
-        # shared RoPE tables (which repeat each row per head) must be built for the local head count.
+        # Under column-parallel qkv the RoPE tables (one row per head) are built for the local head count.
         _tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
         _tp = int(list(mesh_device.shape)[tp_axis]) if _tp_proj else 1
         self._rope_num_heads = self.config.num_heads // _tp
         if self._w_sharded:
             assert sp_axis is not None, f"{self.kernel.name} needs sp_axis"
             assert ccl_manager is not None, f"{self.kernel.name} needs a ccl_manager"
-        # The tile-aligned width the 48 patch channels are zero-padded to. The pad has to
-        # be explicit on conv_in_x_t's K axis: a garbage-filled activation tail would
-        # otherwise multiply against whatever the weight's own tile pad happens to hold.
+        # The tile-aligned width the patch channels are zero-padded to. The pad has to be explicit
+        # on conv_in_x_t's K axis: a garbage-filled activation tail would otherwise multiply against
+        # whatever the weight's own tile pad holds.
         self.padded_patch_channels = math.ceil(cfg.patch_channels / TILE) * TILE
         self._rope_cache: dict[Grid, _RopeTables] = {}
 
         self.conv_in_x_t = Linear(self.padded_patch_channels, cfg.dim, bias=True, mesh_device=mesh_device, dtype=dtype)
-        # The timestep sinusoid and everything downstream of it feed multiplicative
-        # modulation in every block, so keep that short chain at higher precision.
+        # The timestep chain feeds multiplicative modulation in every block, so it runs at higher precision.
         self.t_embedder = _TimestepEmbedder(cfg.t_emb_dim, mesh_device=mesh_device, dtype=modulation_dtype)
         self.shared_adaln = _SharedAdaLNZero(cfg, mesh_device=mesh_device, dtype=modulation_dtype, out_dtype=dtype)
         self.diff_blocks = ModuleList(
@@ -1394,9 +1246,8 @@ class DiffVAEStage5(Module):
     GATE_SUFFIXES = (".gate_msa", ".gate_mlp", ".gate_ctx")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Static gates were folded into attn.proj / mlp.w_down / context_proj at export.
-        # An unfolded checkpoint would silently decode wrong, so refuse it rather than
-        # trusting the shipped variant. Checked at the root so one pass covers every block.
+        # Static gates were folded into attn.proj / mlp.w_down / context_proj at export; an
+        # unfolded checkpoint would silently decode wrong.
         gates = sorted(k for k in state if k.endswith(self.GATE_SUFFIXES))
         if gates:
             msg = f"unfolded static gates present ({', '.join(gates)}); this port assumes pre-folded weights"
@@ -1411,7 +1262,7 @@ class DiffVAEStage5(Module):
             state["conv_out.bias"] = torch.nn.functional.pad(bias, (0, self.padded_patch_channels - bias.shape[0]))
 
     def _stage5_brick(self, grid: Grid) -> tuple[int, int, int]:
-        """The brick the whole stage converts with -- same choice the attention op would make."""
+        """The brick the whole stage converts with: the same choice the attention op would make."""
         if self._brick is not None:
             return self._brick
         from ...layers.neighborhood_attention_plan import _choose_sharded_brick, brick_override
@@ -1440,9 +1291,7 @@ class DiffVAEStage5(Module):
         grid5 = to_bricked_grid(vol, volume=volume, brick=brick)
         flat = ttnn.reshape(grid5, (1, batch, brick_count(volume, brick) * SITES_PER_BRICK, channels))
         out = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
-        # Freed together, at the end, by buffer rather than by object: vol is a view of rm and
-        # flat is one of grid5, so freeing them as they are superseded frees memory that the next
-        # step still reads. See _release_intermediates.
+        # Freed together, by buffer rather than by object: vol is a view of rm and flat one of grid5.
         _release_intermediates((x, rm, vol, grid5, flat), keep=out)
         return out
 
@@ -1490,11 +1339,9 @@ class DiffVAEStage5(Module):
         return tables
 
     def bands(self, grid: Grid) -> tuple[_Band, ...]:
-        """How to split the volume into frame bands, from ``DIFFVAE_SLAB_FRAMES``.
+        """How to split the volume into frame bands, from ``DIFFVAE_SLAB_FRAMES`` (off by default).
 
-        Off by default: banding buys peak memory with redundant halo work, so it is not worth
-        paying until the volume needs it. The row slices are on a tiled dim, so a band boundary has
-        to be tile-aligned, which holds exactly when ``h * w`` is a multiple of ``TILE``.
+        A band boundary has to be tile-aligned, which holds exactly when ``h * w`` is a multiple of ``TILE``.
         """
         frames = os.environ.get("DIFFVAE_SLAB_FRAMES")
         kernel = self.config.kernel_size[0]
@@ -1511,15 +1358,10 @@ class DiffVAEStage5(Module):
         """x_t noise drawn on device, already in the patchified layout. One tensor per band.
 
         Patchify is a permutation of iid samples, so drawing at the destination layout is the same
-        distribution as drawing pixel-space noise and reshuffling it -- which is what lets this skip a
-        908M-element host randn plus the patchify, channel pad, W-reorder and upload. For the same
-        reason the shard needs no W-band reorder: any contiguous slice of iid draws is iid, and the
-        model only requires that each site's noise be an independent sample, not that it came from a
-        particular draw.
-
-        Channels past ``patch_channels`` land on the zero-padded columns of ``conv_in_x_t``, so filling
-        them is inert. Drawn at the FULL volume and partitioned rather than per-chip: ttnn.randn
-        replicates across the mesh, so a per-chip draw hands every W-band identical values.
+        distribution as drawing pixel-space noise and reshuffling it, and the W-shard needs no
+        reorder for the same reason. Channels past ``patch_channels`` land on the zero-padded
+        columns of ``conv_in_x_t``. Drawn at the FULL volume and partitioned: ttnn.randn replicates
+        across the mesh, so a per-chip draw would hand every W-band identical values.
         """
         sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
         out = []
@@ -1542,11 +1384,7 @@ class DiffVAEStage5(Module):
         return out
 
     def embed_x_t(self, x_t: torch.Tensor, bands: tuple[_Band, ...]) -> list[ttnn.Tensor]:
-        """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it, one tensor per band.
-
-        Uploaded a band at a time rather than whole and split afterwards, which would need the
-        volume and its projection resident together.
-        """
+        """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it, one tensor per band."""
         cfg = self.config
         patched = patchify(x_t, cfg.patch_size)
         batch = patched.shape[0]
@@ -1558,9 +1396,8 @@ class DiffVAEStage5(Module):
             flat = rows.permute(0, 2, 3, 4, 1).reshape(1, batch, t * h * w, cfg.patch_channels)
             flat = torch.nn.functional.pad(flat, (0, self.padded_patch_channels - cfg.patch_channels))
             if self._w_sharded:
-                # Reorder the (t, h, w) rows to (device, t, h, w_local) contiguous so from_torch hands
-                # device p its W-band, then upload sharded on the site dim -- the sequence never lands
-                # whole on any chip.
+                # Reorder the (t, h, w) rows to (device, t, h, w_local) so a sharded upload hands
+                # device p its W-band.
                 w_local = w // sp
                 reordered = (
                     flat.reshape(1, batch, t, h, sp, w_local, self.padded_patch_channels)
@@ -1594,11 +1431,8 @@ class DiffVAEStage5(Module):
     ) -> ttnn.Tensor:
         """One stage-5 step. Returns padded patch channels at ``(1, batch, sites, ·)``.
 
-        Upstream carries context and x as one ``[context | conv_in_x_t(x)]`` buffer of
-        ``2 * dim`` channels and slices it here. They are kept apart instead: both halves are
-        tile-aligned, so building the joint buffer and splitting it straight back is an exact
-        round trip, and at 1920x1088 it costs 3.3 GB plus two full-size copies for nothing. No
-        block writes the context half, so nothing depends on them being adjacent.
+        Upstream carries context and x as one ``[context | conv_in_x_t(x)]`` buffer; they are kept
+        apart here, which is exact since no block writes the context half.
         """
         cfg = self.config
         with timing_tree.span(self.mesh_device, "stage5 setup: AdaLN + rope tables", category=timing_tree.SETUP):
@@ -1611,8 +1445,6 @@ class DiffVAEStage5(Module):
             with timing_tree.span(self.mesh_device, f"stage5 block {index}"):
                 x = block(x, context, modulation, grid, bands, band_tables, brick=brick)
             log_dram(self.mesh_device, f"stage5 block {index}")
-        # The tail runs per band too: its output is a quarter the width of the volume it comes
-        # from, so joining after the projection rather than before is the cheap order.
         tail = []
         for tensor, band in zip(x, bands):
             projected = self.conv_out(self.norm_out(tensor))
@@ -1628,22 +1460,13 @@ class DiffVAEStage5(Module):
         return joined
 
     def _wshard_context(self, context: ttnn.Tensor, grid: Grid) -> ttnn.Tensor:
-        """Reshard a replicated ``(1, batch, T*H*W, dim)`` context into this chip's W-band.
-
-        The deterministic stages hand context over replicated (T-outer flat), so it is resharded on
-        device: a contiguous W-band is not a contiguous slice of the T-outer sequence, so it is
-        reshaped to a ``(1, T, H, W, dim)`` volume, ``mesh_partition``ed on W, and flattened back to
-        this chip's ``(1, batch, T*H*(W/sp), dim)`` in the same (t, h, w_local) order the blocks use.
-
-        **Consumes** ``context``: the full replicated volume is freed here, since holding it through
-        the blocks (9.7 GiB at 6s) is what leaves no room for the per-block K/V gather. This is a
-        replicated -> W-sharded reshard; det-stage SP would remove it by handing context W-sharded.
-        """
+        """Reshard a replicated ``(1, batch, T*H*W, dim)`` context into this chip's W-band
+        ``(1, batch, T*H*(W/sp), dim)``. **Consumes** ``context``."""
         dim = int(context.shape[-1])
         rm = ttnn.to_layout(context, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(context)
         vol = ttnn.reshape(rm, (1, grid.t, grid.h, grid.w, dim))
-        band = ttnn.mesh_partition(vol, dim=3, cluster_axis=self.sp_axis)  # (1, T, H, W/sp, dim)
+        band = ttnn.mesh_partition(vol, dim=3, cluster_axis=self.sp_axis)
         ttnn.deallocate(rm)
         w_local = grid.w // int(list(self.mesh_device.shape)[self.sp_axis])
         flat = ttnn.reshape(band, (1, grid.batch, grid.t * grid.h * w_local, dim))
@@ -1662,16 +1485,14 @@ class DiffVAEStage5(Module):
         device_out: bool = False,
         output_type: str = "float",
     ) -> torch.Tensor | ttnn.Tensor:
-        """Return pixels. Valid as the whole decode only for ``model_output_type="x0"``
-        with a single inference step, which is what the shipped 2.5 DiffVAE config asks for.
+        """Return pixels. Valid as the whole decode only for ``model_output_type="x0"`` with a
+        single inference step, which is what the shipped 2.5 DiffVAE config asks for.
 
         ``device_out=True`` returns pixels still on device, stopping immediately before the PCIe
-        pull -- the channel trim and the depth-to-space unpatchify are device ops and stay inside.
-        A trace region cannot contain the pull, so a caller capturing the decode takes this and
-        transfers it itself.
+        pull, so a caller capturing the decode as a trace can transfer them itself.
 
-        ``context_sharded=True`` means the det stages already handed the context over W-sharded (this
-        chip's ``(1, 1, T*H*(W/sp), dim)`` band, same ``sp_axis``), so the re-shard is skipped.
+        ``context_sharded=True`` means the context arrived W-sharded (this chip's band, same
+        ``sp_axis``), so the re-shard is skipped.
         """
         cfg = self.config
         bands = self.bands(grid)
@@ -1679,12 +1500,8 @@ class DiffVAEStage5(Module):
             if self._w_sharded and not context_sharded:
                 context = self._wshard_context(context, grid)
             elif self._w_sharded:
-                context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)  # already this chip's band; just ensure TILE
+                context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)
 
-        # Evaluated apart from the block timer: as an argument it was host patchify and a noise
-        # upload being charged to the diffusion blocks.
-        # Which of the two this is, is known before the clock starts, so the span can name itself at
-        # open rather than picking a label on the way out.
         _label = "stage5: device randn + embed x_t" if x_t is None else "stage5: host patchify + embed x_t"
         with timing_tree.span(self.mesh_device, _label, category=timing_tree.HOST_COMPUTE):
             x_bands = self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
@@ -1706,8 +1523,8 @@ class DiffVAEStage5(Module):
 
         ``vol`` is what ``forward(device_out=True)`` returns: ``(1, 3, T, H, W)`` bf16 row-major in
         ``[-1, 1]``, this chip's W-band (and H-band over the other mesh axis when H divides it).
-        ``yuv`` converts and gathers YUV 4:2:0 on device first so the pull moves 1.5 bytes per pixel
-        instead of 6. ``release=False`` keeps ``vol`` allocated, for a trace whose output buffer it is.
+        ``yuv`` converts and gathers YUV 4:2:0 on device first. ``release=False`` keeps ``vol``
+        allocated, for a trace whose output buffer it is.
         """
         cfg = self.config
         pv = cfg.patch_size
@@ -1722,39 +1539,30 @@ class DiffVAEStage5(Module):
                 ttnn.deallocate(vol)
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
         concat_dims = [None, None]
-        concat_dims[self.sp_axis] = 4  # W-band, in pixels
+        concat_dims[self.sp_axis] = 4
         if other > 1:
-            concat_dims[other_axis] = 3  # H-band over the other axis, see _to_pixels
+            concat_dims[other_axis] = 3
         px = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)
         if release:
             ttnn.deallocate(vol)
         return px
 
     def _to_pixels(self, out, grid, *, device_out: bool = False, output_type: str = "float"):
-        # The tail splits into a device->host PCIe pull and a host-side unpatchify permute; timing
-        # them apart tells us which one the (large, at 1080p) tail cost actually is.
         cfg = self.config
         needs_device_tail = device_out or output_type == "yuv"
         if needs_device_tail and not (self._w_sharded and os.environ.get("DIFFVAE_DEVICE_UNPATCHIFY") == "1"):
             msg = "device_out/yuv need the W-sharded fast path with DIFFVAE_DEVICE_UNPATCHIFY=1"
             raise ValueError(msg)
         if self._w_sharded:
-            # ``out`` is (1, batch, T*H*(W/sp), padded_pc): W-sharded over sp_axis, and REPLICATED
-            # over the other mesh axis (nothing shards it there -- the input was uploaded replicated
-            # on that axis). A composer pull would DMA all `other`x-redundant replicas over PCIe.
-            # Instead pull like the Wan/LTX VAEs do: make every device hold a UNIQUE shard, then
-            # fast_device_to_host reads a different 1/(sp*other) piece from each device concurrently
-            # over all PCIe links. mesh_partition H over the replicated axis is the "keep only my
-            # portion" op -- a comms-free local slice (sub-ms), the same trick fast_device_to_host's
-            # own multi-host branch uses. Reassembled by mesh coordinate into the (t, h, w) volume.
+            # ``out`` is W-sharded over sp_axis and REPLICATED over the other mesh axis. Rather than
+            # pull every replica, mesh_partition H over the replicated axis so every device holds a
+            # unique shard and fast_device_to_host reads a different piece from each concurrently.
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
             other_axis = 1 - self.sp_axis
             other = int(list(self.mesh_device.shape)[other_axis])
             w_local = grid.w // sp
             padded_pc = self.padded_patch_channels
-            # fast_device_to_host needs a 2D mesh and each device unique along a concatenated axis;
-            # only shard the replicated axis when H splits evenly over it, else fall back to the
-            # (correct but replica-pulling) composer path.
+            # fast_device_to_host needs a 2D mesh and H divisible over the replicated axis.
             can_fast = len(tuple(self.mesh_device.shape)) == 2 and (other == 1 or grid.h % other == 0)
             if can_fast:
                 with timing_tree.span(
@@ -1764,39 +1572,34 @@ class DiffVAEStage5(Module):
                     ttnn.deallocate(out)
                     vol = ttnn.reshape(rm, (1, grid.t, grid.h, w_local, padded_pc))
                     concat_dims = [None, None]
-                    concat_dims[self.sp_axis] = 3  # W-band from each sp device
+                    concat_dims[self.sp_axis] = 3
                     shard_other = other > 1
                     if shard_other:
-                        vol = ttnn.mesh_partition(vol, dim=2, cluster_axis=other_axis)  # H over the replicated axis
+                        vol = ttnn.mesh_partition(vol, dim=2, cluster_axis=other_axis)
                         concat_dims[other_axis] = 2
-                    # DIFFVAE_TRIM_PAD_CHANNELS=1 drops the tile padding BEFORE the pull. conv_out emits
-                    # padded_patch_channels because patch_channels (48) is not tile-aligned, so a quarter
-                    # of what crosses PCIe is zeros. Trimming on device is exact -- those columns come
-                    # from the zero-padded rows of the conv_out weight -- but it is a strided row-major
-                    # copy of the whole volume, so whether it wins is a question for the profile.
+                    # DIFFVAE_TRIM_PAD_CHANNELS=1 drops the tile padding before the pull. Exact,
+                    # since those columns come from the zero-padded rows of the conv_out weight.
                     if os.environ.get("DIFFVAE_TRIM_PAD_CHANNELS") == "1":
                         shape = list(vol.shape)
                         trimmed = ttnn.slice(vol, [0] * len(shape), shape[:-1] + [cfg.patch_channels])
                         ttnn.deallocate(vol)
                         vol = trimmed
                     if os.environ.get("DIFFVAE_DEVICE_UNPATCHIFY") == "1":
-                        # Depth-to-space on device so the pull lands final-shaped pixels and the host
-                        # does nothing. Packed channel order is (c, w_sub, h_sub), per patchify.
+                        # Depth-to-space on device. Packed channel order is (c, w_sub, h_sub), per patchify.
                         pv = cfg.patch_size
                         shp = list(vol.shape)
                         wl = shp[3]
                         vol = ttnn.reshape(vol, (1, shp[1], shp[2], wl, cfg.out_channels, pv, pv))
-                        vol = ttnn.permute(vol, (0, 4, 1, 2, 6, 3, 5))  # (1, C, T, H, h_sub, W, w_sub)
+                        vol = ttnn.permute(vol, (0, 4, 1, 2, 6, 3, 5))
                         vol = ttnn.reshape(vol, (1, cfg.out_channels, shp[1], shp[2] * pv, wl * pv))
                         if shard_other:
                             ttnn.deallocate(rm)
                         if device_out:
-                            # Everything above is device work a trace can hold; the pull below is not.
                             return vol
                         return self.pull_pixels(vol, grid, output_type)
                     gathered = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)[
                         ..., : cfg.patch_channels
-                    ]  # (1, T, H, W, patch_channels)
+                    ]
                     if shard_other:
                         ttnn.deallocate(rm)
                     ttnn.deallocate(vol)
@@ -1817,10 +1620,7 @@ class DiffVAEStage5(Module):
                 )
                 return unpatchify(packed, cfg.patch_size)
 
-        # This tensor is replicated across the mesh, so a bare ttnn.to_torch sees one buffer per
-        # device and fails. Reading a single chip's copy is what that replication means; the
-        # composing helper instead pulls all 32 copies to the host and indexes one out of them,
-        # which for a 418 MB output is 13 GB over PCIe and was 100s of a 190s decode.
+        # Replicated across the mesh: read one chip's copy rather than composing every replica.
         with timing_tree.span(self.mesh_device, "stage5 tail: device->host pull", category=timing_tree.HOST_XFER):
             packed = local_device_to_torch(out)[..., : cfg.patch_channels]
             ttnn.deallocate(out)
