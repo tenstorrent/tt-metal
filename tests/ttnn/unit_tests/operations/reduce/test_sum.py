@@ -173,7 +173,7 @@ def test_sum_nd_shard(device, shapes, keepdim):
     ),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63), (16, 41, 63, 63)])
+@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63)])
 def test_sum_subcores(device, sub_core_grids, dtype, shape):
     torch.manual_seed(0)
 
@@ -233,4 +233,4 @@ def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_a
     if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)

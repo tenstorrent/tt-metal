@@ -17,6 +17,12 @@
 #include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim {
+namespace {
+// tt::datum_size throws for block-float rather than returning a size. Bfp8_b is the only
+// block-float format the op admits, so it is the only one that reaches here.
+bool block_float_format(tt::DataFormat df) { return df == tt::DataFormat::Bfp8_b; }
+}  // namespace
+
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,
@@ -49,10 +55,10 @@ RmPlan make_rm_plan(
         plan.ht_tiles_per_chunk = std::clamp(plan.Ht_rm, 1u, k_rm_max_tiles_per_chunk);
     }
 
-    // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;
-    // so the unpacked-format byte sizes are always well-defined here.
-    plan.src_datum_size = tt::datum_size(src_cb_data_format);
-    plan.dst_datum_size = tt::datum_size(dst_cb_data_format);
+    // Block-float has no per-datum size. RM staging and the writer stride never see it here:
+    // RM input is BF16/FP32, and block-float output is TILE-only.
+    plan.src_datum_size = block_float_format(src_cb_data_format) ? 0 : tt::datum_size(src_cb_data_format);
+    plan.dst_datum_size = block_float_format(dst_cb_data_format) ? 0 : tt::datum_size(dst_cb_data_format);
     plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
     // One CB page = one logical RM row (chunk-wide). The compute kernel uses
     // compute_kernel_lib::tilize, whose asymmetric mode requires one input page per row so each
@@ -191,16 +197,23 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             if (legacy) {
                 return {legacy->grid, legacy->orientation};
             }
-            if (input_nd) {
-                return {input_nd->grid, input_nd->orientation};
-            }
-            if (input_legacy) {
-                return {input_legacy->grid, input_legacy->orientation};
-            }
-            TT_THROW(
+            TT_FATAL(
+                input_nd.has_value() || input_legacy.has_value(),
                 "Sharded memory layout {} requires either nd_shard_spec or shard_spec to be set "
                 "on the output memory config or the input tensor",
                 mem_layout);
+            // L1 worker grids and DRAM bank ids are disjoint; do not borrow a grid across buffer types.
+            TT_FATAL(
+                output_mem_config.buffer_type() == input_mem_config.buffer_type(),
+                "Sharded memory layout {} on an output with buffer type {} requires an explicit "
+                "shard_spec (cannot fall back to the input tensor's {} shard grid)",
+                mem_layout,
+                output_mem_config.buffer_type(),
+                input_mem_config.buffer_type());
+            if (input_nd) {
+                return {input_nd->grid, input_nd->orientation};
+            }
+            return {input_legacy->grid, input_legacy->orientation};
         };
         const auto& [grid, orientation] = get_grid_and_orientation();
 
@@ -229,6 +242,15 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             nd_shard_spec.has_value() || input_nd_shard_spec.has_value(),
             "ND_SHARDED memory layout requires nd_shard_spec to be set "
             "on the output memory config or the input tensor");
+        if (!nd_shard_spec.has_value()) {
+            // Same as the legacy fallback: do not borrow an ND shard grid across buffer types.
+            TT_FATAL(
+                output_mem_config.buffer_type() == input_mem_config.buffer_type(),
+                "ND_SHARDED memory layout on an output with buffer type {} requires an explicit "
+                "nd_shard_spec (cannot fall back to the input tensor's {} shard grid)",
+                output_mem_config.buffer_type(),
+                input_mem_config.buffer_type());
+        }
         auto nd_shard_spec_copy = nd_shard_spec.has_value() ? *nd_shard_spec : *input_nd_shard_spec;
         if (reduce_dim == ReduceOpDim::W || reduce_dim == ReduceOpDim::HW) {
             nd_shard_spec_copy.shard_shape[-1] = 1;
@@ -251,22 +273,35 @@ void validate_reduce_sharded_buffer_types(
     const tt::tt_metal::MemoryConfig& input_mem_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::string_view op_name) {
+    const auto is_dram_block_sharded = [](const tt::tt_metal::MemoryConfig& mem_config) {
+        return mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED && mem_config.is_dram();
+    };
     TT_FATAL(
-        !output_mem_config.is_sharded() || output_mem_config.is_l1(),
-        "{}: sharded output memory layout {} is only supported with L1 buffers, got buffer type {}",
+        !is_dram_block_sharded(input_mem_config) && !is_dram_block_sharded(output_mem_config),
+        "{}: DRAM block sharding is not supported, got input layout {} on {}, output layout {} on {}",
+        op_name,
+        input_mem_config.memory_layout(),
+        input_mem_config.buffer_type(),
+        output_mem_config.memory_layout(),
+        output_mem_config.buffer_type());
+    TT_FATAL(
+        !output_mem_config.is_sharded() || output_mem_config.is_l1() || output_mem_config.is_dram(),
+        "{}: sharded output memory layout {} is only supported with L1 or DRAM buffers, got buffer type {}",
         op_name,
         output_mem_config.memory_layout(),
         output_mem_config.buffer_type());
     TT_FATAL(
-        !input_mem_config.is_sharded() || input_mem_config.is_l1(),
-        "{}: sharded input memory layout {} is only supported with L1 buffers, got buffer type {}",
+        !input_mem_config.is_sharded() || input_mem_config.is_l1() || input_mem_config.is_dram(),
+        "{}: sharded input memory layout {} is only supported with L1 or DRAM buffers, got buffer type {}",
         op_name,
         input_mem_config.memory_layout(),
         input_mem_config.buffer_type());
 }
 
 bool h_reduce_negate_fits_in_l1(
-    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using namespace tt::tt_metal;
 
     const auto& shape = input_tensor.padded_shape();
@@ -283,7 +318,10 @@ bool h_reduce_negate_fits_in_l1(
     const uint32_t Ht = H / tile_height;
 
     auto* device = input_tensor.device();
-    const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    // Mirror the H factory: shard-based CB sizing is only valid on the width-sharded L1 path.
+    const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                                    output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                                    input_tensor.memory_config().is_l1() && output_mem_config.is_l1();
 
     uint32_t num_cols_per_core_group_1 = 0;
     uint32_t num_cols_per_core_group_2 = 0;

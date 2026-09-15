@@ -43,6 +43,9 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // this chunk's real tokens. Set, only the page-rows holding them are written, so a chunk whose
         // pad window runs past the cache end is legal. Presence is hashed; the value is a runtime arg.
         std::optional<uint32_t> valid_global;
+        // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
+        // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
+        std::optional<uint32_t> tp_axis;
     };
 
     struct tensor_args_t {
@@ -130,6 +133,7 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t num_layers,
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::Tensor>& valid_global_tensor = std::nullopt,
-    std::optional<uint32_t> valid_global = std::nullopt);
+    std::optional<uint32_t> valid_global = std::nullopt,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -16,6 +16,7 @@
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
+#include "sfpu/ckernel_sfpu_typecast_fp32_to_uint16.h"
 #include "sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 
 namespace ckernel

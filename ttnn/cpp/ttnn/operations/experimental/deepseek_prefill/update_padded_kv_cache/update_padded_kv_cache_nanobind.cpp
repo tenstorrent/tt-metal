@@ -50,7 +50,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     across `cluster_axis` with `sp_factor` slots per chip. Outermost dim equals
                     ``num_slots * num_layers``. Layout/dtype must match ``input``: block-float
                     (bfloat8_b/bfloat4_b) requires TILE; FP8_E4M3 requires ROW_MAJOR (Blackhole).
-                    Seq dims stay 32-aligned in both layouts.
+                    Seq dims stay 32-aligned in both layouts, and TILE layout requires the standard
+                    32x32 tile.
                 input (ttnn.Tensor): 4D input slab on device, same layout, dtype and head dim as
                     cache. Per-chip seq length = chunk_local.
                 slot_idx (int | ttnn.Tensor): scalar form: user slot in the batched prefill cache.
@@ -73,6 +74,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     ``ceil32(valid_global)`` rather than ``kv_actual_global + chunk_global``. The
                     32-token block holding the last real token is still written; clear it with
                     ``zero_padded_kv_cache``. Omitted: the whole padded slab is written.
+                tp_axis (int, optional): Second axis to also shard the cache across (KV dedup).
+                    ``input`` must then be TP-replicated and single-head, and each chip persists only
+                    its own ``1/tp`` seq window. Must differ from ``cluster_axis``.
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
@@ -87,6 +91,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 std::optional<uint32_t>,
+                std::optional<uint32_t>,
                 std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
@@ -95,7 +100,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("num_layers"),
             nb::arg("kv_actual_global"),
             nb::arg("cluster_axis"),
-            nb::arg("valid_global") = nb::none()),
+            nb::arg("valid_global") = nb::none(),
+            nb::arg("tp_axis") = nb::none()),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -106,7 +112,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 std::optional<uint32_t>,
-                const std::optional<Tensor>&>(&update_padded_kv_cache),
+                const std::optional<Tensor>&,
+                std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx").noconvert(),
@@ -114,7 +121,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("layer_idx"),
             nb::arg("num_layers"),
             nb::arg("cluster_axis"),
-            nb::arg("valid_global").noconvert() = nb::none()));
+            nb::arg("valid_global").noconvert() = nb::none(),
+            nb::arg("tp_axis") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

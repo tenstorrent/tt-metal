@@ -2,15 +2,54 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from types import MethodType, SimpleNamespace
+
 import pytest
 
+import ttnn
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import (
+    ModelArgs,
+    TensorGroup,
     compute_galaxy_padded_vocab_size,
     compute_galaxy_width_shard_cores,
     compute_padded_vocab_size,
     create_galaxy_ff1_out_reduce_scatter_memcfg,
     should_pad_sampling_logits_to_power_of_2,
 )
+
+
+@pytest.mark.parametrize("seq_len", [128, 4096])
+def test_qwen_t3k_prefill_matmul_configs_match_across_batching(monkeypatch, seq_len):
+    args = SimpleNamespace(base_model_name="Qwen3-32B", device_name="T3K", mlp2_grid=lambda _: (8, 8))
+    args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
+    args.use_minimal_qkv_prefill_matmul = MethodType(ModelArgs.use_minimal_qkv_prefill_matmul, args)
+    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_blackhole", lambda: False)
+
+    assert args.use_minimal_prefill_matmul(seq_len)
+    assert args.use_minimal_qkv_prefill_matmul(seq_len)
+    qkv = ModelArgs.get_attn_qkv_program_config.__wrapped__(args, Mode.PREFILL, seq_len)
+    ff2 = ModelArgs.get_mlp_ff2_prg_config.__wrapped__(args, Mode.PREFILL, seq_len)
+    assert isinstance(qkv, ttnn.MinimalMatmulConfig)
+    assert isinstance(ff2, ttnn.MinimalMatmulConfig)
+
+
+@pytest.mark.parametrize(
+    "model_name,device_name,galaxy_row,qkv_minimal",
+    [
+        ("Qwen3-32B", "TG", False, False),
+        ("Qwen3-32B", "P150x4", False, False),
+        ("Llama-3.1-8B", "T3K", False, False),
+        ("Llama-3.1-8B", "T3K", True, True),
+    ],
+)
+def test_other_short_prefill_matmul_policies_are_preserved(model_name, device_name, galaxy_row, qkv_minimal):
+    args = SimpleNamespace(
+        base_model_name=model_name, device_name=device_name, is_galaxy_8_device_row_submesh=galaxy_row
+    )
+    args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
+    assert not args.use_minimal_prefill_matmul(128)
+    assert ModelArgs.use_minimal_qkv_prefill_matmul(args, 128) is qkv_minimal
 
 
 @pytest.mark.parametrize(
@@ -135,3 +174,40 @@ def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_
 def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits(expect_error):
     with expect_error(ValueError, "sampling_splits must be >= 1"):
         should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)
+
+
+def _llama_model_args(device_name="P150"):
+    args = object.__new__(ModelArgs)
+    args.model_name = "Llama-3.1-8B-Instruct"
+    args.device_name = device_name
+    args.dram_grid_size = SimpleNamespace(x=8)
+    return args
+
+
+@pytest.mark.parametrize(
+    ("tensor_group", "n"),
+    [
+        (TensorGroup.WQKV, 6144),
+        (TensorGroup.WO, 4096),
+        (TensorGroup.FF2, 4096),
+        (TensorGroup.FF1_FF3, 14336),
+    ],
+)
+def test_llama31_8b_p150_uses_projection_specific_dram_reader_counts(tensor_group, n):
+    args = _llama_model_args()
+
+    assert args.get_dram_sharded_matmul_num_workers(tensor_group, n) == 2
+
+
+def test_llama31_8b_p150_uses_one_dram_reader_when_padded_shards_cannot_split_evenly():
+    args = _llama_model_args()
+
+    # PAD_MLP_CORES=9 pads the gate/up width to 14,400, or 57 tiles per P150 DRAM bank.
+    assert args.get_dram_sharded_matmul_num_workers(TensorGroup.FF1_FF3, 14400) == 1
+
+
+def test_llama31_8b_dram_reader_counts_remain_default_on_unvalidated_devices():
+    args = _llama_model_args(device_name="P300")
+
+    for tensor_group in (TensorGroup.WQKV, TensorGroup.WO, TensorGroup.FF1_FF3, TensorGroup.FF2):
+        assert args.get_dram_sharded_matmul_num_workers(tensor_group, 14336) == 1

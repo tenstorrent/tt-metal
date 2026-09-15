@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -52,6 +53,71 @@ _PRODUCTION_PERF_CASE = _Case(
     value_dim=128,
 )
 _PRODUCTION_PERF_EXPECTED_DURATION_NS = 46_038
+
+
+def _reduce_affine_transforms_ops(
+    a: torch.Tensor | ttnn.Tensor,
+    b: torch.Tensor | ttnn.Tensor,
+    outputs: tuple[torch.Tensor | ttnn.Tensor, ...],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(outputs) != 2:
+        raise ValueError("affine-transform reduction requires two outputs")
+    tensors = (a, b, *outputs)
+    if any(len(tensor.shape) != 3 for tensor in tensors):
+        raise ValueError("affine-transform reduction tensor shapes are inconsistent")
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("affine-transform reduction tensor shapes must be positive")
+
+    batch_heads, key_dim, output_key_dim = outputs[0].shape
+    value_dim = outputs[1].shape[-1]
+    if key_dim != output_key_dim or outputs[1].shape != (batch_heads, key_dim, value_dim) or a.shape[0] % batch_heads:
+        raise ValueError("affine-transform reduction tensor shapes are inconsistent")
+    groups_per_head = a.shape[0] // batch_heads
+    if a.shape != (batch_heads * groups_per_head, key_dim, key_dim) or b.shape != (
+        a.shape[0],
+        key_dim,
+        value_dim,
+    ):
+        raise ValueError("affine-transform reduction tensor shapes are inconsistent")
+
+    compositions = batch_heads * (groups_per_head - 1)
+    return (
+        perf_model.FpuOps(
+            matrix_flops=compositions * (2 * key_dim**3 + 2 * key_dim**2 * value_dim),
+            add_ops=compositions * key_dim * value_dim,
+        ),
+        perf_model.SfpuOps(),
+    )
+
+
+def _reduce_affine_transforms_performance(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    outputs: tuple[ttnn.Tensor, ...],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _reduce_affine_transforms_ops(a, b, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(a, b),
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_reduce_affine_transforms_work_golden() -> None:
+    fpu, sfpu = _reduce_affine_transforms_ops(
+        torch.empty((2, 2, 2)),
+        torch.empty((2, 2, 1)),
+        (torch.empty((1, 2, 2)), torch.empty((1, 2, 1))),
+    )
+
+    assert fpu == perf_model.FpuOps(matrix_flops=24, add_ops=2)
+    assert sfpu == perf_model.SfpuOps()
 
 
 def _host_inputs(
@@ -408,9 +474,21 @@ def test_reduce_affine_transforms_production_performance(device: ttnn.Device) ->
     assert all(output.dtype == ttnn.float32 for output in outputs)
     for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
         assert_accurate(golden, ttnn.to_torch(output), name=f"production reduced {name}", pcc_threshold=0.999)
+    performance = _reduce_affine_transforms_performance(
+        a_tt,
+        b_tt,
+        outputs,
+        measured_ns=duration_ns,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+    )
     logger.info(
-        f"affine-transform reduction {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"affine-transform reduction {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     lower = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
     upper = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 + _PRODUCTION_PERF_MARGIN)

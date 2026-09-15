@@ -21,9 +21,9 @@
 #endif
 
 void kernel_main() {
-    uint32_t Ht = get_arg(args::Ht);
-    uint32_t Wt = get_arg(args::Wt);
-    uint32_t NC = get_arg(args::NC);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t NC = get_arg(args::NC);
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
     constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
@@ -58,16 +58,16 @@ void kernel_main() {
     //        2. chunk: (0, 2); (0, 3); (1, 2); (1, 3); (2, 2); (2, 3);
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; wt += row_chunk) {
-            uint32_t chunk_end = std::min(wt + row_chunk, Wt);
+            const uint32_t chunk_end = std::min(wt + row_chunk, Wt);
             int reduce_dst_idx = 0;
-            uint32_t ntiles = chunk_end - wt;
+            const uint32_t ntiles = chunk_end - wt;
 
             // reduction for one chunk
             // accumulation of Ht results in separate DST indexes
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 tile_regs_acquire();
-                dfb_input.wait_front(ntiles);
+                dfb_input.wait_front(static_cast<uint16_t>(ntiles));
 
                 reconfig_data_format_srca(dfb::in0);
                 copy_init(dfb::in0);
@@ -84,22 +84,22 @@ void kernel_main() {
                 }
 
                 tile_regs_commit();
-                dfb_ineg.reserve_back(ntiles);
+                dfb_ineg.reserve_back(static_cast<uint16_t>(ntiles));
                 tile_regs_wait();
                 pack_reconfig_data_format(dfb::ineg);
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, dfb::ineg);
                 }
                 tile_regs_release();
-                dfb_ineg.push_back(ntiles);
+                dfb_ineg.push_back(static_cast<uint16_t>(ntiles));
 
                 tile_regs_acquire();
 
                 if (ht > 0) {
-                    dfb_acc.wait_front(ntiles);
+                    dfb_acc.wait_front(static_cast<uint16_t>(ntiles));
                 }
 
-                dfb_ineg.wait_front(ntiles);
+                dfb_ineg.wait_front(static_cast<uint16_t>(ntiles));
 
                 if (ht > 0) {
                     reconfig_data_format_srca(dfb::acc);
@@ -119,23 +119,23 @@ void kernel_main() {
                 }
                 reduce_uninit(dfb::ineg);
                 tile_regs_commit();
-                dfb_ineg.pop_front(ntiles);
+                dfb_ineg.pop_front(static_cast<uint16_t>(ntiles));
 
                 if (ht > 0) {
-                    dfb_acc.pop_front(ntiles);
+                    dfb_acc.pop_front(static_cast<uint16_t>(ntiles));
                 }
-                dfb_acc.reserve_back(ntiles);
+                dfb_acc.reserve_back(static_cast<uint16_t>(ntiles));
                 tile_regs_wait();
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     pack_tile(i, dfb::acc);
                 }
                 tile_regs_release();
-                dfb_acc.push_back(ntiles);
+                dfb_acc.push_back(static_cast<uint16_t>(ntiles));
             }
 
             tile_regs_acquire();
 
-            dfb_acc.wait_front(ntiles);
+            dfb_acc.wait_front(static_cast<uint16_t>(ntiles));
 
             reconfig_data_format_srca(dfb::acc);
             copy_init(dfb::acc);
@@ -158,15 +158,15 @@ void kernel_main() {
 #endif
 
             tile_regs_commit();
-            dfb_acc.pop_front(ntiles);
-            dfb_output.reserve_back(ntiles);
+            dfb_acc.pop_front(static_cast<uint16_t>(ntiles));
+            dfb_output.reserve_back(static_cast<uint16_t>(ntiles));
             tile_regs_wait();
             pack_reconfig_data_format(dfb::out);
             for (uint32_t i = 0; i < ntiles; ++i) {
                 pack_tile(i, dfb::out);
             }
             tile_regs_release();
-            dfb_output.push_back(ntiles);
+            dfb_output.push_back(static_cast<uint16_t>(ntiles));
         }
     }
 #endif  // REDUCE_FPU_NEGATE

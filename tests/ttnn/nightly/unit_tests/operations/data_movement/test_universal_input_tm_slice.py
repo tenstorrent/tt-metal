@@ -203,7 +203,7 @@ def _run_slice(
 
     # bf16 native → bit-exact; bf8_b/f32 → PCC (quantization or composite bf16 intermediates).
     if dtype == ttnn.bfloat16 and ulp_when_exact:
-        assert_with_ulp(ref, got, ulp_threshold=0)
+        assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
     else:
         assert_with_pcc(ref.float(), got.float(), 0.9999)
 
@@ -983,6 +983,85 @@ def test_slice_rm_bw_sharded_nonzero_width_begin(shard_factory, device):
     )
 
 
+def test_slice_rm_bw_sharded_subaligned_shard_row_in(device):
+    """RM WIDTH-sharded input whose shard row is 12 bf16 elems = 24B, not a multiple of any buffer
+    alignment. W=96 is tile-aligned and width-begin is 0, so only the shard-row check routes this
+    through L1 interleaved; natively the accessor strides pages by the aligned page size while
+    `noc_async_read_sharded` reuses that same value as the per-page payload."""
+    in_shape = (1, 1, 64, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _width_sharded(in_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        L1_INTERLEAVED,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
+def test_slice_rm_block_sharded_subaligned_shard_row_in(device):
+    """BLOCK-sharded counterpart of the input-side case. `_block_sharded`'s 2x2 grid can't reach it —
+    any tile-aligned W halved is still a multiple of 8 bf16 elems — so use an explicit 2x8 grid:
+    a (32, 12) shard on (1, 1, 64, 96) gives a 24B row while W stays tile-aligned."""
+    in_shape = (1, 1, 64, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 32, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _explicit_block_shard_config(device, 2, 8, 32, 12),
+        L1_INTERLEAVED,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
+def test_slice_rm_bw_sharded_rescaled_subaligned_shard_row(device):
+    """Implicit output spec (no memory_config): the output inherits the input's shard spec and then has
+    it rescaled to the sliced width, after the composite decision. The inherited row is 16 bf16 elems
+    = 32B and aligned, but the rescale yields div_up(96, 8) = 12 elems = 24B, which is not — so the
+    guard has to test the rescaled width rather than the inherited one."""
+    in_shape = (1, 1, 64, 128)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        (1, 1, 64, 96),
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        _width_sharded(in_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        None,
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
+def test_slice_rm_bw_sharded_subaligned_shard_row_out(device):
+    """Mirror of the input-side case on the writer: RM interleaved → WIDTH-sharded output with a
+    24B shard row. Input W is tile-aligned, so needs_rm_composite_output must fire on the shard row
+    alone."""
+    in_shape = (1, 1, 64, 96)
+    out_shape = (1, 1, 32, 96)
+    _run_slice(
+        in_shape,
+        (0, 0, 0, 0),
+        out_shape,
+        (1, 1, 1, 1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        L1_INTERLEAVED,
+        _width_sharded(out_shape, device, num_cores=8, layout=ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.bfloat16,
+        device,
+        ulp_when_exact=True,
+    )
+
+
 # Focused dtype spot-checks on representative paths. The core suites above run bf16 only to keep
 # the file under budget; this hits f32 across TILE+RM paths and bf8b on the TILE-only path.
 @pytest.mark.parametrize(
@@ -1037,7 +1116,7 @@ def _slice_and_assert_shrink(device, shape, begins, ends, out_layout, expected_g
     slices = tuple(slice(b, e, 1) for b, e in zip(begins, ends))
     ref = x[slices]
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 def test_slice_specless_sharded_output_grid_shrinks_height(device):
@@ -1114,4 +1193,4 @@ def test_slice_specless_sharded_output_grid_shrinks_block_col_major(device):
     assert ss.grid == expected, f"Expected COL_MAJOR rect (0,0)->(1,2), got {ss.grid}"
     ref = x[0:1, 0:1, 0:64, 0:96]
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)

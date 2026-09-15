@@ -37,8 +37,8 @@ CoreRangeSet get_worker_grid(
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
-/** Generate shard spec over all worker cores for a given output shape and memory layout. */
-tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
+// Synthesize a populated-shard output ShardSpec for specless sharded eltwise-unary outputs.
+tt::tt_metal::ShardSpec generate_output_shard_spec(
     const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout);
 
 }  // namespace ttnn::operations::unary

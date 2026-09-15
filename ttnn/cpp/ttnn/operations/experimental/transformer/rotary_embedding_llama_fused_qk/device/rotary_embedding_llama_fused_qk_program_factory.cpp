@@ -7,46 +7,67 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaFusedQKProgramFactory::create_program_artifacts(
     const RotaryEmbeddingLlamaFusedQkParams& operation_attributes,
     const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
     RotaryEmbeddingLlamaFusedQkResult& tensor_return_value) {
-    ProgramDescriptor desc;
+    // Named-resource vocabulary. Function-local on purpose: ttnn unity builds can concatenate
+    // factory .cpp files into one TU, where same-named anonymous-namespace constants collide.
+    // The names extend the sibling rotary_embedding_llama op's landed Metal 2.0 vocabulary
+    // (input/cos/sin/trans_mat/rotated_interm/cos_interm/sin_interm/out) for the fused q/k split.
+    const KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName Q_INPUT_DFB{"q_input"};
+    const DFBSpecName K_INPUT_DFB{"k_input"};
+    const DFBSpecName COS_DFB{"cos"};
+    const DFBSpecName SIN_DFB{"sin"};
+    const DFBSpecName TRANS_MAT_DFB{"trans_mat"};
+    const DFBSpecName ROTATED_INTERM_DFB{"rotated_interm"};
+    const DFBSpecName COS_INTERM_DFB{"cos_interm"};
+    const DFBSpecName SIN_INTERM_DFB{"sin_interm"};
+    const DFBSpecName Q_OUT_DFB{"q_out"};
+    const DFBSpecName K_OUT_DFB{"k_out"};
+    const TensorParamName Q_INPUT_PARAM{"q_input"};
+    const TensorParamName K_INPUT_PARAM{"k_input"};
+    const TensorParamName COS_PARAM{"cos"};
+    const TensorParamName SIN_PARAM{"sin"};
+    const TensorParamName TRANS_MAT_PARAM{"trans_mat"};
+    const TensorParamName Q_OUTPUT_PARAM{"q_output"};
+    const TensorParamName K_OUTPUT_PARAM{"k_output"};
 
-    const auto& q_input = tensor_args.q_input;
-    const auto& k_input = tensor_args.k_input;
-    const auto& cos = tensor_args.cos;
-    const auto& sin = tensor_args.sin;
-    const auto& trans_mat = tensor_args.trans_mat;
-    auto& q_output = std::get<0>(tensor_return_value);
-    auto& k_output = std::get<1>(tensor_return_value);
+    const auto& q_input = tensor_args.q_input.mesh_tensor();
+    const auto& k_input = tensor_args.k_input.mesh_tensor();
+    const auto& cos = tensor_args.cos.mesh_tensor();
+    const auto& sin = tensor_args.sin.mesh_tensor();
+    const auto& trans_mat = tensor_args.trans_mat.mesh_tensor();
+    const auto& q_output = std::get<0>(tensor_return_value).mesh_tensor();
+    const auto& k_output = std::get<1>(tensor_return_value).mesh_tensor();
 
-    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(q_input.dtype());
-    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    const tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(q_input.dtype());
+    const uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
 
-    const tt::DataFormat cos_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
+    const tt::DataFormat cos_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
+    const uint32_t cos_single_tile_size = tt::tile_size(cos_dfb_data_format);
 
-    const tt::DataFormat sin_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
+    const tt::DataFormat sin_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
+    const uint32_t sin_single_tile_size = tt::tile_size(sin_dfb_data_format);
 
-    const tt::DataFormat trans_mat_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
-    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
+    const tt::DataFormat trans_mat_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
+    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_dfb_data_format);
 
-    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(q_output.dtype());
-    const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    const tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(q_output.dtype());
+    const uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     const std::optional<tt::tt_metal::ShardSpec>& q_shard_spec = q_input.shard_spec();
     const std::optional<tt::tt_metal::ShardSpec>& k_shard_spec = k_input.shard_spec();
-    const std::optional<tt::tt_metal::ShardSpec>& cos_sin_shard_spec = cos.shard_spec();
 
     const uint32_t q_n_heads_t =
         operation_attributes.row_major_QK ? 1 : q_shard_spec->shape[0] / tt::constants::TILE_HEIGHT;
@@ -56,7 +77,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
     const uint32_t head_dim_t =
         operation_attributes.row_major_QK ? 1 : q_shard_spec->shape[1] / tt::constants::TILE_WIDTH;
 
-    tt::tt_metal::IDevice* device = q_input.device();
+    tt::tt_metal::IDevice* device = tensor_args.q_input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -65,14 +86,11 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
 
     CoreRangeSet k_cores = k_shard_spec->grid;
 
-    CoreRangeSet all_cores = cos_sin_shard_spec->grid;
-    CoreRangeSet all_cores_bb = all_cores.bounding_box();
-
     // The compute kernel must only run on cores that actually receive per-core (unique) runtime args
-    // (the is_q/is_k flag at index 0 below). Using all_cores_bb (the bounding box) would place the
+    // (the is_q/is_k flag below). Using the bounding box of the cos/sin grid would place the
     // kernel on "hole" cores that are inside the bounding box but belong to neither q nor k. Those
-    // cores have zero runtime args set, so get_arg_val<uint32_t>(0) reads out of bounds and trips the
-    // watcher assert (SIGABRT). q and k grids are guaranteed non-overlapping by validate().
+    // cores have zero runtime args set, so reading the is_q runtime arg goes out of bounds and trips
+    // the watcher assert (SIGABRT). q and k grids are guaranteed non-overlapping by validate().
     CoreRangeSet work_cores = q_cores.merge(k_cores);
 
     const uint32_t num_q_input_tiles = q_n_heads_t * head_dim_t;
@@ -88,167 +106,181 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
     const uint32_t num_sin_cos_rows_per_core = batch_per_core;
     uint32_t num_cos_sin_tiles = head_dim_t * num_sin_cos_rows_per_core;
 
-    // Set up the CBs
-    auto* q_src_buffer = q_input.buffer();
-    auto* k_src_buffer = k_input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* trans_mat_buffer = trans_mat.buffer();
-    auto* q_dst_buffer = q_output.buffer();
-    auto* k_dst_buffer = k_output.buffer();
-
-    constexpr uint8_t q_input_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_q_input_tiles * input_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = q_input_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-        .buffer = q_src_buffer,
-    });
-
-    constexpr uint8_t k_input_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_k_input_tiles * input_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = k_input_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-        .buffer = k_src_buffer,
-    });
-
-    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * cos_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
-        }}},
-        .buffer = cos_buffer,
-    });
-
-    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * sin_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
-        }}},
-        .buffer = sin_buffer,
-    });
-
-    constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_4;
+    // ------------------------------------------------------------------
+    // Dataflow buffers. The q/k inputs, cos/sin/trans_mat, and q/k outputs borrow their resident
+    // L1 shards (the legacy dynamic-address `.buffer` backing); the three intermediates are plain. The lone
+    // compute kernel is the sole toucher of every DFB -> self-loop each (PRODUCER + CONSUMER).
+    // Placement is derived from the kernel bindings, so the DFBs live on work_cores.
+    // ------------------------------------------------------------------
+    DataflowBufferSpec q_input_dfb{
+        .unique_id = Q_INPUT_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_q_input_tiles,
+        .data_format_metadata = input_dfb_data_format,
+        .borrowed_from = Q_INPUT_PARAM,
+    };
+    DataflowBufferSpec k_input_dfb{
+        .unique_id = K_INPUT_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_k_input_tiles,
+        .data_format_metadata = input_dfb_data_format,
+        .borrowed_from = K_INPUT_PARAM,
+    };
+    DataflowBufferSpec cos_dfb{
+        .unique_id = COS_DFB,
+        .entry_size = cos_single_tile_size,
+        .num_entries = num_cos_sin_tiles,
+        .data_format_metadata = cos_dfb_data_format,
+        .borrowed_from = COS_PARAM,
+    };
+    DataflowBufferSpec sin_dfb{
+        .unique_id = SIN_DFB,
+        .entry_size = sin_single_tile_size,
+        .num_entries = num_cos_sin_tiles,
+        .data_format_metadata = sin_dfb_data_format,
+        .borrowed_from = SIN_PARAM,
+    };
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_trans_mat_tiles * trans_mat_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = trans_mat_cb_index,
-            .data_format = trans_mat_cb_data_format,
-            .page_size = trans_mat_single_tile_size,
-        }}},
-        .buffer = trans_mat_buffer,
-    });
-
+    DataflowBufferSpec trans_mat_dfb{
+        .unique_id = TRANS_MAT_DFB,
+        .entry_size = trans_mat_single_tile_size,
+        .num_entries = num_trans_mat_tiles,
+        .data_format_metadata = trans_mat_dfb_data_format,
+        .borrowed_from = TRANS_MAT_PARAM,
+    };
     uint32_t num_interm_tiles = head_dim_t;
-    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = rotated_input_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
+    DataflowBufferSpec rotated_interm_dfb{
+        .unique_id = ROTATED_INTERM_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = input_dfb_data_format,
+    };
+    DataflowBufferSpec cos_interm_dfb{
+        .unique_id = COS_INTERM_DFB,
+        .entry_size = cos_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = cos_dfb_data_format,
+    };
+    DataflowBufferSpec sin_interm_dfb{
+        .unique_id = SIN_INTERM_DFB,
+        .entry_size = sin_single_tile_size,
+        .num_entries = num_interm_tiles,
+        .data_format_metadata = sin_dfb_data_format,
+    };
+    DataflowBufferSpec q_out_dfb{
+        .unique_id = Q_OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_q_output_tiles,
+        .data_format_metadata = output_dfb_data_format,
+        .borrowed_from = Q_OUTPUT_PARAM,
+    };
+    DataflowBufferSpec k_out_dfb{
+        .unique_id = K_OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_k_output_tiles,
+        .data_format_metadata = output_dfb_data_format,
+        .borrowed_from = K_OUTPUT_PARAM,
+    };
 
-    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_interm_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_interm_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t q_output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_q_output_tiles * output_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = q_output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-        .buffer = q_dst_buffer,
-    });
-    constexpr uint8_t k_output_cb_index = tt::CBIndex::c_17;  // output operands start at index 17
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_k_output_tiles * output_single_tile_size,
-        .core_ranges = all_cores_bb,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = k_output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-        .buffer = k_dst_buffer,
-    });
+    // ------------------------------------------------------------------
+    // Tensor parameters. Referenced via the DFB borrowed_from links (no kernel TensorBinding —
+    // a compute kernel cannot bind a TensorAccessor). The spec validator accepts borrowed_from as
+    // the required reference.
+    // ------------------------------------------------------------------
+    TensorParameter q_input_param{.unique_id = Q_INPUT_PARAM, .spec = q_input.tensor_spec()};
+    TensorParameter k_input_param{.unique_id = K_INPUT_PARAM, .spec = k_input.tensor_spec()};
+    TensorParameter cos_param{.unique_id = COS_PARAM, .spec = cos.tensor_spec()};
+    TensorParameter sin_param{.unique_id = SIN_PARAM, .spec = sin.tensor_spec()};
+    TensorParameter trans_mat_param{.unique_id = TRANS_MAT_PARAM, .spec = trans_mat.tensor_spec()};
+    TensorParameter q_output_param{.unique_id = Q_OUTPUT_PARAM, .spec = q_output.tensor_spec()};
+    TensorParameter k_output_param{.unique_id = K_OUTPUT_PARAM, .spec = k_output.tensor_spec()};
 
     // Set up the kernel
-    std::vector<uint32_t> compute_kernel_args = {
-        q_input_cb_index,
-        q_output_cb_index,
-        q_n_heads_t,
-        k_input_cb_index,
-        k_output_cb_index,
-        k_n_heads_t,
-        head_dim_t,
-
-        cos_cb_index,
-        sin_cb_index,
-        trans_mat_cb_index,
-
-        rotated_input_interm_cb_index,
-        cos_interm_cb_index,
-        sin_interm_cb_index,
-    };
-    const std::string compute_kernel_path =
+    const std::filesystem::path compute_kernel_path =
         operation_attributes.row_major_QK
             ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/"
               "compute/rotary_embedding_llama_sharded_row_major.cpp"
             : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/"
               "compute/rotary_embedding_llama_sharded.cpp";
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_kernel_path;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = work_cores;
-    compute_desc.compile_time_args = std::move(compute_kernel_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
+    // hw_config mirrors the legacy ComputeConfigDescriptor subset: the legacy factory resolved the
+    // full TTNN compute config but copied only math_fidelity and fp32_dest_acc_en onto the
+    // descriptor, leaving math_approx_mode / dst_full_sync_en at descriptor defaults. Those
+    // defaults coincide with ComputeGen1Config's (sfpu_precision_mode = Precise,
+    // double_buffer_dest = true), so only the two copied fields are set here. No unpack_modes
+    // entries: every DFB is bfloat16 (validate() forces BFLOAT16 tensors), so the Float32
+    // required-entry rule never triggers even when enable_32_bit_dest is on.
+    const ComputeHardwareConfig compute_hw_config =
+        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+
+    auto self_loop = [](const DFBSpecName& dfb, const std::string& name) {
+        return Group<DFBBinding>{
+            DFBBinding{
+                .dfb_spec_name = dfb,
+                .accessor_name = name,
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            DFBBinding{
+                .dfb_spec_name = dfb,
+                .accessor_name = name,
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+        };
+    };
+    Group<DFBBinding> compute_bindings;
+    for (const auto& [dfb, name] : {
+             std::pair{Q_INPUT_DFB, std::string{"q_input"}},
+             std::pair{K_INPUT_DFB, std::string{"k_input"}},
+             std::pair{COS_DFB, std::string{"cos"}},
+             std::pair{SIN_DFB, std::string{"sin"}},
+             std::pair{TRANS_MAT_DFB, std::string{"trans_mat"}},
+             std::pair{ROTATED_INTERM_DFB, std::string{"rotated_interm"}},
+             std::pair{COS_INTERM_DFB, std::string{"cos_interm"}},
+             std::pair{SIN_INTERM_DFB, std::string{"sin_interm"}},
+             std::pair{Q_OUT_DFB, std::string{"q_out"}},
+             std::pair{K_OUT_DFB, std::string{"k_out"}},
+         }) {
+        auto pair = self_loop(dfb, name);
+        compute_bindings.push_back(pair[0]);
+        compute_bindings.push_back(pair[1]);
+    }
+
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = compute_kernel_path,
+        // Explicit O3: the legacy compute kernel resolved to O3 (ComputeConfigDescriptor default),
+        // while Metal 2.0's CompilerOptions defaults to O2. Both kernel variants sit within ~4 bytes
+        // of the TRISC2 code-size limit with the profiler on, so the build flags genuinely matter.
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = compute_bindings,
+        .compile_time_args =
+            {
+                {"q_Ht", q_n_heads_t},
+                {"k_Ht", k_n_heads_t},
+                {"Wt", head_dim_t},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"is_q"}},
+        .hw_config = compute_hw_config,
+    };
+
+    ProgramSpec spec{
+        .name = "rotary_embedding_llama_fused_qk",
+        .kernels = {compute_spec},
+        .dataflow_buffers =
+            {q_input_dfb,
+             k_input_dfb,
+             cos_dfb,
+             sin_dfb,
+             trans_mat_dfb,
+             rotated_interm_dfb,
+             cos_interm_dfb,
+             sin_interm_dfb,
+             q_out_dfb,
+             k_out_dfb},
+        .tensor_parameters =
+            {q_input_param, k_input_param, cos_param, sin_param, trans_mat_param, q_output_param, k_output_param},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = work_cores}},
     };
 
     // Runtime args to differentiate between q, k or no work groups
@@ -259,17 +291,28 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
     constexpr uint32_t is_k_arg = 0;
     const auto q_cores_vec = corerange_to_cores(q_cores, std::nullopt, /*row_wise=*/true);
     const auto k_cores_vec = corerange_to_cores(k_cores, std::nullopt, /*row_wise=*/true);
-    compute_desc.runtime_args.reserve(q_cores_vec.size() + k_cores_vec.size());
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
     for (const auto& core : q_cores_vec) {
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{is_q_arg});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"is_q", is_q_arg}});
     }
     for (const auto& core : k_cores_vec) {
-        compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{is_k_arg});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"is_q", is_k_arg}});
     }
 
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(compute_run_args)};
+    // Borrowed DFBs draw their backing L1 addresses from these tensor args.
+    run_args.tensor_args = {
+        {Q_INPUT_PARAM, TensorArgument{q_input}},
+        {K_INPUT_PARAM, TensorArgument{k_input}},
+        {COS_PARAM, TensorArgument{cos}},
+        {SIN_PARAM, TensorArgument{sin}},
+        {TRANS_MAT_PARAM, TensorArgument{trans_mat}},
+        {Q_OUTPUT_PARAM, TensorArgument{q_output}},
+        {K_OUTPUT_PARAM, TensorArgument{k_output}},
+    };
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim
