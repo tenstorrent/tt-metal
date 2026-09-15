@@ -24,6 +24,17 @@ option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
 option(TT_ENABLE_LTO "Build Releases with Link-Time-Optimization (LTO)" OFF)
 option(ENABLE_DISTRIBUTED "Enable multihost distributed compute support (OpenMPI)" ON)
 option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
+option(TT_UMD_BUILD_GRENDEL_JTAG "Enable UMD Grendel emulation/JTAG support through chippy" OFF)
+set(CHIPPY_SOURCE_DIR
+    ""
+    CACHE PATH
+    "chippy repo root (contains lib/); used with CHIPPY_BUILD_DIR to import a prebuilt chippy"
+)
+set(CHIPPY_BUILD_DIR
+    ""
+    CACHE PATH
+    "chippy lib/ CMake build dir with grendel .a files; skip fetching/building chippy in-tree"
+)
 option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
 option(TT_METAL_USE_EMULE "Build with tt-emule software emulation (no hardware required)" OFF)

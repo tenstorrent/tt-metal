@@ -16,6 +16,7 @@ enum class TargetDevice : std::uint8_t {
     Simulator = 1,
     Mock = 2,
     Emule = 3,
+    EmuAxi = 4,
     Invalid = 0xFF,
 };
 
