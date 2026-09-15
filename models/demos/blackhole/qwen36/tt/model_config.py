@@ -224,6 +224,12 @@ class Qwen36ModelArgs(ModelArgs):
         # swept at the exact production shape (M=32 K=4096 N=6144, test_mlp_decode_matmul_sweep.py):
         _gateup_9b = tpc.wh_9b_n300(self)
         _gateup_cores = 56 if _gateup_9b else (44 if tpc.is_blackhole() else 64)
+        # T3K only: lift create_matmul_1d_decode_progcfg's in0_block_w cap from 8 to 16. N=68 tiles
+        # here has no divisor between 35 and 64, so the core count is pinned at 34 and the K-block
+        # count is the only lever left. MEASURED 58.0 -> 52.1 us per matmul (1.11x) at identical
+        # PCC, and this config is used by the gate/up of EVERY layer, so it lands in verify as well
+        # as in the drafter. Left at 8 elsewhere: the other configs' shapes were not swept.
+        _gateup_cap = 16 if tpc.wh_t3k(self) else 8
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
@@ -232,6 +238,7 @@ class Qwen36ModelArgs(ModelArgs):
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
             fp32_acc=not _gateup_9b,
+            in0_block_w_cap=_gateup_cap,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
@@ -240,6 +247,7 @@ class Qwen36ModelArgs(ModelArgs):
             num_cores=_gateup_cores,
             grid_w=self.decode_grid_w,
             fp32_acc=not _gateup_9b,
+            in0_block_w_cap=_gateup_cap,
         )
         # down: 33 cores (11x3) on BH, fastest measured (~63us). On WH this falls back to 8x5.
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(

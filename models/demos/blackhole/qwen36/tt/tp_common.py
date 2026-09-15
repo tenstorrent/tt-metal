@@ -312,7 +312,9 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(
+    m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, in0_block_w_cap=8
+):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
@@ -326,7 +328,16 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
     # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
-    per_core_k = _find_largest_divisor(k_tiles)
+    # in0_block_w_cap bounds how large a K-block the search may pick. It defaults to 8, which is
+    # what every caller had before the cap was a parameter -- but 8 is not a tuned value, and on a
+    # shape whose K is large relative to N the block count (k_tiles / in0_block_w) is the sync
+    # count, so the cap can be what binds. MEASURED on T3K/27B's gate/up (K=160 tiles, N=68), every
+    # arm at identical PCC:
+    #     in0bw:   4     5     8*    10    16     20    32    40
+    #     time:  72.1  70.6  60.2  57.5  52.1  57.9  53.6  59.5 us     (* = the old cap)
+    # The optimum sits just past where the default search was allowed to look. Raise the cap only
+    # for shapes that were measured; see model_config.py's gate/up callers.
+    per_core_k = _find_largest_divisor(k_tiles, max_div=in0_block_w_cap)
     per_core_n = math.ceil(n_tiles / (cols * rows))
     cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
     sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
@@ -878,6 +889,38 @@ def all_gather_matmul_prefill(
     )[0]
 
     return out
+
+
+def decode_ccl_tuning(args):
+    """(chunks_per_sync, num_workers_per_link) for the GDN DECODE out-projection all-reduce, or None
+    to leave tt_all_reduce on its 10 / 2 defaults.
+
+    prefill_ccl_tuning() below tuned the PREFILL collectives and found num_workers_per_link 2 -> 4
+    was the win while chunks_per_sync did nothing. The decode out-projection all-reduce never got
+    the same treatment -- it passes no tuning at all -- and it profiles at the same efficiency the
+    prefill note complains about: its reduce-scatter moves 655 KB in ~85 us, i.e. 7.7 GB/s against a
+    ~12.5 GB/s Wormhole link.
+
+    The decode answer INVERTS prefill's. MEASURED on T3K/27B at the GDN decode shape
+    ([1,1,32,5120] reduce-scatter), 3 repeats per arm, trace replay, min-of-rounds:
+
+        RS fp32 (the o_proj one)   cps=10: 96.4 / 96.8 / 96.3 us    cps=1: 83.0 / 83.8 / 83.5  -13.7%
+        RS bf16                    cps=10: 73.7 / 73.3 / 73.3 us    cps=1: 68.5 / 68.6 / 68.6   -6.6%
+
+    Within-arm spread is <=0.8 us and the groups do not overlap, so unlike the prefill RS (402 us
+    spread on a 2,263 us mean) this one is not noise. num_workers_per_link=4 is NEUTRAL here
+    (92.8 vs 87.7) and 8 is much worse (110 us) -- with one link, extra workers contend for it, and
+    the decode payload is small enough to be sync-bound rather than bandwidth-bound. That is the
+    opposite regime from prefill's whole-sequence tensors, which is why the knobs swap places.
+
+    The all-gathers are already optimal at the default (72.2 us at wpl=2, 75.3 at 4, 108.3 at 8), so
+    only the all-reduce call site takes this.
+
+    4 collectives per GDN layer x 48 GDN layers, so this lands in the verify phase.
+    T3K only: every number above is this box, and it is a scheduling change only -- the fp32 that
+    gdn/tp.py calls load-bearing stays fp32.
+    """
+    return (1, 2) if wh_t3k(args) else None
 
 
 def prefill_ccl_tuning():
