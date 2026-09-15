@@ -978,14 +978,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER
-        // Boots the streaming device-zone profiler (resident DRISC relays + host receiver) at MeshDevice
-        // bring-up and compiles kernels with the streaming producer (-DPROFILE_STREAMING). This is a
-        // SEPARATE mode from TT_METAL_DEVICE_PROFILER (the legacy DRAM profiler): it does NOT set
-        // profiler_enabled, so nothing of the DRAM profiler (DRAM buffers, per-op dump, dispatch/NoC-event
-        // options) is active, and the two may not be enabled together (TT_FATAL below). The real-time
-        // profiler is disabled while this is on (it reads the same L1 rings). The Tracy sink is NOT
-        // implied: opt in with TT_METAL_STREAMING_PROFILER_TRACY=1; without it, records go only to
-        // registered callbacks (RegisterCallback / the TT_METAL_STREAMING_PROFILER_*_CSV writers).
+        // Boots the streaming profiler at MeshDevice bring-up. Records go to registered callbacks
+        // (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
+        // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and TT_METAL_DEVICE_PROFILER off.
+
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER:
@@ -999,8 +995,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_TRACY
-        // Attaches the Tracy sink to the streaming profiler. Off by default: the primary consumers are the
-        // registered callbacks (RegisterCallback / the CSV writers), and Tracy is one more, expensive, consumer.
+        // Attaches the Tracy sink to the streaming profiler. Off by default.
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER_TRACY=1
         case EnvVarID::TT_METAL_STREAMING_PROFILER_TRACY:
@@ -1008,11 +1003,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_DRAM_MB
-        // Per-relay GDDR spool ring, in MiB. Non-zero makes each relay DMA frames into a ring in its own
-        // DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never
-        // touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep
-        // interval. 0 selects direct push. Capped at STREAMING_PROFILER_SPOOL_MB_MAX: a larger ring overflows
-        // the relay kernel's 32-bit ring arithmetic (a bank is 4 GiB anyway).
+        // Per-relay device DRAM buffer, in MiB. Raise it to absorb more host-side backpressure on the device;
+        // 0 sends profiling data straight to the host. Capped at STREAMING_PROFILER_SPOOL_MB_MAX.
         // Default: STREAMING_PROFILER_SPOOL_MB_DEFAULT
         // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
         case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
@@ -1021,11 +1013,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_FIFO_MB
-        // Host FIFO per D2H socket, in MiB: the device DMA-writes it and the consumers decode it in place, so it
-        // is the capture's whole elastic buffer. Readers may lag by all but a 64 MiB runway (a quarter of a
-        // smaller FIFO); at ~9.8 wire bytes per zone the default holds ~25 M zones per stream. A power of two,
-        // since the ring indexes it; at most STREAMING_PROFILER_FIFO_MB_MAX (the socket's byte size and the
-        // device's credit arithmetic are 32-bit).
+        // Host FIFO per D2H socket, in MiB. Raise it to let a slow callback fall further behind before it loses
+        // profiling data; it costs this much pinned host memory per relay. A power of two, at most
+        // STREAMING_PROFILER_FIFO_MB_MAX.
         // Default: STREAMING_PROFILER_FIFO_MB_DEFAULT
         // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024
         case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB: {

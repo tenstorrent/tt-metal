@@ -178,7 +178,7 @@ inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
 // because the device addresses them with 32-bit offsets.
 inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_DEFAULT = 128;
 inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_MAX = 4095;
-inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_DEFAULT = 256;
+inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_DEFAULT = 128;
 inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_MAX = 2048;  // FIFO size must be a power of two
 
 class RunTimeOptions {
