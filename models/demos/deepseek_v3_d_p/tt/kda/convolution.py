@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, fragment_order
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology
 
 
 def exchange_convolution_carry(
@@ -14,6 +14,7 @@ def exchange_convolution_carry(
     *,
     sequence_parallel_axis: int,
     topology: OffsetTopology,
+    wrap_indicator: ttnn.Tensor | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
@@ -32,33 +33,38 @@ def exchange_convolution_carry(
     mesh_shape = tuple(mesh_device.shape)
     sp_size = mesh_shape[sequence_parallel_axis]
 
-    # One tile slot per fragment end. When the offset splits the partition each
-    # chip contributes both its head end and its tail end, because a chip's head
-    # feeds its own tail while its tail feeds the next chip.
-    fragment_ends = [topology.head_rows, local_sequence] if topology.is_split else [local_sequence]
-    slots_per_chip = len(fragment_ends)
-    padded_tails = []
-    for end in fragment_ends:
-        local_tail = ttnn.slice(
+    def local_tail(end: int) -> ttnn.Tensor:
+        return ttnn.slice(
             projected_qkv,
             (0, end - history, 0),
             (batch, end, channels),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        padded_tails.append(
-            ttnn.pad(
-                local_tail,
-                ((0, 0), (0, ttnn.TILE_SIZE - history), (0, 0)),
-                value=0.0,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+
+    if topology.is_split:
+        if wrap_indicator is None:
+            raise ValueError("a split convolution carry exchange requires a device-local wrap indicator")
+
+        # One device program selects the source address locally. Ordinary ranks
+        # read only their physical end; the wrap rank publishes its head end and
+        # retains its physical end in rows [history:2*history] of the same tile.
+        tiled_tail = ttnn.experimental.kda.pack_convolution_carry(
+            projected_qkv,
+            wrap_indicator,
+            topology.head_rows,
+            history_rows=history,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    padded_tail = (
-        padded_tails[0]
-        if slots_per_chip == 1
-        else ttnn.concat(padded_tails, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    )
-    tiled_tail = ttnn.to_layout(padded_tail, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        physical_end = local_tail(local_sequence)
+        padded_tail = ttnn.pad(
+            physical_end,
+            ((0, 0), (0, ttnn.TILE_SIZE - history), (0, 0)),
+            value=0.0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tiled_tail = ttnn.to_layout(padded_tail, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     gathered_tails = ttnn.all_gather(
         tiled_tail,
         dim=1,
@@ -66,36 +72,38 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    def chip_tail(chip: int, fragment: int = 0) -> ttnn.Tensor:
-        slot = chip * slots_per_chip + fragment
+    def chip_tail(chip: int, *, retained_state: bool = False) -> ttnn.Tensor:
+        row = history if retained_state else 0
         tiled_chip_tail = ttnn.slice(
             gathered_tails,
-            (0, slot * ttnn.TILE_SIZE, 0),
-            (batch, (slot + 1) * ttnn.TILE_SIZE, channels),
+            (0, chip * ttnn.TILE_SIZE, 0),
+            (batch, (chip + 1) * ttnn.TILE_SIZE, channels),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         row_major_tail = ttnn.to_layout(tiled_chip_tail, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.slice(
             row_major_tail,
-            (0, 0, 0),
-            (batch, history, channels),
+            (0, row, 0),
+            (batch, row + history, channels),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # Walk the canonical chronological order rather than re-deriving predecessors.
-    # The boundary chip's head opens the stream and its tail closes it, so the
-    # chip after the boundary takes the boundary chip's HEAD end, not its tail --
-    # a rule that is easy to get wrong when written out by hand.
-    order = fragment_order(topology) if topology.is_split else tuple((chip, 0) for chip in topology.chip_order)
-    entry_by_slot: dict[tuple[int, int], ttnn.Tensor] = {}
-    previous: tuple[int, int] | None = None
-    for slot in order:
-        entry_by_slot[slot] = initial_carry if previous is None else chip_tail(*previous)
-        previous = slot
-    assert previous is not None
-    final_carry = chip_tail(*previous)
+    entry_carries = []
+    for chip in range(sp_size):
+        entry = initial_carry if chip == topology.boundary_chip else chip_tail(topology.predecessor_chip(chip))
+        entry_carries.append(entry)
+        if topology.is_split:
+            # Only the wrap rank reads plane 1, at its tail. Its predecessor is
+            # the last ordinary rank in chronological order. Duplicating plane 0
+            # elsewhere keeps the mesh tensor uniform without inventing a split.
+            tail_entry = chip_tail(topology.predecessor_chip(chip)) if chip == topology.boundary_chip else entry
+            entry_carries.append(tail_entry)
 
-    entry_carries = [entry_by_slot[(chip, fragment)] for chip in range(sp_size) for fragment in range(slots_per_chip)]
+    final_carry = (
+        chip_tail(topology.boundary_chip, retained_state=True)
+        if topology.is_split
+        else chip_tail(topology.chip_order[-1])
+    )
     replicated_entries = ttnn.concat(entry_carries, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     partition_carry = ttnn.mesh_partition(
         replicated_entries,

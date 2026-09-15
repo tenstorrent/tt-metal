@@ -36,7 +36,7 @@ FORCE_INLINE void load_weight_block(
 // Rows of causal history per fragment: one fewer than the four learned taps.
 constexpr uint32_t history_rows_per_plane = 3;
 
-template <uint32_t block_ct, uint32_t num_blocks>
+template <uint32_t block_ct, uint32_t num_blocks, uint32_t has_wrap_indicator>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -47,6 +47,20 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer activation(dfb::act_rm);
     Noc noc;
+
+    uint32_t device_wrap_row = wrap_row;
+    if constexpr (has_wrap_indicator) {
+        const auto wrap_indicator = TensorAccessor(tensor::wrap_indicator);
+        // The activation buffer has not been queued yet, so its first word is
+        // available as temporary reader-local storage for the scalar control.
+        noc.async_read(
+            wrap_indicator, CoreLocalMem<uint32_t>(activation.get_write_ptr()), sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        const auto control = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(activation.get_write_ptr());
+        if (control[0] == 0) {
+            device_wrap_row = 0;
+        }
+    }
 
     const uint32_t tile_bytes = weights.get_entry_size();
     if constexpr (num_blocks == 1) {
@@ -72,8 +86,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
         // wrap_row == 0 the whole branch is skipped.
         int32_t row_floor = 0;
         uint32_t history_plane = 0;
-        if (wrap_row != 0 && mt * tile_height >= wrap_row) {
-            row_floor = static_cast<int32_t>(wrap_row);
+        if (device_wrap_row != 0 && mt * tile_height >= device_wrap_row) {
+            row_floor = static_cast<int32_t>(device_wrap_row);
             history_plane = history_rows_per_plane;
         }
 

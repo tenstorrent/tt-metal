@@ -18,6 +18,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     uint32_t v_width,
     const QkvCausalConv1dSiluProgramConfig& program_config,
     uint32_t wrap_row,
+    const std::optional<ttnn::Tensor>& wrap_indicator,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
@@ -43,6 +44,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         v_width,
         program_config.channel_chunk_size,
         wrap_row,
+        wrap_indicator,
         output_memory_config,
         kernel_config);
     return {outputs[0], outputs[1], outputs[2]};

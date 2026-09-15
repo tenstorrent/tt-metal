@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecu
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
 pytestmark = [
     run_for_blackhole(),
@@ -76,7 +76,7 @@ def _to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: in
     )
 
 
-def _build_layer(mesh_device, config, weights, sp_axis, tp_axis) -> ttKDA:
+def _build_layer(mesh_device, config, weights, sp_axis, tp_axis, *, summary_group_chunks: int = 8) -> ttKDA:
     return ttKDA(
         mesh_device,
         config,
@@ -85,14 +85,14 @@ def _build_layer(mesh_device, config, weights, sp_axis, tp_axis) -> ttKDA:
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         program_config=KDAProgramConfig(
-            recurrence=KDARecurrenceProgramConfig(summary_group_chunks=8),
+            recurrence=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
             gated_rms_output_dtype=ttnn.bfloat16,
             output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         ),
     )
 
 
-def _reference_case() -> tuple[KDAConfig, object, torch.Tensor, torch.Tensor, object]:
+def _reference_case(sequence: int = SEQUENCE) -> tuple[KDAConfig, object, torch.Tensor, torch.Tensor, object]:
     config = KDAConfig(
         hidden_size=128,
         num_heads=8,
@@ -102,11 +102,139 @@ def _reference_case() -> tuple[KDAConfig, object, torch.Tensor, torch.Tensor, ob
         norm_eps=1e-5,
     )
     weights = random_weights(config)
-    hidden = torch.randn(1, SEQUENCE, config.hidden_size, generator=torch.Generator().manual_seed(4211)).to(
+    hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(4211)).to(
         torch.bfloat16
     )
     expected_output, expected_state = kda_forward_reference(hidden, weights, config)
     return config, weights, hidden, expected_output.to(torch.bfloat16), expected_state
+
+
+@pytest.mark.parametrize(
+    "actual_start",
+    [
+        pytest.param(0, id="baseline"),
+        pytest.param(1280, id="group-boundary"),
+        pytest.param(1312, id="inside-group"),
+    ],
+)
+def test_multi_group_split_matches_natural_order(mesh_device: ttnn.MeshDevice, actual_start: int) -> None:
+    """C=2560 keeps its native four 20-chunk groups across local wraps."""
+    tensor_parallel_axis = 1
+    sp_axis = 0
+    sequence = 5120
+    local_rows = sequence // 2
+    config, weights, hidden, expected_output, expected_state = _reference_case(sequence)
+    layer = _build_layer(
+        mesh_device,
+        config,
+        weights,
+        sp_axis,
+        tensor_parallel_axis,
+        summary_group_chunks=20,
+    )
+    permutation = _mla_row_permutation(actual_start, 2, local_rows)
+    hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        output_tt, state = layer.forward(hidden_tt, layer.allocate_state(batch_size=1), actual_start)
+    _assert_matches_reference(
+        output_tt=output_tt,
+        state=state,
+        permutation=permutation,
+        expected_output=expected_output,
+        expected_state=expected_state,
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tensor_parallel_axis,
+        config=config,
+        label=f"SP2xTP4 C2560 G4 start={actual_start}",
+        state_linf_threshold=0.65,
+    )
+
+
+def test_every_aligned_multi_group_offset_matches_natural_order(mesh_device: ttnn.MeshDevice) -> None:
+    """Gate every supported 32-row offset with the production C=2560 grouping."""
+    tensor_parallel_axis = 1
+    sp_axis = 0
+    sequence = 5120
+    local_rows = sequence // 2
+    config, weights, hidden, expected_output, expected_state = _reference_case(sequence)
+    layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis, summary_group_chunks=20)
+
+    for actual_start in range(0, sequence, 32):
+        permutation = _mla_row_permutation(actual_start, 2, local_rows)
+        hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
+        initial_state = layer.allocate_state(batch_size=1)
+        output_tt = None
+        state = None
+        try:
+            with ttnn.manage_config("throw_exception_on_fallback", True):
+                output_tt, state = layer.forward(hidden_tt, initial_state, actual_start)
+            _assert_matches_reference(
+                output_tt=output_tt,
+                state=state,
+                permutation=permutation,
+                expected_output=expected_output,
+                expected_state=expected_state,
+                mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                tp_axis=tensor_parallel_axis,
+                config=config,
+                label=f"SP2xTP4 C2560 G4 exhaustive start={actual_start}",
+                state_linf_threshold=0.65,
+            )
+        finally:
+            if output_tt is not None:
+                ttnn.deallocate(output_tt)
+            if state is not None:
+                ttnn.deallocate(state.recurrent)
+                ttnn.deallocate(state.convolution)
+            ttnn.deallocate(initial_state.recurrent)
+            ttnn.deallocate(initial_state.convolution)
+            ttnn.deallocate(hidden_tt)
+
+
+def test_representative_sp4_multi_group_offsets_match_natural_order(mesh_device: ttnn.MeshDevice) -> None:
+    """Exercise G=4 wraps on two boundary ranks of the orthogonal SP4 layout."""
+    tensor_parallel_axis = 0
+    sp_axis = 1
+    sp_size = 4
+    local_rows = 2560
+    sequence = sp_size * local_rows
+    config, weights, hidden, expected_output, expected_state = _reference_case(sequence)
+    layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis, summary_group_chunks=20)
+    actual_starts = (0, local_rows, 32, 640, 1312, 2528, 2 * local_rows + 1312)
+
+    for actual_start in actual_starts:
+        permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
+        hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
+        initial_state = layer.allocate_state(batch_size=1)
+        output_tt = None
+        state = None
+        try:
+            with ttnn.manage_config("throw_exception_on_fallback", True):
+                output_tt, state = layer.forward(hidden_tt, initial_state, actual_start)
+            _assert_matches_reference(
+                output_tt=output_tt,
+                state=state,
+                permutation=permutation,
+                expected_output=expected_output,
+                expected_state=expected_state,
+                mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                tp_axis=tensor_parallel_axis,
+                config=config,
+                label=f"SP4xTP2 C2560 G4 start={actual_start}",
+                state_linf_threshold=0.65,
+            )
+        finally:
+            if output_tt is not None:
+                ttnn.deallocate(output_tt)
+            if state is not None:
+                ttnn.deallocate(state.recurrent)
+                ttnn.deallocate(state.convolution)
+            ttnn.deallocate(initial_state.recurrent)
+            ttnn.deallocate(initial_state.convolution)
+            ttnn.deallocate(hidden_tt)
 
 
 def _assert_matches_reference(
@@ -121,6 +249,7 @@ def _assert_matches_reference(
     tp_axis,
     config,
     label: str,
+    state_linf_threshold: float = STATE_LINF_THRESHOLD,
 ) -> None:
     """Undo MLA's row permutation, then compare output and both carries."""
     rotated_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
@@ -147,7 +276,7 @@ def _assert_matches_reference(
             reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
             name=f"{label} sp_rank={sp_rank} recurrent",
             pcc_threshold=PCC_THRESHOLD,
-            linf_threshold=STATE_LINF_THRESHOLD,
+            linf_threshold=state_linf_threshold,
         )
         assert_accurate(
             expected_convolution,
@@ -307,3 +436,60 @@ def test_worst_case_split_offset_is_deterministic(
 
     _, mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     assert all(marker.item() == 0 for marker in mismatch_markers), "split-offset KDA is not bit-identical"
+
+
+def test_worst_case_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice) -> None:
+    """Two replays of the complete split layer must produce identical outputs and carries."""
+    tensor_parallel_axis = 1
+    sp_axis = 0
+    sp_size = 2
+    local_rows = SEQUENCE // sp_size
+    actual_start = local_rows + local_rows // 2
+    config, weights, hidden, _, _ = _reference_case()
+    layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
+    permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
+    hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
+
+    warm_input = layer.allocate_state(batch_size=1)
+    warm_output, warm_state = layer.forward(hidden_tt, warm_input, actual_start)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warm_output)
+    ttnn.deallocate(warm_state.recurrent)
+    ttnn.deallocate(warm_state.convolution)
+    ttnn.deallocate(warm_input.recurrent)
+    ttnn.deallocate(warm_input.convolution)
+
+    input_state = layer.allocate_state(batch_size=1)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    output_tt, state = layer.forward(hidden_tt, input_state, actual_start)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+
+        def replay_to_host() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            return (
+                reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tensor_parallel_axis, tp_dim=2, sp_dim=1),
+                reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, 0),
+                reconstruct_convolution_at_sp_rank(
+                    state.convolution,
+                    mesh_device,
+                    sp_axis,
+                    tensor_parallel_axis,
+                    0,
+                    config.num_heads // 4 * config.head_k_dim,
+                ),
+            )
+
+        first = replay_to_host()
+        second = replay_to_host()
+        for name, expected, actual in zip(("output", "recurrent", "convolution"), first, second, strict=True):
+            assert_bit_identical(expected, actual, name=f"split trace replay {name}")
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(output_tt)
+        ttnn.deallocate(state.recurrent)
+        ttnn.deallocate(state.convolution)
+        ttnn.deallocate(input_state.recurrent)
+        ttnn.deallocate(input_state.convolution)
+        ttnn.deallocate(hidden_tt)

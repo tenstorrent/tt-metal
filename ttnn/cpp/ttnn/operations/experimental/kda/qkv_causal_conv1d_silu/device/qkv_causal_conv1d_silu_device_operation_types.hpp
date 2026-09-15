@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -33,6 +34,7 @@ struct QkvCausalConv1dSiluInputs {
     Tensor tap1;
     Tensor tap2;
     Tensor tap3;
+    std::optional<Tensor> wrap_indicator;
 };
 
 }  // namespace ttnn::experimental::prim

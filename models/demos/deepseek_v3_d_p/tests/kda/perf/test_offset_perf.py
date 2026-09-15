@@ -7,9 +7,9 @@ offset prototypes can be compared on identical measurements.
 
 Timing is interleaved, not sequential. Measuring offsets one after another gave
 a 13.5% gap between two runs of the identical baseline, which is larger than
-several of the effects being measured. Every offset's trace is captured up
-front and the timing samples then round-robin across offsets, so drift over the
-run lands on all offsets equally instead of on whichever was measured last.
+several of the effects being measured. One trace is resident at a time and a
+fresh trace is captured for each round-robin sample, so drift lands on all
+offsets equally without exhausting production-shape L1 trace storage.
 
 Offsets change the program, not the arithmetic, so one synthetic input serves
 the whole sweep.
@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
     _TIMING_SAMPLES,
     _allocate_state,
     _deallocate_state,
+    _log_device_program_times,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
 
@@ -83,41 +84,39 @@ def test_offset_handling_cost(
         cache_weights=False,
     )
     sweep = _offset_sweep(local_rows)
-    captured: dict[str, int] = {}
-    held: list = []
-    try:
-        for name, actual_start in sweep.items():
+    samples: dict[str, list[float]] = {name: [] for name in sweep}
+    sweep_items = list(sweep.items())
+    for sample_index in range(_TIMING_SAMPLES):
+        # Rotate the round-robin order so monotonic clock/thermal drift does not
+        # consistently assign the same within-round position to one offset.
+        ordered_items = sweep_items[sample_index:] + sweep_items[:sample_index]
+        for name, actual_start in ordered_items:
             state = _allocate_state(layer)
-            held.append(state)
-            warm_output, warm_state = layer.forward(hidden_tt, state, actual_start)
-            ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(warm_output)
-            _deallocate_state(warm_state)
-
+            # Warm the exact live buffers that trace capture will bind.  The
+            # first forward also reserves persistent CCL semaphores after the
+            # QKV untilize has selected its worker set; a second forward caches
+            # the stable post-reservation untilize signature used by the trace.
+            for _ in range(2):
+                warm_output, warm_state = layer.forward(hidden_tt, state, actual_start)
+                ttnn.synchronize_device(mesh_device)
+                ttnn.deallocate(warm_output)
+                _deallocate_state(warm_state)
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             output, next_state = layer.forward(hidden_tt, state, actual_start)
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            held.extend([output, next_state.recurrent, next_state.convolution])
-            captured[name] = trace_id
-
-        samples: dict[str, list[float]] = {name: [] for name in sweep}
-        for _ in range(_TIMING_SAMPLES):
-            for name, trace_id in captured.items():
+            try:
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
                 start = time.perf_counter()
                 for _ in range(_REPETITIONS):
                     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                 ttnn.synchronize_device(mesh_device)
                 samples[name].append((time.perf_counter() - start) * 1e3 / _REPETITIONS)
-    finally:
-        for trace_id in captured.values():
-            ttnn.release_trace(mesh_device, trace_id)
-        for tensor in held:
-            if isinstance(tensor, ttnn.Tensor):
-                ttnn.deallocate(tensor)
-            else:
-                _deallocate_state(tensor)
+            finally:
+                ttnn.release_trace(mesh_device, trace_id)
+                ttnn.deallocate(output)
+                _deallocate_state(next_state)
+                _deallocate_state(state)
 
     baseline_ms = statistics.median(samples["baseline"])
     measurements = {
@@ -126,6 +125,14 @@ def test_offset_handling_cost(
             "median_trace_wall_ms": statistics.median(values),
             "spread_pct": 100.0 * (max(values) - min(values)) / statistics.median(values),
             "overhead_pct": 100.0 * (statistics.median(values) - baseline_ms) / baseline_ms,
+            "paired_overhead_samples_pct": [
+                100.0 * (value - baseline) / baseline
+                for value, baseline in zip(values, samples["baseline"], strict=True)
+            ],
+            "median_paired_overhead_pct": statistics.median(
+                100.0 * (value - baseline) / baseline
+                for value, baseline in zip(values, samples["baseline"], strict=True)
+            ),
             "trace_wall_samples_ms": values,
         }
         for name, values in samples.items()
@@ -146,3 +153,20 @@ def test_offset_handling_cost(
             sort_keys=True,
         )
     )
+    for name in ("baseline", "worst_case_split"):
+        programs = _log_device_program_times(
+            mesh_device,
+            layer,
+            hidden_tt,
+            f"{layout}-C{local_rows}-{name}",
+            actual_start=sweep[name],
+        )
+        counts = {
+            operation: sum(program["name"] == operation for program in programs)
+            for operation in (
+                "experimental.kda.summarize_chunk_recurrence",
+                "experimental.kda.affine_exclusive_scan",
+                "experimental.kda.recurrent_chunk_scan",
+            )
+        }
+        assert all(count == 1 for count in counts.values()), f"unexpected recurrence program topology: {counts}"

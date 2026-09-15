@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -15,6 +17,9 @@ struct AffineExclusiveScanParams {
     uint32_t groups_per_head;
     uint32_t key_dim;
     uint32_t value_dim;
+    uint32_t wrap_group;
+    bool split_in_group;
+    bool segmented;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -23,6 +28,10 @@ struct AffineExclusiveScanInputs {
     Tensor a;
     Tensor b;
     Tensor initial_state;
+    std::optional<Tensor> tail_a;
+    std::optional<Tensor> tail_b;
+    std::optional<Tensor> tail_state;
+    std::optional<Tensor> wrap_indicator;
 };
 
 }  // namespace ttnn::experimental::prim

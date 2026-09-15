@@ -53,6 +53,16 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     check_same_device(in.input, in.tap1, operation_name, "tap1");
     check_same_device(in.input, in.tap2, operation_name, "tap2");
     check_same_device(in.input, in.tap3, operation_name, "tap3");
+    if (in.wrap_indicator.has_value()) {
+        check_allocated_device_tensor(*in.wrap_indicator, operation_name, "wrap_indicator");
+        check_layout(*in.wrap_indicator, Layout::TILE, operation_name, "wrap_indicator");
+        check_dtype(*in.wrap_indicator, DataType::FLOAT32, operation_name, "wrap_indicator");
+        check_interleaved(*in.wrap_indicator, operation_name, "wrap_indicator");
+        check_same_device(in.input, *in.wrap_indicator, operation_name, "wrap_indicator");
+        TT_FATAL(
+            in.wrap_indicator->logical_volume() >= 1,
+            "qkv_causal_conv1d_silu: wrap_indicator must contain at least one scalar");
+    }
 
     TT_FATAL(
         attrs.q_width > 0 && attrs.k_width > 0 && attrs.v_width > 0,
@@ -167,6 +177,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t v_width,
     uint32_t channel_chunk_size,
     uint32_t wrap_row,
+    const std::optional<Tensor>& wrap_indicator,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& input_shape = input.logical_shape();
@@ -182,7 +193,13 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
-            .input = input, .history = history, .tap0 = tap0, .tap1 = tap1, .tap2 = tap2, .tap3 = tap3});
+            .input = input,
+            .history = history,
+            .tap0 = tap0,
+            .tap1 = tap1,
+            .tap2 = tap2,
+            .tap3 = tap3,
+            .wrap_indicator = wrap_indicator});
 }
 
 }  // namespace ttnn::experimental::prim

@@ -224,6 +224,7 @@ class ttKDA:
         qkv: ttnn.Tensor,
         convolution_state: ttnn.Tensor,
         topology: OffsetTopology,
+        wrap_indicator: ttnn.Tensor | None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
@@ -245,6 +246,7 @@ class ttKDA:
                 state_row_major,
                 sequence_parallel_axis=self.sequence_parallel_axis,
                 topology=topology,
+                wrap_indicator=wrap_indicator,
             )
         else:
             new_state = ttnn.slice(
@@ -271,6 +273,7 @@ class ttKDA:
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
             wrap_row=topology.head_rows if topology.is_split else 0,
+            wrap_indicator=wrap_indicator,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return q, k, v, new_state
@@ -418,8 +421,9 @@ class ttKDA:
         """
         self._validate_forward(hidden_states, state, actual_start)
         topology = offset_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
+        wrap_indicator = self.recurrence.wrap_indicator(topology)
         projected = self._project_inputs(hidden_states)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, topology)
+        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, topology, wrap_indicator)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,

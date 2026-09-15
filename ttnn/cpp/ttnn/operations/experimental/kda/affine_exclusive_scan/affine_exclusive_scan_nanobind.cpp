@@ -41,6 +41,14 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
                 each batch-head. Must be positive and divide the leading dimension.
 
         Keyword Args:
+            tail_a, tail_b (ttnn.Tensor, optional): Tail-segment affine summaries.
+                When supplied with ``tail_state`` and ``wrap_indicator``, the scan
+                switches to the tail chain at the local wrap without a second scan.
+            tail_state (ttnn.Tensor, optional): Tail-chain seed ``[B*H, K, V]``.
+            wrap_indicator (ttnn.Tensor, optional): Per-device scalar; nonzero only
+                on the device containing the wrap.
+            wrap_group (int): Group containing the wrap.
+            split_in_group (bool): Whether the wrap straddles ``wrap_group``.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -62,6 +70,12 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("initial_state").noconvert(),
         nb::arg("groups_per_head"),
         nb::kw_only(),
+        nb::arg("tail_a") = nb::none(),
+        nb::arg("tail_b") = nb::none(),
+        nb::arg("tail_state") = nb::none(),
+        nb::arg("wrap_indicator") = nb::none(),
+        nb::arg("wrap_group") = 0,
+        nb::arg("split_in_group") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }
