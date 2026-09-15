@@ -172,6 +172,8 @@ class RMSNorm(LightweightModule):
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
         # Optional L1 placement for the distributed 3-op outputs (pre/gather/post); None -> DRAM default.
         distributed_out_mc = norm_config.get("distributed_output_mem_config") if norm_config else None
+        # Optional output dtype for the distributed norm's FINAL op. None -> same dtype as the input
+        distributed_out_dtype = norm_config.get("distributed_output_dtype") if norm_config else None
 
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = sharded_program_config if in_sharded else None
@@ -191,6 +193,7 @@ class RMSNorm(LightweightModule):
                 weight=weight,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 output_memory_config=distributed_out_mc,
+                output_dtype=distributed_out_dtype,
             )
         else:
             x = ttnn.rms_norm(
@@ -218,6 +221,7 @@ class RMSNorm(LightweightModule):
         memory_config=None,
         compute_kernel_config=None,
         output_memory_config=None,
+        output_dtype=None,
     ):
         assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
@@ -252,6 +256,7 @@ class RMSNorm(LightweightModule):
             weight=weight,
             compute_kernel_config=compute_kernel_config,
             memory_config=mc,
+            dtype=output_dtype,
         )
         tt_stats.deallocate(True)
 

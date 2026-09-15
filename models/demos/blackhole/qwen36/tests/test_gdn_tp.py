@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole mesh.
+"""TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole or Wormhole TP mesh.
 
 One file per component (decode / chunk-prefill), sharing the loaders and mesh
 parametrization from ``test_factory``:
@@ -16,7 +16,10 @@ parametrization from ``test_factory``:
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
+    # Wormhole: MESH_DEVICE=T3K with the 27B, or MESH_DEVICE=N300 with the 9B.
 """
+
+import gc
 import os
 
 import pytest
@@ -25,7 +28,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import (
     compute_pcc,
     get_pcc_threshold,
@@ -42,6 +45,31 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
+
+
+def _pf_in(mesh_device, args, t):
+    """Prefill input placement: K-sharded when the fused AGMM in-proj is active (it gathers K itself),
+    replicated otherwise (the model's norm gathers before GDN instead).
+
+    Must mirror gdn/tp.py's _fuse_agmm exactly — a mismatch trips the op's `K == K_w` assert, since
+    the fused weight's height is full K while a K-sharded activation is K/tp wide. So if the AGMM
+    fusion is ever enabled beyond Blackhole, this predicate has to move with it."""
+    fused = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None and is_blackhole()
+    return shard_to_device(mesh_device, t, dim=-1) if fused else replicate_to_device(mesh_device, t)
+
+
+def _parametrize_prefill_in_dtype():
+    """Parametrize ``in_dtype`` over the PREFILL activation dtypes this ARCH actually produces.
+
+    bf8 is Wormhole-only (see test_gdn_tp_prefill), gated at COLLECTION time so the case does not
+    exist on Blackhole rather than being generated and skipped -- a skip would report a coverage
+    gap that is not one. Arch is the whole gate: gdn/tp.py's _fuse_agmm reduces to is_blackhole()
+    because _fuse_ab follows gdn_qkvz_weight_memcfg, which model_config.py always sets.
+    is_blackhole() reads ttnn.get_arch_name() only, so this is safe before a device is open."""
+    dtypes = [pytest.param(ttnn.bfloat16, id="in_bf16")]
+    if not is_blackhole():
+        dtypes.append(pytest.param(ttnn.bfloat8_b, id="in_bf8"))
+    return pytest.mark.parametrize("in_dtype", dtypes)
 
 
 @torch.no_grad()
@@ -221,17 +249,19 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        # Decode leaves rec_state in L1; native conv1d CBs on the next instance clash unless spilled.
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched: per-user prefill(return_state) -> assemble -> single batched decode ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     rec_list, conv_list = [], []
     for u in range(B):
-        _, rec_u, conv_u = gb.forward_prefill(
-            shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, return_state=True
-        )
+        _, rec_u, conv_u = gb.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, return_state=True)
         rec_list.append(rec_u)
         conv_list.append(conv_u)
     gb.assemble_batched_state(rec_list, conv_list)
@@ -286,9 +316,12 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -296,9 +329,11 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
     for u in reversed(range(B)):  # reverse order: every write must preserve the already-written rows
         gu = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         gu.reset_state()
-        gu.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        gu.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
+        gu._spill_rec_state_to_dram()
         gb.write_slot(u, gu.rec_state, list(gu.conv_states))  # consumes gu's rec/conv buffers
         gu.rec_state, gu.conv_states = None, None
+        del gu
 
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
     out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
@@ -370,7 +405,7 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=Tmax, capture_state=True)
+        g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=Tmax, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
 
@@ -380,7 +415,7 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     x_pad = torch.zeros(B, Tmax, args.dim, dtype=torch.bfloat16)
     for u in range(B):
         x_pad[u, : lens[u], :] = xp[u][0, 0]
-    gb.forward_prefill_batched(shard_to_device(mesh_device, x_pad, dim=-1), chunk_size=Tmax, valid_lens=lens)
+    gb.forward_prefill_batched(_pf_in(mesh_device, args, x_pad), chunk_size=Tmax, valid_lens=lens)
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim]
     out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
     out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
@@ -425,7 +460,7 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     gref.reset_state()
     gref._stable_state = True
-    gref.forward_prefill_batched(shard_to_device(mesh_device, x.unsqueeze(0), dim=-1), chunk_size=C)
+    gref.forward_prefill_batched(_pf_in(mesh_device, args, x.unsqueeze(0)), chunk_size=C)
     out_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     # ---- test: two CARRIED chunks ----
@@ -433,8 +468,8 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     g.reset_state()
     g._stable_state = True
     g.reset_state_inplace()  # zero state + clear the batched conv carry at sequence start
-    g.forward_prefill_batched(shard_to_device(mesh_device, x[:, :C].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
-    g.forward_prefill_batched(shard_to_device(mesh_device, x[:, C:].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
+    g.forward_prefill_batched(_pf_in(mesh_device, args, x[:, :C].unsqueeze(0)), chunk_size=C, carry=True)
+    g.forward_prefill_batched(_pf_in(mesh_device, args, x[:, C:].unsqueeze(0)), chunk_size=C, carry=True)
     out_t = ttnn.to_torch(g.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     thr = get_pcc_threshold(request, default=0.99)
@@ -447,11 +482,32 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
+@_parametrize_prefill_in_dtype()
+def test_gdn_tp_prefill(mesh_device, in_dtype, reset_seeds, ensure_gc, request):
     """Check that chunk-prefill and step-by-step decode agree on the same T=128 tokens.
 
     Both paths start from zero state. No hand-written reference — this is a
     self-consistency check between forward_prefill and forward_decode.
+
+    ``in_dtype`` is the PREFILL activation dtype only (decode always feeds bf16), which is what
+    makes that pair a measurement rather than a tautology: on Wormhole layer.py narrows
+    attention_norm's prefill gather to bf8 on GDN layers, so the in-proj sees a bf8 in0 in prefill
+    and a bf16 one in decode. Model-level TP tests cannot see this -- they compare two paths
+    carrying the same quantisation. MEASURED bf16/bf8: N300 9B TP=2 0.99926/0.99908,
+    T3K 27B TP=8 0.99939/0.99929 (threshold 0.95).
+
+    bf8 is Wormhole-only because on Blackhole the configuration cannot exist, not because it is
+    untested: the narrowing applies to attention_norm's gather, and layer.py's _fuse_norm_agmm
+    disables that gather and lets the in-proj AGMM do it instead (hardcoded bf16 by
+    tp_common.all_gather_matmul_prefill), which is why _attn_gather_dtype carries the same
+    ``not is_blackhole()``. Forcing bf8 there reports PCC 0.0: qwen36 lets the op allocate its own
+    activation-gather intermediate, which is sized at ``output_dtype`` (bf16, 2048 B/tile) rather
+    than at the activation's dtype (bf8_b, 1088 B/tile), and the gather is a raw page copy with no
+    conversion. A caller-side contract, not an op limit -- llama3_70b_galaxy keeps ``dtype`` equal
+    to its bf8 activation and tt_dit passes a ``persistent_output_buffer`` at ``x.get_dtype()``.
+    Adopting the latter would make a bf8 in0 correct here, at the cost of a buffer on the L1-tight
+    prefill path shared with attention and MLP. Until then do not relax the threshold, and do not
+    re-add the Blackhole row without that buffer.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
@@ -468,8 +524,9 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
-    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
-    x_tt = shard_to_device(mesh_device, x, dim=-1)
+    x_tt = _pf_in(mesh_device, args, x)  # K-sharded on BH (fused AGMM), full-width on WH
+    if in_dtype != x_tt.dtype:
+        x_tt = ttnn.typecast(x_tt, in_dtype)
     composer = tp_composer(mesh_device)
 
     # ---- Prefill ----
@@ -519,8 +576,7 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
-    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
-    x_tt = shard_to_device(mesh_device, x, dim=-1)
+    x_tt = _pf_in(mesh_device, args, x)  # K-sharded on BH (fused AGMM), full-width on WH
     composer = tp_composer(mesh_device)
 
     import models.demos.blackhole.qwen36.tt.gdn.fused_chunk as fc
