@@ -135,6 +135,14 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
         TT_FATAL(
+            attrs.emit_tail_summaries || (!in.wrap_indicator.has_value() && attrs.wrap_chunk == 0),
+            "{}: ordinary summaries do not accept wrap controls; use emit_tail_summaries",
+            operation_name);
+        TT_FATAL(
+            !attrs.emit_tail_summaries || (attrs.chunk_start == 0 && attrs.chunk_count == 0),
+            "{}: tail summaries require the complete chunk range",
+            operation_name);
+        TT_FATAL(
             !attrs.emit_tail_summaries || in.wrap_indicator.has_value(),
             "{}: tail summaries require a device-local wrap_indicator",
             operation_name);

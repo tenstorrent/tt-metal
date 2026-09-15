@@ -269,7 +269,6 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt", Vt},
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)},
-             {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())},
              {"emit_tail_summaries", static_cast<uint32_t>(segmented_summary)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"head", "value_block", "num_chunks", "group", "wrap_group", "split_in_group"}},
@@ -366,7 +365,6 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Kt", Kt},
              {"Vt", Vt},
              {"summary_pair", static_cast<uint32_t>(summary)},
-             {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())},
              {"emit_tail_summaries", static_cast<uint32_t>(segmented_summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"active_chunks", "reset_chunk"}},
         .hw_config = std::move(compute_hw),
@@ -384,8 +382,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         // Every device executes the same chunk schedule. The reader uses its
         // local wrap-indicator shard only to route the reset carry.
         const uint32_t chunk_start = attrs.chunk_start;
-        const uint32_t reset_chunk =
-            (segmented_summary || !summary) ? (group == wrap_group ? split_in_group : 0) : attrs.wrap_chunk;
+        const uint32_t reset_chunk = group == wrap_group ? split_in_group : 0;
         const uint32_t active_chunks = attrs.chunk_count == 0 ? (NC - chunk_start) : attrs.chunk_count;
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,

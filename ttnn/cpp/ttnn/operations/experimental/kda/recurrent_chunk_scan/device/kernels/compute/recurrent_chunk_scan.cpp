@@ -340,7 +340,7 @@ FORCE_INLINE void update_state(
     state_update.pop_front(key_value_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t has_wrap_indicator, uint32_t emit_tail_summaries>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t emit_tail_summaries>
 FORCE_INLINE void compute_summary(uint32_t active_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
@@ -399,7 +399,7 @@ FORCE_INLINE void compute_summary(uint32_t active_chunks, uint32_t split_chunk) 
             final_decay,
             state_update,
             state_temporary);
-        if constexpr (has_wrap_indicator) {
+        if constexpr (emit_tail_summaries) {
             const uint32_t snapshot_chunk = split_chunk;
             if (snapshot_chunk != 0 && chunk + 1 == snapshot_chunk) {
                 state_ring.wait_front(key_value_tiles);
@@ -407,23 +407,21 @@ FORCE_INLINE void compute_summary(uint32_t active_chunks, uint32_t split_chunk) 
                 elementwise_streamed<ElementwiseOperation::SUBTRACT, Kt, Vt>(
                     summary_ring, state_ring, summary_head_output);
                 copy_streamed<Kt, Vt>(state_ring, summary_head_state);
-                if constexpr (emit_tail_summaries) {
-                    tail_state.wait_front(key_value_tiles);
-                    wrap_mask.wait_front(1);
-                    multiply_by_mask(state_ring, wrap_mask, scratch, Kt, Vt);
-                    scratch.wait_front(key_value_tiles);
-                    copy(scratch, state_ring, key_value_tiles);
-                    state_ring.pop_front(key_value_tiles);
-                    scratch.pop_front(key_value_tiles);
+                tail_state.wait_front(key_value_tiles);
+                wrap_mask.wait_front(1);
+                multiply_by_mask(state_ring, wrap_mask, scratch, Kt, Vt);
+                scratch.wait_front(key_value_tiles);
+                copy(scratch, state_ring, key_value_tiles);
+                state_ring.pop_front(key_value_tiles);
+                scratch.pop_front(key_value_tiles);
 
-                    multiply_by_mask(summary_ring, wrap_mask, scratch, Kt, Vt);
-                    scratch.wait_front(key_value_tiles);
-                    elementwise<ElementwiseOperation::ADD, key_value_tiles>(tail_state, scratch, summary_ring);
-                    summary_ring.pop_front(key_value_tiles);
-                    scratch.pop_front(key_value_tiles);
-                    tail_state.pop_front(key_value_tiles);
-                    wrap_mask.pop_front(1);
-                }
+                multiply_by_mask(summary_ring, wrap_mask, scratch, Kt, Vt);
+                scratch.wait_front(key_value_tiles);
+                elementwise<ElementwiseOperation::ADD, key_value_tiles>(tail_state, scratch, summary_ring);
+                summary_ring.pop_front(key_value_tiles);
+                scratch.pop_front(key_value_tiles);
+                tail_state.pop_front(key_value_tiles);
+                wrap_mask.pop_front(1);
             }
         }
         kd.pop_front(chunk_key_tiles);
@@ -497,17 +495,11 @@ FORCE_INLINE void compute_recurrent(uint32_t active_chunks, uint32_t reset_chunk
     }
 }
 
-template <
-    uint32_t Ct,
-    uint32_t Kt,
-    uint32_t Vt,
-    uint32_t summary_pair,
-    uint32_t has_wrap_indicator,
-    uint32_t emit_tail_summaries>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair, uint32_t emit_tail_summaries>
 TT_KERNEL void compute(uint32_t active_chunks, uint32_t reset_chunk) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
     if constexpr (summary_pair) {
-        compute_summary<Ct, Kt, Vt, has_wrap_indicator, emit_tail_summaries>(active_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt, emit_tail_summaries>(active_chunks, reset_chunk);
     } else {
         compute_recurrent<Ct, Kt, Vt>(active_chunks, reset_chunk);
     }
