@@ -237,6 +237,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
  * | is_host_fallback_op  | (Optional): Specifies if this op runs entirely on host                              | bool
  * |                          | no       |
  */
+// The profiler keeps a lightweight declaration to avoid the full API include.
+// NOLINTNEXTLINE(readability-redundant-declaration)
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
 
 // clang-format off

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
-#ifndef __DM__REMAPPER_COMMON_HPP__
-#define __DM__REMAPPER_COMMON_HPP__
+#ifndef DM_REMAPPER_COMMON_HPP
+#define DM_REMAPPER_COMMON_HPP
 
 // Base addresses for 64 pairs of ClientL/ClientR config registers
 #define REMAP_CLIENT_R_CONFIG_REG_BASE_ADDR32 0x01842000
@@ -30,9 +30,10 @@
 
 namespace overlay {
 
-typedef enum clientTypes { DM_0, DM_1, DM_2, DM_3, NEO_0, NEO_1, NEO_2, NEO_3 } tClientTypes;
+enum clientTypes { DM_0, DM_1, DM_2, DM_3, NEO_0, NEO_1, NEO_2, NEO_3 };
+using tClientTypes = clientTypes;
 
-typedef struct {
+struct tCounter_remap_clientR_config_reg_out {
     uint32_t id_0 : 3;
     uint32_t cnt_sel_0 : 5;
     uint32_t id_1 : 3;
@@ -41,12 +42,12 @@ typedef struct {
     uint32_t cnt_sel_2 : 5;
     uint32_t id_3 : 3;
     uint32_t cnt_sel_3 : 5;
-} tCounter_remap_clientR_config_reg_out;
+};
 
-typedef union {
+union tClientR_Config_Reg_u {
     uint32_t val;
     tCounter_remap_clientR_config_reg_out f;
-} tClientR_Config_Reg_u;
+};
 
 // Removed: Single register pointers replaced with pair-indexed access
 
@@ -67,25 +68,25 @@ typedef struct {
 } tCounter_remap_clientL_config_reg_out;
 */
 
-typedef struct {
+struct tCounter_remap_clientL_config_reg_out {
     uint32_t id_L : 3;
     uint32_t cnt_sel_L : 5;
     uint32_t valid : 4;
     uint32_t clientl_is_producer : 1;
     uint32_t clientr_group : 1;
     uint32_t distribute : 1;
-} tCounter_remap_clientL_config_reg_out;
+};
 
-typedef union {
+union tClientL_Config_Reg_u {
     uint32_t val;
     tCounter_remap_clientL_config_reg_out f;
-} tClientL_Config_Reg_u;
+};
 
 // Removed: Single register pointers replaced with pair-indexed access
 
 // ----------------------------------------------------------------------------------------
 
-typedef struct {
+struct tCounter_remap_clientR_status_reg_in {
     uint32_t id_0 : 3;
     uint32_t cnt_sel_0 : 5;
     uint32_t id_1 : 3;
@@ -94,18 +95,18 @@ typedef struct {
     uint32_t cnt_sel_2 : 5;
     uint32_t id_3 : 3;
     uint32_t cnt_sel_3 : 5;
-} tCounter_remap_clientR_status_reg_in;
+};
 
-typedef union {
+union tClientR_status_Reg_u {
     uint32_t val;
     tCounter_remap_clientR_status_reg_in f;
-} tClientR_status_Reg_u;
+};
 
 // Removed: Single register pointers replaced with pair-indexed access
 
 // ----------------------------------------------------------------------------------------
 
-typedef struct {
+struct tCounter_remap_clientL_status_reg_in {
     uint32_t id_L : 3;
     uint32_t cnt_sel_L : 5;
     uint32_t valid : 4;
@@ -115,15 +116,15 @@ typedef struct {
     uint32_t err_inv_client_no : 1;
     uint32_t err_inv_client_id : 1;
     uint32_t err_inv_access : 1;
-} tCounter_remap_clientL_status_reg_in;
+};
 
-typedef union {
+union tClientL_status_Reg_u {
     uint32_t val;
     tCounter_remap_clientL_status_reg_in f;
-} tClientL_status_Reg_u;
+};
 
 // Removed: Single register pointers replaced with pair-indexed access
 
 }  // namespace overlay
 
-#endif  // __DM__REMAPPER_COMMON_HPP__
+#endif  // DM_REMAPPER_COMMON_HPP

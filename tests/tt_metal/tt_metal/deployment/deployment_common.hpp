@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _DEPLOYMENT_COMMON_H
-#define _DEPLOYMENT_COMMON_H
+#ifndef DEPLOYMENT_COMMON_H
+#define DEPLOYMENT_COMMON_H
 
 #include "tt_metal/api/tt-metalium/hal.hpp"
 #include "command_queue_fixture.hpp"
@@ -11,7 +11,7 @@
 
 #define TEST_PARAM(type, var, initial, envvar) \
     type var = (initial);                      \
-    get_env((envvar), &var)
+    get_env((envvar), &(var))
 
 struct l1_allocator {
     uint32_t start;
@@ -113,10 +113,7 @@ private:
     int signum;
 
 public:
-    SignalGuard(int sig, sighandler_t handler) {
-        signum = sig;
-        prev = signal(sig, handler);
-    }
+    SignalGuard(int sig, sighandler_t handler) : prev(signal(sig, handler)), signum(sig) {}
     ~SignalGuard() { signal(signum, prev); }
 };
 
@@ -188,4 +185,4 @@ static void get_env(const char* varname, uint32_t* var) {
     }
 }
 
-#endif /* _DEPLOYMENT_COMMON_H */
+#endif /* DEPLOYMENT_COMMON_H */

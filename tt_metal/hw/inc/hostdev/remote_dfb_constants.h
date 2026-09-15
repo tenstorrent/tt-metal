@@ -28,6 +28,6 @@ inline constexpr uint32_t UINT32_WORDS_PER_REMOTE_DFB_CONFIG = 3;
 // Leading word of a dense remote-DFB region: num_slots, then dense slots.
 inline constexpr uint32_t REMOTE_DFB_REGION_HEADER_WORDS = 1;
 
-inline constexpr uint32_t remote_dfb_config_region_words(uint32_t num_slots) {
+constexpr uint32_t remote_dfb_config_region_words(uint32_t num_slots) {
     return REMOTE_DFB_REGION_HEADER_WORDS + num_slots * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
 }

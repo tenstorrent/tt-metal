@@ -16,7 +16,7 @@ struct TopkLargeIndicesSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle compute_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
-    std::vector<CoreCoord> cores{};
+    std::vector<CoreCoord> cores;
 };
 
 struct TopkLargeIndicesProgramFactory {
