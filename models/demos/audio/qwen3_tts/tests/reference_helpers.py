@@ -143,3 +143,48 @@ def code_predictor_prompt():
     codes = CodePredictorReference().generate_greedy(talker_hidden, first_code)
     teacher_forced = build_input_embeddings(talker_hidden, [first_code] + codes[:-1])
     return talker_hidden, first_code, tuple(codes), teacher_forced
+
+
+@functools.lru_cache(maxsize=1)
+def codebook_size():
+    """How many ids the codec can actually render."""
+    return weights.codec_decoder_config()["codebook_size"]
+
+
+@functools.lru_cache(maxsize=None)
+def codec_frames(count=4):
+    """Real codec frames, produced by the CPU references rather than drawn at random.
+
+    Random codes are out of distribution for the decoder the same way random embeddings
+    were for the talker. This runs the reference talker and code predictor greedily for a
+    few frames off a real prompt, which is what the decoder will actually be handed.
+
+    Returns codes [1, 16, count].
+    """
+    from models.demos.audio.qwen3_tts.reference.qwen3_code_predictor_ref import (
+        CodePredictorReference,
+        build_input_embeddings,
+    )
+    from models.demos.audio.qwen3_tts.reference.qwen3_talker_ref import TalkerReference, default_position_ids
+
+    talker = TalkerReference(dtype=torch.float32)
+    predictor = CodePredictorReference()
+    head = codec_head()
+    embeddings, _ = talker_prompt()
+
+    frames = []
+    for _ in range(count):
+        hidden = talker(embeddings, position_ids=default_position_ids(embeddings.shape[1]))[:, -1:, :]
+        # Restrict codebook 0 to the codec vocabulary. Ids 2048 and above are the talker's
+        # own control tokens (pad, bos, eos, the think markers); upstream's loop stops on
+        # them rather than emitting them, so the decoder never sees one.
+        first = int((hidden[0, 0] @ head.T)[: codebook_size()].argmax())
+        rest = predictor.generate_greedy(hidden, first)
+        frames.append([first] + list(rest))
+        # The next prompt position is the 16 codebook embeddings summed; close enough to
+        # the real loop for the decoder's purposes, and it keeps the codes in distribution.
+        summed = build_input_embeddings(hidden, [first] + rest[:-1])[:, 1:, :].sum(dim=1, keepdim=True)
+        embeddings = torch.cat([embeddings, summed], dim=1)
+
+    codes = torch.tensor(frames, dtype=torch.long)  # [count, 16]
+    return codes.t().unsqueeze(0).contiguous()

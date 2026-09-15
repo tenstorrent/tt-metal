@@ -197,6 +197,10 @@ class TtSpeakerEncoder:
         x = self._reflect_pad(x, _same_padding(kernel, dilation))
         length = x.shape[1]
 
+        # conv1d prepares the weight for the parallelisation it picks, which depends on the
+        # input length; a weight prepared at one length decodes to garbage at another
+        # without raising. The length is therefore part of the key.
+        cache_key = (cache_key, length)
         weight, bias = self._prepared.get(cache_key, (params["weight"], params["bias"]))
         out, out_length, (weight, bias) = ttnn.conv1d(
             input_tensor=ttnn.reshape(x, (1, length, 1, in_channels)),

@@ -19,7 +19,8 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
 | 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **prefill done**, PCC 0.995 |
 | 5 | Code Predictor (5 layers, 15 steps per frame) | device | **done**, logits PCC 0.995 |
-| 6 | Codec decoder → waveform | device | not started |
+| 6 | Codec decoder → waveform (1920x) | device | **done**, waveform PCC 0.995 |
+| 7 | Dual-track prompt + decode loop | host + device | **done**, end to end |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
 single position of the talker's prompt. Its width matches the talker's hidden size, so
@@ -61,7 +62,7 @@ work never materialises the talker.
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoint and, for the device tests, a card. 58 tests, 75 s warm.
+it needs only the checkpoints and, for the device tests, a card. 73 tests, 160 s warm.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
@@ -70,6 +71,8 @@ pytest models/demos/audio/qwen3_tts/tests/test_tokenizer.py            # host on
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py      # speaker encoder
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py       # talker
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py  # code predictor
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py        # codec decoder
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py         # end to end
 ```
 
 `test_checkpoint_loading.py` derives every speaker-encoder tensor name and shape from
@@ -125,6 +128,43 @@ which a 0.99 gate would wave through. Two further tests keep the first one hones
 is compared against `torch.nn.functional.pad` for an exact match, and the angle between a low
 voice and a high one on device is checked against the same angle on the reference (0.9496 vs
 0.9497), which a graph that ignored its input could not reproduce.
+
+`pcc/test_codec_pcc.py` decodes codes to a waveform: stages 0.995 to 0.999997 and the
+waveform 0.995. Test input is random *valid* codes, which is legitimate here and was not for
+the talker: codes index learned codebooks, so any valid code gives an in-distribution latent
+by construction, and what random codes lack is temporal coherence rather than validity. A
+separate test uses real frames from the reference models, which score lower (0.954) because
+they are quiet and the fixture is short; a real 210-frame utterance reaches 0.9956 and is
+indistinguishable from the CPU decode by ear.
+
+One test there is a regression guard worth knowing about. `ttnn.conv1d` prepares weights for
+the parallelisation it picks, and that depends on input length, so caching a prepared weight
+by name alone silently corrupts the next clip of a different length. Measured: 0.995 falling
+to 0.104 on a second decode through the same instance. The fix keys the cache by length, and
+the test decodes 4, 8 then 4 frames through one object.
+
+`pcc/test_pipeline.py` covers the dual-track prefill and the decode loop, and is the one file
+that needs the **CustomVoice** checkpoint. The two releases are complementary: Base carries
+`speaker_encoder` and an empty `spk_id`, CustomVoice carries the nine speakers and no speaker
+encoder. It resolves CustomVoice by repo id rather than from the ambient `$QWEN3_TTS_CKPT`,
+so a first run downloads 4.3 GB.
+
+The prefill is checked position by position against the tables it is built from. Its
+bit-exactness against upstream's own assembled prefill was verified separately, max absolute
+difference 0.0 at all 14 positions, but that needs a second venv on transformers 4.57.3 and
+cannot live in the suite.
+
+Free-running greedy decode diverges from a CPU greedy run: one near-tie flip changes the
+input to every later step, so 13 of 14 steps match with a forced prefix while only a handful
+of codes match when running free. The loop is therefore gated per step, not on sequence
+equality.
+
+## Performance
+
+Not started, deliberately. The decode loop has no KV cache, so every step recomputes the
+whole prefix through all 28 talker layers and each new sequence length triggers a fresh
+compile. Measured 63 s for 1.12 s of audio, 56x slower than real time. A cache is the first
+thing to build, and it is what makes a full-length utterance practical at all.
 
 ## CI
 

@@ -34,6 +34,13 @@ from safetensors import safe_open
 DEFAULT_REPO = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 PINNED_REVISION = "fd4b254389122332181a7c3db7f27e918eec64e3"
 
+# The codec that turns codes back into a waveform. Model repos bundle it under
+# `speech_tokenizer/`, and it is also published standalone.
+CODEC_REPO = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
+CODEC_PINNED_REVISION = "7dd38ad4e9bad454aae9cd937d0cd577604fe229"
+CODEC_SUBFOLDER = "speech_tokenizer"
+CODEC_DECODER_PREFIX = "decoder."
+
 CONFIG_FILE = "config.json"
 WEIGHTS_FILE = "model.safetensors"
 SPEAKER_PREFIX = "speaker_encoder."
@@ -141,6 +148,63 @@ def speaker_encoder_config(allow_download=True):
     cfg = dict(SPEAKER_ENCODER_DEFAULTS)
     cfg.update(model_config(allow_download).get("speaker_encoder_config") or {})
     return cfg
+
+
+@functools.lru_cache(maxsize=None)
+def codec_dir(allow_download=True):
+    """Local directory holding the codec's config.json and model.safetensors.
+
+    Resolves `$QWEN3_TTS_CODEC`, then the `speech_tokenizer/` subfolder the model repos
+    bundle, then the standalone repo at a pinned revision.
+    """
+    local = os.environ.get("QWEN3_TTS_CODEC", "").strip()
+    if local:
+        if not os.path.isdir(local):
+            raise FileNotFoundError(f"$QWEN3_TTS_CODEC is not a directory: {local}")
+        return local
+
+    bundled = os.path.join(checkpoint_dir(allow_download), CODEC_SUBFOLDER)
+    if os.path.isfile(os.path.join(bundled, WEIGHTS_FILE)):
+        return bundled
+
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(
+        CODEC_REPO,
+        revision=os.environ.get("QWEN3_TTS_CODEC_REVISION") or CODEC_PINNED_REVISION,
+        allow_patterns=[CONFIG_FILE, WEIGHTS_FILE, "preprocessor_config.json"],
+        local_files_only=not allow_download,
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def _codec_config_json(allow_download=True):
+    with open(os.path.join(codec_dir(allow_download), CONFIG_FILE)) as f:
+        return json.load(f)
+
+
+def codec_config(allow_download=True):
+    """The codec's whole config.json, as a fresh dict."""
+    return json.loads(json.dumps(_codec_config_json(allow_download)))
+
+
+def codec_decoder_config(allow_download=True):
+    """Just the decoder half, which is what this repository ports."""
+    return codec_config(allow_download)["decoder_config"]
+
+
+def load_codec_decoder_state(dtype=torch.float32, allow_download=True):
+    """The codec decoder's weights, keyed as `Qwen3TTSTokenizerV2Decoder` expects them."""
+    path = os.path.join(codec_dir(allow_download), WEIGHTS_FILE)
+    state = {}
+    with safe_open(path, framework="pt") as f:
+        names = [key for key in f.keys() if key.startswith(CODEC_DECODER_PREFIX)]
+        if not names:
+            raise KeyError(f"no {CODEC_DECODER_PREFIX}* tensors in {path}")
+        for name in names:
+            tensor = f.get_tensor(name)
+            state[name[len(CODEC_DECODER_PREFIX) :]] = tensor if dtype is None else tensor.to(dtype)
+    return state
 
 
 def talker_config(allow_download=True):

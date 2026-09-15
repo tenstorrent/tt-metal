@@ -115,8 +115,18 @@ SPECIAL_TOKEN_NAMES = {
 ASSISTANT_PROMPT_IDS = [151644, 77091, 198, 9707, 504, 17695, 47365, 7976, 13, 151645, 198, 151644, 77091, 198]
 
 
-def test_supported_languages_are_the_documented_ten():
-    assert frontend.supported_languages() == tuple(sorted(CORPUS))
+def test_the_documented_ten_languages_are_all_supported():
+    """The ten the card names must all resolve.
+
+    Asserted as a subset rather than equality: the CustomVoice checkpoint adds
+    `beijing_dialect` and `sichuan_dialect` to `codec_language_id` for its dialect speakers,
+    so the exact set depends on which release is loaded.
+    """
+    supported = set(frontend.supported_languages())
+    missing = sorted(set(CORPUS) - supported)
+    assert not missing, f"unsupported: {missing}"
+    for language in CORPUS:
+        assert frontend.language_id(language) is not None
 
 
 def test_special_ids_name_the_tokens_they_should():

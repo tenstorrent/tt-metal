@@ -16,16 +16,17 @@ verbatim from 4.57.3, the version the checkpoint was released against, minus its
 Taking the original rather than rewriting the formula keeps the rotation the model was
 trained with, including how it derives `dim` from `head_dim` and `partial_rotary_factor`.
 
-**`create_causal_mask`.** Its signature changed: `input_embeds` became `inputs_embeds`, and
-`cache_position` is gone, with 5.12.1 deriving the offset from `past_key_values` and
-`position_ids`. The wrapper below renames the first and drops the second. Dropping it is
-sound for the prefill this reference runs, where there is no cache and positions are
-explicit; anything relying on a populated cache needs checking against upstream before it
-is trusted.
+**The mask builders.** `create_causal_mask` and `create_sliding_window_causal_mask` both
+changed signature: `input_embeds` became `inputs_embeds`, and `cache_position` is gone, with
+5.12.1 deriving the offset from `past_key_values` and `position_ids`. The wrapper below
+renames the first and drops the second. Dropping it is sound for the prefill these references
+run, where there is no cache and positions are explicit; anything relying on a populated
+cache needs checking against upstream before it is trusted.
 """
 
 import torch
 import transformers.masking_utils as masking_utils
+import transformers.utils.generic as generic_utils
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 
 REGISTERED_KEY = "default"
@@ -49,24 +50,47 @@ def _compute_default_rope_parameters(config=None, device=None, seq_len=None, lay
     return inv_freq, attention_factor
 
 
-def _create_causal_mask_4573(create_causal_mask):
+def _mask_builder_4573(build_mask):
     """Accept a 4.57.3 call and forward it to the 5.12.1 function."""
 
     def wrapper(*args, **kwargs):
         if "input_embeds" in kwargs:
             kwargs["inputs_embeds"] = kwargs.pop("input_embeds")
         kwargs.pop("cache_position", None)
-        return create_causal_mask(*args, **kwargs)
+        return build_mask(*args, **kwargs)
 
-    wrapper.__wrapped__ = create_causal_mask
+    wrapper.__wrapped__ = build_mask
+    return wrapper
+
+
+def _check_model_inputs_4573(check_model_inputs):
+    """Accept a 4.57.3 factory call and return the 5.12.1 decorator.
+
+    4.57.3 spelled it `check_model_inputs(tie_last_hidden_states=True)`, a factory that
+    returned the decorator. 5.12.1 spells it `check_model_inputs(func)`, the decorator
+    itself. The vendored codec writes `@check_model_inputs()`, which under 5.12.1 raises
+    for a missing argument. `tie_last_hidden_states` has no counterpart in 5.12.1 and is
+    dropped; the cross-check against the genuine package is what says that costs nothing.
+    """
+
+    def wrapper(*args, **kwargs):
+        if args and callable(args[0]):
+            return check_model_inputs(args[0])
+        return check_model_inputs
+
+    wrapper.__wrapped__ = check_model_inputs
     return wrapper
 
 
 def register():
     """Put the 4.57.3 behaviour back, leaving anything already adapted alone."""
     ROPE_INIT_FUNCTIONS.setdefault(REGISTERED_KEY, _compute_default_rope_parameters)
-    if not hasattr(masking_utils.create_causal_mask, "__wrapped__"):
-        masking_utils.create_causal_mask = _create_causal_mask_4573(masking_utils.create_causal_mask)
+    for name in ("create_causal_mask", "create_sliding_window_causal_mask"):
+        builder = getattr(masking_utils, name)
+        if not hasattr(builder, "__wrapped__"):
+            setattr(masking_utils, name, _mask_builder_4573(builder))
+    if not hasattr(generic_utils.check_model_inputs, "__wrapped__"):
+        generic_utils.check_model_inputs = _check_model_inputs_4573(generic_utils.check_model_inputs)
 
 
 register()
