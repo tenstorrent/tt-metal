@@ -48,6 +48,8 @@ Tensor to_stats_layout(const Tensor& tensor);
 
 // Returns {input_grad, weight_grad}; weight_grad is nullopt when weight is unset.
 // `scale` is E[x * g] over the full row.
+// Fuses the dx eltwise chain and, when weight is set, the dgamma row-reduction
+// into one program so intermediates stay on-chip instead of round-tripping DRAM.
 std::vector<std::optional<Tensor>> apply_backward(
     const Tensor& input,
     const Tensor& output_grad,
