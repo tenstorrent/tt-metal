@@ -43,6 +43,10 @@ namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar {
 
 struct MulReduceScalarConfig {
     uint32_t num_tiles = 1;
+    // 0 selects the non-chunked mul_reduce_scalar_tile. Non-zero selects
+    // mul_reduce_scalar_chunked_tile with this dst_capacity, which the compute
+    // API only permits when num_tiles > dst_capacity.
+    uint32_t chunked_dst_capacity = 0;
     // Tile row height. 32 -> standard 32x32 tiles (4 faces); 16 -> 16x32 "tiny
     // tiles" (2 faces, one face-row). Column dimension is always 32.
     uint32_t tile_height = 32;
@@ -113,10 +117,20 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    const std::map<std::string, std::string> compute_defines = {{"REDUCE_OP", "PoolType::SUM"}};
+    const bool chunked = config.chunked_dst_capacity != 0;
+
+    // num_tiles and dst_capacity are template parameters of
+    // mul_reduce_scalar_chunked_tile, so the chunked kernel takes them as
+    // defines; the non-chunked one reads num_tiles as a runtime arg.
+    std::map<std::string, std::string> compute_defines = {{"REDUCE_OP", "PoolType::SUM"}};
+    if (chunked) {
+        compute_defines["CHUNKED_NUM_TILES"] = std::to_string(config.num_tiles);
+        compute_defines["CHUNKED_DST_CAPACITY"] = std::to_string(config.chunked_dst_capacity);
+    }
     auto mul_reduce_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar.cpp",
+        chunked ? "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar_chunked.cpp"
+                : "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar.cpp",
         core,
         tt_metal::ComputeConfig{.math_fidelity = config.math_fidelity, .compile_args = {}, .defines = compute_defines});
 
@@ -165,11 +179,13 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
 
     log_info(
         LogTest,
-        "num_tiles={}: Golden={}, Device={}, Diff={}",
+        "num_tiles={} dst_capacity={}: Golden={}, Device={}, Diff={}, Device/Golden={}",
         config.num_tiles,
+        config.chunked_dst_capacity,
         golden_scalar,
         device_scalar,
-        std::abs(device_scalar - golden_scalar));
+        std::abs(device_scalar - golden_scalar),
+        golden_scalar != 0.0f ? device_scalar / golden_scalar : 0.0f);
 
     float rel_tol = 0.01f;
     float abs_tol = 0.01f;
@@ -214,4 +230,81 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(1, 2, 3, 7, 8),
     [](const testing::TestParamInfo<int>& info) {
         return "MulReduceScalar_16x32_" + std::to_string(info.param) + "_Tiles";
+    });
+
+// Chunked suites: mul_reduce_scalar_chunked_tile, the path taken once a row no
+// longer fits DST. Chunking is a pure reordering of the same sum, so the golden
+// and the tolerance are unchanged from the non-chunked suites -- the only thing
+// that differs is which compute API computes it.
+//
+// DISABLED because the primitive is broken, not because the tests are: every
+// case below fails on Blackhole today. Run them with
+// --gtest_also_run_disabled_tests. Measured (Blackhole p150b, bfloat16 DEST,
+// HiFi4, A and B ~ U[0,1] so the golden is sum(A*B), default scaler 1.0):
+//
+//   dst_capacity=8 (batch_size 7), varying tile count:
+//     num_tiles  batches   Golden      Device    Device/Golden
+//             9        2  4603.68     30848            6.70
+//            12        2  6143.16     33536            5.46
+//            16        3  8204.25    262144           31.95
+//            21        3 10760.21    270336           25.12
+//            28        4 14310.35   1949696          136.24
+//
+//   num_tiles=8 fixed (identical data and golden), varying dst_capacity:
+//     dst_capacity  batch_size  batches    Device    Device/Golden
+//                7           6        2     26752             6.52
+//                4           3        3    119296            29.06
+//                2           1        8   7.55e+08        183885.61
+//
+// For reference the non-chunked mul_reduce_scalar_tile at 8 tiles returns 4080
+// against the same golden of 4105.68, i.e. 0.994 -- so the inputs and the
+// golden are fine and only the chunked driver is not.
+//
+// Two things follow that a single case cannot show. First, the second table
+// holds the data, the tile count and the golden completely fixed and varies
+// only dst_capacity, so the error cannot be attributed to the amount of data
+// or to the input values -- it tracks the number of chunks. Second, the error
+// is not a consistent over-count: at dst_capacity=2 the result is enormous,
+// and passing a small scaler instead of the default 1.0 makes the result
+// collapse to O(scaler) and become nearly independent of the input, i.e. the
+// summed data stops reaching the output at all. The dst_capacity=2 case is
+// also not run-order stable (observed as both 7.55 and 7.55e+08 -- same
+// mantissa, different exponent), which is consistent with the accumulator
+// picking up residual DEST state.
+class MulReduceScalarChunkedTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
+
+TEST_P(MulReduceScalarChunkedTest, DISABLED_MulReduceScalarChunked) {
+    int num_tiles = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(
+        this->device(), {.num_tiles = num_tiles, .chunked_dst_capacity = 8, .tile_height = 32}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarChunkedTests,
+    MulReduceScalarChunkedTest,
+    testing::Values(9, 12, 16, 21, 28),
+    [](const testing::TestParamInfo<int>& info) {
+        return "MulReduceScalarChunked_" + std::to_string(info.param) + "_Tiles";
+    });
+
+// The controlled version of the suite above: the tile count is FIXED at 8, so
+// the input data, the golden and every buffer are identical across the whole
+// suite, and the only thing that varies is dst_capacity -- which is to say, the
+// number of chunks (batch_size = dst_capacity - 1). Also DISABLED; see above.
+class MulReduceScalarChunkedCapacityTest : public LLKMeshDeviceSingleCardFixture,
+                                           public testing::WithParamInterface<int> {};
+
+TEST_P(MulReduceScalarChunkedCapacityTest, DISABLED_MulReduceScalarChunkedCapacity) {
+    int dst_capacity = GetParam();
+    ASSERT_TRUE(run_mul_reduce_scalar_test(
+        this->device(),
+        {.num_tiles = 8, .chunked_dst_capacity = static_cast<uint32_t>(dst_capacity), .tile_height = 32}));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MulReduceScalarChunkedCapacityTests,
+    MulReduceScalarChunkedCapacityTest,
+    testing::Values(2, 4, 7),
+    [](const testing::TestParamInfo<int>& info) {
+        return "MulReduceScalarChunked_8_Tiles_DstCapacity_" + std::to_string(info.param);
     });
