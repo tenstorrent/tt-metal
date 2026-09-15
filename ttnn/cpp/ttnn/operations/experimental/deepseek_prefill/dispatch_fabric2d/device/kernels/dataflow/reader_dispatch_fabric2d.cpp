@@ -39,41 +39,60 @@ struct Control {
     volatile tt_l1_ptr uint32_t* bucket_len;    // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
-    volatile tt_l1_ptr uint32_t* mc_meta;       // fanout: 4-word scratch for one page's metadata
+    volatile tt_l1_ptr uint32_t* mc_meta;       // fanout: 4 words per destination of one page
     volatile tt_l1_ptr uint32_t* mc_count;      // fanout: entries emitted per direction
-    volatile tt_l1_ptr uint32_t* reach;         // fanout: extent x 2 x (m + 2), tokens reaching >= h hops
-    volatile tt_l1_ptr uint32_t* in_start;      // page offset of each chunk this stream reads
-    volatile tt_l1_ptr uint32_t* out_start;     // page offset of each chunk it writes downstream
+    // fanout: one reach row per (origin, direction), each padded to 64 bytes. An address rather than a
+    // pointer because the pad makes the stride wider than the row.
+    uint32_t reach;
+    volatile tt_l1_ptr uint32_t* in_start;   // page offset of each chunk this stream reads
+    volatile tt_l1_ptr uint32_t* out_start;  // page offset of each chunk it writes downstream
     uint32_t end;
 };
 
+// The geometry the control region is sized from. The host builds the same struct and reserves
+// control_region_bytes of it; carve_control below walks the same block list in the same order, so the
+// two cannot drift apart the way an independently maintained sum did, twice.
+dspf2d::ControlGeometry control_geometry() {
+    dspf2d::ControlGeometry g;
+    g.seq_len = ct.seq_len;
+    g.indices_pad_stride = ct.indices_pad_stride;
+    g.extent = ct.extent;
+    g.num_routed_experts = ct.num_routed_experts;
+    g.experts_per_chip = ct.experts_per_chip;
+    g.topk = ct.topk;
+    g.num_relay = ct.num_relay;
+    return g;
+}
+
 Control carve_control() {
+    const dspf2d::ControlGeometry g = control_geometry();
     uint32_t a = ct.control_addr;
-    const auto take = [&](uint32_t bytes) {
+    const auto take = [&](uint32_t block) {
         const uint32_t at = a;
-        a += bytes;
+        a += dspf2d::control_block_bytes(g, block);
         return at;
     };
-    const auto words = [&](uint32_t n) { return take(n * 4u); };
 
     Control c;
-    c.indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(take(ct.seq_len * ct.indices_pad_stride));
-    c.offsets = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.num_routed_experts));
-    c.counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_routed_experts));
-    c.region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_routed_experts));
-    c.table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(words(ct.num_routed_experts + 1));
-    c.alloc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_routed_experts));
-    c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
-    c.bucket_len = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
-    c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
-    c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        words(ct.seq_len * dspf2d::routing_index_words_per_token(ct.topk)));
-    c.mc_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(4));
-    c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(2));
-    c.reach = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * 2u * (ct.extent / 2u + 2u)));
-    c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
-    c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
+    c.indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(take(dspf2d::kCbIndices));
+    c.offsets = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbOffsets));
+    c.counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbCounts));
+    c.region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRegion));
+    c.table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(take(dspf2d::kCbTable));
+    c.alloc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbAlloc));
+    c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbChipExperts));
+    c.bucket_len = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketLen));
+    c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketStart));
+    c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbEntries));
+    c.mc_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcMeta));
+    c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcCount));
+    c.reach = take(dspf2d::kCbReach);
+    c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbInStart));
+    c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbOutStart));
     c.end = a;
+    // The host reserved exactly this, from the same list. A carve that outgrew the reservation would
+    // run into the global semaphores, so say so here rather than corrupting them.
+    ASSERT(c.end - ct.control_addr == dspf2d::control_region_bytes(g));
     return c;
 }
 
@@ -100,11 +119,14 @@ void read_control_tables(const Control& c) {
     if (ct.fanout) {
         const auto reach_acc = TensorAccessor(
             dspf2d::ReaderCtArgs::reach_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFanoutReachAddr));
-        const uint32_t hops = ct.extent / 2u + 2u;
+        const uint32_t hops = dspf2d::mc_reach_hops(ct.extent);
+        const uint32_t stride = dspf2d::mc_reach_row_bytes(ct.extent);
+        // Row by row into 64-byte-padded slots. A row is hops * 4 bytes, which is never a multiple of
+        // 64, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole: packed, every row
+        // after the first lands at a wrong address and every chunk length downstream is garbage.
         for (uint32_t o = 0; o < ct.extent; o++) {
             for (uint32_t d = 0; d < 2u; d++) {
-                noc_async_read(
-                    reach_acc.get_noc_addr(o * 2u + d), (uint32_t)(c.reach + (o * 2u + d) * hops), hops * 4u);
+                noc_async_read(reach_acc.get_noc_addr(o * 2u + d), c.reach + (o * 2u + d) * stride, hops * 4u);
             }
         }
     }
@@ -368,13 +390,67 @@ struct Ring {
 // Under fan-out a chunk is (origin, hop) and its length is how many of that origin's tokens are still
 // in flight at that hop -- not a per-expert count, which is a marginal and cannot express it.
 uint32_t mc_reach(const Control& c, uint32_t origin_row, uint32_t dir_idx, uint32_t hop) {
-    const uint32_t hops = ct.extent / 2u + 2u;
-    return c.reach[(origin_row * 2u + dir_idx) * hops + hop];
+    const uint32_t stride = dspf2d::mc_reach_row_bytes(ct.extent);
+    volatile tt_l1_ptr uint32_t* row =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(c.reach + (origin_row * 2u + dir_idx) * stride);
+    return row[hop];
+}
+
+// Tokens from one origin whose farthest destination this way is EXACTLY `far` hops off. reach is
+// cumulative and terminated by a zero at m + 1, so the classes partition its tokens.
+uint32_t mc_class_size(const Control& c, uint32_t origin_row, uint32_t dir_idx, uint32_t far) {
+    return mc_reach(c, origin_row, dir_idx, far) - mc_reach(c, origin_row, dir_idx, far + 1);
+}
+
+// Which link carries a token: its rank within its farthest-hop class, sliced the usual way.
+//
+// The obvious rule -- slice the whole hop-1 list -- is WRONG for more than one link, and wrong as a
+// deadlock rather than as wrong data. A multicast chunk shrinks as it travels, so a link's contiguous
+// share of what remains is not the share the next hop's list would hand it: with four tokens whose
+// farthest hops are (2, 2, 1, 1), link 0 takes both far-2 tokens and forwards two pages where the
+// downstream, slicing reach[2] = 2 in half, waits for one from each link. Nothing about the data
+// prevents that, and no rule over the hop-1 list avoids it.
+//
+// Splitting each farthest-hop class instead is stable: a token keeps its link for the whole journey,
+// so a link's pages at hop h are exactly its share of the classes with far >= h. Class sizes come out
+// of the same reach table both sides already hold, so this still needs no communication -- and with
+// one link it telescopes back to reach[hop].
+uint32_t mc_link_of(uint32_t rank, uint32_t class_size) {
+    for (uint32_t link = 0; link + 1 < ct.num_links; link++) {
+        if (rank < slice_begin(class_size, link + 1, ct.num_links)) {
+            return link;
+        }
+    }
+    return ct.num_links - 1;
 }
 
 uint32_t mc_chunk_len(const Control& c, uint32_t origin_row, uint32_t dir_idx, uint32_t hop, uint32_t link) {
-    const uint32_t n = mc_reach(c, origin_row, dir_idx, hop);
-    return slice_begin(n, link + 1, ct.num_links) - slice_begin(n, link, ct.num_links);
+    const uint32_t m = ct.extent / 2u;
+    uint32_t len = 0;
+    for (uint32_t far = hop; far <= m; far++) {
+        const uint32_t n = mc_class_size(c, origin_row, dir_idx, far);
+        len += slice_begin(n, link + 1, ct.num_links) - slice_begin(n, link, ct.num_links);
+    }
+    return len;
+}
+
+// Farthest hop of a staged multicast entry, which is the class it is split by. Derived from the
+// entry rather than stored, so there is one definition of a destination's hop.
+uint32_t mc_entry_far(volatile tt_l1_ptr uint32_t* ent) {
+    uint32_t far = 0;
+    for (uint32_t i = 0; i < ent[1]; i++) {
+        const uint32_t hop = (ent[2 + i] >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK;
+        if (hop > far) {
+            far = hop;
+        }
+    }
+    return far;
+}
+
+// Where this chip sits relative to an origin `j` hops upstream along the stream's direction.
+uint32_t mc_row_back(uint32_t j, int32_t travel) {
+    const int32_t e = static_cast<int32_t>(ct.extent);
+    return static_cast<uint32_t>(((static_cast<int32_t>(ct.my_row) - static_cast<int32_t>(j) * travel) % e + e) % e);
 }
 
 uint32_t chunk_len(const Control& c, uint32_t origin_row, uint32_t e, uint32_t idx, uint32_t count) {
@@ -405,58 +481,52 @@ uint32_t chunk_starts(const Control& c, uint32_t block_base, volatile tt_l1_ptr 
     return at;
 }
 
+// The same, for multicast, where a chunk is (origin, hop) and there are extent/2 of them either way.
+//
+// Outgoing is this chip's own tokens followed by each upstream origin pushed one hop further;
+// incoming is the same origins one hop back. Those are the same m numbers offset by one hop, which is
+// what makes a region both sides derive alone still agree -- and the reason the two lists are
+// generated by one function rather than two.
+uint32_t mc_chunk_starts(
+    const Control& c,
+    uint32_t dir_idx,
+    uint32_t link,
+    int32_t travel,
+    bool outgoing,
+    volatile tt_l1_ptr uint32_t* start) {
+    const uint32_t m = ct.extent / 2u;
+    uint32_t at = 0;
+    for (uint32_t i = 0; i < m; i++) {
+        const uint32_t origin = mc_row_back(i + (outgoing ? 0u : 1u), travel);
+        start[i] = at;
+        at += mc_chunk_len(c, origin, dir_idx, i + 1u, link);
+    }
+    ASSERT(at <= ct.fwd_pages_per_stream);
+    return at;
+}
+
 uint32_t slot_addr(uint32_t slot) { return ct.ring_addr + slot * ct.slot_stride(); }
 
 volatile tt_l1_ptr dspf2d::FwdMetadata* slot_tail(uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr dspf2d::FwdMetadata*>(slot_addr(slot) + ct.token_size_bytes);
 }
 
-}  // namespace
+// The fan-out tail of the same slot. A different view of the same 64 bytes: only one mode runs, and
+// the two layouts agree on where `cmd` and `this_addr` sit so the sender need not know which.
+volatile tt_l1_ptr dspf2d::FanoutMetadata* slot_mc_tail(uint32_t slot) {
+    return reinterpret_cast<volatile tt_l1_ptr dspf2d::FanoutMetadata*>(slot_addr(slot) + ct.token_size_bytes);
+}
 
-void kernel_main() {
-    const Control c = carve_control();
-    ASSERT(c.end <= ct.filled_addr);  // the control region must not run into the semaphores
-
-    read_control_tables(c);
-    read_indices(c);
-    build_chip_experts(c);
-    count_buckets(c);
-    check_buckets(c);
-
-    // Exclusive prefix sum, so the next increment can place each bucket's (token, page) pairs without
-    // moving anything already counted.
-    uint32_t at = 0;
-    for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
-        c.bucket_start[i] = at;
-        at += c.bucket_len[i];
-    }
-
-    fill_entries(c);
-
-    const auto in_acc =
-        TensorAccessor(dspf2d::ReaderCtArgs::in_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kInputAddr));
-    const auto out_acc = TensorAccessor(
-        dspf2d::ReaderCtArgs::out_payload_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kOutPayloadAddr));
-    const auto meta_acc =
-        TensorAccessor(dspf2d::ReaderCtArgs::out_meta_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kOutMetaAddr));
-
-    const auto fwd_acc =
-        TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFwdAddr));
-    const uint32_t my_region = ct.stream * ct.fwd_pages_per_stream;
-
-    chunk_starts(c, ct.in_chunks_base, c.in_start);
-    chunk_starts(c, ct.out_chunks_base, c.out_start);
-
-    // Which position on the axis the chip across this cable holds. The outgoing list is ordered by it,
-    // and a page bound for it is delivered rather than forwarded.
-    uint32_t nbr_row = 0;
-    for (uint32_t r = 0; r < ct.extent; r++) {
-        if (kernel_compile_time_args[ct.ring_chip_ids_base + r] == ct.nbr_chip_id) {
-            nbr_row = r;
-        }
-    }
-
-    Ring ring;
+// This chip's own tokens for its remote destinations.
+template <typename InAcc, typename OutAcc, typename MetaAcc, typename FwdAcc>
+void own_phase(
+    const Control& c,
+    Ring& ring,
+    const InAcc& in_acc,
+    const OutAcc& out_acc,
+    const MetaAcc& meta_acc,
+    const FwdAcc& fwd_acc,
+    uint32_t my_region) {
     // Own assignments, furthest first. The nearest one is the chip across the cable: a single hop that
     // lands straight in its output. Everything further goes into that chip's forwarding region instead,
     // at the position the two chips agree this chunk occupies -- own assignment a is outgoing
@@ -504,8 +574,12 @@ void kernel_main() {
             }
         }
     }
-    ring.flush_publish();
+}
 
+// Pages this stream relays: read out of its own forwarding region and pushed one hop further, or
+// delivered if the chip across the cable is where they were going.
+template <typename FwdAcc>
+void relay_phase(const Control& c, Ring& ring, const FwdAcc& fwd_acc, uint32_t my_region, uint32_t nbr_row) {
     // Arrivals, in the order upstream wrote them. A page here is bound for the chip across the cable or
     // further; the first case is a final write, the second goes into that chip's region at the position
     // the outgoing list gives it.
@@ -565,8 +639,10 @@ void kernel_main() {
             }
         }
     }
-    ring.flush_publish();
+}
 
+template <typename InAcc, typename OutAcc, typename MetaAcc>
+void local_phase(const Control& c, Ring& ring, const InAcc& in_acc, const OutAcc& out_acc, const MetaAcc& meta_acc) {
     // Tokens routed to an expert this chip hosts. They never touch the fabric, so this is a DRAM read
     // and two DRAM writes, and the slot is scratch that is deliberately never published -- publishing
     // it would put these tokens on the cable as well. Every stream runs this over its own fraction, so
@@ -598,6 +674,251 @@ void kernel_main() {
             }
         }
         ring.release_slot();
+    }
+}
+
+// --- Fan-out -------------------------------------------------------------------------------------
+//
+// One page per token per DIRECTION, carrying its own destination list. It travels to the farthest
+// destination that way; every chip en route keeps the pages addressed to it and passes the rest on.
+// There is no final write on the cable: the neighbour consumes out of its own forwarding region, so
+// every slot this mode publishes is a CMD_FORWARD.
+
+// This chip's own tokens, one entry per (token, direction), narrowed to this link's share.
+//
+// The share is by farthest-hop class, which is what makes a link's count at every later hop derivable
+// from the same reach table -- see mc_link_of.
+template <typename InAcc, typename FwdAcc>
+void mc_own_phase(
+    const Control& c,
+    Ring& ring,
+    const InAcc& in_acc,
+    const FwdAcc& fwd_acc,
+    uint32_t my_region,
+    uint32_t dir_idx,
+    uint32_t link) {
+    const uint32_t m = ct.extent / 2u;
+    const uint32_t stride = dspf2d::fo_entry_words(ct.topk);
+    const uint32_t len = mc_chunk_len(c, ct.my_row, dir_idx, 1u, link);
+    // The table is built from this chip's own routing, so its first hop has to be the entries just
+    // staged. If it is not, every chunk length downstream is wrong and the axis deadlocks.
+    ASSERT(c.mc_count[dir_idx] == mc_reach(c, ct.my_row, dir_idx, 1u));
+    ASSERT(m + 1u <= dspf2d::MC_MAX_HOPS);
+
+    uint32_t rank[dspf2d::MC_MAX_HOPS];
+    for (uint32_t h = 0; h < dspf2d::MC_MAX_HOPS; h++) {
+        rank[h] = 0;
+    }
+
+    uint32_t q = 0;
+    for (uint32_t i = 0; i < c.mc_count[dir_idx]; i++) {
+        volatile tt_l1_ptr uint32_t* ent = c.entries + (dir_idx * ct.seq_len + i) * stride;
+        const uint32_t far = mc_entry_far(ent);
+        // Counted for every entry, not just this link's: the rank is a position in the whole class.
+        const uint32_t r = rank[far]++;
+        if (mc_link_of(r, mc_class_size(c, ct.my_row, dir_idx, far)) != link) {
+            continue;
+        }
+        const uint32_t token = ent[0];
+        const uint32_t n_dests = ent[1];
+        const uint32_t slot = ring.claim_slot();
+        noc_async_read(in_acc.get_noc_addr(token), slot_addr(slot), ct.token_size_bytes);
+
+        // Hops are measured from HERE and never rewritten, which is what lets a page be immutable in
+        // flight: a chip j hops along takes the destinations with hop == j and forwards the rest.
+        volatile tt_l1_ptr dspf2d::FanoutMetadata* tail = slot_mc_tail(slot);
+        tail->src_chip = ct.linearized_coord;
+        tail->token = token;
+        for (uint32_t d = 0; d < dspf2d::FO_MAX_DESTS; d++) {
+            tail->dests[d] = (d < n_dests) ? ent[2 + d] : 0u;
+        }
+        // The last page of a chunk forces the downstream bump, which is the boundary that reader
+        // switches on: leave it uncounted and the whole axis waits.
+        tail->cmd = (q + 1 == len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
+        tail->this_addr = fwd_acc.get_noc_addr(my_region + c.out_start[0] + q);
+        q++;
+    }
+    ASSERT(q == len);
+}
+
+// Arrivals. Chunk j came from the origin j hops upstream, so its destinations at hop j are THIS chip:
+// they are written locally, out of the slot the page was read into. What is left travels on.
+//
+// The read count and the forward count are different numbers -- reach[j] against reach[j + 1] -- and
+// that is the point of the mode rather than a rounding artefact. Both sides derive their own, order is
+// preserved, and a page carries its own destinations, so a dense region still lines up.
+template <typename OutAcc, typename MetaAcc, typename FwdAcc>
+void mc_relay_phase(
+    const Control& c,
+    Ring& ring,
+    const OutAcc& out_acc,
+    const MetaAcc& meta_acc,
+    const FwdAcc& fwd_acc,
+    uint32_t my_region,
+    uint32_t dir_idx,
+    uint32_t link,
+    int32_t travel) {
+    const uint32_t m = ct.extent / 2u;
+    volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
+
+    for (uint32_t j = 1; j <= m; j++) {
+        const uint32_t origin = mc_row_back(j, travel);
+        const uint32_t len = mc_chunk_len(c, origin, dir_idx, j, link);
+        // Nothing travels past half the ring, so the last chunk is consumed whole.
+        const uint32_t fwd_len = (j < m) ? mc_chunk_len(c, origin, dir_idx, j + 1u, link) : 0u;
+        const uint32_t in_base = c.in_start[j - 1u];
+        const uint32_t out_base = (j < m) ? c.out_start[j] : 0u;
+        uint32_t q = 0;
+        for (uint32_t p = 0; p < len; p++) {
+            // Upstream fills the region strictly left to right, so its page count is the high-water
+            // offset and a page is ready once that count passes it.
+            // The invalidate has to precede the read: an upstream chip owns this counter, so a
+            // cached line would never show its increments.
+            while (true) {
+                invalidate_l1_cache();
+                if (*arrived > in_base + p) {
+                    break;
+                }
+                ring.flush_publish();  // let our own sender work while we wait on upstream
+            }
+            const uint32_t slot = ring.claim_slot();
+            noc_async_read(
+                fwd_acc.get_noc_addr(my_region + in_base + p),
+                slot_addr(slot),
+                ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
+            noc_async_read_barrier();  // the destination list decides the next hop, so it must be here
+            // The read landed behind the data cache, and this slot carried a different page eight
+            // iterations ago: without this, the tail can still be that page's.
+            invalidate_l1_cache();
+
+            volatile tt_l1_ptr dspf2d::FanoutMetadata* tail = slot_mc_tail(slot);
+            const uint32_t src_chip = tail->src_chip;
+            const uint32_t token = tail->token;
+            uint32_t kept = 0;
+            bool travels_on = false;
+            for (uint32_t d = 0; d < dspf2d::FO_MAX_DESTS; d++) {
+                const uint32_t packed = tail->dests[d];
+                const uint32_t hop = (packed >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK;
+                if (hop > j) {
+                    travels_on = true;
+                    continue;
+                }
+                // Hop 0 is an unused slot, and a hop below j was consumed by a chip behind us: the
+                // page is never rewritten in flight, so both are still here and neither is ours.
+                if (hop != j) {
+                    continue;
+                }
+                // A token can hold several of this chip's experts, so each destination needs its own
+                // metadata words -- one shared scratch would be overwritten under the write still
+                // reading it.
+                volatile tt_l1_ptr uint32_t* meta = c.mc_meta + kept * (dspf2d::MC_META_SLOT_BYTES / 4u);
+                meta[0] = src_chip;
+                meta[1] = token;
+                meta[2] = packed >> dspf2d::FO_SLOT_SHIFT;
+                meta[3] = 0;
+                noc_async_write(
+                    slot_addr(slot), out_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK), ct.token_size_bytes);
+                noc_async_write(
+                    (uint32_t)meta, meta_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK), dspf2d::METADATA_WIRE_BYTES);
+                kept++;
+            }
+            // Every page in chunk j has a destination at hop j or beyond, or it would not be here.
+            ASSERT(kept > 0 || travels_on);
+            if (kept > 0) {
+                // The slot is the source of those writes and is about to be either forwarded from or
+                // handed back, so they have to have read it out first.
+                noc_async_write_barrier();
+            }
+            if (travels_on) {
+                tail->cmd = (q + 1 == fwd_len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
+                tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + q);
+                q++;
+            } else {
+                // Consumed here. Nothing was published for this slot, so handing it straight back is
+                // what keeps a fully consumed page off the cable -- there is no drop command, and the
+                // sender walks the ring in order.
+                ring.release_slot();
+            }
+        }
+        ASSERT(q == fwd_len);
+    }
+}
+
+}  // namespace
+
+void kernel_main() {
+    const Control c = carve_control();
+    ASSERT(c.end <= ct.filled_addr);  // the control region must not run into the semaphores
+
+    read_control_tables(c);
+    read_indices(c);
+    build_chip_experts(c);
+    count_buckets(c);
+    check_buckets(c);
+
+    // Exclusive prefix sum, so the next increment can place each bucket's (token, page) pairs without
+    // moving anything already counted.
+    uint32_t at = 0;
+    for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
+        c.bucket_start[i] = at;
+        at += c.bucket_len[i];
+    }
+
+    fill_entries(c);
+
+    const auto in_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::in_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kInputAddr));
+    const auto out_acc = TensorAccessor(
+        dspf2d::ReaderCtArgs::out_payload_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kOutPayloadAddr));
+    const auto meta_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::out_meta_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kOutMetaAddr));
+
+    const auto fwd_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFwdAddr));
+    const uint32_t my_region = ct.stream * ct.fwd_pages_per_stream;
+
+    chunk_starts(c, ct.in_chunks_base, c.in_start);
+    chunk_starts(c, ct.out_chunks_base, c.out_start);
+
+    // Which position on the axis the chip across this cable holds. The outgoing list is ordered by it,
+    // and a page bound for it is delivered rather than forwarded.
+    uint32_t nbr_row = 0;
+    for (uint32_t r = 0; r < ct.extent; r++) {
+        if (kernel_compile_time_args[ct.ring_chip_ids_base + r] == ct.nbr_chip_id) {
+            nbr_row = r;
+        }
+    }
+
+    Ring ring;
+    if (ct.fanout) {
+        // The local phase reads the unicast routing index, and build_multicast_entries overwrites it:
+        // the two layouts share one region because only one mode ever runs. So this chip's own pages
+        // are placed before the index they were built from is replaced.
+        local_phase(c, ring, in_acc, out_acc, meta_acc);
+        build_multicast_entries(c);
+
+        // Clockwise is direction 0 on both sides -- mc_dir_of resolves a tie at exactly half the ring
+        // the same way the reach table was built. Differ in one place and the lengths silently
+        // disagree.
+        const uint32_t dir_idx = ct.stream % 2u;
+        const uint32_t link = ct.stream / 2u;
+        const int32_t travel = (dir_idx == 0u) ? 1 : -1;
+        mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/false, c.in_start);
+        mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/true, c.out_start);
+
+        mc_own_phase(c, ring, in_acc, fwd_acc, my_region, dir_idx, link);
+        ring.flush_publish();
+        mc_relay_phase(c, ring, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link, travel);
+        ring.flush_publish();
+    } else {
+        chunk_starts(c, ct.in_chunks_base, c.in_start);
+        chunk_starts(c, ct.out_chunks_base, c.out_start);
+
+        own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region);
+        ring.flush_publish();
+        relay_phase(c, ring, fwd_acc, my_region, nbr_row);
+        ring.flush_publish();
+        local_phase(c, ring, in_acc, out_acc, meta_acc);
     }
 
     const uint32_t end_slot = ring.claim_slot();

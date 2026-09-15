@@ -98,8 +98,12 @@ def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, nu
 @pytest.mark.parametrize("seq_len_per_chip", [32, 128], ids=lambda s: f"seq{s}")
 @pytest.mark.parametrize("num_routed_experts", [256], ids=lambda n: f"exp{n}")
 @pytest.mark.parametrize("emb_dim", [256], ids=lambda e: f"emb{e}")
+# Both transports must land the same bytes on the same pages, so they share one gate. Multicast sends
+# one page per token per direction and lets every chip en route keep what is addressed to it; unicast
+# sends one per (token, expert). Nothing about the output distinguishes them, which is the point.
+@pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
 def test_dispatch_fabric2d(
-    mesh_device, device_params, num_links, seq_len_per_chip, capacity_div, num_routed_experts, emb_dim
+    mesh_device, device_params, num_links, seq_len_per_chip, capacity_div, num_routed_experts, emb_dim, fanout
 ):
     cfg = extract_mesh_config(mesh_device)
     sp_axis, H, G = cfg.sp_axis, cfg.dispatch_group_size, cfg.num_dispatch_groups
@@ -162,6 +166,16 @@ def test_dispatch_fabric2d(
     tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
     tt_table = shard(table.unsqueeze(1), (None, 0), ttnn.int32)
 
+    # Multicast sizes a chunk as "tokens from this origin still travelling this way", which no
+    # per-expert count can express. Production has to grow that table in masked_bincount; until then
+    # the test supplies it, derived from the same indices and the same drop rule the op replays.
+    tt_reach = None
+    if fanout:
+        reach = _mc_reach(
+            indices, table, offs, max_dispatch_buffer_token_size, G, H, seq_len_per_chip, num_experts_per_tok
+        )
+        tt_reach = shard(reach.to(torch.int32), (None, 0), ttnn.int32)
+
     payload, metadata = ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
         tt_x,
         tt_idx,
@@ -169,6 +183,8 @@ def test_dispatch_fabric2d(
         tt_table,
         tt_counts,
         tt_region,
+        fanout_reach=tt_reach,
+        fanout=fanout,
         experts_per_chip=experts_per_chip,
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
@@ -589,14 +605,14 @@ def _mc_direction(origin, dst, extent):
     return (1, d) if d <= extent - d else (-1, extent - d)
 
 
-def _mc_reach(indices, table, offs, capacity, G, extent, seq, topk):
-    """reach[g][origin][dir_idx][h] = tokens from origin whose farthest hop that way is >= h.
+def _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk):
+    """far[g][origin][dir_idx] = farthest hop of each travelling token, in token order.
 
-    dir_idx 0 is clockwise. Post-drop: a token whose every surviving page lies elsewhere must not
-    hold a hop open, or the origin sends fewer pages than the relay waits for.
+    Post-drop: a token whose every surviving page lies elsewhere must not hold a hop open, or the
+    origin sends fewer pages than the relay waits for. A token with no destination that way is not
+    in the list at all.
     """
-    m = extent // 2
-    reach = torch.zeros(G, extent, 2, m + 2, dtype=torch.int64)
+    lists = [[[[] for _ in range(2)] for _ in range(extent)] for _ in range(G)]
     for g in range(G):
         for origin in range(extent):
             alloc = offs[g, origin].clone().to(torch.int64)
@@ -616,9 +632,55 @@ def _mc_reach(indices, table, offs, capacity, G, extent, seq, topk):
                     s, d = _mc_direction(origin, row, extent)
                     far[s] = max(far[s], d)
                 for s, di in ((1, 0), (-1, 1)):
-                    for h in range(1, far[s] + 1):
+                    if far[s] > 0:
+                        lists[g][origin][di].append(far[s])
+    return lists
+
+
+def _mc_reach(indices, table, offs, capacity, G, extent, seq, topk):
+    """reach[g][origin][dir_idx][h] = tokens from origin whose farthest hop that way is >= h.
+
+    dir_idx 0 is clockwise. Terminated by a zero at m + 1 so that reach[h] - reach[h + 1] is the
+    number of tokens whose farthest hop is exactly h, for every h including m.
+    """
+    m = extent // 2
+    reach = torch.zeros(G, extent, 2, m + 2, dtype=torch.int64)
+    lists = _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk)
+    for g in range(G):
+        for origin in range(extent):
+            for di in range(2):
+                for far in lists[g][origin][di]:
+                    for h in range(1, far + 1):
                         reach[g, origin, di, h] += 1
     return reach
+
+
+def _mc_chunk(reach_row, h, link, num_links, m):
+    """Pages one link carries of an origin's traffic at hop h.
+
+    NOT a slice of reach[h]. A multicast chunk shrinks as chips consume from it, so a link's
+    contiguous share of the hop-h list is not the share the hop-(h+1) list would hand it, and the
+    two sides of a region end up expecting different counts -- a deadlock, and only when
+    num_links > 1, which is why slicing reach[h] survived a one-link proof.
+
+    Splitting each farthest-hop CLASS instead is stable under that shrinkage: a token keeps its link
+    for the whole journey, so a link's pages at hop h are its shares of the classes with far >= h.
+    Class sizes are reach[f] - reach[f + 1], already in the table. With one link it telescopes back
+    to reach[h].
+    """
+    total = 0
+    for f in range(h, m + 1):
+        n = int(reach_row[f]) - int(reach_row[f + 1])
+        total += _slice_begin(n, link + 1, num_links) - _slice_begin(n, link, num_links)
+    return total
+
+
+def _mc_link_of(rank, class_size, num_links):
+    """Which link a token rides, from its rank within its farthest-hop class."""
+    for link in range(num_links - 1):
+        if rank < _slice_begin(class_size, link + 1, num_links):
+            return link
+    return num_links - 1
 
 
 @pytest.mark.parametrize("extent", [4, 8], ids=lambda e: f"extent{e}")
@@ -648,6 +710,7 @@ def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity
         offs[g] = o[0].long()
 
     reach = _mc_reach(indices, table, offs, capacity, G, extent, seq, topk)
+    far_lists = _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk)
     # Monotone by construction; if this ever breaks the chunk lengths below go negative.
     for g in range(G):
         for o_ in range(extent):
@@ -655,11 +718,39 @@ def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity
                 for h in range(1, m + 1):
                     assert reach[g, o_, di, h] >= reach[g, o_, di, h + 1]
 
+    # Flow conservation, which region agreement alone does NOT give: the two sides of a region can
+    # agree on a length that neither the origin nor any relay can actually produce. Walk the tokens,
+    # give each the link its farthest-hop class rank earns it, and count what survives to each hop.
+    # This is the check that fails for the obvious rule -- slice reach[h] -- at num_links > 1.
+    for g in range(G):
+        for origin in range(extent):
+            for di in range(2):
+                seen = {}
+                held = [[0] * (m + 2) for _ in range(num_links)]
+                for far in far_lists[g][origin][di]:
+                    size = int(reach[g, origin, di, far]) - int(reach[g, origin, di, far + 1])
+                    rank = seen.get(far, 0)
+                    seen[far] = rank + 1
+                    link = _mc_link_of(rank, size, num_links)
+                    for h in range(1, far + 1):
+                        held[link][h] += 1
+                for link in range(num_links):
+                    for h in range(1, m + 1):
+                        want = _mc_chunk(reach[g, origin, di], h, link, num_links, m)
+                        assert held[link][h] == want, (
+                            f"g={g} origin={origin} dir={di} link={link} hop={h}: the link holds "
+                            f"{held[link][h]} pages but every chip sizes that chunk at {want}"
+                        )
+
+    # What the host reserves per stream without knowing a single chunk length. Overrun is silent --
+    # a stream writes into the next stream's region -- and the kernel's only guard is a compiled-out
+    # ASSERT, so the bound is checked here.
+    bound = m * (-(-seq // num_links) + m)
+
     for g in range(G):
 
         def chunk(origin, di, h, link):
-            n = int(reach[g, origin, di, h])
-            return _slice_begin(n, link + 1, num_links) - _slice_begin(n, link, num_links)
+            return _mc_chunk(reach[g, origin, di], h, link, num_links, m)
 
         for stream in range(2 * num_links):
             travel = 1 if stream % 2 == 0 else -1
@@ -679,6 +770,9 @@ def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity
                     rd.append(at2)
                     at2 += chunk(origin, di, j, link)
                 assert out == rd and at == at2, (
-                    f"g={g} stream={stream}: row {row} writes {at} pages at {out} "
-                    f"but row {nbr} reads {at2} at {rd}"
+                    f"g={g} stream={stream}: row {row} writes {at} pages at {out} " f"but row {nbr} reads {at2} at {rd}"
+                )
+                assert at2 <= bound, (
+                    f"g={g} stream={stream} row={nbr}: region needs {at2} pages but the host bound is "
+                    f"{bound} -- this stream would write into the next stream's region"
                 )
