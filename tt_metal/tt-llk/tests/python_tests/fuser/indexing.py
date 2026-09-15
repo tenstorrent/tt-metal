@@ -245,6 +245,14 @@ class BlockRegion:
             level for level in (self.x.level, self.y.level) if level is not None
         )
 
+    def node_shape(
+        self, block_x: Optional[int], block_y: Optional[int]
+    ) -> Tuple[int, int]:
+        return (
+            min(block_x or self.block_tiles_x, self.block_tiles_x),
+            min(block_y or self.block_tiles_y, self.block_tiles_y),
+        )
+
 
 def block_regions(
     tile_count_x: int,
@@ -289,8 +297,7 @@ def default_plan(
     node_block_x: Optional[int] = None,
     node_block_y: Optional[int] = None,
 ) -> LoopPlan:
-    block_x = region.block_tiles_x if node_block_x is None else node_block_x
-    block_y = region.block_tiles_y if node_block_y is None else node_block_y
+    block_x, block_y = region.node_shape(node_block_x, node_block_y)
 
     if granularity == InvocationGranularity.TILE:
         levels = (

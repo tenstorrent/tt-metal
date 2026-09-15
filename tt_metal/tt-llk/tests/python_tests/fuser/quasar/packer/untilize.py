@@ -55,14 +55,10 @@ class PackUntilize(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        tile_shape = pack_node.output.tile_shape
-        y_stride = (
-            pack_node.output.tile_count_x
-            * tile_shape.num_faces_r_dim
-            * tile_shape.face_r_dim
-        )
-        l1_row_idx = (
-            f"{y_stride} * ({block.block_origin_y} + tile_y) + {block.block_origin_x}"
-        )
+        full_ct_dim = pack_node.output.tile_count_x
+        row_stride = full_ct_dim * pack_node.output.tile_shape.total_row_dim()
+        tile_row = f"({block.tile_id_out}) / {full_ct_dim}"
+        tile_col = f"({block.tile_id_out}) % {full_ct_dim}"
+        l1_row_idx = f"{row_stride} * ({tile_row}) + ({tile_col})"
 
         return f"_llk_pack_untilize_({block.tile_id_dest}, {l1_row_idx});\n"

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from helpers.golden_generators import PackGolden
-from helpers.llk_params import PackerReluType
+from helpers.llk_params import L1Accumulation, PackerReluType
 
 
 def append_tile(src, out, state, pack_node, config):
@@ -17,4 +17,7 @@ def append_tile(src, out, state, pack_node, config):
             )
         relu_config = state.relu_configs[key]
         tile = PackGolden.apply_relu(tile, relu_config, data_format)
-    state.output.setdefault(out, []).append(tile)
+    if pack_node.pack_l1_accumulation == L1Accumulation.Yes:
+        state.output.setdefault(out, []).append(tile)
+    else:
+        state.output[out] = [tile]

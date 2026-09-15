@@ -63,11 +63,12 @@ def l1_accumulation_config(
 def untilize_l1_address(output: Operand, block: BlockData) -> str:
     tile_size_16B = output.tile_size
     col_stride = tile_size_16B // output.tile_shape.total_row_dim()
+    col = f"(({block.tile_id_out}) % {output.tile_count_x})"
 
     return (
         f"L1_ADDRESS({output.cpp_name}[0])"
-        f" + {tile_size_16B} * (({block.tile_id_out}) - ({block.block_origin_x}))"
-        f" + {col_stride} * {block.block_origin_x}"
+        f" + {tile_size_16B} * (({block.tile_id_out}) - {col})"
+        f" + {col_stride} * {col}"
     )
 
 

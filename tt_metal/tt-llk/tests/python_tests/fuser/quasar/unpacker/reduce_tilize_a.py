@@ -84,15 +84,15 @@ class UnpackReduceTilize(Unpacker):
         block: BlockData,
     ) -> str:
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
-        row_stride = (
-            compute_unit.src_a.tile_count_x
-            * compute_unit.src_a.tile_shape.total_row_dim()
-        )
-        l1_row_idx = f"{row_stride} * ({block.block_origin_y} + tile_y) + ({block.block_origin_x} + tile_x)"
+        full_ct_dim = compute_unit.src_a.tile_count_x
+        row_stride = full_ct_dim * compute_unit.src_a.tile_shape.total_row_dim()
+        tile_row = f"({block.tile_id_src_a}) / {full_ct_dim}"
+        tile_col = f"({block.tile_id_src_a}) % {full_ct_dim}"
+        l1_row_idx = f"{row_stride} * ({tile_row}) + ({tile_col})"
 
         return (
             f"_llk_unpack_reduce_col_tilizeA_strided_"
-            f"({tensor_shape}, {l1_row_idx}, {block.tile_id_src_a});\n"
+            f"({tensor_shape}, {l1_row_idx}, {block.tile_id_src_b});\n"
         )
 
     def uninit(

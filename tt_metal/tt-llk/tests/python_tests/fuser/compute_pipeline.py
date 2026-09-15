@@ -60,6 +60,10 @@ class PlannedBlock:
     def plan(self, node, role: str) -> LoopPlan:
         return self.plans[(id(node), role)]
 
+    def block_for(self, node) -> BlockData:
+        cols, rows = self.region.node_shape(node.block_tiles_x, node.block_tiles_y)
+        return replace(self.block, block_cols=cols, block_rows=rows)
+
 
 class ComputePipeline:
     math_nodes: List[Union[FpuNode, SfpuNode]]
@@ -147,7 +151,11 @@ class ComputePipeline:
 
     def _plan_node(self, node, role, region, granularity, row_tiles):
         if role in ("unpack", "math"):
-            slots = ["in0", "dest"] if node.src_b is None else ["in0", "in1", "dest"]
+            slots = [
+                slot
+                for slot, operand in (("in0", node.src_a), ("in1", node.src_b))
+                if operand is not None
+            ] + ["dest"]
         elif role == "pack":
             slots = ["dest", "out"]
         elif node.sfpu.input_count == 2:
@@ -155,12 +163,14 @@ class ComputePipeline:
         else:
             slots = ["dest"]
 
-        nx = node.block_tiles_x or region.block_tiles_x
-        ny = node.block_tiles_y or region.block_tiles_y
-        if region.block_tiles_x % nx == 0 and region.block_tiles_y % ny == 0:
-            plan = default_plan(region, granularity, slots, row_tiles, nx, ny)
-        else:
-            plan = default_plan(region, granularity, slots, row_tiles)
+        plan = default_plan(
+            region,
+            granularity,
+            slots,
+            row_tiles,
+            node.block_tiles_x,
+            node.block_tiles_y,
+        )
         overrides = {}
 
         def shift(slot, base):
@@ -213,8 +223,6 @@ class ComputePipeline:
                 operation.max_output_dimensions[0]
                 // operation.tile_shape.total_row_dim()
             )
-        row_tiles = dict.fromkeys(("in0", "in1", "out"), tile_count_x)
-
         planned = []
         for region in block_regions(
             tile_count_x, tile_count_y, operation.block_tiles_x, operation.block_tiles_y
@@ -230,6 +238,20 @@ class ComputePipeline:
             def add_plan(node, role, unit):
                 if unit.granularity == InvocationGranularity.NONE:
                     raise ValueError(f"{type(unit).__name__} has no granularity set")
+                row_tiles = {}
+                if role in ("unpack", "math"):
+                    row_tiles = {
+                        slot: operand.tile_count_x
+                        for slot, operand in (("in0", node.src_a), ("in1", node.src_b))
+                        if operand is not None
+                    }
+                    if unit.granularity == InvocationGranularity.BLOCK:
+                        row_tiles["in0"] = (
+                            operation.max_output_dimensions[1]
+                            // node.src_b.tile_shape.total_col_dim()
+                        )
+                elif role == "pack":
+                    row_tiles["out"] = node.output.tile_count_x
                 plans[(id(node), role)] = self._plan_node(
                     node, role, region, unit.granularity, row_tiles
                 )
@@ -268,8 +290,9 @@ class ComputePipeline:
     def _dest_tiles(self, planned, node, role, slots) -> set:
         plan = planned.plan(node, role)
         block = role == "math" and not plan.call_levels and not plan.fanout_levels
-        bx = (node.block_tiles_x or 1) if block else 1
-        by = (node.block_tiles_y or 1) if block else 1
+        node_block = planned.block_for(node)
+        bx = node_block.block_cols if block else 1
+        by = node_block.block_rows if block else 1
         offsets = [tx + ty * bx for ty in range(by) for tx in range(bx)]
         tiles = set()
         for bank in planned.bank.bank_assignments():
@@ -363,10 +386,10 @@ class ComputePipeline:
             if not body:
                 continue
             if init_fn is not None:
-                code += init_fn(planned.block)
+                code += init_fn(planned)
             code += body
             if uninit_fn is not None:
-                code += uninit_fn(planned.block)
+                code += uninit_fn(planned)
         return code
 
     def _zone(self, config: "GlobalConfig", name: str, body: str) -> str:
@@ -417,17 +440,19 @@ class ComputePipeline:
         init_fn = None
         uninit_fn = None
         if hoist and unpack_ops[0].unpacker.per_block_init:
-            init_fn = lambda block: unpack_ops[0].unpack_init(operation, config, block)
-            uninit_fn = lambda block: unpack_ops[0].unpack_uninit(
-                operation, config, block
+            init_fn = lambda planned: unpack_ops[0].unpack_init(
+                operation, config, planned.block_for(unpack_ops[0])
+            )
+            uninit_fn = lambda planned: unpack_ops[0].unpack_uninit(
+                operation, config, planned.block_for(unpack_ops[0])
             )
 
         def batch_body(planned: PlannedBlock, constants):
-            block = planned.block
             body = ""
             for cu in self.math_nodes:
                 if not isinstance(cu, FpuNode):
                     continue
+                block = planned.block_for(cu)
                 if (
                     not hoist_reconfig
                     and cu.unpacker is not None
@@ -483,13 +508,17 @@ class ComputePipeline:
         init_fn = None
         uninit_fn = None
         if hoist and fpu_ops[0].fpu.per_block_init:
-            init_fn = lambda block: fpu_ops[0].fpu_init(operation, config, block)
-            uninit_fn = lambda block: fpu_ops[0].fpu_uninit(operation, config, block)
+            init_fn = lambda planned: fpu_ops[0].fpu_init(
+                operation, config, planned.block_for(fpu_ops[0])
+            )
+            uninit_fn = lambda planned: fpu_ops[0].fpu_uninit(
+                operation, config, planned.block_for(fpu_ops[0])
+            )
 
         def batch_body(planned: PlannedBlock, constants):
-            block = planned.block
             body = fpu_common.math_wait_for_dest(config, operation)
             for cu in self.math_nodes:
+                block = planned.block_for(cu)
                 if isinstance(cu, FpuNode):
                     if not hoist_reconfig and not config.skip_math_init:
                         body += config.sentinel.configure_math(config, operation, cu)
@@ -557,16 +586,18 @@ class ComputePipeline:
         init_fn = None
         uninit_fn = None
         if hoist and pack_only[0].packer.per_block_init:
-            init_fn = lambda block: pack_only[0].init(operation, config, block)
-            uninit_fn = lambda block: pack_only[0].uninit(operation, config)
+            init_fn = lambda planned: pack_only[0].init(
+                operation, config, planned.block_for(pack_only[0])
+            )
+            uninit_fn = lambda planned: pack_only[0].uninit(operation, config)
 
         def batch_body(planned: PlannedBlock, constants):
-            block = planned.block
             body = pack_common.packer_wait_for_math(config, operation)
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
             prev_was_pack = False
             for pack_node in self.pack_nodes:
+                block = planned.block_for(pack_node)
                 if isinstance(pack_node, SfpuNode):
                     if prev_was_pack:
                         body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
@@ -658,7 +689,7 @@ class ComputePipeline:
         tile_dims = tile_dimensions(operation.tile_shape)
         pack_nodes = self._get_pack_nodes()
         layouts = {id(node): self._output_layout(node) for node in pack_nodes}
-        buffers = {id(node): {} for node in pack_nodes}
+        buffers = {id(node.output): {} for node in pack_nodes}
         relu_configs = {}
         config.sentinel.configure_golden(
             config, operation, output_format=pack_nodes[0].output.data_format
@@ -694,6 +725,9 @@ class ComputePipeline:
                 )
 
                 def run(node, role, golden_fn):
+                    block = planned.block_for(node)
+                    state.dest.block_tiles_x = block.block_cols
+                    state.dest.block_tiles_y = block.block_rows
                     for call in planned.plan(node, role).calls(bank):
                         golden_fn(call, state, node, operation, config)
 
@@ -707,12 +741,13 @@ class ComputePipeline:
                     if isinstance(node, SfpuNode):
                         run(node, "sfpu", node.sfpu.golden_fn)
                         continue
+                    block = planned.block_for(node)
                     state.begin_fpu(
                         Inputs(
                             views.get((id(node), "a")),
                             views.get((id(node), "b")),
-                            planned.region.block_tiles_x,
-                            planned.region.block_tiles_y,
+                            block.block_cols,
+                            block.block_rows,
                         )
                     )
                     if node.unpacker is not None:
@@ -728,11 +763,13 @@ class ComputePipeline:
                         output_format=node.output.data_format,
                         set_math_format=False,
                     )
-                    state.output = buffers[id(node)]
+                    state.output = buffers[id(node.output)]
                     run(node, "pack", node.packer.golden_fn)
 
         for node in pack_nodes:
-            result = finalize_output(layouts[id(node)], buffers[id(node)], node.output)
+            result = finalize_output(
+                layouts[id(node)], buffers[id(node.output)], node.output
+            )
             self._store_golden(node.output, result, golden_type)
 
     def __str__(self):
