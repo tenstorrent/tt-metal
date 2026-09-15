@@ -69,7 +69,7 @@ class MiniMaxH3VSAConfig:
     # vsa_ring_sdpa: fuse the SP-ring all-gather of K/V into the fine stage (VSA_RING_SDPA_SPEC.md). Shards are
     # forwarded around the ring while the attention consumes the shards already landed, replacing the two
     # blocking all-gathers (~8 ms/block at 15 s). Needs streaming, not distributed, identity stream order.
-    ring: bool = False
+    ring: bool = False  # fuse the K/V ring all-gather into the fine stage (vsa_ring_sdpa); env VSA_RING=1/0 overrides
     ring_gather: str = "ring_attention"  # vsa_ring_sdpa's gather: "ring_attention" (stock helper) | "fused_kv"
     ring_workers_per_link: int = 2  # fused_kv only: gather workers per direction per link
 

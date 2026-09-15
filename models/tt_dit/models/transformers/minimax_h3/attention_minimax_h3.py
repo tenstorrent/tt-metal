@@ -594,11 +594,12 @@ class MiniMaxH3Attention(Module):
             if os.environ.get("VSA_DUMP_INDICES"):  # offline selection-statistics dumps (first calls only)
                 self._dump_vsa_indices(vsa_indices)
 
-            use_ring = (
-                self.vsa_config.ring and raw and self.parallel_config.sequence_parallel.factor > 1
-            )  # VSA_RING=0 forces the two-op path for A/B comparisons
-            if use_ring and os.environ.get("VSA_RING", "1") != "1":
-                use_ring = False
+            # vsa_ring_sdpa (the K/V ring all-gather fused into the fine stage) is selected by
+            # MiniMaxH3VSAConfig.ring; VSA_RING=1 / VSA_RING=0 in the environment overrides it either way (opt in
+            # from an existing pipeline script, or force the two-op path for an A/B). Needs raw selection and SP > 1.
+            ring_env = os.environ.get("VSA_RING")
+            ring_wanted = self.vsa_config.ring if ring_env is None else ring_env == "1"
+            use_ring = ring_wanted and raw and self.parallel_config.sequence_parallel.factor > 1
             if use_ring:
                 # vsa_ring_sdpa: the K/V all-gather is fused into the fine stage (shards forwarded around the SP
                 # ring while the attention consumes the landed ones); the gathered buffers are the CCL manager's

@@ -1,10 +1,29 @@
 # vsa_ring_sdpa: fused ring all-gather + VSA fine-stage attention
 
-Status: IMPLEMENTED, correct, overlapped. The op's own token-major K/V gather (section 15; plain head-split K/V in), the per-block landing gate (section 13),
-dense rows dealt into pass 0 and landing-order runs (section 14) hide the K/V gather to within ~1.5 ms in the real
-15 s block: fused op ~23.5 ms vs 27.1 for the two-op path with no extra model ops, block period 62.3 -> 59.5 ms,
-denoise 2.727 -> 2.569 s/step (-5.8 %). The op is now compute-bound (~22 ms on its 108-core grid). Sections 11-12 record the
-earlier (parity, then small-win) versions. Companion to `VSA_STREAM_DESIGN.md` (section 13 has the motivating measurements).
+Status: IMPLEMENTED and validated at the 5 / 10 / 15 s production shapes. Two gather backends (section 17): the
+default `ring_attention` runs the stock ring_attention_all_gather_async helper unmodified with a per-shard gate
+(1-4 % faster denoise than the two-op path); `fused_kv` runs the op's own multi-worker token-major gather with a
+per-block gate (5-8 %). Sections 11-16 record the development path and the measurements behind both.
+
+## 0. How to use it
+
+- Model: set `MiniMaxH3VSAConfig(ring=True)` (default False), or export `VSA_RING=1` to turn it on for an existing
+  pipeline script (`VSA_RING=0` forces the two-op path for an A/B). Requires the streaming kernel with raw selection
+  (the defaults) and sequence parallelism > 1. `ring_gather="ring_attention"` (default) or `"fused_kv"` picks the
+  gather; `ring_workers_per_link` applies to `fused_kv` only.
+- Op: `ttnn.transformer.vsa_ring_sdpa(q, k, v, indices, block_counts, persistent_k, persistent_v,
+  multi_device_global_semaphore=..., num_links=2, cluster_axis=sp_axis, mesh_device=..., topology=Ring,
+  gather="ring_attention", ...)` with k/v the plain head-split `[1, H, T_local, d]` shards and the two persistent
+  buffers `[1, H, T_local*ring_size, d]` (the CCL manager's all-gather ping-pong pair). Same numerics contract as
+  vsa_sdpa; results equal vsa_sdpa on the gathered K/V up to bf16 rounding order and are bit-identical run to run.
+- Validate: `models/tt_dit/tests/models/minimax_h3/test_vsa_block_minimax_h3.py` with `VSA_RING_BLOCK=1`
+  (`VSA_BLOCK_SECONDS=5|10|15`; traced vs untraced PCC 100 %, `VSA_BLOCK_PERF_ITERS=20` prints the block period),
+  `test_vsa_e2e_perf_minimax_h3.py` with `VSA_E2E_MODE=ring` (`VSA_E2E_SECONDS`), and the op tests
+  `tests/ttnn/unit_tests/operations/sdpa/test_vsa_ring_sdpa{,_perf}.py` (`VSA_RING_GATHER=fused_kv` for the other
+  backend). Blackhole 4x8 galaxy, ring of 8 on the SP axis, 2 links: the only validated topology.
+- Knobs for triage (environment): `TT_VSA_RING_WAIT_ALL=1` (serialize gather then compute), `TT_VSA_RING_GATE_OPEN=1`
+  (no gate; timing only), `TT_VSA_DEAL_LOG=1` (print the row dealing), `TT_VSA_RMAX` / `TT_VSA_DEPTH` (resident rows /
+  stream depth; ring default 18 / 10).
 
 ## 1. Problem
 
