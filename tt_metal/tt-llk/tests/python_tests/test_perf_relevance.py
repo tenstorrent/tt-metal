@@ -27,6 +27,7 @@ from helpers.perf.relevance import (
     execute_key,
     maybe_relevance,
     pin_template,
+    project_formats,
     project_runtimes,
     project_templates,
 )
@@ -704,3 +705,68 @@ def test_pack_sol_pack_keeps_dest_index():
     projected = project_runtimes(runtimes, PACK_RELEVANCE[PerfRunType.PACK_ISOLATE])
     dest = next(p for p in projected if isinstance(p, DEST_INDEX))
     assert dest.dst_index == 1
+
+
+def test_project_formats_pins_pack_output_for_unpack():
+    fmt = _format(DataFormat.Float16, DataFormat.Float32)
+    projected = project_formats(fmt, PACK_RELEVANCE[PerfRunType.UNPACK_ISOLATE])
+    assert projected is not fmt
+    assert projected.unpack_A_src == DataFormat.Float16
+    assert projected.unpack_A_dst == DataFormat.Float16
+    assert projected.pack_dst == DataFormat.Float16
+    assert projected.math == DataFormat.Float16
+    assert fmt.pack_dst == DataFormat.Float32
+
+
+def test_sol_unpack_variant_hash_reuses_irrelevant_pack_format(monkeypatch):
+    monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", True)
+    monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
+    templates = [DEST_SYNC(DestSync.Half)]
+    runtimes = [
+        NUM_BLOCKS(1),
+        NUM_TILES_IN_BLOCK(1),
+        LOOP_FACTOR(32),
+        NUM_FACES(),
+        RELU_CONFIG(0),
+    ]
+    common = dict(
+        test_name="perf_pack",
+        run_types=[PerfRunType.UNPACK_ISOLATE, PerfRunType.L1_TO_L1],
+        templates=templates,
+        runtimes=runtimes,
+        dest_acc=DestAccumulation.No,
+        disable_format_inference=True,
+        relevance=PACK_RELEVANCE,
+    )
+    cfg_f16 = PerfConfig(
+        formats=_format(DataFormat.Float16, DataFormat.Float16), **common
+    )
+    cfg_f32 = PerfConfig(
+        formats=_format(DataFormat.Float16, DataFormat.Float32), **common
+    )
+
+    unpack_f16 = next(
+        c for c in cfg_f16.run_configs if c[2] == PerfRunType.UNPACK_ISOLATE
+    )
+    unpack_f32 = next(
+        c for c in cfg_f32.run_configs if c[2] == PerfRunType.UNPACK_ISOLATE
+    )
+    cfg_f16._apply_run_config(*unpack_f16)
+    cfg_f32._apply_run_config(*unpack_f32)
+    assert cfg_f16.variant_id == cfg_f32.variant_id
+    assert cfg_f16.formats_config[0].pack_dst == DataFormat.Float16
+    assert cfg_f16.passed_formats_config[0].pack_dst == DataFormat.Float16
+    assert cfg_f32.passed_formats_config[0].pack_dst == DataFormat.Float32
+    # Produce leftovers must not leak into consume keys.
+    l1_f32 = next(c for c in cfg_f32.run_configs if c[2] == PerfRunType.L1_TO_L1)
+    key_after_unpack = cfg_f32._execute_cache_key(l1_f32[0], l1_f32[1], l1_f32[2])
+    cfg_fresh = PerfConfig(
+        formats=_format(DataFormat.Float16, DataFormat.Float32), **common
+    )
+    key_fresh = cfg_fresh._execute_cache_key(l1_f32[0], l1_f32[1], l1_f32[2])
+    assert key_after_unpack == key_fresh
+
+    l1_f16 = next(c for c in cfg_f16.run_configs if c[2] == PerfRunType.L1_TO_L1)
+    cfg_f16._apply_run_config(*l1_f16)
+    cfg_f32._apply_run_config(*l1_f32)
+    assert cfg_f16.variant_id != cfg_f32.variant_id

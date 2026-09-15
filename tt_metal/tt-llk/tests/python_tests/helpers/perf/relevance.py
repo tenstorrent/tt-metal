@@ -7,14 +7,16 @@ A run type whose TILE_LOOP cannot observe a template still needs that constexpr
 in the C++ header, so unused templates are pinned to canonical defaults rather
 than omitted. Unused runtime / format fields are dropped from the execute cache
 key only; L1 writes keep the original values unless SPEED_OF_LIGHT promotes
-runtimes into the compile header.
+runtimes and formats into the compile header.
 """
 
+import copy
 import os
 from dataclasses import dataclass, fields, replace
 from enum import Enum
 from typing import Any, Iterable
 
+from ..format_config import DataFormat
 from ..llk_params import DestSync, MathFidelity, PerfRunType
 from ..test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -82,6 +84,24 @@ _PACK_BLOCK_RUNTIMES = frozenset(
 # pin_template only rewrites these. Any other template stays in the header, so
 # execute_key must keep it even when spec.templates omits the type.
 _PINNABLE_TEMPLATES = frozenset({MATH_FIDELITY, DEST_SYNC, THROTTLE_LEVEL})
+
+# SPEED_OF_LIGHT inlines every FormatConfig field; unused ones pin to this.
+_PINNED_FORMAT = DataFormat.Float16
+_FORMAT_FIELDS = (
+    "unpack_A_src",
+    "unpack_B_src",
+    "unpack_A_dst",
+    "unpack_B_dst",
+    "unpack_S_src",
+    "unpack_S_dst",
+    "pack_src",
+    "pack_dst",
+    "pack_S_src",
+    "pack_S_dst",
+    "math",
+    "sfpu_src",
+    "sfpu_dst",
+)
 
 
 def _runtime_fields(*types: type, drop: Iterable[str] = ()) -> frozenset[str]:
@@ -318,6 +338,23 @@ def project_runtimes(
             if f.name not in spec.runtime_fields
         }
         projected.append(replace(param, **updates) if updates else param)
+    return projected
+
+
+def project_formats(formats: Any, spec: RunTypeRelevance | None) -> Any:
+    """Pin unused format fields. Used when SPEED_OF_LIGHT inlines formats."""
+    if formats is None:
+        return None
+    if isinstance(formats, list):
+        return [project_formats(fmt, spec) for fmt in formats]
+    projected = copy.copy(formats)
+    if spec is None or spec.format_fields is None:
+        return projected
+    for name in _FORMAT_FIELDS:
+        if not hasattr(projected, name):
+            continue
+        if name not in spec.format_fields:
+            setattr(projected, name, _PINNED_FORMAT)
     return projected
 
 

@@ -6,6 +6,7 @@ import glob
 import os
 import re
 import shutil
+from copy import copy
 from dataclasses import fields
 from datetime import datetime, timezone
 from functools import reduce
@@ -31,6 +32,7 @@ from .relevance import (
     RunTypeRelevance,
     execute_key,
     maybe_relevance,
+    project_formats,
     project_runtimes,
     project_templates,
 )
@@ -818,6 +820,9 @@ class PerfConfig(TestConfig):
             skip_build_header,
             compile_time_formats,
         )
+        self.passed_formats_config = (
+            [copy(fmt) for fmt in self.formats_config] if self.formats_config else None
+        )
 
     @staticmethod
     def _dataclass_name_and_values(obj):
@@ -958,7 +963,7 @@ class PerfConfig(TestConfig):
         return self.relevance.get(run_type)
 
     def _apply_run_config(self, templates, runtimes, run_type: PerfRunType) -> None:
-        """Project unused templates (and SoL runtimes) then refresh variant_id."""
+        """Project unused templates (and SoL runtimes/formats) then refresh variant_id."""
         spec = self._relevance_spec(run_type)
         projected_templates = project_templates(templates, spec)
         self.current_run_type = run_type
@@ -966,6 +971,8 @@ class PerfConfig(TestConfig):
             self.templates = projected_templates + project_runtimes(runtimes, spec)
             self.runtimes = []
             self.compile_time_formats = True
+            self.formats_config = project_formats(self.passed_formats_config, spec)
+            self._refresh_tile_sizes()
         else:
             self.templates = projected_templates
             self.runtimes = runtimes
@@ -978,7 +985,11 @@ class PerfConfig(TestConfig):
             dest_acc=self.dest_acc,
             templates=templates,
             runtimes=runtimes,
-            formats=self.formats_config,
+            formats=(
+                self.passed_formats_config
+                if self.passed_formats_config is not None
+                else self.formats_config
+            ),
             speed_of_light=TestConfig.SPEED_OF_LIGHT,
             spec=self._relevance_spec(run_type),
         )
@@ -1128,6 +1139,10 @@ class PerfConfig(TestConfig):
                     "counter_df": counter_df,
                     "code_size": code_size,
                 }
+
+        if self.passed_formats_config is not None:
+            self.formats_config = self.passed_formats_config
+            self._refresh_tile_sizes()
 
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(

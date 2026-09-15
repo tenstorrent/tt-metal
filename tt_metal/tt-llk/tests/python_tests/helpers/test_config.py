@@ -194,6 +194,11 @@ class TestConfig:
     SPEED_OF_LIGHT: ClassVar[bool] = (
         False  # Should everything be converted to compile-time arguments?
     )
+    TILE_SIZES: ClassVar[dict] = {
+        DataFormat.Bfp8_b: 68,
+        DataFormat.Bfp4_b: 36,
+        DataFormat.Float32: 256,
+    }
 
     TEST_TARGET: ClassVar[TestTargetConfig] = TestTargetConfig()
 
@@ -976,12 +981,6 @@ class TestConfig:
         self.include_dirs = TestConfig._resolve_flag_roots(include_list)
         self.src_include_dirs = TestConfig._resolve_flag_roots(src_include_list)
 
-        TILE_SIZES = {
-            DataFormat.Bfp8_b: 68,
-            DataFormat.Bfp4_b: 36,
-            DataFormat.Float32: 256,
-        }
-
         if formats:
             # Check if this is an outlier format combination that requires dest_acc to be enabled
             # Automatically enable dest_acc for outlier combinations
@@ -1009,13 +1008,7 @@ class TestConfig:
                 # FormatConfig (doesn't); fall back to None for the latter.
                 register_format_hint=getattr(formats, "register_format_hint", None),
             )
-            self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
-            self.unpack_size_a = TILE_SIZES.get(
-                self.formats_config[0].input_format, 128
-            )
-            self.unpack_size_b = TILE_SIZES.get(
-                self.formats_config[0].input_format_B, 128
-            )
+            self._refresh_tile_sizes()
         else:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
@@ -1213,6 +1206,15 @@ class TestConfig:
             return f'#include "{source}"\n'
         return f"#include  <{source}>\n"
 
+    def _refresh_tile_sizes(self) -> None:
+        """Recompute L1 tile sizes from the current formats_config."""
+        if not self.formats_config:
+            return
+        fmt = self.formats_config[0]
+        self.pack_size = TestConfig.TILE_SIZES.get(fmt.output_format, 128)
+        self.unpack_size_a = TestConfig.TILE_SIZES.get(fmt.input_format, 128)
+        self.unpack_size_b = TestConfig.TILE_SIZES.get(fmt.input_format_B, 128)
+
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
@@ -1225,6 +1227,8 @@ class TestConfig:
             "temp_elfs",
             # Host-side opt-in TILE_LOOP relevance map; only projected templates hash.
             "relevance",
+            # Original formats for report columns; SoL compile uses projected formats_config.
+            "passed_formats_config",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
         ]
