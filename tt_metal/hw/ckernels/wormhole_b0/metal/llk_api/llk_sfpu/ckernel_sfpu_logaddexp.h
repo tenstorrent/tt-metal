@@ -13,6 +13,37 @@
 
 namespace ckernel::sfpu {
 
+// Special-value handling shared by logaddexp and logaddexp2, which are both evaluated as
+//     max(a, b) + correction(|a - b|)
+// Call _sfpu_logaddexp_max_ before _sfpu_logaddexp_gap_: the gap relies on a NaN pair
+// already having been copied into the result.
+
+// max(a, b), with a NaN in either operand propagated rather than left to the arithmetic.
+// max() is a bare SFPSWAP with no NaN guard, so it orders a NaN by its sign: a negative NaN
+// loses to any finite operand and would drop out of the result. Copying the NaN operand
+// into the result settles it, because SFPMAD addition is IEEE-754 for a non-finite input:
+// NaN + correction stays NaN whatever the correction makes of the NaN difference.
+sfpi_inline sfpi::vFloat _sfpu_logaddexp_max_(const sfpi::vFloat& a, const sfpi::vFloat& b) {
+    sfpi::vFloat result = sfpi::max(a, b);
+    v_if(sfpi::exexp(a) == 128 && sfpi::exman(a) != 0) { result = a; }
+    v_elseif(sfpi::exexp(b) == 128 && sfpi::exman(b) != 0) { result = b; }
+    v_endif;
+    return result;
+}
+
+// Replaces a with |a - b|, or with zero when the operands are bit-identical. Equal
+// infinities are why the clause exists: inf - inf is NaN, and that NaN would swallow a
+// result the composed form gets right, while a zero gap keeps both signs correct because
+// max(+/-inf, +/-inf) plus a finite correction is +/-inf. SFPU float equality does not
+// reliably match either infinity sign on device, so the operands are compared as bit
+// patterns. For any other bit-identical pair the substitution changes nothing: a finite
+// difference is already +0.0, and a NaN pair was already copied into the result.
+sfpi_inline void _sfpu_logaddexp_gap_(sfpi::vFloat& a, const sfpi::vFloat& b) {
+    v_if(sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) { a = 0.0f; }
+    v_else { a = sfpi::abs(a - b); }
+    v_endif;
+}
+
 // logaddexp(a, b) = max(a, b) + log1p(exp(-|a - b|))
 //
 // The composed form, log(exp(a) + exp(b)), overflows at |x| > 88.7 even though the
@@ -24,22 +55,9 @@ namespace ckernel::sfpu {
 // the two inputs plus max, difference, exponential and result at once, does not fit:
 // the SFPI compiler reports "cannot store sfpu register (register spill)".
 //
-// Equal infinities need their own branch. |a - b| is the right difference everywhere
-// except a == b == +/-inf, where inf - inf is NaN and the NaN then swallows the whole
-// result; the composed form this replaces returns +/-inf there, so without the branch
-// the fix would be a regression on those two points. SFPU float equality does not
-// reliably match either infinity sign on device, so classify infinity from its
-// exponent/mantissa fields and require identical signed bit patterns.
-// Substituting a zero difference then keeps both signs correct:
-// max(+/-inf, +/-inf) + ln 2 = +/-inf. The added clause excludes NaNs, so they do
-// not take this equal-infinity fix-up.
-//
-// A NaN in either operand is propagated explicitly, not left to the arithmetic. max() is a
-// bare SFPSWAP with no NaN guard, so it orders a NaN by its sign: a negative NaN loses to
-// any finite operand and would drop out of the result. The NaN operand is therefore copied
-// into the result before the correction is added. SFPMAD addition is IEEE-754 for a
-// non-finite input, so NaN + correction stays NaN whatever the exponential and log1p make
-// of the NaN difference.
+// Equal infinities and NaN operands are handled by the two helpers above, which
+// logaddexp2 shares. Without the gap helper the fused form would regress on equal
+// infinities, which the composed form returns as +/-inf.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
@@ -47,16 +65,8 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
         sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat result = sfpi::max(a, b);
-        // A NaN operand is copied into the result rather than left to max(); see above.
-        v_if(sfpi::exexp(a) == 128 && sfpi::exman(a) != 0) { result = a; }
-        v_elseif(sfpi::exexp(b) == 128 && sfpi::exman(b) != 0) { result = b; }
-        v_endif;
-        v_if(sfpi::exexp(a) == 128 && sfpi::exman(a) == 0 && sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) {
-            a = 0.0f;
-        }
-        v_else { a = sfpi::abs(a - b); }
-        v_endif;
+        sfpi::vFloat result = _sfpu_logaddexp_max_(a, b);
+        _sfpu_logaddexp_gap_(a, b);
         // The accurate exponential is required, not a preference: the approximate body
         // returns 255/256 rather than 1 at zero, which lands as a 2.8e-03 relative error
         // on the whole result. _sfpu_exp_fp32_accurate_unsafe_ is also not usable here --
