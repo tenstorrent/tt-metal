@@ -19,16 +19,28 @@ class DummySpecDecodeModel(DummyNoOpModel):
     First, an instrument. Its sibling ``DummyNoOpModel`` exists to measure what
     vLLM costs per step with the model removed; this one measures what vLLM
     costs per *speculative* step. With ``TT_SPEC_ACCEPT_DEPTH=0`` nothing is
-    accepted, so each step commits one token and the step time is the host cost
-    of one verify-then-propose iteration with no device work under it. That
-    number decides whether a plugin-driven speculation loop can compete with a
-    model-internal one, and it has only ever been estimated.
+    accepted, so each step commits one token and its wall clock is the host
+    cost of one whole verify-then-propose iteration: the scheduler, the
+    candidate-block build, this model's own arithmetic, the plugin's acceptance
+    walk, the commit and the n-gram proposal, with no device work anywhere
+    under it. That is what a plugin-driven speculation loop can be compared
+    against a model-internal one with.
+
+    It is the cost of the loop and not of vLLM alone, because this model does
+    host work of its own on every step: ``_verified_ids`` builds a ``[B, 1+K]``
+    answer whatever the accept depth. That work measures about 17 microseconds
+    at every shape from ``[1, 6]`` to ``[32, 17]``, against a step whose other
+    costs are milliseconds, so it does not move the comparison. Subtract it
+    only if the comparison ever turns on a margin that small.
 
     Second, the only way to exercise the plugin's speculative path end to end.
     Everything between the runner and the engine needs a real server: the
     ``take_draft_token_ids`` handshake, the scheduler's lookahead budget and
     its grammar truncation of drafts, placeholder accounting, and KV cache
     allocation. None of it is reachable from a host test.
+
+    ``README.md`` beside this file carries the server command, the two modes
+    and what the measurement mode measures.
 
     The contract is
     https://github.com/tenstorrent/vllm-tt-plugin/issues/110 and the model side
@@ -40,8 +52,6 @@ class DummySpecDecodeModel(DummyNoOpModel):
         ``TT_SPEC_ACCEPT_DEPTH``  how many of each row's drafts to accept.
             Default ``-1``, meaning all of them, which exercises the loop
             hardest. ``0`` accepts none, which is the measurement mode.
-        ``TT_SPEC_MAX_DRAFTS``    the largest draft length to admit, default 16.
-            A launch asking for more is served at this length.
     """
 
     model_capabilities = {
@@ -58,37 +68,34 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # with speculation.
     }
 
-    _MAX_DRAFTS = int(os.environ.get("TT_SPEC_MAX_DRAFTS", "16"))
-
     def __init__(self, mesh_device, max_batch_size, vocab_size, **kwargs):
         super().__init__(mesh_device, max_batch_size, vocab_size, **kwargs)
         depth = int(os.environ.get("TT_SPEC_ACCEPT_DEPTH", "-1"))
         self.accept_depth = None if depth < 0 else depth
         logger.info(
-            f"DummySpecDecodeModel: accept_depth="
-            f"{'all' if self.accept_depth is None else self.accept_depth}, "
-            f"max_drafts={self._MAX_DRAFTS}"
+            f"DummySpecDecodeModel: accept_depth=" f"{'all' if self.accept_depth is None else self.accept_depth}"
         )
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
         """Which ``(max_num_seqs, K)`` points this model can serve.
 
-        Everything, up to a draft length ceiling, because it allocates nothing
-        per candidate and holds no state a candidate could invalidate. A real
-        model answers from its own lane arithmetic and L1 budget, and returns
-        ``SpecReject`` for a point it cannot fit.
+        Every one of them, because it allocates nothing per candidate and holds
+        no state a candidate could invalidate, so no draft length costs it more
+        than another. It therefore imposes no ceiling of its own: vLLM already
+        caps a draft length at ``MAX_SPEC_LEN``, and a second, tighter limit
+        here would silently benchmark a different K than the one asked for.
+
+        A real model answers from its own lane arithmetic and L1 budget, and
+        returns ``SpecReject`` for a point it cannot fit.
         """
         from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
 
         del vllm_config, max_num_seqs  # no cost scales with either here
         if requested_k < 1:
-            return SpecReject(
-                reason=f"a draft length of {requested_k} speculates nothing",
-                supported_k=tuple(range(1, cls._MAX_DRAFTS + 1)),
-            )
+            return SpecReject(reason=f"a draft length of {requested_k} speculates nothing")
         return SpecPlan(
-            effective_k=min(requested_k, cls._MAX_DRAFTS),
+            effective_k=requested_k,
             # One decode row per request: this model has no physical candidate
             # layout, so a request costs it the rows a plain decode costs.
             lanes_per_request=1,
@@ -112,7 +119,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
         if spec_mode is None:
             return super().decode_forward(*args, **kwargs)
 
-        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, VerifyOutput
+        from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, VerifyOutput, check_spec_side_tensors
 
         if spec_mode != ACCEPT_MODE_ARGMAX_IDS:
             # Declared in accept_modes, so the runner should never ask; raise by
@@ -125,7 +132,17 @@ class DummySpecDecodeModel(DummyNoOpModel):
         if tokens is None and args:
             tokens = args[0]
         num_valid_drafts = kwargs["num_valid_drafts"]
-        self._check_accepted_counts(kwargs["accepted_counts"], tokens.shape[0])
+        # Both side tensors, against the contract module's own validator rather
+        # than a private copy of its rules: this model is the plugin's
+        # conformance witness, and a witness that checks a weaker domain than
+        # the contract states is worth little. The shared validator is also why
+        # this cannot drift from the plugin's own stand-in.
+        check_spec_side_tensors(
+            num_valid_drafts,
+            kwargs["accepted_counts"],
+            int(tokens.shape[0]),
+            int(tokens.shape[1]) - 1,
+        )
         return VerifyOutput(
             spec_mode=ACCEPT_MODE_ARGMAX_IDS,
             argmax_ids=self._verified_ids(tokens, num_valid_drafts),
@@ -164,22 +181,3 @@ class DummySpecDecodeModel(DummyNoOpModel):
         bonus = (tokens[:, 0].to(torch.int64) + valid + 1) % self.vocab_size
         verified.scatter_(1, valid.unsqueeze(1), bonus.unsqueeze(1))
         return verified.to(torch.int32)
-
-    def _check_accepted_counts(self, accepted_counts, rows):
-        """Refuse a count outside the contract's domain.
-
-        A count is never 0 and never exceeds the block: a model reading
-        ``accepted_counts - 1`` to select a candidate state would index -1.
-        Checked here because this model is also the plugin's conformance
-        witness, and a silent acceptance would make it a poor one.
-        """
-        if accepted_counts is None:
-            raise ValueError(
-                "accepted_counts may be None only after a fused_sample step, "
-                "which DummySpecDecodeModel does not serve"
-            )
-        if accepted_counts.shape != (rows,):
-            raise ValueError(f"accepted_counts must be [{rows}], got {tuple(accepted_counts.shape)}")
-        bad = accepted_counts[accepted_counts < 1]
-        if bad.numel():
-            raise ValueError(f"accepted_counts entries must be at least 1, got {bad.tolist()}")
