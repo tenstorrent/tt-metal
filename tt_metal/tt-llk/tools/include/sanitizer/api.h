@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include <utility>
-
-#include "sanitizer/operation.h"
 #include "sanitizer/settings.h"
-#include "sanitizer/types.h"
 
 #if defined(LLK_SAN_ENABLE)
 
+#include <utility>
+
 #include "sanitizer/impl.h"
+#include "sanitizer/operation.h"
+#include "sanitizer/types.h"
 
 namespace llk::san
 {
@@ -159,56 +159,12 @@ public:
 
 #else
 
-namespace llk::san
-{
-
-template <Thread T = Thread::TRISC0>
-static inline void thread_init()
-{
-}
-
-template <Thread T = Thread::TRISC0, typename... Vs>
-static inline void configure([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <Thread T = Thread::TRISC0, typename... Vs>
-static inline void reconfigure([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
-static inline void init([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
-static inline void execute([[maybe_unused]] Vs&&... values)
-{
-}
-
-template <typename Op, Thread T = Thread::TRISC0, typename... Vs>
-static inline void uninit([[maybe_unused]] Vs&&... values)
-{
-}
-
-static inline void unsupported()
-{
-}
-
-} // namespace llk::san
-
-#define LLK_SAN_FUNCTION() \
-    do                     \
-    {                      \
-    } while (false)
-
-#define LLK_SAN_SILENT_ZONE() \
-    do                        \
-    {                         \
-    } while (false)
+#define LLK_SAN_FUNCTION()    ((void)0)
+#define LLK_SAN_SILENT_ZONE() ((void)0)
 
 #endif
+
+#if defined(LLK_SAN_ENABLE)
 
 #define SAN_HOOK(...)             \
     do                            \
@@ -217,3 +173,9 @@ static inline void unsupported()
         using llk::san::Operand;  \
         __VA_ARGS__;              \
     } while (false)
+
+#else
+
+#define SAN_HOOK(...) ((void)0)
+
+#endif
