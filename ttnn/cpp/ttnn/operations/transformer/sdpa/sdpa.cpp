@@ -361,7 +361,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
+        // The prim takes circular_kv_cache BETWEEN sliding_window_size and the block-cyclic pair. Omitting
+        // it shifts every later argument left -- stripes lands in circular_kv_cache and converts to true,
+        // tripping "circular_kv_cache requires chunked sliding-window attention" on a dense MLA call that
+        // has no sliding window. uint32_t -> bool is implicit, so that compiles clean and fails on device.
         std::nullopt,  // sliding_window_size
+        /*circular_kv_cache=*/false,
         kv_block_cyclic_stripes,
         kv_block_cyclic_ranks);
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
