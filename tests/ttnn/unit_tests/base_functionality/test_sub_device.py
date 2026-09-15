@@ -139,6 +139,40 @@ def test_sub_devices_mesh(mesh_device):
 
 
 @skip_for_slow_dispatch()
+def test_mesh_device_lifecycle_queries(mesh_device):
+    assert mesh_device.is_initialized()
+    assert mesh_device.num_hw_cqs() >= 1
+
+    default_manager_id = mesh_device.get_active_sub_device_manager_id()
+    assert default_manager_id == mesh_device.get_active_sub_device_manager_id()
+
+    first_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    second_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
+    manager_id = mesh_device.create_sub_device_manager(
+        [ttnn.SubDevice([first_cores]), ttnn.SubDevice([second_cores])], 3200
+    )
+    try:
+        mesh_device.load_sub_device_manager(manager_id)
+        assert mesh_device.get_active_sub_device_manager_id() == manager_id
+        assert mesh_device.get_active_sub_device_manager_id() != default_manager_id
+
+        mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+        assert mesh_device.get_sub_device_ids() == [
+            ttnn.SubDeviceId(0),
+            ttnn.SubDeviceId(1),
+        ]
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager_id)
+
+    assert mesh_device.get_active_sub_device_manager_id() == default_manager_id
+
+    ttnn.close_mesh_device(mesh_device)
+    assert not mesh_device.is_initialized()
+
+
+@skip_for_slow_dispatch()
 def test_sub_device_program(device):
     run_sub_devices_program(device)
 
