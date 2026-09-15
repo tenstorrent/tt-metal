@@ -539,7 +539,9 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     num_prefetch_layers = trace_repeats + 1
     num_receivers_per_bank = _NUM_RECV_PER_BANK
     ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
+    # Eight columns keep each bank's eight-receiver contiguous shard on one
+    # receiver row; harvesting reduces the row count, not the row width.
+    ring_cols = _RING_COLS
     ring_rows = ring_size // ring_cols
     k_padded = _round_up(_K, ring_size * ttnn.TILE_SIZE)
 
