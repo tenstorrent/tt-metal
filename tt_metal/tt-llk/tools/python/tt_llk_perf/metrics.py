@@ -79,7 +79,9 @@ def mean_port_util(v: "CounterView", bank: str, names) -> "float | None":
     """
     fractions = [
         f
-        for f in (safe_div(v.count(bank, n), v.cycles(bank, n)) for n in names if v.has(n))
+        for f in (
+            safe_div(v.count(bank, n), v.cycles(bank, n)) for n in names if v.has(n)
+        )
         if f is not None
     ]
     if not fractions:
