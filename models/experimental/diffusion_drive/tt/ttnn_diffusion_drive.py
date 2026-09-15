@@ -277,6 +277,39 @@ class TtnnDiffusionDriveModel:
         return self
 
     # ------------------------------------------------------------------
+    # Full production chain
+    # ------------------------------------------------------------------
+
+    def build_all(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Install the complete production TTNN stack, in dependency order.
+
+        Equivalent to the ``build_stage2 → 3 → 3_4 → 3_5 → 3_6 → 3_7 → 4`` chain
+        that every production caller runs: ResNet-34 stems and BasicBlocks, FPN,
+        perception head, DDIM denoiser, GPT fusion, agent-head MLPs, and the
+        consolidated perception + decoder graph.  After this call ``__call__``
+        routes through ``_forward_ttnn`` (every weight-bearing op on TTNN) rather
+        than the CPU reference.
+
+        ``build_stage5`` is not included: the consolidated backbone turns on by
+        itself once stage 3 and 3_6 are both installed.
+
+        Note the resolution constraint inherited from ``build_stage3_6`` — the GPT
+        fusion pool/upsample ratios are only integer at the production sizes
+        (camera 256×1024, LiDAR 256×256), so forwards must use those.
+
+        Chainable.  Returns self.
+        """
+        return (
+            self.build_stage2(device)
+            .build_stage3(device)
+            .build_stage3_4(device)
+            .build_stage3_5(device)
+            .build_stage3_6(device)
+            .build_stage3_7(device)
+            .build_stage4(device)
+        )
+
+    # ------------------------------------------------------------------
     # Forward (Stage 1 / Stage 2 / Stage 3 / Stage 4)
     # ------------------------------------------------------------------
 
@@ -328,8 +361,15 @@ class TtnnDiffusionDriveModel:
         config: ModelConfig,
         device: ttnn.Device,
         latent: bool = False,
+        build: bool = True,
     ) -> "TtnnDiffusionDriveModel":
         """Load pretrained weights and return a ready-to-use TTNN model.
+
+        With the default ``build=True`` this runs ``build_all`` before returning,
+        so the object really is ready to use: ``__call__`` routes through the
+        on-device path.  Pass ``build=False`` to get the unbuilt wrapper (the
+        forward then falls back to the CPU reference model) — useful only for
+        tests that install stages selectively.
 
         Parameters
         ----------
@@ -343,6 +383,9 @@ class TtnnDiffusionDriveModel:
         latent : bool
             If True, use the learned latent parameter instead of real LiDAR
             inputs (useful for unit tests that do not have sensor data).
+        build : bool
+            If True (default), install the full TTNN stack via ``build_all``.
+            See its docstring for the production-resolution constraint.
         """
         from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, load_model
 
@@ -351,7 +394,8 @@ class TtnnDiffusionDriveModel:
             latent=latent,
         )
         reference_model = load_model(checkpoint_path, ref_cfg, device=torch.device("cpu"))
-        return cls(reference_model, config, device)
+        model = cls(reference_model, config, device)
+        return model.build_all(device) if build else model
 
     # ------------------------------------------------------------------
     # Stage 7: compile / execute_compiled (backbone-loop trace)

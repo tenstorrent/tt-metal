@@ -164,15 +164,7 @@ def main() -> None:
     try:
         model_config = ModelConfig(plan_anchor_path=anchors)
         ttnn_model = TtnnDiffusionDriveModel(ref_model, model_config, device)
-        (
-            ttnn_model.build_stage2(device)
-            .build_stage3(device)
-            .build_stage3_4(device)
-            .build_stage3_5(device)
-            .build_stage3_6(device)
-            .build_stage3_7(device)
-            .build_stage4(device)
-        )
+        ttnn_model.build_all(device)
 
         features = _make_features()
 

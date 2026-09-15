@@ -107,20 +107,12 @@ def _open_build_trace(checkpoint_path: str, anchors_path: str, device_id: int):
     cfg = ModelConfig()
     cfg.plan_anchor_path = anchors_path
     # latent=False → use the real LiDAR BEV the feature builder produces.
-    # Full on-device stack — identical chain to scripts/ttnn_pdm_server._build_model:
+    # from_checkpoint(build=True) runs build_all: the full on-device stack —
     # backbone (stems + BasicBlocks + FPN + GPT fusion, consolidated), perception
-    # head, DDIM denoiser, agent head. Valid at the production resolution the feature
-    # builder emits (camera 256×1024, LiDAR 256×256).
+    # head, DDIM denoiser, agent head. Same chain as ttnn_pdm_server._build_model.
+    # Valid at the production resolution the feature builder emits
+    # (camera 256×1024, LiDAR 256×256).
     model = TtnnDiffusionDriveModel.from_checkpoint(checkpoint_path, cfg, device, latent=False)
-    (
-        model.build_stage2(device)
-        .build_stage3(device)
-        .build_stage3_4(device)
-        .build_stage3_5(device)
-        .build_stage3_6(device)
-        .build_stage3_7(device)
-        .build_stage4(device)
-    )
 
     traced = False
     if _trace_enabled():
