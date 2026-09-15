@@ -24,7 +24,6 @@ weights, and the timing tests are the instrument those paths were tuned with; ne
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -40,10 +39,11 @@ from models.tt_dit.models.vae.diffvae_ltx import (
     NABlock,
     decoder_config,
     rope_tables,
-    stages_backend_from_env,
 )
 from models.tt_dit.models.vae.diffvae_rope import default_rope_dim_split
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.tools import diffvae_bench as bench
+from models.tt_dit.tools.diffvae_bench import ARMS, CHECKPOINT, HEAD_DIM, STAGE1, STAGE1_ARMS, STAGES
 from models.tt_dit.utils.check import assert_quality
 
 CAPTURE = Path(
@@ -52,14 +52,6 @@ CAPTURE = Path(
         os.path.expanduser("~/ltx25_diffvae/stages/crop10.safetensors"),
     )
 )
-CHECKPOINT = Path(
-    os.environ.get(
-        "DIFFVAE_CHECKPOINT",
-        os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.5/vae/ltx-2.5-video-vae-bf16.safetensors"),
-    )
-)
-
-HEAD_DIM = 64
 
 # Stage 1 of the shipped config: 2048 channels, kernel (3,7,7), 4 blocks.
 STAGE_DIM = 2048
@@ -93,13 +85,6 @@ def _block_weights(stage: int, block: int) -> dict[str, torch.Tensor]:
     prefix = f"decoder.det_stages.{stage}.{block}."
     with safe_open(str(CHECKPOINT), "pt") as handle:
         return {key[len(prefix) :]: handle.get_tensor(key).float() for key in handle.keys() if key.startswith(prefix)}
-
-
-def _topology():
-    """Collectives default to Linear; DIFFVAE_TOPOLOGY=ring selects the runner's configuration."""
-    if os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring":
-        return ttnn.Topology.Ring
-    return ttnn.Topology.Linear
 
 
 # ---------------------------------------------------------------------------
@@ -196,49 +181,6 @@ def test_row_chunking_is_exact(*, device, monkeypatch):
 # NABlock fast paths: every DIFFVAE_DET_* arm against the unflagged block
 # ---------------------------------------------------------------------------
 
-SP_AXIS, TP_AXIS = 1, 0
-
-FLAGS = (
-    "DIFFVAE_DET_FUSED_QKV",
-    "DIFFVAE_DET_COLPAR_QKV",
-    "DIFFVAE_DET_FUSED_ROPE",
-    "DIFFVAE_DET_FUSED_SWIGLU",
-    "DIFFVAE_DET_TP_MLP",
-)
-
-BRICKED = "bricked_sp_w_sharded"
-RECOMMENDED = ("DIFFVAE_DET_COLPAR_QKV", "DIFFVAE_DET_FUSED_ROPE", "DIFFVAE_DET_FUSED_SWIGLU")
-
-#: arm -> flags. Every arm and the baseline run the bricked W-sharded executor; ``recommended`` is
-#: the production flag set for the W-sharded stages.
-ARMS = {
-    "fused_qkv": ("DIFFVAE_DET_FUSED_QKV",),
-    "colpar_qkv": ("DIFFVAE_DET_COLPAR_QKV",),
-    "fused_swiglu": ("DIFFVAE_DET_FUSED_SWIGLU",),
-    "tp_mlp": ("DIFFVAE_DET_TP_MLP",),
-    "recommended": RECOMMENDED,
-}
-
-#: (label, dim, kernel, full dims, blocks in that stage) for the W-sharded deterministic stages, at
-#: the s34x60 decode's geometry.
-STAGES = [
-    ("stage2", 1024, (3, 7, 7), (6, 68, 120), 6),
-    ("stage3", 512, (3, 5, 5), (11, 68, 120), 4),
-    ("stage4", 512, (3, 5, 5), (21, 136, 240), 2),
-]
-
-#: Stage 1 of the same decode: (dim, kernel, dims, blocks). Its W=60 does not divide the size-8 axis,
-#: so it runs replicated on the linear-order executor with no TP axis, and only the arms that need
-#: neither can reach it.
-STAGE1 = (2048, (3, 7, 7), (6, 34, 60), 4)
-
-STAGE1_ARMS = {
-    "swiglu": ("DIFFVAE_DET_FUSED_SWIGLU",),
-    "qkv": ("DIFFVAE_DET_FUSED_QKV",),
-    "qkv_rope": ("DIFFVAE_DET_FUSED_QKV", "DIFFVAE_DET_FUSED_ROPE"),
-    "recommended": ("DIFFVAE_DET_FUSED_QKV", "DIFFVAE_DET_FUSED_ROPE", "DIFFVAE_DET_FUSED_SWIGLU"),
-}
-
 
 def _state(dim: int, seed: int) -> dict[str, torch.Tensor]:
     """Checkpoint-shaped weights: fused ``attn.qkv`` and split ``mlp.w_gate``/``w_up``.
@@ -267,84 +209,6 @@ def _state(dim: int, seed: int) -> dict[str, torch.Tensor]:
     }
 
 
-def _set_flags(enabled: tuple[str, ...]) -> None:
-    """The flags are read in ``NeighborhoodAttention.__init__`` / ``SwiGLU.__init__``."""
-    for flag in FLAGS:
-        os.environ[flag] = "1" if flag in enabled else "0"
-
-
-def _build(mesh, dim, kernel, enabled: tuple[str, ...], backend: str = BRICKED):
-    """An NABlock with exactly ``enabled`` set on ``backend``, asserting the flags actually took."""
-    _set_flags(enabled)
-    block = NABlock(
-        dim,
-        kernel,
-        head_dim=HEAD_DIM,
-        mesh_device=mesh,
-        na3d_backend=backend,
-        ccl_manager=CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear),
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
-    )
-    colpar = "DIFFVAE_DET_COLPAR_QKV" in enabled
-    tp_mlp = "DIFFVAE_DET_TP_MLP" in enabled
-    assert block.attn.colpar_qkv is colpar
-    assert block.attn.fused_qkv is (colpar or "DIFFVAE_DET_FUSED_QKV" in enabled)
-    assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
-    assert block.mlp.tp_mlp is tp_mlp
-    assert block.mlp.fused is (tp_mlp or "DIFFVAE_DET_FUSED_SWIGLU" in enabled)
-    assert block.attn.na3d_backend == backend
-    return block
-
-
-def _build_stage1(mesh, enabled: tuple[str, ...]):
-    """A replicated stage-1 block, asserting the flags took and that the unreachable ones did not."""
-    _set_flags(enabled)
-    dim, kernel, _, _ = STAGE1
-    block = NABlock(
-        dim,
-        kernel,
-        head_dim=HEAD_DIM,
-        mesh_device=mesh,
-        na3d_backend="linear_order",
-        ccl_manager=None,
-        sp_axis=None,
-        tp_axis=None,
-    )
-    assert block.attn.tp == 1
-    assert block.attn.fused_qkv is ("DIFFVAE_DET_FUSED_QKV" in enabled)
-    assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
-    assert block.attn.colpar_qkv is False, "colpar needs a tp_axis to shard the weight over"
-    assert block.mlp.fused is ("DIFFVAE_DET_FUSED_SWIGLU" in enabled)
-    return block
-
-
-def _inputs(mesh, dim, dims):
-    sp = int(list(mesh.shape)[SP_AXIS])
-    t, h, w = dims
-    tokens = t * h * (w // sp)
-    cos, sin = rope_tables(dims, default_rope_dim_split(HEAD_DIM), mesh_device=mesh)
-    cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=SP_AXIS)
-    sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=SP_AXIS)
-    return tokens, (t, h, w // sp), cos, sin
-
-
-def _named_params(module, prefix: str = ""):
-    """``named_parameters`` is not recursive; walk the children."""
-    for name, param in module.named_parameters():
-        yield f"{prefix}{name}", param
-    for name, child in module.named_children():
-        yield from _named_params(child, f"{prefix}{name}.")
-
-
-def _seeded(name: str, shape: tuple[int, ...]) -> torch.Tensor:
-    g = torch.Generator().manual_seed(7)
-    if "norm" in name:
-        return (1.0 + 0.05 * torch.randn(*shape, generator=g)).to(torch.float32)
-    scale = shape[-2] ** -0.5 if len(shape) > 1 else 0.02
-    return (torch.randn(*shape, generator=g) * scale).to(torch.float32)
-
-
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["1d"])
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("arm", list(ARMS), ids=list(ARMS))
@@ -353,11 +217,11 @@ def test_det_nablock_arm_matches_baseline(*, mesh_device, device_params, arm, st
     """Every fast path reproduces the unflagged block on the same weights."""
     _, dim, kernel, dims, _ = stage
     state = _state(dim, seed=11)
-    tokens, local, cos, sin = _inputs(mesh_device, dim, dims)
+    tokens, local, cos, sin = bench.det_inputs(mesh_device, dim, dims)
     x_t = torch.randn(tokens, dim, generator=torch.Generator().manual_seed(5))
 
     def run(enabled):
-        block = _build(mesh_device, dim, kernel, enabled)
+        block = bench.build_det_block(mesh_device, dim, kernel, enabled)
         block.load_torch_state_dict(dict(state))
         x = ttnn.from_torch(x_t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         out = block(x, dims=local, cos=cos, sin=sin, device_plan=None)
@@ -378,15 +242,11 @@ def test_det_stage1_arm_matches_baseline(*, mesh_device, device_params, arm):
     t, h, w = dims
     tokens = t * h * w  # replicated: no W shard
     cos, sin = rope_tables(dims, default_rope_dim_split(HEAD_DIM), mesh_device=mesh_device)
-    plan = build_device_plan(
-        plan_na3d(dims, kernel),
-        mesh_device=mesh_device,
-        ccl_manager=CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear),
-    )
+    plan = bench.stage1_plan(mesh_device, dims, kernel)
     x_t = torch.randn(tokens, dim, generator=torch.Generator().manual_seed(5))
 
     def run(enabled):
-        block = _build_stage1(mesh_device, enabled)
+        block = bench.build_stage1_block(mesh_device, enabled)
         block.load_torch_state_dict(dict(state))
         x = ttnn.from_torch(x_t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         out = block(x, dims=dims, cos=cos, sin=sin, device_plan=plan)
@@ -403,35 +263,53 @@ def test_det_nablock_arm_timing(*, mesh_device, device_params, arm):
     """Per-block device time for one arm, summed over the W-sharded stages. Run with ``-s``.
 
     A change inside one block is invisible against a whole decode; this is where the flags were
-    tuned.
+    tuned. ``python -m models.tt_dit.tools.time_module det_nablock --arm <arm>`` is the same
+    measurement outside pytest.
     """
-    iters = int(os.environ.get("ITERS", 10))
-    enabled = () if arm == "baseline" else ARMS[arm]
+    iters = bench.iters_from_env()
     total = 0.0
-    for label, dim, kernel, dims, depth in STAGES:
-        block = _build(mesh_device, dim, kernel, enabled)
-        for name, param in _named_params(block):
-            param.load_torch_tensor(_seeded(name, tuple(param.total_shape)))
-        tokens, local, cos, sin = _inputs(mesh_device, dim, dims)
-        x = ttnn.from_torch(
-            torch.randn(tokens, dim, generator=torch.Generator().manual_seed(3)),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        for _ in range(2):  # warm the program cache
-            x = block(x, dims=local, cos=cos, sin=sin, device_plan=None)
-        ttnn.synchronize_device(mesh_device)
-
-        t0 = time.perf_counter()
-        for _ in range(iters):
-            x = block(x, dims=local, cos=cos, sin=sin, device_plan=None)
-        ttnn.synchronize_device(mesh_device)
-        per_block = (time.perf_counter() - t0) / iters * 1000
-        total += per_block * depth
-        print(f"\n[{arm}/{label}] {per_block:8.2f} ms/block  x{depth} = {per_block * depth:8.1f} ms", flush=True)
-        ttnn.deallocate(x)
+    for stage in STAGES:
+        b = bench.det_block_bench(mesh_device, stage, bench.arm_flags(arm))
+        ms = bench.timed(b, mesh_device, iters)
+        total += ms * b.depth
+        print(f"\n[{arm}/{b.label}] {ms:8.2f} ms/block  x{b.depth} = {ms * b.depth:8.1f} ms", flush=True)
+        b.close()
     print(f"\n[{arm}] W-sharded det blocks total: {total:8.1f} ms\n", flush=True)
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["1d"])
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("arm", ["baseline", *STAGE1_ARMS], ids=["baseline", *STAGE1_ARMS])
+def test_det_stage1_arm_timing(*, mesh_device, device_params, arm):
+    """Per-block device time for the replicated stage-1 block under one arm. Run with ``-s``.
+
+    Stage 1 carries ~2.2x the per-chip matmul FLOPs of stages 2-4 combined: it is the widest stage
+    and the only one that runs on every chip. ``time_module det_stage1`` is the CLI twin.
+    """
+    b = bench.stage1_bench(mesh_device, bench.arm_flags(arm, STAGE1_ARMS))
+    ms = bench.timed(b, mesh_device, bench.iters_from_env())
+    print(f"\n[{arm}/{b.label}] {ms:8.2f} ms/block  x{b.depth} = {ms * b.depth:8.1f} ms\n", flush=True)
+    b.close()
+
+
+# The stage-5 grid is set by GRID_T / GRID_H / GRID_W, defaulting to the shipped 1080p 25-frame
+# geometry, whose host-side context and noise tensors are several GB; shrink T first when validating.
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["1d"])
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+def test_diff_block_timing(*, mesh_device, device_params):
+    """Per-block device time for one stage-5 DiffusionNABlock in the production SP x TP config.
+
+    Stage 5 is the largest block in the decoder and the parity tests run a toy grid, so this is
+    the A/B instrument for stage-5 work. Under ``TT_DIT_STAGE_TIMING=1`` the block's sections are
+    printed too. ``time_module diff_block`` is the CLI twin.
+    """
+    iters = bench.iters_from_env()
+    b = bench.diff_block_bench(mesh_device, bench.grid_from_env())
+    with bench.timing_tree.span(mesh_device, "diff_block_timing", root=True):
+        ms = bench.timed(b, mesh_device, iters)
+    print("\n" + bench.block_line(b, ms), flush=True)
+    if sections := bench.block_sections(iters + 2):
+        print(bench.render_sections(sections), flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -654,16 +532,6 @@ def test_decode_stage5_bricked_matches_replicated(*, mesh_device, sp_axis, laten
 # ---------------------------------------------------------------------------
 
 
-def _timed_decode(decoder, latent, mesh_device) -> tuple[torch.Tensor, float]:
-    """Warm-up decode, then one timed decode; returns the pixels and the time in ms."""
-    decoder.decode(latent, seed=0)
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    pixels = decoder.decode(latent, seed=0)
-    ttnn.synchronize_device(mesh_device)
-    return pixels, (time.perf_counter() - t0) * 1000.0
-
-
 # (deterministic-stages backend, stage-5 backend), single chip, replicated. "linear_order+bricked5" runs
 # the linear-order executor where it fits (the smaller early stages) and the unsharded bricked executor for
 # stage 5. Set TT_DIT_STAGE_TIMING=1 for the per-stage breakdown.
@@ -685,7 +553,7 @@ def test_decode_timing(*, mesh_device, backends, latent_hw):
     dec = DiffVAEDecoder(config, mesh_device=mesh_device, stages_na3d_backend=stages_b, stage5_na3d_backend=stage5_b)
     dec.load_checkpoint(CHECKPOINT)
 
-    px, dt = _timed_decode(dec, latent, mesh_device)
+    px, dt = bench.timed_decode(dec, latent, mesh_device)
     tag = f"stages={stages_b},stage5={stage5_b}"
     print(f"\n[decode {tag}] latent(1,{config['in_channels']},4,{lh},{lw}) -> {tuple(px.shape)}: {dt:8.0f} ms\n")
 
@@ -698,53 +566,97 @@ def test_decode_timing(*, mesh_device, backends, latent_hw):
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
 def test_decode_wsp_timing(*, mesh_device, latent_hw, timing_tree):
+    """Whole-decode wall time in the runner's configuration; ``time_module decoder`` is the CLI twin.
+
+    Every knob is an environment variable read by ``diffvae_bench.production_decoder``:
+    ``DIFFVAE_LATENT_T`` (default 19, the 145-frame target; 4 gives a quick 25-frame run),
+    ``DIFFVAE_TP_HEADS``, ``DIFFVAE_STAGES_WSP``, ``DIFFVAE_STAGE5_BACKEND``,
+    ``DIFFVAE_STAGES_SP_AXIS`` / ``DIFFVAE_STAGES_TP_AXIS``. Note that the plain ``bricked`` stage-5
+    backend does not W-shard, so it runs the full volume on every chip: honest about speed, not
+    about memory. The stages' axis swap is priced here and rejected in NEIGHBORHOOD_ATTENTION.md
+    ("The retired block-permute path").
+    """
     _require_checkpoint()
     config = decoder_config(CHECKPOINT)
-    lh, lw = latent_hw
-    torch.manual_seed(0)
-    # 145-frame (6s) is the target resolution -- default here so the timing test exercises the real
-    # workload. output_frames = 8 * latent_T - 7, so latent_T=19 -> 145 frames; override with
-    # DIFFVAE_LATENT_T (e.g. 4 -> 25 frames) for a quick smaller run.
-    t_lat = int(os.environ.get("DIFFVAE_LATENT_T", 19))
-    latent = torch.randn(1, config["in_channels"], t_lat, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
-    # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
-    # attention runs on heads/4 of the 4 heads per chip, gathered back before the output proj.
-    tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
-    stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
-    # DIFFVAE_STAGE5_BACKEND selects the stage-5 executor. "bricked" does not W-shard (its op takes
-    # the shard origin at compile time, so it is uniform across the mesh), which means stage 5 runs
-    # the FULL volume on every chip rather than 1/sp of it -- the comparison is honest about speed
-    # but not about memory.
-    stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", "bricked_sp_w_sharded")
-    # DIFFVAE_STAGES_SP_AXIS / DIFFVAE_STAGES_TP_AXIS move the deterministic stages' W-shard and
-    # head-TP onto the other mesh axes (0 = the size-4 rows, 1 = the size-8 cols) without touching
-    # stage 5. Prices the SP/TP axis swap, rejected in NEIGHBORHOOD_ATTENTION.md ("The retired
-    # block-permute path"): W over the size-4 axis gives a local width of 30 at 1080p stages 2-3
-    # (brick-alignable) but breaks the same-axis W-sharded deterministic->stage-5 handoff, so the
-    # context is gathered and re-sharded instead.
-    stages_sp_axis = int(os.environ.get("DIFFVAE_STAGES_SP_AXIS", 1))
-    stages_tp_axis = int(os.environ["DIFFVAE_STAGES_TP_AXIS"]) if "DIFFVAE_STAGES_TP_AXIS" in os.environ else tp_axis
-    dec = DiffVAEDecoder(
-        config,
-        mesh_device=mesh_device,
-        ccl_manager=ccl,
-        stage5_na3d_backend=stage5_b,
-        stage5_sp_axis=1,
-        stage5_tp_axis=tp_axis,
-        stages_na3d_backend=stages_backend_from_env() if stages_wsp else None,
-        stages_sp_axis=stages_sp_axis if stages_wsp else None,
-        stages_tp_axis=stages_tp_axis if stages_wsp else None,
-    )
+    t_lat = bench.latent_t_from_env()
+    latent = bench.latent(config, t_lat, latent_hw)
+    dec = bench.production_decoder(mesh_device, config, bench.ccl_from_env(mesh_device))
     dec.load_checkpoint(CHECKPOINT)
 
-    px, dt = _timed_decode(dec, latent, mesh_device)
-    tp = "+TP4" if tp_axis is not None else ""
-    det = f"+detSP({stages_backend_from_env()},sp_axis={stages_sp_axis},tp_axis={stages_tp_axis})" if stages_wsp else ""
+    px, dt = bench.timed_decode(dec, latent, mesh_device)
+    lh, lw = latent_hw
     print(
-        f"\n[decode W-SP({stage5_b}){tp}{det} 4x8] latent(1,{config['in_channels']},{t_lat},{lh},{lw})"
+        f"\n[decode {bench.describe_production_decoder()} 4x8] latent(1,{config['in_channels']},{t_lat},{lh},{lw})"
         f" -> {tuple(px.shape)}: {dt:8.0f} ms\n"
     )
+
+
+# The decode tail: host unpatchify + pull (float) against on-device YUV 4:2:0 (yuv). Both run the
+# identical device graph; only the tail differs, so the delta is the transfer. TT_DIT_STAGE_TIMING=1
+# also isolates the tail timer from the rest of the decode. ``time_module decoder --output float,yuv``
+# is the CLI twin.
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+def test_decode_tail_timing(*, mesh_device):
+    _require_checkpoint()
+    dec, config = bench.loaded_production_decoder(mesh_device)
+    latent = bench.latent(config, bench.latent_t_from_env(), seed=3)
+    for kind in ("float", "yuv"):
+        out, dt = bench.timed_decode(dec, latent, mesh_device, output_type=kind)
+        print(f"\n[{kind:5s}] {dt:9.1f} ms  out={tuple(out.shape)}", flush=True)
+        del out
+
+
+# Trace capture and replay of the whole decode (``decode``) or the deterministic stages alone
+# (``det_context``). The upload stays outside the captured region, so the raw latent is uploaded
+# once into a buffer the capture reads and the replays read again. TT_DIT_STAGE_TIMING and
+# DIFFVAE_STAGES_WSP must both be unset (see ``diffvae_bench.trace_replay`` for why the second hangs
+# the capture). ``time_module decoder --trace`` / ``time_module det_stages --trace`` are the CLI twins.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": bench.TRACE_REGION_SIZE}],
+    indirect=True,
+    ids=["ring"],
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("region", ["decode", "det_context"])
+def test_decode_trace_timing(*, mesh_device, device_params, region):
+    _require_checkpoint()
+    dec, config = bench.loaded_production_decoder(mesh_device)
+    latent = bench.latent(config, bench.latent_t_from_env(4))
+    raw = bench.upload_latent(dec, latent, mesh_device)
+    run = bench.trace_region(dec, region, latent, raw)
+    report = bench.trace_replay(mesh_device, run, bench.iters_from_env(3), probe_dispatch=region == "decode")
+    assert report.identical, f"replay differs from eager by {report.max_abs_diff}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": bench.TRACE_REGION_SIZE}],
+    indirect=True,
+    ids=["ring"],
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+def test_trace_reexecutes(*, mesh_device, device_params):
+    """A captured trace of the deterministic stages re-executes rather than leaving a stale buffer.
+
+    A bit-identical replay is not evidence on its own: the capture's output allocation can reuse
+    the address the eager output was just freed from. Poisoning the output and swapping the input in
+    place after capture are what tell a replay apart from a no-op. ``time_module trace_check`` is the
+    CLI twin.
+    """
+    _require_checkpoint()
+    dec, config = bench.loaded_production_decoder(mesh_device)
+    t_lat = bench.latent_t_from_env(4)
+    result = bench.trace_validate(
+        dec, mesh_device, bench.latent(config, t_lat, seed=1), bench.latent(config, t_lat, seed=2)
+    )
+    assert result.eager_reproducible
+    assert result.replay_matches_a, "poisoned output not rewritten by the replay"
+    assert result.replay_follows_input, "replay ignored the swapped input"
+    assert result.replay_matches_b, "replay on the swapped input does not match eager"
 
 
 # Stage 5 on the linear-order executor across the mesh: its shard splits QUERY tiles across all 32
@@ -761,11 +673,11 @@ def test_decode_gather_mesh_timing(*, mesh_device, latent_hw):
     lh, lw = latent_hw
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
+    ccl = bench.ccl_from_env(mesh_device)
     dec = DiffVAEDecoder(config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="linear_order")
     dec.load_checkpoint(CHECKPOINT)
 
-    px, dt = _timed_decode(dec, latent, mesh_device)
+    px, dt = bench.timed_decode(dec, latent, mesh_device)
     print(
         f"\n[decode gather-mesh 4x8] latent(1,{config['in_channels']},4,{lh},{lw}) -> {tuple(px.shape)}: {dt:8.0f} ms\n"
     )
@@ -790,7 +702,7 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
     config = decoder_config(CHECKPOINT)
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, 34, 60)  # 1080p, 25 frames
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
+    ccl = bench.ccl_from_env(mesh_device)
 
     def sharded(tp_axis, tp_proj):
         os.environ["DIFFVAE_TP_PROJ"] = "1" if tp_proj else "0"
@@ -806,7 +718,7 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
             stages_tp_axis=tp_axis,
         )
         dec.load_checkpoint(CHECKPOINT)
-        px, dt = _timed_decode(dec, latent, mesh_device)
+        px, dt = bench.timed_decode(dec, latent, mesh_device)
         return px.float(), dt
 
     ref_dec = DiffVAEDecoder(
@@ -817,7 +729,7 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
         stage5_na3d_backend="linear_order",
     )
     ref_dec.load_checkpoint(CHECKPOINT)
-    ref, t_ref = _timed_decode(ref_dec, latent, mesh_device)
+    ref, t_ref = bench.timed_decode(ref_dec, latent, mesh_device)
     ref = ref.float()
 
     no_tp, t_no = sharded(None, False)
@@ -844,7 +756,7 @@ def test_decode_wsp_shard_equivalence(*, mesh_device, latent_hw):
     torch.manual_seed(0)
     t_lat = int(os.environ.get("DIFFVAE_LATENT_T", 8))
     latent = torch.randn(1, config["in_channels"], t_lat, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 2)), topology=_topology())
+    ccl = bench.ccl_from_env(mesh_device, default_links=2)
 
     pixels = {}
     for backend in ("bricked", "bricked_sp_w_sharded"):
