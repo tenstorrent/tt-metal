@@ -14,6 +14,8 @@ No PCC here: `test_prefill_dispatch_fabric2d.py` owns correctness, and a host-si
 sit between the two ops in the capture.
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -80,6 +82,22 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     table = _expert_dispatch_table(NUM_ROUTED_EXPERTS, H, G)
     in_group_share, hot_weight = ROUTING_PROFILES[routing]
     indices = _draw_indices(G, H, seq_len_per_chip, NUM_EXPERTS_PER_TOK, NUM_ROUTED_EXPERTS, in_group_share, hot_weight)
+    # Real routing instead of the draw: one captured MoE layer, Galaxy-global expert ids, 5120 tokens
+    # viewed as 8 source chips x 640. Every dispatch column sees the same picks and resolves only its
+    # own experts, so one layer exercises all four columns at once. Read-only on the capture.
+    captured_layer = os.environ.get("TT_DS_CAPTURED_LAYER")
+    if captured_layer is not None:
+        from safetensors import safe_open
+
+        path = os.environ.get(
+            "TT_DS_CAPTURED_PATH",
+            "/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_5120_nopad/expert_routing.safetensors",
+        )
+        assert seq_len_per_chip == 640, "captured routing is 5120 tokens over 8 chips"
+        with safe_open(path, "pt") as f:
+            ids = f.get_tensor(f"expert_ids_layer_{int(captured_layer)}").to(torch.int64)
+        indices = ids.view(H, seq_len_per_chip, NUM_EXPERTS_PER_TOK).unsqueeze(0).expand(G, -1, -1, -1).clone()
+        routing = f"captured-L{int(captured_layer)}"
     realized = float((table[torch.arange(G).view(G, 1, 1, 1), indices] != -1).to(torch.float64).mean())
 
     offs = torch.zeros(G, H, NUM_ROUTED_EXPERTS, dtype=torch.int32)
