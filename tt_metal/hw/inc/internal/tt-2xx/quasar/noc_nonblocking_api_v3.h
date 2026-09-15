@@ -122,6 +122,14 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #endif
 }
 
+// Point atomic return values back at the default slot after a caller redirected
+// them (noc_fast_atomic_cas4 below). The slot is in this initiator's own L1, so
+// it is issued as the local-window operand like every other V3 source address.
+inline __attribute__((always_inline)) void noc_restore_default_atomic_ret_addr(uint32_t atomic_ret_val) {
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(atomic_ret_val));
+}
+
 // ============================================================================
 // Stateless issues
 // ============================================================================
@@ -454,6 +462,37 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     if (!posted) {
         noc_nonposted_atomics_acked[noc] += 1;
     }
+}
+
+// Quasar NoC CAS: a 4-BIT compare-and-swap on one 4-byte word of a 16B L1 atom. Succeeds
+// iff word == {28'b0, cmp4}, then word <- {28'b0, swap4}; the PRE-OP word is returned to
+// this hart's R_SRC_ADDR slot. Usable ONLY for words whose value stays in [0, 15].
+// Same contract as V2; addr is a complete ATT operand and the return slot is this
+// initiator's local address, issued as the local-window operand. The redirected
+// return address stays latched on the simple command buffer until
+// noc_restore_default_atomic_ret_addr.
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
+inline __attribute__((always_inline)) void noc_fast_atomic_cas4(
+    uint32_t noc, uint64_t addr, uint32_t vc, uint32_t cmp4, uint32_t swap4, uint32_t atomic_ret_val) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    // Masked to 4 bits below; an out-of-range cmp could ACQUIRE a free lock.
+    ASSERT(cmp4 <= 0xF && swap4 <= 0xF);
+    uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE;
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);
+    // The pre-op word lands in this initiator's own L1.
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, noc_v3_local_operand(atomic_ret_val));
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, addr);
+    uint64_t at_len = NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(swap4 & 0xF) << 6) | ((uint64_t)(cmp4 & 0xF) << 2) |
+                      NOC_AT_IND_32((addr >> 2) & 0x3);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, at_len);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)0);
+    __builtin_riscv_ttrocc_scmdbuf_issue_trans();
+
+    noc_nonposted_atomics_acked[noc] += 1;
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
