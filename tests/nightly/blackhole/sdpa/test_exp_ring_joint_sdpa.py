@@ -16,6 +16,8 @@ Perf table generation is included but skipped on CI.
 import math
 import os
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -95,6 +97,18 @@ HEADS_PER_DEVICE = 10  # After TP split
 # ============================================================================
 # HARDWARE DETECTION
 # ============================================================================
+
+
+def log_iteration_timing(iter_ms):
+    """Report per-dispatch wall time. The first iteration carries kernel compile, so read the median
+    of the rest; with one iteration there is nothing warm to report."""
+    if not iter_ms:
+        return
+    warm = iter_ms[1:] if len(iter_ms) > 1 else iter_ms
+    logger.info(
+        f"SOL_RING_TIMING iters={len(iter_ms)} first={iter_ms[0]:.2f}ms "
+        f"warm_median={sorted(warm)[len(warm) // 2]:.2f}ms all={[round(m, 2) for m in iter_ms]}"
+    )
 
 
 def detect_devices_without_opening():
@@ -415,9 +429,11 @@ def run_exp_ring_joint_sdpa_nightly(
         program_cache_entries_baseline = None
 
         tt_out_list = []
+        iter_ms = []
 
         for i in range(num_iterations):
             ttnn.synchronize_device(mesh_device)
+            iter_start = time.perf_counter()
 
             if check_program_cache_hit:
                 # Fresh semaphore set for this iteration must have addresses never seen before,
@@ -457,6 +473,9 @@ def run_exp_ring_joint_sdpa_nightly(
                 num_buffers_per_channel=num_buffers_per_channel,
                 **extra_kwargs,
             )
+
+            ttnn.synchronize_device(mesh_device)
+            iter_ms.append((time.perf_counter() - iter_start) * 1e3)
 
             tt_out_list.append(tt_out)
 
@@ -569,9 +588,11 @@ def run_exp_ring_joint_sdpa_nightly(
                 else:
                     logger.info(f"Output iter {i} matches iter 0 (bitwise equal)")
 
+            log_iteration_timing(iter_ms)
             assert pass_determinism, "Exp ring joint SDPA determinism failed"
             return
 
+        log_iteration_timing(iter_ms)
         if not do_check:
             return
 
@@ -748,6 +769,40 @@ def test_sol_ring_keep_every_one_is_dense(
         max_payload_size=max_payload_size,
         op=ttnn.transformer.sol_ring,
         op_kwargs={"chunk_keep_every": 1},
+    )
+
+
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("chunk_keep_every", [1, 2, 4, 6, 8], ids=["d100", "d50", "d25", "d17", "d12"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS[:1], ids=TEST_CONFIG_IDS[:1])
+def test_sol_ring_density_scaling(
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, chunk_keep_every, reset_seeds
+):
+    """Does skipping chunks convert into time? Read SOL_RING_TIMING per density.
+
+    This is the measurement that decides whether forking the ring op was worth it. The comparison is
+    `vsa_sdpa`'s own sweep at matched density (job 248: 16.09 ms at 10.9 %, 20.98 ms at 16.0 %,
+    103.73 ms dense); if the ring does not beat those, its 2x dense-vs-dense advantage did not
+    survive contact with sparsity.
+
+    The stride is an upper bound on real Sol routing, not a stand-in for it: it selects a strided
+    subset at chunk granularity, where a threshold selects a scattered one and needs intra-chunk
+    stamping for partial chunks. Accuracy is not checked here -- a strided subset is not the dense
+    answer -- so this is timing only, and `keep_every=1` is the row that must match dense.
+    """
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        do_check=False,
+        num_iterations=5,
+        op=ttnn.transformer.sol_ring,
+        op_kwargs={"chunk_keep_every": chunk_keep_every},
     )
 
 
