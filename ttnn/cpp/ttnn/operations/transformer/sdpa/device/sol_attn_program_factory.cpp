@@ -185,7 +185,7 @@ uint32_t sol_attn_attention_sink_tile_count(
 
 // TensorAccessorArgs placeholder rule for optional tensors: nullptr when absent, so the accessor
 // chain stays intact and kernels compile against it but never read it.
-tt::tt_metal::Buffer* buffer_or_null(const std::optional<Tensor>& t) {
+tt::tt_metal::Buffer* sol_attn_buffer_or_null(const std::optional<Tensor>& t) {
     return t.has_value() ? t.value().buffer() : nullptr;
 }
 
@@ -645,8 +645,9 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
         .append_to(reader_compile_time_args);
     // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
-    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(sol_attn_buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(sol_attn_buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
+        .append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
@@ -706,10 +707,11 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
     // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
+    TensorAccessorArgs(sol_attn_buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
     // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(writer_compile_time_args);
+    TensorAccessorArgs(sol_attn_buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
+        .append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
