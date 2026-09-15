@@ -21,8 +21,10 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         softmax_output.logical_shape() == upstream_grad.logical_shape(),
         "Softmax output and upstream gradient tensors must have the same shape");
-    check_device_tensor(softmax_output, "SoftmaxBackward", "softmax_output", {DataType::BFLOAT16, DataType::FLOAT32});
-    check_device_tensor(upstream_grad, "SoftmaxBackward", "upstream_grad", {DataType::BFLOAT16, DataType::FLOAT32});
+    check_device_tensor(
+        softmax_output, "SoftmaxBackward", "softmax_output", {.dtypes = {DataType::BFLOAT16, DataType::FLOAT32}});
+    check_device_tensor(
+        upstream_grad, "SoftmaxBackward", "upstream_grad", {.dtypes = {DataType::BFLOAT16, DataType::FLOAT32}});
     check_same_device(upstream_grad, softmax_output, "SoftmaxBackward", "upstream_grad", "softmax_output");
     TT_FATAL(
         upstream_grad.dtype() == softmax_output.dtype(),

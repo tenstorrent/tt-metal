@@ -4,10 +4,10 @@
 
 #include "moe_group_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "moe_group_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -15,38 +15,30 @@ namespace ttml::metal::ops::moe_group::device {
 
 void MoeGroupDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
-    auto check =
-        [](const ttnn::Tensor& t, const char* name, tt::tt_metal::Layout layout, tt::tt_metal::DataType dtype) {
-            TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "moe_group: {} must be on device", name);
-            TT_FATAL(t.buffer() != nullptr, "moe_group: {} buffer is null", name);
-            TT_FATAL(
-                t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-                "moe_group: {} must be in DRAM, got {}",
-                name,
-                enchantum::to_string(t.buffer()->buffer_type()));
-            TT_FATAL(
-                t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-                "moe_group: {} must be INTERLEAVED, got {}",
-                name,
-                enchantum::to_string(t.memory_config().memory_layout()));
-            TT_FATAL(
-                t.layout() == layout,
-                "moe_group: {} must be {} layout, got {}",
-                name,
-                enchantum::to_string(layout),
-                enchantum::to_string(t.layout()));
-            TT_FATAL(
-                t.dtype() == dtype,
-                "moe_group: {} must be {}, got {}",
-                name,
-                enchantum::to_string(dtype),
-                enchantum::to_string(t.dtype()));
-        };
-
-    check(args.dispatched, "dispatched", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
-    check(args.metadata, "metadata", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
-    check(args.scores, "scores", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
-    check(args.local_expert_ids, "local_expert_ids", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT16);
+    check_device_tensor(
+        args.dispatched,
+        "moe_group",
+        "dispatched",
+        {.layout = tt::tt_metal::Layout::ROW_MAJOR, .buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(
+        args.metadata,
+        "moe_group",
+        "metadata",
+        {.dtypes = {tt::tt_metal::DataType::UINT16},
+         .layout = tt::tt_metal::Layout::ROW_MAJOR,
+         .buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(
+        args.scores,
+        "moe_group",
+        "scores",
+        {.layout = tt::tt_metal::Layout::ROW_MAJOR, .buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(
+        args.local_expert_ids,
+        "moe_group",
+        "local_expert_ids",
+        {.dtypes = {tt::tt_metal::DataType::UINT16},
+         .layout = tt::tt_metal::Layout::ROW_MAJOR,
+         .buffer_type = tt::tt_metal::BufferType::DRAM});
 
     const auto& ds = args.dispatched.logical_shape();
     TT_FATAL(ds.rank() == 4U, "moe_group: dispatched must be 4D [D,B,S,H]");
