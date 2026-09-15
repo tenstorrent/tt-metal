@@ -235,12 +235,12 @@ def main():
             print(f"Weights downloaded to: {pretrained_path}")
 
         hf_tokenizer = AutoTokenizer.from_pretrained(src)
-        vocab_size = (hf_tokenizer.vocab_size + 31) // 32 * 32
+        vocab_size = len(hf_tokenizer)  # base vocab + added tokens: the checkpoint's row count
         ids = np.array(hf_tokenizer.encode(text), dtype=np.uint32)
-        print(f"Using HF BPE tokenizer, vocab_size={hf_tokenizer.vocab_size} (padded to {vocab_size})")
+        print(f"Using HF BPE tokenizer, vocab_size={vocab_size}")
     else:
         tokenizer = CharTokenizer(text)
-        vocab_size = (tokenizer.vocab_size + 31) // 32 * 32
+        vocab_size = tokenizer.vocab_size
         ids = np.array(tokenizer.encode(text), dtype=np.uint32)
 
     n_train = int(len(ids) * 0.9)
