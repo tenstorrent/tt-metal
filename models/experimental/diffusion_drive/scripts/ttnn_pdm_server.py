@@ -140,9 +140,9 @@ def _build_model(checkpoint: str, anchors: str, device):
     cfg = ModelConfig()
     cfg.plan_anchor_path = anchors
     # latent=False → use the real LiDAR BEV that the agent sends.
-    model = TtnnDiffusionDriveModel.from_checkpoint(checkpoint, cfg, device, latent=False)
-    # Full on-device stack: backbone (stems + BasicBlocks + FPN + GPT fusion),
-    # perception head, DDIM denoiser, and agent head all run via TTNN ops.
+    # from_checkpoint(build=True) installs the full on-device stack via build_all:
+    # backbone (stems + BasicBlocks + FPN + GPT fusion), perception head, DDIM
+    # denoiser, and agent head all run via TTNN ops.
     # Once build_stage3 (FPN) + build_stage3_6 (stems+fusion) are in, the backbone
     # runs as one device-native graph by default (consolidated; the 8 per-stage host
     # round-trips are gone). Stage 3.6 (fusion) requires the production resolution
@@ -151,15 +151,7 @@ def _build_model(checkpoint: str, anchors: str, device):
     # build_stage4 then consolidates the perception block + the DDIM decoder loop
     # onto the device too (drops the per-drop-in round-trips) — measured ~1.20×
     # faster per request, and the prerequisite for whole-model trace capture.
-    (
-        model.build_stage2(device)
-        .build_stage3(device)
-        .build_stage3_4(device)
-        .build_stage3_5(device)
-        .build_stage3_6(device)
-        .build_stage3_7(device)
-        .build_stage4(device)
-    )
+    model = TtnnDiffusionDriveModel.from_checkpoint(checkpoint, cfg, device, latent=False)
     return model
 
 
