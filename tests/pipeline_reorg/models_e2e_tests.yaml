@@ -1176,6 +1176,7 @@
       tier: 3
   owner_id: D0B8130N4BW # Dalar Vartanians
   team: models
+  budget_type: e2e
 
 # ── Stable Diffusion 3.5 Large (TT-DiT) ────────────────────────────
 
