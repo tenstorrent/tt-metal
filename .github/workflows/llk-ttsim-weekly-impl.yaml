@@ -226,6 +226,9 @@ jobs:
           REF: ${{ steps.pin.outputs.ref }}
         run: |
           set -euo pipefail
+          TOKEN="${TOKEN//$'\r'/}"
+          TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
+          TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
           mkdir -p ttsim-private
           git -C ttsim-private init
           git -C ttsim-private fetch --depth 1 \
