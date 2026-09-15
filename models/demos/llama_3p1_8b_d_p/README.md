@@ -10,6 +10,11 @@ into the model-agnostic `models/demos/common/prefill` engine. Decode runs separa
 Umbrella: [tt-blaze#4137](https://github.com/tenstorrent/tt-blaze/issues/4137) ·
 prefill: [#4138](https://github.com/tenstorrent/tt-blaze/issues/4138)
 
+The scaffold/configuration checks and the host/device RoPE tests pass at the recorded base, and the
+device RoPE change is independently reviewed and approved. RMSNorm, MLP, attention, the full
+prefill model, runtime, and migration have not passed yet. See the
+[implementation and verification roadmap](ROADMAP.md) for the staged plan and evidence snapshot.
+
 ## Configuration
 
 ```
@@ -36,7 +41,7 @@ tt/config.py                       MeshConfig — SP/TP validation + shard mappe
 tt/model_config.py                 ModelArgs — weights path, HF config cross-check
 tt/runners/adapters/llama_3p1_8b.py   PrefillModelAdapter subclass (the engine's only seam)
 tt/runners/manifests/llama_3p1_8b.json  model manifest (keeps rank bindings model-agnostic)
-reference/ scripts/ tests/ tests/unit/ utils/   placeholders for the stack above
+reference/ scripts/ tests/ tests/unit/ utils/   reference, test, and support areas for the stack above
 ```
 
 ## Correctness reference

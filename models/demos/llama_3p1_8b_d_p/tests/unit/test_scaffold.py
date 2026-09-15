@@ -19,6 +19,7 @@ ADAPTER_MODULE = "models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b
 FORBIDDEN_AT_IMPORT = ("torch", "ttnn", "transformers", "safetensors")
 
 
+# Verifies that importing the adapter does not load packages needed only for model execution.
 def test_adapter_is_import_light():
     """Import the adapter in a clean interpreter and assert none of the heavy stacks came with it.
 
@@ -39,6 +40,7 @@ def test_adapter_is_import_light():
     assert out == "", f"adapter import pulled in heavy modules: {out}"
 
 
+# Verifies that the cache path records the total device count and SP/TP mesh before devices open.
 def test_weight_cache_path_uses_sp_times_tp(tmp_path, monkeypatch):
     """`{name}_{arch}_{N}dev / {sp}x{tp}`, with N = sp*tp.
 
@@ -56,6 +58,7 @@ def test_weight_cache_path_uses_sp_times_tp(tmp_path, monkeypatch):
     assert path.is_dir()
 
 
+# Verifies that an empty cache setting disables caching instead of selecting the current directory.
 def test_weight_cache_disabled_returns_none(monkeypatch):
     """An empty PREFILL_TTNN_CACHE means "no cache", not "cache in the cwd"."""
     from models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b import Llama31PrefillAdapter
@@ -64,6 +67,7 @@ def test_weight_cache_disabled_returns_none(monkeypatch):
     assert Llama31PrefillAdapter().weight_cache_path((4, 8)) is None
 
 
+# Verifies that the bundled checkpoint config matches the model dimensions and Llama3 RoPE setup.
 def test_bundled_hf_config_matches_the_dim_ssot():
     """The repo-bundled config.json the adapter defaults to really is Llama-3.1-8B.
 
@@ -89,6 +93,7 @@ def test_bundled_hf_config_matches_the_dim_ssot():
     assert raw["rope_theta"] == 500000.0
 
 
+# Verifies that invalid mesh axes, rank, and TP width fail before any sharding is derived.
 def test_mesh_config_rejects_bad_axes_before_deriving(expect_error):
     """Axis validation must happen at the API boundary, not surface later as wrong sharding.
 
@@ -109,6 +114,7 @@ def test_mesh_config_rejects_bad_axes_before_deriving(expect_error):
         MeshConfig((4, 8), tp=4, tp_axis=1)
 
 
+# Verifies that either mesh orientation keeps SP and TP on complementary axes with correct widths.
 def test_mesh_config_axes_are_complementary():
     """SP and TP must never resolve to the same axis, on either orientation."""
     from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
