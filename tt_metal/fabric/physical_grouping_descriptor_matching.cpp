@@ -29,7 +29,6 @@
 #include <fmt/ranges.h>
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
-#include "protobuf/mesh_graph_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -191,39 +190,22 @@ std::optional<MgdDeviceTopology> get_mgd_instance_device_topology(
     if (instance_ids.empty()) {
         return std::nullopt;
     }
-    const auto& instance = mesh_graph_descriptor.get_instance(instance_ids[0]);
-
-    const proto::TorusTopology* device_topology = nullptr;
-    const proto::MeshTopology* host_topology = nullptr;
-    if (instance.kind == NodeKind::Mesh) {
-        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
-        if (mesh_desc != nullptr) {
-            device_topology = &mesh_desc->device_topology();
-            host_topology = &mesh_desc->host_topology();
-        }
-    } else if (instance.kind == NodeKind::Switch) {
-        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
-        if (switch_desc != nullptr) {
-            device_topology = &switch_desc->device_topology();
-        }
-    }
-    if (device_topology == nullptr || device_topology->dims().empty()) {
+    const auto declared = mesh_graph_descriptor.get_declared_topology(instance_ids[0]);
+    if (declared.dims.empty()) {
         return std::nullopt;
     }
 
     MgdDeviceTopology topo;
-    topo.dims.assign(device_topology->dims().begin(), device_topology->dims().end());
-    if (host_topology != nullptr && !host_topology->dims().empty()) {
-        topo.host_dims.assign(host_topology->dims().begin(), host_topology->dims().end());
-    }
-    topo.ring_dims.reserve(device_topology->dim_types_size());
-    for (int i = 0; i < device_topology->dim_types_size(); ++i) {
-        const bool declared_ring = device_topology->dim_types(i) == proto::TorusTopology::RING;
-        const int32_t dim_size = i < device_topology->dims_size() ? device_topology->dims(i) : 0;
+    topo.dims = declared.dims;
+    topo.host_dims = declared.host_dims;
+    topo.ring_dims.reserve(declared.ring_dims.size());
+    for (std::size_t i = 0; i < declared.ring_dims.size(); ++i) {
+        const int32_t dim_size = i < declared.dims.size() ? declared.dims[i] : 0;
         // RING on a dim of 2 or less is a no-op (same edges as LINE). Drop it so matching does not
         // look for a TORUS variant in that direction.
         topo.ring_dims.push_back(
-            declared_ring && dim_size > 0 && tt::tt_fabric::is_genuine_torus_dim(static_cast<uint32_t>(dim_size)));
+            declared.ring_dims[i] && dim_size > 0 &&
+            tt::tt_fabric::is_genuine_torus_dim(static_cast<uint32_t>(dim_size)));
     }
     return topo;
 }
@@ -286,12 +268,9 @@ AdjacencyGraph<GroupingChipId> build_mgd_mesh_instance_adjacency(
     const auto& mesh_instance = mesh_graph_descriptor.get_instance(mesh_instance_id);
     TT_FATAL(mesh_instance.kind == NodeKind::Mesh, "build_mgd_mesh_instance_adjacency called on non-mesh instance");
 
-    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
-    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null");
-
-    // Get device topology dimensions (represents ASIC-level layout)
-    const auto& device_topology = mesh_desc->device_topology();
-    std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+    // Device topology dimensions represent the ASIC-level layout
+    const auto declared = mesh_graph_descriptor.get_declared_topology(mesh_instance);
+    const std::vector<int32_t>& device_dims = declared.dims;
 
     if (device_dims.empty()) {
         // No device topology - return empty graph
@@ -315,12 +294,7 @@ AdjacencyGraph<GroupingChipId> build_mgd_mesh_instance_adjacency(
     // edges is what restricts the match to the correct PGD topology variant: a RING/RING MGD is a torus, so
     // only the TORUSXY variant contains all its wrap edges and matches, while MESH/TORUSX/TORUSY (missing
     // some wraps) correctly fail to match. (A LINE-only graph here would embed in every variant.)
-    std::vector<bool> ring_dims;
-    ring_dims.reserve(device_topology.dim_types_size());
-    for (int i = 0; i < device_topology.dim_types_size(); ++i) {
-        ring_dims.push_back(device_topology.dim_types(i) == proto::TorusTopology::RING);
-    }
-    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1, ring_dims);
+    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1, declared.ring_dims);
 }
 
 // Helper function to build adjacency graph from MGD switch instance
@@ -331,12 +305,8 @@ AdjacencyGraph<GroupingChipId> build_mgd_switch_instance_adjacency(
     TT_FATAL(
         switch_instance.kind == NodeKind::Switch, "build_mgd_switch_instance_adjacency called on non-switch instance");
 
-    const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(switch_instance.desc);
-    TT_FATAL(switch_desc != nullptr, "Switch descriptor is null");
-
-    // Get device topology dimensions (represents ASIC-level layout)
-    const auto& device_topology = switch_desc->device_topology();
-    std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+    // Device topology dimensions represent the ASIC-level layout
+    const std::vector<int32_t> device_dims = mesh_graph_descriptor.get_declared_topology(switch_instance).dims;
 
     if (device_dims.empty()) {
         // No device topology - return empty graph
@@ -538,10 +508,7 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         uint32_t asic_count = required_asics_map.at(mesh_type).at(mesh_name);
 
         // Get device topology dimensions for corner orientation assignment
-        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
-        TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null");
-        const auto& device_topology = mesh_desc->device_topology();
-        std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+        const std::vector<int32_t> device_dims = mesh_graph_descriptor.get_declared_topology(mesh_instance).dims;
 
         // Create GroupingInfo
         GroupingInfo grouping_info;
@@ -587,10 +554,7 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         uint32_t asic_count = required_asics_map.at("MESH").at(switch_name);
 
         // Get device topology dimensions for corner orientation assignment
-        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(switch_instance.desc);
-        TT_FATAL(switch_desc != nullptr, "Switch descriptor is null");
-        const auto& device_topology = switch_desc->device_topology();
-        std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+        const std::vector<int32_t> device_dims = mesh_graph_descriptor.get_declared_topology(switch_instance).dims;
 
         // Create GroupingInfo
         GroupingInfo grouping_info;
@@ -881,7 +845,23 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
 }
 
 // Compose PGD grouping-node -> host partition index from an MGD<->PGD topology match and the matched MGD
-// host_topology. Empty when the MGD is single-host. Called at PGD<->MGD commit time in get_valid_groupings_for_mgd.
+// host_topology. Empty only when the MGD declared no host topology at all, so an empty result means "nothing
+// was declared" rather than "one host". Called at PGD<->MGD commit time in get_valid_groupings_for_mgd.
+//
+// TODO: the host split's direction is unconstrained. This row-major-splits the MGD's own chip indices and stamps
+// the result onto whichever PGD nodes the isomorphism picked, so the axis the split lands on is whatever
+// orientation that match happened to choose -- the MGD host axis is never tied to the PGD's host structure. One
+// declared host group can therefore end up half on one physical host and half on another (measured on the gemma
+// 4x4 with host_topology [2,1]: an 8-chip group whose best single 8-ASIC PSD host could seat only 4 of its 8
+// members, with every member trait-bound). That fails configure_pgd_psd_host_alignment_constraints, and because
+// footprint discovery and the rank-bound path can settle on different matches out of the same candidate set, the
+// two can disagree about the same descriptor.
+//
+// Fix: give the PGD a first-class host level and match against it. The galaxy PGDs already define a
+// `galaxy_hosts` grouping, but the split MESH groupings are composed straight from HALFTRAY refs and never
+// reference it, and physical_grouping_descriptor.proto has no host semantics (only nS / MESH presets plus
+// free-form custom types). Once the PGD carries hosts, constrain the MGD<->PGD match so the MGD's host partition
+// maps onto the PGD's host partition, instead of applying the split after the match is already chosen.
 std::map<LogicalChipId, uint32_t> compose_mesh_node_to_host_group_from_mgd_match(
     const std::optional<MgdDeviceTopology>& mgd_topo,
     const std::map<LogicalChipId, GroupingChipId>& mgd_node_to_grouping_node) {
@@ -890,14 +870,9 @@ std::map<LogicalChipId, uint32_t> compose_mesh_node_to_host_group_from_mgd_match
         return node_to_host_group;
     }
 
-    int64_t host_count = 1;
-    for (int32_t dim : mgd_topo->host_dims) {
-        host_count *= dim;
-    }
-    if (host_count <= 1) {
-        return node_to_host_group;
-    }
-
+    // host_topology [1,1] is not "no opinion": it declares one rank owning the whole mesh, which is as binding
+    // as any other split and is left in so the caller enforces it. host_partition_index_for_row_major_chip puts
+    // every chip in partition 0 for it, giving a single group that must land inside a single host.
     for (const auto& [mgd_node, grouping_node] : mgd_node_to_grouping_node) {
         node_to_host_group.emplace(
             grouping_node,
@@ -996,8 +971,24 @@ std::set<LogicalChipId> collect_pgd_asic_targets(const GroupingInfo& grouping_in
     return all_targets;
 }
 
-// When GroupingInfo carries a host split, require each PGD host group to map to a distinct PSD host partition.
-// Single-host groupings only get a soft same-host preference so cross-host torus embeddings remain possible.
+// Align the MGD's declared host_topology with the PSD's host partitions.
+//
+// The contract is asymmetric: the physical host boundaries constrain the logical ones, never the reverse. Each
+// mesh host rank the MGD declares must land inside a single PSD host, because a rank is one process on one host
+// and cannot own chips on two. The logical side may subdivide further -- several mesh host ranks sharing one
+// physical host is fine -- which is why this is a same-host requirement per declared group rather than a demand
+// for one distinct host per group.
+//
+// A host_topology of [1,1] is one declared rank covering the whole mesh, so it goes through the same path and
+// is held to the same rule: the mesh must fit inside one host. A torus that can only close through inter-host
+// links does not earn an exception here -- it has to declare the hosts it spans.
+//
+// The soft same-host preference is left for groupings that reach this with no declared host topology at all,
+// where there is no contract to enforce and one host is merely the better tie-break.
+//
+// A rejection here is usually not a too-small host: see the TODO on
+// compose_mesh_node_to_host_group_from_mgd_match, which stamps the declared split onto the match in an arbitrary
+// orientation, so a group can straddle two hosts that are each large enough to hold it whole.
 bool configure_pgd_psd_host_alignment_constraints(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -1011,8 +1002,27 @@ bool configure_pgd_psd_host_alignment_constraints(
     const std::vector<std::set<AsicID>> global_groups =
         collect_psd_host_groups(physical_graph, physical_system_descriptor);
     if (global_groups.size() <= 1) {
+        log_debug(
+            tt::LogFabric,
+            "DIAG host alignment '{}': {} target(s), PSD exposes {} host partition(s) -> no host constraint applied",
+            grouping_info.name,
+            all_targets.size(),
+            global_groups.size());
         return true;
     }
+
+    // Bias `targets` toward the fewest host partitions that can cover them. Preferences never make the solve
+    // infeasible, so this only breaks ties the hard constraints leave open.
+    const auto prefer_minimal_host_cover = [&](const std::set<LogicalChipId>& targets) {
+        const auto [fits_one_host, preferred_globals] =
+            ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(targets, global_groups);
+        if (!preferred_globals.empty()) {
+            for (const LogicalChipId& target : targets) {
+                constraints.add_preferred_constraint(target, preferred_globals);
+            }
+        }
+        return fits_one_host;
+    };
 
     if (!grouping_info.mesh_node_to_host_group.empty()) {
         std::map<uint32_t, std::set<LogicalChipId>> targets_by_group;
@@ -1028,53 +1038,103 @@ bool configure_pgd_psd_host_alignment_constraints(
             }
             targets_by_group[group_it->second].insert(node_id);
         }
-        if (targets_by_group.size() < 2) {
-            log_debug(
-                tt::LogFabric,
-                "PGD host split '{}' resolved to a single host group; skipping strict partition",
-                grouping_info.name);
-            return true;
-        }
-
         std::vector<std::set<LogicalChipId>> target_groups;
         target_groups.reserve(targets_by_group.size());
-        for (auto& [_, nodes] : targets_by_group) {
-            target_groups.push_back(std::move(nodes));
+        std::vector<std::size_t> group_sizes;
+        group_sizes.reserve(targets_by_group.size());
+        for (auto& [_, group_targets] : targets_by_group) {
+            group_sizes.push_back(group_targets.size());
+            target_groups.push_back(std::move(group_targets));
         }
-        if (target_groups.size() > global_groups.size()) {
+
+        // Hard, and only in this direction: no PSD host boundary may cut through a declared mesh host rank. Each
+        // target group must therefore be carvable inside one PSD host. Groups are free to share a host, so a
+        // host_topology finer than the physical hosts stays legal; what is rejected is a single declared rank
+        // whose chips would have to come from two different hosts.
+        if (!constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
+            std::map<std::size_t, std::size_t> global_size_histogram;
+            for (const auto& asics : global_groups) {
+                ++global_size_histogram[asics.size()];
+            }
+            std::vector<std::string> global_size_text;
+            global_size_text.reserve(global_size_histogram.size());
+            for (const auto& [asic_count, host_count] : global_size_histogram) {
+                global_size_text.push_back(fmt::format("{}x{}chips", host_count, asic_count));
+            }
             log_debug(
                 tt::LogFabric,
-                "PGD host split '{}' needs {} host partitions but PSD exposes {}",
+                "PGD host split '{}' REJECTED: no PSD host can hold one of the {} declared host group(s) sized "
+                "[{}]; PSD exposes {} host partition(s) [{}]",
                 grouping_info.name,
                 target_groups.size(),
-                global_groups.size());
+                fmt::join(group_sizes, ","),
+                global_groups.size(),
+                fmt::join(global_size_text, ","));
+            // DIAG: distinguish "no host is big enough" from "traits already pinned the group across hosts".
+            const auto& forbidden_pairs = constraints.get_forbidden_pairs();
+            const auto& valid_mappings = constraints.get_valid_mappings();
+            for (std::size_t group_index = 0; group_index < target_groups.size(); ++group_index) {
+                const std::set<LogicalChipId>& group = target_groups[group_index];
+                std::size_t unconstrained_members = 0;
+                for (const LogicalChipId& target : group) {
+                    unconstrained_members += valid_mappings.contains(target) ? 0 : 1;
+                }
+                std::size_t best_covered = 0;
+                std::size_t best_host_asics = 0;
+                for (const auto& partition : global_groups) {
+                    std::size_t covered = 0;
+                    for (const LogicalChipId& target : group) {
+                        for (const AsicID& asic_id : partition) {
+                            if (forbidden_pairs.contains({target, asic_id})) {
+                                continue;
+                            }
+                            if (!valid_mappings.contains(target) || constraints.is_valid_mapping(target, asic_id)) {
+                                ++covered;
+                                break;
+                            }
+                        }
+                    }
+                    if (covered > best_covered) {
+                        best_covered = covered;
+                        best_host_asics = partition.size();
+                    }
+                }
+                log_debug(
+                    tt::LogFabric,
+                    "DIAG host split '{}' group {}: {} chip(s) ({} unconstrained); best single PSD host covers "
+                    "{}/{} member(s) and has {} asic(s)",
+                    grouping_info.name,
+                    group_index,
+                    group.size(),
+                    unconstrained_members,
+                    best_covered,
+                    group.size(),
+                    best_host_asics);
+            }
             return false;
         }
-        if (!constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
-            log_debug(
-                tt::LogFabric,
-                "PGD host split '{}' could not register required host-partition constraints",
-                grouping_info.name);
-            return false;
-        }
+        // Cap the hosts used at the number of declared groups: the split may collapse onto fewer hosts, never
+        // spread onto more than it declared.
         constraints.set_max_same_rank_groups_used(target_groups.size());
+        log_debug(
+            tt::LogFabric,
+            "PGD host split '{}' ACCEPTED: {} declared host group(s) sized [{}] each required onto a single one of "
+            "{} PSD host partition(s)",
+            grouping_info.name,
+            target_groups.size(),
+            fmt::join(group_sizes, ","),
+            global_groups.size());
         return true;
     }
 
-    const auto [single_group_fits, preferred_globals] =
-        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(all_targets, global_groups);
-    if (!preferred_globals.empty()) {
-        if (!single_group_fits) {
-            log_debug(
-                tt::LogFabric,
-                "PGD host alignment: target count {} exceeds largest single partition; preferring minimal host cover "
-                "({} preferred globals)",
-                all_targets.size(),
-                preferred_globals.size());
-        }
-        for (const LogicalChipId& target : all_targets) {
-            constraints.add_preferred_constraint(target, preferred_globals);
-        }
+    if (!prefer_minimal_host_cover(all_targets)) {
+        log_debug(
+            tt::LogFabric,
+            "PGD host alignment '{}': target count {} exceeds largest single PSD partition; preferring minimal host "
+            "cover across {} partition(s)",
+            grouping_info.name,
+            all_targets.size(),
+            global_groups.size());
     }
     return true;
 }
@@ -1226,6 +1286,10 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
         // first next() and must not see them change afterward.
         if (!add_pgd_to_psd_constraints(
                 grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr)) {
+            log_debug(
+                tt::LogFabric,
+                "DIAG enumerate '{}': CONSTRAINT-ENCODE-FAILED (trait or host alignment)",
+                grouping_info.name);
             state.exhausted = true;
             return {};
         }
@@ -1249,6 +1313,18 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
             unique_shapes);
         ++state.solves;
         if (!mapping.success) {
+            if (i == 0) {
+                log_debug(
+                    tt::LogFabric,
+                    "DIAG enumerate '{}': NO-EMBEDDING ({} target node(s) on {} asic(s), validation_mode={}, "
+                    "unique_shapes={}): {}",
+                    grouping_info.name,
+                    grouping_info.adjacency_graph.get_nodes().size(),
+                    physical_graph.get_nodes().size(),
+                    static_cast<int>(validation_mode),
+                    unique_shapes,
+                    mapping.error_message);
+            }
             state.exhausted = true;
             break;
         }
@@ -1346,14 +1422,16 @@ std::string PlacementSolveStats::to_string() const {
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings) const {
-    return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor, pinnings);
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
+    bool require_placement) const {
+    return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor, pinnings, require_placement);
 }
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
-    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings) const {
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
+    bool require_placement) const {
     ValidGroupingsMap result;
 
     std::optional<AdjacencyGraph<tt::tt_metal::AsicID>> psd_physical_graph;
@@ -1361,6 +1439,22 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         psd_physical_graph.emplace(
             tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(*physical_system_descriptor));
     }
+
+    // TODO: validate this PGD's own host level against the PSD's hosts here, before any matching runs. A
+    // PGD describes a machine, so if it declares hosts that machine does not have, every answer built on
+    // it is built on a false picture and the descriptor should be refused rather than quietly used.
+    //
+    // The check: flatten each declared HOSTS grouping to the set of chips it holds, and require that for
+    // at least one of this PGD's variants every flattened host lands inside a single PSD host. One
+    // matching variant is enough -- a PGD legitimately offers several orientations and only has to have
+    // one that fits the machine it was handed -- but if no variant does, throw. Covered by
+    // PhysicalGroupingDescriptorTests.GetValidGroupingsForMGD_PgdHostsThatContradictThePsdAreRejected,
+    // which is a FIXME until this lands.
+    //
+    // This is the PGD<->PSD half of the host contract. The MGD<->PGD half is still missing too: see the
+    // TODO on compose_mesh_node_to_host_group_from_mgd_match, where the MGD's declared split is stamped
+    // onto whichever orientation the isomorphism returned instead of being matched against these hosts.
+    // Both halves want the same thing -- a PGD host level the matcher actually reads.
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
@@ -1675,12 +1769,22 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 committed.push_back(std::move(mgd_fallback));
             }
         }
-        TT_FATAL(
-            !committed.empty(),
-            "Physical groupings: Mesh graph descriptor '{}': no PGD grouping and no MGD grouping "
-            "could be placed on the PSD ({} topology match(es))",
-            mgd_grouping_info.name,
-            last_topology_match_count);
+        // Callers that only want preferred pinnings on an already rank-bound graph pass require_placement=false:
+        // for them an unplaceable mesh is a missing hint, not a broken system, and they degrade to no pinning.
+        if (committed.empty()) {
+            TT_FATAL(
+                !require_placement,
+                "Physical groupings: Mesh graph descriptor '{}': no PGD grouping and no MGD grouping "
+                "could be placed on the PSD ({} topology match(es))",
+                mgd_grouping_info.name,
+                last_topology_match_count);
+            log_warning(
+                tt::LogFabric,
+                "Physical groupings: Mesh graph descriptor '{}': no PGD grouping and no MGD grouping could be "
+                "placed on the PSD ({} topology match(es)); continuing without pinning hints for this mesh",
+                mgd_grouping_info.name,
+                last_topology_match_count);
+        }
     }
 
     // =============================================================================

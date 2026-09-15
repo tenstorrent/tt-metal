@@ -118,6 +118,17 @@ struct AsicPinningGroup {
 // on the generated proto enum (which is only forward-declared in this header).
 enum class InterMeshChannelPolicy : uint8_t { Strict, Relaxed };
 
+// The grid a mesh or switch descriptor declares, with the proto enums already resolved, so that
+// consumers reading a descriptor's shape do not have to take a dependency on the generated proto.
+struct DeclaredTopology {
+    std::vector<int32_t> dims;       // device_topology dims; empty when the descriptor declares none
+    std::vector<int32_t> host_dims;  // host_topology dims; empty when the descriptor declares none
+    // Per device dim, whether it was declared RING rather than LINE. Reported as written: a RING on an
+    // axis too short to make a distinct wrap edge is still a RING here, and it is the reader's call
+    // whether that matters to it.
+    std::vector<bool> ring_dims;
+};
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
@@ -223,6 +234,11 @@ public:
     // Inter-mesh channel policy from the first FABRIC connection, or top-level graph topology when there are
     // none. Defaults to STRICT when the descriptor states none (mirrors MeshGraph::is_inter_mesh_policy_relaxed).
     bool is_inter_mesh_policy_relaxed() const;
+
+    // The device and host grid an instance's descriptor declares. Graph instances, and descriptors with
+    // no device_topology, come back with empty dims. Switches declare no host topology.
+    DeclaredTopology get_declared_topology(GlobalNodeId instance_id) const;
+    DeclaredTopology get_declared_topology(const InstanceData& instance) const;
 
     // Calculate chip count from device_topology dimensions for a mesh instance
     // Returns the product of all dimensions in device_topology.dims()
