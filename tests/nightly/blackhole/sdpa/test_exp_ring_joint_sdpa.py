@@ -718,6 +718,8 @@ def test_sol_ring_determinism(b, nh, total_seq, d, q_chunk_size, k_chunk_size, d
 
 
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("max_payload_size", [8192], ids=["8k"])
+@pytest.mark.parametrize("test_global_mask", [False], ids=["aligned"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS[:1], ids=TEST_CONFIG_IDS[:1])
 def test_sol_ring_keep_every_one_is_dense(
