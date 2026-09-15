@@ -153,9 +153,8 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
  * Please also note that quiescent does not mean "at section 0". A balanced loop with an odd iteration
  * count exits with both trackers on section 1, which is a valid entry state for the next loop.
  *
- * In a kernel that uses only the tile_regs_* API calls and keeps its commits and releases balanced,
- * the handshake can still breaks due to an compute-API operation, run between handshake loops, whose uninit
- * has left the packer configured inconsistently with the handshake.
+ * This function can be used as a in-kernel workaround for an compute-API operation that leaks state
+ * that is not quiescence.
  * This function re-establishes the canonical quiescent state in precisely this case: it drains any outstanding
  * packs, re-seeds MATH_PACK, and returns both trackers to section 0 with `ocb` as the packer's destination.
  * To restore the pack MOP one needs to also add the llk_pack_init<PackMode::Default>.
