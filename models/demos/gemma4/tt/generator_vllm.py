@@ -2149,7 +2149,15 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # there), so the adaptive scheduler must reserve width-1 for it even on
         # solo decode steps. Declaring the SAME value here keeps the scheduler's
         # reservation and the model's emission in lockstep with no sentinel.
-        "tt_adaptive_block_max_prompt_tokens": int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0")),
+        # Only meaningful while the ADAPTIVE block path is live. With
+        # GEMMA4_DFLASH_SERVE_BLOCK=1 (block output OFF -- the documented
+        # throughput operating point) tt_adaptive_block_output is False, and
+        # declaring a prompt frontier without it is rejected at config time:
+        # "tt_adaptive_block_max_prompt_tokens requires tt_adaptive_block_output".
+        # That made the documented throughput config fail to boot.
+        "tt_adaptive_block_max_prompt_tokens": (
+            int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0")) if _SPEC_BLOCK > 1 else 0
+        ),
     }
 
     # -- plugin speculative contract (vllm-tt-plugin#110 s.2) -----------------
