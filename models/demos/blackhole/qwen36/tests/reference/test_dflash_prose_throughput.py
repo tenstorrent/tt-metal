@@ -121,7 +121,31 @@ def test_prose_vs_benchmark_prompt(mesh_device, device_params, reset_seeds, ensu
     # arm for COMPARISON, which happens to compile everything first. Nothing documents or enforces
     # it. This warm-up is deliberate, and it is also the timing warm-up (charging compilation to a
     # measured run is the bias that made an A/B in this work read 0.85x when the truth was 1.00x).
-    dflash_generate(drafter, target, bench, max_new_tokens=8)
+    #
+    # AND "AT LEAST ONE EAGER GENERATION" IS NOT ENOUGH -- IT MUST COVER THE SHAPES THE MEASURED
+    # RUNS WILL USE. The rule above is necessary and was still insufficient: a warm-up compiles only
+    # the programs ITS OWN shapes touch. Any shape first met AFTER the capture compiles with a trace
+    # parked, which is the same hang the rule exists to prevent.
+    #
+    # This file hung on exactly that, twice, deterministically and byte-identically (2026-09-15,
+    # T3K). The old warm-up was `bench, max_new_tokens=8`; the measured prose run is a 64-token
+    # prompt with NEW_TOKENS=48, so max_length is 112 and its FINAL step has
+    # `verify_size = min(16, 112 - 110) = 2`. A 2-wide block is a drafter shape the 8-token warm-up
+    # never produces. py-spy pinned every hang at the same state -- drafter.py:585 `_kv_heads`,
+    # layer_idx=4, start=110, hist_len=109, new_ctx=1, q_len=2, kv_seq=3 -- and gdb put the native
+    # stack in `SystemMemoryManager::fetch_queue_reserve_back`, spinning on a dispatch fetch queue
+    # that never drains: the host stuck PUSHING, the device having stopped consuming.
+    #
+    # That the shape itself is fine is measured separately: test_drafter_block_width.py runs the
+    # drafter standalone at widths 16/8/4/3/2/1 and reproduces this exact state (109 rows of
+    # history, new_ctx=1, q_len=2) in 0.20 s. What it does not have is a parked trace -- and it pays
+    # ~3.3 s the first time it sees each new width, which is the compile that hangs here.
+    #
+    # So warm with the REAL prompts at the REAL budget. Each measured configuration is generated
+    # once eagerly, which compiles every program it needs -- narrow tail included -- before anything
+    # is captured.
+    for warm_prompt in (bench, prose):
+        dflash_generate(drafter, target, warm_prompt, max_new_tokens=NEW_TOKENS)
     target.enable_traced_verify()
     dflash_generate(drafter, target, bench, max_new_tokens=8)
 
