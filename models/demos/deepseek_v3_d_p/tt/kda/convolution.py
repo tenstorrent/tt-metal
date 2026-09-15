@@ -18,8 +18,12 @@ def exchange_convolution_carry(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
-    Both outputs have shape ``[B, history, Q_local + K_local + V_local]`` in
-    row-major DRAM. ``partition_carry`` differs by SP rank: the chronologically
+    ``partition_carry`` is BF16 row-major DRAM with shape
+    ``[B, 3, Q_local + K_local + V_local]`` for ordinary input and
+    ``[B, 6, Q_local + K_local + V_local]`` for split input. In split mode,
+    plane zero (rows 0:3) seeds the physical head and plane one (rows 3:6)
+    seeds the physical tail on the boundary rank. ``final_carry`` always
+    contains three history rows. ``partition_carry`` differs by SP rank: the chronologically
     first chip receives ``initial_carry`` and every other chip receives its
     chronological predecessor's tail. ``final_carry`` is the global stream tail
     replicated across SP. Channels remain sharded across TP.
