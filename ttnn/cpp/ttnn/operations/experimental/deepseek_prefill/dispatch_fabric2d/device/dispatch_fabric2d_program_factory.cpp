@@ -57,23 +57,20 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // The reader's L1 working set: its copy of the control tensors, the 64-byte-padded indices, and the
 // routing index it builds from them. Sized for the worst case, which is every token routed to experts
 // this chip actually sends.
-uint32_t control_region_bytes(const DispatchFabric2dParams& args, uint32_t extent) {
-    const uint32_t w = args.num_routed_experts;
-    const uint32_t pad_stride =
-        dspf2d::META_PAD_STRIDE *
-        ((args.num_experts_per_tok * 2 + dspf2d::META_PAD_STRIDE - 1) / dspf2d::META_PAD_STRIDE);
-    const uint32_t words =
-        (extent + 2) * w                      // expert_offsets rows, counts, region offsets
-        + (w + 1)                             // dispatch table, with its trailing sentinel column
-        + w                                   // the running per-expert allocator
-        + 3 * extent * args.experts_per_chip  // chip -> experts inverse, bucket lengths, bucket starts
-        + args.seq_len_per_chip *
-              dspf2d::routing_index_words_per_token(args.num_experts_per_tok)  // routing index, either mode
-        + 4                                                                    // fanout metadata scratch
-        + 2                                                                    // fanout per-direction cursors
-        + extent * 2 * (extent / 2 + 2)                                        // fanout reach table
-        + 2 * relay_chunks_per_stream(extent) * args.experts_per_chip;         // chunk start offsets
-    return args.seq_len_per_chip * pad_stride + words * static_cast<uint32_t>(sizeof(uint32_t));
+//
+// The block sizes live in the kernel interface, because the kernel's carve reads the same list. This
+// used to be an independent sum here, and twice it fell behind the carve -- overrunning the control
+// region into the global semaphores, with a green build both times.
+dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uint32_t extent) {
+    return dspf2d::ControlGeometry{
+        .seq_len = args.seq_len_per_chip,
+        .indices_pad_stride = dspf2d::META_PAD_STRIDE *
+                              ((args.num_experts_per_tok * 2 + dspf2d::META_PAD_STRIDE - 1) / dspf2d::META_PAD_STRIDE),
+        .extent = extent,
+        .num_routed_experts = args.num_routed_experts,
+        .experts_per_chip = args.experts_per_chip,
+        .topk = args.num_experts_per_tok,
+        .num_relay = relay_chunks_per_stream(extent)};
 }
 
 L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t token_bytes, uint32_t control_bytes, uint32_t sem_floor) {
@@ -142,8 +139,13 @@ struct ForwardingBuffer {
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const DispatchFabric2dParams& args, uint32_t token_bytes, uint32_t extent) {
     ForwardingBuffer fwd;
-    fwd.pages_per_stream = fwd_pages_per_stream(
-        extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
+    // Fan-out puts one page per token per direction through the region rather than one per (token,
+    // expert) pair per destination, so its bound is a different expression, not a scaling of the other.
+    fwd.pages_per_stream =
+        args.fanout
+            ? mc_fwd_pages_per_stream(extent, args.num_links, args.seq_len_per_chip)
+            : fwd_pages_per_stream(
+                  extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
     const uint32_t page_bytes = token_bytes + dspf2d::FORWARDING_METADATA_SIZE;
     TT_FATAL(
         page_bytes % 64 == 0, "dispatch_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
@@ -186,7 +188,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     const auto placement = decide_placement(mesh, args.axis, args.num_links);
     const auto sems = allocate_ring_semaphores(mesh);
     const auto fwd = allocate_forwarding_buffer(mesh, args, token_bytes, extent);
-    const L1Layout l1 = compute_l1_layout(mesh, token_bytes, control_region_bytes(args, extent), sems.lowest_address());
+    const L1Layout l1 = compute_l1_layout(
+        mesh, token_bytes, dspf2d::control_region_bytes(control_geometry(args, extent)), sems.lowest_address());
 
     tt::tt_metal::Buffer* dram[dspf2d::ReaderRtArg::kCount] = {};
     dram[dspf2d::ReaderRtArg::kInputAddr] = tensor_args.input_tensor.buffer();
