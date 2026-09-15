@@ -8,8 +8,8 @@
 
 Orchestrates: tt-smi snapshot validation, direct FW-telemetry-table reads,
 reset stability loop, tt-metal deployment-test gtest invocation, the kmd_triage
-first-step tools, and — where the host has the package — a cluster-debug ETH
-dump. Emits a single JSON pass/fail report.
+first-step tools, and — where the host has the package — the QSFP tests.
+ Emits a single JSON pass/fail report.
 
 Run via run_diag.sh which sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH.
 """
@@ -272,7 +272,7 @@ TRIAGE_SUBDIR = "tools/scaleout/kmd_triage"
 TRIAGE_DIR_ENV = "HC_TRIAGE_DIR"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cluster debug — the syseng ETH dump, when the host has it
+# QSFP tests — the syseng ETH dump, when the host has it
 # ─────────────────────────────────────────────────────────────────────────────
 
 # `tt-bh-glx-cluster-debug` ships as a .deb built with PyInstaller, so it is one
@@ -281,25 +281,25 @@ TRIAGE_DIR_ENV = "HC_TRIAGE_DIR"
 # triage phase probes for its scripts. A host that has not had the package
 # installed simply does not have it, and that is a SKIP: an optional tool is
 # lost coverage when it is absent, never a failure.
-CLUSTER_DEBUG_BIN = "tt-bh-glx-cluster-debug"
+QSFP_TOOL_BIN = "tt-bh-glx-cluster-debug"
 
 # `collect` reads one galaxy into a JSONL snapshot: per-ASIC telemetry, the
 # per-port ERISC blobs for all 448 ETH ports, and the QSFP cages over I2C.
 # --parallelize reads the four UBBs' cages at once, about twice as fast, and the
 # cage sweep is where most of a run's time goes.
-CLUSTER_DEBUG_COLLECT_ARGS = ["collect", "--parallelize"]
+QSFP_COLLECT_ARGS = ["collect", "--parallelize"]
 
 # A backstop, not the expected duration: the cage sweep self-bounds at the
 # tool's own 600 s --qsfp-budget and a full run measures ~7 min. It has to stay
 # well inside run_health_check.py's whole-run --timeout-minutes (30 by default),
 # because that one kills the process group and takes the report with it, while
 # overrunning this one only costs this phase.
-CLUSTER_DEBUG_TIMEOUT_S = 1200
+QSFP_TIMEOUT_S = 1200
 
 # Tiers that collect a dump. Same shape as TIER_TRIAGE and for the same reason:
 # light is a ~75 s smoke check and a minutes-long ETH sweep does not belong in
 # it. medium and deploy already pay for the triage phase in the same slot.
-TIER_CLUSTER_DEBUG = {
+TIER_QSFP_TESTS = {
     "light": False,
     "medium": True,
     "deploy": True,
@@ -308,7 +308,7 @@ TIER_CLUSTER_DEBUG = {
 # Where the conversion from the dump's records to checks lives. Kept out of this
 # file because it is pure data shaping with no hardware in it: a stored dump is
 # all it needs, so it can be iterated on and tested at a desk.
-CLUSTER_DEBUG_INGEST_MODULE = "cluster_debug_ingest"
+QSFP_INGEST_MODULE = "qsfp_ingest"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Result model
@@ -1731,7 +1731,7 @@ def normalize_external_check(payload: dict, gating: bool, prefix: str, gating_fl
     """Turn one entry of an external tool's JSON into a Check, defensively.
 
     Shared by every phase that ingests findings produced outside this file — the
-    triage scripts and the cluster-debug dump — because they write one shape
+    triage scripts and the QSFP tests' dump — because they write one shape
     (see ``kmd_triage/triage_json.sh``) and the defences below are properties of
     ingesting *any* of it, not of either producer.
 
@@ -1943,11 +1943,11 @@ def _as_text(v) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 6 — cluster debug ETH dump
+# Phase 6 — QSFP tests (ETH link, cabling and module state)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def import_cluster_debug_ingest():
+def import_qsfp_ingest():
     """The sibling ingest module, or None if it didn't ship with this copy.
 
     Imported here rather than at module scope because a missing ingest module is
@@ -1959,20 +1959,20 @@ def import_cluster_debug_ingest():
     the suite directory on the path.
     """
     try:
-        return importlib.import_module(CLUSTER_DEBUG_INGEST_MODULE)
+        return importlib.import_module(QSFP_INGEST_MODULE)
     except ImportError:
         pass
     here = str(Path(__file__).resolve().parent)
     if here not in sys.path:
         sys.path.append(here)
     try:
-        return importlib.import_module(CLUSTER_DEBUG_INGEST_MODULE)
+        return importlib.import_module(QSFP_INGEST_MODULE)
     except ImportError:
         return None
 
 
-def resolve_cluster_debug(override: str | None) -> tuple[str | None, str]:
-    """The cluster-debug binary, or None plus the reason this phase can't run.
+def resolve_qsfp_tool(override: str | None) -> tuple[str | None, str]:
+    """The QSFP collector binary, or None plus the reason this phase can't run.
 
     A reason rather than an exception, unlike resolve_tt_smi: the tool is
     optional, so taking a whole diagnostic run down over a package that isn't
@@ -1984,12 +1984,12 @@ def resolve_cluster_debug(override: str | None) -> tuple[str | None, str]:
         candidate = Path(override)
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate), ""
-        return None, f"--cluster-debug-path={override} is not an executable file"
-    found = shutil.which(CLUSTER_DEBUG_BIN)
+        return None, f"--qsfp-tool-path={override} is not an executable file"
+    found = shutil.which(QSFP_TOOL_BIN)
     if found:
         return found, ""
     return None, (
-        f"{CLUSTER_DEBUG_BIN} not on PATH — it ships in the syseng cluster-debug .deb, "
+        f"{QSFP_TOOL_BIN} not on PATH — it ships in the syseng cluster-debug .deb, "
         f"so a host without that package collects no ETH dump"
     )
 
@@ -2000,26 +2000,26 @@ def resolve_cluster_debug(override: str | None) -> tuple[str | None, str]:
 # internal topology table, and the wrong table resolves 24 confident wrong
 # inter-UBB partners per galaxy — which would surface above as miscabling on a
 # correctly cabled machine.
-CLUSTER_DEBUG_REV_EQUIVALENT = {
+QSFP_REV_EQUIVALENT = {
     "RevA/B": "BH_GALAXY_REV_AB",
     "RevC": "BH_GALAXY_REV_C",
 }
 
 # The ingest check this cross-check reads its half of the comparison from, after
 # normalize_external_check has applied the phase prefix.
-CLUSTER_DEBUG_REV_CHECK = "clusterdbg_board_rev"
+QSFP_REV_CHECK = "qsfp_board_rev"
 
 
-def cluster_debug_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: bool) -> Check:
+def qsfp_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: bool) -> Check:
     """Compare the dump's board revision against the snapshot phase's.
 
     The one finding in this phase that this file derives rather than reads out
     of the dump, since only the runner knows both halves. It still goes out
-    through normalize_external_check so it obeys --cluster-debug-gating like
+    through normalize_external_check so it obeys --qsfp-gating like
     every other check here: a phase where one FAIL gates the run and the rest do
     not would be impossible to reason about from the report alone.
     """
-    found = next((c for c in checks if c.name == CLUSTER_DEBUG_REV_CHECK), None)
+    found = next((c for c in checks if c.name == QSFP_REV_CHECK), None)
     dump_rev = (found.data or {}).get("rev") if found else None
     if detected_rev is None or dump_rev is None:
         missing = "the tt-smi snapshot" if detected_rev is None else "the dump"
@@ -2031,7 +2031,7 @@ def cluster_debug_rev_crosscheck(checks: list[Check], detected_rev: str | None, 
             "ip": "board",
         }
     else:
-        expected = CLUSTER_DEBUG_REV_EQUIVALENT.get(detected_rev)
+        expected = QSFP_REV_EQUIVALENT.get(detected_rev)
         agrees = expected == dump_rev
         payload = {
             "name": "board_rev_agrees",
@@ -2046,10 +2046,10 @@ def cluster_debug_rev_crosscheck(checks: list[Check], detected_rev: str | None, 
             "data": {"tt_smi_rev": detected_rev, "dump_rev": dump_rev, "expected_dump_rev": expected},
             "ip": "board",
         }
-    return normalize_external_check(payload, gating, prefix="clusterdbg_", gating_flag="--cluster-debug-gating")
+    return normalize_external_check(payload, gating, prefix="qsfp_", gating_flag="--qsfp-gating")
 
 
-def run_cluster_debug(
+def run_qsfp_tests(
     tier: str,
     phase: Phase,
     dry_run: bool,
@@ -2060,7 +2060,7 @@ def run_cluster_debug(
     reason: str | None = None,
     detected_rev: str | None = None,
 ) -> None:
-    """Collect an ETH dump with the cluster-debug tool and fold its findings in.
+    """Run the QSFP tests: collect an ETH dump and fold its findings in.
 
     The dump answers a question nothing else in this suite reaches: the
     snapshot phase reads ``ETH_LIVE_STATUS`` out of tt-smi telemetry, a bitmask
@@ -2076,34 +2076,34 @@ def run_cluster_debug(
     same reasoning as the triage phase: a check that silently vanishes reads as
     coverage we had. Tooling breakage (timeout, an unreadable dump) is a WARN,
     because it says nothing about the hardware. Findings about the hardware come
-    from the dump, and are held at WARN unless ``--cluster-debug-gating`` was
+    from the dump, and are held at WARN unless ``--qsfp-gating`` was
     passed.
     """
-    if not TIER_CLUSTER_DEBUG.get(tier, False):
+    if not TIER_QSFP_TESTS.get(tier, False):
         phase.add(
             Check(
-                name="clusterdbg_collect",
+                name="qsfp_collect",
                 status=SKIP,
-                details=f"no cluster debug dump for tier '{tier}'",
+                details=f"no QSFP tests for tier '{tier}'",
                 ip="other",
             )
         )
         return
 
-    binary, unavailable = resolve_cluster_debug(binary_override)
+    binary, unavailable = resolve_qsfp_tool(binary_override)
     if binary is None:
-        phase.add(Check(name="clusterdbg_collect", status=SKIP, details=unavailable, ip="other"))
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=unavailable, ip="other"))
         return
 
-    ingest = import_cluster_debug_ingest()
+    ingest = import_qsfp_ingest()
     if ingest is None:
         # Collecting a dump nothing will read would spend minutes of hardware
         # access to produce a file and no findings.
         phase.add(
             Check(
-                name="clusterdbg_collect",
+                name="qsfp_collect",
                 status=SKIP,
-                details=f"{CLUSTER_DEBUG_INGEST_MODULE}.py is not importable beside diag_runner.py",
+                details=f"{QSFP_INGEST_MODULE}.py is not importable beside diag_runner.py",
                 ip="other",
             )
         )
@@ -2117,13 +2117,13 @@ def run_cluster_debug(
     # filename-safe characters because it reaches this path from the system, not
     # from the caller, and a separator in it would write outside logs_dir.
     safe_host = re.sub(r"[^A-Za-z0-9._-]", "_", socket.gethostname()) or "unknown"
-    dump_path = logs_dir / f"cluster_dump_{safe_host}.jsonl"
-    log_path = logs_dir / "cluster_debug.log"
-    text_path = logs_dir / "cluster_debug.txt"
+    dump_path = logs_dir / f"qsfp_dump_{safe_host}.jsonl"
+    log_path = logs_dir / "qsfp.log"
+    text_path = logs_dir / "qsfp.txt"
     # A dump left by an earlier run would be read as this run's ETH state.
     dump_path.unlink(missing_ok=True)
 
-    cmd = [binary, *CLUSTER_DEBUG_COLLECT_ARGS, "--out", str(dump_path)]
+    cmd = [binary, *QSFP_COLLECT_ARGS, "--out", str(dump_path)]
     if descriptor is not None:
         cmd += ["--factory-descriptor-path", str(descriptor)]
     # Free text on the envelope. Recording why a dump exists is what the field
@@ -2131,28 +2131,28 @@ def run_cluster_debug(
     # place.
     cmd += ["--reason", reason or f"tt-metal health check, {tier} tier"]
 
-    log("--- cluster debug 'collect' ---")
+    log("--- qsfp tests: collect ---")
     log(f"  cmd:  {shlex.join(cmd)}")
     log(f"  dump: {dump_path}")
 
     if dry_run:
-        print(f"  {'clusterdbg_collect':30} (dry-run)")
-        phase.add(Check(name="clusterdbg_collect", status=SKIP, details=f"(dry) {shlex.join(cmd)}", ip="other"))
+        print(f"  {'qsfp_collect':30} (dry-run)")
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=f"(dry) {shlex.join(cmd)}", ip="other"))
         return
 
-    _emit_running("clusterdbg_collect")
+    _emit_running("qsfp_collect")
     t0 = time.time()
     timed_out = False
     try:
-        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=CLUSTER_DEBUG_TIMEOUT_S)
+        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=QSFP_TIMEOUT_S)
         rc, out, err = cp.returncode, cp.stdout or "", cp.stderr or ""
     except subprocess.TimeoutExpired as e:
         timed_out, rc = True, 124
         out, err = _as_text(e.stdout), _as_text(e.stderr)
     except OSError as e:
         dt = time.time() - t0
-        _emit_result("clusterdbg_collect", SKIP, suffix=f"({dt:.1f}s)")
-        phase.add(Check(name="clusterdbg_collect", status=SKIP, details=f"could not run {binary}: {e!r}", ip="other"))
+        _emit_result("qsfp_collect", SKIP, suffix=f"({dt:.1f}s)")
+        phase.add(Check(name="qsfp_collect", status=SKIP, details=f"could not run {binary}: {e!r}", ip="other"))
         return
     dt = time.time() - t0
 
@@ -2182,7 +2182,7 @@ def run_cluster_debug(
             records, malformed = ingest.load_dump(dump_path)
             payload = ingest.build_report(records, malformed)
             checks = [
-                normalize_external_check(c, gating, prefix="clusterdbg_", gating_flag="--cluster-debug-gating")
+                normalize_external_check(c, gating, prefix="qsfp_", gating_flag="--qsfp-gating")
                 for c in payload.get("checks", [])
                 if isinstance(c, dict)
             ]
@@ -2201,7 +2201,7 @@ def run_cluster_debug(
 
     if timed_out:
         status = WARN
-        details = f"timed out after {CLUSTER_DEBUG_TIMEOUT_S}s; no findings collected"
+        details = f"timed out after {QSFP_TIMEOUT_S}s; no findings collected"
     elif problem:
         status = WARN
         # Why it produced nothing is the only useful thing left to report, and
@@ -2215,10 +2215,10 @@ def run_cluster_debug(
         details = f"rc={rc} {len(records)} record(s), {len(checks)} check(s)"
     details += f" dur={dt:.1f}s log={log_path}"
 
-    _emit_result("clusterdbg_collect", status, suffix=f"({dt:.1f}s)")
+    _emit_result("qsfp_collect", status, suffix=f"({dt:.1f}s)")
     phase.add(
         Check(
-            name="clusterdbg_collect",
+            name="qsfp_collect",
             status=status,
             details=details,
             data={
@@ -2241,7 +2241,7 @@ def run_cluster_debug(
     for c in checks:
         phase.add(c)
     if checks:
-        phase.add(cluster_debug_rev_crosscheck(checks, detected_rev, gating))
+        phase.add(qsfp_rev_crosscheck(checks, detected_rev, gating))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2283,16 +2283,16 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     ap.add_argument(
-        "--skip-cluster-debug",
+        "--skip-qsfp-tests",
         action="store_true",
-        help="Skip the cluster debug ETH dump entirely.",
+        help="Skip the QSFP tests entirely.",
     )
     ap.add_argument(
-        "--cluster-debug-path",
-        help=f"The {CLUSTER_DEBUG_BIN} binary. Default: whatever is on PATH (the syseng .deb installs it).",
+        "--qsfp-tool-path",
+        help=f"The {QSFP_TOOL_BIN} binary. Default: whatever is on PATH (the syseng .deb installs it).",
     )
     ap.add_argument(
-        "--cluster-debug-descriptor",
+        "--qsfp-descriptor",
         type=Path,
         help=(
             "factory_system_descriptor.textproto, which gives the cage-attached links an expected "
@@ -2301,10 +2301,10 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     ap.add_argument(
-        "--cluster-debug-gating",
+        "--qsfp-gating",
         action="store_true",
         help=(
-            "Let cluster debug FAILs gate the run. Off by default for the same reason as "
+            "Let QSFP test FAILs gate the run. Off by default for the same reason as "
             "--triage-gating: findings are recorded either way, but a tool still bedding in "
             "cannot ticket the fleet."
         ),
@@ -2333,19 +2333,19 @@ def run_diag(
     skip_reset: bool = False,
     skip_tests: bool = False,
     skip_triage: bool = False,
-    skip_cluster_debug: bool = False,
+    skip_qsfp_tests: bool = False,
     input_snapshot: Path | None = None,
     tt_smi_path: str | None = None,
     tt_metal_path: Path | None = None,
     triage_dir: Path | None = None,
     triage_gating: bool = False,
-    cluster_debug_path: str | None = None,
-    cluster_debug_descriptor: Path | None = None,
-    cluster_debug_gating: bool = False,
+    qsfp_tool_path: str | None = None,
+    qsfp_descriptor: Path | None = None,
+    qsfp_gating: bool = False,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → cluster debug).
+    """Run the full pipeline (snapshot → resets → gtests → triage → QSFP tests).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -2558,39 +2558,37 @@ def run_diag(
     report["phases"]["triage"] = asdict(triage_phase)
     print_phase_summary("triage", report["phases"]["triage"])
 
-    # Phase 6: the cluster debug ETH dump, when the host has the package. Last,
+    # Phase 6: the QSFP tests, when the host has the package. Last,
     # and after the post-test reset for the same two reasons the triage phase
     # sits there: it opens every chip, so it must not overlap the tests, and the
     # tool has no SIGBUS handler, so a concurrent reset would kill it outright
     # rather than being reported. Reading the links after that reset is also the
     # reading that matters — it is the state the machine is being left in.
-    cluster_debug_phase = Phase(name="cluster_debug")
+    qsfp_phase = Phase(name="qsfp_tests")
     t0 = time.time()
-    if skip_cluster_debug:
-        cluster_debug_phase.add(
-            Check(name="clusterdbg_collect", status=SKIP, details="--skip-cluster-debug", ip="other")
-        )
+    if skip_qsfp_tests:
+        qsfp_phase.add(Check(name="qsfp_collect", status=SKIP, details="--skip-qsfp-tests", ip="other"))
     else:
         try:
-            run_cluster_debug(
+            run_qsfp_tests(
                 tier,
-                cluster_debug_phase,
+                qsfp_phase,
                 dry_run,
                 logs_dir,
-                cluster_debug_gating,
-                binary_override=cluster_debug_path,
-                descriptor=cluster_debug_descriptor,
+                qsfp_gating,
+                binary_override=qsfp_tool_path,
+                descriptor=qsfp_descriptor,
                 detected_rev=report.get("detected_board_rev"),
             )
         except Exception as e:
             # Same rule as triage: a crash in an optional phase is lost
             # coverage, not a hardware finding, and must not take the run down.
-            cluster_debug_phase.error = repr(e)
-            cluster_debug_phase.add(Check(name="clusterdbg_collect", status=WARN, details=repr(e), ip="other"))
-    cluster_debug_phase.duration_s = time.time() - t0
-    cluster_debug_phase.rollup()
-    report["phases"]["cluster_debug"] = asdict(cluster_debug_phase)
-    print_phase_summary("cluster_debug", report["phases"]["cluster_debug"])
+            qsfp_phase.error = repr(e)
+            qsfp_phase.add(Check(name="qsfp_collect", status=WARN, details=repr(e), ip="other"))
+    qsfp_phase.duration_s = time.time() - t0
+    qsfp_phase.rollup()
+    report["phases"]["qsfp_tests"] = asdict(qsfp_phase)
+    print_phase_summary("qsfp_tests", report["phases"]["qsfp_tests"])
 
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
@@ -2637,15 +2635,15 @@ def main() -> int:
         skip_reset=args.skip_reset,
         skip_tests=args.skip_tests,
         skip_triage=args.skip_triage,
-        skip_cluster_debug=args.skip_cluster_debug,
+        skip_qsfp_tests=args.skip_qsfp_tests,
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,
         tt_metal_path=args.tt_metal_path,
         triage_dir=args.triage_dir,
         triage_gating=args.triage_gating,
-        cluster_debug_path=args.cluster_debug_path,
-        cluster_debug_descriptor=args.cluster_debug_descriptor,
-        cluster_debug_gating=args.cluster_debug_gating,
+        qsfp_tool_path=args.qsfp_tool_path,
+        qsfp_descriptor=args.qsfp_descriptor,
+        qsfp_gating=args.qsfp_gating,
         output=args.output,
         snapshot_out=args.snapshot_out,
     )

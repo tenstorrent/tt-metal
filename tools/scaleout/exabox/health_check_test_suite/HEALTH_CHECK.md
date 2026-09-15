@@ -3,7 +3,7 @@
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
-in the first-step triage tools and a cluster-debug ETH dump. Emits a single JSON
+in the first-step triage tools and the QSFP tests. Emits a single JSON
 report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
@@ -27,7 +27,7 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 
 ## Tiers
 
-| Tier | Resets | Tests | Triage | Cluster debug | Duration | Use when |
+| Tier | Resets | Tests | Triage | QSFP tests | Duration | Use when |
 |---|---|---|---|---|---|---|
 | `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | ~75 s   | Smoke check on every new unit |
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
@@ -156,7 +156,7 @@ for want of a capability rather than a mount:
 Also note `/proc/driver/tenstorrent/<N>/pids` lists *host* PIDs, which don't resolve
 in the container's PID namespace — the holder count is right, the names are not.
 
-## Cluster debug phase
+## QSFP tests phase
 
 `medium` and `deploy` finish by collecting an ETH dump with
 `tt-bh-glx-cluster-debug collect --parallelize`, when that binary is on PATH.
@@ -193,7 +193,7 @@ expects and what the firmware found, side by side, and leaves the comparison to
 the reader — nothing in it says PASS or FAIL, and its JSONL record shape looks
 nothing like this suite's report.
 
-`cluster_debug_ingest.py` is that reader. Each fault class it derives is one of
+`qsfp_ingest.py` is that reader. Each fault class it derives is one of
 the access patterns the dump was shaped to answer (`cluster_debug_spec.md`
 §10.3, declared as SQL in the tool's own `visualizer/queries.py`), re-derived in
 Python over a single dump so the health check needs neither the merge step nor
@@ -203,7 +203,7 @@ the SQLite database. It emits **the same shape the triage scripts emit** —
 defences, and the checks reach the JSON report, the console summary and the
 Superset CSVs with nothing downstream needing to know the phase exists.
 
-That shared normalizer is why names carry a `clusterdbg_` prefix (the analyzer
+That shared normalizer is why names carry a `qsfp_` prefix (the analyzer
 keys `CHECK_CATEGORY`, `EXCLUDED_CHECKS` and `_find_check()` on the bare name
 across *all* phases) and why an unrecognised status or `ip` is folded rather than
 passed through. It also honours an optional `console_visible: false`, which is
@@ -214,7 +214,7 @@ The ingest module is separately runnable, with the triage scripts' interface, so
 a dump collected on a sick machine is reviewable at a desk:
 
 ```bash
-python3 cluster_debug_ingest.py cluster_dump_bh-glx-110-a07u02.jsonl --json out.json
+python3 qsfp_ingest.py qsfp_dump_bh-glx-110-a07u02.jsonl --json out.json
 ```
 
 ### Coverage depends on the descriptor, and the checks say so
@@ -222,12 +222,12 @@ python3 cluster_debug_ingest.py cluster_dump_bh-glx-110-a07u02.jsonl --json out.
 Internal links — the 104 soldered ones — always have an expected partner, from
 the topology table built into the collector. Cage-attached links only get one
 from a `factory_system_descriptor.textproto`, passed with
-`--cluster-debug-descriptor`. **Both halves of "a descriptor applied" matter**: a
+`--qsfp-descriptor`. **Both halves of "a descriptor applied" matter**: a
 file that was supplied but does not name this host leaves the cabled links
 exactly as undescribed as no file at all, so the ingest checks `PRESENT` *and*
 `MATCHED_HOSTNAME`.
 
-Without one, `clusterdbg_cage_gaps` SKIPs (an empty cage cannot be told from an
+Without one, `qsfp_cage_gaps` SKIPs (an empty cage cannot be told from an
 unused one) and an undescribed trained link is recorded without alerting rather
 than reported as a surprise — otherwise every one of the ~36 cabled links inside
 the chassis would be a finding on every run.
@@ -241,7 +241,7 @@ Same discipline as the triage phase, for the same reason.
 - Timed out, wrote no dump, or the dump would not parse → **WARN**: lost
   coverage, not a statement about the hardware.
 - Findings from the dump → recorded as-is, except that **FAIL is held at WARN
-  unless `--cluster-debug-gating` is passed**, matching `--triage-gating` while
+  unless `--qsfp-gating` is passed**, matching `--triage-gating` while
   the tool beds in.
 
 One subtlety worth knowing: `collect` exits non-zero *only* when nothing at all
@@ -250,11 +250,11 @@ and a cage sweep that fell over are all recorded in the dump as findings and
 still exit 0. So the phase judges on the dump, not the exit code — a readable
 dump after a non-zero exit is still read, and a clean exit with no dump is still
 a failure to collect. The collector's own `FINDINGS` list is surfaced as
-`clusterdbg_findings`, which is what stops a clean exit code reading as a clean
+`qsfp_findings`, which is what stops a clean exit code reading as a clean
 run.
 
-The dump lands in `<output_dir>/logs/cluster_dump_<host>.jsonl` (~3.4 MB with
-cages) alongside `cluster_debug.txt` and `cluster_debug.log`, so
+The dump lands in `<output_dir>/logs/qsfp_dump_<host>.jsonl` (~3.4 MB with
+cages) alongside `qsfp.txt` and `qsfp.log`, so
 `collect_run_artifacts()` attaches all three to the JIRA ticket with no extra
 wiring.
 
@@ -276,10 +276,10 @@ kills the process group and takes the report with it — so raise it when runnin
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
 | `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |
 | `--triage-gating` | off | Let triage FAILs gate the run. Off holds them at WARN (noted in `details`); findings are recorded either way. |
-| `--skip-cluster-debug` | off | Skip the cluster debug ETH dump entirely |
-| `--cluster-debug-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
-| `--cluster-debug-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
-| `--cluster-debug-gating` | off | Let cluster debug FAILs gate the run. Off holds them at WARN; findings are recorded either way. |
+| `--skip-qsfp-tests` | off | Skip the QSFP tests entirely. Named for the phase, not the collector's own `--skip-qsfp`, which drops the cage sweep but still collects ETH. |
+| `--qsfp-tool-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
+| `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
+| `--qsfp-gating` | off | Let QSFP test FAILs gate the run. Off holds them at WARN; findings are recorded either way. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root (must contain the deployment-test binary under `build_Release/`) |
@@ -353,30 +353,30 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 ### Thermal (JSON-only)
 `asic_thermal_precheck` records the hottest chip / temp vs `thm_limit` for forensics.
 
-### Cluster debug (medium / deploy, when the package is installed)
+### QSFP tests (medium / deploy, when the package is installed)
 
-Derived from the ETH dump; see [the phase section](#cluster-debug-phase) above
+Derived from the ETH dump; see [the phase section](#qsfp-tests-phase) above
 for how they get here and why FAILs are advisory by default. Checks marked
 JSON-only are store-only forensics kept out of the console summary.
 
 | Check | Rule | On fail |
 |---|---|---|
-| `clusterdbg_collect` | The collect run itself | **WARN** on timeout, no dump, or an unreadable one. **SKIP** when the tier doesn't ask, the package isn't installed, or the ingest module is missing. |
-| `clusterdbg_inventory` | 4 UBBs, 32 ASICs, 14 ETH ports per ASIC. Reaches the chips over the collector's own PCI enumeration and BMC reads rather than tt-smi, so it deliberately overlaps `pcie_enum_count` — two paths agreeing is worth more than either alone, and the collector records a *reason* per absent slot. | **FAIL** on a short count or an absent slot. **WARN** on unparseable dump lines. |
-| `clusterdbg_board_rev` | All UBBs report one `BOARD_REV`, and all 8 ASICs of each agree on `board_id`. The revision selects the internal topology table, so a bad read invalidates the partner checks below too, not just this one. | **FAIL** on mixed revisions or intra-UBB disagreement |
-| `clusterdbg_board_rev_agrees` | The dump's revision against the snapshot phase's `detected_board_rev` — two reads of one register down independent paths | **FAIL** on disagreement. **SKIP** when either side didn't determine one. |
-| `clusterdbg_findings` | The collector's own `FINDINGS` list (unreadable descriptor, unusable ipmitool, a cage sweep that fell over) | **WARN** — lost coverage. This is what stops `collect`'s exit code 0 reading as a clean run. |
-| `clusterdbg_collection_failures` | No record is `READ_FAILED` / `UNREACHABLE` / `ABSENT` | **FAIL** — a part that did not answer |
-| `clusterdbg_collection_partial` | No record is `PARTIAL` / `SKIPPED` | **WARN** — lost coverage, kept separate from the above so it doesn't read as a fault. JSON-only when clean. |
-| `clusterdbg_link_training` | Every in-service port (not harvested, `PORT_TYPE` not `PCIE`/`UNCONNECTED`/`INVALID_LOCATION`) reports `TRAIN_STATUS == LINK_TRAIN_PASS`. Unread ports are excluded — a failed read is not a failed link. | **FAIL**, naming the ports |
-| `clusterdbg_link_asymmetry` | Both ends of a resolved link agree on `LINK_UP`. Reported once per link, not once per record. | **FAIL** — the asymmetry names the end at fault. JSON-only when clean. |
-| `clusterdbg_missing_channel` | Every port with an expected partner saw one. A pair blind at both ends collapses to one row. | **FAIL**. **SKIP** when no port carries an expectation. |
-| `clusterdbg_miscabled` | The partner the firmware found is the one expected | **FAIL** on a wrong end. **WARN** on a link nobody described, but only when a descriptor matched this host — otherwise recorded without alerting. |
-| `clusterdbg_partner_disagreement` | A names B and B names A. Needs no expectation at all, so it holds without a descriptor. | **FAIL** — the hardware contradicting itself. JSON-only when clean. |
-| `clusterdbg_outside_channel` | Trained links leading to hardware this dump didn't read | never alerts — one galaxy is collected, so every inter-galaxy cable lands here. JSON-only. |
-| `clusterdbg_cage_gaps` | Cages match the expected cabling | **WARN**. **SKIP** without expected cabling, or when the sweep didn't run. |
-| `clusterdbg_eth_counters` | Store-only: `RETRAIN_COUNT`, `CORR_CW`, `UNCORR_CW` totals plus the worst ports | never alerts — JSON-only, like `gddr_info_*` |
-| `clusterdbg_modules` | Store-only: the transceiver inventory (vendor PN/SN, length, cage) | never alerts — JSON-only |
+| `qsfp_collect` | The collect run itself | **WARN** on timeout, no dump, or an unreadable one. **SKIP** when the tier doesn't ask, the package isn't installed, or the ingest module is missing. |
+| `qsfp_inventory` | 4 UBBs, 32 ASICs, 14 ETH ports per ASIC. Reaches the chips over the collector's own PCI enumeration and BMC reads rather than tt-smi, so it deliberately overlaps `pcie_enum_count` — two paths agreeing is worth more than either alone, and the collector records a *reason* per absent slot. | **FAIL** on a short count or an absent slot. **WARN** on unparseable dump lines. |
+| `qsfp_board_rev` | All UBBs report one `BOARD_REV`, and all 8 ASICs of each agree on `board_id`. The revision selects the internal topology table, so a bad read invalidates the partner checks below too, not just this one. | **FAIL** on mixed revisions or intra-UBB disagreement |
+| `qsfp_board_rev_agrees` | The dump's revision against the snapshot phase's `detected_board_rev` — two reads of one register down independent paths | **FAIL** on disagreement. **SKIP** when either side didn't determine one. |
+| `qsfp_findings` | The collector's own `FINDINGS` list (unreadable descriptor, unusable ipmitool, a cage sweep that fell over) | **WARN** — lost coverage. This is what stops `collect`'s exit code 0 reading as a clean run. |
+| `qsfp_collection_failures` | No record is `READ_FAILED` / `UNREACHABLE` / `ABSENT` | **FAIL** — a part that did not answer |
+| `qsfp_collection_partial` | No record is `PARTIAL` / `SKIPPED` | **WARN** — lost coverage, kept separate from the above so it doesn't read as a fault. JSON-only when clean. |
+| `qsfp_link_training` | Every in-service port (not harvested, `PORT_TYPE` not `PCIE`/`UNCONNECTED`/`INVALID_LOCATION`) reports `TRAIN_STATUS == LINK_TRAIN_PASS`. Unread ports are excluded — a failed read is not a failed link. | **FAIL**, naming the ports |
+| `qsfp_link_asymmetry` | Both ends of a resolved link agree on `LINK_UP`. Reported once per link, not once per record. | **FAIL** — the asymmetry names the end at fault. JSON-only when clean. |
+| `qsfp_missing_channel` | Every port with an expected partner saw one. A pair blind at both ends collapses to one row. | **FAIL**. **SKIP** when no port carries an expectation. |
+| `qsfp_miscabled` | The partner the firmware found is the one expected | **FAIL** on a wrong end. **WARN** on a link nobody described, but only when a descriptor matched this host — otherwise recorded without alerting. |
+| `qsfp_partner_disagreement` | A names B and B names A. Needs no expectation at all, so it holds without a descriptor. | **FAIL** — the hardware contradicting itself. JSON-only when clean. |
+| `qsfp_outside_channel` | Trained links leading to hardware this dump didn't read | never alerts — one galaxy is collected, so every inter-galaxy cable lands here. JSON-only. |
+| `qsfp_cage_gaps` | Cages match the expected cabling | **WARN**. **SKIP** without expected cabling, or when the sweep didn't run. |
+| `qsfp_eth_counters` | Store-only: `RETRAIN_COUNT`, `CORR_CW`, `UNCORR_CW` totals plus the worst ports | never alerts — JSON-only, like `gddr_info_*` |
+| `qsfp_modules` | Store-only: the transceiver inventory (vendor PN/SN, length, cage) | never alerts — JSON-only |
 
 An all-zero `remote_info` is treated as **no answer, not an answer**: an
 untrained port still carries a zero-filled one, and reading it as a partner
@@ -454,8 +454,8 @@ tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag.sh         # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
 ├── diag_runner.py      # Python orchestrator (all check logic lives here). Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
-├── cluster_debug_ingest.py  # cluster-debug JSONL dump -> checks. No hardware in it: a stored dump is all
-│                       #   it needs, so it is iterated on and tested at a desk. Runnable standalone.
+├── qsfp_ingest.py      # QSFP tests: cluster-debug JSONL dump -> checks. No hardware in it: a stored
+│                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
 ├── HEALTH_CHECK.md     # this file
 └── test_infrastructure/  # scheduled/CI harness around the diag suite
     ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP

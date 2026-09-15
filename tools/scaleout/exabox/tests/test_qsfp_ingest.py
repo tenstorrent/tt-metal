@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for cluster_debug_ingest.py: the derivation of health-check
+"""Unit tests for qsfp_ingest.py: the derivation of health-check
 findings from a `tt-bh-glx-cluster-debug` dump.
 
 Every case is built from synthetic records rather than a captured dump, so the
@@ -25,7 +25,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
-import cluster_debug_ingest as ingest  # noqa: E402
+import qsfp_ingest as ingest  # noqa: E402
 
 HOST = "bh-glx-110-a07u02"
 TRAINED = "LINK_TRAIN_PASS"
@@ -336,11 +336,11 @@ class TestLinkTraining(unittest.TestCase):
     def test_trained_ports_pass(self):
         a, b = linked_pair()
         checks = ingest.summarize([envelope(), a, b])
-        self.assertEqual(find(checks, "clusterdbg_link_training")["status"], "PASS")
+        self.assertEqual(find(checks, "qsfp_link_training")["status"], "PASS")
 
     def test_untrained_port_fails_and_is_named(self):
         a, b = linked_pair(train="LINK_TRAIN_TIMEOUT", link_up=(False, False))
-        entry = find(ingest.summarize([envelope(), a, b]), "clusterdbg_link_training")
+        entry = find(ingest.summarize([envelope(), a, b]), "qsfp_link_training")
         self.assertEqual(entry["status"], "FAIL")
         self.assertIn("ubb=1/asic=1/eth=4", entry["details"])
         self.assertEqual(len(entry["data"]["failures"]), 2)
@@ -354,23 +354,23 @@ class TestLinkTraining(unittest.TestCase):
             port("p", "u2", "glx=h/eth=12", port_type="PCIE", train=None),
             port("u", "u3", "glx=h/eth=0", port_type="UNCONNECTED", train=None),
         ]
-        self.assertEqual(find(ingest.summarize(records), "clusterdbg_link_training")["status"], "SKIP")
+        self.assertEqual(find(ingest.summarize(records), "qsfp_link_training")["status"], "SKIP")
 
     def test_unread_port_is_not_a_down_port(self):
         # A PARTIAL port has no STATUS block at all, so judging it would turn a
         # failed read into a failed link.
         records = [envelope(), port("x", "u", "glx=h/eth=4", status="PARTIAL", has_status_block=False)]
-        self.assertEqual(find(ingest.summarize(records), "clusterdbg_link_training")["status"], "SKIP")
+        self.assertEqual(find(ingest.summarize(records), "qsfp_link_training")["status"], "SKIP")
 
 
 class TestLinkAsymmetry(unittest.TestCase):
     def test_agreeing_ends_pass(self):
         a, b = linked_pair()
-        self.assertEqual(find(ingest.summarize([envelope(), a, b]), "clusterdbg_link_asymmetry")["status"], "PASS")
+        self.assertEqual(find(ingest.summarize([envelope(), a, b]), "qsfp_link_asymmetry")["status"], "PASS")
 
     def test_disagreeing_ends_are_reported_once_per_link(self):
         a, b = linked_pair(link_up=(True, False))
-        entry = find(ingest.summarize([envelope(), a, b]), "clusterdbg_link_asymmetry")
+        entry = find(ingest.summarize([envelope(), a, b]), "qsfp_link_asymmetry")
         self.assertEqual(entry["status"], "FAIL")
         # A link is one thing; both of its records describe the same fault.
         self.assertEqual(len(entry["data"]["asymmetric"]), 1)
@@ -379,19 +379,19 @@ class TestLinkAsymmetry(unittest.TestCase):
         a, b = linked_pair(link_up=(True, False))
         b["COLLECTION"] = {"STATUS": "READ_FAILED", "REASON": "dark"}
         b["STATUS"] = None
-        self.assertEqual(find(ingest.summarize([envelope(), a, b]), "clusterdbg_link_asymmetry")["status"], "PASS")
+        self.assertEqual(find(ingest.summarize([envelope(), a, b]), "qsfp_link_asymmetry")["status"], "PASS")
 
 
 class TestMissingChannel(unittest.TestCase):
     def test_expected_and_seen_passes(self):
         a, b = linked_pair()
-        self.assertEqual(find(ingest.summarize([envelope(), a, b]), "clusterdbg_missing_channel")["status"], "PASS")
+        self.assertEqual(find(ingest.summarize([envelope(), a, b]), "qsfp_missing_channel")["status"], "PASS")
 
     def test_both_ends_blind_collapse_to_one_row(self):
         a, b = linked_pair(train="LINK_TRAIN_TIMEOUT", link_up=(False, False))
         a["DATA"]["eth_status"]["VALUE"]["remote_info"] = DARK_REMOTE
         b["DATA"]["eth_status"]["VALUE"]["remote_info"] = DARK_REMOTE
-        entry = find(ingest.summarize([envelope(), a, b]), "clusterdbg_missing_channel")
+        entry = find(ingest.summarize([envelope(), a, b]), "qsfp_missing_channel")
         self.assertEqual(entry["status"], "FAIL")
         self.assertEqual(len(entry["data"]["missing"]), 1)
         self.assertEqual(entry["data"]["missing"][0]["ends"], "both ends")
@@ -402,7 +402,7 @@ class TestMissingChannel(unittest.TestCase):
     def test_one_blind_end_stays_its_own_row(self):
         a, b = linked_pair()
         a["DATA"]["eth_status"]["VALUE"]["remote_info"] = DARK_REMOTE
-        entry = find(ingest.summarize([envelope(), a, b]), "clusterdbg_missing_channel")
+        entry = find(ingest.summarize([envelope(), a, b]), "qsfp_missing_channel")
         self.assertEqual(entry["status"], "FAIL")
         self.assertEqual(len(entry["data"]["missing"]), 1)
         self.assertEqual(entry["data"]["missing"][0]["ends"], "this end only")
@@ -410,7 +410,7 @@ class TestMissingChannel(unittest.TestCase):
     def test_no_expectations_skips_rather_than_passing(self):
         # Reporting PASS here would claim coverage the run did not have.
         p = port("p", "u", f"glx={HOST}/ubb=1/asic=1/eth=4", remote=DARK_REMOTE)
-        self.assertEqual(find(ingest.summarize([envelope(), p]), "clusterdbg_missing_channel")["status"], "SKIP")
+        self.assertEqual(find(ingest.summarize([envelope(), p]), "qsfp_missing_channel")["status"], "SKIP")
 
 
 class TestMiscabled(unittest.TestCase):
@@ -418,7 +418,7 @@ class TestMiscabled(unittest.TestCase):
         a, b = linked_pair()
         third = port("pc", "asic:0x99/eth04", f"glx={HOST}/ubb=2/asic=1/eth=4", remote={"asic_id": "0x11", "eth_id": 4})
         a["DATA"]["eth_status"]["VALUE"]["remote_info"] = {"asic_id": "0x99", "eth_id": 4}
-        entry = find(ingest.summarize([envelope(), a, b, third]), "clusterdbg_miscabled")
+        entry = find(ingest.summarize([envelope(), a, b, third]), "qsfp_miscabled")
         self.assertEqual(entry["status"], "FAIL")
         self.assertEqual(len(entry["data"]["wrong_end"]), 1)
 
@@ -427,7 +427,7 @@ class TestMiscabled(unittest.TestCase):
         # expectation; calling each one a surprise would be noise on every run.
         a = port("pa", "asic:0x11/eth10", f"glx={HOST}/ubb=1/asic=1/eth=10", remote={"asic_id": "0x12", "eth_id": 10})
         b = port("pb", "asic:0x12/eth10", f"glx={HOST}/ubb=1/asic=2/eth=10", remote={"asic_id": "0x11", "eth_id": 10})
-        entry = find(ingest.summarize([envelope(), a, b]), "clusterdbg_miscabled")
+        entry = find(ingest.summarize([envelope(), a, b]), "qsfp_miscabled")
         self.assertEqual(entry["status"], "PASS")
         self.assertEqual(len(entry["data"]["undescribed"]), 2)
         self.assertIn("no factory descriptor matched", entry["details"])
@@ -435,7 +435,7 @@ class TestMiscabled(unittest.TestCase):
     def test_undescribed_link_with_a_descriptor_warns(self):
         a = port("pa", "asic:0x11/eth10", f"glx={HOST}/ubb=1/asic=1/eth=10", remote={"asic_id": "0x12", "eth_id": 10})
         b = port("pb", "asic:0x12/eth10", f"glx={HOST}/ubb=1/asic=2/eth=10", remote={"asic_id": "0x11", "eth_id": 10})
-        entry = find(ingest.summarize([envelope(descriptor=HOST), a, b]), "clusterdbg_miscabled")
+        entry = find(ingest.summarize([envelope(descriptor=HOST), a, b]), "qsfp_miscabled")
         self.assertEqual(entry["status"], "WARN")
 
     def test_descriptor_present_but_not_naming_this_host_is_no_coverage(self):
@@ -449,14 +449,12 @@ class TestMiscabled(unittest.TestCase):
 class TestPartnerDisagreement(unittest.TestCase):
     def test_mutual_naming_passes(self):
         a, b = linked_pair()
-        self.assertEqual(
-            find(ingest.summarize([envelope(), a, b]), "clusterdbg_partner_disagreement")["status"], "PASS"
-        )
+        self.assertEqual(find(ingest.summarize([envelope(), a, b]), "qsfp_partner_disagreement")["status"], "PASS")
 
     def test_one_sided_naming_fails(self):
         a, b = linked_pair()
         b["DATA"]["eth_status"]["VALUE"]["remote_info"] = {"asic_id": "0x99", "eth_id": 4}
-        entry = find(ingest.summarize([envelope(), a, b]), "clusterdbg_partner_disagreement")
+        entry = find(ingest.summarize([envelope(), a, b]), "qsfp_partner_disagreement")
         self.assertEqual(entry["status"], "FAIL")
 
 
@@ -465,7 +463,7 @@ class TestOutsideChannel(unittest.TestCase):
         # One galaxy is collected, so every inter-galaxy cable lands here. It is
         # a measure of reach, not a fault.
         p = port("pa", "asic:0x11/eth10", f"glx={HOST}/ubb=1/asic=1/eth=10", remote={"asic_id": "0xbeef", "eth_id": 10})
-        entry = find(ingest.summarize([envelope(), p]), "clusterdbg_outside_channel")
+        entry = find(ingest.summarize([envelope(), p]), "qsfp_outside_channel")
         self.assertEqual(entry["status"], "PASS")
         self.assertEqual(entry["data"]["count"], 1)
         self.assertFalse(entry.get("console_visible", True))
@@ -478,32 +476,32 @@ class TestOutsideChannel(unittest.TestCase):
 
 class TestInventory(unittest.TestCase):
     def test_full_galaxy_passes(self):
-        entry = find(ingest.summarize(full_galaxy_records()), "clusterdbg_inventory")
+        entry = find(ingest.summarize(full_galaxy_records()), "qsfp_inventory")
         self.assertEqual(entry["status"], "PASS")
         self.assertEqual(entry["data"]["counts"]["asic"], 32)
         self.assertEqual(entry["data"]["counts"]["eth_port"], 448)
 
     def test_short_count_fails(self):
         records = [envelope(), galaxy(), ubb(1), asic(1, 1)]
-        entry = find(ingest.summarize(records), "clusterdbg_inventory")
+        entry = find(ingest.summarize(records), "qsfp_inventory")
         self.assertEqual(entry["status"], "FAIL")
         self.assertIn("ubb 1/4", entry["details"])
         self.assertIn("asic 1/32", entry["details"])
 
     def test_absent_slot_reasons_are_surfaced(self):
         records = [envelope(), galaxy(absent_ubbs=(2,)), ubb(1, absent_asics=(3,))]
-        entry = find(ingest.summarize(records), "clusterdbg_inventory")
+        entry = find(ingest.summarize(records), "qsfp_inventory")
         self.assertEqual(entry["status"], "FAIL")
         self.assertTrue(any("UBB2" in a for a in entry["data"]["absent"]))
         self.assertTrue(any("UBB1/U3" in a for a in entry["data"]["absent"]))
 
     def test_malformed_lines_warn_without_claiming_missing_hardware(self):
-        entry = find(ingest.summarize(full_galaxy_records(), malformed=2), "clusterdbg_inventory")
+        entry = find(ingest.summarize(full_galaxy_records(), malformed=2), "qsfp_inventory")
         self.assertEqual(entry["status"], "WARN")
         self.assertIn("2 unparseable line(s)", entry["details"])
 
     def test_identity_records_the_cross_snapshot_join_keys(self):
-        entry = find(ingest.summarize(full_galaxy_records()), "clusterdbg_inventory")
+        entry = find(ingest.summarize(full_galaxy_records()), "qsfp_inventory")
         self.assertEqual(entry["data"]["identity"]["chassis_serial"], "QTWS7TKC260400005")
         self.assertEqual(entry["data"]["identity"]["ubb_uids"]["1"], "ubb:SER1")
 
@@ -516,7 +514,7 @@ class TestInventory(unittest.TestCase):
 class TestCollectionStatus(unittest.TestCase):
     def test_hard_failures_fail_and_carry_their_reason(self):
         records = [envelope(), galaxy(), ubb(1), asic(1, 1, status="UNREACHABLE")]
-        entry = find(ingest.summarize(records), "clusterdbg_collection_failures")
+        entry = find(ingest.summarize(records), "qsfp_collection_failures")
         self.assertEqual(entry["status"], "FAIL")
         self.assertIn("asic UNREACHABLE x1", entry["details"])
         self.assertEqual(entry["data"]["failures"][0]["reason"], "L1 read returned all-ones (dark tile)")
@@ -524,29 +522,29 @@ class TestCollectionStatus(unittest.TestCase):
     def test_partial_and_skipped_are_lost_coverage_not_faults(self):
         records = [envelope(), galaxy(), ubb(1), cage(1, 1, status="SKIPPED")]
         checks = ingest.summarize(records)
-        self.assertEqual(find(checks, "clusterdbg_collection_failures")["status"], "PASS")
-        partial = find(checks, "clusterdbg_collection_partial")
+        self.assertEqual(find(checks, "qsfp_collection_failures")["status"], "PASS")
+        partial = find(checks, "qsfp_collection_partial")
         self.assertEqual(partial["status"], "WARN")
         self.assertIn("lost coverage", partial["details"])
 
     def test_harvested_is_not_a_collection_failure(self):
         records = [envelope(), port("h", "u", "glx=h/eth=5", harvested=True, status="HARVESTED")]
-        self.assertEqual(find(ingest.summarize(records), "clusterdbg_collection_failures")["status"], "PASS")
+        self.assertEqual(find(ingest.summarize(records), "qsfp_collection_failures")["status"], "PASS")
 
     def test_envelope_carries_no_collection_status(self):
-        self.assertEqual(find(ingest.summarize([envelope()]), "clusterdbg_collection_failures")["status"], "PASS")
+        self.assertEqual(find(ingest.summarize([envelope()]), "qsfp_collection_failures")["status"], "PASS")
 
 
 class TestBoardRev(unittest.TestCase):
     def test_uniform_revision_passes(self):
         records = [envelope()] + [ubb(n) for n in range(1, 5)]
-        entry = find(ingest.summarize(records), "clusterdbg_board_rev")
+        entry = find(ingest.summarize(records), "qsfp_board_rev")
         self.assertEqual(entry["status"], "PASS")
         self.assertEqual(entry["data"]["rev"], "BH_GALAXY_REV_C")
 
     def test_mixed_revision_fails(self):
         records = [envelope(), ubb(1), ubb(2, rev="BH_GALAXY_REV_AB")]
-        entry = find(ingest.summarize(records), "clusterdbg_board_rev")
+        entry = find(ingest.summarize(records), "qsfp_board_rev")
         self.assertEqual(entry["status"], "FAIL")
         self.assertIn("mixed revisions", entry["details"])
 
@@ -554,18 +552,18 @@ class TestBoardRev(unittest.TestCase):
         # board_id can be reset to a uniform default, taking the revision with
         # it, and nothing else looks wrong when it happens.
         records = [envelope(), ubb(1, agreement=False)]
-        entry = find(ingest.summarize(records), "clusterdbg_board_rev")
+        entry = find(ingest.summarize(records), "qsfp_board_rev")
         self.assertEqual(entry["status"], "FAIL")
         self.assertIn("disagree on board_id", entry["details"])
 
 
 class TestCagesAndModules(unittest.TestCase):
     def test_no_cages_skips(self):
-        self.assertEqual(find(ingest.summarize([envelope()]), "clusterdbg_cage_gaps")["status"], "SKIP")
+        self.assertEqual(find(ingest.summarize([envelope()]), "qsfp_cage_gaps")["status"], "SKIP")
 
     def test_cages_without_an_expected_partner_skip(self):
         records = [envelope(), cage(1, 1), cage(1, 2, present=False)]
-        entry = find(ingest.summarize(records), "clusterdbg_cage_gaps")
+        entry = find(ingest.summarize(records), "qsfp_cage_gaps")
         self.assertEqual(entry["status"], "SKIP")
         self.assertIn("cannot be told from an unused one", entry["details"])
 
@@ -575,18 +573,18 @@ class TestCagesAndModules(unittest.TestCase):
             cage(1, 1, partner="ubb:SER2/qsfp01"),
             cage(1, 2, present=False, partner="ubb:SER2/qsfp02"),
         ]
-        entry = find(ingest.summarize(records), "clusterdbg_cage_gaps")
+        entry = find(ingest.summarize(records), "qsfp_cage_gaps")
         self.assertEqual(entry["status"], "WARN")
         self.assertEqual(entry["data"]["gaps"][0]["gap"], "empty, a cable was expected")
 
     def test_unread_cage_is_not_an_empty_cage(self):
         records = [envelope(), cage(1, 1, partner="p"), cage(1, 2, present=False, status="READ_FAILED")]
-        entry = find(ingest.summarize(records), "clusterdbg_cage_gaps")
+        entry = find(ingest.summarize(records), "qsfp_cage_gaps")
         self.assertEqual(entry["status"], "PASS")
 
     def test_module_inventory_is_store_only(self):
         records = [envelope(), cage(1, 1, module_uid="mod:x"), module(1, 1)]
-        entry = find(ingest.summarize(records), "clusterdbg_modules")
+        entry = find(ingest.summarize(records), "qsfp_modules")
         self.assertEqual(entry["status"], "PASS")
         self.assertEqual(entry["data"]["modules"][0]["vendor_sn"], "APF23140099")
         self.assertFalse(entry.get("console_visible", True))
@@ -599,7 +597,7 @@ class TestEthCounters(unittest.TestCase):
             port("a", "u1", "glx=h/ubb=1/asic=1/eth=0", retrain=2, corr_cw=10, uncorr_cw=1),
             port("b", "u2", "glx=h/ubb=1/asic=1/eth=1", retrain=3, corr_cw=5, uncorr_cw=0),
         ]
-        entry = find(ingest.summarize(records), "clusterdbg_eth_counters")
+        entry = find(ingest.summarize(records), "qsfp_eth_counters")
         self.assertEqual(entry["status"], "PASS")
         self.assertEqual(entry["data"]["totals"], {"retrain_count": 5, "corr_cw": 15, "uncorr_cw": 1})
         self.assertEqual(entry["data"]["worst_uncorr_cw"][0]["path"], "ubb=1/asic=1/eth=0")
@@ -617,7 +615,7 @@ class TestReportShape(unittest.TestCase):
         self.assertTrue(report["checks"])
         for entry in report["checks"]:
             self.assertEqual(set(entry) - {"console_visible"}, {"name", "status", "details", "ip", "data"})
-            self.assertTrue(entry["name"].startswith("clusterdbg_"))
+            self.assertTrue(entry["name"].startswith("qsfp_"))
             self.assertIn(entry["status"], ("PASS", "WARN", "FAIL", "SKIP"))
             # An ip outside the health check's groups would reach the JSON and
             # the CSV but never appear in the console summary.

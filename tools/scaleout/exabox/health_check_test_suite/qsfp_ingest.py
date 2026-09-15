@@ -36,7 +36,7 @@ Runnable on its own against a stored dump, with the same
 ``--json <path> -o <path>`` interface the triage scripts take, which is what
 makes a dump collected on a sick machine reviewable on a desk:
 
-    python3 cluster_debug_ingest.py cluster_dump_host.jsonl --json out.json
+    python3 qsfp_ingest.py qsfp_dump_host.jsonl --json out.json
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ TOOL_NAME = "tt-bh-glx-cluster-debug"
 
 # Bumped when the derivation below changes what it calls a fault, so a stored
 # report says which rules produced it. Not the dump's SCHEMA_VER, which the
-# collector owns and `clusterdbg_inventory` records separately.
+# collector owns and `qsfp_inventory` records separately.
 INGEST_VERSION = 1
 
 PASS, WARN, FAIL, SKIP = "PASS", "WARN", "FAIL", "SKIP"
@@ -305,7 +305,7 @@ def _inventory(groups: dict[str, list[dict]], envelope: dict, malformed: int) ->
         status = PASS
 
     return check(
-        "clusterdbg_inventory",
+        "qsfp_inventory",
         status,
         details,
         ip="asic",
@@ -335,9 +335,9 @@ def _findings(envelope: dict) -> dict:
     """
     findings = [str(f) for f in (envelope.get("FINDINGS") or [])]
     if not findings:
-        return check("clusterdbg_findings", PASS, "collector reported no findings", ip="other")
+        return check("qsfp_findings", PASS, "collector reported no findings", ip="other")
     return check(
-        "clusterdbg_findings",
+        "qsfp_findings",
         WARN,
         f"{len(findings)} finding(s): " + _listing(findings),
         ip="other",
@@ -380,14 +380,14 @@ def _collection_failures(records: list[dict]) -> list[dict]:
 
     checks = [
         check(
-            "clusterdbg_collection_failures",
+            "qsfp_collection_failures",
             FAIL if hard else PASS,
             _render(hard) if hard else "every part collected or was harvested",
             ip="other",
             data={"failures": hard},
         ),
         check(
-            "clusterdbg_collection_partial",
+            "qsfp_collection_partial",
             WARN if soft else PASS,
             (
                 # Distinct from the check above on purpose: this is coverage the
@@ -417,7 +417,7 @@ def _board_rev(ubbs: list[dict]) -> dict:
     revision with it, and nothing else looks wrong when it happens.
     """
     if not ubbs:
-        return check("clusterdbg_board_rev", SKIP, "no UBB records in the dump", ip="board")
+        return check("qsfp_board_rev", SKIP, "no UBB records in the dump", ip="board")
 
     revs = Counter(str(u.get("BOARD_REV") or "unknown") for u in ubbs)
     disagreeing = [short_path(u) for u in ubbs if u.get("BOARD_ID_ASIC_AGREEMENT") is False]
@@ -425,7 +425,7 @@ def _board_rev(ubbs: list[dict]) -> dict:
 
     if single is not None and single != "unknown" and not disagreeing:
         return check(
-            "clusterdbg_board_rev",
+            "qsfp_board_rev",
             PASS,
             f"{single} on all {len(ubbs)} UBB(s)",
             ip="board",
@@ -440,7 +440,7 @@ def _board_rev(ubbs: list[dict]) -> dict:
     if disagreeing:
         reasons.append(f"ASICs disagree on board_id within: {', '.join(disagreeing)}")
     return check(
-        "clusterdbg_board_rev",
+        "qsfp_board_rev",
         FAIL,
         "; ".join(reasons),
         ip="board",
@@ -457,12 +457,12 @@ def _link_training(ports: list[dict]) -> dict:
     """
     considered = [p for p in ports if in_service(p) and port_read(p)]
     if not considered:
-        return check("clusterdbg_link_training", SKIP, "no in-service ETH ports were read", ip="eth")
+        return check("qsfp_link_training", SKIP, "no in-service ETH ports were read", ip="eth")
 
     failed = [p for p in considered if port_status(p, "TRAIN_STATUS") != TRAIN_PASS]
     if not failed:
         return check(
-            "clusterdbg_link_training",
+            "qsfp_link_training",
             PASS,
             f"{len(considered)}/{len(considered)} in-service ports trained",
             ip="eth",
@@ -480,7 +480,7 @@ def _link_training(ports: list[dict]) -> dict:
         for p in failed
     ]
     return check(
-        "clusterdbg_link_training",
+        "qsfp_link_training",
         FAIL,
         f"{len(considered) - len(failed)}/{len(considered)} in-service ports trained; down: "
         + _listing([f"{e['path']} ({e['train_status'] or 'no train status'})" for e in entries]),
@@ -510,7 +510,7 @@ def _link_asymmetry(ports: list[dict], by_entry: dict[str, dict]) -> dict:
 
     if not pairs:
         return check(
-            "clusterdbg_link_asymmetry",
+            "qsfp_link_asymmetry",
             PASS,
             "no link disagrees with itself end to end",
             ip="eth",
@@ -527,7 +527,7 @@ def _link_asymmetry(ports: list[dict], by_entry: dict[str, dict]) -> dict:
         for near, far in pairs.values()
     ]
     return check(
-        "clusterdbg_link_asymmetry",
+        "qsfp_link_asymmetry",
         FAIL,
         f"{len(entries)} link(s) up at one end and down at the other: "
         + _listing([f"{e['path']}={e['link_up']} vs {e['far_path']}={e['far_link_up']}" for e in entries]),
@@ -549,7 +549,7 @@ def _missing_channel(ports: list[dict], by_entry: dict[str, dict]) -> dict:
         # No descriptor matched this host *and* no internal table applied. Saying
         # PASS here would report coverage this run did not have.
         return check(
-            "clusterdbg_missing_channel",
+            "qsfp_missing_channel",
             SKIP,
             "no port in this dump carries an expected partner",
             ip="eth",
@@ -583,13 +583,13 @@ def _missing_channel(ports: list[dict], by_entry: dict[str, dict]) -> dict:
 
     if not entries:
         return check(
-            "clusterdbg_missing_channel",
+            "qsfp_missing_channel",
             PASS,
             f"all {len(expecting)} expected channel(s) were seen by firmware",
             ip="eth",
         )
     return check(
-        "clusterdbg_missing_channel",
+        "qsfp_missing_channel",
         FAIL,
         f"{len(entries)} of {len(expecting)} expected channel(s) never came up: "
         + _listing([f"{e['path']} -> {e['expected']} ({e['ends']})" for e in entries]),
@@ -632,7 +632,7 @@ def _miscabled(ports: list[dict], by_uid: dict[str, dict], expectations_complete
     data = {"wrong_end": wrong_end, "undescribed": undescribed, "expectations_complete": expectations_complete}
     if wrong_end:
         return check(
-            "clusterdbg_miscabled",
+            "qsfp_miscabled",
             FAIL,
             f"{len(wrong_end)} channel(s) trained to the wrong end: "
             + _listing([f"{e['path']} -> {e['observed']} (expected {e['expected']})" for e in wrong_end]),
@@ -641,7 +641,7 @@ def _miscabled(ports: list[dict], by_uid: dict[str, dict], expectations_complete
         )
     if undescribed and expectations_complete:
         return check(
-            "clusterdbg_miscabled",
+            "qsfp_miscabled",
             WARN,
             f"{len(undescribed)} channel(s) trained where nothing was expected: "
             + _listing([f"{e['path']} -> {e['observed']}" for e in undescribed]),
@@ -654,7 +654,7 @@ def _miscabled(ports: list[dict], by_uid: dict[str, dict], expectations_complete
             f"no channel trained to the wrong end; {len(undescribed)} trained where this dump had no "
             f"expectation (no factory descriptor matched this host, so the cabled links are undescribed)"
         )
-    return check("clusterdbg_miscabled", PASS, details, ip="eth", data=data)
+    return check("qsfp_miscabled", PASS, details, ip="eth", data=data)
 
 
 def _partner_disagreement(ports: list[dict], by_uid: dict[str, dict]) -> dict:
@@ -682,14 +682,14 @@ def _partner_disagreement(ports: list[dict], by_uid: dict[str, dict]) -> dict:
 
     if not entries:
         return check(
-            "clusterdbg_partner_disagreement",
+            "qsfp_partner_disagreement",
             PASS,
             "both ends of every observed link name each other",
             ip="eth",
             console_visible=False,
         )
     return check(
-        "clusterdbg_partner_disagreement",
+        "qsfp_partner_disagreement",
         FAIL,
         f"{len(entries)} end(s) disagree about their partner: "
         + _listing([f"{e['path']} says {e['far_path']}, which says {e['far_observed'] or 'nothing'}" for e in entries]),
@@ -709,7 +709,7 @@ def _outside_channel(ports: list[dict], by_uid: dict[str, dict]) -> dict:
     """
     outside = [p for p in ports if (o := observed_partner(p)) is not None and o not in by_uid]
     return check(
-        "clusterdbg_outside_channel",
+        "qsfp_outside_channel",
         PASS,
         f"{len(outside)} trained channel(s) lead outside this dump "
         f"(expected: one galaxy was collected, so every inter-galaxy cable does)",
@@ -731,14 +731,14 @@ def _cage_gaps(cages: list[dict]) -> dict:
     fact, not a board one.
     """
     if not cages:
-        return check("clusterdbg_cage_gaps", SKIP, "no cage records (the QSFP sweep did not run)", ip="eth")
+        return check("qsfp_cage_gaps", SKIP, "no cage records (the QSFP sweep did not run)", ip="eth")
     # A cage that was not read is not empty; the collection checks have it.
     readable = [c for c in cages if collection_status(c) not in ("SKIPPED", "READ_FAILED", "UNREACHABLE")]
     if not readable:
-        return check("clusterdbg_cage_gaps", SKIP, f"none of the {len(cages)} cage(s) were read", ip="eth")
+        return check("qsfp_cage_gaps", SKIP, f"none of the {len(cages)} cage(s) were read", ip="eth")
     if not any(c.get("QSFP_PARTNER_UID") for c in readable):
         return check(
-            "clusterdbg_cage_gaps",
+            "qsfp_cage_gaps",
             SKIP,
             f"no cage carries an expected partner, so an empty one cannot be told from an "
             f"unused one ({len(readable)} cage(s) read)",
@@ -759,9 +759,9 @@ def _cage_gaps(cages: list[dict]) -> dict:
         entries.append({"path": short_path(cage), "qsfp": cage.get("QSFP_NAME"), "gap": gap})
 
     if not entries:
-        return check("clusterdbg_cage_gaps", PASS, f"all {len(readable)} cage(s) match the expected cabling", ip="eth")
+        return check("qsfp_cage_gaps", PASS, f"all {len(readable)} cage(s) match the expected cabling", ip="eth")
     return check(
-        "clusterdbg_cage_gaps",
+        "qsfp_cage_gaps",
         WARN,
         f"{len(entries)} of {len(readable)} cage(s) do not match the expected cabling: "
         + _listing([f"{e['qsfp'] or e['path']} ({e['gap']})" for e in entries]),
@@ -781,7 +781,7 @@ def _eth_counters(ports: list[dict]) -> dict:
     """
     read = [p for p in ports if port_read(p) and p.get("STATUS")]
     if not read:
-        return check("clusterdbg_eth_counters", SKIP, "no port carries a STATUS block", ip="eth", console_visible=False)
+        return check("qsfp_eth_counters", SKIP, "no port carries a STATUS block", ip="eth", console_visible=False)
 
     def _total(field: str) -> int:
         return sum(v for p in read if isinstance(v := port_status(p, field), int))
@@ -804,7 +804,7 @@ def _eth_counters(ports: list[dict]) -> dict:
     if worst:
         details += "; worst uncorr: " + ", ".join(f"{e['path']}={e['uncorr_cw']}" for e in worst)
     return check(
-        "clusterdbg_eth_counters",
+        "qsfp_eth_counters",
         PASS,
         details,
         ip="eth",
@@ -821,7 +821,7 @@ def _modules(cages: list[dict], modules: list[dict]) -> dict:
     thrown errors in three different cages" be answered later from stored runs.
     """
     if not cages and not modules:
-        return check("clusterdbg_modules", SKIP, "the QSFP sweep did not run", ip="eth", console_visible=False)
+        return check("qsfp_modules", SKIP, "the QSFP sweep did not run", ip="eth", console_visible=False)
     populated = sum(1 for c in cages if c.get("PRESENT"))
     vendors = Counter(str(m.get("VENDOR_PN") or "unknown") for m in modules)
     inventory = [
@@ -835,7 +835,7 @@ def _modules(cages: list[dict], modules: list[dict]) -> dict:
         for m in modules
     ]
     return check(
-        "clusterdbg_modules",
+        "qsfp_modules",
         PASS,
         f"{len(modules)} module(s) in {populated}/{len(cages)} populated cage(s); "
         f"types: {', '.join(f'{pn} x{n}' for pn, n in sorted(vendors.items())) or 'none'}",
@@ -876,7 +876,7 @@ def summarize(records: list[dict], malformed: int = 0) -> list[dict]:
     if not envelope and not ports:
         return [
             check(
-                "clusterdbg_inventory",
+                "qsfp_inventory",
                 FAIL,
                 f"the dump holds no snapshot envelope and no ETH ports ({len(records)} record(s), "
                 f"{malformed} unparseable line(s))",
