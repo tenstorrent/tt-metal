@@ -65,6 +65,7 @@
 #include <cstdlib>
 #include <functional>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
@@ -953,7 +954,8 @@ TEST_F(LoudboxRingSDPATest, DISABLED_BreakDownOneStep) {
         return samples[samples.size() / 2] * 1e6;  // us
     };
 
-    for (const auto& cfg : std::vector<std::array<size_t, 4>>{{1, 4, 128, 64}, {1, 4, 512, 64}}) {
+    for (const auto& cfg :
+         std::vector<std::array<size_t, 4>>{{1, 4, 128, 64}, {1, 4, 512, 64}, {1, 4, 2048, 64}, {1, 4, 4096, 64}}) {
         const size_t batch = cfg[0], heads = cfg[1], rows_per_chip = cfg[2], head_dim = cfg[3];
         const size_t seq_len = rows_per_chip * cp_size;
         const std::array<std::size_t, 4> shape{batch, heads, seq_len, head_dim};
@@ -1004,9 +1006,13 @@ TEST_F(LoudboxRingSDPATest, DISABLED_BreakDownOneStep) {
                 ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward, step_bf16, step_bf16, step_bf16);
         });
         std::cout << "  ring_sdpa_bw, one step (Q pass + KV pass)   " << two_pass << "\n";
-        for (const uint32_t Bt : {1u, 2u}) {
+        for (const uint32_t Bt : {1u, 2u, 4u}) {
             if (rows_per_chip % (2u * Bt * 32u) != 0u) {
                 continue;
+            }
+            const uint32_t C_here = static_cast<uint32_t>(rows_per_chip) / (2u * Bt * 32u);
+            if (C_here > 64u) {
+                continue;  // no rectangle of that area in the grid
             }
             const double cyclic = median([&]() {
                 ttnn::copy(zero_fp32, step_fp32);
@@ -1099,7 +1105,8 @@ TEST_F(LoudboxRingSDPATest, DISABLED_SweepTheStepOps) {
                 dO, O, q, k, v, lse, cp_size, cp_axis, 0, ttml::metal::AttentionMaskType::Causal,
                 ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward, step_bf16, step_bf16, step_bf16);
         });
-        std::cout << "  heads=" << heads << " rows/chip=" << rows << " d=" << d << ": two-pass " << two_pass;
+        std::ostringstream line;
+        line << "  heads=" << heads << " rows/chip=" << rows << " d=" << d << ": two-pass " << two_pass;
         // Largest block height the chunk allows, up to 4, and C from it.
         for (const uint32_t Bt : {1u, 2u, 4u}) {
             if (rows % (2u * Bt * 32u) != 0u) {
@@ -1109,9 +1116,12 @@ TEST_F(LoudboxRingSDPATest, DISABLED_SweepTheStepOps) {
             // The op deals slices round-robin to as many C-core groups as
             // fit and runs the rest in turn, so heads x C beyond the grid is
             // no longer a refusal; it shows up as time instead. Print the
-            // groups so the loop's depth is visible next to the number.
+            // groups so the loop's depth is visible next to the number. What
+            // is still refused is a C with no rectangle of that area in the
+            // grid -- 128 or 256 cores -- which the try/catch reports.
             const auto grid = device->compute_with_storage_grid_size();
-            const size_t groups = std::min<size_t>(heads, static_cast<size_t>(grid.x) * grid.y / C);
+            const size_t capacity = static_cast<size_t>(grid.x) * grid.y / C;
+            const size_t groups = std::max<size_t>(1, std::min<size_t>(heads, capacity));
             double cyclic = 0.0;
             try {
                 cyclic = median_us([&]() {
@@ -1121,13 +1131,13 @@ TEST_F(LoudboxRingSDPATest, DISABLED_SweepTheStepOps) {
                         acc_v);
                 });
             } catch (const std::exception&) {
-                std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ") no rectangle of area " << C << " fits";
+                line << " | cyclic Bt=" << Bt << " (C=" << C << ") no rectangle of area " << C << " fits";
                 continue;
             }
-            std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ", " << groups << " groups x "
-                      << (heads + groups - 1) / groups << " slices) " << cyclic;
+            line << " | cyclic Bt=" << Bt << " (C=" << C << ", " << groups << " groups x "
+                 << (heads + groups - 1) / groups << " slices) " << cyclic;
         }
-        std::cout << "\n";
+        std::cout << line.str() << "\n";
     }
 }
 
