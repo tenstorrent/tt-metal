@@ -462,6 +462,13 @@ Gradients run_algorithm2(
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
+    // The column gradients' seeds and accumulators too: read only by the
+    // reload and handover copies, so the running sums keep all 32 bits
+    // across a handover and a reload rather than the register's 19.
+    unpack_mode[tt::CBIndex::c_18] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_21] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_22] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     const auto compute = CreateKernel(
         program, kComputePath, region,
         ComputeConfig{
@@ -769,6 +776,13 @@ Gradients run_relay(
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
+    // The column gradients' seeds and accumulators too: read only by the
+    // reload and handover copies, so the running sums keep all 32 bits
+    // across a handover and a reload rather than the register's 19.
+    unpack_mode[tt::CBIndex::c_18] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_21] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
+    unpack_mode[tt::CBIndex::c_22] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     const auto compute = CreateKernel(
         program, kComputePath, region,
         ComputeConfig{
@@ -1200,6 +1214,20 @@ void report_op_error(
         }
         return den > 0.0 ? std::sqrt(num / den) : std::sqrt(num);
     };
+    // The least-squares scale of the error on the reference, slice 0: with
+    // got = (1 + b) want + noise, this is b -- a systematic inflation (b > 0)
+    // or shrinkage (b < 0) of the whole gradient, which the RMS hides.
+    const auto scale_bias = [&](const xt::xarray<float>& got, const xt::xarray<float>& want) {
+        double num = 0.0, den = 0.0;
+        for (uint32_t r = 0; r < want.shape()[0]; ++r) {
+            for (uint32_t c = 0; c < want.shape()[1]; ++c) {
+                const double e = got(0, 0, r, c) - want(r, c);
+                num += e * want(r, c);
+                den += double(want(r, c)) * want(r, c);
+            }
+        }
+        return den > 0.0 ? num / den : 0.0;
+    };
     const auto gq_h = ttml::core::to_xtensor(gq);
     const auto gk_h = ttml::core::to_xtensor(gk);
     const auto gv_h = ttml::core::to_xtensor(gv);
@@ -1208,7 +1236,8 @@ void report_op_error(
               << " N=" << N << " slices=" << slices << ": dQ " << relative(gq_h, ref.dQ)
               << " dK " << relative(gk_h, ref.dK) << " dV " << relative(gv_h, ref.dV)
               << "   rms: dQ " << rms_relative(gq_h, ref.dQ) << " dK " << rms_relative(gk_h, ref.dK) << " dV "
-              << rms_relative(gv_h, ref.dV) << "\n";
+              << rms_relative(gv_h, ref.dV) << "   bias: dQ " << scale_bias(gq_h, ref.dQ) << " dK "
+              << scale_bias(gk_h, ref.dK) << " dV " << scale_bias(gv_h, ref.dV) << "\n";
     if (std::getenv("CYCLIC_DUMP_BLOCKS") != nullptr) {
         for (const auto& [name, g, r] : {std::tuple{"dQ", &gq_h, &ref.dQ}, std::tuple{"dK", &gk_h, &ref.dK},
                                           std::tuple{"dV", &gv_h, &ref.dV}}) {
