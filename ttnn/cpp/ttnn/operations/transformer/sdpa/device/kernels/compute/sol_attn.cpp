@@ -160,7 +160,7 @@ void kernel_main() {
         // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head q_chunk
         // from each flat index. num_phases==1 is pinned for streaming, so the chunked offset comes
         // from phase 1.
-        sdpa_standard_v2<
+        sol_attn_standard_v2<
             Sq_chunk_t,
             Sk_chunk_t,
             valid_Skt,
@@ -188,7 +188,8 @@ void kernel_main() {
             cb_attention_sink,
             use_provided_mask,
             use_windowed_narrowing,
-            cb_windowed_k_range>(
+            cb_windowed_k_range,
+            chunk_keep_every>(
             global_q_count,
             k_num_chunks,
             cb_out_im_A,
