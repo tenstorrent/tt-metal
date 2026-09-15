@@ -886,3 +886,201 @@ def test_sharded_concat_ragged_last_core_width(device, shape):
         (4, 32),
         num_cores=3,
     )
+
+
+def _sharded_grid_2d(grid_cols, grid_rows):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))})
+
+
+def _flat_height(shape):
+    """A sharded tensor is stored as the 2D flattening (prod(dims[:-1]), dims[-1])."""
+    h = 1
+    for d in shape[:-1]:
+        h *= d
+    return h
+
+
+# Issue #55342: a height concat has to interleave per leading index. Both sharded height-concat
+# factories instead appended whole input shards, which is the same thing only when every dim
+# before rank-2 is 1 -- the rank-4 (1, 1, H, W) model case the existing tests all use. With a
+# leading dim > 1 the result was [all of input 0; all of input 1] rather than per-leading-index
+# interleaved: right shape, in-bounds writes, silently wrong data.
+#
+# The comparison has to be exact. The wrong layout is a *permutation* of the correct data, so PCC
+# and allclose stay high while every block after the first is misplaced; _run_sharded_concat uses
+# assert_equal.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("num_inputs", [2, 3])
+@pytest.mark.parametrize(
+    "shape, num_cores",
+    [
+        # --- leading dims all 1: the block count is 1 and this is the pre-fix behaviour ---
+        ((1, 4, 16), 1),
+        ((1, 1, 32, 32), 1),
+        # --- rank 3, 4, 5 with a leading dim > 1 ---
+        ((2, 4, 16), 1),
+        ((2, 1, 4, 16), 1),
+        ((2, 1, 1, 4, 16), 1),
+        # --- block counts other than a power of two, and more than one leading dim > 1 ---
+        ((3, 4, 16), 1),
+        ((2, 3, 4, 16), 1),
+        # --- multi-core: the width split is orthogonal to the block loop, so both must hold ---
+        ((2, 4, 32), 2),
+        ((2, 3, 4, 64), 4),
+        # --- tile-aligned, so TILE layout actually runs; the block stride is then in tiles ---
+        ((2, 32, 32), 1),
+        ((2, 1, 32, 32), 1),
+        ((2, 1, 1, 32, 32), 1),
+        ((2, 1, 32, 64), 2),
+        ((3, 32, 64), 2),
+        # The issue's hardware-confirmed config. Row-major only: a width-sharded TILE tensor
+        # needs a tile-wide shard, and 32 // 2 is not.
+        ((2, 1, 32, 32), 2),
+    ],
+)
+def test_sharded_concat_height_leading_dims_width_sharded(device, layout, dtype, num_inputs, shape, num_cores):
+    # Width sharding splits the last dim, so TILE needs the *shard* width tile-aligned too, not
+    # just the tensor's.
+    if layout == ttnn.TILE_LAYOUT and (
+        shape[-2] % 32 != 0 or shape[-1] % 32 != 0 or (shape[-1] // num_cores) % 32 != 0
+    ):
+        pytest.skip("TILE layout requires tile-aligned H and shard W")
+
+    flat_h = _flat_height(shape)
+    _run_sharded_concat(
+        device,
+        layout,
+        dtype,
+        shape,
+        num_inputs,
+        -2,
+        ttnn.ShardStrategy.WIDTH,
+        (flat_h, shape[-1] // num_cores),
+        (flat_h * num_inputs, shape[-1] // num_cores),
+        num_cores=num_cores,
+    )
+
+
+# Same bug in ConcatBlockShardedProgramFactory, where it was the cum_h accumulation advancing by a
+# whole input height. Harder than the width-sharded half because block sharding splits the height
+# across grid rows: a core's output rows can straddle a leading-index boundary and so pull from
+# more than one source core. The (leading index, input) segments below are walked in output-row
+# order and the existing first_src_r/last_src_r split handles the cross-core sourcing.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "shape, num_inputs, grid_cols, grid_rows",
+    [
+        # Leading dims all 1: one block, pre-fix behaviour.
+        ((1, 1, 64, 64), 2, 2, 2),
+        # Leading dim > 1. Two blocks over two grid rows: each core's rows are exactly one block,
+        # so every segment still comes from a single source core.
+        ((2, 1, 64, 64), 2, 2, 2),
+        ((2, 64, 64), 2, 2, 2),
+        ((2, 1, 1, 64, 64), 2, 2, 2),
+        # Three blocks over two grid rows: the middle core's output rows straddle a block
+        # boundary, so its segments pull from two source cores.
+        ((3, 1, 64, 64), 2, 2, 2),
+        # Four blocks, and a non-square grid so grid_cols != grid_rows is exercised. W is 128 so
+        # the 4-column split still leaves a tile-wide shard.
+        ((4, 1, 64, 128), 2, 4, 2),
+        # Three inputs.
+        ((2, 1, 64, 64), 3, 2, 2),
+    ],
+)
+def test_sharded_concat_height_leading_dims_block_sharded(
+    device, layout, dtype, shape, num_inputs, grid_cols, grid_rows
+):
+    flat_h = _flat_height(shape)
+    shard_shape = (flat_h // grid_rows, shape[-1] // grid_cols)
+    output_shard = (flat_h * num_inputs // grid_rows, shape[-1] // grid_cols)
+
+    shard_grid = _sharded_grid_2d(grid_cols, grid_rows)
+    input_mem = ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=True,
+    )
+    output_mem = ttnn.create_sharded_memory_config(
+        output_shard,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    torch_inputs = [random_torch_tensor(dtype, shape) for _ in range(num_inputs)]
+    torch_out = torch.concat(torch_inputs, dim=-2)
+
+    ttnn_inputs = [
+        ttnn.to_memory_config(ttnn.from_torch(t, layout=layout, device=device, dtype=dtype), input_mem)
+        for t in torch_inputs
+    ]
+    ttnn_out = ttnn.concat(ttnn_inputs, dim=-2, memory_config=output_mem)
+
+    assert (
+        ttnn_out.memory_config() == output_mem
+    ), f"output memory config is {ttnn_out.memory_config()}, expected {output_mem}"
+    assert tuple(ttnn_out.shape) == tuple(torch_out.shape), (
+        f"wrong output shape: got {tuple(ttnn_out.shape)}, expected {tuple(torch_out.shape)} for "
+        f"concat({num_inputs}x{tuple(shape)}, dim=-2) BLOCK, {layout}, {dtype}, "
+        f"shard {shard_shape} -> {output_shard} on {grid_cols}x{grid_rows} cores"
+    )
+    assert_equal(torch_out, ttnn.to_torch(ttnn_out))
+
+
+# The issue's repro, spelled out. Distinct arange fills so a failure names which block moved where
+# instead of just reporting a mismatch; uint32 so the values are exact at any size. Checks the full
+# tensor, and separately the first column of each flattened row, which is the view in the issue:
+#   got      [0,16,32,48,  64,  80,  96, 112, 1000,...]   <- all of a, then all of b
+#   expected [0,16,32,48,1000,1016,1032,1048,   64,...]   <- interleaved per leading index
+@pytest.mark.parametrize(
+    "strategy, shape, grid_cols, grid_rows",
+    [
+        (ttnn.ShardStrategy.WIDTH, (2, 4, 16), 1, 2),
+        (ttnn.ShardStrategy.WIDTH, (2, 32, 32), 1, 2),
+        (ttnn.ShardStrategy.BLOCK, (2, 1, 64, 64), 2, 2),
+    ],
+)
+def test_sharded_concat_height_interleaves_leading_dims(device, strategy, shape, grid_cols, grid_rows):
+    num_inputs = 2
+    numel = 1
+    for d in shape:
+        numel *= d
+    torch_inputs = [
+        (torch.arange(numel, dtype=torch.int64) + i * 1000).to(torch.int32).reshape(shape) for i in range(num_inputs)
+    ]
+    torch_out = torch.concat(torch_inputs, dim=-2)
+
+    flat_h = _flat_height(shape)
+    if strategy == ttnn.ShardStrategy.WIDTH:
+        shard_shape = (flat_h, shape[-1] // (grid_cols * grid_rows))
+        output_shard = (flat_h * num_inputs, shape[-1] // (grid_cols * grid_rows))
+    else:
+        shard_shape = (flat_h // grid_rows, shape[-1] // grid_cols)
+        output_shard = (flat_h * num_inputs // grid_rows, shape[-1] // grid_cols)
+
+    shard_grid = _sharded_grid_2d(grid_cols, grid_rows)
+    input_mem = ttnn.create_sharded_memory_config(
+        shard_shape, core_grid=shard_grid, strategy=strategy, use_height_and_width_as_shard_shape=True
+    )
+    output_mem = ttnn.create_sharded_memory_config(
+        output_shard, core_grid=shard_grid, strategy=strategy, use_height_and_width_as_shard_shape=True
+    )
+
+    ttnn_inputs = [
+        ttnn.to_memory_config(
+            ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.uint32), input_mem
+        )
+        for t in torch_inputs
+    ]
+    ttnn_out = ttnn.to_torch(ttnn.concat(ttnn_inputs, dim=-2, memory_config=output_mem))
+
+    got_col0 = ttnn_out.reshape(-1, shape[-1])[:, 0].tolist()
+    expected_col0 = torch_out.reshape(-1, shape[-1])[:, 0].tolist()
+    assert got_col0 == expected_col0, (
+        f"height concat did not interleave the {_flat_height(shape) // shape[-2]} leading indices.\n"
+        f"column 0 of each flattened row:\n  got     : {got_col0}\n  expected: {expected_col0}"
+    )
+    assert_equal(torch_out, ttnn_out)
