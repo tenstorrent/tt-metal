@@ -55,8 +55,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // in0 -> SrcB, in1 -> SrcA; the same geometry hw_configure programmed the unpacker with.
-    const ckernel::TensorShape tensor_shape_in0 = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces_B);
-    const ckernel::TensorShape tensor_shape_in1 = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces_A);
+    // Explicit face grid: the legacy helper always maps num_faces == 2 to 1x2 and cannot express 2x1.
+    const auto face_grid_rows = [](const std::uint32_t num_faces) { return num_faces > 2 ? 2 : 1; };
+    const auto face_grid_cols = [](const std::uint32_t num_faces) { return num_faces > 1 ? 2 : 1; };
+    const ckernel::TensorShape tensor_shape_in0 =
+        ckernel::make_tensor_shape(FACE_R_DIM, ckernel::MAX_FACE_C_DIM, face_grid_rows(num_faces_B), face_grid_cols(num_faces_B));
+    const ckernel::TensorShape tensor_shape_in1 =
+        ckernel::make_tensor_shape(FACE_R_DIM, ckernel::MAX_FACE_C_DIM, face_grid_rows(num_faces_A), face_grid_cols(num_faces_A));
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)

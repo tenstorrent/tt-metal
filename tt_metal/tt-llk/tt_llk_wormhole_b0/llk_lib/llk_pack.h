@@ -79,8 +79,8 @@ static __attribute__((noinline, noclone)) void pack_multitile(const std::uint32_
 /**
  * @brief Compute the packed L1 footprint (in bytes) of a tile for a given format and datum count.
  *
- * Thin alias for @ref TILE_SIZE_BYTES, which the unpack side uses to derive the TILE_SIZE_A/B GPRs;
- * sharing it keeps pack and unpack tile addressing in agreement.
+ * Thin alias for @ref TILE_SIZE_BYTES. Shares the mantissa and exponent-byte sizing with the
+ * unpack side, which adds L1-word alignment on top and returns words rather than bytes.
  *
  * @param pack_dst_format: Destination (L1) data format.
  * @param datum_count: Number of datums in the tile.

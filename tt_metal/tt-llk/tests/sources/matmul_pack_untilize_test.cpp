@@ -15,7 +15,6 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 const std::uint32_t ct_dim             = 1;
 const bool UNTILIZE                    = true;
-std::uint32_t face_size                = 128;
 std::uint32_t tile_size                = 16 * 16 * 4;
 const ckernel::DstSync sync            = ckernel::DstSync::SyncHalf;
 

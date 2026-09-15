@@ -70,7 +70,7 @@ inline constexpr std::uint32_t _llk_unpack_tile_size_(
         // TILE_SIZE_BYTES sizes the shared-exponent section at one byte per 16 datums. Hardware
         // reserves whole 16-byte L1 words for that section, so a tile with fewer than 16 face rows
         // still pays for 16 exponent bytes.
-        const std::uint32_t exp_bytes = datum_count / 16;
+        const std::uint32_t exp_bytes = datum_count / BFP_EXP_GROUP_DATUMS;
         tile_size_bytes += ((exp_bytes + L1_WORD_SIZE_BYTES - 1) & ~(L1_WORD_SIZE_BYTES - 1)) - exp_bytes;
     }
 

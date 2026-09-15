@@ -270,6 +270,9 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
 // Per-tile L1 footprint in bytes of `datum_count` datums of `format`. SCALE_DATUM_SIZE keeps
 // one-byte-per-datum for the sub-byte BFP payloads, so correct it here (Bfp4 packs 2 datums/byte,
 // Bfp2 packs 4) and add the shared exponent byte every BFP* format stores per 16 datums.
+// BFP formats store one shared exponent byte per this many datums.
+constexpr static std::uint32_t BFP_EXP_GROUP_DATUMS = 16;
+
 constexpr static std::uint32_t TILE_SIZE_BYTES(std::uint32_t format, std::uint32_t datum_count)
 {
     std::uint32_t tile_size_bytes = SCALE_DATUM_SIZE(format, datum_count);
@@ -296,7 +299,7 @@ constexpr static std::uint32_t TILE_SIZE_BYTES(std::uint32_t format, std::uint32
 
     if (IS_BFP_FORMAT(format))
     {
-        tile_size_bytes += datum_count / 16;
+        tile_size_bytes += datum_count / BFP_EXP_GROUP_DATUMS;
     }
 
     return tile_size_bytes;
