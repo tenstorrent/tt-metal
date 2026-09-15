@@ -46,6 +46,19 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                         case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_2:
                         case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_2:
                             defines.push_back("UCK_CHLKC_PACK");
+                            // DPRINT is force-disabled on the pack firmware for now. The DEST-register
+                            // dump rendezvous (ckernel_debug.h) is currently unpack<->math only -- pack
+                            // is not yet a participant, so it never prints -- yet DEBUG_PRINT_ENABLED
+                            // still compiles the DPRINT ring machinery into every compute firmware. Pack
+                            // is the largest of the three, so that unused machinery pushes its firmware
+                            // over the fixed TRISC code region (MEM_TRISC_FIRMWARE_SIZE) at device open.
+                            // Eliding it here keeps pack within the region without a memory-map change.
+                            // Firmware only (a pack kernel may still print). Remove this once pack joins
+                            // the rendezvous / can print without overflowing the region.
+                            if (params.is_fw &&
+                                params.rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+                                defines.push_back("FORCE_DPRINT_OFF");
+                            }
                             break;
                         case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_3:
                         case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_3:
