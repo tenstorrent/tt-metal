@@ -123,6 +123,7 @@ def prefill_forward(
     tt_ccl=None,
     num_devices=1,
     topology=None,
+    reduce=True,
 ):
     """hidden_states [1,1,S,H] (S multiple of 32), routing_weights [1,1,S,E]. Returns [1,1,S,H/tp]."""
     seq_len = hidden_states.shape[2]
@@ -161,7 +162,7 @@ def prefill_forward(
 
     # Row-parallel down_proj partials -> reduce-scatter (fractured hidden), matching
     # Qwen36MLP._forward_tp.
-    if num_devices > 1:
+    if num_devices > 1 and reduce:
         result_acc = tt_all_reduce(
             result_acc,
             mesh_device,

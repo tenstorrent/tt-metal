@@ -22,7 +22,7 @@ class Qwen36Experts:
         experts_per_device = config.num_experts // self.num_devices if self.num_devices > 1 else config.num_experts
         self.prefill_sparsity = create_prefill_sparsity(mesh_device, experts_per_device)
 
-    def __call__(self, hidden_states, dense_routing, mode="decode"):
+    def __call__(self, hidden_states, dense_routing, mode="decode", reduce=True):
         """hidden_states [1,1,S,H] (S=batch in decode, seq in prefill), dense_routing
         [1,1,S,E] -> [1,1,S,H/tp]. mode ('decode'|'prefill') selects the path."""
         if mode == "decode":
@@ -35,6 +35,7 @@ class Qwen36Experts:
                 tt_ccl=self.tt_ccl,
                 num_devices=self.num_devices,
                 topology=self.topology,
+                reduce=reduce,
             )
         seq_len = hidden_states.shape[2]
         assert seq_len % 32 == 0, f"Prefill seq_len must be a multiple of 32, got {seq_len}"
@@ -48,4 +49,5 @@ class Qwen36Experts:
             tt_ccl=self.tt_ccl,
             num_devices=self.num_devices,
             topology=self.topology,
+            reduce=reduce,
         )
