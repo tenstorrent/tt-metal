@@ -162,7 +162,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_unary_sfpu": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -175,6 +175,7 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "fused_sort",
             "iterations",
             "loop_factor",
             "marker",
@@ -302,7 +303,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_fused": "perf_fused"},
     },
     "perf_math_matmul": {
-        "version": 3,
+        "version": 5,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -319,13 +320,19 @@ PERF_TEST_SCHEMAS = {
             "in0_r_dim",
             "in1_c_dim",
             "in1_r_dim",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
             "k_dimm",
             "loop_factor",
             "marker",
             "math_fidelity",
+            "num_blocks",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
             "partial_a",
             "partial_b",
             "partial_face_math",
@@ -645,7 +652,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_ternary": "perf_sfpu_ternary"},
     },
     "perf_vif_targets": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -658,6 +665,7 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "fused_sort",
             "iterations",
             "loop_factor",
             "marker",

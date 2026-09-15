@@ -53,10 +53,10 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280' --wrapper-invocation",
-            10_405_747,  # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox, 8xP150), run 33194029504.
-            # One sample, superseding 10_963_542: the 2D matmul program configs drop the Matmul
-            # bucket 1,800,354 -> 1,301,974 ns against main while Other holds within 0.06%. Keep
-            # cutting this gate on the CI runner -- bh-lb-15 read the old value 23% high.
+            9_134_448,  # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox, 8xP150), run 34128459250.
+            # One sample. The routed expert carries the delta: 3,128,319 ns against a 6,006,129 ns
+            # remainder the previous centre also had to contain, putting the op alone at 1.41x.
+            # Keep cutting this gate on the CI runner -- bh-lb-15 read the old value 23% high.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
