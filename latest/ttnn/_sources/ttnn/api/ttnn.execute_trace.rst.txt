@@ -1,0 +1,8 @@
+﻿ttnn.execute\_trace
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.execute_trace:
+
+.. autodata:: ttnn.execute_trace

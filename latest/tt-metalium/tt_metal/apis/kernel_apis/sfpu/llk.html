@@ -555,6 +555,49 @@ is accessed.</p>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">v_and</span></code> can be used inside any predicated conditional block (i.e., a <code class="docutils literal notranslate"><span class="pre">v_block</span></code> or a <code class="docutils literal notranslate"><span class="pre">v_if</span></code>).</p>
 </section>
+<section id="register-pressure">
+<h4>Register Pressure<a class="headerlink" href="#register-pressure" title="Permalink to this heading"></a>
+</h4>
+<p>Register pressure refers to the number of live variables, which should
+be held in registers, at any point in the program.  The more live
+values, the higher the pressure. The SFPU only has 8 LRegs available
+to hold variables. Usually when more values are live the compiler will
+emit spill and fill code to store values on the program stack.  But
+this is not possible on the SFPU, as there is no simple path between the
+lregs and memory for the lregs. If this situation happens, the
+compiler will emit an error message of the form:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">error</span><span class="p">:</span> <span class="n">there</span> <span class="n">are</span> <span class="n">too</span> <span class="n">few</span> <span class="n">lregs</span> <span class="n">to</span> <span class="n">hold</span> <span class="n">live</span> <span class="n">values</span>
+<span class="n">note</span><span class="p">:</span> <span class="k">try</span> <span class="s1">'sfpi::lreg_pressure'</span><span class="p">,</span> <span class="ow">or</span> <span class="n">reduce</span> <span class="n">the</span> <span class="n">number</span> <span class="n">of</span> <span class="n">live</span> <span class="n">variables</span>
+<span class="n">note</span><span class="p">:</span> <span class="n">instruction</span> <span class="ow">is</span> <span class="s1">'1504: [sp:SI]=L0:XTT32SI       REG_DEAD L0:XTT32SI'</span>
+</pre></div>
+</div>
+<p>The preceeding <code class="docutils literal notranslate"><span class="pre">inlined</span> <span class="pre">from</span> <span class="pre">...</span></code> lines provide information about
+the context of the instruction (usually the instruction is embedded in
+the sfpi library, so somewhere further back in the include chain is
+the cause).</p>
+<p>As the note indicates, sfpi provides a type that can be used to tell
+the compiler register pressure is high, and therefore avoid
+optimizations that can increase it. It is not however a guaranteed
+solution.  To use this, place:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">sfpi</span><span class="o">::</span><span class="n">lreg_pressure</span><span class="w"> </span><span class="n">_</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>in the scope you determine to have high register pressure. (The <code class="docutils literal notranslate"><span class="pre">_</span></code>
+indicates an aribtrary name of no importance.) The pressure will be
+noted between the defined variable and the end of the scope.  If,
+within a high pressure area you determine the pressure drops, you may
+embed:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">sfpi</span><span class="o">::</span><span class="n">lreg_pressure</span><span class="w"> </span><span class="nf">_</span><span class="p">(</span><span class="nb">false</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>which will reduce the pressure from that point until the end of its
+scope. <code class="docutils literal notranslate"><span class="pre">lreg_pressure</span></code> objects nest the pressure correctly, so one
+may be embedded within another’s scope (most likely via function
+inlining).</p>
+</section>
 </section>
 <section id="data-type-details">
 <h3>Data Type Details<a class="headerlink" href="#data-type-details" title="Permalink to this heading"></a>
@@ -1177,14 +1220,27 @@ back into the LReg.</p>
 <span class="w">                                 </span><span class="c1">// to preserve the value in LReg1 (if desired)</span>
 </pre></div>
 </div>
-<p>You may mark an lreg as used in code that the compiler cannot examine
-with the <code class="docutils literal notranslate"><span class="pre">used</span></code> function:</p>
+<p>Mark an LReg as occupied in a region the compiler cannot examine with
+<code class="docutils literal notranslate"><span class="pre">used()</span></code>.  Call it before a raw <code class="docutils literal notranslate"><span class="pre">TTI_*</span></code> / <code class="docutils literal notranslate"><span class="pre">TT_*</span></code> sequence so the
+compiler will not keep an SFPI value live in that LReg, and again after
+so it will not assume the LReg still holds an SFPI value:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="n">l_reg</span><span class="p">[</span><span class="n">LRegs</span><span class="o">::</span><span class="n">LReg0</span><span class="p">].</span><span class="n">used</span><span class="p">();</span>
-<span class="c1">// your code here</span>
+<div class="highlight"><pre><span></span><span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">;</span>
+
+<span class="n">l_reg</span><span class="p">[</span><span class="n">LRegs</span><span class="o">::</span><span class="n">LReg0</span><span class="p">].</span><span class="n">used</span><span class="p">();</span><span class="w">   </span><span class="c1">// LReg0 is not live going in</span>
+<span class="n">TTI_SFPLOAD</span><span class="p">(...);</span><span class="w">             </span><span class="c1">// raw instruction writes LReg0</span>
+<span class="n">TT_SFPSTORE</span><span class="p">(...);</span>
+<span class="n">l_reg</span><span class="p">[</span><span class="n">LRegs</span><span class="o">::</span><span class="n">LReg0</span><span class="p">].</span><span class="n">used</span><span class="p">();</span><span class="w">   </span><span class="c1">// LReg0 contents are unknown going out</span>
+
+<span class="n">vFloat</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
+<span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">y</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>The compiler will not keep a value live in  lreg0 across your code.</p>
+<p>Without <code class="docutils literal notranslate"><span class="pre">used()</span></code>, mixing SFPI with those macros is undefined (see
+Mixing SFPI with <code class="docutils literal notranslate"><span class="pre">TTI</span></code> / <code class="docutils literal notranslate"><span class="pre">TT</span></code> below).  Prefer expressing the
+sequence in SFPI; if that is not possible, write the whole region in
+<code class="docutils literal notranslate"><span class="pre">TTI</span></code>/<code class="docutils literal notranslate"><span class="pre">TT</span></code>, or mark every occupied LReg as shown above.</p>
 </section>
 </section>
 </section>
@@ -1284,6 +1340,32 @@ vector to memory will result in an error similar to the following:</p>
 Therefore, all function calls must be inlined.  To ensure this use
 <code class="docutils literal notranslate"><span class="pre">sfpi_inline</span></code>, which is defined to <code class="docutils literal notranslate"><span class="pre">__attribute__((always_inline))</span></code> on GCC.</p>
 </section>
+<section id="return-inside-v-if">
+<h3>Return Inside <code class="docutils literal notranslate"><span class="pre">v_if</span></code><a class="headerlink" href="#return-inside-v-if" title="Permalink to this heading"></a>
+</h3>
+<p>Do not <code class="docutils literal notranslate"><span class="pre">return</span></code> inside a <code class="docutils literal notranslate"><span class="pre">v_if</span></code>.  <code class="docutils literal notranslate"><span class="pre">return</span></code> is a C++ statement lowered to
+scalar, non-predicated control flow: it exits the whole function for every
+vector lane and skips the matching <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> (unbalanced CC stack).  There
+is no per-lane early out.  Handle special cases with predicated assignment
+instead (<code class="docutils literal notranslate"><span class="pre">v_if</span> <span class="pre">(cond)</span> <span class="pre">{</span> <span class="pre">result</span> <span class="pre">=</span> <span class="pre">x;</span> <span class="pre">}</span> <span class="pre">v_endif;</span></code>) and let later stores
+overwrite.  A scalar <code class="docutils literal notranslate"><span class="pre">if</span></code> outside a vector-predicated block can still
+<code class="docutils literal notranslate"><span class="pre">return</span></code>.</p>
+</section>
+<section id="mixing-sfpi-with-tti-tt">
+<h3>Mixing SFPI with <code class="docutils literal notranslate"><span class="pre">TTI</span></code> / <code class="docutils literal notranslate"><span class="pre">TT</span></code><a class="headerlink" href="#mixing-sfpi-with-tti-tt" title="Permalink to this heading"></a>
+</h3>
+<p>Do not mix SFPI vector code (<code class="docutils literal notranslate"><span class="pre">vFloat</span></code>, <code class="docutils literal notranslate"><span class="pre">v_if</span></code>, <code class="docutils literal notranslate"><span class="pre">dst_reg</span></code>) with raw
+<code class="docutils literal notranslate"><span class="pre">TTI_*</span></code> / <code class="docutils literal notranslate"><span class="pre">TT_*</span></code> instruction macros in the same live region.  The
+compiler allocates LRegs and manages the CC stack; those macros write
+numbered LRegs and CC that the compiler cannot see.  The result is
+undefined: live SFPI values can be overwritten, the CC stack can become
+unbalanced, and the optimizer can reorder the instruction stream.</p>
+<p>When a sequence cannot be expressed in SFPI, implement that region
+entirely with <code class="docutils literal notranslate"><span class="pre">TTI</span></code>/<code class="docutils literal notranslate"><span class="pre">TT</span></code>.  If SFPI and a raw sequence must appear in
+the same function, mark each occupied LReg with <code class="docutils literal notranslate"><span class="pre">l_reg[n].used()</span></code> so
+the compiler will not keep a value live across the raw sequence (see
+Assigning LRegs above).</p>
+</section>
 <section id="register-spilling">
 <h3>Register Spilling<a class="headerlink" href="#register-spilling" title="Permalink to this heading"></a>
 </h3>
@@ -1309,6 +1391,8 @@ called by a wrapper function before showing the line number in the user’s code
 <div>
 <ul class="simple">
 <li><p>Forgetting a <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> results in mismatched {} error which can be confusing (however, catches the case where a <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> is missing!)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">return</span></code> inside a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> is not a per-lane early out; it exits the whole function and skips <code class="docutils literal notranslate"><span class="pre">v_endif</span></code></p></li>
+<li><p>Mixing SFPI with raw <code class="docutils literal notranslate"><span class="pre">TTI_*</span></code> / <code class="docutils literal notranslate"><span class="pre">TT_*</span></code> macros in the same live region is undefined (compiler-allocated LRegs and CC vs numbered registers the compiler cannot see)</p></li>
 <li><p>In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code</p></li>
 <li><p>Keeping too many variables alive at once requires register spilling which is not implemented and causes a compiler abort</p></li>
 <li><p>The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.</p></li>

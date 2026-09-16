@@ -1,0 +1,8 @@
+﻿ttnn.clamped\_silu\_glu
+=======================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.clamped_silu_glu:
+
+.. autooperation:: ttnn.clamped_silu_glu

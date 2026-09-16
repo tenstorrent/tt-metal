@@ -1,0 +1,8 @@
+﻿ttnn.end\_trace\_capture
+========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.end_trace_capture:
+
+.. autodata:: ttnn.end_trace_capture

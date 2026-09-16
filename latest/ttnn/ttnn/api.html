@@ -244,6 +244,13 @@
 </li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="#trace">Trace</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="api/ttnn.begin_trace_capture.html">ttnn.begin_trace_capture</a></li>
+<li class="toctree-l3"><a class="reference internal" href="api/ttnn.end_trace_capture.html">ttnn.end_trace_capture</a></li>
+<li class="toctree-l3"><a class="reference internal" href="api/ttnn.execute_trace.html">ttnn.execute_trace</a></li>
+<li class="toctree-l3"><a class="reference internal" href="api/ttnn.release_trace.html">ttnn.release_trace</a></li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="#memory-config">Memory Config</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="api/ttnn.create_sharded_memory_config.html">ttnn.create_sharded_memory_config</a></li>
 </ul>
@@ -435,6 +442,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.bitwise_and.html">ttnn.bitwise_and</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.bitwise_or.html">ttnn.bitwise_or</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.bitwise_xor.html">ttnn.bitwise_xor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.clamped_silu_glu.html">ttnn.clamped_silu_glu</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.div.html">ttnn.div</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.div_no_nan.html">ttnn.div_no_nan</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.divide.html">ttnn.divide</a></li>
@@ -937,6 +945,28 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </ol>
 </section>
 </section>
+</section>
+<section id="trace">
+<h2>Trace<a class="headerlink" href="#trace" title="Permalink to this heading"></a>
+</h2>
+<div class="tt-api-card-list docutils container">
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.begin_trace_capture.html#ttnn.begin_trace_capture" title="ttnn.begin_trace_capture"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.begin_trace_capture</span></code></a></p>
+<p class="tt-api-card-desc">ttnn.MeshDevice, *, cq_id: Optional[ttnn.QueueId] = None) -&gt; ttnn.MeshTraceId</p>
+</div>
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.end_trace_capture.html#ttnn.end_trace_capture" title="ttnn.end_trace_capture"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.end_trace_capture</span></code></a></p>
+<p class="tt-api-card-desc">ttnn.MeshDevice, trace_id: ttnn.MeshTraceId, *, cq_id: Optional[ttnn.QueueId] = None) -&gt; None</p>
+</div>
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.execute_trace.html#ttnn.execute_trace" title="ttnn.execute_trace"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.execute_trace</span></code></a></p>
+<p class="tt-api-card-desc">ttnn.MeshDevice, trace_id: ttnn.MeshTraceId, *, cq_id: Optional[ttnn.QueueId] = None, blocking: bool = True) -&gt; None</p>
+</div>
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.release_trace.html#ttnn.release_trace" title="ttnn.release_trace"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.release_trace</span></code></a></p>
+<p class="tt-api-card-desc">ttnn._ttnn.multi_device.MeshDevice, trace_id: ttnn._ttnn.operations.trace.MeshTraceId) -&gt; None</p>
+</div>
+</div>
 </section>
 <section id="memory-config">
 <h2>Memory Config<a class="headerlink" href="#memory-config" title="Permalink to this heading"></a>
@@ -1672,6 +1702,10 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.bitwise_xor.html#ttnn.bitwise_xor" title="ttnn.bitwise_xor"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.bitwise_xor</span></code></a></p>
 <p class="tt-api-card-desc">Perform bitwise_xor operation on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p>
+</div>
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.clamped_silu_glu.html#ttnn.clamped_silu_glu" title="ttnn.clamped_silu_glu"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.clamped_silu_glu</span></code></a></p>
+<p class="tt-api-card-desc">Computes DeepSeek-V4's clamped SiLU-GLU activation over the pre-split <code class="xref py py-attr docutils literal notranslate"><span class="pre">gate</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">up</span></code> tensors.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.div.html#ttnn.div" title="ttnn.div"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.div</span></code></a></p>

@@ -1,0 +1,8 @@
+﻿ttnn.begin\_trace\_capture
+==========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.begin_trace_capture:
+
+.. autodata:: ttnn.begin_trace_capture

@@ -1,0 +1,8 @@
+﻿ttnn.release\_trace
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.release_trace:
+
+.. autodata:: ttnn.release_trace
