@@ -618,7 +618,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
                 # dot-free symlink (e.g. Kimi-K2_7-Code) back to a dotted real dir (Kimi-K2.7-Code), and HF
                 # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
                 # safetensors load works through the symlink either way; only the config import cares.
-                # This matches _resolve_config_only, which already loads config from the raw env path.
+                # _resolve_config_only descends the same way for config.json.
                 return model_path.absolute()
             else:
                 logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
@@ -705,7 +705,10 @@ def _resolve_config_only(variant_name: str):
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:
-        model_path = Path(env_path)
+        # Descend into an HF hub-cache root's snapshot, where config.json lives, exactly as
+        # get_or_download_model does for the weights. Without this a hub-root env var falls
+        # through to the online download and fails under HF_HUB_OFFLINE=1.
+        model_path = _resolve_hf_snapshot_dir(Path(env_path))
         if (model_path / "config.json").exists():
             logger.info(f"Using existing config from {v.env_var}: {model_path}")
             return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(model_path), trust_remote_code=True))
@@ -747,8 +750,11 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     # Only variants that ship custom tokenizer code (e.g. Kimi) need trust_remote_code; DeepSeek-V3
     # uses a stock fast tokenizer and turns it off to avoid the flat-config custom-import path.
     trust_remote_code = v.tokenizer_trust_remote_code
+    env_path = os.getenv(v.env_var)
     candidates = [
-        os.getenv(v.env_var),
+        # Descend an HF hub-cache root to its snapshot, where tokenizer.json lives; the root itself
+        # holds only blobs/refs/snapshots, so the glob below never matches it.
+        str(_resolve_hf_snapshot_dir(Path(env_path))) if env_path else None,
         str(v.default_local_path) if v.default_local_path is not None else None,
         str(v.shared_path) if v.shared_path is not None else None,
     ]
