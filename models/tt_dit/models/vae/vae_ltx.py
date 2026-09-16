@@ -39,7 +39,7 @@ from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
-from .diffvae_ltx import DiffVAEDecoder
+from .diffvae_ltx import DiffVAEDecoder, DiffVAEOptions
 from .diffvae_ltx import decoder_config as diffvae_config
 
 if TYPE_CHECKING:
@@ -1582,6 +1582,7 @@ class LTXVideoVAEAdapter:
         height: int,
         width: int,
         diffusion_decoder: bool = False,
+        diffvae_options: DiffVAEOptions | None = None,
     ) -> None:
         self._checkpoint_path = checkpoint_path
         self._mesh_device = mesh_device
@@ -1610,42 +1611,17 @@ class LTXVideoVAEAdapter:
         # file: a 2.3 monolith has only the conv one, and 2.5 can be decoded either way.
         self._decoder: LTXVideoDecoder | DiffVAEDecoder | None = None
         if diffusion_decoder:
-            # The timing harness builds this decoder W-SHARDED over the mesh (and optionally with
-            # TP-over-heads on the orthogonal axis); the pipeline built it replicated on the
-            # linear-order executor, so none of the sharded fast path could be exercised end to end.
-            # These read the same environment the harness does and fall back to the previous
-            # replicated construction when nothing is set, so an existing pipeline run is
-            # unchanged. DIFFVAE_STAGE5_BACKEND selects the stage-5 executor ("bricked_sp_w_sharded",
-            # the default, or the replicated "linear_order"); DIFFVAE_STAGES_WSP=1 W-shards the
-            # deterministic stages too, on the executor DIFFVAE_STAGES_BACKEND names;
-            # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the rows axis.
-            from .diffvae_ltx import stages_backend_from_env
-
-            stage5_backend = os.environ.get("DIFFVAE_STAGE5_BACKEND")
-            stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
-            stages_backend = stages_backend_from_env() if stages_wsp else None
-            sharded = stage5_backend is not None or stages_wsp
-            tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
+            # How the decoder runs (executors, shard axes, fusions, host boundaries) is the
+            # caller's decision, carried in ``diffvae_options``; the default is replicated on the
+            # linear-order executor.
+            options = diffvae_options or DiffVAEOptions()
             self._decoder = DiffVAEDecoder(
                 diffvae_config(checkpoint_path),
                 mesh_device=mesh_device,
                 ccl_manager=vae_ccl_manager,
-                stage5_na3d_backend=(stage5_backend or "bricked_sp_w_sharded") if sharded else None,
-                stage5_sp_axis=1 if sharded else None,
-                stage5_tp_axis=tp_axis if sharded else None,
-                stages_na3d_backend=stages_backend,
-                stages_sp_axis=1 if stages_wsp else None,
-                stages_tp_axis=tp_axis if stages_wsp else None,
+                options=options,
             )
-            if sharded:
-                logger.info(
-                    f"VAE config: DiffVAE diffusion decoder, W-sharded "
-                    f"stage5={stage5_backend or 'bricked_sp_w_sharded'} "
-                    f"det_stages={f'W-sharded on {stages_backend}' if stages_wsp else 'replicated'} "
-                    f"tp_heads={'on' if tp_axis is not None else 'off'}"
-                )
-            else:
-                logger.info("VAE config: DiffVAE diffusion decoder (replicated)")
+            logger.info(f"VAE config: DiffVAE diffusion decoder {options}")
         elif self.decoder_blocks:
             self._decoder = LTXVideoDecoder(
                 decoder_blocks=self.decoder_blocks,
@@ -1698,7 +1674,7 @@ class LTXVideoVAEAdapter:
         if isinstance(self._decoder, DiffVAEDecoder):
             # No conv3d blocking to key on, and the remapping (folded statistics, permuted
             # upsample projections) lives on the decoder itself. The parameter layout is keyed
-            # because the DIFFVAE_DET_* flags change which parameters exist (see parameter_layout).
+            # because the deterministic block options change which parameters exist (see parameter_layout).
             decoder = self._decoder
             cache_module.load_model(
                 decoder,

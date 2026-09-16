@@ -12,6 +12,57 @@ import torch
 from loguru import logger
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """How the DiffVAE is built and what its instruments run with; see the two fixtures below."""
+    group = parser.getgroup("diffvae", "LTX-2.5 DiffVAE")
+    group.addoption("--diffvae", action="store_true", help="pipeline tests: decode with the DiffVAE diffusion decoder")
+    group.addoption(
+        "--diffvae-replicated",
+        action="store_true",
+        help="build the DiffVAE replicated on the linear-order executor with the host boundaries on the host",
+    )
+    group.addoption("--diffvae-slab-frames", type=int, default=78, help="stage-5 frames per band (0 runs it whole)")
+    group.addoption("--diffvae-no-tp-heads", action="store_true", help="no TP-over-heads on the rows axis")
+    group.addoption("--diffvae-gna-stride", default="1,1,1", metavar="T,H,W", help="stage-5 GNA query-group stride")
+    group.addoption("--diffvae-latent-t", type=int, help="decoder instruments: latent frames (output is 8T-7)")
+    group.addoption("--diffvae-iters", type=int, help="timing instruments: timed iterations")
+    group.addoption("--diffvae-topology", choices=("linear", "ring"), default="linear", help="standalone CCL topology")
+    group.addoption("--diffvae-num-links", type=int, help="standalone CCL links")
+    group.addoption("--diffvae-grid", metavar="TxHxW", help="stage-5 block instrument grid")
+
+
+@pytest.fixture
+def diffvae_options(request):
+    """How the DiffVAE decoder is built: the runner's production configuration unless the options say otherwise."""
+    import dataclasses
+
+    from models.tt_dit.models.vae.diffvae_ltx import DiffVAEOptions
+    from models.tt_dit.tools.diffvae_bench import parse_stride
+
+    opt = request.config.option
+    if opt.diffvae_replicated:
+        return DiffVAEOptions()
+    return dataclasses.replace(
+        DiffVAEOptions.production(slab_frames=opt.diffvae_slab_frames or None, tp_heads=not opt.diffvae_no_tp_heads),
+        gna_stride=parse_stride(opt.diffvae_gna_stride),
+    )
+
+
+@pytest.fixture
+def bench_options(request):
+    """What a DiffVAE instrument runs with (frames, iterations, collectives, grid)."""
+    from models.tt_dit.tools.diffvae_bench import BenchOptions, parse_grid, parse_topology
+
+    opt = request.config.option
+    return BenchOptions(
+        latent_t=opt.diffvae_latent_t,
+        iters=opt.diffvae_iters,
+        topology=parse_topology(opt.diffvae_topology),
+        num_links=opt.diffvae_num_links,
+        grid=parse_grid(opt.diffvae_grid) if opt.diffvae_grid else None,
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",

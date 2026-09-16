@@ -13,7 +13,7 @@ Submodules are named to mirror the checkpoint's own keys (``attn.qkv``, ``mlp.w_
 from __future__ import annotations
 
 import math
-import os
+from dataclasses import dataclass
 
 import torch
 
@@ -38,9 +38,97 @@ from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_p
 W_SHARDED_BACKENDS = frozenset({"bricked_sp_w_sharded"})
 
 
-def stages_backend_from_env(default: str = "bricked_sp_w_sharded") -> str:
-    """``DIFFVAE_STAGES_BACKEND``: the executor for the W-sharded deterministic stages 1-3."""
-    return os.environ.get("DIFFVAE_STAGES_BACKEND") or default
+@dataclass(frozen=True)
+class DetBlockOptions:
+    """Which forms the deterministic NA blocks build.
+
+    These change the parameter SET (one fused ``qkv`` or three projections, one packed ``gate_up``
+    or two), so they are part of the weight-cache key; see :meth:`DiffVAEDecoder.parameter_layout`.
+    """
+
+    #: One fused qkv GEMM, split by ``nlp_create_qkv_heads``.
+    fused_qkv: bool = False
+    #: The fused qkv weight sharded on its output axis over ``tp_axis``. Implies ``fused_qkv``.
+    colpar_qkv: bool = False
+    #: ``rotary_embedding_hf`` while still TILE. Needs ``fused_qkv``.
+    fused_rope: bool = False
+    #: One ``[up | gate]`` GEMM whose epilogue emits ``silu(gate) * up``.
+    fused_swiglu: bool = False
+    #: gate/up column-parallel and w_down row-parallel over ``tp_axis``. Implies ``fused_swiglu``.
+    tp_mlp: bool = False
+
+    def resolve(self, tp_axis: int | None) -> DetBlockOptions:
+        """The forms a block with this ``tp_axis`` actually builds.
+
+        Stage 1 runs replicated with no TP axis, so the column-parallel forms fall away there and
+        the plain fused ones stand; stages 2-4 get fused qkv from ``colpar_qkv`` alone.
+        """
+        colpar = self.colpar_qkv and tp_axis is not None
+        tp_mlp = self.tp_mlp and tp_axis is not None
+        fused_qkv = self.fused_qkv or colpar
+        return DetBlockOptions(
+            fused_qkv=fused_qkv,
+            colpar_qkv=colpar,
+            fused_rope=self.fused_rope and fused_qkv,
+            fused_swiglu=self.fused_swiglu or tp_mlp,
+            tp_mlp=tp_mlp,
+        )
+
+
+@dataclass(frozen=True)
+class DiffVAEOptions:
+    """Everything about HOW :class:`DiffVAEDecoder` runs that is not in the checkpoint's architecture.
+
+    Resolved once by whoever builds the decoder and handed down; nothing below the decoder reads
+    the environment. :meth:`production` is the configuration the runner scripts ship.
+    """
+
+    #: Stage-5 executor: ``"linear_order"`` (replicated), ``"bricked"`` (replicated, bricked order)
+    #: or ``"bricked_sp_w_sharded"`` (this chip's W-band over ``stage5_sp_axis``).
+    stage5_backend: str = "linear_order"
+    stage5_sp_axis: int | None = None
+    #: TP-over-heads on the orthogonal mesh axis, only under a W-sharded backend.
+    stage5_tp_axis: int | None = None
+    #: Deterministic stages 1-3 executor; the same names, minus ``"bricked"``. Stage 1 always runs
+    #: replicated on ``"linear_order"`` (its W does not divide the mesh axis).
+    stages_backend: str = "linear_order"
+    stages_sp_axis: int | None = None
+    stages_tp_axis: int | None = None
+    #: Deterministic block forms.
+    det: DetBlockOptions = DetBlockOptions()
+    #: One fused stage-5 qkv GEMM, split by slicing the packed output.
+    stage5_fused_qkv: bool = False
+    #: Column-parallel stage-5 qkv over ``stage5_tp_axis``; each chip projects only its heads.
+    stage5_tp_proj: bool = True
+    #: Generalized Neighborhood Attention query-group stride, physical (t, h, w). (1, 1, 1) is the
+    #: shipped architecture.
+    gna_stride: tuple[int, int, int] = (1, 1, 1)
+    #: Frames per stage-5 band, or None to run the volume whole.
+    slab_frames: int | None = None
+    #: The decode's two host boundaries run on device: ghost pad and flatten on the way in; x_t
+    #: noise, tile-pad trim and depth-to-space on the way out. The traced decode needs it, and the
+    #: output side needs a W-sharded stage 5.
+    device_boundaries: bool = False
+    #: Whether the pipeline evicts a resident DiT before decoding. None: exclusive unless stage 5
+    #: is sharded, which is when it holds a fraction of the volume per chip and fits beside the DiT.
+    exclusive_residency: bool | None = None
+
+    @classmethod
+    def production(cls, *, slab_frames: int | None = 78, tp_heads: bool = True) -> DiffVAEOptions:
+        """The 4x8 1080p configuration the runner scripts ship: both halves W-sharded on the bricked
+        executor over the columns axis, TP-over-heads on the rows axis, every fusion on."""
+        tp_axis = 0 if tp_heads else None
+        return cls(
+            stage5_backend="bricked_sp_w_sharded",
+            stage5_sp_axis=1,
+            stage5_tp_axis=tp_axis,
+            stages_backend="bricked_sp_w_sharded",
+            stages_sp_axis=1,
+            stages_tp_axis=tp_axis,
+            det=DetBlockOptions(fused_qkv=True, colpar_qkv=True, fused_rope=True, fused_swiglu=True),
+            slab_frames=slab_frames,
+            device_boundaries=True,
+        )
 
 
 def decoder_config(path) -> dict:
@@ -186,6 +274,7 @@ class NeighborhoodAttention(Module):
         ccl_manager=None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
+        options: DetBlockOptions = DetBlockOptions(),
     ):
         super().__init__()
         assert dim % head_dim == 0, f"dim={dim} not divisible by head_dim={head_dim}"
@@ -205,16 +294,17 @@ class NeighborhoodAttention(Module):
         self.tp_axis = tp_axis
         self.rope_dim_split = default_rope_dim_split(head_dim)
 
-        # DIFFVAE_DET_COLPAR_QKV=1: shard the fused qkv weight on its output axis so each chip's
-        # matmul computes only its own heads. Implies fused_qkv.
-        self.colpar_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_COLPAR_QKV") == "1"
-        # DIFFVAE_DET_FUSED_QKV=1: one fused qkv matmul split by nlp_create_qkv_heads, partitioning
-        # the heads over tp_axis first so the norms, scale and RoPE run on heads/tp. Not gated on
-        # tp_axis: at tp=1 the partition is skipped and the TILE (B, NH, S, HD) layout stands alone.
-        self.fused_qkv = self.colpar_qkv or os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1"
-        # DIFFVAE_DET_FUSED_ROPE=1: one rotary_embedding_hf per lane, applied while still TILE. The
-        # weight fold already puts q/k in HF's rotate_half convention; it needs full-width cos/sin.
-        self.fused_rope = self.fused_qkv and os.environ.get("DIFFVAE_DET_FUSED_ROPE") == "1"
+        opts = options.resolve(tp_axis)
+        # colpar_qkv: the fused qkv weight sharded on its output axis, so each chip's matmul computes
+        # only its own heads.
+        self.colpar_qkv = opts.colpar_qkv
+        # fused_qkv: one qkv matmul split by nlp_create_qkv_heads, partitioning the heads over
+        # tp_axis first so the norms, scale and RoPE run on heads/tp. At tp=1 the partition is
+        # skipped and the TILE (B, NH, S, HD) layout stands alone.
+        self.fused_qkv = opts.fused_qkv
+        # fused_rope: one rotary_embedding_hf per lane, applied while still TILE. The weight fold
+        # already puts q/k in HF's rotate_half convention; it needs full-width cos/sin.
+        self.fused_rope = opts.fused_rope
         self._fused_rope_cache: dict = {}
         self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
         if self.fused_qkv:
@@ -405,17 +495,26 @@ class NeighborhoodAttention(Module):
 class SwiGLU(Module):
     """``w_down(silu(w_gate(x)) * w_up(x))``, biasless, as upstream ships it."""
 
-    def __init__(self, dim: int, hidden_dim: int, *, mesh_device=None, tp_axis=None, ccl_manager=None):
+    def __init__(
+        self,
+        dim: int,
+        hidden_dim: int,
+        *,
+        mesh_device=None,
+        tp_axis=None,
+        ccl_manager=None,
+        fused: bool = False,
+        tp_mlp: bool = False,
+    ):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.dim = dim
         self.tp_axis = tp_axis
         self.ccl_manager = ccl_manager
-        # DIFFVAE_DET_TP_MLP=1: gate/up column-parallel and w_down row-parallel over tp_axis.
-        # Implies the packed weight.
-        self.tp_mlp = tp_axis is not None and os.environ.get("DIFFVAE_DET_TP_MLP") == "1"
-        # DIFFVAE_DET_FUSED_SWIGLU=1: one [up | gate] GEMM whose epilogue emits silu(gate) * up.
-        self.fused = self.tp_mlp or os.environ.get("DIFFVAE_DET_FUSED_SWIGLU") == "1"
+        # tp_mlp: gate/up column-parallel and w_down row-parallel over tp_axis, on the packed weight.
+        self.tp_mlp = tp_mlp and tp_axis is not None
+        # fused: one [up | gate] GEMM whose epilogue emits silu(gate) * up.
+        self.fused = fused or self.tp_mlp
 
         if self.tp_mlp:
             self.gate_up = ColParallelLinear(
@@ -499,8 +598,10 @@ class NABlock(Module):
         ccl_manager=None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
+        options: DetBlockOptions = DetBlockOptions(),
     ):
         super().__init__()
+        opts = options.resolve(tp_axis)
         # Upstream rounds the 4x MLP ratio up to a multiple of 16.
         hidden = (int(dim * 4.0) + 15) // 16 * 16
         self.norm1 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
@@ -513,9 +614,18 @@ class NABlock(Module):
             ccl_manager=ccl_manager,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
+            options=opts,
         )
         self.norm2 = RMSNorm(dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
-        self.mlp = SwiGLU(dim, hidden, mesh_device=mesh_device, tp_axis=tp_axis, ccl_manager=ccl_manager)
+        self.mlp = SwiGLU(
+            dim,
+            hidden,
+            mesh_device=mesh_device,
+            tp_axis=tp_axis,
+            ccl_manager=ccl_manager,
+            fused=opts.fused_swiglu,
+            tp_mlp=opts.tp_mlp,
+        )
         self.mesh_device = mesh_device
 
     def forward(
@@ -655,6 +765,7 @@ class DeterministicStages(Module):
         na3d_backend: str | None = None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
+        block_options: DetBlockOptions = DetBlockOptions(),
     ):
         super().__init__()
         assert len(upsamples) == len(stage_channels) - 1, "one upsample between consecutive stages"
@@ -663,9 +774,9 @@ class DeterministicStages(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         # Under a W-sharded backend the activation is W-sharded from stage 1 on (stage 0's W is not
-        # divisible by the mesh axis, so it stays replicated). DIFFVAE_DET_NA3D_BACKEND reaches
-        # stages 1-4 only; stage 5 is selected by DIFFVAE_STAGE5_BACKEND.
-        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_DET_NA3D_BACKEND", "linear_order")
+        # divisible by the mesh axis, so it stays replicated). This backend reaches stages 1-4 only;
+        # stage 5 has its own.
+        self.na3d_backend = na3d_backend or "linear_order"
         assert self.na3d_backend in {"linear_order"} | W_SHARDED_BACKENDS, (
             f"unknown NA3D backend {self.na3d_backend!r}; expected one of "
             f"{sorted({'linear_order'} | W_SHARDED_BACKENDS)}"
@@ -698,6 +809,7 @@ class DeterministicStages(Module):
                             ccl_manager=ccl_manager if self._w_sharded and stage > 0 else None,
                             sp_axis=sp_axis if self._w_sharded and stage > 0 else None,
                             tp_axis=tp_axis if self._w_sharded and stage > 0 else None,
+                            options=block_options,
                         )
                         for _ in range(stage_depths[stage])
                     ]
@@ -887,8 +999,7 @@ class DiffVAEDecoder(Module):
 
     supports_yuv = True
 
-    #: Stage-5 activations are too large to share the mesh with a resident DiT, so the pipeline
-    #: evicts the DiT before decode. Overridden below when stage 5 is sharded.
+    #: Whether the pipeline evicts a resident DiT before decode; see DiffVAEOptions.exclusive_residency.
     requires_exclusive_residency = True
 
     def __init__(
@@ -898,20 +1009,18 @@ class DiffVAEDecoder(Module):
         mesh_device,
         dtype: ttnn.DataType = ttnn.bfloat16,
         ccl_manager=None,
-        stage5_na3d_backend: str | None = None,
-        stage5_sp_axis: int | None = None,
-        stage5_tp_axis: int | None = None,
-        stages_na3d_backend: str | None = None,
-        stages_sp_axis: int | None = None,
-        stages_tp_axis: int | None = None,
+        options: DiffVAEOptions = DiffVAEOptions(),
     ):
         super().__init__()
         from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
 
-        # A sharded stage 5 holds a fraction of the volume per chip and can sit beside a resident
-        # DiT, which also keeps the DiT's captured trace valid. DIFFVAE_EXCLUSIVE=1 forces eviction.
-        if stage5_sp_axis is not None:
-            self.requires_exclusive_residency = os.environ.get("DIFFVAE_EXCLUSIVE") == "1"
+        self.options = options
+        # A replicated stage 5's activations are too large to share the mesh with a resident DiT;
+        # a sharded one holds a fraction of the volume per chip and can sit beside it, which also
+        # keeps the DiT's captured trace valid.
+        self.requires_exclusive_residency = (
+            options.exclusive_residency if options.exclusive_residency is not None else options.stage5_sp_axis is None
+        )
 
         self.config = config
         self.mesh_device = mesh_device
@@ -938,15 +1047,17 @@ class DiffVAEDecoder(Module):
             head_dim=config["head_dim"],
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            na3d_backend=stages_na3d_backend,
-            sp_axis=stages_sp_axis,
-            tp_axis=stages_tp_axis,
+            na3d_backend=options.stages_backend,
+            sp_axis=options.stages_sp_axis,
+            tp_axis=options.stages_tp_axis,
+            block_options=options.det,
         )
         self.stage5 = DiffVAEStage5(
             DiffVAEStage5Config(
                 dim=config["stage_channels"][-1],
                 head_dim=config["head_dim"],
                 kernel_size=config["stage5_kernel"],
+                gna_stride=options.gna_stride,
                 context_channels=config["stage_channels"][-1],
                 mlp_hidden=4 * config["stage_channels"][-1],
                 num_blocks=config["stage_depths"][-1],
@@ -957,9 +1068,13 @@ class DiffVAEDecoder(Module):
             mesh_device=mesh_device,
             dtype=dtype,
             ccl_manager=ccl_manager,
-            na3d_backend=stage5_na3d_backend,
-            sp_axis=stage5_sp_axis,
-            tp_axis=stage5_tp_axis,
+            na3d_backend=options.stage5_backend,
+            sp_axis=options.stage5_sp_axis,
+            tp_axis=options.stage5_tp_axis,
+            fused_qkv=options.stage5_fused_qkv,
+            tp_proj=options.stage5_tp_proj,
+            slab_frames=options.slab_frames,
+            device_unpatchify=options.device_boundaries,
         )
         # When both halves W-shard on the same axis, the context is handed over W-sharded instead
         # of gathered and re-sharded.
@@ -973,7 +1088,7 @@ class DiffVAEDecoder(Module):
 
         The fusion flags change the parameter SET (one fused ``qkv`` or three projections, one
         packed ``gate_up`` or two), so a cache written under one flag set does not load under
-        another. Read off the built modules rather than the environment.
+        another. Read off the built modules rather than the options.
         """
 
         def stage_token(blocks) -> str:
@@ -1034,7 +1149,7 @@ class DiffVAEDecoder(Module):
         assert channels == self.in_channels, f"latent has {channels} channels, expected {self.in_channels}"
 
         ghost = self.ghost_latent_frames
-        if os.environ.get("DIFFVAE_DEVICE_PREPROC") == "1":
+        if self.options.device_boundaries:
             # Upload the latent as-is; the ghost pad and channels-last flatten run on device.
             with timing_tree.span(self.mesh_device, "host->mesh: upload latent (raw)", category=timing_tree.HOST_XFER):
                 raw = latent_tt
@@ -1124,8 +1239,8 @@ class DiffVAEDecoder(Module):
             else:
                 context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
 
-        # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device.
-        if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
+        # With the boundaries on device, noise stays None and stage 5 draws it there.
+        if noise is None and not self.options.device_boundaries:
             shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
             with timing_tree.span(
                 self.mesh_device, f"host: noise randn {tuple(shape)}", category=timing_tree.HOST_COMPUTE
@@ -1174,10 +1289,12 @@ class DiffVAEDecoder(Module):
         """
         from .diffvae_ltx_stage5 import Grid
 
-        for flag in ("DIFFVAE_DEVICE_PREPROC", "DIFFVAE_DEVICE_NOISE", "DIFFVAE_DEVICE_UNPATCHIFY"):
-            if os.environ.get(flag) != "1":
-                msg = f"a traced DiffVAE decode needs {flag}=1: the host work it replaces cannot sit inside a trace"
-                raise ValueError(msg)
+        if not self.options.device_boundaries:
+            msg = (
+                "a traced DiffVAE decode needs DiffVAEOptions(device_boundaries=True): "
+                "the host work it replaces cannot sit inside a trace"
+            )
+            raise ValueError(msg)
         if timing_tree.ENABLED:
             msg = "TT_DIT_STAGE_TIMING=1 synchronises the mesh inside every span, which a trace capture cannot hold"
             raise RuntimeError(msg)
@@ -1209,10 +1326,9 @@ class DiffVAEDecoder(Module):
 
         ``output_type`` matches ``LTXVideoDecoder.forward``: ``float`` keeps ``[-1, 1]``, ``rgb``
         maps it to planar uint8, ``yuv`` converts and gathers YUV 4:2:0 on device (needs
-        ``DIFFVAE_DEVICE_UNPATCHIFY=1``).
+        ``DiffVAEOptions.device_boundaries``).
         """
-        # DIFFVAE_TRACED=0 keeps this decoder eager inside an otherwise traced pipeline.
-        if self._vae_traced and os.environ.get("DIFFVAE_TRACED", "1") != "0":
+        if self._vae_traced:
             if noise is not None:
                 msg = "a traced decode draws its noise on device; a caller-supplied noise cannot enter the trace"
                 raise ValueError(msg)

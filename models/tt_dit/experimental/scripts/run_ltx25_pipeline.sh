@@ -4,6 +4,11 @@
 # Deep profile, outputs kept per run (see the PROFILE block at the bottom):
 #   PROFILE=1 bash models/tt_dit/experimental/scripts/run_ltx25_pipeline.sh
 #
+# How the DiffVAE is built is a pytest option, not an environment variable: --diffvae selects it and
+# the --diffvae-* options (see `pytest --help`, group "LTX-2.5 DiffVAE") say how it runs, defaulting
+# to DiffVAEOptions.production(). This script passes only --diffvae-slab-frames; add anything else
+# after the script name.
+#
 # Exists because pasting the env prefix as one quoted multi-line command keeps corrupting it:
 # once via non-breaking spaces glued to the first var on each line, once via raw newlines
 # splitting it into five bash statements so pytest ran with no arguments.
@@ -16,7 +21,6 @@ export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-$HOME/.cache/tt-dit}"
 # Overridable so a checkout whose weights live elsewhere (e.g. the HF cache) can point at
 # them without editing this file -- the sibling run_ltx25_diffvae.sh already works this way.
 export LTX25_ROOT=${LTX25_ROOT:-/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941}
-export LTX25_DIFFVAE=${LTX25_DIFFVAE:-1}
 export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
 
 export NO_PROMPT=${NO_PROMPT:-1}
@@ -31,19 +35,8 @@ export HEIGHT=${HEIGHT:-1088}
 export WIDTH=${WIDTH:-1920}
 export OUTPUT_PATH="${OUTPUT_PATH:-$HOME/ltx25_diffvae_1080p.mp4}"
 
-export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-78}
-export DIFFVAE_STAGES_WSP=1
-export DIFFVAE_DEVICE_NOISE=1
-export DIFFVAE_DEVICE_PREPROC=1
-export DIFFVAE_DEVICE_UNPATCHIFY=1
-export DIFFVAE_TRIM_PAD_CHANNELS=1
-export DIFFVAE_DET_COLPAR_QKV=1
-# Reaches only deterministic stage 1, which runs replicated with no TP axis and so cannot take the
-# column-parallel path: without it that stage projects q/k/v separately and rotates unfused, and
-# the two rows are ~550 ms of the decode. Stages 2-4 get fused qkv from COLPAR_QKV regardless.
-export DIFFVAE_DET_FUSED_QKV=1
-export DIFFVAE_DET_FUSED_ROPE=1
-export DIFFVAE_DET_FUSED_SWIGLU=1
+# Stage-5 frames per band: the one DiffVAE knob this script varies (see PROFILE and LTX_TRACED below).
+SLAB_FRAMES=${SLAB_FRAMES:-78}
 # The decode tree. Off under LTX_TRACED=1: with the DiffVAE traced its spans would synchronise the
 # mesh inside the capture, and the decoder refuses to capture with the timers on.
 if [ "$LTX_TRACED" = 1 ]; then
@@ -54,21 +47,14 @@ fi
 # Stream one "[stage HH:MM:SS] > label" / "< label  N ms" line per decode span so a hang is visible
 # while it happens (the last ">" with no "<" names it) instead of at the timeout. Tree unchanged.
 export TT_DIT_STAGE_LOG=${TT_DIT_STAGE_LOG:-1}
-# Stage 5 and the W-sharded deterministic stages 1-3 run the bricked executor
-# (bricked_sp_w_sharded). The only other value either knob accepts is "linear_order" (replicated),
-# which does not fit the pipeline's memory.
-export DIFFVAE_STAGE5_BACKEND=${DIFFVAE_STAGE5_BACKEND:-bricked_sp_w_sharded}
-export DIFFVAE_STAGES_BACKEND=${DIFFVAE_STAGES_BACKEND:-bricked_sp_w_sharded}
-export DIFFVAE_S5_GNA_STRIDE=${DIFFVAE_S5_GNA_STRIDE:-1,1,1}
-export DIFFVAE_TP_HEADS=${DIFFVAE_TP_HEADS:-1}
 
 # Fail loudly if the paste-corruption bugs ever come back rather than running a half-configured job.
-: "${LTX25_DIFFVAE:?}" "${LTX25_ROOT:?}"
+: "${LTX25_ROOT:?}"
 # Under LTX_TRACED=1 the transformer's captures and the 1.9 GiB a decode leaves resident put the
 # stage-5 MLP hidden (2.4 GB at slab 73) past the largest contiguous DRAM block; 48 is the measured
 # fit (2026-09-15). Refuse here, at t=0, instead of in gen #0's decode after two minutes of loading.
-if [ "$LTX_TRACED" = 1 ] && [ "$DIFFVAE_SLAB_FRAMES" -gt 48 ]; then
-  echo "LTX_TRACED=1 needs DIFFVAE_SLAB_FRAMES<=48 (got $DIFFVAE_SLAB_FRAMES): larger slabs OOM in the traced decode" >&2
+if [ "$LTX_TRACED" = 1 ] && [ "$SLAB_FRAMES" -gt 48 ]; then
+  echo "LTX_TRACED=1 needs SLAB_FRAMES<=48 (got $SLAB_FRAMES): larger slabs OOM in the traced decode" >&2
   exit 1
 fi
 [ -f "$LTX25_ROOT/vae/ltx-2.5-video-vae-bf16.safetensors" ] || {
@@ -76,7 +62,7 @@ fi
 
 PYTEST=(python_env/bin/python -u -m pytest
   models/tt_dit/tests/models/ltx/test_pipeline_ltx25_distilled.py::test_pipeline_ltx25_distilled
-  -k 4x8sp1tp0nl2_ring_is_fsdp0 -s -q --timeout=0)
+  -k 4x8sp1tp0nl2_ring_is_fsdp0 -s -q --timeout=0 --diffvae)
 
 # PROFILE=1: one untraced gen with the deep decode-tree profile, everything under a fresh
 # generated/profile/<UTC stamp>/ (mp4, log.txt, decode_trees.txt) so reruns never overwrite.
@@ -90,7 +76,7 @@ if [ "${PROFILE:-0}" = 1 ]; then
   export LTX_TRACED=0
   export LTX_VAE_TIME=${LTX_VAE_TIME:-1}
   export TT_DIT_BLOCK_PROF=${TT_DIT_BLOCK_PROF:-1}
-  export DIFFVAE_SLAB_FRAMES=73
+  SLAB_FRAMES=73
   export OUTPUT_PATH="$OUT_DIR/ltx25_1080p.mp4"
   export TT_DIT_TREE_OUT="$OUT_DIR/decode_trees.txt"
   # Expand the perf table's "VAE decode" row from the decode tree (levels deep), and with BLOCK_PROF
@@ -99,10 +85,10 @@ if [ "${PROFILE:-0}" = 1 ]; then
   export PYTHONPATH="$PWD/models/tt_dit/experimental/scripts${PYTHONPATH:+:$PYTHONPATH}"
   echo "[profile] $(git rev-parse --short HEAD) -> $OUT_DIR"
   set +e
-  "${PYTEST[@]}" -p timing_tree_plugin "$@" 2>&1 | tee "$OUT_DIR/log.txt"
+  "${PYTEST[@]}" --diffvae-slab-frames "$SLAB_FRAMES" -p timing_tree_plugin "$@" 2>&1 | tee "$OUT_DIR/log.txt"
   status=${PIPESTATUS[0]}
   echo "PYTEST_EXIT=$status" | tee -a "$OUT_DIR/log.txt"
   exit "$status"
 fi
 
-exec "${PYTEST[@]}" "$@"
+exec "${PYTEST[@]}" --diffvae-slab-frames "$SLAB_FRAMES" "$@"

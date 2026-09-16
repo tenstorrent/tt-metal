@@ -235,6 +235,7 @@ class LTXPipeline:
         width: int = 0,
         run_warmup: bool = False,
         traced: bool = False,
+        vae_traced: bool | None = None,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
         lora_enabled: bool = False,
         lora_cache_capacity: int = 2,
@@ -247,6 +248,9 @@ class LTXPipeline:
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
         self._traced = traced
+        # Whether the VAE decode is captured as its own trace inside a traced pipeline; None follows
+        # ``traced``. False keeps the decoder eager while the transformer replays.
+        self._vae_traced = traced if vae_traced is None else vae_traced
         self._trace_state: dict[str, LTXTransformerState] = {}
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()

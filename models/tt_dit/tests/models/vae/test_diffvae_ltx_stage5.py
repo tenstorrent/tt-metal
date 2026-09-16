@@ -38,19 +38,14 @@ from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
 from models.tt_dit.utils.check import assert_quality
 
 
-def _gate_ccl(mesh_device):
-    """CCLManager for the gates. Defaults are the historical Linear/1-link the committed baseline
-    was recorded with, so an unset environment reproduces it exactly; DIFFVAE_TOPOLOGY /
-    DIFFVAE_NUM_LINKS let a gate run also cover the collective config the runner actually ships
-    (ring + 2 links). An all-gather only moves bytes, so this should not shift any PCC -- which is
+def _gate_ccl(mesh_device, bench_options):
+    """CCLManager for the gates. The ``bench_options`` defaults are the historical Linear/1-link the
+    committed baseline was recorded with, so a bare run reproduces it exactly; ``--diffvae-topology
+    ring --diffvae-num-links 2`` lets a gate run also cover the collective config the runner
+    actually ships. An all-gather only moves bytes, so this should not shift any PCC -- which is
     the point of being able to check.
     """
-    from models.tt_dit.parallel.manager import CCLManager
-
-    topology = (
-        ttnn.Topology.Ring if os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring" else ttnn.Topology.Linear
-    )
-    return CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=topology)
+    return bench_options.ccl(mesh_device)
 
 
 _LTX_CORE_SRC = os.environ.get("LTX_CORE_SRC")
@@ -402,8 +397,8 @@ def test_stage5_parity(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, pcc: 
     )
     tt_t = tt_timestep(timestep, mesh_device)
 
-    # Bands come from the model so this covers whatever DIFFVAE_SLAB_FRAMES asks for: unset it
-    # runs the volume whole, and setting it holds the banded path to the same per-block reference.
+    # Bands come from the model so this covers whatever slab_frames asks for: None runs the volume
+    # whole, and a value holds the banded path to the same per-block reference.
     bands = model.bands(grid)
 
     def join(parts):
@@ -451,7 +446,7 @@ def test_stage5_parity(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, pcc: 
 @pytest.mark.parametrize("submesh_shape", [(2, 4)], ids=["2x4"])
 @pytest.mark.parametrize("pcc", [0.999], ids=["pcc999"])
 @pytest.mark.diffvae_gate
-def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, submesh_shape, pcc: float):
+def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, submesh_shape, pcc: float, bench_options):
     """Sharded NA3D (``NA3DShard`` + ``all_gather``) on a real multi-chip mesh.
 
     :func:`test_stage5_parity` runs the replicated path — it passes no ``ccl_manager``, so
@@ -479,7 +474,7 @@ def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, subm
     randomize(reference, seed=1234)
     state = checkpoint_state(reference)
 
-    ccl_manager = _gate_ccl(mesh)
+    ccl_manager = _gate_ccl(mesh, bench_options)
     model = DiffVAEStage5(config, mesh_device=mesh, dtype=dtype, ccl_manager=ccl_manager)
     model.load_torch_state_dict(state)
 
@@ -495,31 +490,6 @@ def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, subm
     tt_t = tt_timestep(timestep, mesh)
     tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
     assert_quality(ref_pixels, tt_pixels, pcc=pcc)
-
-
-def test_resolved_gna_stride(monkeypatch):
-    """The one place stage 5 resolves its stride. No device: it is config arithmetic.
-
-    Every stage-5 backend reads this, so the precedence is what decides which attention a run
-    computes. It used to live in ``neighborhood_attention.configured_stride()``, where it was
-    reachable only by the bricked executor and invisible to the config object.
-    """
-    monkeypatch.delenv("DIFFVAE_S5_GNA_STRIDE", raising=False)
-    assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
-
-    monkeypatch.setenv("DIFFVAE_S5_GNA_STRIDE", "2,4,4")
-    assert DiffVAEStage5Config().resolved_gna_stride == (2, 4, 4)
-    # An explicitly configured stride is a deliberate choice by the caller and outranks the knob.
-    assert DiffVAEStage5Config(gna_stride=(1, 2, 2)).resolved_gna_stride == (1, 2, 2)
-
-    # Empty is "unset": `DIFFVAE_S5_GNA_STRIDE=` in a script must not crash on int("").
-    monkeypatch.setenv("DIFFVAE_S5_GNA_STRIDE", "")
-    assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
-
-    # No other knob reaches this.
-    monkeypatch.delenv("DIFFVAE_S5_GNA_STRIDE", raising=False)
-    monkeypatch.setenv("DIFFVAE_GNA_STRIDE", "2,4,4")
-    assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
 
 
 @torch.no_grad()
@@ -552,7 +522,7 @@ def test_resolved_gna_stride(monkeypatch):
     ],
     ids=["t12_stride111", "t12_stride122", "t12_stride144", "t22_stride111", "t22_stride2_4_8"],
 )
-def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, grid, stride, pcc):
+def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, grid, stride, pcc, bench_options):
     """Stage 5 on the PRODUCTION W-sharded backend against the ltx_core reference, per GNA stride.
 
     The other parity tests here run the replicated or NA3DShard paths at stride 1; this is the only
@@ -589,7 +559,7 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
     randomize(reference, seed=1234)
     state = checkpoint_state(reference)
 
-    ccl_manager = _gate_ccl(mesh_device)
+    ccl_manager = _gate_ccl(mesh_device, bench_options)
     model = DiffVAEStage5(
         config,
         mesh_device=mesh_device,

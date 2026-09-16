@@ -10,12 +10,12 @@ fixture, the CLI through :func:`open_mesh`.
 
 Every instrument here has the same shape. A *bench* is a built module plus one ``step`` that runs
 it once on inputs it owns; :func:`timed` warms the program cache and measures. The deterministic
-blocks take an *arm*, a tuple of ``DIFFVAE_DET_*`` flag names, which is set in the environment
-before construction because that is where the layers read it.
+blocks take an *arm*, a :class:`DetBlockOptions` naming the fusions the block builds with.
 
-Configuration that the shipped runner scripts pass as environment variables (``DIFFVAE_TOPOLOGY``,
-``DIFFVAE_NUM_LINKS``, ``DIFFVAE_LATENT_T``, ``DIFFVAE_STAGES_WSP``, ...) is read here by one
-function each, so the defaults are the same in the tests and the tool.
+What a run measures is carried in two objects, so the defaults are the same in the tests and the
+tool: a :class:`DiffVAEOptions` for how the decoder is built (the pytest ``diffvae_options`` fixture
+or ``time_module``'s flags produce it) and a :class:`BenchOptions` for the instrument itself
+(latent frames, iterations, collectives, the stage-5 grid).
 """
 
 from __future__ import annotations
@@ -33,11 +33,12 @@ import torch
 import ttnn
 from models.tt_dit.layers.neighborhood_attention_plan import build_device_plan, plan_na3d
 from models.tt_dit.models.vae.diffvae_ltx import (
+    DetBlockOptions,
     DiffVAEDecoder,
+    DiffVAEOptions,
     NABlock,
     decoder_config,
     rope_tables,
-    stages_backend_from_env,
 )
 from models.tt_dit.models.vae.diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
 from models.tt_dit.models.vae.diffvae_rope import default_rope_dim_split
@@ -62,32 +63,25 @@ LATENT_HW = (34, 60)
 # Deterministic-block arms and geometry
 # ---------------------------------------------------------------------------
 
-FLAGS = (
-    "DIFFVAE_DET_FUSED_QKV",
-    "DIFFVAE_DET_COLPAR_QKV",
-    "DIFFVAE_DET_FUSED_ROPE",
-    "DIFFVAE_DET_FUSED_SWIGLU",
-    "DIFFVAE_DET_TP_MLP",
-)
+#: The unflagged block every arm is compared against.
+BASELINE = DetBlockOptions()
 
-RECOMMENDED = ("DIFFVAE_DET_COLPAR_QKV", "DIFFVAE_DET_FUSED_ROPE", "DIFFVAE_DET_FUSED_SWIGLU")
-
-#: arm -> flags. Every arm and the baseline run the bricked W-sharded executor; ``recommended`` is
-#: the production flag set for the W-sharded stages.
-ARMS = {
-    "fused_qkv": ("DIFFVAE_DET_FUSED_QKV",),
-    "colpar_qkv": ("DIFFVAE_DET_COLPAR_QKV",),
-    "fused_swiglu": ("DIFFVAE_DET_FUSED_SWIGLU",),
-    "tp_mlp": ("DIFFVAE_DET_TP_MLP",),
-    "recommended": RECOMMENDED,
+#: arm -> block options. Every arm and the baseline run the bricked W-sharded executor;
+#: ``recommended`` is the production set for the W-sharded stages.
+ARMS: dict[str, DetBlockOptions] = {
+    "fused_qkv": DetBlockOptions(fused_qkv=True),
+    "colpar_qkv": DetBlockOptions(colpar_qkv=True),
+    "fused_swiglu": DetBlockOptions(fused_swiglu=True),
+    "tp_mlp": DetBlockOptions(tp_mlp=True),
+    "recommended": DetBlockOptions(colpar_qkv=True, fused_rope=True, fused_swiglu=True),
 }
 
 #: Stage 1 runs replicated with no TP axis, so only the arms that need neither can reach it.
-STAGE1_ARMS = {
-    "swiglu": ("DIFFVAE_DET_FUSED_SWIGLU",),
-    "qkv": ("DIFFVAE_DET_FUSED_QKV",),
-    "qkv_rope": ("DIFFVAE_DET_FUSED_QKV", "DIFFVAE_DET_FUSED_ROPE"),
-    "recommended": ("DIFFVAE_DET_FUSED_QKV", "DIFFVAE_DET_FUSED_ROPE", "DIFFVAE_DET_FUSED_SWIGLU"),
+STAGE1_ARMS: dict[str, DetBlockOptions] = {
+    "swiglu": DetBlockOptions(fused_swiglu=True),
+    "qkv": DetBlockOptions(fused_qkv=True),
+    "qkv_rope": DetBlockOptions(fused_qkv=True, fused_rope=True),
+    "recommended": DetBlockOptions(fused_qkv=True, fused_rope=True, fused_swiglu=True),
 }
 
 #: (label, dim, kernel, full dims, blocks in that stage) for the W-sharded deterministic stages, at
@@ -103,22 +97,28 @@ STAGES = [
 STAGE1 = (2048, (3, 7, 7), (6, 34, 60), 4)
 
 
-def arm_flags(arm: str, table: dict[str, tuple[str, ...]] = ARMS) -> tuple[str, ...]:
-    """``"baseline"`` is the empty arm; anything else must be a key of ``table``."""
+def arm_options(arm: str, table: dict[str, DetBlockOptions] = ARMS) -> DetBlockOptions:
+    """``"baseline"`` is the unflagged block; anything else must be a key of ``table``."""
     if arm == "baseline":
-        return ()
+        return BASELINE
     return table[arm]
 
 
-def set_flags(enabled: tuple[str, ...]) -> None:
-    """The flags are read in ``NeighborhoodAttention.__init__`` / ``SwiGLU.__init__``."""
-    for flag in FLAGS:
-        os.environ[flag] = "1" if flag in enabled else "0"
+def _assert_built(block: NABlock, arm: DetBlockOptions, tp_axis: int | None) -> None:
+    """The block built exactly the forms ``arm`` resolves to at this ``tp_axis``."""
+    expected = arm.resolve(tp_axis)
+    built = DetBlockOptions(
+        fused_qkv=block.attn.fused_qkv,
+        colpar_qkv=block.attn.colpar_qkv,
+        fused_rope=block.attn.fused_rope,
+        fused_swiglu=block.mlp.fused,
+        tp_mlp=block.mlp.tp_mlp,
+    )
+    assert built == expected, f"built {built}, expected {expected}"
 
 
-def build_det_block(mesh, dim: int, kernel, enabled: tuple[str, ...], backend: str = BRICKED) -> NABlock:
-    """An NABlock with exactly ``enabled`` set on ``backend``, asserting the flags actually took."""
-    set_flags(enabled)
+def build_det_block(mesh, dim: int, kernel, arm: DetBlockOptions, backend: str = BRICKED) -> NABlock:
+    """An NABlock built with ``arm`` on ``backend``, asserting the forms actually took."""
     block = NABlock(
         dim,
         kernel,
@@ -128,21 +128,15 @@ def build_det_block(mesh, dim: int, kernel, enabled: tuple[str, ...], backend: s
         ccl_manager=CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear),
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
+        options=arm,
     )
-    colpar = "DIFFVAE_DET_COLPAR_QKV" in enabled
-    tp_mlp = "DIFFVAE_DET_TP_MLP" in enabled
-    assert block.attn.colpar_qkv is colpar
-    assert block.attn.fused_qkv is (colpar or "DIFFVAE_DET_FUSED_QKV" in enabled)
-    assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
-    assert block.mlp.tp_mlp is tp_mlp
-    assert block.mlp.fused is (tp_mlp or "DIFFVAE_DET_FUSED_SWIGLU" in enabled)
+    _assert_built(block, arm, TP_AXIS)
     assert block.attn.na3d_backend == backend
     return block
 
 
-def build_stage1_block(mesh, enabled: tuple[str, ...]) -> NABlock:
-    """A replicated stage-1 block, asserting the flags took and that the unreachable ones did not."""
-    set_flags(enabled)
+def build_stage1_block(mesh, arm: DetBlockOptions) -> NABlock:
+    """A replicated stage-1 block, asserting the forms took and that the column-parallel ones did not."""
     dim, kernel, _, _ = STAGE1
     block = NABlock(
         dim,
@@ -153,12 +147,11 @@ def build_stage1_block(mesh, enabled: tuple[str, ...]) -> NABlock:
         ccl_manager=None,
         sp_axis=None,
         tp_axis=None,
+        options=arm,
     )
     assert block.attn.tp == 1
-    assert block.attn.fused_qkv is ("DIFFVAE_DET_FUSED_QKV" in enabled)
-    assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
+    _assert_built(block, arm, None)
     assert block.attn.colpar_qkv is False, "colpar needs a tp_axis to shard the weight over"
-    assert block.mlp.fused is ("DIFFVAE_DET_FUSED_SWIGLU" in enabled)
     return block
 
 
@@ -206,77 +199,93 @@ def fill(module) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Environment-driven configuration
+# Run configuration
 # ---------------------------------------------------------------------------
 
 
-def topology() -> ttnn.Topology:
-    """Collectives default to Linear; DIFFVAE_TOPOLOGY=ring selects the runner's configuration."""
-    if os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring":
-        return ttnn.Topology.Ring
-    return ttnn.Topology.Linear
+@dataclass(frozen=True)
+class BenchOptions:
+    """What an instrument runs with, as distinct from how the decoder is built (:class:`DiffVAEOptions`).
 
-
-def fabric_for_topology() -> ttnn.FabricConfig:
-    """The fabric that matches :func:`topology`: a ring closes the wraparound link."""
-    return ttnn.FabricConfig.FABRIC_1D_RING if topology() is ttnn.Topology.Ring else ttnn.FabricConfig.FABRIC_1D
-
-
-def ccl_from_env(mesh, *, default_links: int = 1) -> CCLManager:
-    """``DIFFVAE_TOPOLOGY`` / ``DIFFVAE_NUM_LINKS``, the knobs the runner scripts set."""
-    return CCLManager(mesh, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", default_links)), topology=topology())
-
-
-def latent_t_from_env(default: int = 19) -> int:
-    """``DIFFVAE_LATENT_T``: output frames are ``8 * T - 7``, so 19 is the 145-frame target."""
-    return int(os.environ.get("DIFFVAE_LATENT_T", default))
-
-
-def iters_from_env(default: int = 10) -> int:
-    return int(os.environ.get("ITERS", default))
-
-
-def production_decoder(mesh, config: dict, ccl: CCLManager) -> DiffVAEDecoder:
-    """The decoder as the runner ships it, every knob read from the environment.
-
-    Stage 5 is W-sharded on ``DIFFVAE_STAGE5_BACKEND`` (default bricked). ``DIFFVAE_TP_HEADS=1``
-    adds TP-over-heads on the size-4 axis. ``DIFFVAE_STAGES_WSP=1`` W-shards the deterministic
-    stages too, on ``DIFFVAE_STAGES_BACKEND``; ``DIFFVAE_STAGES_SP_AXIS`` / ``DIFFVAE_STAGES_TP_AXIS``
-    move their shard axes without touching stage 5. Weights are not loaded here.
+    Every field is optional so a test or tool keeps its own default when the caller says nothing:
+    the accessor methods take that default.
     """
-    tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
-    stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
-    stages_sp_axis = int(os.environ.get("DIFFVAE_STAGES_SP_AXIS", 1))
-    stages_tp_axis = int(os.environ["DIFFVAE_STAGES_TP_AXIS"]) if "DIFFVAE_STAGES_TP_AXIS" in os.environ else tp_axis
-    return DiffVAEDecoder(
-        config,
-        mesh_device=mesh,
-        ccl_manager=ccl,
-        stage5_na3d_backend=os.environ.get("DIFFVAE_STAGE5_BACKEND", BRICKED),
-        stage5_sp_axis=1,
-        stage5_tp_axis=tp_axis,
-        stages_na3d_backend=stages_backend_from_env() if stages_wsp else None,
-        stages_sp_axis=stages_sp_axis if stages_wsp else None,
-        stages_tp_axis=stages_tp_axis if stages_wsp else None,
-    )
+
+    #: Latent frames for the decoder instruments; output frames are ``8 * T - 7`` (19 -> 145).
+    latent_t: int | None = None
+    #: Timed iterations after the warm-ups.
+    iters: int | None = None
+    #: Collectives. Linear/1-link is what the committed gate baselines were recorded with; the
+    #: runner ships ring + 2 links.
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    num_links: int | None = None
+    #: The stage-5 grid for the block instrument.
+    grid: Grid | None = None
+
+    def latent_frames(self, default: int = 19) -> int:
+        return default if self.latent_t is None else self.latent_t
+
+    def iterations(self, default: int = 10) -> int:
+        return default if self.iters is None else self.iters
+
+    def ccl(self, mesh, *, default_links: int = 1) -> CCLManager:
+        return CCLManager(
+            mesh, num_links=default_links if self.num_links is None else self.num_links, topology=self.topology
+        )
+
+    @property
+    def fabric(self) -> ttnn.FabricConfig:
+        """The fabric that matches :attr:`topology`: a ring closes the wraparound link."""
+        return ttnn.FabricConfig.FABRIC_1D_RING if self.topology is ttnn.Topology.Ring else ttnn.FabricConfig.FABRIC_1D
+
+    def stage5_grid(self, default: Grid) -> Grid:
+        return default if self.grid is None else self.grid
 
 
-def describe_production_decoder() -> str:
-    """The tag the decode timing lines carry, from the same environment the decoder read."""
-    stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", BRICKED)
-    tp = "+TP4" if os.environ.get("DIFFVAE_TP_HEADS") == "1" else ""
+def parse_topology(name: str) -> ttnn.Topology:
+    """``"linear"`` or ``"ring"``, as the CLI flags and pytest options spell them."""
+    try:
+        return {"linear": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}[name.lower()]
+    except KeyError:
+        raise ValueError(f"unknown topology {name!r}; expected 'linear' or 'ring'") from None
+
+
+def parse_grid(spec: str, *, batch: int = 1) -> Grid:
+    """``"TxHxW"`` to a :class:`Grid`."""
+    t, h, w = (int(v) for v in spec.lower().split("x"))
+    return Grid(batch=batch, t=t, h=h, w=w)
+
+
+def parse_stride(spec: str) -> tuple[int, int, int]:
+    """``"t,h,w"`` to a GNA stride."""
+    parts = tuple(int(v) for v in spec.split(","))
+    if len(parts) != 3:
+        raise ValueError(f"gna stride {spec!r} needs three comma-separated ints")
+    return parts
+
+
+def production_decoder(mesh, config: dict, ccl: CCLManager, options: DiffVAEOptions) -> DiffVAEDecoder:
+    """A decoder built with ``options``; :meth:`DiffVAEOptions.production` is how the runner ships it.
+    Weights are not loaded here."""
+    return DiffVAEDecoder(config, mesh_device=mesh, ccl_manager=ccl, options=options)
+
+
+def describe(options: DiffVAEOptions) -> str:
+    """The tag the decode timing lines carry."""
+    tp = f"+TP(axis {options.stage5_tp_axis})" if options.stage5_tp_axis is not None else ""
     det = ""
-    if os.environ.get("DIFFVAE_STAGES_WSP") == "1":
-        sp_axis = int(os.environ.get("DIFFVAE_STAGES_SP_AXIS", 1))
-        tp_axis = os.environ.get("DIFFVAE_STAGES_TP_AXIS", "0" if tp else "None")
-        det = f"+detSP({stages_backend_from_env()},sp_axis={sp_axis},tp_axis={tp_axis})"
-    return f"W-SP({stage5_b}){tp}{det}"
+    if options.stages_sp_axis is not None:
+        det = f"+detSP({options.stages_backend},sp_axis={options.stages_sp_axis},tp_axis={options.stages_tp_axis})"
+    sharded = "W-SP" if options.stage5_sp_axis is not None else "replicated"
+    return f"{sharded}({options.stage5_backend}){tp}{det} slab={options.slab_frames}"
 
 
-def loaded_production_decoder(mesh, *, checkpoint: Path = CHECKPOINT) -> tuple[DiffVAEDecoder, dict]:
+def loaded_production_decoder(
+    mesh, options: DiffVAEOptions, ccl: CCLManager, *, checkpoint: Path = CHECKPOINT
+) -> tuple[DiffVAEDecoder, dict]:
     """:func:`production_decoder` with the checkpoint loaded; returns the decoder and its config."""
     config = decoder_config(checkpoint)
-    dec = production_decoder(mesh, config, ccl_from_env(mesh))
+    dec = production_decoder(mesh, config, ccl, options)
     dec.load_checkpoint(checkpoint)
     return dec, config
 
@@ -330,7 +339,7 @@ def block_line(bench: Bench, ms: float) -> str:
     )
 
 
-def det_block_bench(mesh, stage, arm: tuple[str, ...]) -> Bench:
+def det_block_bench(mesh, stage, arm: DetBlockOptions) -> Bench:
     """One W-sharded deterministic NABlock of ``stage`` (a :data:`STAGES` row) under ``arm``."""
     label, dim, kernel, dims, depth = stage
     block = build_det_block(mesh, dim, kernel, arm)
@@ -359,7 +368,7 @@ def det_block_bench(mesh, stage, arm: tuple[str, ...]) -> Bench:
     return bench
 
 
-def stage1_bench(mesh, arm: tuple[str, ...]) -> Bench:
+def stage1_bench(mesh, arm: DetBlockOptions) -> Bench:
     """The replicated stage-1 NABlock under ``arm``. Every chip holds the whole volume."""
     dim, kernel, dims, depth = STAGE1
     t, h, w = dims
@@ -395,16 +404,6 @@ def stage1_bench(mesh, arm: tuple[str, ...]) -> Bench:
 STAGE5_GRID = Grid(batch=1, t=121, h=128, w=192)
 
 
-def grid_from_env(default: Grid = STAGE5_GRID) -> Grid:
-    """``GRID_T`` / ``GRID_H`` / ``GRID_W`` override the stage-5 grid; shrink T first when validating."""
-    return Grid(
-        batch=default.batch,
-        t=int(os.environ.get("GRID_T", default.t)),
-        h=int(os.environ.get("GRID_H", default.h)),
-        w=int(os.environ.get("GRID_W", default.w)),
-    )
-
-
 def _flat(x: torch.Tensor, channels: int) -> torch.Tensor:
     """``(B, T, H, W, C)`` -> the module's ``(1, B, sites, C)`` layout."""
     return x.reshape(1, x.shape[0], -1, channels)
@@ -426,7 +425,7 @@ def diff_block_bench(mesh, grid: Grid = STAGE5_GRID, *, ccl: CCLManager | None =
         cfg,
         mesh_device=mesh,
         dtype=ttnn.bfloat16,
-        ccl_manager=ccl or ccl_from_env(mesh),
+        ccl_manager=ccl or CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear),
         na3d_backend=BRICKED,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,

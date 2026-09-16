@@ -52,8 +52,14 @@ def test_pipeline_ltx25_distilled(
     topology,
     is_fsdp,
     no_prompt,
+    request,
+    diffvae_options,
 ):
-    """LTX-2.5 distilled 2-stage AV pipeline (Gemma-4 + split checkpoints)."""
+    """LTX-2.5 distilled 2-stage AV pipeline (Gemma-4 + split checkpoints).
+
+    ``--diffvae`` decodes with the DiffVAE diffusion decoder, built as the ``--diffvae-*`` options
+    say (the runner's production configuration by default); without it the conv decoder runs.
+    """
     skip_if_unsupported_num_links(mesh_device, num_links)
 
     parent_mesh = mesh_device
@@ -80,6 +86,8 @@ def test_pipeline_ltx25_distilled(
         num_frames=num_frames,
         height=height,
         width=width,
+        diffusion_decoder=request.config.option.diffvae,
+        diffvae_options=diffvae_options if request.config.option.diffvae else None,
         # LTX25_ANCESTRAL=0 falls back to the 2.3 deterministic Euler in stage 1, to A/B the
         # ancestral sampler (the other 2.5-only change on the T2V path) against prompt adherence.
         use_ancestral_sampler=os.environ.get("LTX25_ANCESTRAL", "1") not in ("0", "false", "False"),

@@ -5,6 +5,10 @@
 # once via non-breaking spaces glued to the first var on each line, once via raw newlines
 # splitting it into five bash statements so pytest ran with no arguments.
 #
+# How the decoder is built is a pytest option, not an environment variable: the --diffvae-* options
+# (see `pytest --help`, group "LTX-2.5 DiffVAE") default to DiffVAEOptions.production(); this script
+# passes the collective config and the slab size and forwards anything else after its name.
+#
 # ── THE BASELINE ──────────────────────────────────────────────────────────────────
 # Every timing comparison in the decode-tree work is against this exact invocation:
 #
@@ -16,9 +20,9 @@
 # HOW IT GOT HERE -- two variables, both now defaults below, measured one at a time on this
 # same invocation. The deltas are disjoint (different rows of the tree) so they sum exactly:
 #
-#   10752.8 ms   Topology.Linear + num_links=1, DET_FUSED_QKV off   (the old baseline)
-#   -1710.9      DIFFVAE_TOPOLOGY=ring + DIFFVAE_NUM_LINKS=2        (-15.9%)
-#    -498.6      DIFFVAE_DET_FUSED_QKV=1                            (-5.5%)
+#   10752.8 ms   Topology.Linear + num_links=1, det fused_qkv off   (the old baseline)
+#   -1710.9      ring topology + 2 links                            (-15.9%)
+#    -498.6      det fused_qkv on                                   (-5.5%)
 #   ---------
 #    8543.3 ms   -2209.5 total (-20.5%)
 #
@@ -33,7 +37,7 @@
 #                      num_links=1 used one of the two eth channels crossing the size-8 axis. Every
 #                      non-collective row moved by <1.5 ms. num_links is capped at 2 by the fabric.
 #   det fused qkv      det stage 0 947.1 -> 533.2. It is the one stage built with tp_axis=None, so
-#                      colpar_qkv is False and DET_COLPAR_QKV/DET_FUSED_ROPE never reached it: three
+#                      colpar_qkv is False and colpar_qkv/fused_rope never reached it: three
 #                      2048->2048 GEMMs and the matmul-based apply_rope. Fusing gives it the same
 #                      path stages 1-3 already run -- rope 335.9 -> 18.1, proj 214.8 -> 40.2, against
 #                      +77.1 on qkv-to-volume for the permute nlp_create_qkv_heads' layout forces.
@@ -41,16 +45,16 @@
 #                      projection fusion, 99.9985% once the fused rope comes with it.
 #
 # PCC, both changes together, vs the 8 committed diffvae_gate baselines (run_diffvae_gates.sh with
-# DIFFVAE_DET_FUSED_QKV=1 DIFFVAE_TOPOLOGY=ring DIFFVAE_NUM_LINKS=2): every gate within 0.0001
+# fused_qkv on and --diffvae-topology ring --diffvae-num-links 2): every gate within 0.0001
 # percentage points, against a 0.02-point tolerance. Six exact, decoder context -0.0001, end-to-end
 # decode +0.0001 (99.8817 -> 99.8818). The ring/2-link run and a Linear/1-link run of the same
 # suite gave IDENTICAL PCCs to four decimals, which is the direct evidence that the collective
 # change is numerically inert -- an all-gather only moves bytes. So the whole -2209.5 ms is free.
 #
 # The gates pinned Linear/1-link at all three CCLManager sites and could not see the collective
-# config the runner ships; they now go through _gate_ccl(), which reads DIFFVAE_TOPOLOGY /
-# DIFFVAE_NUM_LINKS and defaults to Linear/1-link so an unset environment still reproduces the
-# committed baseline exactly.
+# config the runner ships; they now go through _gate_ccl(), which takes --diffvae-topology /
+# --diffvae-num-links and defaults to Linear/1-link so a bare run still reproduces the committed
+# baseline exactly.
 #
 # TT_DIT_BLOCK_PROF=1 is part of the baseline, not a decoration: without it the deterministic
 # stages show only their attention collectives and the attention spans (kv-wrow, q-to-seq, the block
@@ -66,19 +70,18 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
 export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-$HOME/.cache/tt-dit}"
 export LTX25_ROOT=${LTX25_ROOT:-/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941}
-export LTX25_DIFFVAE=${LTX25_DIFFVAE:-1}
 export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
 # The models/tt_dit/tests/models/vae/* tests do NOT read LTX25_ROOT -- they resolve weights from
 # DIFFVAE_CHECKPOINT, defaulting to ~/.cache/ltx-checkpoints/ltx-2.5/... which does not exist here,
 # and skip silently when it is missing.
 export DIFFVAE_CHECKPOINT="${DIFFVAE_CHECKPOINT:-$LTX25_ROOT/vae/ltx-2.5-video-vae-bf16.safetensors}"
 
-# Only read by test_diffvae_ltx.py's timing tests. Ring + 2 links, matching the pipeline runs: the fabric is
-# built as FABRIC_1D_RING either way, so Linear left the wraparound link enabled and unused, and
-# num_links=1 used one of the two eth channels that reach across the size-8 axis.
-export DIFFVAE_TOPOLOGY=${DIFFVAE_TOPOLOGY:-ring}
-export DIFFVAE_NUM_LINKS=${DIFFVAE_NUM_LINKS:-2}
-# export DIFFVAE_LATENT_T=19   # default; 19 latent frames -> 145 output frames
+# Ring + 2 links, matching the pipeline runs: the fabric is built as FABRIC_1D_RING either way, so
+# Linear left the wraparound link enabled and unused, and num_links=1 used one of the two eth
+# channels that reach across the size-8 axis. Latent frames default to 19 (145 output frames);
+# pass --diffvae-latent-t 4 for a quick 25-frame run.
+TOPOLOGY=${TOPOLOGY:-ring}
+NUM_LINKS=${NUM_LINKS:-2}
 
 export NO_PROMPT=${NO_PROMPT:-1}
 export RUN_WARMUP=${RUN_WARMUP:-0}
@@ -90,21 +93,10 @@ export HEIGHT=${HEIGHT:-1088}
 export WIDTH=${WIDTH:-1920}
 export OUTPUT_PATH="${OUTPUT_PATH:-$HOME/ltx25_diffvae_1080p.mp4}"
 
-# 73 OOMs on the W-SP path: band 0 spans 78 frames -> the full-W K/V gather is 651.8 MB/bank against
-# a 582.2 MB largest free block. 48 -> band 53 -> 442.9 MB/bank. (~8.36 MB/bank per band frame.)
-export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-78} # changing to 48 fixes the issue!!
-export DIFFVAE_STAGES_WSP=${DIFFVAE_STAGES_WSP:-1}
-export DIFFVAE_STAGES_BACKEND=${DIFFVAE_STAGES_BACKEND:-bricked_sp_w_sharded}
-export DIFFVAE_DEVICE_NOISE=${DIFFVAE_DEVICE_NOISE:-1}
-export DIFFVAE_DEVICE_PREPROC=${DIFFVAE_DEVICE_PREPROC:-1}
-export DIFFVAE_DEVICE_UNPATCHIFY=${DIFFVAE_DEVICE_UNPATCHIFY:-1}
-export DIFFVAE_TRIM_PAD_CHANNELS=${DIFFVAE_TRIM_PAD_CHANNELS:-1}
-export DIFFVAE_DET_COLPAR_QKV=${DIFFVAE_DET_COLPAR_QKV:-1}
-# Reaches ONLY det stage 0: stages 1+ get the fused qkv via COLPAR_QKV already, so this is a no-op
-# for them (asserted in test_diffvae_ltx.py's arms tests). See "HOW IT GOT HERE" above.
-export DIFFVAE_DET_FUSED_QKV=${DIFFVAE_DET_FUSED_QKV:-1}
-export DIFFVAE_DET_FUSED_ROPE=${DIFFVAE_DET_FUSED_ROPE:-1}
-export DIFFVAE_DET_FUSED_SWIGLU=${DIFFVAE_DET_FUSED_SWIGLU:-1}
+# Stage-5 frames per band. 73 OOMs on the W-SP path: band 0 spans 78 frames -> the full-W K/V gather
+# is 651.8 MB/bank against a 582.2 MB largest free block. 48 -> band 53 -> 442.9 MB/bank.
+# (~8.36 MB/bank per band frame.)
+SLAB_FRAMES=${SLAB_FRAMES:-78}
 export TT_DIT_STAGE_TIMING=${TT_DIT_STAGE_TIMING:-1}
 # Live progress: one "[stage HH:MM:SS] > label" line to stdout as each span opens and a "<" line
 # with its ms as it closes. Otherwise a decode is silent from the stage-5 plan line to the tree at
@@ -116,12 +108,12 @@ export TT_DIT_STAGE_LOG=${TT_DIT_STAGE_LOG:-1}
 # the warm-up pass. Prefix TT_DIT_BLOCK_PROF=1 to break the deterministic stages down into
 # attention/mlp as well -- that adds 64 device syncs, so the two modes are close but should not be
 # mixed in one comparison.
-export DIFFVAE_TP_HEADS=${DIFFVAE_TP_HEADS:-1}
 
 # Fail loudly if the paste-corruption bugs ever come back rather than running a half-configured job.
-: "${LTX25_DIFFVAE:?}" "${LTX25_ROOT:?}"
+: "${LTX25_ROOT:?}"
 [ -f "$DIFFVAE_CHECKPOINT" ] || {
   echo "DiffVAE weights missing: DIFFVAE_CHECKPOINT=$DIFFVAE_CHECKPOINT" >&2; exit 1; }
 
 exec python_env/bin/python -u -m pytest \
-	models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_wsp_timing -k s34x60 -x -q -s "$@"
+	models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_wsp_timing -k s34x60 -x -q -s \
+	--diffvae-slab-frames "$SLAB_FRAMES" --diffvae-topology "$TOPOLOGY" --diffvae-num-links "$NUM_LINKS" "$@"

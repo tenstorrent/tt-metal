@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.tt_dit.models.vae.diffvae_ltx import DiffVAEDecoder, decoder_config
+from models.tt_dit.models.vae.diffvae_ltx import DiffVAEDecoder, DiffVAEOptions, decoder_config
 from models.tt_dit.parallel.manager import CCLManager
 
 CHECKPOINT = Path(
@@ -24,18 +24,8 @@ def main() -> None:
     try:
         config = decoder_config(CHECKPOINT)
         latent = torch.randn(1, config["in_channels"], 4, 34, 60, generator=torch.Generator().manual_seed(3))
-        ccl = CCLManager(mesh, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 2)), topology=ttnn.Topology.Ring)
-        dec = DiffVAEDecoder(
-            config,
-            mesh_device=mesh,
-            ccl_manager=ccl,
-            stage5_na3d_backend="bricked_sp_w_sharded",
-            stage5_sp_axis=1,
-            stage5_tp_axis=0,
-            stages_na3d_backend="bricked_sp_w_sharded",
-            stages_sp_axis=1,
-            stages_tp_axis=0,
-        )
+        ccl = CCLManager(mesh, num_links=2, topology=ttnn.Topology.Ring)
+        dec = DiffVAEDecoder(config, mesh_device=mesh, ccl_manager=ccl, options=DiffVAEOptions.production())
         dec.load_checkpoint(CHECKPOINT)
         print(f"supports_yuv = {dec.supports_yuv}", flush=True)
 

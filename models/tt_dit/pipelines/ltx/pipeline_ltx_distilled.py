@@ -286,7 +286,7 @@ class LTXDistilledPipeline(LTXPipeline):
             self._warmup_decode(num_frames, height, width)
 
             # Programs are now compiled
-            if self._traced and self.vae_decoder is not None:
+            if self._vae_traced and self.vae_decoder is not None:
                 self.vae_decoder._vae_traced = True
 
             # Warm the on-device audio decode eagerly at the real latent shape: compiles kernels,

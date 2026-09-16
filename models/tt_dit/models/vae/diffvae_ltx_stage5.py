@@ -15,7 +15,6 @@ Port of ``ltx_core.model.video_vae``: ``DiffusionVideoDecoder.forward_diff_step`
 from __future__ import annotations
 
 import math
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -115,20 +114,6 @@ class DiffVAEStage5Config:
         return self.out_channels * self.patch_size**2
 
     @property
-    def resolved_gna_stride(self) -> tuple[int, int, int]:
-        """``gna_stride``, or ``DIFFVAE_S5_GNA_STRIDE`` when the config is left at the default.
-
-        An explicitly configured stride wins over the environment; (1,1,1) is the shipped
-        architecture, so it is indistinguishable from "not configured".
-        """
-        if self.gna_stride != (1, 1, 1):
-            return self.gna_stride
-        value = os.environ.get("DIFFVAE_S5_GNA_STRIDE")
-        if value:
-            return tuple(int(part) for part in value.split(","))
-        return (1, 1, 1)
-
-    @property
     def resolved_rope_dim_split(self) -> tuple[int, int, int]:
         if self.rope_dim_split is not None:
             split = self.rope_dim_split
@@ -149,7 +134,7 @@ class DiffVAEStage5Config:
 class NAKernel:
     """Which NA3D executor stage 5 runs, and the layout decisions that follow from it."""
 
-    #: The backend string callers select with (DIFFVAE_STAGE5_BACKEND, or the ctor kwarg).
+    #: The backend string callers select with (DiffVAEOptions.stage5_backend, or the ctor kwarg).
     name: str
     #: Keep this chip's W-shard of the sequence through the whole stage.
     w_sharded: bool = False
@@ -662,6 +647,8 @@ class _NeighborhoodAttention3D(Module):
         na3d_backend: str | NAKernel,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
+        fused_qkv: bool = False,
+        tp_proj: bool = True,
     ) -> None:
         super().__init__()
         self.config = config
@@ -674,9 +661,9 @@ class _NeighborhoodAttention3D(Module):
         self.tp_axis = tp_axis
         self.scale = config.head_dim**-0.5
 
-        # DIFFVAE_TP_PROJ=1: column-parallel qkv over the TP axis, so each chip computes only its
-        # heads' q/k/v and feeds the attention already head-sharded. The out-proj stays replicated.
-        self.tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
+        # tp_proj: column-parallel qkv over the TP axis, so each chip computes only its heads' q/k/v
+        # and feeds the attention already head-sharded. The out-proj stays replicated.
+        self.tp_proj = tp_proj and tp_axis is not None
         tp = int(list(mesh_device.shape)[tp_axis]) if self.tp_proj else 1
         assert not self.tp_proj or config.num_heads % tp == 0, f"num_heads={config.num_heads} not divisible by tp={tp}"
         self.heads_local = config.num_heads // tp
@@ -686,8 +673,8 @@ class _NeighborhoodAttention3D(Module):
         if self.tp_proj:
             qkv_linear["weight_mesh_axes"] = [None, tp_axis]
             qkv_linear["bias_mesh_axes"] = [None, tp_axis]
-        # DIFFVAE_S5_FUSED_QKV=1: one fused qkv matmul, split by slicing the packed output.
-        self.fused_qkv = os.environ.get("DIFFVAE_S5_FUSED_QKV", "0") == "1"
+        # fused_qkv: one fused qkv matmul, split by slicing the packed output.
+        self.fused_qkv = fused_qkv
         if self.fused_qkv:
             self.qkv = Linear(config.dim, 3 * config.dim, **qkv_linear)
         else:
@@ -893,7 +880,7 @@ class _NeighborhoodAttention3D(Module):
                     heads_presharded=self.tp_proj,
                     already_bricked=brick is not None,
                     brick=brick,
-                    stride=cfg.resolved_gna_stride,
+                    stride=cfg.gna_stride,
                 )
             case _:
                 out = neighborhood_attention_3d(
@@ -904,7 +891,7 @@ class _NeighborhoodAttention3D(Module):
                     scale=1.0,
                     ccl_manager=self.ccl_manager,
                     backend=self.kernel.name,
-                    gna_stride=cfg.resolved_gna_stride,
+                    gna_stride=cfg.gna_stride,
                 )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
@@ -931,6 +918,8 @@ class DiffusionNABlock(Module):
         na3d_backend: str | NAKernel,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
+        fused_qkv: bool = False,
+        tp_proj: bool = True,
     ) -> None:
         super().__init__()
         self.config = config
@@ -958,6 +947,8 @@ class DiffusionNABlock(Module):
             na3d_backend=self.kernel,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
+            fused_qkv=fused_qkv,
+            tp_proj=tp_proj,
         )
         self.norm2 = RMSNorm(config.dim, **norm)
         # Fused [up | gate] projection whose epilogue emits silu(gate) * up.
@@ -1169,6 +1160,10 @@ class DiffVAEStage5(Module):
         na3d_backend: str | NAKernel | None = None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
+        fused_qkv: bool = False,
+        tp_proj: bool = True,
+        slab_frames: int | None = None,
+        device_unpatchify: bool = False,
     ) -> None:
         super().__init__()
         self.config = config or DiffVAEStage5Config()
@@ -1185,9 +1180,13 @@ class DiffVAEStage5(Module):
         self._w_sharded = self.kernel.w_sharded
         self._keep_bricked = self.kernel.keep_bricked
         self._brick: tuple[int, int, int] | None = None
+        # Frames per band, or None for the whole volume; see bands().
+        self.slab_frames = slab_frames
+        # Tile-pad trim and depth-to-space on device before the pull; needed for device_out / yuv.
+        self.device_unpatchify = device_unpatchify
         # Under column-parallel qkv the RoPE tables (one row per head) are built for the local head count.
-        _tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
-        _tp = int(list(mesh_device.shape)[tp_axis]) if _tp_proj else 1
+        self.tp_proj = tp_proj and tp_axis is not None
+        _tp = int(list(mesh_device.shape)[tp_axis]) if self.tp_proj else 1
         self._rope_num_heads = self.config.num_heads // _tp
         if self._w_sharded:
             assert sp_axis is not None, f"{self.kernel.name} needs sp_axis"
@@ -1211,6 +1210,8 @@ class DiffVAEStage5(Module):
                 na3d_backend=self.kernel,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
+                fused_qkv=fused_qkv,
+                tp_proj=tp_proj,
             )
             for _ in range(cfg.num_blocks)
         )
@@ -1246,7 +1247,7 @@ class DiffVAEStage5(Module):
         volume = (grid.t, grid.h, grid.w)
         context_window = tuple(min(window, extent) for window, extent in zip(self.config.kernel_size, volume))
         self._brick = brick_override(volume) or _choose_sharded_brick(
-            volume, context_window, self.config.resolved_gna_stride, w_local, sp
+            volume, context_window, self.config.gna_stride, w_local, sp
         )
         return self._brick
 
@@ -1313,20 +1314,20 @@ class DiffVAEStage5(Module):
         return tables
 
     def bands(self, grid: Grid) -> tuple[_Band, ...]:
-        """How to split the volume into frame bands, from ``DIFFVAE_SLAB_FRAMES`` (off by default).
+        """How to split the volume into frame bands of ``slab_frames`` (None runs it whole).
 
         A band boundary has to be tile-aligned, which holds exactly when ``h * w`` is a multiple of ``TILE``.
         """
-        frames = os.environ.get("DIFFVAE_SLAB_FRAMES")
+        frames = self.slab_frames
         kernel = self.config.kernel_size[0]
         if frames and (grid.h * grid.w) % TILE != 0:
             logger.warning(
-                f"[diffvae] ignoring DIFFVAE_SLAB_FRAMES: h*w={grid.h * grid.w} is not a multiple of {TILE}, "
+                f"[diffvae] ignoring slab_frames={frames}: h*w={grid.h * grid.w} is not a multiple of {TILE}, "
                 "so a frame boundary is not a tile boundary"
             )
             frames = None
         align = self._stage5_brick(grid)[0] if self._keep_bricked else 1
-        return _bands(grid.t, frames=int(frames) if frames else None, kernel=kernel, align=align)
+        return _bands(grid.t, frames=frames, kernel=kernel, align=align)
 
     def device_x_t(self, grid: Grid, bands: tuple[_Band, ...], *, seed: int = 0) -> list[ttnn.Tensor]:
         """x_t noise drawn on device, already in the patchified layout. One tensor per band.
@@ -1524,8 +1525,8 @@ class DiffVAEStage5(Module):
     def _to_pixels(self, out, grid, *, device_out: bool = False, output_type: str = "float"):
         cfg = self.config
         needs_device_tail = device_out or output_type == "yuv"
-        if needs_device_tail and not (self._w_sharded and os.environ.get("DIFFVAE_DEVICE_UNPATCHIFY") == "1"):
-            msg = "device_out/yuv need the W-sharded fast path with DIFFVAE_DEVICE_UNPATCHIFY=1"
+        if needs_device_tail and not (self._w_sharded and self.device_unpatchify):
+            msg = "device_out/yuv need the W-sharded fast path with device_unpatchify"
             raise ValueError(msg)
         if self._w_sharded:
             # ``out`` is W-sharded over sp_axis and REPLICATED over the other mesh axis. Rather than
@@ -1551,14 +1552,14 @@ class DiffVAEStage5(Module):
                     if shard_other:
                         vol = ttnn.mesh_partition(vol, dim=2, cluster_axis=other_axis)
                         concat_dims[other_axis] = 2
-                    # DIFFVAE_TRIM_PAD_CHANNELS=1 drops the tile padding before the pull. Exact,
-                    # since those columns come from the zero-padded rows of the conv_out weight.
-                    if os.environ.get("DIFFVAE_TRIM_PAD_CHANNELS") == "1":
+                    # Drop the tile padding before the pull. Exact, since those columns come from
+                    # the zero-padded rows of the conv_out weight.
+                    if self.device_unpatchify:
                         shape = list(vol.shape)
                         trimmed = ttnn.slice(vol, [0] * len(shape), shape[:-1] + [cfg.patch_channels])
                         ttnn.deallocate(vol)
                         vol = trimmed
-                    if os.environ.get("DIFFVAE_DEVICE_UNPATCHIFY") == "1":
+                    if self.device_unpatchify:
                         # Depth-to-space on device. Packed channel order is (c, w_sub, h_sub), per patchify.
                         pv = cfg.patch_size
                         shp = list(vol.shape)
