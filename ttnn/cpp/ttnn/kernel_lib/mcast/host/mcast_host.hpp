@@ -174,11 +174,6 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
-    // One successful append per helper; subsequent calls fail, including on copies of a bound helper.
-    // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
-    // existing zero-initialized semaphores covering every participating core.
-    // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
-    // the Program; discard that Program after a failed append.
     void append_semaphores(tt::tt_metal::Program& program);
 
     // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
@@ -345,11 +340,6 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
-    // One successful append per helper; subsequent calls fail, including on copies of a bound helper.
-    // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
-    // existing zero-initialized semaphores covering every participating core.
-    // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
-    // the Program; discard that Program after a failed append.
     void append_semaphores(tt::tt_metal::Program& program);
 
     // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
@@ -437,11 +427,6 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
-    // One successful append per helper; subsequent calls fail, including on copies of a bound helper.
-    // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
-    // existing zero-initialized semaphores covering every participating core.
-    // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
-    // the Program; discard that Program after a failed append.
     void append_semaphores(tt::tt_metal::Program& program);
 
     // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
