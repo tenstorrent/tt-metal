@@ -2,7 +2,7 @@
 
 [ttsim](https://github.com/tenstorrent/ttsim) is Tenstorrent's functional
 simulator. It models a Wormhole or Blackhole chip end-to-end on a plain
-x86_64 Linux host — no silicon required. The LLK test suite can target
+x86_64 or aarch64 Linux host — no silicon required. The LLK test suite can target
 ttsim with the same pytest invocations used for silicon, modulo a couple
 of environment variables.
 
