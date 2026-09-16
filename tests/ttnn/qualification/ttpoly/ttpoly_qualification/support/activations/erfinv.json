@@ -1,0 +1,293 @@
+{
+  "name": "erfinv",
+  "semantic_profiles": {
+    "ttnn": {
+      "special_value_policy": {"nan": "nan", "pos_inf": "pos_inf", "neg_inf": "neg_inf", "pos_zero": "pos_zero", "neg_zero": "neg_zero"},
+      "domain_action_overrides": [
+        {
+          "match": {"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}},
+          "action": {"kind": "return_class", "class": "neg_inf"}
+        },
+        {
+          "match": {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}},
+          "action": {"kind": "return_class", "class": "pos_inf"}
+        }
+      ]
+    }
+  },
+  "producer_recipes": [
+    {
+      "schema": "ttpoly_producer_recipe_v1", "id": "selected_bf16_nonordinary_v1",
+      "target": {
+        "approximation_type": "polynomial", "degree": 3, "segments": 1,
+        "segmentation": "uniform", "fitting": "lsq", "metric": "ulp",
+        "fit_precision": "fp32", "target_precision": "bf16", "relative_error": true,
+        "fit_hardwaremode": null, "architecture": "bh", "critical_point_policy": "ignore",
+        "lo": 0.0, "hi": 5.550000190734863,
+        "range_reduction_method": "none"
+      },
+      "producer": {"kind": "declared_fit_materializer", "fit_block": "whole_log_ratio", "transforms": []},
+      "output": {"variant": "block-whole_log_ratio"},
+      "determinism": {"toolchain_contract": "tenstorrent_patched_fitter_v1", "method_order": ["lsq"], "tie_break_contract": "metric_min_fixed_order_v1"}
+    }
+  ],
+  "activation_schema_version": 3,
+  "direct_total_schedule": {
+    "schema": "ttpoly_direct_total_schedule_v1",
+    "kind": "log_square_factorized_odd",
+    "selected_block_id": "whole_log_ratio",
+    "log_block_id": "whole_log1p"
+  },
+  "interior_root": {"x0": 0.0, "order": 1},
+  "description": "Inverse error function - erf^(-1)(x)",
+  "pytorch": {
+    "module": "torch",
+    "function": "erfinv",
+    "signature": "erfinv(input)"
+  },
+  "domain": {
+    "min": -0.99,
+    "max": 0.99
+  },
+  "campaign_domain": {
+    "min": -0.99,
+    "max": 0.99
+  },
+  "valid_domain": {
+    "min": -1.0,
+    "max": 1.0,
+    "min_result": "neg_inf",
+    "max_result": "pos_inf"
+  },
+  "contract": {
+    "arity": 1,
+    "parameters": [],
+    "finite_domain": {"min": -1.0, "max": 1.0},
+    "min_result": "neg_inf",
+    "max_result": "pos_inf",
+    "otherwise": "return_nan_class",
+    "nan_policy": "return_nan_class",
+    "pos_inf_policy": "return_nan_class",
+    "neg_inf_policy": "return_nan_class",
+    "signed_zero_policy": "preserve"
+  },
+  "domain_actions": [
+    {"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}},
+    {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}},
+    {"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "neg_inf"}},
+    {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "pos_inf"}}
+  ],
+  "domain_action_programs": [{"target": {"precision": "bf16", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"}, "domain_actions": [{"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "neg_inf"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "pos_inf"}}], "proof": {"kind": "mathematical_contract", "precision": "bf16", "population": "mathematical_domain_and_special_classes"}}, {"target": {"precision": "bf16", "architecture": "wh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"}, "domain_actions": [{"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "neg_inf"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "pos_inf"}}], "proof": {"kind": "mathematical_contract", "precision": "bf16", "population": "mathematical_domain_and_special_classes"}}, {"target": {"precision": "bf16", "architecture": "rvv", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"}, "domain_actions": [{"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "neg_inf"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": true, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "pos_inf"}}], "proof": {"kind": "exhaustive", "precision": "bf16", "population": "all_65536_bf16_rvv_typed_action_semantics"}}, {"target": {"precision": "fp32", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"}, "domain_actions": [{"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}], "proof": {"kind": "mathematical_contract", "precision": "fp32", "population": "mathematical_domain_and_special_classes"}}, {"target": {"precision": "fp32", "architecture": "rvv", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"}, "domain_actions": [{"coordinate": "raw", "direction": "below", "bound": -1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}, {"coordinate": "raw", "direction": "above", "bound": 1.0, "inclusive": false, "phase": "pre_evaluation", "action": {"kind": "return_class", "class": "nan"}}], "proof": {"kind": "mathematical_contract", "precision": "fp32", "population": "mathematical_domain_and_special_classes"}}],
+  "classification": [
+    "smooth"
+  ],
+  "fit_method": "segmented",
+  "rational_search": {"enabled": true, "segment_counts": [1, 2], "max_denominator_excess": 0},
+  "special_value_policy": {"nan": "nan", "pos_inf": "nan", "neg_inf": "nan", "pos_zero": "pos_zero", "neg_zero": "neg_zero"},
+  "sollya_expr": "erfinv(x)",
+  "rational_parity": {
+    "numerator": "odd",
+    "denominator": "even",
+    "rationale": "erfinv is an odd function: erfinv(-x) = -erfinv(x)"
+  },
+  "has_silicon_sfpu": true,
+  "zero_at_origin": true,
+  "polynomial_parity": "odd",
+  "critical_points": [
+    {
+      "x": 0.0,
+      "value": 0.0,
+      "description": "Zero crossing at origin"
+    }
+  ],
+  "range_reduction": {
+    "method": "none"
+  },
+  "fits": {
+    "erfinv_ratio": {
+      "variable": "s",
+      "expression": "erfinv(sqrt(s))/sqrt(s)",
+      "removable_limits": {"s=0": 0.886226925452758},
+      "domain": {"min": 0.0, "max": 0.5625},
+      "approximation": {"allowed": ["polynomial", "rational"], "parity": "none"},
+      "constraints": {"value_at_zero": 0.886226925452758},
+      "materializations": [
+        {
+          "target": {"precision": "bf16", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "polynomial",
+          "producer": "numerical_expression_qr_v1",
+          "degree": 6,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        },
+        {
+          "target": {"precision": "fp32", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "polynomial",
+          "producer": "numerical_expression_qr_v1",
+          "degree": 10,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        }
+      ]
+    },
+    "log1p_negative": {
+      "variable": "u",
+      "expression": "log1p(u)",
+      "domain": {"min": -0.9999999403953552, "max": -0.75},
+      "approximation": {"allowed": ["exponent_alu_log1p"]},
+      "materializations": [
+        {
+          "target": {"precision": "bf16", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "exponent_alu_log1p",
+          "producer": "numerical_log1p_lstsq",
+          "degree": 5,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        },
+        {
+          "target": {"precision": "fp32", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "exponent_alu_log1p",
+          "producer": "numerical_log1p_lstsq",
+          "degree": 10,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        }
+      ]
+    },
+    "sqrt_positive": {
+      "variable": "t",
+      "expression": "sqrt(t)",
+      "domain": {"min": 1.38, "max": 17.0},
+      "approximation": {
+        "allowed": ["newton_root"],
+        "root_n": 2,
+        "reciprocal": false,
+        "newton_iters": 2,
+        "magic_seed": "0x5f1110a0",
+        "c0": 0.0,
+        "c1": 2.2825186,
+        "c2": 2.2533049
+      },
+      "materializations": [
+        {
+          "target": {"precision": "bf16", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "newton_root",
+          "producer": "fixed_newton_root",
+          "fitting": "fpminimax",
+          "metric": "ulp"
+        },
+        {
+          "target": {"precision": "fp32", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "newton_root",
+          "producer": "fixed_newton_root",
+          "fitting": "fpminimax",
+          "metric": "ulp"
+        }
+      ]
+    },
+    "positive_tail": {
+      "variable": "r",
+      "expression": "erfinv(1-exp(-((r+2.66)^2)))",
+      "domain": {"min": -1.51, "max": 1.51},
+      "approximation": {"allowed": ["polynomial", "rational"], "parity": "none"},
+      "materializations": [
+        {
+          "target": {"precision": "bf16", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "polynomial",
+          "producer": "numerical_expression_qr_v1",
+          "degree": 6,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        },
+        {
+          "target": {"precision": "fp32", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "polynomial",
+          "producer": "numerical_expression_qr_v1",
+          "degree": 10,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        }
+      ]
+    },
+    "whole_log1p": {
+      "variable": "u",
+      "expression": "log1p(u)",
+      "domain": {"min": -0.9999999403953552, "max": 0.0},
+      "approximation": {"allowed": ["exponent_alu_log1p"]},
+      "materializations": [
+        {
+          "target": {"precision": "bf16", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "exponent_alu_log1p",
+          "producer": "numerical_log1p_lstsq",
+          "degree": 2,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        },
+        {
+          "target": {"precision": "bf16", "architecture": "wh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "exponent_alu_log1p",
+          "producer": "numerical_log1p_lstsq",
+          "degree": 2,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        }
+      ]
+    },
+    "whole_log_ratio": {
+      "variable": "t",
+      "expression": "erfinv(sqrt(1-exp(-t)))/sqrt(1-exp(-t))",
+      "removable_limits": {"t=0": 0.886226925452758},
+      "domain": {"min": 0.0, "max": 5.550000190734863},
+      "approximation": {"allowed": ["polynomial"], "parity": "none"},
+      "constraints": {"value_at_zero": 0.886226925452758},
+      "materializations": [
+        {
+          "target": {"precision": "bf16", "architecture": "bh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "polynomial",
+          "producer": "numerical_expression_qr_v1",
+          "degree": 3,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        },
+        {
+          "target": {"precision": "bf16", "architecture": "wh", "intermediate_precision": "fp32", "input_daz": true, "output_ftz": true, "rounding_order": "post_round"},
+          "method": "polynomial",
+          "producer": "numerical_expression_qr_v1",
+          "degree": 3,
+          "samples": 8192,
+          "fitting": "lsq",
+          "metric": "ulp"
+        }
+      ]
+    }
+  },
+  "piecewise": {
+    "breakpoints": [
+      0.0
+    ],
+    "pieces": [
+      {
+        "index": 0,
+        "domain_condition": "x < 0",
+        "sollya_expr": "erfinv(x)",
+        "description": "Negative region"
+      },
+      {
+        "index": 1,
+        "domain_condition": "x >= 0",
+        "sollya_expr": "erfinv(x)",
+        "description": "Positive region"
+      }
+    ]
+  },
+  "notes": "The legacy coefficient campaign remains [-0.99,0.99]. The BF16 direct-total log-square schedule owns [-1,1], exact endpoint infinities, and NaN outside while preserving the selected whole_log_ratio and whole_log1p coefficient artifacts. Its terminal exact scale lets destination RNE decide the BF16 MIN_NORMAL transition before FTZ. The remaining fit blocks retain their original producer declarations for coefficient provenance and offline comparison."
+}

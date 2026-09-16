@@ -1,0 +1,87 @@
+{
+  "activation": "erfinv",
+  "closed_form_terminals": [],
+  "domain_actions": [
+    {
+      "action": {
+        "class": "neg_inf",
+        "kind": "return_class"
+      },
+      "bound": -1.0,
+      "coordinate": "raw",
+      "direction": "below",
+      "inclusive": false,
+      "phase": "pre_evaluation"
+    },
+    {
+      "action": {
+        "class": "pos_inf",
+        "kind": "return_class"
+      },
+      "bound": 1.0,
+      "coordinate": "raw",
+      "direction": "above",
+      "inclusive": false,
+      "phase": "pre_evaluation"
+    },
+    {
+      "action": {
+        "class": "neg_inf",
+        "kind": "return_class"
+      },
+      "bound": -1.0,
+      "coordinate": "raw",
+      "direction": "below",
+      "inclusive": true,
+      "phase": "pre_evaluation"
+    },
+    {
+      "action": {
+        "class": "pos_inf",
+        "kind": "return_class"
+      },
+      "bound": 1.0,
+      "coordinate": "raw",
+      "direction": "above",
+      "inclusive": true,
+      "phase": "pre_evaluation"
+    }
+  ],
+  "execution_kind": "tti_signed_nonfinite_quotient",
+  "io_contract": {
+    "arity": 1,
+    "fuse_grad": false,
+    "gradient_composition": "none",
+    "tensor_input_roles": [
+      "activation_input"
+    ]
+  },
+  "raw_class_actions": {},
+  "real_domain": {
+    "finite_domain": "all_real",
+    "valid_domain": {
+      "max": 1.0,
+      "max_result": "pos_inf",
+      "min": -1.0,
+      "min_result": "neg_inf"
+    }
+  },
+  "schema": "ttpoly_scoring_semantics_v5",
+  "semantic_profile": "ttnn",
+  "special_value_policy": {
+    "nan": "nan",
+    "neg_inf": "neg_inf",
+    "neg_zero": "neg_zero",
+    "pos_inf": "pos_inf",
+    "pos_zero": "pos_zero"
+  },
+  "target": {
+    "architecture": "bh",
+    "input_daz": true,
+    "intermediate_precision": "fp32",
+    "output_ftz": true,
+    "precision": "bf16",
+    "rounding_order": "post_round"
+  },
+  "target_composite_class_overlay": null
+}

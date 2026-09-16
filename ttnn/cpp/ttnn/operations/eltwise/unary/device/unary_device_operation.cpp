@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_device_operation.hpp"
+#include <bit>
+#include <cstdint>
+#include <vector>
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -14,8 +17,18 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::unary {
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
+    // Float-bit dispatch guards must remain distinct on cache hits too.
+    std::vector<std::vector<uint32_t>> exact_float_parameter_words;
+    exact_float_parameter_words.reserve(op_chain.size());
+    for (const auto& op : op_chain) {
+        auto& words = exact_float_parameter_words.emplace_back();
+        for (float value : op.get_params_if<float>()) {
+            words.push_back(std::bit_cast<uint32_t>(value));
+        }
+    }
     return ttsl::hash::hash_objects_with_default_seed(
         op_chain,
+        exact_float_parameter_words,
         output_dtype,
         memory_config,
         fp32_dest_acc_en,
@@ -174,6 +187,21 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     TT_FATAL(ttnn::is_device_tensor(input_tensor), "Unary: Unexpected tensor type {}", input_tensor.storage_type());
 
     const auto output_spec = compute_output_specs(attributes, tensor_args);
+    // Include the actual (possibly preallocated) output contract, not only
+    // requested output_dtype. Keep shape-dependent work splitting cacheable.
+    const auto dispatch_contract_key = ttsl::hash::hash_objects_with_default_seed(
+        input_tensor.device()->arch(),
+        input_tensor.tensor_spec().tile().get_height(),
+        input_tensor.tensor_spec().tile().get_width(),
+        input_tensor.tensor_spec().tile().get_transpose_within_face(),
+        input_tensor.tensor_spec().tile().get_transpose_of_faces(),
+        output_spec.data_type(),
+        output_spec.layout(),
+        output_spec.memory_config(),
+        output_spec.tile().get_height(),
+        output_spec.tile().get_width(),
+        output_spec.tile().get_transpose_within_face(),
+        output_spec.tile().get_transpose_of_faces());
     const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
     std::optional<uint32_t> src_shard_vol = std::nullopt;
     std::optional<uint32_t> dst_shard_vol = std::nullopt;
@@ -192,6 +220,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         return operation::hash_operation<UnaryDeviceOperation>(
             attributes,
+            dispatch_contract_key,
             input_tensor.dtype(),
             input_tensor.layout(),
             input_tensor.memory_config(),
@@ -202,6 +231,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
+        dispatch_contract_key,
         input_tensor.dtype(),
         input_tensor.layout(),
         input_tensor.memory_config(),

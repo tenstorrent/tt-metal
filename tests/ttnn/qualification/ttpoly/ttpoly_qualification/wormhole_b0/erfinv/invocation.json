@@ -1,0 +1,10 @@
+{
+  "public_operation": "erfinv",
+  "tensor_roles": [
+    "activation_input"
+  ],
+  "public_args": [],
+  "public_kwargs": [],
+  "single_result_container": false,
+  "explicit_dram_output": false
+}
