@@ -752,19 +752,20 @@ class WanTransformer3DModel(Module):
         prev_fn_residual_1BND: ttnn.Tensor,
         *,
         num_fn_blocks: int,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Timestep conditioning, patch embedding and the first ``num_fn_blocks`` blocks.
 
-        Returns ``(spatial_1BND, fn_residual_1BND, diff_sum_1B11, ref_sum_1B11, temb_11BD,
-        timestep_proj_1BTD)`` where::
+        Returns ``(spatial_1BND, fn_residual_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD)`` where::
 
-            fn_residual = spatial_after_Fn_blocks - spatial_after_patch_embedding
-            diff_sum    = sum(|fn_residual - prev_fn_residual|)   (this device's shard only)
-            ref_sum     = sum(|prev_fn_residual|)                 (this device's shard only)
+            fn_residual  = spatial_after_Fn_blocks - spatial_after_patch_embedding
+            sums[..., 0] = sum(|fn_residual - prev_fn_residual|)   (this device's shard only)
+            sums[..., 1] = sum(|fn_residual|)                      (this device's shard only)
 
-        Summing ``diff_sum`` / ``ref_sum`` over all mesh devices and dividing gives cache-dit's
-        relative mean-L1 residual diff. ``spatial_1BND`` is a private copy, safe to hold across
-        the following ``cache_body`` call.
+        Summing over all mesh devices, ``sums[0]`` divided by the previous computed step's
+        ``sums[1]`` is cache-dit's relative mean-L1 residual diff. The reductions stay in bf16
+        (accumulated on device; the ~0.1% rounding is irrelevant for thresholding) and are packed
+        into one tensor so the host needs a single readback. ``spatial_1BND`` is a private copy,
+        safe to hold across the following ``cache_body`` call.
         """
         temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
 
@@ -787,13 +788,14 @@ class WanTransformer3DModel(Module):
         ttnn.deallocate(spatial_0_1BND)
 
         diff_1BND = ttnn.abs(ttnn.subtract(fn_residual_1BND, prev_fn_residual_1BND))
-        diff_sum_1B11 = ttnn.sum(ttnn.typecast(diff_1BND, ttnn.float32), dim=[2, 3], keepdim=True)
+        diff_sum_1B11 = ttnn.sum(diff_1BND, dim=[2, 3], keepdim=True)
         ttnn.deallocate(diff_1BND)
-        ref_1BND = ttnn.abs(prev_fn_residual_1BND)
-        ref_sum_1B11 = ttnn.sum(ttnn.typecast(ref_1BND, ttnn.float32), dim=[2, 3], keepdim=True)
-        ttnn.deallocate(ref_1BND)
+        abs_1BND = ttnn.abs(fn_residual_1BND)
+        cur_sum_1B11 = ttnn.sum(abs_1BND, dim=[2, 3], keepdim=True)
+        ttnn.deallocate(abs_1BND)
+        sums_1B12 = ttnn.concat([diff_sum_1B11, cur_sum_1B11], dim=3)
 
-        return spatial_1BND, fn_residual_1BND, diff_sum_1B11, ref_sum_1B11, temb_11BD, timestep_proj_1BTD
+        return spatial_1BND, fn_residual_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD
 
     def cache_body(
         self,

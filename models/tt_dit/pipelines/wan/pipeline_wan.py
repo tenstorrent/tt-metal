@@ -650,8 +650,15 @@ class WanPipeline(PipelineAPIMixin):
         return runners
 
     def cache_summary(self) -> list[dict[str, object]]:
-        """DBCache statistics (cached steps, residual diffs) per expert for the most recent call."""
-        return [ts.cache_runner.context.summary() for ts in self.transformer_states if ts.cache_runner is not None]
+        """DBCache statistics (cached steps, residual diffs, optional profile) per expert for the most recent call."""
+        out = []
+        for ts in self.transformer_states:
+            if ts.cache_runner is None:
+                continue
+            summary = ts.cache_runner.context.summary()
+            summary["profile_ms"] = ts.cache_runner.profile_summary()
+            out.append(summary)
+        return out
 
     def get_model_input(self, latents: ttnn.Tensor, cond_latents: ttnn.Tensor | None) -> ttnn.Tensor:
         """Adapter function to enable I2V. For base T2V, just return the latents (cast to bf16)."""
