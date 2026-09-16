@@ -56,6 +56,7 @@ public:
     // Initialize dispatch firmware (compile + configure device CQs). This may be used by dispatchcontext to
     // re-enable fast dispatch after it was disabled at runtime.
     void initialize_dispatch_firmware(bool force_recreate_topology);
+    void teardown_dispatch_firmware();
     void reset_dispatch_topology();
     // API needed due to Issue #19729
     std::size_t get_max_num_eth_cores_across_all_devices() const;
