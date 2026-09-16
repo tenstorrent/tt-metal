@@ -13,10 +13,11 @@ prefix (11 chunks), `q_chunk=32`, bf16 Q / bfp8 KV, `d_q=d_k=576`, `d_v=512`, 16
 | full-mesh 32-ring, best tuning | 6.7219 ms | +0.959 ms |
 | full-mesh 32-ring, inherited k=640 | 7.0604 ms | +1.298 ms |
 
-The shipped TP-AG design costs 5.9x less than the best full-mesh alternative. Its entire remaining
-gap is **arrival exposure** -- ring steps waiting on data that the fabric has already proved it can
-deliver in less time than the wait. Nothing else is left: k tuning is flat, padding does not add
-time, transport is fine, and ring width when hidden costs 2.1 us/step.
+The shipped TP-AG design costs 5.9x less than the best full-mesh alternative. Everything that was
+suspected of causing that gap has been measured and eliminated: k tuning is flat, padding does not
+add time, transport is fine, unit count is at its floor, and ring width costs 2.1 us/step. What
+remains -- 0.806 ms at k=640 -- is **not yet attributed**, and the last section says why the obvious
+explanation does not hold and what instrument would settle it.
 
 ## How this was measured, and one retraction
 
@@ -124,7 +125,7 @@ tiles) and every width below divides it exactly.
 Baseline: 8-ring k=640 at 12 chunks, 96 units, **6.2748 ms**. (Device time scales with work almost
 exactly: 6.2748 / 5.7639 = 1.089 against a 12/11 = 1.091 work ratio.)
 
-| k_chunk | units | per step | device | overhead | unit cost | exposure | us/step |
+| k_chunk | units | per step | device | overhead | unit cost | residual | us/step |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 192 | 320 | 10 | 7.6167 ms | 1.342 | 1.178 | 0.164 | 5.1 |
 | 320 | 192 | 6 | 7.1639 ms | 0.889 | 0.505 | 0.384 | 12.0 |
@@ -132,7 +133,8 @@ exactly: 6.2748 / 5.7639 = 1.089 against a 12/11 = 1.091 work ratio.)
 | 480 | 128 | 4 | 7.0386 ms | 0.764 | 0.168 | 0.595 | 18.6 |
 | 640 | 96 | 3 | 7.0805 ms | 0.806 | 0.000 | 0.806 | 25.2 |
 
-`unit cost` is `(units - 96) x 5.26 us` from experiment 1; `exposure` is the remainder.
+`unit cost` is `(units - 96) x 5.26 us` from experiment 1; `residual` is what is left over. The
+residual is a subtraction, not a measurement of any particular stall -- see the last section.
 
 **Overhead is flat at 0.76-0.89 ms across k=320..640.** The two terms trade off and cancel: fewer
 units cuts per-unit cost and starves each ring step of the compute that hides its arrival. There is
@@ -173,7 +175,7 @@ tuned width needs the op to process a **short final unit** instead of padding to
 worth ~9% of K work at depths where the shard is not a multiple of k.
 
 **Transport is not the bottleneck.** 32 hops cost 43 us more than 8 -- 19x smaller than the 806 us of
-exposure, and the entire transfer (479 us) is less than the exposure it is blamed for. The
+residual, and the entire transfer (479 us) is less than the residual it was blamed for. The
 small-payload penalty is real but irrelevant at this scale.
 
 **Unit count is real but already at its floor.** 5.26 us per unit, and the 32-ring cannot go below 96
@@ -181,16 +183,29 @@ units at k=640 (3 per shard) without exceeding L1.
 
 **Ring width itself is nearly free** -- 2.1 us per step when hidden, 0.068 ms over 32 steps.
 
-**Everything that remains is arrival exposure.** At k=640 the 32-ring has 196 us of compute per ring
-step against a 15 us transfer, and still leaves 25.2 us per step exposed. Compute per step exceeds
-the arrival thirteenfold and the arrival is still not hidden, so this is neither a bandwidth limit
-nor a latency floor: the ring is failing to overlap at this granularity. The same mechanism works
-fine at 11 units per step (1.6 us exposed), which points at buffer credit depth rather than the
-transfer.
+**The remaining 0.806 ms is unattributed, and it is NOT waiting for data.** That was the working
+hypothesis and experiment 5 refutes it: the whole 32-hop gather lands in 0.479 ms while compute runs
+6.275 ms, and shards are consumed nearest-first, so arrivals run about 13x ahead of consumption.
+Three further candidates are ruled out by the matched-352 comparison, where 32 ring steps cost only
+51 us more than 8 (2.1 us/step): per-step loop overhead, the per-iteration Q re-read
+(`need_q_read = (q_per_core > 1) || !q_pushed`), and the per-slice worker barrier would each scale
+with step count and would have shown up there. Extra straddle runs are too small to matter -- about
+288 additional run iterations across the op, each a divide and a compare.
 
-**What a fix would be worth.** With exposure eliminated at 96 units the 32-ring would land at
-5.7625 + 96-88 units x 5.26 us = **5.805 ms, +0.043 ms** over no dedup -- beating the shipped TP-AG
-path's +0.162 ms. That is the prize, and it is the only one left.
+The one variable that differs between the two comparisons is units per ring step: 11 where the cost
+vanishes, 3 where it is 25.2 us/step. Why low units-per-step costs that much is not answerable from
+whole-op timing.
+
+**What would settle it.** The realtime profiler reports one duration per program, and a fused op is
+one program spanning CCL and compute cores, so it cannot show where inside the op the time goes.
+Kernel-zone profiling (Tracy device profiler) timestamps zones per core and would show directly
+whether compute cores stall on `out_ready_sem`, stall on CB credits, or are simply busy. That
+distinction decides whether an all-gather change is the right target at all.
+
+**What a fix would be worth, if the residual turns out to be recoverable.** At 96 units the 32-ring
+would land at 5.7625 + (96-88) x 5.26 us = **5.805 ms, +0.043 ms** over no dedup, beating the shipped
+TP-AG path's +0.162 ms. That is the upper bound on the prize; whether any of it is reachable depends
+on what the residual actually is.
 
 ## Status against the shard-major plan
 
@@ -204,8 +219,8 @@ path's +0.162 ms. That is the prize, and it is the only one left.
 | 6, hot path | unit sweep done (flat); mask coalescing done; the unit-size sweep to 1280 is infeasible on L1. |
 
 The plan's premise was that k-chunk rounding was the barrier. It is not: rounding costs nothing in
-math and 9% in wasted capacity, and the barrier the plan never names is arrival exposure at low
-units-per-step.
+math and 9% in wasted capacity. What the plan never names is the cost that appears at low
+units-per-step, which is also the only thing left unexplained here.
 
 ## Reproducing
 
