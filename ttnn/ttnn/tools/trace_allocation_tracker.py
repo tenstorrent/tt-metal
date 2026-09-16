@@ -16,19 +16,74 @@ Controlled by environment variables:
 
 Set these before importing ttnn; they are read once at process startup.
 
-See also: ttnn.corruptible_allocation_scope, ttnn.execute_trace.
+See also: acknowledge_corruptible, corruptible_allocation_scope, ttnn.execute_trace.
 """
 
 from __future__ import annotations
 
+import contextlib
 import gc
+import os
 import sys
+import warnings
 from typing import ClassVar
 
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_REFERRER_DEPTH
+from ttnn._ttnn.operations.trace import (
+    get_all_unsafe_tracked_ids,
+    get_unsafe_tracked_ids,
+    remove_unsafe_tracked_id,
+    trace_allocation_diagnostics_enabled,
+    trace_allocation_tracking_enabled,
+)
 
 
-class UnsafeAllocationTracker:
+def _env_nonnegative_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+        if parsed < 0:
+            raise ValueError
+        return parsed
+    except ValueError:
+        warnings.warn(f"{name} must be a non-negative integer; using {default}", stacklevel=2)
+        return default
+
+
+# Metal owns and parses these process-wide settings once. Query its cached RunTimeOptions snapshot rather than
+# reading the environment independently, so TTNN and Metal cannot disagree. Referrer depth is Python-only.
+TRACE_ALLOC_TRACKING = trace_allocation_tracking_enabled()
+TRACE_ALLOC_DIAGNOSTICS = trace_allocation_diagnostics_enabled()
+TRACE_ALLOC_REFERRER_DEPTH = (
+    _env_nonnegative_int("TT_METAL_TRACE_ALLOC_REFERRER_DEPTH", 10) if TRACE_ALLOC_DIAGNOSTICS else 10
+)
+
+
+if TRACE_ALLOC_TRACKING:
+    from ttnn._ttnn.operations.trace import (
+        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
+        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
+    )
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """Suppress accounting for intentionally corruptible allocations in this scope."""
+        _push_corruptible_allocation_scope(mesh_device)
+        try:
+            yield
+        finally:
+            _pop_corruptible_allocation_scope(mesh_device)
+
+else:
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """No-op when trace allocation tracking is disabled."""
+        yield
+
+
+class TraceAllocationTracker:
     """Per-device tracker for allocations made while traces are active."""
 
     _tracebacks: ClassVar[dict[int, str]] = {}
@@ -36,51 +91,64 @@ class UnsafeAllocationTracker:
     _diagnostics_enabled: ClassVar[bool] = TRACE_ALLOC_DIAGNOSTICS
     _referrer_depth: ClassVar[int] = TRACE_ALLOC_REFERRER_DEPTH
 
-    def __init__(self, mesh_device):
-        self.mesh_device = mesh_device
+    @classmethod
+    def reconcile_tracebacks(cls) -> set[int]:
+        """Drop tracebacks for buffers no longer marked unsafe by any allocator."""
+        currently_unsafe = set(get_all_unsafe_tracked_ids())
+        for buffer_unique_id in cls._tracebacks.keys() - currently_unsafe:
+            cls._tracebacks.pop(buffer_unique_id)
+        return currently_unsafe
 
     @classmethod
-    def mark_corruptible(cls, tensor) -> int:
+    def acknowledge_corruptible(cls, tensor) -> None:
         """
-        Mark a tensor's backing buffer as intentionally corruptible.
-        This removes the buffer from unsafe-allocation tracking immediately.
-        Returns the tensor's buffer_unique_id.
+        Acknowledge that a tensor's backing buffer may intentionally be corrupted.
+        This removes the buffer from trace-allocation tracking immediately.
+
+        This is a no-op when trace allocation tracking is disabled.
         """
+        if not TRACE_ALLOC_TRACKING:
+            return
+
         import ttnn
-        from ttnn._ttnn.operations.trace import remove_unsafe_tracked_id
 
         if not isinstance(tensor, ttnn.Tensor):
-            raise TypeError(f"mark_corruptible expects a ttnn.Tensor, got {type(tensor).__name__}")
+            raise TypeError(f"acknowledge_corruptible expects a ttnn.Tensor, got {type(tensor).__name__}")
         if not ttnn.is_tensor_storage_on_device(tensor):
-            raise ValueError("mark_corruptible expects a tensor with device storage")
+            raise ValueError("acknowledge_corruptible expects a tensor with device storage")
         if not tensor.is_allocated():
-            raise ValueError("mark_corruptible expected an allocated tensor")
+            raise ValueError("acknowledge_corruptible expected an allocated tensor")
 
         buf_id = tensor.buffer_unique_id()
         if buf_id is None:
-            raise ValueError("mark_corruptible expected a tensor with a valid device buffer_unique_id")
+            raise ValueError("acknowledge_corruptible expected a tensor with a valid device buffer_unique_id")
 
         remove_unsafe_tracked_id(tensor.device(), buf_id)
         cls._tracebacks.pop(buf_id, None)
-        return buf_id
 
-    def verify_before_replay(self, trace_id) -> None:
+    @classmethod
+    def verify_before_replay(cls, mesh_device, trace_id) -> None:
         """
-        Call before execute_trace. Triggers GC, then checks for buffers that
-        are unsafe for this trace and still alive. Raises RuntimeError with
-        details if any are found.
+        Call before execute_trace. Checks for unsafe buffers and only triggers
+        GC when the first check finds candidates, then checks again. Raises
+        RuntimeError with details if any remain.
 
         Reports allocation context (op name + compile args) and Python-side referrers.
         """
-        from ttnn._ttnn.operations.trace import drain_retired_traceback_ids, get_unsafe_tracked_ids
-
-        gc.collect()
-
         # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context
-        live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device, trace_id)
-        if self._diagnostics_enabled:
-            for buf_id in drain_retired_traceback_ids():
-                self._tracebacks.pop(buf_id, None)
+        live_unsafe_map = get_unsafe_tracked_ids(mesh_device, trace_id)
+        if not live_unsafe_map:
+            if cls._diagnostics_enabled:
+                cls.reconcile_tracebacks()
+            return
+
+        # Unreachable tensors can be retained in Python reference cycles. Pay
+        # for a full collection only on the exceptional path where C++ first
+        # reports a live unsafe allocation, then re-query authoritative state.
+        gc.collect()
+        live_unsafe_map = get_unsafe_tracked_ids(mesh_device, trace_id)
+        if cls._diagnostics_enabled:
+            cls.reconcile_tracebacks()
         if not live_unsafe_map:
             return
 
@@ -96,20 +164,20 @@ class UnsafeAllocationTracker:
             ctx_str = f" [op: {ctx}]" if ctx else ""
             parts.append(f"Buffer {buf_id}{ctx_str}\n")
 
-            if self._diagnostics_enabled:
-                tb = self._tracebacks.get(buf_id)
+            if cls._diagnostics_enabled:
+                tb = cls._tracebacks.get(buf_id)
                 if tb:
                     parts.append(f"  allocated at:\n{tb}")
 
-        if self._diagnostics_enabled:
+        if cls._diagnostics_enabled:
             parts.append("\n--- Python referrer analysis ---\n")
             try:
-                parts.append(self._find_python_referrers(live_unsafe))
+                parts.append(cls._find_python_referrers(live_unsafe))
             except Exception as e:
                 parts.append(f"(referrer analysis failed: {type(e).__name__}: {e})")
 
         parts.append(
-            "\nUse corruptible_allocation_scope() for acknowledged-corruptible "
+            "\nUse ttnn.tools.trace_allocation_tracker.corruptible_allocation_scope() for acknowledged-corruptible "
             "tensors, or ensure temporary tensors are freed before replay."
         )
         raise RuntimeError("".join(parts))
@@ -214,7 +282,7 @@ class UnsafeAllocationTracker:
                     continue
                 for name, val in local_items:
                     stats["locals"] += 1
-                    _scan_value(val, loc, name, depth=UnsafeAllocationTracker._referrer_depth)
+                    _scan_value(val, loc, name, depth=TraceAllocationTracker._referrer_depth)
                 frame = frame.f_back
 
         lines: list[str] = [
@@ -250,6 +318,11 @@ class UnsafeAllocationTracker:
             lines.append(
                 "Hint: these may be program cache buffers (tracked by default; disable with"
                 " TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1), or held deeper than the"
-                f" referrer search depth (currently {UnsafeAllocationTracker._referrer_depth} levels)."
+                f" referrer search depth (currently {TraceAllocationTracker._referrer_depth} levels)."
             )
         return "\n".join(lines)
+
+
+def acknowledge_corruptible(tensor) -> None:
+    """Acknowledge that a device tensor's buffer may intentionally be corrupted by trace replay."""
+    TraceAllocationTracker.acknowledge_corruptible(tensor)
