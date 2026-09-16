@@ -7254,28 +7254,64 @@ def stage_of_op(op, profile) -> str:
     hand back whichever stage the other one is heaviest in. A target that ever carries code plus
     shape still matches its own entry exactly. Stage names come from the capture's own marks --
     never a name this tool typed.
+
+    A NEIGHBOUR, WHEN THE OP ITSELF NEVER APPEARS. The per-stage replay runs a stage's own
+    `<stage>_trace_step` in isolation, so an op the model's contract places OUTSIDE every stage's
+    step -- glue code in the generation loop itself, e.g. the on-device argmax that picks the next
+    token after a stage's forward returns -- is never dispatched by that replay and has nothing of
+    its own in stage_buckets to rank, on any model, whatever the op is called. It still ran adjacent
+    to something that does: `buckets` (the one real capture, not the per-stage replay) tags every op
+    with the op immediately before and after it, and a glue op's neighbour is reliably inside the
+    stage it glues onto. Tried prev_op first (what just finished before this op ran), then next_op,
+    through the SAME match-and-rank rule -- a neighbour is not exempt from the tie check either.
     """
     try:
         want = str(op or "").strip()
         if not want:
             return ""
-        by_stage: dict = {}
-        for stage, buckets in ((profile or {}).get("stage_buckets") or {}).items():
-            for bucket in buckets or []:
-                for o in (bucket or {}).get("top_ops") or []:
-                    code = str((o or {}).get("op_code") or "").strip()
-                    if not code:
+
+        def _matched(name: str) -> dict:
+            out: dict = {}
+            for stage, buckets in ((profile or {}).get("stage_buckets") or {}).items():
+                for bucket in buckets or []:
+                    for o in (bucket or {}).get("top_ops") or []:
+                        code = str((o or {}).get("op_code") or "").strip()
+                        if not code:
+                            continue
+                        shape = str((o or {}).get("shape") or "").strip()
+                        full = ("%s %s" % (code, shape)).strip()
+                        if name == code or name == full:
+                            out[str(stage)] = out.get(str(stage), 0.0) + float((o or {}).get("device_ms") or 0.0)
+            return out
+
+        def _ranked(by_stage: dict) -> str:
+            if not by_stage:
+                return ""
+            ranked = sorted(by_stage.items(), key=lambda kv: -kv[1])
+            if len(ranked) > 1 and ranked[0][1] <= ranked[1][1]:
+                return ""  # a tie names no stage more than another; say nothing rather than guess
+            return ranked[0][0]
+
+        _own = _ranked(_matched(want))
+        if _own:
+            return _own
+        for _b in (profile or {}).get("buckets") or []:
+            for _o in (_b or {}).get("top_ops") or []:
+                _code = str((_o or {}).get("op_code") or "").strip()
+                _shape = str((_o or {}).get("shape") or "").strip()
+                if want not in (_code, ("%s %s" % (_code, _shape)).strip()):
+                    continue
+                for _nb in (
+                    str((_o or {}).get("prev_op") or "").strip(),
+                    str((_o or {}).get("next_op") or "").strip(),
+                ):
+                    if not _nb:
                         continue
-                    shape = str((o or {}).get("shape") or "").strip()
-                    full = ("%s %s" % (code, shape)).strip()
-                    if want == code or want == full:
-                        by_stage[str(stage)] = by_stage.get(str(stage), 0.0) + float((o or {}).get("device_ms") or 0.0)
-        if not by_stage:
-            return ""
-        ranked = sorted(by_stage.items(), key=lambda kv: -kv[1])
-        if len(ranked) > 1 and ranked[0][1] <= ranked[1][1]:
-            return ""  # a tie names no stage more than another; say nothing rather than guess
-        return ranked[0][0]
+                    _s = _ranked(_matched(_nb))
+                    if _s:
+                        return _s
+                return ""  # the op exists in the real capture; both neighbours were checked and said nothing
+        return ""
     except Exception:  # noqa: BLE001 -- a missing attribution must not fail the gate
         return ""
 
