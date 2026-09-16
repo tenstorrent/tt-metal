@@ -135,7 +135,16 @@ def to_poisoned_sharded(device, torch_tensor, mem_config, pad_value):
 
 
 def ttnn_layer_norm_sharded(
-    device, tt_input_tensor, use_welford, block_ht, block_wt, subblock_w=1, residual=None, weight=None, bias=None
+    device,
+    tt_input_tensor,
+    use_welford,
+    block_ht,
+    block_wt,
+    subblock_w=1,
+    residual=None,
+    weight=None,
+    bias=None,
+    compute_kernel_config=None,
 ):
     """
     Run layer norm sharded on a TTNN tensor.
@@ -149,6 +158,7 @@ def ttnn_layer_norm_sharded(
         residual: The residual tensor to add to the input tensor.
         weight: The weight tensor to use for the layer norm.
         bias: The bias tensor to use for the layer norm.
+        compute_kernel_config: The compute kernel config to run with, or None for the op default.
     Returns:
         The output tensor as a torch tensor.
     """
@@ -177,6 +187,7 @@ def ttnn_layer_norm_sharded(
             inplace=False,
         ),
         recip_tensor=recip_tensor,
+        compute_kernel_config=compute_kernel_config,
     )
 
     output_ttnn = ttnn.from_device(output_ttnn)
