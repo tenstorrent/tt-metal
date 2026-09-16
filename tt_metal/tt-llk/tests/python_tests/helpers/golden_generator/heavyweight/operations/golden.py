@@ -44,9 +44,11 @@ class OpConfig:
     out_format: DataFormat
     dest_format: DataFormat
     geometry: Dict = field(default_factory=dict)
-    #: Result tiles accumulated into one Dest before it is packed. 1 is the
-    #: ordinary case: one input tile in, one output tile out.
-    tiles_per_accumulation: int = 1
+    #: Input tiles folded into one output tile. 1 is the ordinary case: one
+    #: tile in, one tile out. How they fold is the operation's business — an
+    #: accumulating op sums them into Dest, a reuse-dest op feeds Dest back in
+    #: as an operand.
+    tiles_per_output: int = 1
     relu_type: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
     edge_mask: Optional[PackEdgeMask] = None
@@ -160,6 +162,49 @@ class Golden:
 
         return Step(f"l1_to_srcS({source})", run, reads=(source,), writes=(into,))
 
+    def l1_to_dest(
+        self, cfg: OpConfig, source: str = "in0", into: str = "dest", index: int = 0
+    ) -> Step:
+        """Seed Dest straight from an L1 buffer, bypassing the src registers."""
+        l1_format = cfg.in_formats[index]
+
+        def run(regs: Registers) -> None:
+            regs[into] = self.blocks.l1_to_dest(
+                regs[source], l1_format, cfg.dest_format, **cfg.geometry
+            )
+
+        return Step(f"l1_to_dest({source})", run, reads=(source,), writes=(into,))
+
+    def dest_to_srcA(
+        self,
+        cfg: OpConfig,
+        source: str = "dest",
+        into: str = "srcA",
+        src_format: Optional[DataFormat] = None,
+    ) -> Step:
+        """Feed Dest back into SrcA, re-quantized to src-register precision."""
+        fmt = src_format or self.blocks.src_format(cfg.in_formats[0])
+
+        def run(regs: Registers) -> None:
+            regs[into] = self.blocks.dest_to_srcA(regs[source], fmt)
+
+        return Step(f"dest_to_srcA({source})", run, reads=(source,), writes=(into,))
+
+    def dest_to_srcB(
+        self,
+        cfg: OpConfig,
+        source: str = "dest",
+        into: str = "srcB",
+        src_format: Optional[DataFormat] = None,
+    ) -> Step:
+        """Feed Dest back into SrcB, re-quantized to src-register precision."""
+        fmt = src_format or self.blocks.src_format(cfg.in_formats[0])
+
+        def run(regs: Registers) -> None:
+            regs[into] = self.blocks.dest_to_srcB(regs[source], fmt)
+
+        return Step(f"dest_to_srcB({source})", run, reads=(source,), writes=(into,))
+
     def dest_to_l1(
         self, cfg: OpConfig, into: str = "out", source: str = "dest"
     ) -> Step:
@@ -220,7 +265,7 @@ class Golden:
         dest_format: Optional[DataFormat] = None,
         num_faces: int = 4,
         face_r_dim: int = 16,
-        num_tiles_per_accumulation: int = 1,
+        num_tiles_per_output: int = 1,
         trace: Optional[List[StageRecord]] = None,
         **pack_effects,
     ) -> torch.Tensor:
@@ -244,11 +289,11 @@ class Golden:
             dest_format=dest_format
             or self.blocks.dest_format_for(in_formats[0], dest_acc),
             geometry=geometry,
-            tiles_per_accumulation=num_tiles_per_accumulation,
+            tiles_per_output=num_tiles_per_output,
             **pack_effects,
         )
-        if num_tiles_per_accumulation > 1:
-            return self._run_accumulating(stimuli, in_formats, cfg, trace)
+        if num_tiles_per_output > 1:
+            return self._run_blocked(stimuli, in_formats, cfg, trace)
         # Lay the stimuli out in L1 exactly as the test harness does before
         # writing them to the device, so the chain reads the bytes the hardware
         # read. Note this packs tiles contiguously while
@@ -267,20 +312,20 @@ class Golden:
         l1_out = self.last_chain.run(regs, result="out", trace=trace)
         return self.blocks.unpack_from_l1(l1_out, out_format, **geometry)
 
-    def _run_accumulating(
+    def _run_blocked(
         self,
         stimuli: Sequence[torch.Tensor],
         in_formats: Sequence[DataFormat],
         cfg: OpConfig,
         trace: Optional[List[StageRecord]],
     ) -> torch.Tensor:
-        """Run one chain per block of `cfg.tiles_per_accumulation` input tiles.
+        """Run one chain per block of `cfg.tiles_per_output` input tiles.
 
-        Each block accumulates its tiles into a single Dest and packs once, so
-        the output holds one tile per block rather than one per input tile.
+        Each block folds its tiles into a single Dest and packs once, so the
+        output holds one tile per block rather than one per input tile.
         """
         per_tile = datums_per_tile(**cfg.geometry)
-        depth = cfg.tiles_per_accumulation
+        depth = cfg.tiles_per_output
         total_tiles = stimuli[0].numel() // per_tile
         if total_tiles % depth:
             raise ValueError(
