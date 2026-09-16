@@ -89,18 +89,20 @@ MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
 if [ ! -f "${MGD}" ] && [ "${CONFIG}" = sc2 ]; then
   MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto"
 fi
-# Report every missing input at once. Assets are staged per cluster, so a leg can be one sync away on one
-# SKU and several on another; failing on the first gap costs a whole reservation per asset to discover the
-# rest. HF_MODEL and TRACE_DIR are gated here too -- otherwise they surface deep inside the runner, after
-# weight load has begun, as a stack trace rather than a path.
+# Every /mnt/models asset is consumed on the WORKERS -- ranks load the checkpoints, the producer reads the
+# golden -- and the orchestrator this script runs on is a different machine that need not mount it at all.
+# Probing these paths locally reports a fully staged cluster as empty. Only MGD is ours to check here; it
+# ships in the checkout. HF_MODEL and TRACE_DIR are gated too -- otherwise they surface deep inside the
+# runner, after weight load has begun, as a stack trace rather than a path.
+# One pass over all workers, since staging is per host: a leg can be one sync away on one and several on
+# another, and each gap found alone costs a whole reservation to find the next.
+ASSET_PROBE="for e in 'verifier checkpoint=${HF_MODEL}' 'drafter checkpoint=${DFLASH_MODEL}' 'prompt trace=${TRACE_DIR}' 'drafter golden=${GOLDEN_KV_DIR}'; do [ -d \"\${e#*=}\" ] || echo \"MISSING \$(hostname) \${e%%=*}: \${e#*=}\"; done"
 MISSING=""
-[ -f "${MGD}" ] || MISSING="${MISSING}  mesh-graph descriptor: ${MGD}\n"
-[ -d "${HF_MODEL}" ] || MISSING="${MISSING}  verifier checkpoint: ${HF_MODEL}\n"
-[ -d "${DFLASH_MODEL}" ] || MISSING="${MISSING}  drafter checkpoint: ${DFLASH_MODEL}\n"
-[ -d "${TRACE_DIR}" ] || MISSING="${MISSING}  prompt trace: ${TRACE_DIR}\n"
-[ -d "${GOLDEN_KV_DIR}" ] || MISSING="${MISSING}  drafter golden: ${GOLDEN_KV_DIR}\n"
+[ -f "${MGD}" ] || MISSING="  mesh-graph descriptor: ${MGD}"$'\n'
+WORKER_MISSING=$(mpirun --pernode bash -lc "${ASSET_PROBE}" 2>/dev/null | sed -n 's/^MISSING /  /p' | sort -u || true)
+[ -z "${WORKER_MISSING}" ] || MISSING="${MISSING}${WORKER_MISSING}"$'\n'
 if [ -n "${MISSING}" ]; then
-  printf 'missing inputs for %s/%s on %s:\n%b' "${MODEL}" "${CONFIG}" "$(hostname)" "${MISSING}" >&2
+  printf 'missing inputs for %s/%s:\n%s' "${MODEL}" "${CONFIG}" "${MISSING}" >&2
   exit 2
 fi
 
