@@ -82,8 +82,9 @@ L1Layout compute_l1_layout(
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + RING_OFF;
     l.pkt_hdr_ring = l.ring + dspf2d::NUM_L1_SLOTS * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
-    const uint32_t hdr_ring_bytes =
-        2 * dspf2d::NUM_L1_SLOTS * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    // The same expression the sender indexes the pool with; the reason they must agree is stated there.
+    const uint32_t hdr_ring_bytes = dspf2d::headers_per_slot(fanout) * dspf2d::NUM_L1_SLOTS *
+                                    static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // Both RISCs address these, so they cannot live in the reader's control carve. Sized to nothing
     // under unicast so its layout is untouched.
     l.mc_delivery = (l.pkt_hdr_ring + hdr_ring_bytes + 63u) & ~63u;
@@ -148,8 +149,12 @@ struct ForwardingBuffer {
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const DispatchFabric2dParams& args, uint32_t token_bytes, uint32_t extent) {
     ForwardingBuffer fwd;
-    // Fan-out puts one page per token per direction through the region rather than one per (token,
-    // expert) pair per destination, so its bound is a different expression, not a scaling of the other.
+    // Fan-out puts at most one page per token per direction through a region rather than one per
+    // (token, expert) pair per destination, so its bound is a different expression, not a scaling of
+    // the other. Loose by a whole chunk under the terminal rule, since the last of a stream's m chunks
+    // is now identically empty -- deliberately not tightened: this bound is the only thing standing
+    // between a stream and its neighbour's slice of a shared tensor, and the kernel's own check of it
+    // is an ASSERT that is compiled out on this hardware.
     fwd.pages_per_stream =
         args.fanout
             ? mc_fwd_pages_per_stream(extent, args.num_links, args.seq_len_per_chip)
