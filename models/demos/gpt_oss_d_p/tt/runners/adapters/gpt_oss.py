@@ -53,7 +53,6 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"
-    supports_d2h_layer_ack = False  # layer completion comes through the host on_layer_complete callback
 
     # --- test metadata ---
     hf_repo_id = "openai/gpt-oss-120b"
@@ -145,6 +144,8 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
+            # Same knob as the standalone harness; the tilized cache is keyed by mesh shape only.
+            expert_weight_dtype=(ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b),
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
             # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
             topology=(

@@ -140,7 +140,10 @@ class PrefillModelAdapter(ABC):
     # How the runtime reports layer completion to the migration layer-ack channel. True: it can ship D2H
     # device records (``set_d2h_ack_service``), so the runner may run with PREFILL_LAYER_ACK_D2H=1. False:
     # host ``on_layer_complete`` callback only (``set_layer_completion_sink``); the runner refuses D2H mode.
-    supports_d2h_layer_ack: bool = True
+    supports_d2h_layer_ack: bool = False
+    # Whether the runtime captures the prefill chunk as a trace (``capture_trace``); the runner refuses
+    # PREFILL_USE_TRACE=1 otherwise instead of opening a trace region and running eagerly.
+    supports_trace: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says

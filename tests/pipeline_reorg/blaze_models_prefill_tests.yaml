@@ -1320,8 +1320,9 @@
   test_group: module
   skus:
     bh_sc1:
-      # Runner ready in ~14 min (tilized-cache read over NFS + JIT), 11 chunks + PCC readback ~1 min.
-      timeout: 50
+      # Measured 22 min on bh_sc1 (runner ready ~20 min: tilized-cache read over NFS + JIT; 11 chunks +
+      # PCC readback ~1 min); the NFS read is the variable part.
+      timeout: 30
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
   budget_type: demo

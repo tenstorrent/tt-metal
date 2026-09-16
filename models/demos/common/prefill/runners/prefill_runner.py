@@ -96,6 +96,10 @@ TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
+assert not USE_TRACE or ADAPTER.supports_trace, (
+    f"PREFILL_USE_TRACE=1 but {ADAPTER.name} does not capture the prefill chunk as a trace "
+    "(adapter.supports_trace=False); run with PREFILL_USE_TRACE=0."
+)
 assert not (DFLASH_ENABLED and USE_TRACE), (
     "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
