@@ -44,7 +44,7 @@ The shared startup dump prints `PREFILL_HF_MODEL` or the adapter default; it doe
 |---|---|---|
 | `PREFILL_H2D_SERVICE_ID` | `gemma4_prefill` | Input-service identity and acknowledgment-channel suffix. Runner and producer must agree. |
 | `PREFILL_FABRIC_MODE` | `1d` | Fabric configuration at mesh open. Shared runner also parses `2d`, `1d_ring`, `2d_torus_x`, `2d_torus_y`, and `2d_torus_xy`; Gemma4 service validation was run with `1d`. |
-| `PREFILL_TRACE_REGION_SIZE` | `268435456` bytes (256 MiB) | Device memory reserved for the trace. Must fit the captured graph. |
+| `PREFILL_TRACE_REGION_SIZE` | `268435456` bytes (256 MiB), from the manifest | Device memory reserved for the trace. Must fit the captured graph. |
 | `PREFILL_LAYER_ACK_D2H` | `1` | `1` emits device records after each layer. `0` emits host callbacks for all layers after the complete chunk has synchronized. Hardware service validation used `1`. |
 | `PREFILL_LAYER_ACK_FIFO_BYTES` | `4096` bytes | D2H acknowledgment FIFO capacity. Used when `PREFILL_LAYER_ACK_D2H=1`. |
 | `PREFILL_LAYER_COMPLETION_RING` | `/tt_prefill_layer_completion_ring` | Shared-memory ring-name base. The runner appends `_0` for its single rank. |
