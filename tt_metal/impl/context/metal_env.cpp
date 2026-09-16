@@ -5,7 +5,10 @@
 
 #include <pthread.h>
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
@@ -23,6 +26,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
@@ -158,6 +162,37 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         res);
     return res.dram_programmable_cores;
 }
+
+// The qsr.s1 emulator model only routes device NoC traffic through the boot-programmed
+// address-translation tables, so tt-metal defaults it to the grendel_qsr1 ATT map. UMD ships the
+// qsr.s1 models as `emu-qsr-s1-*` directories; the decision needs only the simulator path, so it runs
+// before the Cluster opens the simulator.
+// The simulator directory basename, with any trailing separator stripped so filename() is not empty.
+std::string quasar_simulator_name(const llrt::RunTimeOptions& rtoptions) {
+    std::string simulator = rtoptions.get_simulator_path().string();
+    while (simulator.size() > 1 && simulator.back() == '/') {
+        simulator.pop_back();
+    }
+    return std::filesystem::path(simulator).filename().string();
+}
+
+bool simulator_is_qsr_s1(const llrt::RunTimeOptions& rtoptions) {
+    return quasar_simulator_name(rtoptions).starts_with("emu-qsr-s1");
+}
+
+// Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
+// TT_METAL_NOC_ATT; an explicit value (including off) wins.
+void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
+    if (!simulator_is_qsr_s1(rtoptions)) {
+        return;
+    }
+    rtoptions.set_noc_att_map("grendel_qsr1");
+    log_info(
+        tt::LogMetal,
+        "TT_METAL_NOC_ATT defaulted to grendel_qsr1 for the qsr.s1 simulator '{}' (set TT_METAL_NOC_ATT=off to opt out)",
+        quasar_simulator_name(rtoptions));
+}
+
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
@@ -169,6 +204,40 @@ void MetalEnvImpl::initialize_base_objects() {
     }
 
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
+
+    // Settle the ATT configuration before constructing the Cluster, whose constructor opens the
+    // simulator: a bad TT_METAL_NOC_ATT or a watcher/ATT conflict is caught here, not after the
+    // emulator is up.
+    if (platform_arch == tt::ARCH::QUASAR) {
+        if (const auto att_map = this->rtoptions_->get_noc_att_map(); att_map.has_value()) {
+            // An explicit, non-off TT_METAL_NOC_ATT must name a known map; otherwise the JIT build only
+            // rejects it when the defines are generated, long after device open.
+            TT_FATAL(
+                quasar_att::find_map(*att_map) != nullptr,
+                "TT_METAL_NOC_ATT='{}' is not a known ATT map (expected {}).",
+                *att_map,
+                quasar_att::KNOWN_MAP_NAMES);
+        } else if (this->rtoptions_->get_simulator_enabled() && !this->rtoptions_->is_noc_att_specified()) {
+            // ATT-by-default for the qsr.s1 emulator model, decided from the simulator directory name.
+            default_quasar_noc_att_from_path(*this->rtoptions_);
+        }
+
+        // The watcher's NoC sanitizer decodes XY operands and cannot run under ATT; disable it here so a
+        // bare TT_METAL_WATCHER=<n> alongside an ATT map does not abort once the emulator is up.
+        if (this->rtoptions_->get_noc_att_map().has_value() && this->rtoptions_->get_watcher_enabled() &&
+            !this->rtoptions_->watcher_noc_sanitize_disabled()) {
+            this->rtoptions_->disable_watcher_noc_sanitize();
+            log_warning(
+                tt::LogMetal,
+                "TT_METAL_NOC_ATT map '{}' is active with the watcher enabled: disabling the watcher NoC "
+                "sanitizer, which decodes XY operands and cannot run under ATT. Set "
+                "TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1 to silence this.",
+                *this->rtoptions_->get_noc_att_map());
+        }
+    }
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_noc_att_map() == "grendel_qsr1") {
+        setenv("TT_UMD_NOC_ATT", "grendel_qsr1", 0);
+    }
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
