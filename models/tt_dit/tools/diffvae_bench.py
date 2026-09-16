@@ -41,6 +41,7 @@ from models.tt_dit.models.vae.diffvae_ltx import (
     rope_tables,
 )
 from models.tt_dit.models.vae.diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
+from models.tt_dit.models.vae.diffvae_ops import wshard
 from models.tt_dit.models.vae.diffvae_rope import default_rope_dim_split
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import timing_tree
@@ -441,7 +442,7 @@ def diff_block_bench(mesh, grid: Grid = STAGE5_GRID, *, ccl: CCLManager | None =
     tt_context = ttnn.from_torch(
         _flat(context, cfg.context_channels).contiguous(), device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
-    tt_context = model._wshard_context(tt_context, grid)
+    tt_context = wshard(tt_context, (grid.t, grid.h, grid.w), sp_axis=model.sp_axis)
     bands = model.bands(grid)
     x_bands = model.embed_x_t(x_t, bands)
     timestep = ttnn.from_torch(

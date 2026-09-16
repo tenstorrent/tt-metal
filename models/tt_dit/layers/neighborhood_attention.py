@@ -708,7 +708,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             if moved is not owned:
                 ttnn.deallocate(moved)
             # Tiled on the way out: this branch returns the exact shape the caller's
-            # _reshape_retiled short-circuits on, so it reaches the out-proj matmul as-is.
+            # retile short-circuits on, so it reaches the out-proj matmul as-is.
             owned = ttnn.to_layout(owned, ttnn.TILE_LAYOUT)
             _tp_trace(device, f"retilized -> {tuple(owned.shape)}; TP block done")
 
