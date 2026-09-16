@@ -46,6 +46,7 @@ target_sources(
             ccl_common.hpp
             ccl_host_datastructures.hpp
             sharding_addrgen_helper.hpp
+            shared_with_host/ccl_helpers_schedule.hpp
             shared_with_host/hetergeneous_data_structs.hpp
             shared_with_host/sharded_tensor_addr_gen.hpp
             shared_with_host/snake_ring.hpp
