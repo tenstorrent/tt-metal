@@ -34,8 +34,21 @@ def _torch_sigmoid_bw(grad, inp):
         (2, 2, 64, 96),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
-def test_sigmoid_bw_matches_torch(shape, dtype, device):
+@pytest.mark.parametrize(
+    "dtype, expected_pcc",
+    [
+        (ttnn.bfloat16, 0.9995),
+        (ttnn.float32, 0.9995),
+        # The block float types carry one shared exponent per 16-element block, so they need a
+        # looser bar than the bit-addressable floats: bfloat8_b keeps a 7-bit mantissa, bfloat4_b
+        # only 3. Measured PCC against torch is ~0.9999 and ~0.952 respectively, steady across
+        # every shape in the matrix, so these bars sit below that with headroom rather than being
+        # pinned to an observed value.
+        (ttnn.bfloat8_b, 0.99),
+        (ttnn.bfloat4_b, 0.93),
+    ],
+)
+def test_sigmoid_bw_matches_torch(shape, dtype, expected_pcc, device):
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.float32) * 4.0
     torch_grad = torch.randn(shape, dtype=torch.float32) * 10.0
@@ -45,12 +58,9 @@ def test_sigmoid_bw_matches_torch(shape, dtype, device):
 
     output = ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]
 
-    assert output.dtype == input_tensor.dtype
-    assert tuple(output.shape) == shape
+    assert output.dtype == input_tensor.dtype, f"output dtype {output.dtype} != input dtype {input_tensor.dtype}"
+    assert tuple(output.shape) == shape, f"output shape {tuple(output.shape)} != requested {shape}"
 
-    # bfloat8_b carries a shared exponent per 16-element block, so it needs a looser bar than
-    # the bit-addressable float types.
-    expected_pcc = 0.99 if dtype == ttnn.bfloat8_b else 0.9995
     assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), expected_pcc)
 
 
@@ -144,7 +154,9 @@ def test_sigmoid_bw_honours_memory_config(memory_config, device):
 
     output = ttnn.sigmoid_bw(grad_tensor, input_tensor, memory_config=memory_config)[0]
 
-    assert output.memory_config().buffer_type == memory_config.buffer_type
+    assert (
+        output.memory_config().buffer_type == memory_config.buffer_type
+    ), f"output landed in {output.memory_config().buffer_type}, requested {memory_config.buffer_type}"
     assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), 0.9995)
 
 
@@ -182,7 +194,11 @@ def test_sigmoid_bw_program_cache_distinguishes_dtypes(device):
         assert_with_pcc(expected, ttnn.to_torch(output), pcc)
 
     # bfloat16 then float32 then bfloat16 again: two distinct programs, the third a cache hit.
-    assert device.num_program_cache_entries() - start == 2
+    added = device.num_program_cache_entries() - start
+    assert added == 2, (
+        f"expected 2 program cache entries (one per dtype, third call a hit), got {added}; "
+        "more means the hash separates runs it should share, fewer means it collides dtypes"
+    )
 
 
 def test_sigmoid_bw_rejects_row_major(device, expect_error):

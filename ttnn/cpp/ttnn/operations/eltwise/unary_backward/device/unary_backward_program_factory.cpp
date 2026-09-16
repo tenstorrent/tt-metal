@@ -129,6 +129,15 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // both are properties of the program the factory built, so a kernel that needs them must
     // not have to re-derive them, and one that does not simply leaves the define unused.
     std::map<std::string, std::string> compute_defines;
+    // A kernel only needs the unpacker to switch format between the two operand buffers when the
+    // operands actually carry different formats; otherwise the single configuration
+    // compute_kernel_hw_startup() installs covers both, and reconfiguring per tile transition is
+    // measurable overhead on the common same-dtype path (~2% for bfloat16). Both operand dtypes
+    // are part of compute_program_hash, so a program built for one pairing is never replayed for
+    // another and the kernel can make this a compile-time decision.
+    if (grad_output_cb_data_format != input_cb_data_format) {
+        compute_defines["MIXED_OPERAND_DATA_FORMATS"] = "1";
+    }
     compute_defines["COPY_DEST_DATA_FORMAT"] = fp32_dest_acc_en ? "DataFormat::Float32" : "DataFormat::Float16_b";
     compute_defines["BF16_ROUNDING_MODE"] = (output.dtype() == DataType::BFLOAT16)
                                                 ? "ckernel::DstRoundingMode::NearestEven"

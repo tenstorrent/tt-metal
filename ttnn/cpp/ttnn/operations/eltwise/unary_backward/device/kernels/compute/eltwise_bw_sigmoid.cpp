@@ -18,6 +18,17 @@
 
 namespace ckl = compute_kernel_lib;
 
+// Switching the unpacker's format between the two operand buffers is only needed when the
+// operands carry different formats, which the program factory signals with
+// MIXED_OPERAND_DATA_FORMATS. For the same-dtype case -- every call in practice -- the single
+// configuration compute_kernel_hw_startup() installs already covers both buffers, and a
+// reconfiguration per tile transition is pure overhead, so stay disabled by default.
+#ifdef MIXED_OPERAND_DATA_FORMATS
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Enabled;
+#else
+constexpr auto operand_reconfig = ckl::DataFormatReconfig::Disabled;
+#endif
+
 void kernel_main() {
     const uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
@@ -41,10 +52,7 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                // grad_output and input may arrive in different dtypes -- the composite this
-                // replaced accepted that -- so the unpacker has to reconfigure between the two
-                // buffers rather than assume one format for both.
-                ckl::DataFormatReconfig::Enabled),
+                operand_reconfig),
             ckl::Dst::D0>{},
         // dest[1] = input
         ckl::CopyTile<
@@ -53,10 +61,7 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                // grad_output and input may arrive in different dtypes -- the composite this
-                // replaced accepted that -- so the unpacker has to reconfigure between the two
-                // buffers rather than assume one format for both.
-                ckl::DataFormatReconfig::Enabled),
+                operand_reconfig),
             ckl::Dst::D1>{},
         ckl::Sigmoid<ckl::Dst::D1>{},                                // dest[1] = s
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * s
