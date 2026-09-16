@@ -334,3 +334,111 @@ def test_a_draft_length_of_zero_is_refused():
     reject = DummySpecDecodeModel.spec_plan(config, max_num_seqs=8, requested_k=0)
 
     assert "speculates nothing" in reject.reason
+
+
+def _fixed_model(monkeypatch, accept_depth=None):
+    monkeypatch.setenv("TT_SPEC_TARGET", "fixed")
+    return _model(monkeypatch, accept_depth=accept_depth)
+
+
+def test_the_fixed_target_ignores_what_was_drafted(monkeypatch):
+    """The property the `depth` target cannot have.
+
+    Two blocks that differ only in their draft columns must produce the same
+    answer at every column that is not one of the differing ones, because the
+    rule reads the token and its position and nothing else. A target that
+    echoed the drafts would answer differently at every column.
+    """
+    model = _fixed_model(monkeypatch)
+    positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
+    first = torch.tensor([[100, 11, 12, 13]], dtype=torch.int32)
+    second = torch.tensor([[100, 99, 98, 97]], dtype=torch.int32)
+
+    a = model._fixed_choice(first, positions)
+    b = model._fixed_choice(second, positions)
+
+    # Column 0 holds the same committed token in both, so the same answer.
+    assert int(a[0, 0]) == int(b[0, 0])
+    # The rest differ because their inputs differ, and neither equals its input.
+    assert a[0, 1:].tolist() != b[0, 1:].tolist()
+    for column in range(1, 4):
+        assert int(a[0, column]) != int(first[0, column])
+
+
+def test_the_fixed_target_answers_a_plain_decode_by_the_same_rule(monkeypatch):
+    """An unspeculated arm has to follow the rule, or it emits token 0 forever.
+
+    The base class answers a decode with zero logits, so this mode overrides
+    the plain call as well. The argmax of what it returns is what the ordinary
+    host-sampling tail commits.
+    """
+    model = _fixed_model(monkeypatch)
+    tokens = torch.tensor([[100], [200]], dtype=torch.int32)
+    positions = torch.tensor([7, 9], dtype=torch.int32)
+
+    logits = model.decode_forward(tokens=tokens, start_pos=positions)
+
+    assert logits.shape == (2, 1, VOCAB)
+    argmax = logits.argmax(dim=2).reshape(2)
+    expected = model._fixed_choice(tokens, positions.reshape(2, 1)).reshape(2)
+    assert argmax.tolist() == expected.tolist()
+
+
+def test_the_fixed_target_s_drafter_proposes_what_the_verify_will_choose(monkeypatch):
+    """Acceptance still happens, because the drafter walks the same rule.
+
+    The drafter is where wrongness lives in this mode: it follows the rule for
+    the first `accept_depth` drafts and bends the rest, so a partial-acceptance
+    run stays reachable without the target ever looking at a draft.
+    """
+    model = _fixed_model(monkeypatch, accept_depth=2)
+    model._verify_hidden = object()
+    committed = torch.tensor([[100, 0, 0, 0]], dtype=torch.int32)
+    positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    drafts = model.propose_draft_tokens(
+        3, committed, positions, counts, hidden=model._verify_hidden
+    ).draft_token_ids
+
+    # Walk the rule by hand from the row's last committed token at position 5.
+    token, position = 100, 5
+    truth = []
+    for _ in range(3):
+        token = (token * 31 + position * 7 + 11) % VOCAB
+        position += 1
+        truth.append(token)
+
+    assert drafts[0, 0].item() == truth[0]
+    assert drafts[0, 1].item() == truth[1]
+    # Past the accept depth the drafter offers something the verify will refuse.
+    assert drafts[0, 2].item() != truth[2]
+
+
+def test_the_fixed_target_accepts_its_own_drafts_up_to_the_depth(monkeypatch):
+    """The two halves agree, which is what makes the depth knob still work."""
+    model = _fixed_model(monkeypatch, accept_depth=2)
+    model._verify_hidden = object()
+    committed = torch.tensor([[100, 0, 0, 0]], dtype=torch.int32)
+    positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    drafts = model.propose_draft_tokens(
+        3, committed, positions, counts, hidden=model._verify_hidden
+    ).draft_token_ids
+    # The next verify's block: the row's last committed token, then the drafts.
+    block = torch.cat([committed[:, :1], drafts], dim=1)
+    verified = model._fixed_choice(block, positions)
+
+    # Columns 0 and 1 agree with the drafts offered there, column 2 does not.
+    assert int(verified[0, 0]) == int(drafts[0, 0])
+    assert int(verified[0, 1]) == int(drafts[0, 1])
+    assert int(verified[0, 2]) != int(drafts[0, 2])
+
+
+def test_an_unknown_target_is_refused(monkeypatch, expect_error):
+    """A typo in the mode must not silently select the default."""
+    monkeypatch.setenv("TT_SPEC_TARGET", "fxied")
+
+    with expect_error(ValueError, "TT_SPEC_TARGET"):
+        DummySpecDecodeModel(mesh_device=None, max_batch_size=8, vocab_size=VOCAB)

@@ -9,6 +9,18 @@ from loguru import logger
 
 from models.vllm_test_utils.no_op_test.test_model import DummyNoOpModel
 
+# Which target this model stands in for, selected by ``TT_SPEC_TARGET``.
+#
+# ``depth`` accepts the first ``TT_SPEC_ACCEPT_DEPTH`` drafts of every row by
+# returning them unchanged, which makes the acceptance rate a knob and is what
+# every acceptance-accounting measurement wants.
+#
+# ``fixed`` chooses by a rule the drafts never enter, which makes the output
+# sequence independent of whether anything was drafted at all, and is what an
+# end-to-end losslessness comparison needs.
+TARGET_DEPTH = "depth"
+TARGET_FIXED = "fixed"
+
 
 class DummySpecDecodeModel(DummyNoOpModel):
     """Dummy model implementing the speculative-decoding contract.
@@ -91,13 +103,36 @@ class DummySpecDecodeModel(DummyNoOpModel):
         super().__init__(mesh_device, max_batch_size, vocab_size, **kwargs)
         depth = int(os.environ.get("TT_SPEC_ACCEPT_DEPTH", "-1"))
         self.accept_depth = None if depth < 0 else depth
+        self.target = os.environ.get("TT_SPEC_TARGET", TARGET_DEPTH)
+        if self.target not in (TARGET_DEPTH, TARGET_FIXED):
+            raise ValueError(
+                f"TT_SPEC_TARGET must be {TARGET_DEPTH!r} or {TARGET_FIXED!r}, " f"got {self.target!r}"
+            )
         # Set by every verify and checked by the drafter. None before the first
         # verify, which is also the state a propose arriving before any verify
         # would be caught by.
         self._verify_hidden = None
         logger.info(
-            f"DummySpecDecodeModel: accept_depth=" f"{'all' if self.accept_depth is None else self.accept_depth}"
+            f"DummySpecDecodeModel: target={self.target} accept_depth="
+            f"{'all' if self.accept_depth is None else self.accept_depth}"
         )
+
+    def _fixed_choice(self, tokens, positions):
+        """``fixed`` target: the choice that follows each input, by one rule.
+
+        The rule reads the token and its position and nothing else, so what
+        this model chooses at a candidate position does not depend on what was
+        drafted there. That is what makes an end-to-end losslessness check
+        possible: the same prompt run with and without speculation has to emit
+        the same sequence, because the sequence is a property of the rule.
+
+        The ``depth`` target cannot answer that question. It returns each draft
+        unchanged up to its accept depth, so its output is a function of what
+        was drafted, and a speculated run and a plain run of it are meant to
+        differ.
+        """
+        ids = tokens.to(torch.int64) * 31 + positions.to(torch.int64) * 7 + 11
+        return (ids % self.vocab_size).to(torch.int32)
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
@@ -157,6 +192,8 @@ class DummySpecDecodeModel(DummyNoOpModel):
         """
         spec_mode = kwargs.get("spec_mode")
         if spec_mode is None:
+            if self.target == TARGET_FIXED:
+                return self._plain_fixed(*args, **kwargs)
             return super().decode_forward(*args, **kwargs)
 
         from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, VerifyOutput, check_spec_side_tensors
@@ -190,9 +227,19 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # receives is the object it produced, and nothing else can be checked
         # by a stand-in.
         self._verify_hidden = object()
+        positions = kwargs.get("start_pos")
+        if positions is None and len(args) > 1:
+            positions = args[1]
+        if self.target == TARGET_FIXED:
+            # Every column at once, and no reference to the drafts or to the
+            # accept depth: a draft is accepted exactly when it already equals
+            # what this rule would have chosen.
+            verified = self._fixed_choice(tokens, positions)
+        else:
+            verified = self._verified_ids(tokens, num_valid_drafts)
         return VerifyOutput(
             spec_mode=ACCEPT_MODE_ARGMAX_IDS,
-            argmax_ids=self._verified_ids(tokens, num_valid_drafts),
+            argmax_ids=verified,
             hidden=self._verify_hidden,
         )
 
@@ -256,9 +303,51 @@ class DummySpecDecodeModel(DummyNoOpModel):
 
         index = (accepted_counts.to(torch.int64) - 1).unsqueeze(1)
         last = committed_tokens.to(torch.int64).gather(1, index)
-        offsets = torch.arange(1, num_drafts + 1, dtype=torch.int64)
-        drafts = (last + offsets.unsqueeze(0)) % self.vocab_size
+        if self.target == TARGET_FIXED:
+            # Walk the rule forward from each row's last committed token, so
+            # the drafts are what the verify is going to choose, and bend the
+            # ones past the accept depth so that a partial-acceptance run is
+            # still reachable in this target. Wrongness lives in the drafter
+            # here, which is where a real drafter's wrongness lives.
+            position = committed_positions.to(torch.int64).gather(1, index)
+            depth = num_drafts if self.accept_depth is None else self.accept_depth
+            columns = []
+            token, pos = last, position
+            for column in range(num_drafts):
+                token = self._fixed_choice(token, pos).to(torch.int64)
+                pos = pos + 1
+                offered = token if column < depth else (token + 1) % self.vocab_size
+                columns.append(offered)
+            drafts = torch.cat(columns, dim=1)
+        else:
+            offsets = torch.arange(1, num_drafts + 1, dtype=torch.int64)
+            drafts = (last + offsets.unsqueeze(0)) % self.vocab_size
         return DraftOutput(draft_token_ids=drafts.to(torch.int32))
+
+    def _plain_fixed(self, *args, **kwargs):
+        """An ordinary decode under the ``fixed`` target.
+
+        The base class answers a decode with zero logits, whose argmax is token
+        0 at every step, so an unspeculated run of it emits one token forever
+        and cannot be compared with anything. This follows the same rule the
+        verify follows, which is what makes the two arms comparable.
+        """
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        positions = kwargs.get("start_pos")
+        if positions is None and len(args) > 1:
+            positions = args[1]
+        rows = tokens.shape[0]
+        choice = self._fixed_choice(
+            tokens.reshape(rows, -1)[:, :1], positions.reshape(rows, -1)[:, :1]
+        )
+        if kwargs.get("sampling_params") is not None:
+            # Device sampling asks for ids rather than logits.
+            return choice.reshape(rows).to(torch.int64)
+        logits = torch.zeros(rows, 1, self.vocab_size, dtype=torch.float32)
+        logits.scatter_(2, choice.to(torch.int64).unsqueeze(2), 1.0)
+        return logits
 
     def _verified_ids(self, tokens, num_valid_drafts):
         """What this model claims at each candidate position.
