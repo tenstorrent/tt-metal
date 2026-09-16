@@ -9,7 +9,7 @@ order and MLA's actual row placement fails here.
 
 import pytest
 
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_topology import ChronologicalTopology, _chronological_topology
+from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import ChronologicalTopology, _chronological_topology
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 
 SP_SIZE = 8
