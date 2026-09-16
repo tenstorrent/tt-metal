@@ -12,7 +12,35 @@ of it is `docs/SPEC_DECODE_CONTRACT.md` in that repository.
 ## Running it
 
 The architecture name is `TTDummySpecDecodeModel`. The plugin registers it only
-when the TT config asks for the test models, so both of these are required:
+when the TT config asks for the test models, so `--additional-config` below is
+required.
+
+There are two launches, because this model serves both halves of the contract
+and the drafting method decides which one runs.
+
+**The model's own drafter**, which is what exercises `propose_draft_tokens` and
+the hidden-state handoff. Prefer this one: it speculates on every step after
+the first whatever the prompt says.
+
+```bash
+vllm serve models/vllm_test_utils/spec_test \
+    --tokenizer meta-llama/Llama-3.1-8B-Instruct \
+    --additional-config '{"tt": {"register_test_models": true}}' \
+    --speculative-config '{"method": "custom_class",
+                           "model": "vllm_tt_plugin.model_owned_drafter",
+                           "num_speculative_tokens": 5}' \
+    --max-num-seqs 8 \
+    --no-async-scheduling
+```
+
+`custom_class` is vLLM's name for a proposer it does not own, which is what a
+model-owned drafter is, and the `model` key must be exactly
+`vllm_tt_plugin.model_owned_drafter`: vLLM requires a dotted proposer path
+there, nothing imports it, and the plugin refuses any other value rather than
+letting a path that goes nowhere look meaningful.
+
+**The host n-gram drafter**, which asks this model for no drafting at all and
+exercises the verify alone.
 
 ```bash
 vllm serve models/vllm_test_utils/spec_test \
@@ -37,7 +65,10 @@ This needs a `vllm-tt-plugin` revision whose speculative execution path has
 landed. On a revision without it the launch is refused at configuration time,
 which is the intended behaviour there and not a fault of this model.
 
-## The prompt decides whether speculation runs at all
+## With the n-gram drafter, the prompt decides whether speculation runs at all
+
+This section is about the n-gram launch only. The model's own drafter proposes
+from each row's last committed token, so any prompt speculates.
 
 `DummyNoOpModel.prefill_forward` returns zero logits, so the first sampled token
 is id 0 whatever the prompt says, and a draftless step of this model commits
@@ -62,10 +93,14 @@ the end of the run, so the run has to be at least `max_tokens + 2` long.
 
 A natural-language prompt drafts nothing. The pair the output ends on never
 appears earlier in the sequence, so every step is a draftless step and the
-server commits one token per step. That exercises configuration admission, the
-KV cache, the engine's `take_draft_token_ids` handshake and the narrow path, and
-no part of acceptance. Driven on the host at `num_speculative_tokens=3` over ten
-decode steps, the run prompt commits 37 tokens and a text prompt commits 10.
+server commits one token per step. That still exercises configuration
+admission, the KV cache, the engine's `take_draft_token_ids` handshake and the
+accept walk, which runs with `num_valid_drafts` of 0 on every row: this model's
+`spec_plan` returns `supports_narrow_decode=False`, so the candidate block
+keeps its full `[B, 1+K]` width even with nothing drafted, and the narrow call
+is never made. What it does not exercise is a single accepted draft. Driven on
+the host at `num_speculative_tokens=3` over ten decode steps, the run prompt
+commits 37 tokens and a text prompt commits 10.
 
 ## The two modes
 
@@ -82,7 +117,13 @@ fewer drafts than another does not shorten it.
 
 The cost of the whole loop with no device work in it: the scheduler, the
 candidate-block build, this model's arithmetic, the plugin's acceptance walk,
-the commit, and the n-gram proposal.
+the commit, and the proposal.
+
+Measure with the model's own drafter rather than with n-gram. Every step then
+commits the same width, so a per-step cost divides cleanly, and there is no
+`numba` compilation in the run: the n-gram proposer's first call pays about a
+second to compile `batch_propose_numba`, which lands on the first speculative
+step and is easy to mistake for a per-step cost.
 
 It is not vLLM's cost alone. This model builds a `[B, 1+K]` answer on every
 step, which measures about 17 microseconds at every shape from `[1, 6]` to
@@ -90,10 +131,41 @@ step, which measures about 17 microseconds at every shape from `[1, 6]` to
 
 ## Continuous integration
 
-Not registered in `tests/pipeline_reorg/vllm_model_tests.yaml` yet, because a
-speculative launch needs a plugin revision that can execute one and the
-workflow defaults its plugin ref to `main`. The entry to add once that lands,
-alongside the `no_op_test` one:
+Nothing automated runs this model or its host tests yet, and both items are
+blocked on the same thing: a speculative launch needs a `vllm-tt-plugin`
+revision whose execution path has landed, and
+`.github/workflows/vllm-model-tests.yaml` defaults its plugin ref to `main`,
+where such a launch is refused at configuration time.
+
+Two things to add once a revision with it is selectable.
+
+**The host tests.** `models/vllm_test_utils/tests/host/test_spec_test_model.py`
+needs `vllm_tt_plugin` importable, because the drafter validates its inputs
+against the contract module's own validator and returns the contract's
+`DraftOutput`. No tt-metal job collects `models/**/tests/host` today, and the
+one workflow that does check out the plugin and put both repositories on
+`PYTHONPATH` is the device workflow above, so this needs either a host step in
+that workflow or a plugin-equipped host job of its own. Until then these tests
+run by hand, with the plugin on `PYTHONPATH`.
+
+**The server entries**, in `tests/pipeline_reorg/vllm_model_tests.yaml`,
+alongside the `no_op_test` one. The model-owned drafter first, because it is
+the one that exercises `propose_draft_tokens` and the hidden handoff:
+
+```yaml
+- name: "Speculative decode test model, model-owned drafter"
+  model: models/vllm_test_utils/spec_test
+  server-timeout: 2
+  benchmark-timeout: 2
+  mesh-device: "(1, 1)"
+  arch: arch-wormhole_b0
+  tt-config: '{"register_test_models": true, "input_queue_batching_delay": 0}'
+  additional-server-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct --no-async-scheduling --speculative-config {\"method\":\"custom_class\",\"model\":\"vllm_tt_plugin.model_owned_drafter\",\"num_speculative_tokens\":5}"
+  additional-benchmark-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0"
+  multimodal: false
+```
+
+And the n-gram one, which exercises the verify against a host drafter:
 
 ```yaml
 - name: "Speculative decode test model (vLLM overhead)"
@@ -108,9 +180,15 @@ alongside the `no_op_test` one:
   multimodal: false
 ```
 
-A request completing is not enough to prove speculation ran: an n-gram run
-completes whether or not it ever proposed a draft. The assertion has to be that
-drafts were proposed and a prefix longer than one token committed. The
-benchmark's own prompts cannot produce a draft against this model, whether they
-are random or sampled from a dataset, so an entry that measures the speculative
-loop rather than the draftless path has to send the ascending run above.
+A request completing is not enough to prove speculation ran: either run
+completes whether or not a draft was ever proposed or accepted. The assertion
+has to be that drafts were proposed and that at least one step after a
+request's first committed more than one token. A request's first decode step
+always commits exactly one, because the drafter runs after a commit and nothing
+is in flight yet, so an assertion that every step commits a wide prefix fails
+on a correct run.
+
+The n-gram entry needs its prompt chosen as well: the benchmark's own prompts
+cannot produce a draft against this model, whether random or sampled from a
+dataset, so it has to send the ascending run above. The model-owned entry has
+no such requirement.

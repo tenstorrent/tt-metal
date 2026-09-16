@@ -43,10 +43,12 @@ class DummySpecDecodeModel(DummyNoOpModel):
     candidate block, and ``propose_draft_tokens`` drafts the next one, which is
     what a launch asking for the model's own drafter calls instead of an n-gram
     proposer. The drafter proposes exactly what the verify accepts, so with
-    every draft accepted each step commits ``1+K`` tokens and no step is ever
-    draftless; an n-gram drafter stalls whenever the generated text stops
-    repeating, which makes a fixed committed width impossible to measure with
-    it.
+    every draft accepted every step after the first commits ``1+K`` tokens. The
+    first decode step of a request commits one: the drafter runs after a
+    commit, so nothing is in flight yet. From there no step is ever draftless,
+    which an n-gram drafter cannot promise, because it stalls whenever the
+    generated text stops repeating and makes a fixed committed width impossible
+    to measure.
 
     ``README.md`` beside this file carries the server command, the two modes
     and what the measurement mode measures.
@@ -73,10 +75,13 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # admission checks that the method's requirements are a subset of what
         # the model declares, so declaring more never refuses a launch.
         "spec_requirements": ["device_propose", "hidden_feed"],
-        # Where the target hidden state the drafter consumes lives. This model
-        # keeps it on device, which is what the first real TT drafter does; the
-        # handle is opaque to the plugin either way.
-        "spec_hidden_handoff": ["on_device"],
+        # How the target hidden state reaches the drafter. ``roundtrip`` and
+        # not ``on_device``, because what this model returns is a host Python
+        # object carrying no hidden state at all: it exists so the handoff's
+        # one checkable property, that the runner hands back the object the
+        # verify produced, can be asserted. A model that keeps real hidden
+        # state in device memory declares ``on_device``.
+        "spec_hidden_handoff": ["roundtrip"],
         # Left at 1 by omission. Any value above 1 selects the block-output
         # rail, which owns the committed width per step and cannot be combined
         # with speculation.
@@ -98,20 +103,37 @@ class DummySpecDecodeModel(DummyNoOpModel):
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
         """Which ``(max_num_seqs, K)`` points this model can serve.
 
-        Every one of them, because it allocates nothing per candidate and holds
-        no state a candidate could invalidate, so no draft length costs it more
-        than another. It therefore imposes no ceiling of its own: vLLM already
-        caps a draft length at ``MAX_SPEC_LEN``, and a second, tighter limit
-        here would silently benchmark a different K than the one asked for.
+        Every point whose candidate block fits the context, because this model
+        allocates nothing per candidate and holds no state a candidate could
+        invalidate, so no draft length costs it more than another.
 
-        A real model answers from its own lane arithmetic and L1 budget, and
-        returns ``SpecReject`` for a point it cannot fit.
+        It deliberately imposes no ceiling below that, so a measurement runs at
+        the K it was asked for rather than at a limit invented here, and
+        nothing else imposes one either: ``MAX_SPEC_LEN`` is asserted inside
+        vLLM's ``RejectionSampler``, which the TT path never calls, and
+        ``SpeculativeConfig`` checks only that the draft length is positive. A
+        large K therefore reaches the runner, whose ``[B, 1+K]`` candidate
+        block and ``[B, K]`` draft block scale with it. That is the intended
+        behaviour for an instrument; a real model answers from its own lane
+        arithmetic and L1 budget and returns ``SpecReject`` for a point it
+        cannot fit.
         """
         from vllm_tt_plugin.spec_decode import ACCEPT_MODE_ARGMAX_IDS, DRAFTER_STATE_INTERNAL, SpecPlan, SpecReject
 
-        del vllm_config, max_num_seqs  # no cost scales with either here
+        del max_num_seqs  # no cost scales with concurrency here
         if requested_k < 1:
             return SpecReject(reason=f"a draft length of {requested_k} speculates nothing")
+        # A candidate block of 1+K positions cannot be verified past the
+        # context, so this is a real limit rather than an invented one.
+        max_model_len = int(vllm_config.model_config.max_model_len)
+        if requested_k + 1 > max_model_len:
+            return SpecReject(
+                reason=(
+                    f"a draft length of {requested_k} needs a {requested_k + 1} position "
+                    f"candidate block, past max_model_len {max_model_len}"
+                ),
+                supported_k=(max_model_len - 1,),
+            )
         return SpecPlan(
             effective_k=requested_k,
             # One decode row per request: this model has no physical candidate
@@ -187,11 +209,12 @@ class DummySpecDecodeModel(DummyNoOpModel):
         This is the device-drafter half of the contract, and what it exists to
         exercise is the loop rather than any drafting quality: it proposes
         exactly what its own verify accepts, ``last + 1 + j`` from each row's
-        last committed token, so with every draft accepted a step commits
-        ``1+K`` tokens and no step is ever draftless. An n-gram drafter cannot
-        give that, because it stalls whenever the text stops repeating, which
-        makes this the only way to measure a speculative step's cost at a fixed
-        committed width.
+        last committed token, so with every draft accepted every step that has
+        drafts in flight commits ``1+K`` tokens. A request's first decode step
+        has none, because this call runs after a commit. An n-gram drafter
+        cannot promise even the steps after that, because it stalls whenever
+        the text stops repeating, which makes this the only way to measure a
+        speculative step's cost at a fixed committed width.
 
         Which entry of the committed block is a row's last token is
         ``accepted_counts - 1``, the same arithmetic the verify uses to pick a

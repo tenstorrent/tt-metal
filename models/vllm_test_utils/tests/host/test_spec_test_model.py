@@ -1,26 +1,33 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PyTorch-only tests for the speculative test model's verify arithmetic.
+"""Host tests for the speculative test model's verify and draft arithmetic.
 
 `DummySpecDecodeModel._verified_ids` decides what the model claims at each
-candidate position, and that answer is what the plugin's accept walk turns into
-a committed prefix. Its arithmetic is pure PyTorch: no TTNN, no device, and no
-`vllm_tt_plugin`, so it can be tested directly here.
+candidate position, and `DummySpecDecodeModel.propose_draft_tokens` decides
+what it drafts next. Both are pure PyTorch and neither needs TTNN or a device,
+so they can be tested directly here.
 
-Worth testing rather than assuming, because two properties of it are easy to
+These tests do need `vllm_tt_plugin` on the path, because the drafter validates
+its inputs against the contract module's own validator and returns the
+contract's `DraftOutput`: a witness that checked a weaker domain than the
+contract states would be worth little. The verify tests alone need nothing
+beyond PyTorch.
+
+Worth testing rather than assuming, because several properties here are easy to
 get wrong in a way that nothing downstream reports. A bonus written to a column
 fixed for the batch instead of to each row's own draft count silently commits
-the wrong token on a row that carries fewer drafts than its neighbour. And an
+the wrong token on a row that carries fewer drafts than its neighbour. An
 accept depth applied across the batch instead of per row lets one row's short
-draft list shorten another's speculation.
+draft list shorten another's speculation. And a drafter reading a fixed column
+of the committed block instead of each row's `accepted_counts - 1` entry
+continues a row from padding or from another row's token.
 
 The layout under test: column `j` is the choice draft `j` has to match, for `j`
 below the row's count, and the column at the row's count carries the bonus that
 follows a fully accepted row.
 """
 
-import pytest
 import torch
 
 from models.vllm_test_utils.spec_test.test_model import DummySpecDecodeModel
@@ -229,7 +236,7 @@ def test_a_draft_id_stays_inside_the_vocabulary(monkeypatch):
     assert drafts.dtype == torch.int32
 
 
-def test_a_foreign_hidden_handle_is_refused(monkeypatch):
+def test_a_foreign_hidden_handle_is_refused(monkeypatch, expect_error):
     """The handoff check: the runner must carry the handle back unchanged.
 
     A runner that dropped or replaced it would leave a real drafter running
@@ -241,32 +248,33 @@ def test_a_foreign_hidden_handle_is_refused(monkeypatch):
     committed = torch.tensor([[10, 11, 12, 13]], dtype=torch.int32)
     counts = torch.tensor([1], dtype=torch.int32)
 
-    with pytest.raises(ValueError, match="hidden handle"):
+    with expect_error(ValueError, "hidden handle"):
         _propose(model, committed, counts, hidden=object())
 
-    with pytest.raises(ValueError, match="hidden handle"):
+    with expect_error(ValueError, "hidden handle"):
         _propose(model, committed, counts, hidden=None)
 
 
-def test_a_committed_block_of_the_wrong_width_is_refused(monkeypatch):
+def test_a_committed_block_of_the_wrong_width_is_refused(monkeypatch, expect_error):
     model = _model(monkeypatch)
     model._verify_hidden = object()
     committed = torch.tensor([[10, 11]], dtype=torch.int32)
     counts = torch.tensor([1], dtype=torch.int32)
 
-    with pytest.raises(ValueError, match="1\\+K wide"):
+    with expect_error(ValueError, "1\\+K wide"):
         _propose(model, committed, counts, num_drafts=3)
 
 
-def test_an_accepted_count_outside_its_range_is_refused(monkeypatch):
+def test_an_accepted_count_outside_its_range_is_refused(monkeypatch, expect_error):
     """Validated against the contract module, not a private copy of its rules."""
     model = _model(monkeypatch)
     model._verify_hidden = object()
     committed = torch.tensor([[10, 11, 12, 13]], dtype=torch.int32)
 
-    with pytest.raises(ValueError):
+    # The validator names the offending tensor and its range.
+    with expect_error(ValueError, "accepted_counts"):
         _propose(model, committed, torch.tensor([0], dtype=torch.int32))
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "accepted_counts"):
         _propose(model, committed, torch.tensor([5], dtype=torch.int32))
 
 
@@ -294,3 +302,35 @@ def test_the_verify_hands_out_a_fresh_handle_each_step(monkeypatch):
     assert first.hidden is not None
     assert second.hidden is not None
     assert first.hidden is not second.hidden
+
+
+def test_a_draft_length_past_the_context_is_refused(monkeypatch):
+    """The one ceiling this model has, and it is not an invented one.
+
+    A candidate block of `1+K` positions cannot be verified past the context,
+    so a draft length that needs more is refused with the length that fits.
+    Nothing upstream refuses it instead: `MAX_SPEC_LEN` is asserted inside
+    vLLM's `RejectionSampler`, which the TT path never calls, and
+    `SpeculativeConfig` checks only that the draft length is positive.
+    """
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(model_config=SimpleNamespace(max_model_len=64))
+
+    plan = DummySpecDecodeModel.spec_plan(config, max_num_seqs=8, requested_k=63)
+    assert plan.effective_k == 63
+
+    reject = DummySpecDecodeModel.spec_plan(config, max_num_seqs=8, requested_k=64)
+    assert reject.supported_k == (63,)
+    assert "max_model_len" in reject.reason
+
+
+def test_a_draft_length_of_zero_is_refused():
+    """Speculating nothing is a configuration error, not a quiet plain decode."""
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(model_config=SimpleNamespace(max_model_len=2048))
+
+    reject = DummySpecDecodeModel.spec_plan(config, max_num_seqs=8, requested_k=0)
+
+    assert "speculates nothing" in reject.reason
