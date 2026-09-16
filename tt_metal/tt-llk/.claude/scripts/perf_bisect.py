@@ -29,6 +29,7 @@ Requires `gh`, authenticated, with push access. Measuring a commit pushes a
 
 import argparse
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -110,6 +111,88 @@ def dispatch_inputs(sha):
     return {k: v for k, v in wanted.items() if k in declared and v != ""}
 
 
+RUNNER_SCRIPTS = [
+    "tt_metal/tt-llk/tests/run_llk_perf_blackhole.sh",
+    "tt_metal/tt-llk/tests/run_llk_perf_wormhole.sh",
+]
+
+
+def force_non_sol(sha):
+    """A commit on top of `sha` whose perf runners measure with SoL off.
+
+    Speed of light cannot be turned off from a dispatch on older commits: before
+    2026-08-25 the runner hardcodes `--speed-of-light`, and the SPEED_OF_LIGHT
+    env knob that today's input drives did not exist. Bisecting without this
+    patch measures SoL at one end and non-SoL at the other, which is a mode
+    change, not a code change.
+
+    Returns ``(commit, {path: mechanism})``.
+    """
+    env = dict(os.environ, GIT_INDEX_FILE=os.path.abspath(".perf_bisect_index"))
+    if os.path.exists(env["GIT_INDEX_FILE"]):
+        os.remove(env["GIT_INDEX_FILE"])
+    subprocess.run(["git", "read-tree", sha], env=env, check=True, capture_output=True)
+
+    how = {}
+    for path in RUNNER_SCRIPTS:
+        try:
+            body = git("show", f"{sha}:{path}")
+        except RuntimeError:
+            continue  # the script postdates this commit
+        if "SPEED_OF_LIGHT:-true" in body:
+            patched = body.replace("SPEED_OF_LIGHT:-true", "SPEED_OF_LIGHT:-false")
+            how[path] = "env-default"
+        elif "--speed-of-light" in body:
+            patched = body.replace(" --speed-of-light", "")
+            how[path] = "flag-removed"
+        else:
+            how[path] = "already-off"
+            continue
+        if "--speed-of-light" in patched.replace(
+            "SPEED_OF_LIGHT_ARGS=(--speed-of-light)", ""
+        ):
+            raise RuntimeError(f"{path}: a --speed-of-light survived the patch")
+
+        r = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            input=patched + ("" if body.endswith("\n") else ""),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        blob = r.stdout.strip()
+        mode = git("ls-tree", sha, "--", path).split()[0]
+        subprocess.run(
+            ["git", "update-index", "--cacheinfo", f"{mode},{blob},{path}"],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+
+    tree = subprocess.run(
+        ["git", "write-tree"], env=env, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    commit = subprocess.run(
+        [
+            "git",
+            "commit-tree",
+            tree,
+            "-p",
+            sha,
+            "-m",
+            "bisect: measure with speed of light off",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        # commit-tree needs an identity even for a throwaway commit
+        # (the bisect branches are deleted by `cleanup`).
+    ).stdout.strip()
+    os.remove(env["GIT_INDEX_FILE"])
+    return commit, how
+
+
 def push_branch(sha, index):
     """One branch per run, because the workflow cancels its own concurrency group.
 
@@ -119,7 +202,8 @@ def push_branch(sha, index):
     different group, and the two runs proceed in parallel.
     """
     branch = f"{BRANCH_PREFIX}{short(sha)}-r{index}"
-    git("push", "--force", f"git@github.com:{REPO}.git", f"{sha}:refs/heads/{branch}")
+    head, _ = force_non_sol(sha)
+    git("push", "--force", f"git@github.com:{REPO}.git", f"{head}:refs/heads/{branch}")
     return branch
 
 
@@ -236,6 +320,32 @@ def fetch_perf_data(run_id, dest):
     return csvs
 
 
+def assert_non_sol(*roots):
+    """Refuse to draw a verdict on runs that measured speed of light.
+
+    The setting is recorded per row, so the data itself says what was measured.
+    Reading it back is the only check that survives a workflow whose inputs mean
+    something different at one end of the range than the other.
+    """
+    import pandas as pd
+
+    seen = set()
+    for root in roots:
+        for f in pathlib.Path(root).rglob("*.csv"):
+            if f.name.endswith(".post.csv"):
+                continue
+            df = pd.read_csv(f, low_memory=False)
+            if "speed_of_light" not in df.columns:
+                raise RuntimeError(f"{f}: no speed_of_light column to check")
+            seen.update(df["speed_of_light"].astype(str).unique())
+    if seen != {"False"}:
+        raise RuntimeError(
+            f"runs measured speed_of_light={sorted(seen)}, expected False only. "
+            "The non-SoL patch did not take at this commit."
+        )
+    print("  speed_of_light: False in every row")
+
+
 # --- the verdict ------------------------------------------------------------
 
 
@@ -336,6 +446,7 @@ def measure(sha, args, state):
         fetch_perf_data(rid, side)
         sides.append(side)
 
+    assert_non_sol(*sides)
     module = compare_module(args.compare_ref, args.work_dir)
     result = compare(module, sides[0], sides[1], work / "compare")
     result.update(
