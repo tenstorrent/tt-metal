@@ -29,6 +29,53 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
+### PARITY LOCALISED: it is the DRAFTER, not the target
+
+Two probes, each comparing a component against ITSELF across three traced generations with
+identical inputs (no reference implementation to get wrong, which is what defeated two earlier
+attempts -- see the retraction below).
+
+TARGET -- `tests/unit/test_traced_generation_parity.py`. Same fixed blocks, no drafter:
+
+    gen2 vs gen1  steps 0-4  logits pcc 1.0  argmax 1.0000  taps L10/L20/L30 = 1.0
+    gen3 vs gen1  steps 0-4  logits pcc 1.0  argmax 1.0000  taps L10/L20/L30 = 1.0
+
+The target is BIT-EXACT across generations, taps included.
+
+DRAFTER -- `tests/unit/test_drafter_generation_parity.py`, both arms:
+
+    synthetic inputs   gen2  step 0 pcc 1.0  step 1 pcc 1.0  step 2 pcc 0.408  step 3 pcc 0.825
+                       gen3  all steps pcc 1.0
+    real tap path      gen2  drafted tokens DIFFER from step 3
+                       gen3  drafted tokens IDENTICAL
+
+So acceptance is how many drafts match the target's argmax; the target's argmax is provably
+identical in generation 2; therefore the DRAFTER is what alternates. Every hypothesis before this
+was aimed at the target -- shared TT_CCL, ctx_capacity, the reset snapshot allocation,
+trace-at-offset, snapshot reuse -- and all five measured clean because they were pointed at the
+wrong component.
+
+TWO DETAILS THAT NARROW IT FURTHER:
+
+* **It does not start at step 0.** Steps 0 and 1 are exact; divergence begins at step 2 (synthetic)
+  / step 3 (real taps). So the drafter does NOT start generation 2 with stale state -- it begins
+  correctly and goes wrong once the KV history has accumulated across two or three commits. That
+  points at the drafter's KV COMMIT path, not at its inputs or its reset.
+* **pcc 0.408 then 0.825** -- it degrades hard and partially recovers rather than compounding,
+  which reads as a specific corrupted region being read, not error accumulation.
+
+MECHANISM TO CONFIRM: the drafter runs EAGERLY while the target's trace is parked, allocating and
+freeing buffers every step, and Metal warns such buffers "may be corrupted once a trace is
+executed". An alternating allocate/free pattern across generations gives period 2, and it makes the
+drafter the VICTIM of the parked trace's memory. `ctx_capacity` not fixing it (1.031) is consistent:
+fixed capacity pins the history buffer, but the commit still writes through it every step.
+
+NEXT: instrument the drafter's KV commit across generations 1 and 2 -- the history tensor after each
+commit, not just the forward's output -- and find the first commit whose result differs. The commit
+primitives already have their own test (`tests/unit/test_drafter_kv_write_primitives.py`) and the
+fixed-capacity path writes with `slice_write` at a computed row offset, which is the narrow surface
+to check first.
+
 ### THE PARITY BUG IS THE BIG ONE: 2.99 -> 17.54 tok/s (0.17x -> 0.98x production)
 
 Acceptance ALTERNATES with traced-generation index, and the demo measures the bad one every run.
