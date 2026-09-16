@@ -2439,6 +2439,9 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_ProfileRingLaunch) {
         Bt = static_cast<uint32_t>(std::atoi(e));
     }
     // RING_LAUNCH_KIND=diagonal or dense runs only that launch (for a profile).
+    // RING_LAUNCH_DQ_TRANSPOSED=1 runs the launch as the ring does inside its
+    // step loop: dQ in the kernels' tile-transposed form on both sides.
+    const bool dq_transposed = std::getenv("RING_LAUNCH_DQ_TRANSPOSED") != nullptr;
     const char* kind = std::getenv("RING_LAUNCH_KIND");
     const std::string only = (kind != nullptr) ? kind : "";
     const uint32_t d = 64;
@@ -2457,7 +2460,8 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_ProfileRingLaunch) {
         const auto once = [&]() {
             cyclic_sdpa_bw(
                 q, k, v, dO, lse, u, Bt, /* use_barrier */ false, mask, /* accumulate */ true, dq, dk, dv,
-                /* max_groups */ 0, /* sequence_chunks */ 2, rc, cc);
+                /* max_groups */ 0, /* sequence_chunks */ 2, rc, cc,
+                /* grad_query_in_tile_transposed */ dq_transposed, /* grad_query_out_tile_transposed */ dq_transposed);
             tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         };
         once();  // warm: compile

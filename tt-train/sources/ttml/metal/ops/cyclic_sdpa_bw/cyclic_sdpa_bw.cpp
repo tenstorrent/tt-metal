@@ -26,11 +26,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     uint32_t max_groups,
     uint32_t sequence_chunks,
     const std::vector<uint32_t>& row_chunks,
-    const std::vector<uint32_t>& col_chunks) {
+    const std::vector<uint32_t>& col_chunks,
+    bool grad_query_in_tile_transposed,
+    bool grad_query_out_tile_transposed) {
     auto result = ttnn::prim::ttml_cyclic_sdpa_bw(
         query, key, value, grad_output, log_sum_exp, row_scalar, rows_per_block_tiles, use_barrier, mask_type,
         accumulate_into_outputs, preallocated_grad_query, preallocated_grad_key, preallocated_grad_value,
-        max_groups, sequence_chunks, row_chunks, col_chunks);
+        max_groups, sequence_chunks, row_chunks, col_chunks, grad_query_in_tile_transposed,
+        grad_query_out_tile_transposed);
     return {result[0], result[1], result[2]};
 }
 
