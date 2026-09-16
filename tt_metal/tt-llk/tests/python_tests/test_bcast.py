@@ -66,6 +66,27 @@ supported_formats = [
 # BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
 
 
+def get_valid_input_dimensions(tile_dimensions, formats, dest_acc):
+    """Add a multi-tile input only where the 32-bit unpack-to-dest broadcast path runs.
+
+    That path (Float32/Int32/UInt32 with dest accumulation) points the math DEST
+    window at each tile and addresses the tile's rows with compile-time offsets, so
+    a single-tile input leaves it degenerate: dst_index and the DEST base are both 0.
+    [128, 64] is 8 tiles, which the DEST-half capacity of 4 32-bit tiles splits into
+    2 blocks, driving dst_index 0..3 in both the lower and the flipped upper half.
+    Every other variant keeps the single-tile input.
+    """
+    single_tile = [list(tile_dimensions)]
+
+    if tile_dimensions != [32, 32]:
+        return single_tile
+
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+        return single_tile + [[128, 64]]
+
+    return single_tile
+
+
 @parametrize(
     # enable tiny tiles tests when they're added formally to the LLKs
     # tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
@@ -78,12 +99,14 @@ supported_formats = [
         BroadcastType.Scalar,
     ],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    input_dimensions=get_valid_input_dimensions,
 )
 def test_unpack_bcast(
     tile_dimensions,
     formats,
     broadcast_type,
     dest_acc,
+    input_dimensions,
 ):
     # --- Skips -----------------------------------------------------------
 
@@ -130,7 +153,6 @@ def test_unpack_bcast(
     # For full tiles ([32,32]):     face_r_dim=16, num_faces=4.
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
-    input_dimensions = list(tile_dimensions)
 
     # --- Stimuli generation ----------------------------------------------
     # generate_stimuli(..., tile_dimensions=...) produces dense data for any tile size.
@@ -161,7 +183,7 @@ def test_unpack_bcast(
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.No,
+        dest_acc,
         formats,
         input_dimensions,
         tile_dimensions,
