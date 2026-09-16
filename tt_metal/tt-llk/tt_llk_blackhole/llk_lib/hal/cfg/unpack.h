@@ -199,54 +199,29 @@ public:
     static_assert(ContextIndex < UnpackerContextCount<UnpackerIndex>, "unpacker context index out of range");
 
 private:
-    static constexpr const Field& source()
-    {
-        if constexpr (ContextIndex == 0)
-        {
-            return ThconReg3Fields::Base_address;
-        }
-        else if constexpr (ContextIndex == 1)
-        {
-            return ThconReg3Fields::Base_cntx1_address;
-        }
-        else if constexpr (ContextIndex == 2)
-        {
-            return ThconReg3Fields::Base_cntx2_address;
-        }
-        else if constexpr (ContextIndex == 3)
-        {
-            return ThconReg3Fields::Base_cntx3_address;
-        }
-        else if constexpr (ContextIndex == 4)
-        {
-            return ThconReg4Fields::Base_cntx4_address;
-        }
-        else if constexpr (ContextIndex == 5)
-        {
-            return ThconReg4Fields::Base_cntx5_address;
-        }
-        else if constexpr (ContextIndex == 6)
-        {
-            return ThconReg4Fields::Base_cntx6_address;
-        }
-        else
-        {
-            return ThconReg4Fields::Base_cntx7_address;
-        }
-    }
-
-    static constexpr Sec section = UnpackerIndex == 0 ? Sec::S0 : Sec::S1;
+    static constexpr const Field* Sources[8] = {
+        &ThconReg3Fields::Base_address,
+        &ThconReg3Fields::Base_cntx1_address,
+        &ThconReg3Fields::Base_cntx2_address,
+        &ThconReg3Fields::Base_cntx3_address,
+        &ThconReg4Fields::Base_cntx4_address,
+        &ThconReg4Fields::Base_cntx5_address,
+        &ThconReg4Fields::Base_cntx6_address,
+        &ThconReg4Fields::Base_cntx7_address,
+    };
+    static constexpr const Field& source = *Sources[ContextIndex];
+    static constexpr Sec section         = UnpackerIndex == 0 ? Sec::S0 : Sec::S1;
 
 public:
     // Resolve the THCON section into a standalone field so Base itself can be
     // used as a single non-type template argument.
     static constexpr Field Base {
-        source().scope,
-        source().word_size,
-        source().addr32(section),
+        source.scope,
+        source.word_size,
+        source.addr32(section),
         0,
-        source().shamt(section),
-        source().width,
+        source.shamt(section),
+        source.width,
         1,
         0,
     }; // Unpacker source/tile context base address (aligned to 16B word) (32b)
@@ -306,30 +281,23 @@ public:
     }
 };
 
-class UnpackerEntry
+template <typename ContextFields>
+class BasicUnpackerEntry
 {
 public:
     UnpackerAddrCtrlFields AddrCtrl;
     UnpackerAddrBaseFields AddrBase;
-    UnpackerContextFields Cntx;
+    ContextFields Cntx;
     const Field& ForcedSharedExp;
     const Field& AddDestAddrCntr;
     const Field& NopRegClrVal;
     UnpackerBlobsYStartFields BlobsYStart;
 };
 
+using UnpackerEntry = BasicUnpackerEntry<UnpackerContextFields>;
+
 template <std::uint32_t UnpackerIndex>
-class StaticUnpackerEntry
-{
-public:
-    UnpackerAddrCtrlFields AddrCtrl;
-    UnpackerAddrBaseFields AddrBase;
-    StaticUnpackerContextFields<UnpackerIndex> Cntx;
-    const Field& ForcedSharedExp;
-    const Field& AddDestAddrCntr;
-    const Field& NopRegClrVal;
-    UnpackerBlobsYStartFields BlobsYStart;
-};
+using StaticUnpackerEntry = BasicUnpackerEntry<StaticUnpackerContextFields<UnpackerIndex>>;
 
 class UnpackerFields
 {
@@ -350,27 +318,13 @@ private:
                                                                                                                  // SRCA (unpacker 0) or SRCB (unpacker 1) (32b)
     };
 
-    template <std::uint32_t UnpackerIndex>
-    static constexpr UnpackerEntry make()
+    template <std::uint32_t UnpackerIndex, typename ContextFields>
+    static constexpr BasicUnpackerEntry<ContextFields> make(ContextFields context)
     {
         return {
             {UnpackerIndex},
             {UnpackerIndex},
-            {UnpackerIndex},
-            Fields<UnpackerIndex>::ForcedSharedExp,
-            Fields<UnpackerIndex>::AddDestAddrCntr,
-            Fields<UnpackerIndex>::NopRegClrVal,
-            {UnpackerIndex},
-        };
-    }
-
-    template <std::uint32_t UnpackerIndex>
-    static constexpr StaticUnpackerEntry<UnpackerIndex> make_static()
-    {
-        return {
-            {UnpackerIndex},
-            {UnpackerIndex},
-            {},
+            context,
             Fields<UnpackerIndex>::ForcedSharedExp,
             Fields<UnpackerIndex>::AddDestAddrCntr,
             Fields<UnpackerIndex>::NopRegClrVal,
@@ -383,12 +337,12 @@ public:
     constexpr StaticUnpackerEntry<UnpackerIndex> operator[](detail::CompileTimeIndex<UnpackerIndex>) const
     {
         static_assert(UnpackerIndex < detail::UnpackerCount, "unpacker index out of range");
-        return make_static<UnpackerIndex>();
+        return make<UnpackerIndex>(StaticUnpackerContextFields<UnpackerIndex> {});
     }
 
     constexpr UnpackerEntry operator[](std::uint32_t unpacker) const
     {
-        return unpacker == 0 ? make<0>() : unpacker == 1 ? make<1>() : detail::invalid_index<UnpackerEntry>();
+        return unpacker == 0 ? make<0>(UnpackerContextFields {0}) : unpacker == 1 ? make<1>(UnpackerContextFields {1}) : detail::invalid_index<UnpackerEntry>();
     }
 
     /**
