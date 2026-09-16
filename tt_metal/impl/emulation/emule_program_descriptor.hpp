@@ -4,7 +4,7 @@
 //
 // The emule program descriptor: a flat POD snapshot of everything the emulator
 // needs from a tt-metal Program/IDevice. build_emule_descriptor (the marshaller,
-// build_emule_descriptor.cpp) is the ONLY code that reads private tt-metal types;
+// emule_descriptor_builder.cpp) is the ONLY code that reads private tt-metal types;
 // it fills this POD, and the interpretation modules (device_map, kernel_defines,
 // program_model, cb_dfb_setup, metal2_emit, jit) consume ONLY this — never a
 // private tt-metal type. That is the API boundary that makes the modules movable.

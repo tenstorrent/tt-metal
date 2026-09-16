@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "emulated_program_runner.hpp"
+#include "emule_descriptor_builder.hpp"
 #include "emule_multi_rank_runtime.hpp"
 #include "emule_live_ranges.hpp"
 #include "host_sanitizers.hpp"
@@ -4354,6 +4355,12 @@ static void dispatch_to_device(
 void execute_program_emulated(IDevice* device, Program& program) {
     auto device_id = device->id();
     log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
+
+    // STAGE 1: build + discard (validation); consumers land in Stage 2.
+    auto _emule_desc = tt_emule::build_emule_descriptor(program, device);
+    auto _emule_soc = tt_emule::build_soc_view(device);
+    (void)_emule_desc;
+    (void)_emule_soc;
     // Mark the fabric connection-route table stale: the next op's first connection record clears it, so
     // routes stay scoped to the current op (this op's builds already recorded before this launch).
     g_conn_route_dirty.store(true, std::memory_order_relaxed);
