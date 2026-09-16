@@ -22,6 +22,8 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.audio.qwen3_tts import audio as host_audio
+from models.demos.audio.qwen3_tts import weights
 from models.demos.audio.qwen3_tts.reference.qwen3_speaker_ref import SpeakerReference, speaker_mel
 from models.demos.audio.qwen3_tts.tests.reference_helpers import speaker_reference, synthetic_voiced_clip
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_speaker import TtSpeakerEncoder, preprocess_speaker_parameters
@@ -44,6 +46,55 @@ def _to_reference_layout(tensor):
 def _embed(model, device, mel):
     mel_tt = ttnn.from_torch(mel, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     return ttnn.to_torch(model(mel_tt)).to(torch.float32).reshape(1, -1)
+
+
+def test_the_ported_mel_matches_the_vendored_one():
+    """`audio.mel_spectrogram` against the copy inside the vendored upstream encoder.
+
+    The pipeline needs a mel and must not import an oracle to get one, so the front-end is
+    ported into `audio.py`. Exact equality is the right gate: both run the same torch ops on
+    the same filterbank, so any difference means a transcription error, not rounding.
+    """
+    for seconds, voice in ((3.0, "low"), (1.0, "high")):
+        clip = synthetic_voiced_clip(seconds=seconds, voice=voice)
+        ported, vendored = host_audio.speaker_mel(clip), speaker_mel(clip)
+        assert ported.shape == vendored.shape, f"{tuple(ported.shape)} != {tuple(vendored.shape)}"
+        assert torch.equal(ported, vendored), f"{voice}: differs by {(ported - vendored).abs().max()}"
+
+
+def test_read_clip_resamples_and_mixes_down(tmp_path):
+    """A reference clip arrives as a file at whatever rate and channel count it has.
+
+    Both encoders want 24 kHz mono and neither resamples, so this is where that happens.
+    Written to a temporary file rather than shipped as a fixture: the suite keeps no golden
+    audio, and what matters is the rate and shape that come back.
+    """
+    import soundfile
+
+    clip = synthetic_voiced_clip(seconds=1.0).numpy()
+    target = weights.codec_config()["input_sample_rate"]
+
+    mono = tmp_path / "mono.wav"
+    soundfile.write(mono, clip, target)
+    read = host_audio.read_clip(mono)
+    assert read.shape == (clip.shape[0],)
+    # A wav is 16-bit PCM unless told otherwise, which is what a real reference clip will
+    # be, so the tolerance is one quantisation step rather than zero.
+    assert torch.allclose(read, torch.from_numpy(clip), atol=2**-15), "no resample, no change"
+
+    # 16 kHz stereo: resampled up and mixed down, and the duration survives both.
+    other = tmp_path / "stereo16k.wav"
+    resampled = clip[::3]  # a crude decimation is enough; only the rate in the header matters
+    soundfile.write(other, resampled.repeat(2).reshape(-1, 2), 8000)
+    read = host_audio.read_clip(other)
+    assert read.dim() == 1
+    assert abs(read.shape[0] / target - resampled.shape[0] / 8000) < 0.01, "the duration must survive"
+
+
+def test_a_clip_at_the_wrong_rate_is_refused(expect_error):
+    """Both encoders want 24 kHz and neither resamples; `audio.read_clip` is what does."""
+    with expect_error(ValueError, "24000"):
+        host_audio.speaker_mel(synthetic_voiced_clip(seconds=0.5), sample_rate=16000)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

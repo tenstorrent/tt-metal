@@ -14,8 +14,10 @@ What is checked, and what cannot be:
 
   * The prefill's shape and composition, position by position, against the same tables
     upstream builds it from. Bit-exactness against upstream's own assembled prefill was
-    verified separately (max absolute difference 0.0 at all 14 positions for a 3-token
-    utterance) but needs a second venv running transformers 4.57.3, so it cannot live here.
+    verified separately, by capturing it at the talker's door under transformers 4.57.3:
+    max absolute difference 0.0 for `ryan` with a language tag and without one, and for the
+    dialect speaker `dylan` under Chinese, Auto and English. That needs two transformers
+    versions in one comparison, so it cannot live here.
   * That the talker's steps agree with the CPU reference when both see the same prefix.
     Free running decode does diverge: one near-tie flip changes the input to every later
     step. Measured 13 of 14 steps matching with a forced prefix, the single miss having a
@@ -155,6 +157,36 @@ def test_language_and_speaker_never_enter_the_text_stream(tables):
     _, prompt_ids = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     assert frontend.language_id(LANGUAGE) not in prompt_ids
     assert weights.talker_config()["spk_id"][SPEAKER] not in prompt_ids
+
+
+def test_a_dialect_speaker_overrides_the_language_tag(tables):
+    """`eric` speaks Sichuanese and `dylan` Beijing, and the tag follows the speaker.
+
+    Upstream replaces the language id with the dialect's whenever the language is Chinese or
+    `Auto` and the speaker is one of those two. For them `Auto` therefore stops meaning "no
+    tag": the prompt gains the tagged think block a plain `Auto` would not have.
+    """
+    config = weights.talker_config()
+    assert config["spk_is_dialect"]["dylan"] == "beijing_dialect", "the premise of this test"
+    assert config["spk_is_dialect"][SPEAKER] is False
+
+    dialect_id = config["codec_language_id"]["beijing_dialect"]
+    for language in ("Chinese", "Auto"):
+        embeddings, _ = build_custom_voice_prefill(TEXT, "dylan", language, tables)
+        assert torch.allclose(
+            embeddings[0, 5], tables.codec([dialect_id]).reshape(-1) + tables.tts_pad.reshape(-1)
+        ), f"{language} with a dialect speaker must tag the dialect"
+
+    # A speaker who is not a dialect speaker keeps the plain behaviour, tag and all.
+    plain, _ = build_custom_voice_prefill(TEXT, SPEAKER, "Auto", tables)
+    tagged, _ = build_custom_voice_prefill(TEXT, "dylan", "Auto", tables)
+    assert plain.shape[1] == tagged.shape[1] - 1, "Auto leaves the tag off for everyone else"
+
+    # And an explicit non-Chinese language is left alone even for a dialect speaker.
+    english, _ = build_custom_voice_prefill(TEXT, "dylan", LANGUAGE, tables)
+    assert torch.allclose(
+        english[0, 5], tables.codec([frontend.language_id(LANGUAGE)]).reshape(-1) + tables.tts_pad.reshape(-1)
+    )
 
 
 def test_an_unknown_speaker_is_refused(tables, expect_error):

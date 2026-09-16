@@ -14,7 +14,7 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | Block | Component | Where | State |
 |---|---|---|---|
 | 0 | Checkpoint access (`weights.py`) | host | **done** |
-| 1 | Mel front-end, 128 bins at 24 kHz | host | **done** |
+| 1 | Mel front-end, 128 bins at 24 kHz (`audio.py`) | host | **done**, matches upstream exactly |
 | 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
 | 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
 | 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **done**, PCC 0.995, KV cache + trace |
@@ -23,14 +23,67 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 7 | Dual-track prompt + decode loop | host + device | **done**, end to end |
 | 8 | Sampling (`sampling.py`) | host | **done**, matches `transformers` |
 | 9 | Codec encoder, waveform → codes | device | **done**, latents PCC 0.9999 |
+| 10 | Voice clone: reference clip → prompt → speech | host + device | **done**, prompt bit-exact |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
 single position of the talker's prompt. Its width matches the talker's hidden size, so
 nothing projects between them.
 
-The codec encoder is the other half of block 6 and the last unported block. It turns a
-reference clip into codes, which is what the voice-clone prompt carries on its codec track.
-Assembling that prompt is the next piece of work; nothing routes through the encoder yet.
+## Voice cloning
+
+Every block is in, and cloning is what joins them. Give it a reference clip and its
+transcript and it speaks new text in that voice:
+
+```python
+from models.demos.audio.qwen3_tts import audio
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline, build_clone_reference
+
+clip = audio.read_clip("reference.wav")                       # any rate, resampled to 24 kHz
+reference = build_clone_reference(device, clip, "what the clip says")
+pipeline = Qwen3TTSPipeline(device, max_frames=400, seed=0)
+waveform, codes = pipeline.generate_clone("New words in that voice.", reference)
+```
+
+`build_clone_reference` runs the codec encoder and the speaker encoder once and drops both,
+so a server that clones one voice repeatedly should hold on to the `CloneReference` rather
+than rebuild it. This is a **Base checkpoint** path: Base carries the speaker encoder and an
+empty `spk_id`, CustomVoice the nine speakers and no encoder, so cloning and named speakers
+are mutually exclusive releases.
+
+The prompt is `generate_icl_prompt` with `non_streaming_mode=True`, and it was checked
+against upstream's own assembly, captured at the talker's door under transformers 4.57.3:
+**max absolute difference 0.0** across all 72 positions, and again at 71 positions with the
+language tag off. Two things about it are worth knowing:
+
+  * The text track carries the reference transcript **before** the text to speak, so the
+    model is shown what the clip said as well as how it sounded. The codec track then
+    carries the clip itself, one summed 16-codebook embedding per frame.
+  * The reference frames are decoded together with the generated ones and cut off the front
+    of the waveform afterwards. The codec decoder is causal, so the first generated frames
+    read the reference as context; decoding them alone gives a different and worse onset.
+    Each frame is exactly 1920 samples, so the cut is exact.
+
+Measured on one P300 chip, cloning a 6.72 s reference clip that CustomVoice had just
+spoken, then saying 9.28 s of new text:
+
+| stage | time |
+|---|---|
+| both encoders, once per clip | 9.0 s |
+| prompt, 150 positions, and 116 frames | 12.2 s |
+| codec decoder, 200 frames (the reference rides along) | 4.6 s |
+| **total** | **16.8 s, 1.81x real time** |
+
+A long reference makes the codec stage longer, since its frames are decoded with the
+generated ones and then cut. Both encoders are a one-off: hold the `CloneReference` and a
+second utterance in the same voice skips them.
+
+Whether the voice actually carried over is a question the speaker encoder can answer.
+Cosine between the reference clip's vector and the clone's: **0.9948**, against 0.8230 for
+an unrelated voice.
+
+Streaming text input is the one regime still missing. With `non_streaming_mode=False`
+upstream sums the two tracks position by position and feeds whatever text is left over
+during decode, as a real `trailing_text_hidden` rather than a constant pad.
 
 ## Speed
 
@@ -97,7 +150,7 @@ work never materialises the talker.
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoints and, for the device tests, a card. 94 tests, 160 s warm.
+it needs only the checkpoints and, for the device tests, a card. 107 tests, 185 s warm.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
@@ -108,7 +161,8 @@ pytest models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py       # talker
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py  # code predictor
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py        # codec decoder
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py  # codec encoder
-pytest models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py         # end to end
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py         # end to end, CustomVoice
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_clone_pcc.py       # end to end, voice clone
 ```
 
 `test_checkpoint_loading.py` derives every speaker-encoder tensor name and shape from
@@ -216,9 +270,17 @@ encoder. It resolves CustomVoice by repo id rather than from the ambient `$QWEN3
 so a first run downloads 4.3 GB.
 
 The prefill is checked position by position against the tables it is built from. Its
-bit-exactness against upstream's own assembled prefill was verified separately, max absolute
-difference 0.0 at all 14 positions, but that needs a second venv on transformers 4.57.3 and
-cannot live in the suite.
+bit-exactness against upstream's own assembled prefill was verified separately, by capturing
+that prefill at the talker's door under transformers 4.57.3: max absolute difference 0.0 for
+`ryan` tagged and untagged, and for the dialect speaker `dylan` under Chinese, Auto and
+English. Two transformers versions cannot share an environment, so the suite pins the
+composition instead.
+
+Two prompt rules were wrong before that comparison and are now tested. `Auto` means no
+language tag, and upstream marks the absence with `codec_nothink_id` rather than
+`codec_think_id`. And two of the nine speakers are dialect speakers, `eric` (Sichuanese) and
+`dylan` (Beijing): for them Chinese or `Auto` tags the dialect, so `Auto` stops meaning "no
+tag" at all.
 
 Free-running greedy decode diverges from a CPU greedy run: one near-tie flip changes the
 input to every later step, so 13 of 14 steps match with a forced prefix while only a handful
@@ -257,6 +319,7 @@ duplicate these tests or claim coverage that does not exist.
 | `weights.py` | checkpoint resolution and the speaker-encoder weight reader |
 | `frontend.py` | host text path: tokenizer, prompt wrappers, language resolution |
 | `sampling.py` | host sampler, matching `transformers`' processor order |
+| `audio.py` | host audio path: file to 24 kHz waveform, waveform to log-mel |
 | `tt/` | TTNN blocks |
 | `reference/` | CPU references (PCC oracles); `reference/qwen/` is vendored upstream, Apache-2.0 |
 | `tests/` | host tests, `tests/pcc/` for device correctness |

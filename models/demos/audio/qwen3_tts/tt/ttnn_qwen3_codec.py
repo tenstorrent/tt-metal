@@ -354,6 +354,10 @@ class TtCodecDecoder:
         self.kv_heads = self.config["num_key_value_heads"]
         self.head_dim = self.config["head_dim"]
         self.scale = self.head_dim**-0.5
+        # upsampling_ratios then upsample_rates: 4 x 480, so one frame is 1920 samples.
+        self.upsample = int(
+            torch.tensor(self.config["upsample_rates"] + self.config["upsampling_ratios"], dtype=torch.long).prod()
+        )
         self._prepared = {}
 
     # ── primitives ──────────────────────────────────────────────────────────
