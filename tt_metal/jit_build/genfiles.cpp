@@ -71,11 +71,13 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
     ttsl::unreachable();
 }
 
-// Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
+// Generates TRISC prolog: #define + kernel compile-time args and JIT-generated headers
 // Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
 string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
+    // Both legacy and Metal 2.0 compute kernels need these before any kernel-specific headers.
+    prolog << "#include \"api/compile_time_args.h\"\n";
     if (is_metal2_kernel) {
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
