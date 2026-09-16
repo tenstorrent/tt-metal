@@ -140,11 +140,15 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
                     .split_count = split_count});
             };
 
-            // Furthest destination first, with relays interleaved so downstream streams get work early.
-            // After the j-th own assignment the cumulative relay count is the triangular number
-            // T(j-2) = (j-2)(j-1)/2, which for m=4 gives own4 own3 own2 relay0 own1 relay1 relay2 relay3..5
-            // (own by distance, so own1 is the neighbour, which is delivered rather than forwarded).
-            uint32_t relays = 0;
+            // Furthest destination first, then the relays. Doing our own work first is what puts DISTANCE
+            // between a relay and the upstream chunk feeding it: the upstream emits that chunk at the top of
+            // its pass, we consume it at the bottom of ours, and the whole own phase is the slack the ring
+            // has to absorb jitter with. The schedule runs once per local expert, so that slack is a pass,
+            // not a run -- interleaving relays earlier would shrink it to a chunk or two.
+            //
+            // Emission order is unaffected: a relay for our neighbour and the nearest own assignment are
+            // both final writes, so neither puts a chunk downstream, and the forwarding chunks come off in
+            // the same sequence either way.
             for (uint32_t j = 1; j <= m; j++) {
                 const uint32_t distance = m - j + 1;
                 if (distance == m) {
@@ -152,12 +156,8 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
                 } else {
                     own(distance, link, num_links);
                 }
-                const uint32_t want = (j >= 2) ? (j - 2) * (j - 1) / 2 : 0;
-                for (; relays < want && relays < relay_chunks_per_stream(extent); relays++) {
-                    list.push_back(Assignment{.is_relay = true, .relay_chunk = relays});
-                }
             }
-            for (; relays < relay_chunks_per_stream(extent); relays++) {
+            for (uint32_t relays = 0; relays < relay_chunks_per_stream(extent); relays++) {
                 list.push_back(Assignment{.is_relay = true, .relay_chunk = relays});
             }
             TT_FATAL(

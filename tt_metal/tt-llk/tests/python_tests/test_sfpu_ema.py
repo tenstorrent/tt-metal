@@ -154,11 +154,11 @@ def _run_ema_on_device(alpha: float, beta: float, num_time_tiles: int, dest_acc)
     return res_tensor, golden_input
 
 
-# dest_acc=Yes (32-bit DEST) is intentionally not swept: the EMA kernel is hardcoded for
-# 16-bit bf16 DEST (_ema_load/store_current_input_ use SFPLOADI_MOD0_FLOATB at fixed fp16
-# offsets with no is_fp32_dest_acc_en branch), so a 32-bit DEST is not supported.
+# Both DEST widths are swept. The kernel's SFPLOAD/SFPSTORE take the element format from
+# the configured DEST rather than fixing it, so each width has to be covered on its own;
+# the ttnn ema op runs with a 32-bit DEST, so that leg is the one production uses.
 @parametrize(
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     num_time_tiles=[1, 2, 4],
 )
 def test_sfpu_ema(dest_acc, num_time_tiles):
