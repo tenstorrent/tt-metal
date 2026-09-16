@@ -183,6 +183,20 @@ struct KernelSpec {
     };
     Group<TensorBinding> tensor_bindings;
 
+    // PrefetcherPipe bindings
+    // Declares that this data-movement kernel participates in a PrefetcherPipe (declared at the
+    // ProgramSpec level as a PrefetcherPipeParameter). The kernel constructs the device object
+    // from the binding token:
+    //   experimental::PrefetcherPipe pipe(pipe::<accessor_name>)
+    // The kernel's role (sender or receiver) is derived from its WorkUnitSpec node coverage
+    // against the parameter's geometry; see prefetcher_pipe_parameter.hpp. Compute kernels
+    // cannot bind a pipe; they consume through a relay DFB (DataflowBufferSpec::prefetcher_pipe_relays).
+    struct PrefetcherPipeBinding {
+        PrefetcherPipeParamName pipe_parameter_name;  // identify the PrefetcherPipeParameter within the ProgramSpec
+        std::string accessor_name;                    // pipe accessor name (used in the kernel source code)
+    };
+    Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
+
     // Additional program parameter binding types (coming soon):
     //  - GlobalSemaphore bindings
     //  - GlobalDataflowBuffer bindings
@@ -241,6 +255,7 @@ using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
+using PrefetcherPipeBinding = KernelSpec::PrefetcherPipeBinding;
 
 //------------------------------------------------
 // Convenience factories for DFBBinding

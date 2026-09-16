@@ -32,6 +32,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     metal2_host_api/test_mesh_workload_factories_hw.cpp
+    metal2_host_api/test_prefetcher_pipe_spec.cpp
     metal2_host_api/test_program_spec.cpp
     metal2_host_api/test_program_spec_hw.cpp
     metal2_host_api/test_scratchpad_hw.cpp

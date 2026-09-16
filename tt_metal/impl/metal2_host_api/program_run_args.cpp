@@ -402,6 +402,17 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 
     // Validate tensor runtime parameters (delegated to shared helper).
     ValidateTensorArgs(program, params.tensor_args);
+
+    // Validate PrefetcherPipe arguments. A Program created from a spec does not yet carry
+    // PrefetcherPipeParameter slots (MakeProgramFromSpec rejects such specs), so any supplied pipe
+    // argument names a parameter the Program does not declare.
+    for (const auto& [param_name, pipe_arg] : params.prefetcher_pipe_args) {
+        (void)pipe_arg;
+        TT_THROW(
+            "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
+            "PrefetcherPipeParameter of that name.",
+            param_name);
+    }
 }
 
 // Emit the CRTA words for a single tensor binding, in order:
@@ -1150,6 +1161,16 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // Tensor args: any TensorParameter may be omitted (its prior MeshTensor is retained); supplied
     // ones are validated against their declared spec.
     ValidateTensorArgs(program, params.tensor_args, /*require_all=*/false);
+
+    // PrefetcherPipe args: may be omitted; a supplied one must name a declared parameter (none can
+    // exist yet, see ValidateProgramRunArgs).
+    for (const auto& [param_name, pipe_arg] : params.prefetcher_pipe_args) {
+        (void)pipe_arg;
+        TT_THROW(
+            "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
+            "PrefetcherPipeParameter of that name.",
+            param_name);
+    }
 }
 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
@@ -1338,6 +1359,18 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
             // the disjoint check the key is absent, so insert takes effect (under skip_validation a
             // collision keeps base's existing entry).
             base.tensor_args.insert({name, arg});
+        }
+
+        // PrefetcherPipe args: union by parameter name (disjoint). Same insert-not-[] reasoning as
+        // tensor_args: reference_wrapper is not default-constructible.
+        for (const auto& [name, arg] : other.prefetcher_pipe_args) {
+            if (!skip_validation) {
+                TT_FATAL(
+                    !base.prefetcher_pipe_args.contains(name),
+                    "MergeProgramRunArgs: PrefetcherPipeParameter '{}' is specified in more than one ProgramRunArgs.",
+                    name);
+            }
+            base.prefetcher_pipe_args.insert({name, arg});
         }
 
         // DFB run overrides: union by DFB name (disjoint).
