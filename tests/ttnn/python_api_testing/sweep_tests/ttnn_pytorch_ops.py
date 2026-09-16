@@ -312,18 +312,12 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
         return _simulate_bfp_quantization(x, 3)
     elif tt_input_dtype == ttnn.bfloat8_b and tt_output_dtype == ttnn.bfloat4_b:
         return _simulate_bfp_quantization(x, 7)
-    elif tt_output_dtype == ttnn.uint8:
+    elif tt_output_dtype in (ttnn.uint8, ttnn.int8):
         if tt_input_dtype == ttnn.bfloat4_b:
             x = _simulate_bfp_quantization(x, 3)
         elif tt_input_dtype == ttnn.bfloat8_b:
             x = _simulate_bfp_quantization(x, 7)
-        return narrow_to_8bit(x, signed=False)
-    elif tt_output_dtype == ttnn.int8:
-        if tt_input_dtype == ttnn.bfloat4_b:
-            x = _simulate_bfp_quantization(x, 3)
-        elif tt_input_dtype == ttnn.bfloat8_b:
-            x = _simulate_bfp_quantization(x, 7)
-        return narrow_to_8bit(x, signed=True)
+        return narrow_to_8bit(x, signed=tt_output_dtype == ttnn.int8)
     elif tt_input_dtype == ttnn.uint8:
         if tt_output_dtype == ttnn.float32:
             return x.to(torch.float32)

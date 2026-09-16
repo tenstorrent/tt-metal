@@ -73,7 +73,8 @@ inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
  *
  * For input/output to be Int8, the caller must additionally declare the circular buffers as UInt8 instead
  * of Int8, so the raw 2's complement byte is zero-extended instead of being decoded as sign-magnitude,
- * and must put Dest in 32 bit mode. The kernels below do the sign handling themselves on that raw byte.
+ * and must put Dest in 32 bit mode, which is enforced by a static_assert. The kernels below do the sign
+ * handling themselves on that raw byte.
  * Int8 is not available on Quasar.
  *
  * Return value: None
@@ -117,6 +118,10 @@ ALWI void typecast_tile(uint32_t idst) {
             VectorMode::RC));
     }
 #else
+    static_assert(
+        is_fp32_dest_acc_en || (in_format != DataFormat::Int8 && out_format != DataFormat::Int8),
+        "Int8 typecast requires Dest in 32 bit mode");
+
     if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::UInt16) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
