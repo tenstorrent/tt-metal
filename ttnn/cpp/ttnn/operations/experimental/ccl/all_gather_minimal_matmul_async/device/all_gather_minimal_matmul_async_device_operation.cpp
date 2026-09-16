@@ -637,11 +637,13 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_cluster_axis.has_value() ? ::ttnn::ccl::get_usable_topology(input_tensor, fsdp_topology, fsdp_cluster_axis)
                                       : fsdp_topology.value_or(ttnn::ccl::Topology::Ring);
 
+    const auto registry_mode = ttnn::operations::matmul::registry::current_mode();
+    const bool registry_fallback_is_error = ttnn::operations::matmul::registry::fallback_is_error(registry_mode);
     std::optional<agmm_registry::Recipe> registry_recipe;
     if (!config && !compute_kernel_config && input_tensor.logical_shape().rank() >= 2 &&
         weight_tensor.logical_shape().rank() >= 2) {
         registry_recipe = agmm_registry::select_recipe(
-            ttnn::operations::matmul::registry::current_mode(),
+            registry_mode,
             make_registry_facts(
                 input_tensor,
                 weight_tensor,
@@ -671,6 +673,11 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
                 persistent_weight_buffer,
                 fsdp_topology_,
                 fuse_swiglu));
+    }
+    if (registry_fallback_is_error && !registry_recipe) {
+        TT_THROW(
+            "AGMM registry required an exact recipe, but dispatch fell back: {}",
+            config || compute_kernel_config ? "explicit override" : "ineligible request");
     }
     auto selected_config = config;
     auto selected_kernel_config = compute_kernel_config;

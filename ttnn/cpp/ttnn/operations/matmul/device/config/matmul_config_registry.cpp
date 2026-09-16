@@ -7,7 +7,10 @@
 #include <algorithm>
 #include <bit>
 #include <limits>
+#include <string_view>
 #include <utility>
+
+#include <tt_stl/assert.hpp>
 
 #include "matmul_registry_data.hpp"
 
@@ -22,6 +25,24 @@ ExecutionAction execution_action(const Mode mode, const Resolution& resolution) 
         return ExecutionAction::ApplyRecipe;
     }
     return mode == Mode::Shadow ? ExecutionAction::ObserveOnly : ExecutionAction::Fallback;
+}
+
+constexpr std::string_view reason_name(const ResolutionReason reason) noexcept {
+    switch (reason) {
+        case ResolutionReason::Disabled: return "disabled";
+        case ResolutionReason::IneligibleOperationDomain: return "ineligible operation domain";
+        case ResolutionReason::MalformedOperationSemantics: return "malformed operation semantics";
+        case ResolutionReason::InconsistentIoContract: return "inconsistent I/O contract";
+        case ResolutionReason::TraceCaptureUnsupported: return "trace capture unsupported";
+        case ResolutionReason::ExplicitOverride: return "explicit override";
+        case ResolutionReason::UnsupportedSemantics: return "unsupported semantics";
+        case ResolutionReason::IncompleteRequest: return "incomplete request";
+        case ResolutionReason::InconsistentRequest: return "inconsistent request";
+        case ResolutionReason::MaterializationRejected: return "materialization rejected";
+        case ResolutionReason::EmptyRegistry: return "no exact match";
+        case ResolutionReason::CertifiedMatch: return "certified match";
+    }
+    return "unknown reason";
 }
 
 std::optional<compact::DataType> compact_dtype(const tt::tt_metal::DataType dtype) noexcept {
@@ -431,6 +452,10 @@ Mode current_mode() noexcept {
     return configured_value <= static_cast<std::uint8_t>(Mode::On) ? configured : Mode::Off;
 }
 
+bool fallback_is_error(const Mode mode) {
+    return mode == Mode::On && ttnn::CONFIG.get<"throw_exception_on_fallback">();
+}
+
 std::optional<MatmulProgramConfig> materialize_registry_program_config(
     const compact::KeyDescriptor& key,
     const compact::ProgramConfigDescriptor& descriptor,
@@ -597,6 +622,10 @@ DispatchResult resolve_for_dispatch(
             resolution.reason = ResolutionReason::MaterializationRejected;
             action = ExecutionAction::Fallback;
         }
+    }
+    if (fallback_is_error(mode) && action != ExecutionAction::ApplyRecipe) {
+        TT_THROW(
+            "Matmul registry required an exact recipe, but dispatch fell back: {}", reason_name(resolution.reason));
     }
 
     return {.resolution = resolution, .action = action, .materialized_parameters = std::move(materialized)};

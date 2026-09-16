@@ -5,8 +5,11 @@
 
 #include <limits>
 
+#include <tt_stl/assert.hpp>
+
 #include "agmm_registry_data.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 
 namespace ttnn::experimental::all_gather_minimal_matmul_registry {
 namespace {
@@ -251,16 +254,20 @@ std::optional<Recipe> materialize_recipe(const compact::EntryDescriptor& descrip
         .compute_kernel_config = compute_kernel_config};
 }
 
-std::optional<Recipe> select_recipe(const Mode mode, const RegistryRequestFacts& facts) noexcept {
+std::optional<Recipe> select_recipe(const Mode mode, const RegistryRequestFacts& facts) {
     if (mode != Mode::On) {
         return std::nullopt;
     }
     const auto key = build_registry_key(facts);
-    if (!key) {
-        return std::nullopt;
+    const auto* entry = key ? lookup(*key) : nullptr;
+    std::optional<Recipe> recipe;
+    if (entry != nullptr) {
+        recipe = materialize_recipe(*entry);
     }
-    const auto* entry = lookup(*key);
-    return entry != nullptr ? materialize_recipe(*entry) : std::nullopt;
+    if (!recipe && ttnn::operations::matmul::registry::fallback_is_error(mode)) {
+        TT_THROW("AGMM registry required an exact recipe, but no exact match was found");
+    }
+    return recipe;
 }
 
 }  // namespace ttnn::experimental::all_gather_minimal_matmul_registry

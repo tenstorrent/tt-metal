@@ -268,5 +268,6 @@ Resolution resolve_with_compact_table_for_testing(
 
 // One runtime switch controls both local dense and distributed AGMM tables.
 Mode current_mode() noexcept;
+bool fallback_is_error(Mode mode);
 
 }  // namespace ttnn::operations::matmul::registry

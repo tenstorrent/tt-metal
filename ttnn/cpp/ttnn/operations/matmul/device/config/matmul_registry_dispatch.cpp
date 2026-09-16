@@ -198,6 +198,9 @@ void try_apply_registry_parameters(
     } catch (...) {
         // Request construction may inspect tensors before legacy validators
         // do. Preserve their exception timing by falling back untouched.
+        if (fallback_is_error(mode)) {
+            throw;
+        }
         const Eligibility eligibility{.call = call_semantics};
         static_cast<void>(resolve_for_dispatch(mode, std::nullopt, eligibility, parameters));
         return;
@@ -215,6 +218,9 @@ void try_apply_registry_parameters(
             return;
         }
     } catch (...) {
+        if (fallback_is_error(mode)) {
+            throw;
+        }
         // An unavailable trace state is indistinguishable from active capture.
         inspection.eligibility.trace_capture_active = true;
         static_cast<void>(resolve_for_dispatch(mode, std::nullopt, inspection.eligibility, parameters));
@@ -239,6 +245,9 @@ void try_apply_registry_parameters(
         // ComputeKernelConfig is six scalars: trivially copyable, so a move here
         // is a copy wearing a costume. clang-tidy performance-move-const-arg.
         parameters.compute_kernel_config = caller_compute_kernel_config;
+        if (fallback_is_error(mode)) {
+            throw;
+        }
         return;
     }
 }

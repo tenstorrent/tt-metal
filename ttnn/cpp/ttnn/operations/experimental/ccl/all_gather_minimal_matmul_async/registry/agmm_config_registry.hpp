@@ -39,6 +39,6 @@ std::optional<compact::KeyDescriptor> build_registry_key(const RegistryRequestFa
 std::span<const compact::EntryDescriptor> entries_for_device_count(std::uint16_t device_count) noexcept;
 const compact::EntryDescriptor* lookup(const compact::KeyDescriptor& key) noexcept;
 std::optional<Recipe> materialize_recipe(const compact::EntryDescriptor& descriptor) noexcept;
-std::optional<Recipe> select_recipe(Mode mode, const RegistryRequestFacts& facts) noexcept;
+std::optional<Recipe> select_recipe(Mode mode, const RegistryRequestFacts& facts);
 
 }  // namespace ttnn::experimental::all_gather_minimal_matmul_registry

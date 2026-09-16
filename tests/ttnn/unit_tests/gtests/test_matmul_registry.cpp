@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <optional>
 #include <variant>
 
@@ -101,10 +102,18 @@ Resolution invalid_materialization_resolution(
         .key = compact_registry_key(runtime_request)};
 }
 
+Resolution missing_resolution(const MatmulRegistryRequest&, const Eligibility&) noexcept {
+    return Resolution{.reason = ResolutionReason::EmptyRegistry};
+}
+
 struct RuntimeStateReset {
     MatmulRegistryMode original_mode = ttnn::CONFIG.get<"matmul_registry_mode">();
+    bool original_throw_exception_on_fallback = ttnn::CONFIG.get<"throw_exception_on_fallback">();
 
-    ~RuntimeStateReset() { ttnn::CONFIG.set<"matmul_registry_mode">(original_mode); }
+    ~RuntimeStateReset() {
+        ttnn::CONFIG.set<"matmul_registry_mode">(original_mode);
+        ttnn::CONFIG.set<"throw_exception_on_fallback">(original_throw_exception_on_fallback);
+    }
 };
 
 compact::ProgramConfigDescriptor multicast_1d_program() {
@@ -374,6 +383,33 @@ TEST(MatmulConfigRegistry, OffShadowAndOnHaveDistinctMutationContracts) {
     ASSERT_TRUE(on.materialized_parameters.has_value());
     EXPECT_TRUE(on.materialized_parameters->program_config.has_value());
     EXPECT_TRUE(on.materialized_parameters->compute_kernel_config.has_value());
+}
+
+TEST(MatmulConfigRegistry, StrictOnRejectsEveryFallbackAndAcceptsAnExactHit) {
+    RuntimeStateReset reset;
+    ttnn::CONFIG.set<"throw_exception_on_fallback">(true);
+    const ttnn::prim::MatmulParams legacy;
+
+    auto explicit_override = eligibility();
+    explicit_override.has_program_config = true;
+    EXPECT_THROW(
+        resolve_for_dispatch(Mode::On, request(), explicit_override, legacy, missing_resolution), std::exception);
+    EXPECT_THROW(resolve_for_dispatch(Mode::On, request(), eligibility(), legacy, missing_resolution), std::exception);
+
+    const auto hit = resolve_for_dispatch(Mode::On, checked_in_request(), eligibility(), legacy);
+    EXPECT_EQ(hit.action, ExecutionAction::ApplyRecipe);
+    EXPECT_TRUE(hit.materialized_parameters.has_value());
+}
+
+TEST(MatmulConfigRegistry, OrdinaryOnRemainsFallbackCompatible) {
+    RuntimeStateReset reset;
+    ttnn::CONFIG.set<"throw_exception_on_fallback">(false);
+
+    const auto miss = resolve_for_dispatch(
+        Mode::On, request(), eligibility(), ttnn::prim::MatmulParams{}, missing_resolution);
+    EXPECT_EQ(miss.resolution.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(miss.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(miss.materialized_parameters.has_value());
 }
 
 TEST(MatmulConfigRegistry, MaterializationFailureFallsBack) {
