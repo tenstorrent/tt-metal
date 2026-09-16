@@ -40,6 +40,9 @@ void kernel_main() {
     std::uint32_t Ht = get_arg(args::Ht);
 
     for (std::uint32_t n = 0; n < N; ++n) {
+// Find the column statistic m: max(x) for softmax, min(x) for softmin (see
+        // moreh_softmax_w_large.cpp for the -max(-x) lowering rationale).
+#ifdef SOFTMAX
         // find max
         if (Ht == 1) {
             mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
@@ -60,7 +63,45 @@ void kernel_main() {
                 compute_kernel_lib::Accumulate::at(dfb_max, 1));  // iteration=1, reload from dfb_max
         }
 
-        for (std::uint32_t h = 0; h < Ht; h += onetile) {
+#else
+        if (Ht == 1) {
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
+
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_COL,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::single(), compute_kernel_lib::ReduceInputMemoryLayout::contiguous(), compute_kernel_lib::NoAccumulation{}, /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        } else {
+            for (std::uint32_t h = 0; h < Ht - 1; ++h) {
+                negative_tile_to_cb(dfb_in0_obj, dfb_tmp_obj, /*itile=*/0, /*pop=*/1);
+                compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb_tmp, dfb_max_scaler, dfb_max>(
+                    compute_kernel_lib::ReduceInputBlockShape::single(),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/h));
+            }
+
+            negative_mask_tile_to_cb(dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_COL,
+                dfb_tmp,
+                dfb_max_scaler,
+                dfb_max,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Fast>(
+                compute_kernel_lib::ReduceInputBlockShape::single(),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::Accumulate::at(dfb_max, /*iter=*/Ht - 1), /*post_reduce=*/[](std::uint32_t dst_idx) { negative_tile_init(); negative_tile(dst_idx); });
+        }
+#endif
+
+                for (std::uint32_t h = 0; h < Ht; h += onetile) {
             // compute exp(x - max(x))
             if (h == Ht - 1) {
 #ifdef SOFTMAX
