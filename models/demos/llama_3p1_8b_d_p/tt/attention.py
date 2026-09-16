@@ -63,6 +63,26 @@ COMPUTE_KERNEL_CONFIG_HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=False,
 )
 
+# The projections (QKV in, O out) are plain matmuls and carry none of that constraint, so they get
+# fp32 accumulation. This is not a free knob -- it is what fixes V.
+#
+# Without it a 4096-long dot product accumulates in bf16. That is invisible in K, whose outputs run
+# |max| 10-20, and severe in V, whose outputs run 0.5-2.5: a small result built from large operands
+# means cancellation, and cancellation turns accumulator rounding into large *relative* error.
+# Measured against the golden trace, V bottomed out at 0.9666 around layer 12 while the bf8 cache's
+# own quantisation ceiling is 0.99996, so the cache dtype never was the limit -- this was. The error
+# was uniform across all 8 KV heads and all token blocks, which is the signature of accumulator
+# precision rather than a wiring fault.
+#
+# packer_l1_acc likewise, and this pairing is exactly what llama3_70b_galaxy uses for its HiFi4
+# matmuls (``model_config.py``), so the production Llama on this hardware was already doing it.
+COMPUTE_KERNEL_CONFIG_PROJECTIONS = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
 PROJECTIONS = ("q_proj", "k_proj", "v_proj", "o_proj")
 
 # SDPA chunking. Short sequences cannot fill a 256-row chunk, and over-chunking a short prefill
@@ -130,6 +150,7 @@ class TtLlamaAttention(LightweightModule):
         activations_dtype: ttnn.DataType = ttnn.bfloat16,
         weights_dtype: ttnn.DataType = ttnn.bfloat16,
         compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4,
+        projection_compute_kernel_config=COMPUTE_KERNEL_CONFIG_PROJECTIONS,
         hf_frame_weights: bool = True,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
@@ -198,6 +219,8 @@ class TtLlamaAttention(LightweightModule):
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
+        # Separate from the above on purpose: the SDPA/ring ops must keep fp32_dest_acc_en False.
+        self.projection_compute_kernel_config = projection_compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
 
@@ -330,7 +353,9 @@ class TtLlamaAttention(LightweightModule):
         sp = self.mesh_device.shape[self.mesh_config.sp_axis]
         seq_len = x.shape[-2]
 
-        xqkv = ttnn.matmul(x, self.wqkv, dtype=self.activations_dtype, compute_kernel_config=self.compute_kernel_config)
+        xqkv = ttnn.matmul(
+            x, self.wqkv, dtype=self.activations_dtype, compute_kernel_config=self.projection_compute_kernel_config
+        )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=self.n_local_heads,
@@ -365,7 +390,10 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn)
 
         out_full = ttnn.matmul(
-            concat, self.o_proj, dtype=self.activations_dtype, compute_kernel_config=self.compute_kernel_config
+            concat,
+            self.o_proj,
+            dtype=self.activations_dtype,
+            compute_kernel_config=self.projection_compute_kernel_config,
         )
         ttnn.deallocate(concat)
 

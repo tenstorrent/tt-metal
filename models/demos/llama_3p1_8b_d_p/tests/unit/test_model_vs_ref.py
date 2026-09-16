@@ -57,15 +57,23 @@ PCC_REQUIRED = 0.99
 # written by 32 layers of bf16 compute, against an fp32 CPU golden at 2048 tokens. The error is
 # accumulated, not local.
 #
-# Measured on a 4x8 galaxy with the real checkpoint, deterministically: worst K 0.9899, worst V
-# 0.9666 at layer 12, degrading smoothly with depth and recovering after ~layer 15. The same run's
-# final hidden states hit 0.9980 against the reference, so the model is not the thing being limited.
+# The full-model bar, same 0.99 as every other cell in this file. Measured on a 4x8 galaxy with the
+# real checkpoint, deterministically: worst K 0.9990, worst V 0.9959 (layer 28), best 0.99997.
 #
-# 0.99 is unreachable here by any configuration: the SP ring cache-read op requires a bfloat8_b
-# cache -- its gather buffers are bf8 -- so a wider cache is not an option to trade against. A
-# per-layer break from a real wiring bug shows up as one bad layer against clean neighbours, which
-# this floor still catches; gpt-oss gates the same measurement at 0.85 under a measured ~0.92.
-PCC_REQUIRED_KV_GOLDEN = 0.95
+# This floor was 0.95 for a while on the theory that the bfloat8_b KV cache set the ceiling. That
+# was wrong, and the way it was wrong is worth recording. Round-tripping the fp32 golden through
+# bfloat8_b and scoring it against itself puts the cache's own quantisation ceiling at 0.99996 --
+# the dtype costs nothing. The real limit was bf16 accumulation in the QKV/O projection matmuls
+# (``attention.COMPUTE_KERNEL_CONFIG_PROJECTIONS``): harmless for K, whose outputs run |max| 10-20,
+# and severe for V at 0.5-2.5, where a small result from large operands means cancellation and
+# cancellation turns accumulator rounding into large relative error. Enabling fp32 accumulation on
+# those two matmuls moved worst V from 0.9666 to 0.9959 and worst K from 0.9899 to 0.9990.
+#
+# The lesson for the next person tempted to lower a floor: the uniformity of the error was the tell.
+# It sat at the same level across all 8 KV heads and all token blocks, which is accumulator
+# precision, not a wiring fault -- and "the dtype must be the limit" is a hypothesis that is cheap
+# to actually test before relaxing a gate.
+PCC_REQUIRED_KV_GOLDEN = PCC_REQUIRED
 
 # Small enough to build and load in seconds; see the module docstring for why this is not a
 # weakening of the test.
@@ -652,10 +660,12 @@ def test_real_checkpoint_kv_pcc_vs_golden(mesh_device, device_params, reset_seed
     worst = min(min(pair) for pair in results.values())
     logger.info(f"#4150 per-layer KV PCC: {len(results)} layers, worst {worst:.6f}")
 
-    # A wiring bug in one layer reads as an outlier against its neighbours, not as a low floor, and
-    # the floor above is too loose to catch that on its own. Depth-accumulated error is smooth, so
-    # require each layer to be within 0.03 of the median rather than only above the floor.
+    # A wiring bug in one layer reads as an outlier against its neighbours rather than as a low
+    # floor, and a floor alone cannot see that. Depth-accumulated error is smooth, so also require
+    # each layer to sit near the median. 0.01 against a measured spread of 0.9959..0.99997: tight
+    # enough to catch one broken layer hiding above the floor, loose enough not to trip on the
+    # smooth depth trend. Was 0.03 when the floor was 0.95 and the spread was ten times wider.
     per_layer = {layer: min(pair) for layer, pair in results.items()}
     median = sorted(per_layer.values())[len(per_layer) // 2]
-    outliers = {layer: pcc for layer, pcc in per_layer.items() if median - pcc > 0.03}
-    assert not outliers, f"layer(s) {outliers} sit far below the median {median:.6f}; suspect that layer, not bf8"
+    outliers = {layer: pcc for layer, pcc in per_layer.items() if median - pcc > 0.01}
+    assert not outliers, f"layer(s) {outliers} sit far below the median {median:.6f}; suspect that layer"
