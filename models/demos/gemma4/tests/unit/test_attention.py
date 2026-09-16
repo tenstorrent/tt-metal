@@ -26,6 +26,7 @@ from models.demos.gemma4.tt.ccl import CCLManager
 from ...tests.test_factory import (
     PREFILL_BUCKETS,
     TestFactory,
+    _get_model_path,
     build_hf_prefill_mask,
     compare_tensors,
     find_layer_idx,

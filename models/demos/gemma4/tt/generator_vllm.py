@@ -1194,7 +1194,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         )
         if prompt_lens_list is not None:
             prefill_seq_lens_plan = [
-                get_gemma4_padded_prefill_len(int(seq_len) - num_cached)
+                get_padded_prefill_len(int(seq_len) - num_cached)
                 for seq_len, num_cached in zip(prompt_lens_list, num_cached_for_plan)
             ]
             padded_lens_equal = len(set(prefill_seq_lens_plan)) == 1
