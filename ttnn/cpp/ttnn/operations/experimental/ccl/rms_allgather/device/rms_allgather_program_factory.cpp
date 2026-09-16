@@ -249,13 +249,11 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = block_wt;
-    // post_all_gather_stats_block_tiles
-    uint32_t post_all_gather_stats_block_tiles = 1;
-    uint32_t num_distributed_devices = 1;
-    if (stats.has_value()) {
-        post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
-        num_distributed_devices = post_all_gather_stats_block_tiles;
-    }
+    // One E(x^2) partial tile per device on the cluster axis. Taken from ring_size rather than from
+    // the stats buffer width, which silently collapses to 1 for a 1-tile-wide buffer and disables
+    // cross-device averaging; validation asserts the buffer is ring_size tiles wide.
+    uint32_t num_distributed_devices = ring_size;
+    uint32_t post_all_gather_stats_block_tiles = ring_size;
 
     uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
     // block size for in1 (tensor b)
