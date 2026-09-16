@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize per-channel credits and a viewer-only stall score."""
+"""Normalize per-channel credits from captured streams and counters."""
 
 from __future__ import annotations
 
@@ -68,6 +68,7 @@ def decode_channels(router: dict[str, Any]) -> dict[str, Any]:
     instance = router.get("instance") or {}
     sender_counts = [int(value) for value in instance.get("sender_channels_per_vc") or []]
     worker = int(instance.get("worker_sender_channel", 0))
+    producers = instance.get("sender_producers") or []
     warnings = router.setdefault("warnings", [])
     regions = {region["id"]: region for region in router.get("regions", [])}
 
@@ -86,6 +87,7 @@ def decode_channels(router: dict[str, Any]) -> dict[str, Any]:
                 "index": index,
                 "vc": vc,
                 "role": "worker" if index == worker else "upstream",
+                "producer": producers[index] if index < len(producers) else None,
                 "depth": None,
                 "free_slots": None,
                 "occupied": None,
@@ -140,7 +142,7 @@ def decode_channels(router: dict[str, Any]) -> dict[str, Any]:
                     channel["completed_pending"] = value
                     if status == "torn":
                         channel["torn"] = True
-            elif suffix == "control.connection_sem":
+            elif suffix == "control.connection":
                 word = (region.get("value") or {}).get("word")
                 channel["connection"] = {"raw": word, "name": CONNECTION_STATE.get(word)}
             continue
@@ -232,52 +234,13 @@ def decode_channels(router: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def stall_score(router: dict[str, Any]) -> float | None:
-    """Heuristic occupancy colouring. Idle-healthy and hung-backpressure can look identical."""
-
-    if router["capture"]["status"] != "ok":
-        return None
-    channels = router.get("channels") or {}
-    scores: list[float] = []
-    usable = False
-    for channel in channels.get("senders", []):
-        if channel["status"] in {"torn", "unknown", "inconsistent"}:
-            continue
-        usable = True
-        depth = channel.get("depth")
-        occupied = channel.get("occupied")
-        if depth and occupied is not None and occupied >= 0:
-            scores.append(min(occupied / depth, 1.0))
-    for channel in channels.get("receivers", []):
-        if channel["status"] in {"torn", "unknown", "inconsistent"}:
-            continue
-        usable = True
-        depth = channel.get("depth")
-        pending = channel.get("pkts_pending")
-        if depth and pending is not None and pending >= 0:
-            scores.append(min(pending / depth, 1.0))
-    for channel in channels.get("downstream", []):
-        if channel["status"] in {"torn", "unknown", "inconsistent"}:
-            continue
-        usable = True
-        if channel.get("free_slots") == 0:
-            scores.append(1.0)
-        elif isinstance(channel.get("free_slots"), int) and channel["free_slots"] > 0:
-            scores.append(0.0)
-    if not usable:
-        return None
-    return max(scores) if scores else 0.0
-
-
 def annotate_links(decoded: dict[str, Any]) -> None:
-    """Copy each router's stall score onto every outgoing topology edge."""
+    """Copy each link source router's capture status onto the edge."""
 
     owners = {endpoint_key(router["id"]): router for router in decoded["routers"]}
     for link in decoded["topology"]["links"]:
         owner = owners.get(endpoint_key(link["src"]))
         if owner is None:
-            link["stall_score"] = None
             link["status"] = "not_captured"
         else:
-            link["stall_score"] = owner.get("stall_score")
             link["status"] = owner["capture"]["status"]

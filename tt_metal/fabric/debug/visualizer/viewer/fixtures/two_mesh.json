@@ -6,14 +6,14 @@
     {
       "manifest": {
         "path": "fixtures/source/manifest.json",
-        "sha256": "ef4e8eea6262081473c4f1544db750d7942c582162c391e87eb11245396ffe30",
+        "sha256": "a03f271f9bae7b284db5084a17769fc242ec0400e7b09768870fcc1a0ea4d3ea",
         "mpi_rank": 0,
         "host_rank": 0,
         "sha_verified": true
       },
       "snapshot": {
         "path": "fixtures/source/snapshot.json",
-        "sha256": "9ff52df7de4ba7e54c91a47f6e0f7e82d3af361892a191da109afea8e44cd94d",
+        "sha256": "ae83f370afafb1ac6bfa8ad11f406cf24dfc3b22d1976c3ece3cf9704280b879",
         "captured_at": "2026-09-15T00:00:00Z",
         "provenance": {
           "ttexalens_version": "test",
@@ -150,7 +150,6 @@
         "link_class": "intermesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -169,7 +168,6 @@
         "link_class": "intermesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       }
     ]
@@ -203,6 +201,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -435,7 +436,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -782,6 +783,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -816,8 +818,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -847,6 +848,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -1079,7 +1083,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -1426,6 +1430,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -1460,8 +1465,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     }
   ],
   "coverage": {

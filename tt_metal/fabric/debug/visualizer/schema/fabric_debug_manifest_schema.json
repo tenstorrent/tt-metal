@@ -222,6 +222,7 @@
         "sender_channels_per_vc",
         "receiver_channels_per_vc",
         "worker_sender_channel",
+        "sender_producers",
         "credit_plan",
         "first_level_ack_vc0",
         "downstream_edm_mask_vc0",
@@ -245,6 +246,11 @@
           "items": { "type": "integer", "minimum": 0 }
         },
         "worker_sender_channel": { "type": "integer", "minimum": 0 },
+        "sender_producers": {
+          "description": "Per flat sender channel, the producer intent: \"worker\" for the local-worker slot, a direction name (\"E\"/\"W\"/\"N\"/\"S\"/\"Z\") for producer slots, null where unmapped. Resolved by the C++ emitter from the canonical slot rule; consumers display it without re-deriving.",
+          "type": "array",
+          "items": { "type": ["string", "null"] }
+        },
         "credit_plan": {
           "type": "object",
           "required": ["vc0_uses_counters", "vc1_uses_counters", "vc2_uses_counters"],

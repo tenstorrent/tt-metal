@@ -114,18 +114,21 @@ function renderHeaderDetail(root, slot, packetHeaderType) {
   }
 }
 
-export function ringOccupancy(ring) {
+export function ringOccupancy(ring, noun = "occupied") {
   if (typeof ring.occupied_count !== "number" || typeof ring.depth !== "number") {
-    return "occupancy unknown";
+    return `${noun} unknown`;
   }
-  return `${ring.occupied_count}/${ring.depth} occupied`;
+  return `${ring.occupied_count}/${ring.depth} ${noun}`;
 }
 
-export function renderRing(ring, packetHeaderType) {
+export function renderRing(ring, packetHeaderType, subtitle = null, meta = null, stateLine = null) {
   const card = el("section", "buffer-card");
   const heading = el("div", "buffer-heading");
   const title = el("div");
-  title.append(el("h4", null, ring.id), el("span", "buffer-meta", `${ringOccupancy(ring)} · stride ${ring.stride} B`));
+  title.append(
+    el("h4", null, subtitle ? `${ring.id} (${subtitle})` : ring.id),
+    el("span", "buffer-meta", meta ?? `${ringOccupancy(ring)} · ${ring.stride} B/slot`),
+  );
   const status = el("span", `status ${ring.occupancy_status || ring.status}`, ring.occupancy_status || ring.status);
   heading.append(title, status);
   card.append(heading);
@@ -155,6 +158,15 @@ export function renderRing(ring, packetHeaderType) {
     }
   }
   card.append(track);
+  if (Array.isArray(stateLine) && stateLine.length) {
+    const state = el("div", "buffer-state");
+    for (const [name, value] of stateLine) {
+      const pair = el("span", "bs-pair");
+      pair.append(el("span", "bs-name", `${name}:`), " ", el("span", "bs-value", value));
+      state.append(pair);
+    }
+    card.append(state);
+  }
   card.append(el(
     "p",
     "buffer-caveat",
@@ -182,7 +194,6 @@ function routerButton(router, selectedKey, onSelect) {
   meta.textContent = [
     router.routing_plane === null || router.routing_plane === undefined ? null : `plane ${router.routing_plane}`,
     router.capture?.status,
-    router.stall_score === null || router.stall_score === undefined ? null : `stall ${Number(router.stall_score).toFixed(2)}`,
   ].filter(Boolean).join(" · ");
   button.append(main, meta);
   button.addEventListener("click", () => onSelect?.(key));

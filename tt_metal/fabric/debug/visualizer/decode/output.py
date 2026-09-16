@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .credits import annotate_links, decode_channels, stall_score
+from .credits import annotate_links, decode_channels
 from .inputs import DecodeInput
 from .headers import packet_header_shape
 from .liveness import classify_liveness, decode_lifecycle
@@ -100,7 +100,6 @@ def build_decoded(
             router["liveness"] = None
             router["rings"] = []
             router["channels"] = decode_channels(router)
-            router["stall_score"] = None
             continue
         sample = region_decoder.sample_for(input_index, router["id"])
         manifest = inputs[input_index].manifest.manifest
@@ -133,7 +132,6 @@ def build_decoded(
             slots=slots,
         )
         router["channels"] = decode_channels(router)
-        router["stall_score"] = stall_score(router)
     merged["coverage"]["identity_mismatch"] = sum(
         router["identity"]["matches"] is False for router in merged["routers"]
     )

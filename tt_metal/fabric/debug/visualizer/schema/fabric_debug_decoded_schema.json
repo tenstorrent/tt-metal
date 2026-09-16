@@ -184,11 +184,10 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["src", "dst", "stall_score", "status"],
+            "required": ["src", "dst", "status"],
             "properties": {
               "src": { "$ref": "#/$defs/endpoint" },
               "dst": { "$ref": "#/$defs/endpoint" },
-              "stall_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
               "status": {
                 "enum": ["ok", "unreadable", "reset", "torn", "unknown", "unsupported", "not_captured"]
               }
@@ -213,7 +212,6 @@
         "lifecycle",
         "liveness",
         "channels",
-        "stall_score",
         "regions",
         "rings",
         "warnings"
@@ -283,7 +281,6 @@
           ]
         },
         "channels": { "$ref": "#/$defs/channels" },
-        "stall_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
         "regions": {
           "type": "array",
           "items": { "$ref": "#/$defs/region" }
@@ -467,6 +464,7 @@
         "index",
         "vc",
         "role",
+        "producer",
         "depth",
         "free_slots",
         "occupied",
@@ -481,6 +479,10 @@
         "index": { "type": "integer", "minimum": 0 },
         "vc": { "type": ["integer", "null"], "minimum": 0 },
         "role": { "enum": ["worker", "upstream"] },
+        "producer": {
+          "description": "Producer intent resolved by the C++ emitter: \"worker\" for the local-worker slot, a direction name for producer slots, null where unmapped.",
+          "type": ["string", "null"]
+        },
         "depth": { "type": ["integer", "null"], "minimum": 0 },
         "free_slots": { "type": ["integer", "null"] },
         "occupied": { "type": ["integer", "null"] },

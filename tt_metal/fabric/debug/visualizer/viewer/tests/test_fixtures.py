@@ -48,19 +48,35 @@ class FixtureTest(unittest.TestCase):
             with self.subTest(path.name):
                 self.validator.validate(json.loads(path.read_text(encoding="utf-8")))
 
-    def test_stalled_link_is_the_hot_edge(self):
+    def test_senders_carry_producer_intent(self):
+        for name in sorted(INDEX_NAMES):
+            decoded = load(name)
+            senders = [
+                sender
+                for router in decoded["routers"]
+                for sender in router.get("channels", {}).get("senders", [])
+            ]
+            self.assertTrue(senders, name)
+            for sender in senders:
+                with self.subTest(f"{name} ch{sender['index']}"):
+                    self.assertIn("producer", sender)
+                    self.assertEqual(sender["producer"], "worker")
+
+    def test_stalled_link_shows_backpressure(self):
         decoded = load("stalled_link.json")
-        scores = [link["stall_score"] for link in decoded["topology"]["links"]]
-        self.assertIn(1.0, scores)
-        self.assertEqual(max(score for score in scores if score is not None), 1.0)
-        hot = next(link for link in decoded["topology"]["links"] if link["stall_score"] == 1.0)
-        src = next(router for router in decoded["routers"] if router["id"] == hot["src"])
-        self.assertEqual(src["stall_score"], 1.0)
+        target_id = {"mesh_id": 0, "chip_id": 0, "eth_chan": 0}
+        src = next(router for router in decoded["routers"] if router["id"] == target_id)
         self.assertTrue(any(edge["free_slots"] == 0 for edge in src["channels"]["downstream"]))
         self.assertTrue(
             any(
                 sender["depth"] and sender["occupied"] == sender["depth"]
                 for sender in src["channels"]["senders"]
+            )
+        )
+        self.assertTrue(
+            any(
+                link["src"] == target_id and link["status"] == "ok"
+                for link in decoded["topology"]["links"]
             )
         )
 

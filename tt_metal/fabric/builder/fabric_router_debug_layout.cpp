@@ -50,6 +50,40 @@ void check_named_address(const NamedArgs& args, const std::string& name, size_t 
         expected);
 }
 
+std::string eth_direction_name(eth_chan_directions direction) {
+    switch (direction) {
+        case eth_chan_directions::EAST: return "E";
+        case eth_chan_directions::WEST: return "W";
+        case eth_chan_directions::NORTH: return "N";
+        case eth_chan_directions::SOUTH: return "S";
+        case eth_chan_directions::Z: return "Z";
+        default: TT_FATAL(false, "Cannot name sender producer direction {}", static_cast<int>(direction));
+    }
+}
+
+// Per flat sender channel, the producer intent ("worker" for the local-worker slot, a direction
+// name for producer slots, nullopt where unmapped), resolved from the canonical slot rule so
+// manifest consumers never re-derive it. Iterates vc/channel in flat order.
+std::vector<std::optional<std::string>> sender_producer_names(
+    eth_chan_directions facing,
+    const std::array<uint32_t, builder_config::MAX_NUM_VCS>& sender_counts,
+    const FabricStaticSizedChannelsAllocator* allocator) {
+    builder::RouterProducerSlots slots(facing, sender_counts);
+    std::vector<std::optional<std::string>> names;
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (uint32_t channel = 0; channel < allocator->get_num_sender_channels(vc); ++channel) {
+            if (slots.worker_channel(vc) == channel) {
+                names.emplace_back("worker");
+            } else if (const auto producer = slots.producer_at(vc, channel); producer.has_value()) {
+                names.emplace_back(eth_direction_name(*producer));
+            } else {
+                names.emplace_back(std::nullopt);
+            }
+        }
+    }
+    return names;
+}
+
 FabricRouterDebugRegion group(std::string id, std::string parent = {}) {
     return {
         .id = std::move(id),
@@ -215,6 +249,8 @@ FabricRouterDebugInstance build_router_debug_instance(
         .sender_channels_per_vc = builder.get_actual_sender_channels_per_vc(),
         .receiver_channels_per_vc = builder.get_actual_receiver_channels_per_vc(),
         .worker_sender_channel = get_worker_connected_sender_channel(),
+        .sender_producers =
+            sender_producer_names(builder.get_direction(), builder.get_actual_sender_channels_per_vc(), allocator),
         .credit_plan = streams.plan(),
         .first_level_ack_vc0 = named(args, "ENABLE_FIRST_LEVEL_ACK_VC0") != 0,
         .downstream_edm_mask_vc0 = builder.get_downstream_edm_mask_for_vc(0),
@@ -392,17 +428,17 @@ FabricRouterDebugInstance build_router_debug_instance(
                     sizeof(EDMChannelWorkerLocationInfo),
                     "EDMChannelWorkerLocationInfo"},
                 std::tuple{
-                    "flow_control_sem",
+                    "flow_semaphore",
                     config.sender_channels_local_flow_control_semaphore_address[flat],
                     FabricEriscDatamoverConfig::field_size,
                     "u32"},
                 std::tuple{
-                    "producer_terminate",
+                    "termination_status",
                     config.sender_channels_producer_terminate_connection_address[flat],
                     FabricEriscDatamoverConfig::field_size,
                     "u32"},
                 std::tuple{
-                    "connection_sem",
+                    "connection",
                     config.sender_channels_connection_semaphore_address[flat],
                     FabricEriscDatamoverConfig::field_size,
                     "u32"},
