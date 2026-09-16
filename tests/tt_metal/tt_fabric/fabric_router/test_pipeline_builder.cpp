@@ -2,42 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/// CPU-only PipelineBuilder prefetch: resolve_graph_layout + socket-endpoint validation.
-///
-/// Mirrors the tt-blaze PipelineGraph.build_topology / build_topology_multimesh path
-/// (pipeline_builder/graph.py) without opening a MeshDevice or creating MeshSockets:
-///
-///   * Every MGD host-rank slice becomes one pipeline stage submesh, using the slice's
-///     NATIVE shape (e.g. 4x2 on a 2x2-host mesh, 1x2 on a 4x4-host mesh).  This is the
-///     same set of submeshes blaze gets from mesh_device.create_submeshes(stage_shape),
-///     one submesh per MPI rank.
-///   * A single linear loopback ring (s0->s1->...->sN->s0) over ALL submeshes, in MGD
-///     order, is handed to the same C++ resolver blaze calls (resolve_graph_layout).
-///     The resolver discovers the physical stage ordering via topological sort +
-///     backtracking — we do not impose an ordering.
-///   * For a single-mesh MGD this is the uniform-shape build_topology case; for a
-///     multi-mesh MGD the ring spans meshes with heterogeneous per-mesh shapes
-///     (e.g. 8x 4x2 on M0 + 32x 1x2 on M1), the build_topology_multimesh case.
-///
-/// The resolved layout is then validated the way the silicon pipeline relies on it:
-/// active fabric eth channels on every socket chip, and a direct PSD ethernet link +
-/// matching fabric hop per edge.  A chip MAY serve as more than one socket endpoint —
-/// including a stage whose entry and exit land on the same chip — because blaze's
-/// PipelineBlock places a colliding exit-send kernel on SECOND_PIPELINE_CORE_COORD (a
-/// second core on that chip, see blaze/models/pipeline_block.py).  Same-chip / reused
-/// socket endpoints are therefore valid and are NOT rejected here.
+// CPU-only pipeline placement tests using mock cluster descriptors.
+// SC20/SC24 rings and spec-decode forks run through the pipeline-placement driver group.
+// No MeshDevice or MeshSockets are created.
 
 #include <gtest/gtest.h>
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <limits>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
-
-#include <tt-logger/tt-logger.hpp>
 
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
@@ -47,6 +30,7 @@
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -133,12 +117,15 @@ FabricNodeId fabric_node_at_local_coord(
 
 // Returns first validation error, or nullopt if all checks pass.
 std::optional<std::string> validate_pipeline_builder_graph_layout_errors(
-    const ControlPlane& control_plane, const std::vector<SubmeshLayout>& layouts, const GraphLayoutResult& result) {
+    const ControlPlane& control_plane,
+    const std::vector<SubmeshLayout>& layouts,
+    const GraphLayoutResult& result,
+    std::optional<size_t> expected_edge_count = std::nullopt) {
     const std::size_t num_stages = result.stage_order.size();
 
-    // (1) Structural shape: exactly one resolved edge and one submesh assignment per stage.
-    if (result.resolved_edges.size() != num_stages) {
-        return fmt::format("resolved_edges size {} != stage count {}", result.resolved_edges.size(), num_stages);
+    // (1) Structural shape: the requested edges and one submesh assignment per stage.
+    if (result.resolved_edges.size() != expected_edge_count.value_or(num_stages)) {
+        return fmt::format("unexpected resolved_edges size {}", result.resolved_edges.size());
     }
     if (result.node_to_submesh.size() != num_stages) {
         return fmt::format("node_to_submesh size {} != stage count {}", result.node_to_submesh.size(), num_stages);
@@ -237,7 +224,121 @@ std::string describe_layouts(const std::vector<SubmeshLayout>& layouts) {
     return desc;
 }
 
+void check_graph_capacity(const ControlPlane& control_plane, uint32_t capacity, const std::string& fabric_mode) {
+    const auto layouts = build_submesh_layouts_from_mgd(control_plane.get_mesh_graph());
+    ASSERT_GE(layouts.size(), 2u);
+    // Model-equivalent placement graphs only: no weights, programs, or MeshDevice.
+    // A smaller graph searches all supplied submeshes, leaving the rest unused.
+    const char* requested_graph = std::getenv("TT_PIPELINE_TEST_GRAPH");
+    const std::string graph = requested_graph == nullptr ? "native_ring" : requested_graph;
+    ASSERT_TRUE(graph == "native_ring" || graph == "ring" || graph == "fork" || graph == "fork_mpi");
+    const char* requested_stages = std::getenv("TT_PIPELINE_TEST_STAGES");
+    const size_t stage_count = requested_stages == nullptr ? layouts.size() : std::stoul(requested_stages);
+    ASSERT_GE(stage_count, 2u);
+    ASSERT_LE(stage_count, layouts.size());
+    const auto nodes = build_ring_nodes(stage_count);
+    auto edges = build_ring_edges(stage_count);
+    std::map<std::string, uint32_t> stage_chip_counts;
+    if (graph != "native_ring") {
+        for (const auto& node : nodes) {
+            stage_chip_counts[node] = 8;
+        }
+    }
+    if (graph == "fork" || graph == "fork_mpi") {
+        // Router s0, followed by the target branch and then the draft branch.
+        // The host-MPI variant excludes the draft return from the fabric graph.
+        const char* requested_target_stages = std::getenv("TT_PIPELINE_TEST_TARGET_STAGES");
+        const size_t target_stages = requested_target_stages == nullptr ? 38u : std::stoul(requested_target_stages);
+        ASSERT_GT(target_stages, 0u);
+        ASSERT_GT(stage_count, target_stages + 1);
+        edges.clear();
+        edges.emplace_back("s0", "s1", false);
+        for (size_t i = 1; i < target_stages; ++i) {
+            edges.emplace_back(nodes[i], nodes[i + 1], false);
+        }
+        edges.emplace_back(nodes[target_stages], "s0", true);
+        edges.emplace_back("s0", nodes[target_stages + 1], false);
+        for (size_t i = target_stages + 1; i + 1 < stage_count; ++i) {
+            edges.emplace_back(nodes[i], nodes[i + 1], false);
+        }
+        if (graph == "fork") {
+            edges.emplace_back(nodes.back(), "s0", true);
+        }
+    }
+    const auto chips = to_submesh_chips(layouts);
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = resolve_graph_layout(nodes, edges, chips, stage_chip_counts, {}, capacity);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    fmt::print(
+        "PIPELINE_SWEEP graph={} stages={} submeshes={} capacity={} fabric={} outcome=feasible "
+        "resolve_seconds={:.6f}\n",
+        graph,
+        stage_count,
+        layouts.size(),
+        capacity,
+        fabric_mode,
+        seconds);
+    EXPECT_EQ(result.resolved_edges.size(), edges.size());
+    const auto error = validate_pipeline_builder_graph_layout_errors(control_plane, layouts, result, edges.size());
+    EXPECT_FALSE(error.has_value()) << error.value_or("");
+    std::set<size_t> assigned_submeshes;
+    for (const auto& [stage, mesh] : result.node_to_submesh) {
+        EXPECT_TRUE(assigned_submeshes.insert(mesh).second);
+        if (stage_chip_counts.contains(stage)) {
+            EXPECT_EQ(chips.at(mesh).size(), stage_chip_counts.at(stage));
+        }
+    }
+    std::set<std::tuple<std::string, uint32_t, uint32_t, uint32_t>> slots;
+    auto check_slot = [&](const std::string& stage, uint32_t row, uint32_t col, std::optional<uint32_t> slot) {
+        ASSERT_TRUE(slot.has_value());
+        EXPECT_LT(*slot, capacity);
+        EXPECT_TRUE(slots.emplace(stage, row, col, *slot).second);
+    };
+    for (const auto& edge : result.resolved_edges) {
+        check_slot(edge.src, edge.exit_row, edge.exit_col, edge.exit_core_slot);
+        check_slot(edge.dst, edge.entry_row, edge.entry_col, edge.entry_core_slot);
+    }
+    check_slot(result.stage_order.front(), result.h2d_entry_row, result.h2d_entry_col, result.h2d_core_slot);
+    check_slot(result.stage_order.front(), result.d2h_exit_row, result.d2h_exit_col, result.d2h_core_slot);
+}
+
 }  // namespace
+
+// tt-run supplies the mock descriptor and MGD. Each case must find a valid layout.
+TEST(PipelineBuilderMockTest, GraphCapacity) {
+    const char* mock = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    const char* requested_capacity = std::getenv("TT_PIPELINE_TEST_CORE_CAPACITY");
+    if (mock == nullptr || *mock == '\0' || requested_capacity == nullptr) {
+        GTEST_SKIP() << "requires mock cluster and TT_PIPELINE_TEST_CORE_CAPACITY";
+    }
+    const std::string capacity_text(requested_capacity);
+    ASSERT_TRUE(capacity_text == "1" || capacity_text == "2");
+    const uint32_t capacity = std::stoul(capacity_text);
+    const char* requested_fabric = std::getenv("TT_PIPELINE_TEST_FABRIC");
+    const std::string fabric_mode = requested_fabric == nullptr ? "2D" : requested_fabric;
+    ASSERT_TRUE(fabric_mode == "2D" || fabric_mode == "TORUS_XY" || fabric_mode == "TORUS_Y");
+    auto fabric_config = FabricConfig::FABRIC_2D;
+    if (fabric_mode == "TORUS_XY") {
+        fabric_config = FabricConfig::FABRIC_2D_TORUS_XY;
+    } else if (fabric_mode == "TORUS_Y") {
+        fabric_config = FabricConfig::FABRIC_2D_TORUS_Y;
+    }
+
+    auto& context = tt::tt_metal::MetalContext::instance();
+    context.get_cluster().configure_ethernet_cores_for_fabric_routers(
+        fabric_config, std::numeric_limits<uint8_t>::max());
+    context.set_default_fabric_topology();
+    context.set_fabric_config(fabric_config, FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    context.initialize_fabric_config();
+    // Initialization is collective; placement uses only local control-plane data.
+    const auto& world = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    if (*world->rank() == 0) {
+        EXPECT_NO_THROW(check_graph_capacity(context.get_control_plane(), capacity, fabric_mode));
+    }
+    // The helper keeps fatal assertions from skipping synchronization and cleanup.
+    world->barrier();
+    context.get_cluster().configure_ethernet_cores_for_fabric_routers(FabricConfig::DISABLED);
+}
 
 // Resolve and validate the canonical blaze pipeline ring for whatever MGD is loaded:
 // one stage per host-rank submesh at its native shape, full loopback ring, single
