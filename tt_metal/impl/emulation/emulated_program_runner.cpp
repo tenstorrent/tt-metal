@@ -303,38 +303,7 @@ static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 // worker L1 field is a 0-based in-slot offset while a DRAM bank is GB-scale (2 GB on
 // Wormhole views, 4 GB on Blackhole), so no single mask fits both, and an offset that fits
 // neither belongs to no core.
-// Helper: get SWEmuleChip* from MetalContext cluster for a given device_id. (Relocated up from
-// later in this file — needed here for the PCIe branch below, and by the fabric teleport hooks
-// further down.)
-static tt::umd::SWEmuleChip* get_sw_emulated_chip(tt::ChipId device_id) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto* umd_cluster = cluster.get_driver().get();
-    if (!umd_cluster) {
-        return nullptr;
-    }
-    auto* chip = umd_cluster->get_chip(device_id);
-    return dynamic_cast<tt::umd::SWEmuleChip*>(chip);
-}
-
-// Per-device cache of pcie_base_ (the host-facing/PCIe address threshold), keyed by device_id —
-// avoids a dynamic_cast + cluster lookup on every single NOC-address resolve. Rebuilt lazily; a
-// device close+reopen mints a new SWEmuleChip with a stable arch, so the cached value never goes
-// stale the way the core_map cache (which holds raw Core* into per-chip L1) can.
-static std::mutex g_pcie_base_mutex;
-static std::unordered_map<uint32_t, uint64_t> g_pcie_base_cache;
-
-static uint64_t get_pcie_base_cached(uint32_t device_id) {
-    std::lock_guard<std::mutex> lock(g_pcie_base_mutex);
-    auto it = g_pcie_base_cache.find(device_id);
-    if (it != g_pcie_base_cache.end()) {
-        return it->second;
-    }
-    auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
-    uint64_t pcie_base =
-        sw_emu ? tt::umd::SysmemManager::get_pcie_base_for_arch(sw_emu->get_soc_descriptor().arch) : UINT64_MAX;
-    g_pcie_base_cache[device_id] = pcie_base;
-    return pcie_base;
-}
+// get_sw_emulated_chip / get_pcie_base_cached moved to emule_device_map.{hpp,cpp}.
 
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
@@ -343,8 +312,8 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     // below the bit-36 coordinate field, so every on-chip address clears it. Registry
     // membership is the discriminator; the threshold is only a pre-filter.
     uint32_t device_id = __emule_self->chip_id;
-    if (noc_addr >= get_pcie_base_cached(device_id)) {
-        auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
+    if (noc_addr >= tt::tt_metal::emule::get_pcie_base_cached(device_id)) {
+        auto* sw_emu = tt::tt_metal::emule::get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
         auto* sysmem = sw_emu ? static_cast<tt::umd::SimulationSysmemManager*>(sw_emu->get_sysmem_manager()) : nullptr;
         // A host-facing address (>= pcie_base) is by construction on an emule chip that has a
         // SimulationSysmemManager, so a null manager is a contract violation, not a resolvable miss.
@@ -1850,81 +1819,8 @@ static void jit_compile_pending(
 }
 
 // ---------------------------------------------------------------------------
-// build_core_map: Build physical {x,y} → tt_emule::Core* for NOC resolution.
-// Cached per device_id since chip topology doesn't change between calls.
-// ---------------------------------------------------------------------------
-// Per-device physical {x,y}->Core* maps, at file scope so the fabric teleport hooks below can resolve a
-// remote chip's core (its map is built by that device's own concurrent run). See tt-emule docs/fabric-ccl-emulation.md.
-static std::mutex g_core_map_mutex;
-static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>> g_core_map_cache;
-// The SWEmuleChip each cached core_map was built against. A device close+reopen mints
-// a NEW SWEmuleChip with fresh per-core L1 mmaps (single-process-galaxy L1 model), so a
-// core_map cached from the prior chip holds Core* into a now-disjoint L1 region. The NOC
-// path (this map) would then resolve a worker's semaphore to a different L1 backing than
-// that worker's own fiber (built from the CURRENT chip in setup_core_state) reads —
-// cross-core sems never observed → deadlock. Rebuild when the chip identity changes.
-static std::unordered_map<uint32_t, tt::umd::SWEmuleChip*> g_core_map_sw_emu;
-
-static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
-    tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
-    std::lock_guard<std::mutex> lock(g_core_map_mutex);
-    auto& core_map = g_core_map_cache[device_id];
-    if (core_map && g_core_map_sw_emu[device_id] != sw_emu) {
-        core_map.reset();  // stale: built against a different (now-replaced) SWEmuleChip
-    }
-    if (!core_map && sw_emu) {
-        g_core_map_sw_emu[device_id] = sw_emu;
-        core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
-        // Add ALL worker cores from the device grid
-        auto grid = device->compute_with_storage_grid_size();
-        for (uint32_t lx = 0; lx < grid.x; lx++) {
-            for (uint32_t ly = 0; ly < grid.y; ly++) {
-                auto phys = device->virtual_core_from_logical_core(CoreCoord(lx, ly), tt::CoreType::WORKER);
-                auto* core = sw_emu->get_core(tt_xy_pair(phys.x, phys.y));
-                uint64_t key = (uint64_t(phys.x) << 32) | phys.y;
-                (*core_map)[key] = core;
-            }
-        }
-        // Add DRAM cores. Post-uplift get_core() is worker-only (mints a bogus
-        // CoreRole::WORKER for a DRAM coord), so back DRAM per physical channel via
-        // get_dram_channel_backing(channel): every NOC endpoint of a channel must
-        // alias onto that one CoreRole::DRAM core so host writes and kernel NOC reads
-        // hit the same memory. get_dram_cores() groups by LOGICAL channel (outer index).
-        auto& umd_soc = sw_emu->get_soc_descriptor();
-        auto dram_cores = umd_soc.get_dram_cores();
-        for (uint32_t ch = 0; ch < dram_cores.size(); ch++) {
-            auto* core = sw_emu->get_dram_channel_backing(ch);
-            for (auto& dc : dram_cores[ch]) {
-                uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
-                (*core_map)[key] = core;
-            }
-        }
-        // Add DRAM cores (metal_SocDescriptor preferred worker coords). Register BOTH
-        // NOC0 and NOC1 preferred coords (on Wormhole they differ per view) so
-        // __emule_resolve_noc_addr can route either. Key the backing by the coord's
-        // umd LOGICAL channel (the physical DRAM channel) — not the metal dram-view
-        // index: several views alias one physical channel (at different offsets), and
-        // the host write path resolves the same LOGICAL channel. Keying by view index
-        // would split one channel across multiple backings → host/kernel read mismatch.
-        {
-            auto& umd = sw_emu->get_soc_descriptor();
-            auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            for (uint32_t view = 0; view < msoc.get_num_dram_views() && view < MAX_NUM_BANKS; view++) {
-                for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-                    auto dc = msoc.get_preferred_worker_core_for_dram_view(view, noc);
-                    auto lg =
-                        umd.translate_coord_to(tt_xy_pair(dc.x, dc.y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-                    auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
-                    uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
-                    (*core_map)[key] = core;
-                }
-            }
-        }
-    } else if (!core_map) {
-        core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
-    }
-    return core_map.get();
-}
+// build_core_map + the core-map cache globals (g_core_map_mutex/cache, exposed via the header for
+// the fabric resolver) moved to emule_device_map.{hpp,cpp}.
 
 // ---------------------------------------------------------------------------
 // Fabric route table: resolve a send's FINAL destination chip by a static walk of the
