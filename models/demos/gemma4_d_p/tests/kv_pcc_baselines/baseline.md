@@ -1,6 +1,6 @@
 **Result: BASELINE_RECORDED**
 
-Revision: `30f7a6b365850059b1413cc4747fcd3a7a2e6648`; local changes: True
+Revision: `30f7a6b365850059b1413cc4747fcd3a7a2e6648`
 
 Allowed degradation: PCC 0.0; relative L2 0.0.
 
@@ -153,7 +153,7 @@ Aggregated over chunks. `pcc min`/`relL2 max` expose per-chunk outliers a mean w
 | schema_version | 1 |
 | configuration | {'model': 'google/gemma-4-31B-it', 'mesh_shape': [8, 4], 'chunk_size': 8192, 'context_len': 262144, 'token_source': 'text', 'token_ids_sha256': 'e73f3ef24f8f508b4ddbb06f68a575c9dfc87efd97be924f4c0782281f94b666', 'reference_metadata_sha256': 'ad44a10d8c1e615d38f297651b1b633f8f4bf47114ecdc782ce7db9a0afff388', 'reference_index_sha256': '9905bfe619077dc36070d7031d7b8291acefb303e8ac12d3be156450f04d8431', 'layer_types': ['sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'sliding_attention', 'full_attention'], 'cache_comparison': 'global_effective_k_and_packed_v_sliding_reordered_k_v1'} |
 | tolerances | {'pcc': 0.0, 'rel_l2': 0.0} |
-| provenance | {'revision': '30f7a6b365850059b1413cc4747fcd3a7a2e6648', 'dirty': True, 'test': 'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-readback_final-ctx_256k-chunk8192-text-8x4]', 'fresh_full_model_run': True, 'measurement_count': 3840, 'checkpoint': '/data/amilovanovic/tt-metal/generated/gemma4_d_p/kv_pcc/markdown_workflow_20260916_120214/fresh_markdown_baseline/measurements.md'} |
+| provenance | {'revision': '30f7a6b365850059b1413cc4747fcd3a7a2e6648', 'test': 'models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_long_context_traced[blackhole-readback_final-ctx_256k-chunk8192-text-8x4]', 'fresh_full_model_run': True, 'measurement_count': 3840, 'checkpoint': '/data/amilovanovic/tt-metal/generated/gemma4_d_p/kv_pcc/markdown_workflow_20260916_120214/fresh_markdown_baseline/measurements.md'} |
 | comparison | {'status': 'baseline_recorded', 'baseline': None} |
 
 <!-- /kv-pcc-metadata -->

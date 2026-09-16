@@ -229,7 +229,7 @@ def write_markdown(path, report, *, exclusive=False):
     if provenance.get("recovered_from_multiple_runs"):
         lines.extend(["Recovered from two runs; earlier measurements were rounded to six decimal places.", ""])
     if provenance.get("revision"):
-        lines.extend([f"Revision: `{cell(provenance['revision'])}`; local changes: {provenance.get('dirty')}", ""])
+        lines.extend([f"Revision: `{cell(provenance['revision'])}`", ""])
     if report.get("tolerances"):
         lines.extend(
             [
@@ -328,12 +328,8 @@ class KvPccRun:
         report = make_report(self.configuration, records)
         repo = pathlib.Path(__file__).resolve().parents[4]
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, text=True, capture_output=True)
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=repo, text=True, capture_output=True
-        )
         report["provenance"] = {
             "revision": revision.stdout.strip() or None,
-            "dirty": bool(dirty.stdout) if dirty.returncode == 0 else None,
             "test": self.nodeid,
         }
         report["tolerances"] = self.tolerances
