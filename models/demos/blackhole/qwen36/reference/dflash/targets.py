@@ -224,7 +224,28 @@ class TtTarget:
         # compiled the loop's programs, which a sequence reset does not undo.
         self.model._reset_gdn_state_for_new_sequence()
         self._anchor = 0
-        self._anchor_gdn = self.model.save_gdn_state()
+        # DFLASH_REUSE_RESET_SNAPSHOT=1: keep the existing snapshot BUFFERS instead of allocating a
+        # fresh 48-layer set on every generation.
+        #
+        # THE THEORY THIS TESTS. Acceptance alternates with traced-generation index (7.000 / 1.500 /
+        # 7.000; the demo measures the bad one and runs 2.99 tok/s instead of 17.54). reset() runs at
+        # the top of EVERY generation and allocates a fresh snapshot with the trace parked, which
+        # Metal warns is unsafe. An alternating allocate/free pattern is exactly how that produces
+        # period 2: generation 1's snapshot is still referenced when generation 2 allocates, so gen 2
+        # lands elsewhere; gen 1's is then freed and gen 3 reclaims that region.
+        #
+        # This is NOT the `into=` form, which SIGBUSed: that COPIES into the old buffers after
+        # _reset_gdn_state_for_new_sequence() has invalidated them. Here nothing is copied at all --
+        # the sequence reset zeroes the GDN state, so a snapshot taken right after one always holds
+        # the same zeros, and a snapshot that is still the one from a previous reset already IS that
+        # value. Only a snapshot the re-anchor has since overwritten must be retaken.
+        if (
+            os.environ.get("DFLASH_REUSE_RESET_SNAPSHOT") != "1"
+            or self._anchor_gdn is None
+            or getattr(self, "_anchor_gdn_dirty", True)
+        ):
+            self._anchor_gdn = self.model.save_gdn_state()
+            self._anchor_gdn_dirty = False
         self._tokens.zero_()
 
     def _taps_cat(self, parts):
@@ -564,6 +585,9 @@ class TtTarget:
             else:
                 # Reuse the snapshot's buffers rather than reallocating every bucket.
                 self._anchor_gdn = self.model.save_gdn_state(into=self._anchor_gdn)
+            # The snapshot no longer holds the sequence-start zeros, so the next reset() must retake
+            # it rather than keep these buffers. See reset().
+            self._anchor_gdn_dirty = True
         # The partial tail bucket — where a speculative block always lands.
         lg, tp = self._run(self._anchor, end, keep_rows=want if narrow else None)
         logit_parts.append(lg)

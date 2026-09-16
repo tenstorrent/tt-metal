@@ -101,12 +101,25 @@ def _build(mesh_device, ctx_capacity=None):
     # per-step shape space to the block width alone -- the precondition for warm_block_widths, and
     # so for retiring the compile-under-a-parked-trace hang. Acceptance is unaffected: priced at
     # 5.182 tok/step both ways (tests/reference/test_dflash_acceptance_capacity.py).
+    # DFLASH_SHARE_CCL=0 gives the drafter its OWN TT_CCL instead of the model's.
+    #
+    # TT_CCL hands out global semaphores round-robin -- get_and_cycle_ag_semaphore_handles advances
+    # (idx + 1) % 2 over TWO per axis -- and a captured trace bakes whichever handle it held. Sharing
+    # the instance means the drafter's tap all-gather cycles the same pool the target's TRACED
+    # collectives use, which is a period-2 mechanism, and acceptance here alternates with period 2
+    # (DFLASH_HANDOFF.md: traced generations 7.000 / 1.500 / 7.000; the demo measures the bad one and
+    # runs 2.99 tok/s instead of 17.54). The known-good test_dflash_traced_throughput.py does NOT
+    # share, which is the structural difference between them.
+    #
+    # An earlier check "refuted" shared tt_ccl, but it compared sharing against not-sharing on the
+    # PROSE test's control -- it never tested it against the parity effect, which is what this knob
+    # is for.
     drafter = TtDrafter(
         TtDFlashDrafter(
             mesh_device,
             cfg,
             load_drafter_state_dict(drafter_path),
-            tt_ccl=model.tt_ccl,
+            **({"tt_ccl": model.tt_ccl} if os.environ.get("DFLASH_SHARE_CCL", "1") == "1" else {}),
             ctx_capacity=ctx_capacity,
         ),
         target,

@@ -58,6 +58,36 @@ WHERE THE DEMO ACTUALLY STANDS:
     reference prompt, bad parity    traced    2.99 tok/s   0.17x
     condiment prompt (crosses)      eager     6.19 tok/s   0.35x
 
+PERIOD-2 CONFIRMED IN THE DEMO (not just in the unit test):
+
+    DFLASH_TRACED_WARM=0 (1st traced gen)  17.54 tok/s  acceptance 4.950  0.98x
+    DFLASH_TRACED_WARM=1 (2nd traced gen)   2.99 tok/s  acceptance 1.021  0.17x
+    DFLASH_TRACED_WARM=2 (3rd traced gen)  17.74 tok/s  acceptance 4.950  0.99x
+
+Clean alternation, fully recovering on the third. NOTHING ACCUMULATES -- that rules out drift and
+any "state slowly degrades" story, and it is a strong constraint: the mechanism toggles once per
+traced generation and restores completely.
+
+THREE HYPOTHESES REFUTED BY MEASUREMENT, all on the bad parity with the reference prompt:
+
+    shared TT_CCL semaphore pool      DFLASH_SHARE_CCL=0            acceptance 1.021 (vs 1.021)
+    fixed-capacity drafter            DFLASH_CTX_CAPACITY unset     acceptance 1.031 (vs 1.021)
+    per-generation snapshot alloc     DFLASH_REUSE_RESET_SNAPSHOT=1 acceptance 1.021 (vs 1.021)
+
+The last one is still worth keeping as a PERF fix -- it moved the bad-parity run 2.99 -> 4.52 tok/s
+by not allocating 48 layers of snapshot per generation -- but it is not the parity mechanism.
+
+STOP CONSTRUCTING ISOLATED TESTS FOR THIS. Every one comes back clean while the loop stays broken,
+exactly as happened with the anchor bug (trace-at-offset and snapshot-reuse both measure pcc 1.0).
+Instrument the loop instead.
+
+THE CONSTRAINT TO AIM AT: acceptance 1.021 means EVERY draft is rejected, i.e. total drafter
+failure, not degradation. The drafter's only input from the target is the taps, so generation 2's
+taps are almost certainly wrong. `verify_traced` re-arms them per replay from `_vt_taps`
+(`self._taps = dict(self._vt_taps)`) -- a narrow surface, and the place to instrument first. Compare
+generation 1's and generation 2's taps for the SAME step index and prompt; they should be identical
+and the evidence says they will not be.
+
 TWO REMAINING BUGS, parity first by a wide margin:
 
 1. PARITY. Mechanism unknown. `DFLASH_TRACED_WARM=0` is a workaround, not a fix -- it just lands the
