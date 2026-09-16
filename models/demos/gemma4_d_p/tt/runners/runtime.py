@@ -11,10 +11,11 @@ from models.demos.gemma4_d_p.tt.common import create_tt_model
 
 
 class Gemma4PrefillRuntime:
-    def __init__(self, *, mesh_device, model_path, config):
+    def __init__(self, *, mesh_device, hf_model_id, tt_cache_path, config):
         self.mesh_device = mesh_device
         self.mesh_config = MeshConfig(mesh_device)
-        self.model_path = model_path
+        self.hf_model_id = hf_model_id
+        self.tt_cache_path = tt_cache_path
         self.config = config
         self.trace_id = None
         self.d2h_service = None
@@ -48,12 +49,12 @@ class Gemma4PrefillRuntime:
     def compile(self, kv_cache):
         _, self.model, _, _ = create_tt_model(
             mesh_config=self.mesh_config,
-            model_path=self.model_path,
+            hf_model_id=self.hf_model_id,
             prefill_chunk_size=self.config.chunk_size,
             max_seq_len=self.config.max_seq_len,
             max_batch_size=1,
             ring_kv_caches=kv_cache,
-            weight_cache_path=self.config.weight_cache_path,
+            tt_cache_path=self.tt_cache_path,
         )
         self.input_tokens = self.make_chunk_input([0] * self.config.chunk_size)
         self.positions = self.make_chunk_input(range(self.config.chunk_size))

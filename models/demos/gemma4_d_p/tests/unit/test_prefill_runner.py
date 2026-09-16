@@ -35,6 +35,7 @@ def service_params():
 def test_adapter_uses_canonical_weight_cache(monkeypatch, tmp_path):
     monkeypatch.delenv("PREFILL_TTNN_CACHE", raising=False)
     monkeypatch.setenv("TT_CACHE_PATH", str(tmp_path))
+    (tmp_path / "tensor_cache_bf16_mesh8x4").mkdir()
     adapter = get_adapter("gemma4_d_p")
     assert isinstance(adapter, Gemma4PrefillAdapter)
     assert adapter.weight_cache_path((8, 4)) == tmp_path / "tensor_cache_bf16_mesh8x4"
@@ -80,3 +81,36 @@ def test_completion_wait_requires_exactly_sixty_layers(expect_error):
         wait_for_layers(SimpleNamespace(try_consume_all=lambda: 61), timeout_s=1)
     with expect_error(TimeoutError, "0/60 layer acknowledgments"):
         wait_for_layers(SimpleNamespace(try_consume_all=lambda: 0), timeout_s=0)
+
+
+@pytest.mark.parametrize("prefill_override", [False, True])
+def test_tt_cache_resolution(monkeypatch, tmp_path, prefill_override):
+    import ttnn
+    from models.demos.gemma4_d_p.tt.model_config import resolve_cache_dir_from_tt_cache_path
+
+    monkeypatch.delenv("PREFILL_TTNN_CACHE", raising=False)
+    monkeypatch.setenv("TT_CACHE_PATH", str(tmp_path / "regular"))
+    expected = tmp_path / "regular/tensor_cache_bf16_mesh8x4"
+    expected.mkdir(parents=True)
+    assert (
+        resolve_cache_dir_from_tt_cache_path(tmp_path / "regular", dtype=ttnn.bfloat16, mesh_shape=(8, 4)) == expected
+    )
+    if prefill_override:
+        monkeypatch.setenv("PREFILL_TTNN_CACHE", str(tmp_path / "service"))
+        expected = tmp_path / "service/tensor_cache_bf16_mesh8x4"
+        expected.mkdir(parents=True)
+    assert Gemma4PrefillAdapter().weight_cache_path((8, 4)) == expected
+
+
+def test_tt_cache_requires_configured_root(monkeypatch, tmp_path, expect_error):
+    import ttnn
+    from models.demos.gemma4_d_p.tt.model_config import resolve_cache_dir_from_tt_cache_path
+
+    monkeypatch.delenv("TT_CACHE_PATH", raising=False)
+    monkeypatch.delenv("PREFILL_TTNN_CACHE", raising=False)
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    monkeypatch.setenv("HF_MODEL", str(tmp_path))
+    with expect_error(ValueError, "tt_cache_path must be provided"):
+        resolve_cache_dir_from_tt_cache_path(None, dtype=ttnn.bfloat16, mesh_shape=(8, 4))
+    with expect_error(ValueError, "tt_cache_path must be provided"):
+        Gemma4PrefillAdapter().weight_cache_path((8, 4))
