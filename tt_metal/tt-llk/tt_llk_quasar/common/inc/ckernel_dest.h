@@ -11,6 +11,7 @@
 
 #include "cfg_defines.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "ckernel_vector.h"
 #include "tensix_types.h"
 #include "tt_t6_trisc_map.h"
@@ -34,280 +35,80 @@
 namespace ckernel
 {
 
-template <int t>
+template <ThreadId thread_id>
 inline void set_dest_fmt(std::uint32_t fmt)
 {
-    // FWLOG1("Setting RISC-dest access format to %d", fmt);
-    static_assert(t >= 0 and t < 3, "Thread must be 0, 1, or 2");
+    static_assert(
+        thread_id == UnpackThreadId || thread_id == MathThreadId || thread_id == PackThreadId, "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
 
-    if (t == 0)
+    if constexpr (thread_id == UnpackThreadId)
     {
         cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_fmt_RMW, fmt);
     }
-    else if (t == 1)
+    else if constexpr (thread_id == MathThreadId)
     {
         cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_fmt_RMW, fmt);
     }
-    else
+    else if constexpr (thread_id == PackThreadId)
     {
         cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_fmt_RMW, fmt);
     }
-
-    tensix_sync();
 }
 
-inline void set_dest_fmt(std::uint32_t fmt, int t)
+template <ThreadId thread_id>
+inline void set_dest_unsigned_int_rmw(const int val)
 {
-    // FWLOG1("Setting RISC-dest access format to %d", fmt);
-    if (t == 0)
-    {
-        set_dest_fmt<0>(fmt);
-    }
-    else if (t == 1)
-    {
-        set_dest_fmt<1>(fmt);
-    }
-    else
-    {
-        set_dest_fmt<2>(fmt);
-    }
-    // No tensix_sync() here: the templated set_dest_fmt<t> above already ends with one.
-}
+    static_assert(
+        thread_id == UnpackThreadId || thread_id == MathThreadId || thread_id == PackThreadId, "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
 
-template <int t, bool is_signed>
-inline void set_dest_int8_int16_signed()
-{
-    static_assert(t >= 0 and t < 3, "Thread must be 0, 1, or 2");
-    if (is_signed)
+    if constexpr (thread_id == UnpackThreadId)
     {
-        // FWLOG0("Setting RISC-dest int8 access mode to signed");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, 0);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, 0);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 0);
-        }
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, val);
     }
-    else
+    else if constexpr (thread_id == MathThreadId)
     {
-        // FWLOG0("Setting RISC-dest int8 access mode to unsigned");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, 1);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, 1);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 1);
-        }
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, val);
+    }
+    else if constexpr (thread_id == PackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, val);
     }
 }
 
-template <int t>
-inline void set_dest_int8_int16_signed(bool const is_signed)
+template <ThreadId thread_id>
+inline void set_dest_int8_int16_signed(const bool is_signed)
 {
-    static_assert(t >= 0 and t < 3, "Thread must be 0, 1, or 2");
-    if (is_signed)
+    set_dest_unsigned_int_rmw<thread_id>(is_signed ? 0 : 1);
+}
+
+template <ThreadId thread_id>
+inline void set_dest_no_swizzle_rmw(const int val)
+{
+    static_assert(
+        thread_id == UnpackThreadId || thread_id == MathThreadId || thread_id == PackThreadId, "Thread must be UnpackThreadId, MathThreadId, or PackThreadId");
+
+    // In unswizzled mode, values are written into dest as-is with
+    // no saturation checks and no bit shuffling. This means they
+    // are incompatible with the FPU, but it could be useful for
+    // debugging.
+    if constexpr (thread_id == UnpackThreadId)
     {
-        // FWLOG0("Setting RISC-dest int8 access mode to signed");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, 0);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, 0);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 0);
-        }
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, val);
     }
-    else
+    else if constexpr (thread_id == MathThreadId)
     {
-        // FWLOG0("Setting RISC-dest int8 access mode to unsigned");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, 1);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, 1);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 1);
-        }
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, val);
+    }
+    else if constexpr (thread_id == PackThreadId)
+    {
+        cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, val);
     }
 }
 
-inline void set_dest_int8_int16_signed(int const t, bool const is_signed)
+template <ThreadId thread_id>
+inline void set_dest_enable_swizzling(const bool enable)
 {
-    if (is_signed)
-    {
-        // FWLOG0("Setting RISC-dest int8 access mode to signed");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, 0);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, 0);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 0);
-        }
-    }
-    else
-    {
-        // FWLOG0("Setting RISC-dest int8 access mode to unsigned");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int_RMW, 1);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int_RMW, 1);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int_RMW, 1);
-        }
-    }
-}
-
-template <int t, bool enable>
-inline void set_dest_enable_swizzling()
-{
-    static_assert(t >= 0 and t < 3, "Thread must be 0, 1, or 2");
-    if (enable)
-    {
-        // In unswizzled mode, values are written into dest as-is with
-        // no saturation checks and no bit shuffling. This means they
-        // are incompatible with the FPU, but it could be useful for
-        // debugging
-        // FWLOG0("Setting RISC-dest int access mode to unswizzled mode");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 0);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 0);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 0);
-        }
-    }
-    else
-    {
-        // FWLOG0("Setting RISC-dest int access mode to swizzled mode (normal)");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 1);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 1);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 1);
-        }
-    }
-}
-
-template <int t>
-inline void set_dest_enable_swizzling(bool const enable)
-{
-    static_assert(t >= 0 and t < 3, "Thread must be 0, 1, or 2");
-    if (enable)
-    {
-        // In unswizzled mode, values are written into dest as-is with
-        // no saturation checks and no bit shuffling. This means they
-        // are incompatible with the FPU, but it could be useful for
-        // debugging
-        // FWLOG0("Setting RISC-dest int access mode to unswizzled mode");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 0);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 0);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 0);
-        }
-    }
-    else
-    {
-        // FWLOG0("Setting RISC-dest int access mode to swizzled mode (normal)");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 1);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 1);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 1);
-        }
-    }
-}
-
-inline void set_dest_enable_swizzling(int const t, bool const enable)
-{
-    if (enable)
-    {
-        // In unswizzled mode, values are written into dest as-is with
-        // no saturation checks and no bit shuffling. This means they
-        // are incompatible with the FPU, but it could be useful for
-        // debugging
-        // FWLOG0("Setting RISC-dest int access mode to unswizzled mode");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 0);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 0);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 0);
-        }
-    }
-    else
-    {
-        // FWLOG0("Setting RISC-dest int access mode to swizzled mode (normal)");
-        if (t == 0)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle_RMW, 1);
-        }
-        else if (t == 1)
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle_RMW, 1);
-        }
-        else
-        {
-            cfg_rmw(RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle_RMW, 1);
-        }
-    }
+    set_dest_no_swizzle_rmw<thread_id>(enable ? 0 : 1);
 }
 
 struct fp16a
@@ -528,7 +329,7 @@ inline float absf(float x)
     return x < 0.0f ? -x : x;
 }
 
-std::uint8_t fmt_to_dest_type(DataFormat fmt)
+inline std::uint8_t fmt_to_dest_type(DataFormat fmt)
 {
     switch (fmt)
     {
@@ -541,19 +342,34 @@ std::uint8_t fmt_to_dest_type(DataFormat fmt)
         case DataFormat::Int32:
             return RISC_DEST_FMT_INT32;
         case DataFormat::Int16:
+        case DataFormat::UInt16:
             return RISC_DEST_FMT_INT16;
         case DataFormat::Int8:
+        case DataFormat::UInt8:
             return RISC_DEST_FMT_INT8;
         default:
-            // FWASSERT(0, "Unsupported dest format");
             return RISC_DEST_FMT_INT16;
     }
 }
 
-template <int t>
+template <ThreadId thread_id>
 inline void set_dest_fmt(DataFormat fmt)
 {
-    set_dest_fmt<t>(fmt_to_dest_type(fmt));
+    set_dest_fmt<thread_id>(fmt_to_dest_type(fmt));
+}
+
+inline bool dest_fmt_is_signed(DataFormat fmt)
+{
+    return fmt != DataFormat::UInt8 && fmt != DataFormat::UInt16;
+}
+
+// Program this thread's RISC_DEST_ACCESS_CTRL section for MMIO DEST access.
+template <ThreadId thread_id>
+inline void configure_dest_access(DataFormat fmt, bool enable_swizzle = true)
+{
+    set_dest_fmt<thread_id>(fmt);
+    set_dest_enable_swizzling<thread_id>(enable_swizzle);
+    set_dest_int8_int16_signed<thread_id>(dest_fmt_is_signed(fmt));
 }
 
 template <typename T>
