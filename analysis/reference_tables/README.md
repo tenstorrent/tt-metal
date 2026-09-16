@@ -9,7 +9,7 @@ produced it.
 | File | Rows | What it holds |
 |---|---|---|
 | `targets_table.csv` | 142 | Every device wall of the campaign: configuration, measured cycles and microseconds, core count, the run tag it came from. The widest table, and the one to diff a rerun against. |
-| `refit_r2_walls.csv` | 98 | The same walls priced by the model, with signed error per wall and the fit / prediction / hold-out set each belongs to. |
+| `refit_r2_walls.csv` | 110 | The same walls priced by the model, with signed error per wall and the fit / prediction / hold-out set each belongs to. Includes the 2026-09-16 MLA decode slice and cores-per-group sweeps. |
 | `floor_verification_configs.csv` | 20 | Perf counter readings (FPU, SFPU, MATH) per configuration on the unmodified kernel, per-core mean and wall-setting core. |
 | `model_components_grid1.csv` | 14 | Measured wall against the model's named wall terms, per configuration. |
 | `floor_verification_fits.json` | - | The fitted floor constants and the overlap fits behind them. |
