@@ -126,7 +126,7 @@ public:
 
     constexpr PackerAddrCtrlEntry operator[](PackerReg reg) const
     {
-        return reg == PackerReg::Reg0 ? make<0>() : reg == PackerReg::Reg1 ? make<1>() : detail::invalid_index<PackerAddrCtrlEntry>();
+        return (*this)[static_cast<std::uint32_t>(reg)];
     }
 
     constexpr PackerAddrCtrlEntry operator[](std::uint32_t reg) const
@@ -167,7 +167,7 @@ public:
 
     constexpr const Field& operator[](PackerReg reg) const
     {
-        return reg == PackerReg::Reg0 ? get<0>() : reg == PackerReg::Reg1 ? get<1>() : detail::invalid_index<const Field&>();
+        return (*this)[static_cast<std::uint32_t>(reg)];
     }
 
     constexpr const Field& operator[](std::uint32_t reg) const
