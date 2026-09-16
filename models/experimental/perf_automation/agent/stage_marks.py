@@ -711,6 +711,21 @@ def inject_stage_marks(text: str) -> tuple:
     return "".join(o), "injected at line %d, per-stage pass in %s()" % (k + 1, fname)
 
 
+def marks_ok(why: str) -> bool:
+    """Did a call to inject_stage_marks actually leave marks in place -- just now, or already?
+
+    False for every reason string above that means no bare call was ever found to bracket at all
+    (no bare call on the profiled path; the body it would append to could not be located, before or
+    after bracketing). A caller that only checks "did the text change" cannot tell those apart from
+    "already injected", which also leaves the text untouched and is fine -- so this checks the
+    reason, not the diff. Defined here, next to the strings themselves, so a caller never keeps a
+    second copy of prose that only this function is allowed to produce -- and treats anything this
+    function does not recognise as failure, not success: an unrecognised reason from a future change
+    here is a gap to report, never one to assume is fine.
+    """
+    return why == "already injected" or "per-stage pass in" in why
+
+
 def _build_pipeline_call_site(node):
     """(index of the line AFTER the statement that calls a `build_pipeline`-named factory directly
     inside `node`, that statement's own indent), or None when no such call is visible here.

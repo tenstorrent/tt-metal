@@ -29,7 +29,13 @@ def model_root(tmp_path, monkeypatch):
     to commit a lever that silently degrades the model. These tests exercise manifest / telemetry /
     metric-default behaviour, none of which is about the gate, so they supply the cheapest gate that
     satisfies the policy -- a file declaring a numeric PCC threshold.
+
+    Same reasoning for PERF_MCP_ALLOW_UNMARKED_STAGES: the perf test stub below is a one-line comment
+    with no eager-pass call for the injector to find, and stage_marks now refuses to continue past
+    that rather than silently profiling an unmarked test for a whole run. These tests are not about
+    stage marking either, so they opt out of the same check the gate stub opts out of.
     """
+    monkeypatch.setenv("PERF_MCP_ALLOW_UNMARKED_STAGES", "1")
     (tmp_path / "model").mkdir()
     (tmp_path / "model" / "test_e2e.py").write_text("# perf test stub\n")
     (tmp_path / "model" / "attention.py").write_text("# attn stub\n")
@@ -274,3 +280,33 @@ def test_agent_call_telemetry_persisted(tmp_path, model_root):
     assert state["tokens_in"] == sum(r["tokens_in"] for r in rows)
     assert state["tokens_out"] == sum(r["tokens_out"] for r in rows)
     assert state["cost_usd"] == round(sum(r["cost_usd"] for r in rows), 6)
+
+
+# ---------------------------------------------------------------- unmarked stages stop the run, loudly
+
+
+def test_an_unmarked_perf_test_stops_the_run(tmp_path, model_root, monkeypatch):
+    """The gap this closes: stage_marks used to report "no bare call to an eager pass on the
+    profiled path" as a plain done() status and continue, so a generated test the injector could
+    never place marks into ran the whole optimize loop unmarked -- discovered only by reading the
+    report much later. Without the escape hatch this fixture's own model_root sets, the run must
+    not get past the stage_marks step at all."""
+    monkeypatch.delenv("PERF_MCP_ALLOW_UNMARKED_STAGES", raising=False)
+    with pytest.raises(SystemExit, match="CANNOT CONTINUE"):  # allow-pytest.raises: no expect_error fixture
+        _run(tmp_path, model_root)
+
+
+def test_the_escape_hatch_lets_an_unmarked_run_continue(tmp_path, model_root, monkeypatch):
+    """The opt-out this fixture already relies on, asserted directly: an operator who has read the
+    refusal and decided to proceed without per-stage attribution is not blocked forever."""
+    monkeypatch.setenv("PERF_MCP_ALLOW_UNMARKED_STAGES", "1")
+    try:
+        run_dir = Path(_run(tmp_path, model_root)["run_dir"])
+    except FileNotFoundError:
+        # tt-perf-report is not installed in this environment -- the same pre-existing gap every
+        # other _run()-based test in this file hits, further along, at the baseline measurement
+        # step. stage_marks already ran and wrote its event before that point.
+        run_dir = next((tmp_path / "runs").iterdir())
+    events = [json.loads(l) for l in (run_dir / "events.jsonl").read_text().splitlines()]
+    marks = next(e for e in events if e["stage"] == "stage_marks" and e["event"] == "done")
+    assert "no bare call" in marks["detail"]

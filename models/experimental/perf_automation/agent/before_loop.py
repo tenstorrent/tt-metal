@@ -869,16 +869,37 @@ def before_loop(
     # The injector is idempotent and refuses when it cannot place the block, so running it on every
     # run costs nothing and can never produce two marked passes.
     stages.start("stage_marks", "Marking stage boundaries for the profiler")
+    # A GAP HERE USED TO BE SILENT FOR AN ENTIRE RUN. stages.done(_why) reported "no bare call to an
+    # eager pass on the profiled path" exactly like every other benign status line, so a generated
+    # test the injector could not place marks into ran unmarked for the whole run -- stage_buckets
+    # stayed empty, every stack shared one math-fidelity peak, and nothing said so until someone read
+    # the roofline forty minutes in. marks_ok distinguishes "no bare call was found at all" from
+    # "already injected" (also leaves the text unchanged, and is fine) by the reason, not the diff.
     try:
-        from .stage_marks import inject_stage_marks as _inject_marks
+        from .stage_marks import inject_stage_marks as _inject_marks, marks_ok
 
         _pt = Path(tt_root) / perf_rel
         _cur = _pt.read_text()
         _new, _why = _inject_marks(_cur)
         if _new != _cur:
             _pt.write_text(_new)
+        if not marks_ok(_why) and os.environ.get("PERF_MCP_ALLOW_UNMARKED_STAGES") != "1":
+            raise SystemExit(
+                "CANNOT CONTINUE — stage marks could not be placed in %s (%s). Every stack would "
+                "share one math-fidelity peak and the per-op stack column would be blank for the "
+                "whole run, discovered only by reading the report later. Set "
+                "PERF_MCP_ALLOW_UNMARKED_STAGES=1 to run anyway without per-stage attribution." % (_pt, _why)
+            )
         stages.done(_why)
+    except SystemExit:
+        raise
     except Exception as _mi:  # noqa: BLE001
+        if os.environ.get("PERF_MCP_ALLOW_UNMARKED_STAGES") != "1":
+            raise SystemExit(
+                "CANNOT CONTINUE — stage marks injection raised %s: %s. Set "
+                "PERF_MCP_ALLOW_UNMARKED_STAGES=1 to run anyway without per-stage attribution."
+                % (type(_mi).__name__, str(_mi)[:200])
+            )
         stages.done("not injected (%s: %s)" % (type(_mi).__name__, str(_mi)[:90]))
 
     stages.start("resolve_signposts", "Locating profiler signposts")
