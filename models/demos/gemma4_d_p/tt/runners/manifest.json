@@ -1,5 +1,4 @@
 {
-  "_comment": "PREFILL_TRACE_REGION_SIZE = 256 * 1024 * 1024 bytes (256 MiB)",
   "env": {
     "PREFILL_MODEL": "gemma4_d_p",
     "PREFILL_SP": "8",
