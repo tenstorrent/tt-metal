@@ -1,0 +1,32 @@
+[
+  {
+    "id": "line_1d",
+    "title": "1D line",
+    "file": "line_1d.json"
+  },
+  {
+    "id": "mesh_2d",
+    "title": "2×2 mesh",
+    "file": "mesh_2d.json"
+  },
+  {
+    "id": "torus_xy",
+    "title": "2×2 torus wrap",
+    "file": "torus_xy.json"
+  },
+  {
+    "id": "two_mesh",
+    "title": "Two meshes",
+    "file": "two_mesh.json"
+  },
+  {
+    "id": "stalled_link",
+    "title": "Stalled link",
+    "file": "stalled_link.json"
+  },
+  {
+    "id": "coverage_holes",
+    "title": "Coverage holes",
+    "file": "coverage_holes.json"
+  }
+]

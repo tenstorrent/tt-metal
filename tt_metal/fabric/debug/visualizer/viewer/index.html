@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TT Fabric Debug Viewer</title>
+  <link rel="stylesheet" href="css/viewer.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">TT Fabric Debug</p>
+      <h1>Fabric state viewer</h1>
+    </div>
+    <div class="header-actions">
+      <label class="file-button">
+        Open decoded JSON
+        <input id="file-input" type="file" accept=".json,application/json">
+      </label>
+      <label class="fixture-select" hidden>
+        Fixtures
+        <select id="fixture-select">
+          <option value="">Committed fixtures…</option>
+        </select>
+      </label>
+      <label class="expert-toggle">
+        <input id="expert-raw" type="checkbox">
+        Expert raw
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <section id="drop-zone" class="drop-zone" aria-labelledby="empty-title">
+      <div id="empty-state" class="empty-state">
+        <span class="file-glyph" aria-hidden="true">{ }</span>
+        <h2 id="empty-title">Open a decoded fabric snapshot</h2>
+        <p>Choose or drop a <code>fabric_debug_decoded</code> JSON file. Served pages can also pick a committed fixture.</p>
+        <p class="muted">The viewer is offline and never connects to a device.</p>
+      </div>
+
+      <div id="session" class="session" hidden>
+        <section class="session-heading">
+          <div>
+            <p id="source-name" class="eyebrow"></p>
+            <h2 id="run-title"></h2>
+            <p id="run-meta" class="muted"></p>
+          </div>
+          <div id="host-meta" class="host-meta"></div>
+        </section>
+
+        <section aria-label="Capture coverage">
+          <div id="coverage-strip" class="coverage-strip"></div>
+        </section>
+
+        <section class="workspace">
+          <div class="map-pane">
+            <div class="map-toolbar">
+              <button id="map-back" type="button" disabled>Back</button>
+              <p id="map-crumb" class="map-crumb">Mesh</p>
+              <p id="model-summary" class="muted"></p>
+            </div>
+            <div id="map-root" class="map-root"></div>
+          </div>
+
+          <aside class="router-browser">
+            <div class="browser-heading">
+              <div>
+                <p class="eyebrow">Router index</p>
+                <h3>Fabric routers</h3>
+              </div>
+              <span id="filter-count" class="count-badge"></span>
+            </div>
+            <label class="filter-label" for="router-filter">Filter by identity or status</label>
+            <input id="router-filter" type="search" placeholder="mesh, chip, eth, direction, status…">
+            <div id="router-list" class="router-list"></div>
+            <div id="router-panel" class="router-panel"></div>
+          </aside>
+        </section>
+      </div>
+    </section>
+
+    <div id="error-banner" class="error-banner" role="alert" hidden>
+      <strong>Could not open decoded state</strong>
+      <span id="error-message"></span>
+      <button id="dismiss-error" type="button">Dismiss</button>
+    </div>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
