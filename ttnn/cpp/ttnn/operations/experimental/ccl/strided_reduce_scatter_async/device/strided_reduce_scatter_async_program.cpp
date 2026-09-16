@@ -932,10 +932,8 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
-                    GetRuntimeArgs(program, reader_kernel_id);
-                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args =
-                    GetRuntimeArgs(program, writer_kernel_id);
+                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
