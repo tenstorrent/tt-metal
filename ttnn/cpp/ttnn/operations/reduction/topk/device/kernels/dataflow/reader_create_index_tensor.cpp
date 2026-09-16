@@ -10,6 +10,7 @@
 #include "api/tensor/noc_traits.h"
 
 #include <cstdint>
+#include "cpp/ttnn/operations/reduction/topk/device/kernels/topk_zone_config.hpp"
 
 void kernel_main() {
     // Runtime arguments
@@ -49,8 +50,10 @@ void kernel_main() {
 
     // Read data and generate indices
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
+        TOPK_ZONE("TK_READ_ROW");
         const uint32_t row = id + core_loop * total_number_of_cores;
         for (uint32_t w = 0; w < Wt; ++w) {
+            TOPK_ZONE_FINE("TK_READ_TILE");
             cb_in0.reserve_back(onetile);
             noc.async_read(
                 inout_tensor_accessor, cb_in0, tile_bytes_in0, {.page_id = row * Wt + w}, {.offset_bytes = 0});

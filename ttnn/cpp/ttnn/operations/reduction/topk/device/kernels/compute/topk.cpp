@@ -10,6 +10,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/dataflow/circular_buffer.h"
+#include "cpp/ttnn/operations/reduction/topk/device/kernels/topk_zone_config.hpp"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
@@ -21,6 +22,7 @@
  */
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_cb_index, const uint32_t dest_cb_index, const uint32_t total_tiles) {
+    TOPK_ZONE("TK_TRANSPOSE");
     CircularBuffer input_cb(input_cb_index);
     CircularBuffer dest_cb(dest_cb_index);
 
@@ -134,8 +136,11 @@ void kernel_main() {
     constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
 
     // Initialize kernel components
-    compute_kernel_hw_startup(input_val_cb_index, input_ind_cb_index, output_val_cb_index);
-    ckernel::topk_tile_init();
+    {
+        TOPK_ZONE("TK_INIT");
+        compute_kernel_hw_startup(input_val_cb_index, input_ind_cb_index, output_val_cb_index);
+        ckernel::topk_tile_init();
+    }
 
     CircularBuffer input_val_cb(input_val_cb_index);
     CircularBuffer input_ind_cb(input_ind_cb_index);
@@ -149,6 +154,7 @@ void kernel_main() {
 
     constexpr int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
+        TOPK_ZONE("TK_ROW");
         uint32_t ktiles_saved = 0;
 
         /*
@@ -225,6 +231,7 @@ void kernel_main() {
         // Main processing loop: refactored into single loop to fit TRISC2 memory constraints
         uint32_t input_take = 2;  // First iteration processes 2 tiles, subsequent iterations process 1
         for (uint32_t count = 1; count < Wt; count++) {
+            TOPK_ZONE_FINE("TK_STEP");
             // Transpose input tiles from WH to HW format and pack to intermediate buffers
 
             for (uint32_t i = 0; i < input_take; i++) {

@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "cpp/ttnn/operations/reduction/topk/device/kernels/topk_zone_config.hpp"
 
 void kernel_main() {
     // Runtime args
@@ -38,6 +39,7 @@ void kernel_main() {
 
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
+        TOPK_ZONE("TK_WRITE_ROW");
         const uint32_t row = id + core_loop * total_number_of_cores;
 
         // TopK values
