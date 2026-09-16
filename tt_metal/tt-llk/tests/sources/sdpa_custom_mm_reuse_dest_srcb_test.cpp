@@ -115,9 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         FACE_R_DIM,
         FACE_R_DIM,
         4 /* unpA_num_faces */,
-        4 /* unpB_num_faces */,
-        params.TILE_SIZE_UNPACK_A,
-        params.TILE_SIZE_UNPACK_B);
+        4 /* unpB_num_faces */);
 
     // -- P (=B) preload into DEST: the reuse matmul reads SrcB from DEST, so the
     // math thread first datacopies P into DEST. That datacopy needs its own SrcA

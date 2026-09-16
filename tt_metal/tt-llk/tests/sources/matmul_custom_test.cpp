@@ -27,16 +27,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        params.num_faces_A,
-        params.num_faces_B,
-        params.TILE_SIZE_UNPACK_A,
-        params.TILE_SIZE_UNPACK_B);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces_A, params.num_faces_B);
     _llk_unpack_AB_matmul_init_<>(
         0 /* transpose */,
         params.CT_DIM,
@@ -55,8 +46,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             L1_ADDRESS(params.buffer_B[0]),
             j,
             j * params.CT_DIM,
-            params.TILE_SIZE_UNPACK_A,
-            params.TILE_SIZE_UNPACK_B,
+            formats.unpack_B_src /* operand A -> SrcB */,
+            formats.unpack_A_src /* operand B -> SrcA */,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces_B),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces_A),
             false /* unpA_partial_face */,
             false /* unpB_partial_face */,
             params.CT_DIM,

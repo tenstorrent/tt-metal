@@ -49,10 +49,44 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
 }
 
 /**
+ * @brief Per-tile L1 stride, in 16-byte words, of a tile with the given L1 format and face geometry.
+ *
+ * This is the unit the TILE_SIZE_A/B GPRs and the unpacker base-address registers use, and the unit the
+ * host records as the CB page size. Block-float tiles carry a shared-exponent section on top of their
+ * mantissas; it occupies whole 16-byte L1 words, so a partial tile still pays for a full word of it.
+ *
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_face_r_dim: Rows per face.
+ * @param unpack_num_faces: Number of faces.
+ * @return Per-tile L1 stride in 16-byte words.
+ */
+// Unpacker base-address registers address L1 in 16-byte words.
+constexpr std::uint32_t L1_WORD_SIZE_BYTES = 16;
+
+inline constexpr std::uint32_t _llk_unpack_tile_size_(
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_face_r_dim, const std::uint32_t unpack_num_faces)
+{
+    const std::uint32_t datum_count = unpack_num_faces * unpack_face_r_dim * FACE_C_DIM;
+    std::uint32_t tile_size_bytes   = TILE_SIZE_BYTES(unpack_src_format, datum_count);
+
+    if (IS_BFP_FORMAT(unpack_src_format))
+    {
+        // TILE_SIZE_BYTES sizes the shared-exponent section at one byte per 16 datums. Hardware
+        // reserves whole 16-byte L1 words for that section, so a tile with fewer than 16 face rows
+        // still pays for 16 exponent bytes.
+        const std::uint32_t exp_bytes = datum_count / BFP_EXP_GROUP_DATUMS;
+        tile_size_bytes += ((exp_bytes + L1_WORD_SIZE_BYTES - 1) & ~(L1_WORD_SIZE_BYTES - 1)) - exp_bytes;
+    }
+
+    return (tile_size_bytes + L1_WORD_SIZE_BYTES - 1) / L1_WORD_SIZE_BYTES;
+}
+
+/**
  * @brief Configure the unpacker hardware for both operands A and B.
  *
  * Programs the per-operand source/destination data formats, face dimensions and face counts via
- * configure_unpack_AB, and stores the per-operand tile sizes into the unpack GPRs.
+ * configure_unpack_AB, and stores the per-operand tile sizes, derived from the source format and face
+ * geometry via @ref _llk_unpack_tile_size_, into the unpack GPRs.
  *
  * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
  * @param unpA_src_format: Source data format of operand A in L1.
@@ -63,8 +97,6 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
  * @param unpB_face_r_dim: Rows per face for operand B.
  * @param unpA_num_faces: Number of faces for operand A, valid values = <1, 2, 4>.
  * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
- * @param unpA_tile_size: Tile size of operand A stored to the tile-size GPR.
- * @param unpB_tile_size: Tile size of operand B stored to the tile-size GPR.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_configure_(
@@ -75,9 +107,7 @@ inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_face_r_dim,
     const std::uint32_t unpB_face_r_dim,
     const std::uint32_t unpA_num_faces,
-    const std::uint32_t unpB_num_faces,
-    const std::uint32_t unpA_tile_size = 0,
-    const std::uint32_t unpB_tile_size = 0)
+    const std::uint32_t unpB_num_faces)
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
@@ -85,6 +115,8 @@ inline void _llk_unpack_hw_configure_(
     configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
         unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
 
+    const std::uint32_t unpA_tile_size = _llk_unpack_tile_size_(unpA_src_format, unpA_face_r_dim, unpA_num_faces);
+    const std::uint32_t unpB_tile_size = _llk_unpack_tile_size_(unpB_src_format, unpB_face_r_dim, unpB_num_faces);
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
     TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
 }
@@ -123,7 +155,7 @@ inline void _llk_unpack_configure_stoch_rnd_()
  * @tparam issue_stall: Issue the STALL_CFG/UNPACK0 drain before the config writes. Leave true for standalone
  *                      callers; @ref _llk_unpack_reconfig_data_format_srca_impl_ passes false because it has
  *                      already stalled for its format writes.
- * @param tile_size: New tile size (bytes) of operand A, stored to the tile-size GPR (tracks the shape).
+ * @param unpack_src_format: Source data format of operand A in L1, used to size the tile.
  * @param unpack_face_r_dim: Rows per face.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
  * @note A face_r_dim change also needs the op init re-run: the unpacker ADC X-end is programmed by the op
@@ -131,7 +163,7 @@ inline void _llk_unpack_configure_stoch_rnd_()
  */
 template <bool issue_stall = true>
 inline void _llk_unpack_reconfig_tile_shape_srca_(
-    const std::uint32_t tile_size, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
 {
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
@@ -140,7 +172,8 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
     }
 
-    // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcA L1 base.
+    // Tile size tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcA L1 base.
+    const std::uint32_t tile_size = _llk_unpack_tile_size_(unpack_src_format, unpack_face_r_dim, unpack_num_faces);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
 
     // Program unpacker0 per context x_dim (face size in l1)
@@ -163,14 +196,14 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
  * @tparam issue_stall: Issue the STALL_CFG/UNPACK1 drain before the config writes. Leave true for standalone
  *                      callers; @ref _llk_unpack_reconfig_data_format_srcb_impl_ passes false because it has
  *                      already stalled for its format writes.
- * @param tile_size: New tile size (bytes) of operand B, stored to the tile-size GPR (tracks the shape).
+ * @param unpack_src_format: Source data format of operand B in L1, used to size the tile.
  * @param unpack_face_r_dim: Rows per face.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
  * @note See @ref _llk_unpack_reconfig_tile_shape_srca_: a face_r_dim change also needs the op init re-run.
  */
 template <bool issue_stall = true>
 inline void _llk_unpack_reconfig_tile_shape_srcb_(
-    const std::uint32_t tile_size, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
 {
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
@@ -179,7 +212,8 @@ inline void _llk_unpack_reconfig_tile_shape_srcb_(
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
     }
 
-    // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcB L1 base.
+    // Tile size tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcB L1 base.
+    const std::uint32_t tile_size = _llk_unpack_tile_size_(unpack_src_format, unpack_face_r_dim, unpack_num_faces);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
 
     // Set X-dim to face_r_dim * FACE_C_DIM
@@ -202,7 +236,6 @@ inline void _llk_unpack_reconfig_tile_shape_srcb_(
  *                    wants to avoid the extra RMW; skipping it can leave a stale SrcAUnsigned bit (tt-metal#34499).
  * @param unpack_src_format: New source data format of operand A in L1.
  * @param unpack_dst_format: New destination data format operand A is converted to.
- * @param tile_size: New tile size of operand A stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
  * @note The SrcA-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcAUnsigned), and the math-side INT8 math-enable in
@@ -215,7 +248,6 @@ template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool 
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpack_num_faces  = 4)
 {
@@ -242,6 +274,8 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
+    // Re-derive the tile size from the new source format and the face geometry.
+    const std::uint32_t tile_size = _llk_unpack_tile_size_(unpack_src_format, unpack_face_r_dim, unpack_num_faces);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
 
     // The ch1 (register-side) Z/Y strides are format-derived (datum size), so re-commit them on EVERY format
@@ -257,7 +291,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     {
         // Reprogram tile size + face geometry. issue_stall=false: the STALL_CFG/UNPACK0 above already drained.
         // (tile_size is re-written here; it is the same value stored just above -- a harmless duplicate.)
-        _llk_unpack_reconfig_tile_shape_srca_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
+        _llk_unpack_reconfig_tile_shape_srca_<false /*issue_stall*/>(unpack_src_format, unpack_face_r_dim, unpack_num_faces);
     }
 }
 
@@ -274,7 +308,6 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  *                    wants to avoid the extra RMW; skipping it can leave a stale SrcBUnsigned bit (tt-metal#34499).
  * @param unpack_src_format: New source data format of operand B in L1.
  * @param unpack_dst_format: New destination data format operand B is converted to.
- * @param tile_size: New tile size of operand B stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
  * @note The SrcB-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcBUnsigned), and the math-side INT8 math-enable in
@@ -287,7 +320,6 @@ template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool 
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpack_num_faces  = 4)
 {
@@ -314,6 +346,8 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);
+    // Re-derive the tile size from the new source format and the face geometry.
+    const std::uint32_t tile_size = _llk_unpack_tile_size_(unpack_src_format, unpack_face_r_dim, unpack_num_faces);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
 
     // Re-commit the format-derived srcB ch1 Z-stride on every format change (see the srcA impl for why).
@@ -322,7 +356,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
         // Reprogram tile size + face geometry. issue_stall=false: the STALL_CFG/UNPACK1 above already drained.
-        _llk_unpack_reconfig_tile_shape_srcb_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
+        _llk_unpack_reconfig_tile_shape_srcb_<false /*issue_stall*/>(unpack_src_format, unpack_face_r_dim, unpack_num_faces);
     }
 }
 

@@ -16,17 +16,7 @@ template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_cleanup_configure_current_bank_()
 {
     constexpr std::uint32_t canonical_format = to_underlying(DataFormat::Float16_b);
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        canonical_format,
-        canonical_format,
-        canonical_format,
-        canonical_format,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4,
-        4,
-        HW_CLEANUP_CANONICAL_TILE_SIZE_16B,
-        HW_CLEANUP_CANONICAL_TILE_SIZE_16B);
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(canonical_format, canonical_format, canonical_format, canonical_format, FACE_R_DIM, FACE_R_DIM, 4, 4);
 }
 
 /**

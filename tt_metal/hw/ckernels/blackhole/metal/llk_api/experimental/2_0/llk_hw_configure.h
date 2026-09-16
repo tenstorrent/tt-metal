@@ -44,9 +44,7 @@ inline void llk_unpack_hw_configure() {
         DESC_A.shape.face_r_dim,
         DESC_B.shape.face_r_dim,
         DESC_A.shape.total_num_faces(),
-        DESC_B.shape.total_num_faces(),
-        ckernel::experimental::tile_stride_words(DESC_A.format, DESC_A.shape),
-        ckernel::experimental::tile_stride_words(DESC_B.format, DESC_B.shape));
+        DESC_B.shape.total_num_faces());
 }
 #endif
 

@@ -43,7 +43,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         4 /* num_faces */,
         4 /* num_faces */);
     _llk_unpack_AB_matmul_init_<>();
-    _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, params.TILE_SIZE_UNPACK_A, params.TILE_SIZE_UNPACK_B);
+    _llk_unpack_AB_matmul_<>(
+        L1_ADDRESS(params.buffer_A[0]),
+        L1_ADDRESS(params.buffer_B[0]),
+        0,
+        0,
+        formats_array[run].unpack_B_src /* operand A -> SrcB */,
+        formats_array[run].unpack_A_src /* operand B -> SrcA */);
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
@@ -51,7 +57,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, TILE_SIZE_PACK);
+        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         0 /* transpose_of_faces */,
         0 /* within_face_16x16_transpose */,
