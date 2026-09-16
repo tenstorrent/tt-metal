@@ -209,7 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
 
         _llk_pack_init_(bfd_pack, tensor_shape, TILE_CNT);
-        _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape);
+        _llk_pack_reduce_mask_config_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
         PROFILER_SYNC();
     }
     {
