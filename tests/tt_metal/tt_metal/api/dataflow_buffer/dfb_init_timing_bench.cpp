@@ -1264,7 +1264,7 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
 // Same 1Sx1A topology as BenchmarkCaseSixDebug but with implicit_sync enabled.
 // Uses a single-producer DM kernel that forces num_sw_threads=1 before finish()
 // (see dfb_bench_case6_debug_implicit_dm.cpp). Without that, finish()'s internal
-// sync_threads(get_num_threads()) waits for all 6 launched DM harts even though
+// sync_threads() waits for all 6 launched DM harts even though
 // only DM4 issues the implicit read.
 void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) {
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));

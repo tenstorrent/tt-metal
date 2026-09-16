@@ -5,7 +5,7 @@
 // Benchmark-only producer finish for single-producer implicit-sync DFBs.
 //
 // DataflowBuffer::finish() -> handle_final_credits() unconditionally calls
-// sync_threads(get_num_threads()). Quasar benchmark kernels are often launched
+// sync_threads(), which waits for every DM thread of the kernel. Quasar benchmark kernels are often launched
 // with num_threads_per_cluster > 1 while only one DM produces on a given DFB,
 // which deadlocks in that barrier.
 //

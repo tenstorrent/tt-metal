@@ -404,9 +404,10 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     // different threads' checks, causing some to enter the barrier and others to skip
     // it. Once past this point, tiles_to_process on the tail txn_id reflects the
     // contributions of all producers / consumers for this collective batch.
-    // Producer and consumer kernels co-reside with different thread counts, so each
-    // side uses its own barrier (0 = producer, 1 = consumer) — sharing one deadlocks.
-    sync_threads(is_producer ? 0 : 1);
+    // Producer and consumer kernels co-reside with different thread counts, so each must
+    // rendezvous on its own barrier — sharing one deadlocks. They are distinct kernels and every
+    // kernel gets its own barrier slot, so plain sync_threads() already keeps them apart.
+    sync_threads();
 
     // ISR already handled the collective batch — modular check (see WTP1).
     if (static_cast<int16_t>(read_actual_slot0() - expected_slot0) >= 0) {
