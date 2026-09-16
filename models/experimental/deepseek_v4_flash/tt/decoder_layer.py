@@ -158,6 +158,7 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         and the add into one op call, matching the eager math at HiFi4 / fp32 dest acc.
         """
         _profile(self.device)
+        print(f"Input to _mix {sublayer_out.layout} {streams.layout} {post.layout} {comb.layout}")
         return ttnn.experimental.deepseek.mix_streams(post, comb, sublayer_out, streams, compute_kernel_config=_HIFI4)
 
     def decode(

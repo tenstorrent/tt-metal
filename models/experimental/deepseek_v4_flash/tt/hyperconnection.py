@@ -177,6 +177,15 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         b, s, hc, d = hidden_streams.shape
         t = b * s
 
+        if hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT:
+            # mix_streams decode output is RM WIDTH_SHARDED with shard height H=4.
+            # ``to_layout(TILE)`` always builds a TILE TensorLayout from the *source*
+            # shard spec (see ``requires_padding_change``), so a dest memory_config
+            # with height padded to 32 is ignored and (4, 64) still fails the 32x32
+            # check. Drop to interleaved first; same pattern as RMSNorm.
+            if hidden_streams.is_sharded():
+                hidden_streams = ttnn.to_memory_config(hidden_streams, ttnn.DRAM_MEMORY_CONFIG)
+            hidden_streams = ttnn.to_layout(hidden_streams, ttnn.TILE_LAYOUT)
         # Flatten streams to [1,1,T,H*D] and unweighted-RMSNorm over H*D.
         tile_height = hidden_streams.get_tile().tile_shape[0]
         if isinstance(self.fn, LinearDecode):
