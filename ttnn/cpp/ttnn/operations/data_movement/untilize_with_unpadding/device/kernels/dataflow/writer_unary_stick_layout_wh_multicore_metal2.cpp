@@ -43,12 +43,7 @@ void kernel_main() {
         dfb_out0.wait_front(single_block_size * has_rows);
         std::uint32_t l1_read_addr = dfb_out0.get_read_ptr();
 
-        // The work split runs over the *input* padded width, so a core can own a block lying
-        // entirely at or past the unpadded output width -- every byte of it is discarded. Clamping
-        // such a block would underflow this unsigned subtraction into a ~4 GB write that never
-        // retires, hanging the device, so skip the writes instead. Both quantities are the same for
-        // every row of the block, so decide once. The CB bookkeeping around this still has to run:
-        // the reader and compute kernels produce the block either way.
+        // The work split runs over the input padded width.
         if (start_column_id < unpadded_X_size) {
             const std::uint32_t total_size = start_column_id + width_size;
             const std::uint32_t write_size =
