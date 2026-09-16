@@ -15,8 +15,13 @@ from PIL import Image
 
 import ttnn
 
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 from ....utils.tensor import from_torch
-from ....utils.test import ring_params_8k_req_exact_devices, ring_params_req_exact_devices
+from ....utils.test import (
+    ring_params_4k_req_exact_devices,
+    ring_params_8k_req_exact_devices,
+    ring_params_req_exact_devices,
+)
 
 # Fixed VAE work units: encoder (17, 256, 256) tiles, decoder (7, 16, 16) latent chunks.
 TILE = 256
@@ -26,10 +31,13 @@ DECODE_LATENT_FRAMES = 7
 
 
 def weights_subdir(subfolder: str) -> str | None:
-    base = os.environ.get("MINIMAX_H3_MODEL_PATH")
-    if not base:
+    """That partition's directory, resolving (and with TT_DIT_ALLOW_HF_DOWNLOAD=1 fetching) the
+    snapshot. `None` when it cannot be resolved, which callers turn into a skip."""
+    try:
+        base = resolve_weights_dir(subfolder)
+    except WeightsNotFoundError:
         return None
-    candidate = os.path.join(base, subfolder)
+    candidate = os.path.join(str(base), subfolder)
     return candidate if os.path.isfile(os.path.join(candidate, "config.json")) else None
 
 
@@ -116,10 +124,16 @@ _ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 150_000_000, "l1_small_size": _L1_SMALL}
 
-MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8")
-MESH_4X32_RING = pytest.param((4, 32), _ring_8k_trace, id="4x32")
+MESH_4X8_RING = pytest.param((4, 8), 2, _ring_8k, id="4x8nl2")
+MESH_4X32_RING = pytest.param((4, 32), 2, _ring_8k_trace, id="4x32nl2")
+# Wormhole has 1.5 MB L1/core against Blackhole's larger budget, so the 64 KB reservation the
+# Blackhole meshes use leaves too little for the DiT's static circular buffers.
+_L1_SMALL_WH = 32768
+_ring_4k = {**ring_params_4k_req_exact_devices, "l1_small_size": _L1_SMALL_WH}
+MESH_4X8_RING_WH = pytest.param((4, 8), 4, _ring_4k, id="4x8nl4")
 
-GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING]
+
+GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING, MESH_4X8_RING_WH]
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
@@ -309,9 +323,10 @@ def conditioner_checkpoint_dir(patterns: list[str]) -> str:
     """
     import glob
 
-    root = os.environ.get("MINIMAX_H3_MODEL_PATH", "")
-    if not root or not os.path.isdir(root):
-        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
+    try:
+        root = str(resolve_weights_dir(CONDITIONER_SUBFOLDER))
+    except WeightsNotFoundError as error:
+        pytest.skip(str(error))
     missing = [pattern for pattern in patterns if not glob.glob(os.path.join(root, pattern))]
     if missing:
         pytest.skip(f"MiniMax-H3 conditioner checkpoint at {root} is missing {missing}")

@@ -7,7 +7,6 @@ A/V sync is checked structurally (duration/ordering); envelope-vs-motion correla
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,8 +17,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
@@ -417,15 +418,14 @@ CALIBRATED_FOX_PROMPT = (
 
 
 def weights_dir(*required_subdirs: str) -> Path:
-    """The snapshot dir from MINIMAX_H3_MODEL_PATH; skips when it or a required partition is missing."""
-    root = os.environ.get("MINIMAX_H3_MODEL_PATH", "")
-    if not root or not Path(root).is_dir():
-        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
-    directory = Path(root)
-    missing = [name for name in required_subdirs if not (directory / name).is_dir()]
-    if missing:
-        pytest.skip(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
-    return directory
+    """The snapshot dir, from MINIMAX_H3_MODEL_PATH / the HF cache / a download; skips when unresolved.
+
+    A download needs TT_DIT_ALLOW_HF_DOWNLOAD=1; without it an absent snapshot still skips as before.
+    """
+    try:
+        return resolve_weights_dir(*required_subdirs)
+    except WeightsNotFoundError as error:
+        pytest.skip(str(error))
 
 
 def artifact_dir(name: str) -> Path:
@@ -471,8 +471,11 @@ def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: flo
     rows = pipeline.last_timings
     total = sum(seconds for _, seconds in rows)
     shape = tuple(pipeline.mesh_device.shape)
+    # The arch is read, not assumed: the same (4, 8) shape is a Galaxy on either part, and a
+    # mislabelled MEASUREMENT line is what gets pasted into a perf report.
+    arch = "Blackhole" if is_blackhole() else "Wormhole"
     logger.info(
-        f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
+        f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} {arch}, "
         f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
         f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links{extra} "
         f"| warm window: one full warmup generation at this shape, prepares and export excluded"
