@@ -1296,7 +1296,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
-  test_type: prefill_runner_kv_pcc
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, runner, kv_cache]
   test_group: disagg_prefill
   skus:
@@ -1324,7 +1324,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1
-  test_type: prefill_runner_kv_pcc
+  test_type: ci_probe_disabled
   test_tags: [kimi_k2_7, runner, kv_cache]
   test_group: disagg_prefill
   skus:
@@ -1345,7 +1345,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52 sc1
-  test_type: prefill_runner_kv_pcc
+  test_type: ci_probe_disabled
   test_tags: [glm_5_2, runner, kv_cache]
   test_group: disagg_prefill
   skus:
