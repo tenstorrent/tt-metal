@@ -55,8 +55,8 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_a = Layout::TILE;
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
-        // Selects the gelu variant BIAS_GELU compiles into its postprocess activation.
-        bool gelu_fast_and_approximate = false;
+        // Parameters of the op being run, for ops that take any; empty for ops that do not.
+        std::optional<binary::BinaryOpParams> op_params;
 
         // `worker_grid` is hashed because get_worker_grid resolves it from MUTABLE device state, so
         // unhashed a cache hit could reuse a program placed on a different core set. `sub_device_id`
@@ -82,7 +82,7 @@ struct BinaryNgDeviceOperation {
             "scalar",
             "rtol",
             "atol",
-            "gelu_fast_and_approximate");
+            "op_params");
         auto attribute_values() const {
             return std::make_tuple(
                 binary_op_type,
@@ -105,7 +105,7 @@ struct BinaryNgDeviceOperation {
                 scalar,
                 rtol,
                 atol,
-                binary_op_type == BinaryOpType::BIAS_GELU ? gelu_fast_and_approximate : false);
+                binary_op_type == BinaryOpType::BIAS_GELU ? op_params : std::optional<binary::BinaryOpParams>{});
         }
         DataType get_dtype() const;
     };

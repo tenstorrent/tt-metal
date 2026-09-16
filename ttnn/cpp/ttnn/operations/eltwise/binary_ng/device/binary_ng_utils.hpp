@@ -95,7 +95,7 @@ struct OpConfig {
         BinaryOpType binary_op_type,
         std::in_place_type_t<EnumT>,
         std::optional<DataType> dtype = std::nullopt,
-        bool gelu_fast_and_approximate = false);
+        const std::optional<binary::BinaryOpParams>& op_params = std::nullopt);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
