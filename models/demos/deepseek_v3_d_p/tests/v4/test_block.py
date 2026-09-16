@@ -112,7 +112,7 @@ def _test_config(model_config, num_hidden_layers):
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("seq_len", [2048], ids=["seq2048"])
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 # Layer 0 is hash_moe (tid2eid routing), layer 4 the plain top-k MoE -- both heavily_compressed
 # attention. Two layers rather than one because the router is the only thing that differs between
 # them, so a failure on one and not the other points straight at the gate.

@@ -29,7 +29,6 @@ _ATTENTION = {
     "heavily_compressed_attention": TtHCA,
 }
 
-# What the attention and MoE sublayers run at. The residual streams around them are fp32.
 _SUBLAYER_DTYPE = ttnn.bfloat16
 
 
@@ -47,9 +46,10 @@ class TtV4Block(LightweightModule):
     Shapes, taking a single device first: input and output are ``[1, 1, seq, hc_mult * hidden]`` fp32,
     and each sublayer sees ``[1, 1, seq, hidden]``. On a mesh the sequence is sharded on the SP axis
     and hidden on the TP axis, giving ``[1, 1, seq/sp, hc_mult * hidden/tp]`` and
-    ``[1, 1, seq/sp, hidden/tp]``. Hidden is never gathered across the block. The packed streams are
-    ordered stream-major within a chip, so a contiguous TP split gives each chip its own hidden slice
-    of every stream.
+    ``[1, 1, seq/sp, hidden/tp]``. Hidden is never gathered across the block. Within a chip the columns
+    hold its own hidden slice of every stream, which is what ``mhc_expand`` and this block's own
+    output already produce -- chaining layers needs no repacking. Only a host upload has to permute
+    into that order, since a mesh mapper splits the last dim globally (``_pack_streams`` in the test).
 
     The MoE comes from ``TtPrefillBlock._build_moe``: the same TtMoe off the same model config,
     reading ``state_dict["hash_table"]`` for V4's hash-routed layers.
@@ -217,8 +217,3 @@ class TtV4Block(LightweightModule):
 
         x = self.attn_res(x, _attn, sublayer_dtype=_SUBLAYER_DTYPE)
         return self.ffn_res(x, _ffn, sublayer_dtype=_SUBLAYER_DTYPE)
-
-    def release_sub_device_managers(self):
-        """Drop the MoE's shared-expert overlap sub-device manager before the mesh closes."""
-        if hasattr(self.ffn, "release_sub_device_manager"):
-            self.ffn.release_sub_device_manager()
