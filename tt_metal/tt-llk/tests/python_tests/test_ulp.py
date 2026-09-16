@@ -28,6 +28,7 @@ specific way the metric could look right and be wrong:
 
 import math
 
+import numpy as np
 import pytest
 import torch
 from helpers.accuracy_metrics import local_ulp
@@ -1041,7 +1042,7 @@ def test_elementwise_valid_marks_only_the_out_of_budget_lanes(dtype):
             _step_down(1.0, dtype, 3)[0],
         ]
     )
-    is_valid, distance = ulp_elementwise_valid(golden, result, 1)
+    is_valid, distance, _rescued = ulp_elementwise_valid(golden, result, 1)
     assert distance.tolist() == [0, 1, 2, 3]
     assert is_valid.tolist() == [True, True, False, False]
 
@@ -1050,7 +1051,7 @@ def test_elementwise_valid_accepts_both_nan_and_rejects_a_missing_one():
     nan = float("nan")
     golden = torch.tensor([nan, nan, 1.0], dtype=torch.float32)
     result = torch.tensor([nan, 1.0, nan], dtype=torch.float32)
-    is_valid, _ = ulp_elementwise_valid(golden, result, 0)
+    is_valid, _, _rescued = ulp_elementwise_valid(golden, result, 0)
     assert is_valid.tolist() == [True, False, False]
 
 
@@ -1060,7 +1061,7 @@ def test_elementwise_valid_rejects_an_overflow_to_inf_even_though_it_ranks_one_s
     different kind of wrong, and the tolerance gate this replaces rejects it too."""
     golden = torch.tensor([torch.finfo(torch.float32).max], dtype=torch.float32)
     result = torch.tensor([float("inf")], dtype=torch.float32)
-    is_valid, distance = ulp_elementwise_valid(golden, result, 1)
+    is_valid, distance, _rescued = ulp_elementwise_valid(golden, result, 1)
     assert int(distance[0]) == 1
     assert is_valid.tolist() == [False]
 
@@ -1071,11 +1072,13 @@ def test_near_zero_atol_rescues_a_cancellation_lane():
     golden = torch.tensor([100.0, 1e-8], dtype=torch.float32)
     result = torch.tensor([100.0, 2e-8], dtype=torch.float32)
 
-    is_valid, distance = ulp_elementwise_valid(golden, result, 4)
+    is_valid, distance, _rescued = ulp_elementwise_valid(golden, result, 4)
     assert int(distance[1]) > 1000  # meaningless as a kernel verdict
     assert is_valid.tolist() == [True, False]
 
-    is_valid, _ = ulp_elementwise_valid(golden, result, 4, near_zero_atol=1e-7)
+    is_valid, _, _rescued = ulp_elementwise_valid(
+        golden, result, 4, near_zero_atol=1e-7
+    )
     assert is_valid.tolist() == [True, True]
 
 
@@ -1084,7 +1087,7 @@ def test_near_zero_atol_does_not_loosen_the_large_magnitude_lanes():
     count replaces, so the floor must stay below the near-zero cut."""
     golden = torch.tensor([100.0, 1e-8], dtype=torch.float32)
     result = torch.tensor([100.5, 1e-8], dtype=torch.float32)
-    is_valid, _ = ulp_elementwise_valid(golden, result, 0, near_zero_atol=1.0)
+    is_valid, _, _rescued = ulp_elementwise_valid(golden, result, 0, near_zero_atol=1.0)
     assert is_valid.tolist() == [False, True]
 
 
@@ -1096,14 +1099,16 @@ def test_near_zero_cut_is_a_fraction_of_the_tensors_dynamic_range():
     result = golden.clone()
     result[1] += 0.5
     result[2] += 0.5
-    is_valid, _ = ulp_elementwise_valid(golden, result, 0, near_zero_atol=1.0)
+    is_valid, _, _rescued = ulp_elementwise_valid(golden, result, 0, near_zero_atol=1.0)
     assert is_valid.tolist() == [True, True, False]
 
 
 def test_near_zero_atol_covers_every_lane_of_an_all_zero_golden():
     golden = torch.zeros(3, dtype=torch.float32)
     result = torch.tensor([0.0, 1e-9, 1.0], dtype=torch.float32)
-    is_valid, _ = ulp_elementwise_valid(golden, result, 0, near_zero_atol=1e-8)
+    is_valid, _, _rescued = ulp_elementwise_valid(
+        golden, result, 0, near_zero_atol=1e-8
+    )
     assert is_valid.tolist() == [True, True, False]
 
 
@@ -1201,3 +1206,52 @@ def test_a_failure_at_the_top_of_the_range_reports_a_usable_step():
     assert not ok
     assert message.startswith("non-finite disagreement")
     assert "1 ULP = inf" not in message
+
+
+def test_elementwise_valid_reports_which_lanes_the_floor_rescued():
+    """The third return value. Those lanes hold the largest step counts in the tensor by
+    construction, so a reporting caller that ranks every lane names a lane that *passed*
+    and never mentions the one that failed."""
+    golden = torch.tensor([100.0, 1e-8], dtype=torch.float32)
+    result = torch.tensor([100.0, 2e-8], dtype=torch.float32)
+    is_valid, distance, rescued = ulp_elementwise_valid(
+        golden, result, 4, near_zero_atol=1e-7
+    )
+    assert is_valid.tolist() == [True, True]
+    assert rescued.tolist() == [False, True]
+    # Ranked without the rescued lane, the summary names nothing; with it, it names the
+    # lane that was never a failure.
+    assert ulp_stats(distance, ~rescued)["max"] == 0
+    assert ulp_stats(distance)["max"] > 1000
+
+
+def test_no_lane_is_reported_as_rescued_when_it_was_in_budget_anyway():
+    golden = torch.tensor([100.0, 1e-8], dtype=torch.float32)
+    result = golden.clone()
+    _, _, rescued = ulp_elementwise_valid(golden, result, 4, near_zero_atol=1e-7)
+    assert not bool(rescued.any())
+
+
+def test_the_sweep_metric_covers_the_proxy_formats_the_gate_judges():
+    """``local_ulp`` probed a private copy of the native format tuple, so the sweep wrote
+    NaN ``signed_ulp_error`` for exactly the format the gate can now judge. It asks
+    ``has_ulp_gate`` now, making the proxy table the single source of truth."""
+    values = np.array([1.0, 2.0])
+    assert not np.isnan(local_ulp(values, DataFormat.Bfp8_b)).any()
+    assert np.isnan(local_ulp(values, DataFormat.Bfp4_b)).all()
+
+
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_the_sweep_metric_matches_local_step_at_the_top_of_the_range(dtype):
+    """The gap the reviewer pointed at: ``test_local_step_agrees_with_the_sweep_metric``
+    never probed ``finfo.max``, so the ``nextafter`` saturation there went uncaught in
+    both functions and the shared-definition claim quietly stopped holding."""
+    fmt = {
+        torch.bfloat16: DataFormat.Float16_b,
+        torch.float16: DataFormat.Float16,
+        torch.float32: DataFormat.Float32,
+    }[dtype]
+    largest = float(torch.finfo(dtype).max)
+    swept = float(local_ulp(np.array([largest]), fmt)[0])
+    assert math.isfinite(swept)
+    assert swept == pytest.approx(local_step(largest, dtype))
