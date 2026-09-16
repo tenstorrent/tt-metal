@@ -842,7 +842,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Any op that reads device tensor data asserts.
         // Default: false
         // Usage: export TT_METAL_COMPILE_ONLY=1
-        case EnvVarID::TT_METAL_COMPILE_ONLY: this->compile_only = true; break;
+        case EnvVarID::TT_METAL_COMPILE_ONLY: this->compile_only = is_env_enabled(value); break;
 
         // TT_METAL_FORCE_REINIT
         // Force context reinitialization on each run.
