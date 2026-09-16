@@ -88,8 +88,10 @@ of five):
 | 4 | ~0.55 TFLOP/s (`d = 128`: ~0.77) | long sequences; 4096 rows on 16 cores in ~640 us, 28160 rows on 110 cores in ~4.1 ms |
 
 Taller blocks do more arithmetic per packet hop and per DST register fill;
-the pass at `Bt = 4` runs at roughly 65% of the fidelity-adjusted matmul
-peak. Prefer the tallest `Bt` whose core count fits (next section).
+at `Bt = 4` the matmul pipe is busy about 38% of the time (executed FLOPs
+times fidelity phases against the 5.4 TFLOP/s per core that the matrix
+engine does at LoFi). Prefer the tallest `Bt` whose core count fits (next
+section).
 
 ### `mask_type`
 
@@ -181,7 +183,7 @@ groups side by side (wider on ties). If none fits it fails with
     groups = min(slices, how many rectangles fit the grid, max_groups)
 
 groups run side by side and take the remaining slices in turn. Shapes used
-in the tests and benchmarks (Blackhole, 13x10 compute grid):
+in the tests and benchmarks (Blackhole p150, 11x10 compute grid):
 
 | `N` | `Bt` | `C` | rectangle | groups on the grid |
 |---|---|---|---|---|
@@ -224,6 +226,34 @@ the original two-pass backward on its better layout, milliseconds:
 
 At 4096 rows per chip and above the ring step is bound by the shifts, not
 the kernel; below 1024 by dispatch.
+
+### Utilisation against the repository's two-pass backward
+
+Same problem, same 110 cores, causal, `d = 64`, both kernels timed on one
+chip (`DISABLED_CompareWithTheRepositorysBackward`, median of five). MFU
+is useful FLOPs (five matmuls over the causal triangle) over the LoFi
+matrix-engine peak of the 110 cores, 594 TFLOP/s; "busy" is executed FLOPs
+times fidelity phases over the same peak (the two-pass kernel recomputes
+the score stage in both passes, 7 matmuls at HiFi4; the cyclic runs 5 at
+3.6 phases on average). The two-pass kernel's DRAM bytes are counted from
+its readers (it re-reads K and V for every query tile and Q, dO and the
+statistics for every key tile, so its traffic grows with the square of the
+sequence); the cyclic kernel's are the lower bound of every operand once
+(its relay never re-reads). The card's DRAM peak is 512 GB/s.
+
+| rows x heads, `Bt` | two-pass: TFLOP/s, MFU, busy, GB/s | cyclic: TFLOP/s, MFU, busy, GB/s | speed-up |
+|---|---|---|---|
+| 7040 x 1, 1 | 9.1, 1.5%, 9%, 289 | 16.4, 2.8%, 10%, 15 | 1.8x |
+| 7040 x 2, 2 | 10.1, 1.7%, 10%, 322 | 37.5, 6.3%, 23%, 34 | 3.7x |
+| 14080 x 1, 2 | 10.2, 1.7%, 10%, 323 | 37.6, 6.3%, 23%, 17 | 3.7x |
+| 14080 x 2, 4 | 10.4, 1.8%, 10%, 328 | 60.1, 10.1%, 36%, 27 | 5.8x |
+| 28160 x 1, 4 | 10.6, 1.8%, 10%, 332 | 63.0, 10.6%, 38%, 14 | 6.0x |
+
+Bytes moved for the 28160-row problem: about 8 GB against 58 MB, a factor
+of 138. The two-pass kernel sits at roughly 65% of DRAM bandwidth with its
+matrix pipe a tenth busy; the cyclic kernel uses 3% of the bandwidth and
+is bound by its own pipeline (the vector unit's DST traffic in the score
+pass, then the matmuls of the gradient updates), not by DRAM.
 
 ## Accuracy
 
