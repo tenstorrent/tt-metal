@@ -6,6 +6,7 @@
 
 #include "chunk_plan.hpp"
 
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/kernel_types.hpp>  // for tt::tt_metal::NOC
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -155,18 +156,19 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //   chunk           -- the unit we move. min(input page, output page).
     //   chunks_per_page -- how many chunks share one page. One number per side, and one of them is 1.
     //   bank_step       -- page-id step to the next chunk sitting next to this one in memory.
+    //                      0 means none are adjacent.
     //   run             -- chunks next to each other in memory. One NOC command, one packet segment.
     //   run_max         -- most chunks one run may take.
     //   payload_chunks  -- chunks the fabric payload could hold.
     //   packet_chunks   -- chunks a packet really holds: min(payload_chunks, 4 runs).
-    //   entry           -- one CB page, in chunks. Always a whole number of packets.
+    //   entry           -- one CB page, in chunks. A whole number of packets unless L1 is tight.
     //   stripe          -- our chunks per output row. The one number all_gather hands the chunk
     //                      machinery: a run stops at the row edge, past which sits another device.
     //   hop             -- one relay step. Hop 0 sends our own input, later hops relay.
     //   sink            -- a stripe consumed here, not relayed on.
     //
-    // The host sizes, the kernels walk. Reader and writer read bank_step off the TensorAccessor
-    // themselves, so no layout is special-cased here and the two cannot disagree.
+    // The host sizes, the kernels walk. Both derive bank_step from the same distribution spec,
+    // differing only in the 0 sentinel noted at its derivation below.
     ////////////////////////////////////////////////////////////////
 
     const auto chunks = chunk_sizes(input_tensor, output_tensor);
@@ -229,14 +231,17 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // --- Packets and runs ---
     // Whole chunks only: a packet cannot use a tail shorter than one chunk, and leaving that tail out
     // of the figure the CB entry is sized from keeps entry and packet boundaries coincident.
-    // bank_step is 1 on a sharded output -- its chunks are already neighbours, so runs are long and
-    // nothing below caps them.
     const uint32_t payload_chunks = std::max(1u, fabric_packet_size / chunk_size);
     const uint32_t packet_size = payload_chunks * chunk_size;
-    const uint32_t bank_step =
-        output_tensor.memory_config().is_sharded()
-            ? 1u
-            : std::max(1u, mesh_device->allocator()->get_num_banks(output_tensor.buffer()->buffer_type()));
+    // Mirrors kernels/chunk_walk.hpp bank_step_of(), except that a shard one page wide in every dim
+    // gives 0 here where the accessor gives 1. 0 is the one we want: run_den_of() reads it as
+    // one-chunk runs, which is what the device produces. Do not "fix" it to 1.
+    const auto& out_dspec = output_tensor.buffer()->buffer_distribution_spec();
+    const auto out_buffer_type = output_tensor.buffer()->buffer_type();
+    const uint32_t page_step = out_dspec.has_value()
+                                   ? out_dspec->contiguous_page_stride()
+                                   : std::max(1u, mesh_device->allocator()->get_num_banks(out_buffer_type));
+    const uint32_t bank_step = out_chunks_per_page > 1 ? 1u : page_step;
     const uint32_t packet_chunks = packet_chunks_of(payload_chunks, stripe, bank_step);
     report_payload(packet_size, chunk_size, stripe, bank_step, arch);
 
@@ -265,7 +270,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     uint32_t packets_per_cb_entry = 1;
     uint32_t run_cap_bytes = 0;
     uint8_t mux_slots_per_channel = 2;
-    const uint32_t cb_depth = 2;  // two entries: one filling while the other drains.
+    uint32_t wanted_cb_depth = 2;  // one entry filling while the other drains, unless L1 forces it to 1.
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Calibrated on T3000 at 2, 4 and 8 devices.
         //
@@ -407,8 +412,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     ////////////////////////////////////////////////////////////////
 
     // --- CB entry ---
-    // An entry holds a whole number of packets, and a whole number of pages on whichever side shares
-    // one, so an entry boundary never cuts either; one of those two counts is always 1.
+    // An entry wants a whole number of packets, and of pages on whichever side shares one, so a
+    // boundary cuts neither; one of those counts is always 1. Wants: a tight L1 breaks both below.
     //
     // The unit is what a packet actually carries -- not what the payload could carry, which is a
     // different number whenever the segment count ends the packet first. Sizing from the payload
@@ -430,8 +435,13 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // so it is left as measured rather than special-cased.
     const uint32_t entry_floor_bytes = 14 * 1024;
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t entry_chunks =
-        entry_chunks_of(entry_unit, chunk_size, packets_per_cb_entry, entry_floor_bytes, cb_depth, max_l1_space);
+    // Size for speed, then let L1 have the last word.
+    const auto [entry_chunks, cb_depth] = entry_chunks_fitted(
+        entry_chunks_of(entry_unit, chunk_size, packets_per_cb_entry, entry_floor_bytes),
+        chunk_size,
+        max_l1_space,
+        /*min_cb_depth=*/1,  // reader reserves one page and writer waits on one, so depth 1 is serial, not stuck
+        wanted_cb_depth);
     const uint32_t cb_page_size = entry_chunks * chunk_size;
 
     // Input and relay CB

@@ -6,6 +6,7 @@
 
 #include "chunk_plan.hpp"
 
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -222,17 +223,18 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     //   chunk           -- the unit we move. min(input page, output page).
     //   chunks_per_page -- how many chunks share one page. One number per side, and one of them is 1.
     //   bank_step       -- page-id step to the next chunk sitting next to this one in memory.
+    //                      0 means none are adjacent.
     //   run             -- chunks next to each other in memory. One NOC command, one packet segment.
     //   run_max         -- most chunks one run may take.
     //   payload_chunks  -- chunks the fabric payload could hold.
     //   packet_chunks   -- chunks a packet really holds: min(payload_chunks, 4 runs).
-    //   entry           -- one CB page, in chunks. Always a whole number of packets.
+    //   entry           -- one CB page, in chunks. A whole number of packets unless L1 is tight.
     //   stripe          -- our chunks per output row. The one number all_gather hands the chunk
     //                      machinery: a run stops at the row edge, past which sits another device.
     //   route           -- one multicast range: how many hops, in which direction.
     //
-    // The host sizes, the kernels walk. Reader and writer read bank_step off the TensorAccessor
-    // themselves, so no layout is special-cased here and the two cannot disagree.
+    // The host sizes, the kernels walk. Both derive bank_step from the same distribution spec,
+    // differing only in the 0 sentinel noted at its derivation below.
     ////////////////////////////////////////////////////////////////
 
     const auto arch = input_tensor.device()->arch();
@@ -288,12 +290,12 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // --- Per-arch tuning ---
     // Two CB entries is the floor on any arch: the reader runs one entry ahead of the sender, so a single
     // entry deadlocks.
-    uint32_t cb_depth = 2;
+    uint32_t wanted_cb_depth = 2;
     uint32_t packets_per_cb_entry = 1;
     uint32_t run_cap_bytes = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Depth is also the reader's in-flight trid count, but deeper is perf-neutral here, so keep the L1.
-        cb_depth = 2;
+        wanted_cb_depth = 2;
         // Packing several packets per entry amortises the reader/sender CB handshake, which is what the
         // store-and-forward writer wants -- but here the reader sends the packets itself, off transaction
         // ids and with no per-entry flush to stall on, so a one-packet entry just pipelines finer and wins
@@ -304,7 +306,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     } else if (arch == tt::ARCH::BLACKHOLE) {
         // Calibrated at 8 devices x 2 links, and at 1, 2 and 4 links. cb_depth and the run cap were both
         // already at their optimum -- every other value measured fell inside the run-to-run spread.
-        cb_depth = 3;
+        wanted_cb_depth = 3;
         // packets_per_cb_entry: four amortises the reader/sender handshake and is right almost everywhere,
         // but not on a line carrying a long stripe: there the sender is already serialised per hop, and a
         // four-packet entry just delays the first send behind three more packet loads. A ring, sending in
@@ -328,13 +330,16 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // --- Packets, runs and the CB entry ---
     // Whole chunks only: a packet cannot use a tail shorter than one chunk, and leaving that tail out
     // of the figure the entry is sized from keeps entry and packet boundaries coincident.
-    // bank_step is 1 on a sharded output -- its chunks are already neighbours, so runs are long and
-    // nothing caps them.
     const uint32_t payload_chunks = std::max(1u, packet_size / chunk_size);
-    const uint32_t bank_step =
-        output_tensor.memory_config().is_sharded()
-            ? 1u
-            : std::max(1u, input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type()));
+    // Mirrors kernels/chunk_walk.hpp bank_step_of(), except that a shard one page wide in every dim
+    // gives 0 here where the accessor gives 1. 0 is the one we want: run_den_of() reads it as
+    // one-chunk runs, which is what the device produces. Do not "fix" it to 1.
+    const auto& out_dspec = output_tensor.buffer()->buffer_distribution_spec();
+    const auto out_buffer_type = output_tensor.buffer()->buffer_type();
+    const uint32_t page_step = out_dspec.has_value()
+                                   ? out_dspec->contiguous_page_stride()
+                                   : std::max(1u, input_tensor.device()->allocator()->get_num_banks(out_buffer_type));
+    const uint32_t bank_step = out_chunks_per_page > 1 ? 1u : page_step;
     const uint32_t packet_chunks = packet_chunks_of(payload_chunks, stripe, bank_step);
     report_payload(packet_size, chunk_size, stripe, bank_step, arch);
 
@@ -346,8 +351,8 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         run_max = run_max != 0 ? std::min(run_max, arch_run_max) : arch_run_max;
     }
 
-    // An entry holds a whole number of packets, and a whole number of pages on whichever side shares
-    // one, so an entry boundary never cuts either. The unit is what a packet actually carries.
+    // An entry wants a whole number of packets, and of pages on whichever side shares one, so a
+    // boundary cuts neither. Wants: a tight L1 breaks both below. The unit is what a packet carries.
     const uint32_t chunks_per_group = std::max(in_chunks_per_page, out_chunks_per_page);
     uint32_t entry_unit = run_max != 0 ? packet_chunks : payload_chunks;
     entry_unit = std::max(chunks_per_group, (entry_unit / chunks_per_group) * chunks_per_group);
@@ -355,8 +360,14 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // flush to stall on, so the handshake the floor pays for is not on its critical path. Its own
     // packets_per_cb_entry tuning above is the whole story.
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t entry_chunks =
-        entry_chunks_of(entry_unit, chunk_size, packets_per_cb_entry, /*floor_bytes=*/0, cb_depth, max_l1_space);
+    // Size for speed, then let L1 have the last word. Take its depth back, not the wanted one: the
+    // kernels below count trids by it.
+    const auto [entry_chunks, cb_depth] = entry_chunks_fitted(
+        entry_chunks_of(entry_unit, chunk_size, packets_per_cb_entry, /*floor_bytes=*/0),
+        chunk_size,
+        max_l1_space,
+        /*min_cb_depth=*/2,  // the reader reserves two pages at once and counts trids by depth; 1 deadlocks
+        wanted_cb_depth);
     const uint32_t cb_page_size = entry_chunks * chunk_size;
 
     // Input CB

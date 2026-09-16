@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 #include <tt-metalium/math.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -19,11 +20,13 @@ namespace ttnn::operations::ccl {
 //   chunk           -- the unit we move. min(input page, output page).
 //   chunks_per_page -- how many chunks share one page. One number per side, and one of them is 1.
 //   bank_step       -- page-id step to the next chunk sitting next to this one in memory.
-//                      Interleaved: the bank count. 1 means chunks are already neighbours.
+//                      Interleaved: the bank count. 1 means chunks are already neighbours, and
+//                      0 means none are (a shard one page wide in every dim).
 //   run             -- chunks next to each other in memory. One NOC command, one packet segment.
 //   payload_chunks  -- chunks the fabric payload could hold.
 //   packet_chunks   -- chunks a packet really holds: min(payload_chunks, 4 runs).
-//   entry           -- one CB page, in chunks. Always a whole number of packets.
+//   entry           -- one CB page, in chunks. A whole number of packets, unless L1 is too
+//                      tight for that (entry_chunks_fitted).
 //   stripe          -- the op's boundary: our chunks per output row, which is where a run stops.
 //
 // The one number the op hands over is `stripe`. Everything below follows from it.
@@ -62,15 +65,22 @@ inline ChunkSizes chunk_sizes(const Tensor& input_tensor, const Tensor& output_t
     return sizes;
 }
 
+// A run averages stripe / this. bank_step 0 means nothing is adjacent, so runs are one chunk. The
+// device accessor reports 1 there, not 0, because it needs a non-zero multiplier -- believing its 1
+// here would predict a full packet.
+inline uint32_t run_den_of(uint32_t stripe, uint32_t bank_step) {
+    return bank_step == 0 ? stripe : std::min(stripe, bank_step);
+}
+
 // --- how many chunks a packet holds ---
 // A packet carries at most four scatter segments (NOC_SCATTER_WRITE_MAX_CHUNKS in
 // tt_metal/fabric/fabric_edm_packet_header.hpp), and a segment is one run. On an interleaved output
 // the chunks next to each other in memory are bank_step page ids apart, and a run may not leave our
-// stripe, so a run averages stripe / min(stripe, bank_step) chunks. Where four of those come to
-// less than the payload, the segment count is what ends the packet and the rest of the payload is
+// stripe, so a run averages stripe / run_den_of(stripe, bank_step) chunks. Where four of those come
+// to less than the payload, the segment count is what ends the packet and the rest of the payload is
 // dead space -- which matters because the CB entry is sized in packets below.
 inline uint32_t packet_chunks_of(uint32_t payload_chunks, uint32_t stripe, uint32_t bank_step) {
-    const uint32_t run_den = std::min(stripe, std::max(1u, bank_step));
+    const uint32_t run_den = run_den_of(stripe, bank_step);
     const uint32_t four_runs = 4 * stripe / run_den;
     return std::clamp(four_runs, 1u, payload_chunks);
 }
@@ -97,7 +107,7 @@ inline uint32_t packet_chunks_of(uint32_t payload_chunks, uint32_t stripe, uint3
 // chunk, so four of them always fill a 4-chunk payload whatever the stripe.
 inline uint32_t ideal_payload_bytes(uint32_t chunk_size, uint32_t stripe, uint32_t bank_step, uint32_t ceiling) {
     constexpr uint32_t target_bytes = 8 * 1024;
-    const uint32_t run_den = std::min(stripe, std::max(1u, bank_step));
+    const uint32_t run_den = run_den_of(stripe, bank_step);
     const uint32_t by_segments = std::max(1u, 4 * stripe / run_den);
     const uint32_t by_target = std::max(1u, target_bytes / chunk_size);
     const uint32_t by_hardware = std::max(1u, ceiling / chunk_size);
@@ -155,39 +165,61 @@ inline uint32_t run_max_of(uint32_t packets, uint32_t payload_chunks, uint32_t c
 }
 
 // --- how big a CB entry is ---
-// The writer flushes at every entry boundary, so an entry has to be a whole number of packets: an
+// The writer flushes at every entry boundary, so an entry wants to be a whole number of packets: an
 // entry that is not cuts a packet every time round, and a cut packet still costs a whole fabric
-// slot. A 32 KB entry over a 14336 B packet measured 11-17% slower at long stripes for exactly
-// that reason.
+// slot. A 32 KB entry over a 14336 B packet measured 11-17% slower at long stripes for exactly that
+// reason. Wants, not is: entry_chunks_fitted below breaks this when L1 leaves no room for it.
 //
 // Within that, an entry also has to be big enough for the reader/writer handshake to amortise --
 // one wait_front/pop_front pair plus a read barrier per entry. At a small fabric packet the
 // one-packet entry is only a few KB and the handshake shows: an 8-device line at a 8192 B packet
 // was worth 26% once the entry grew. `floor_bytes` is that floor.
 //
-// `unit` is what a packet actually carries, and `least_units` is the caller's own tuning. The
-// result is clamped to the L1 an entry may use.
-inline uint32_t entry_chunks_of(
-    uint32_t unit,
-    uint32_t chunk_size,
-    uint32_t least_units,
-    uint32_t floor_bytes,
-    uint32_t cb_depth,
-    uint32_t max_l1_space) {
+// `unit` is what a packet actually carries, and `least_units` is the caller's own tuning. This sizes
+// the entry for speed only -- see entry_chunks_fitted() below for what actually fits in L1.
+inline uint32_t entry_chunks_of(uint32_t unit, uint32_t chunk_size, uint32_t least_units, uint32_t floor_bytes) {
     const uint32_t unit_bytes = unit * chunk_size;
-    uint32_t units = std::max(std::max(1u, least_units), tt::div_up(floor_bytes, unit_bytes));
-    const uint32_t units_that_fit = max_l1_space / (cb_depth * unit_bytes);
-    if (units_that_fit < units) {
-        log_warning(
-            tt::LogOp,
-            "all_gather CB entry shortened from {} to {} packet(s) by L1 headroom ({} B available); performance may "
-            "regress.",
-            units,
-            std::max(1u, units_that_fit),
-            max_l1_space);
-        units = std::max(1u, units_that_fit);
-    }
+    const uint32_t units = std::max(std::max(1u, least_units), tt::div_up(floor_bytes, unit_bytes));
     return units * unit;
+}
+
+// --- what actually fits ---
+// A CB that does not fit L1 does not run slowly, it throws from validate_circular_buffer_region, and
+// an L1-resident tensor can leave less than one packet. So the rules above are wants; this is the
+// last word. Any chunk count is legal: every kernel use of the entry is min(entry, remaining), with
+// no division, and the tail of every slice is already a partial entry.
+//
+// Depth goes last and never below min_cb_depth, which is correctness, not speed: the multicast
+// reader reserves two pages at once and counts trids by depth, so 1 deadlocks it. Returns the depth
+// it settled on because that is what the CB and the kernels have to be built with.
+inline std::pair<uint32_t, uint32_t> entry_chunks_fitted(
+    uint32_t entry_chunks, uint32_t chunk_size, uint32_t max_l1_space, uint32_t min_cb_depth, uint32_t wanted_depth) {
+    uint32_t cb_depth = wanted_depth;
+    while (max_l1_space / (cb_depth * chunk_size) == 0 && cb_depth > min_cb_depth) {
+        --cb_depth;
+    }
+    const uint32_t fits = max_l1_space / (cb_depth * chunk_size);
+    TT_FATAL(
+        fits > 0,
+        "all_gather has {} B of L1 for its circular buffer, which does not hold {} entr{} of one {} B chunk. Move a "
+        "tensor to DRAM, or shard it over more cores: in the lockstep L1 allocator a shard grid narrower than the "
+        "bank count charges its whole per-bank footprint to every core.",
+        max_l1_space,
+        min_cb_depth,
+        min_cb_depth == 1 ? "y" : "ies",
+        chunk_size);
+    if (fits >= entry_chunks) {
+        return {entry_chunks, cb_depth};
+    }
+    log_warning(
+        tt::LogOp,
+        "all_gather CB entry cut from {} to {} chunk(s) at depth {} ({} B of L1 available); throughput will drop -- "
+        "the entry no longer holds whole packets.",
+        entry_chunks,
+        fits,
+        cb_depth,
+        max_l1_space);
+    return {fits, cb_depth};
 }
 
 }  // namespace ttnn::operations::ccl
