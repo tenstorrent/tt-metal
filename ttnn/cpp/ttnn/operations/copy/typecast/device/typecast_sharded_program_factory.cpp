@@ -39,8 +39,8 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         out_shard_spec.num_cores(),
         ncores);
 
-    tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat act_df = cb_dataformat_for(input.dtype());
+    tt::DataFormat out_df = cb_dataformat_for(output.dtype());
 
     uint32_t input_tile_size = tt::tile_size(act_df);
     uint32_t output_tile_size = tt::tile_size(out_df);
