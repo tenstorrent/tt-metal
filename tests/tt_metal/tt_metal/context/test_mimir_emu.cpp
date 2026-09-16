@@ -40,114 +40,10 @@ void write_smc32(Cluster& cluster, const tt_cxy_pair& smc, uint64_t address, uin
     cluster.write_core(&value, sizeof(value), smc, address);
 }
 
-uint64_t read_smc64(Cluster& cluster, const tt_cxy_pair& smc, uint64_t address) {
-    uint64_t value = 0;
-    cluster.read_core(&value, sizeof(value), smc, address);
-    return value;
-}
-
-void configure_cce_sram(Cluster& cluster, ChipId chip_id) {
-    const auto smc_cores = cluster.get_soc_desc(chip_id).get_cores(CoreType::SMC, CoordSystem::TRANSLATED);
-    ASSERT_EQ(smc_cores.size(), 1);
-    const tt_cxy_pair smc(chip_id, smc_cores.front().x, smc_cores.front().y);
-
-    constexpr uint64_t kColdReset = 0x2040;
-    constexpr uint64_t kWarmReset = 0x2044;
-    constexpr uint64_t kCce0ResetBits = (1ULL << 8) | (1ULL << 9) | (1ULL << 10);
-    constexpr uint64_t kCce1ResetBits = (1ULL << 12) | (1ULL << 13) | (1ULL << 14);
-    constexpr uint64_t kInfrastructureResetBits = (1ULL << 1) | (1ULL << 2);
-    constexpr uint64_t kCceResetBits = kCce0ResetBits | kCce1ResetBits;
-
-    write_smc64(
-        cluster, smc, kColdReset, read_smc64(cluster, smc, kColdReset) | kInfrastructureResetBits | kCceResetBits);
-    write_smc64(cluster, smc, kWarmReset, read_smc64(cluster, smc, kWarmReset) | kCceResetBits);
-
-    // Open the non-secure and secure catch-all entries for the memory, CCE, and CCE-config
-    // interconnect tiles, matching Mimir's run_cce_via_sival.py bring-up.
-    constexpr uint64_t kFirewallNonSecure =
-        (1ULL << 0) | (1ULL << 1) | (1ULL << 4) | (1ULL << 8) | (7ULL << 12) | (1ULL << 24);
-    constexpr uint64_t kFirewallSecure = (1ULL << 0) | (1ULL << 1) | (1ULL << 4) | (7ULL << 12) | (1ULL << 24);
-    constexpr uint64_t kFirewallEnd = 0xFFFFFFFFFFFULL;
-    constexpr std::array<std::pair<uint64_t, uint64_t>, 6> kFirewallEntries{{
-        {0x04000000, 0x040001E0},
-        {0x04000800, 0x040009E0},
-        {0x04001000, 0x040011E0},
-        {0x04001800, 0x040019E0},
-        {0x04002000, 0x040021E0},
-        {0x04002800, 0x040029E0},
-    }};
-    for (const auto& [non_secure, secure] : kFirewallEntries) {
-        for (const auto& [base, config] : std::array<std::pair<uint64_t, uint64_t>, 2>{
-                 {{non_secure, kFirewallNonSecure}, {secure, kFirewallSecure}}}) {
-            write_smc64(cluster, smc, base, config);
-            write_smc64(cluster, smc, base + 0x08, 0);
-            write_smc64(cluster, smc, base + 0x10, kFirewallEnd);
-        }
-    }
-
-    // Release each CCE uncore. The eight RISC-V cores remain in reset; SRAM is now host-accessible.
-    write_smc64(cluster, smc, 0x02200000, 0x1);
-    write_smc64(cluster, smc, 0x03200000, 0x1);
-}
-
 CoreCoord translated_dram_core(const metal_SocDescriptor& soc_desc, uint32_t channel) {
     const auto core = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(channel, 0, CoreType::DRAM, CoordSystem::LOGICAL), CoordSystem::TRANSLATED);
     return {core.x, core.y};
-}
-
-void configure_cce0_for_firmware(Cluster& cluster, const tt_cxy_pair& smc) {
-    constexpr uint64_t kCce0Tl1Base = 0x40000000;
-    constexpr uint64_t kCceTl1SpaBase = 0x1280000000;
-    constexpr uint64_t kCceTl1SpaEnd = 0x1280800000;
-    constexpr uint64_t kGddrSpaBase = 0x1000000000000;
-    constexpr uint64_t kGddrSpaEnd = 0x1000200000000;
-    constexpr uint64_t kGddrLocalBase = 0x800000000;
-    constexpr uint64_t kValid = 1;
-    constexpr uint64_t kValidWithSnoop = kValid | (1ULL << 30);
-
-    // CCE0 MLA: TL1 entry 0 and GDDR entry 2.
-    for (const auto& [base, start, end, target, attrs] : std::array<std::array<uint64_t, 5>, 2>{{
-             {0x02300000, kCceTl1SpaBase, kCceTl1SpaEnd, kCce0Tl1Base, kValid},
-             {0x02300040, kGddrSpaBase, kGddrSpaEnd, kGddrLocalBase, kValid},
-         }}) {
-        write_smc64(cluster, smc, base + 0x00, start);
-        write_smc64(cluster, smc, base + 0x08, end);
-        write_smc64(cluster, smc, base + 0x10, target);
-        write_smc64(cluster, smc, base + 0x18, attrs);
-    }
-
-    // CCE0 DMRISC: TL1 entry 0 and GDDR entry 3.
-    for (const auto& [base, start, end, target, attrs] : std::array<std::array<uint64_t, 5>, 2>{{
-             {0x02202000, kCceTl1SpaBase, kCceTl1SpaEnd, kCce0Tl1Base, kValid},
-             {0x02202060, kGddrSpaBase, kGddrSpaEnd, kGddrLocalBase, kValidWithSnoop},
-         }}) {
-        write_smc64(cluster, smc, base + 0x00, start);
-        write_smc64(cluster, smc, base + 0x08, end);
-        write_smc64(cluster, smc, base + 0x10, target);
-        write_smc64(cluster, smc, base + 0x18, attrs);
-    }
-
-    // All harts enter at the beginning of CCE0 TL1.
-    for (uint32_t hart = 0; hart < 8; ++hart) {
-        write_smc64(cluster, smc, 0x02000000 + hart * sizeof(uint64_t), kCce0Tl1Base);
-    }
-    write_smc64(cluster, smc, 0x02300088, kCceTl1SpaBase);
-
-    constexpr std::array<std::pair<uint64_t, uint32_t>, 9> kHashConfiguration{{
-        {0x00, 0x00000001},
-        {0x04, 0x00000000},
-        {0x08, 0x00000000},
-        {0x0C, 0x0000A290},
-        {0x10, 0x00005560},
-        {0x14, 0x00005540},
-        {0x18, 0x0000AA80},
-        {0x1C, 0x00112110},
-        {0x20, 0x00221220},
-    }};
-    for (const auto& [offset, value] : kHashConfiguration) {
-        write_smc32(cluster, smc, 0x02211000 + offset, value);
-    }
 }
 
 std::vector<uint8_t> read_firmware(const char* path) {
@@ -180,8 +76,6 @@ TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
     ASSERT_EQ(cluster.all_chip_ids().size(), 1);
 
     constexpr ChipId chip_id = 0;
-    configure_cce_sram(cluster, chip_id);
-
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
     const CoreCoord cce0 = translated_dram_core(soc_desc, 0);
     const CoreCoord cce1 = translated_dram_core(soc_desc, 1);
@@ -210,7 +104,6 @@ TEST(MimirEmu, CceSramRoundTripThroughMinimalDevice) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     Cluster& cluster = MetalContext::instance().get_cluster();
-    configure_cce_sram(cluster, device->id());
     const CoreCoord cce = device->virtual_core_from_logical_core({0, 0}, CoreType::DRAM);
     constexpr uint64_t address = kCceL1NocOffset + kCceSramTestOffset;
     constexpr uint32_t written = 0xC0FFEE03;
@@ -236,11 +129,8 @@ TEST(MimirEmu, Cce0ExecutesPrebuiltFirmware) {
     llrt::RunTimeOptions rtoptions;
     Cluster cluster(rtoptions);
     constexpr ChipId chip_id = 0;
-    configure_cce_sram(cluster, chip_id);
-
     const auto smc_core = cluster.get_soc_desc(chip_id).get_cores(CoreType::SMC, CoordSystem::TRANSLATED).front();
     const tt_cxy_pair smc(chip_id, smc_core.x, smc_core.y);
-    configure_cce0_for_firmware(cluster, smc);
 
     const CoreCoord cce0 = translated_dram_core(cluster.get_soc_desc(chip_id), 0);
     const tt_cxy_pair cce(chip_id, cce0);
@@ -260,8 +150,10 @@ TEST(MimirEmu, Cce0ExecutesPrebuiltFirmware) {
     uint32_t postcode = 0;
     write_smc32(cluster, smc, kCce0Postcode, postcode);
 
-    // Keep harts 1-7 in reset and release only hart 0 plus the already-running uncore.
-    write_smc64(cluster, smc, 0x02200000, 0x3);
+    // PF_CTRL_RESET bit 0 is the uncore, bits 1-8 are harts 0-7. Release only the boot hart
+    // plus the already-running uncore: the Mimir CCE linker script sets __boot_hart = 1, and
+    // only the boot hart reaches main()/WRITE_TEST_PASS(). Non-boot harts run secondary_main().
+    write_smc64(cluster, smc, 0x02200000, 0x5);
     for (uint32_t poll = 0; poll < 500 && postcode != kPass && postcode != kFail; ++poll) {
         cluster.read_core(&postcode, sizeof(postcode), smc, kCce0Postcode);
         if (postcode != kPass && postcode != kFail) {
@@ -275,8 +167,8 @@ TEST(MimirEmu, Cce0ExecutesPrebuiltFirmware) {
     EXPECT_EQ(postcode, kPass) << "CCE0 firmware did not report PASS before the 10-second timeout.";
 }
 
-// DRAM is opt-in. The SiVal server skips GDDR bringup unless the model has been configured;
-// an unconfigured access stalls the AXI master and wedges the session. Same gate as UMD's
+// DRAM is opt-in. test_emu_server.py runs SMC boot so GDDR has slaves; test_sival_server.py
+// does not, and an unconfigured access stalls the AXI master. Same gate as UMD's
 // EmuTTDevice DRAM test: TT_METAL_EMU_DRAM or TT_UMD_EMU_DRAM.
 TEST(MimirEmu, DramChannelsDoNotAliasThroughPublicDeviceApi) {
     if (!emu_server_configured()) {
