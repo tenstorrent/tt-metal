@@ -612,7 +612,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             // Noop core: zero-filled runtime args, sized to match the active kernel variant so unused
             // cores neither inflate the per-kernel max runtime-arg allocation nor change slot count when a
             // core flips between noop and work across differently-shaped cache hits.
-            const size_t reader_len = row_major_inputs ? 26 : 21;
+            const size_t reader_len = row_major_inputs ? 26 : 23;
             const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
             const size_t compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
             reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
@@ -810,6 +810,8 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 b_num_tiles,
+                aWt,
+                bWt,
             };
         }
 
