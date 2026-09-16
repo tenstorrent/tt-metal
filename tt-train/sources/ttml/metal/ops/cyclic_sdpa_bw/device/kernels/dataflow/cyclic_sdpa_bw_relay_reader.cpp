@@ -648,6 +648,7 @@ void kernel_main() {
             // over the cores and the early reads only got in the way of the
             // packet traffic (the full grid at Bt = 1 lost 19% with them).
             if (sched.dense() && !sched.is_later_streak_start(ni, t + 1u)) {
+                DeviceZoneScopedN("PREFETCH-DQ");
                 const uint32_t ngs = base_grad_query + nslot * stride_grad_query;
                 for (uint32_t k = 0; k < row_tiles; ++k) {
                     noc_async_read_page(row_base + (ni - 1u) * row_tiles + k, grad_query, ngs + k * grad_bytes);

@@ -50,7 +50,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     // is the whole sequence against itself.
     uint32_t sequence_chunks = 1U,
     const std::vector<uint32_t>& row_chunks = {},
-    const std::vector<uint32_t>& col_chunks = {});
+    const std::vector<uint32_t>& col_chunks = {},
+    // dQ's DRAM layout at the launch's boundaries; see the op's attributes.
+    bool grad_query_in_tile_transposed = false,
+    bool grad_query_out_tile_transposed = false);
 
 // The same thing, taking what a forward pass actually hands back.
 //
