@@ -20,7 +20,7 @@ qsr = ttnn._ttnn.operations.experimental.quasar
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-def test_quasar_gather_in0_unknown_worker_y_is_fatal(device):
+def test_quasar_gather_in0_unknown_worker_y_is_fatal(device, expect_error):
     """Ring GRID first-col workers (1,3) and (2,3) have y=3, not in WH map {0,4,5,9}."""
     worker_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in GRID])
     dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})
@@ -68,7 +68,7 @@ def test_quasar_gather_in0_unknown_worker_y_is_fatal(device):
     in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in0_mc)
     in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=in1_mc)
 
-    with pytest.raises(RuntimeError, match="NOT FOUND in first-col map"):
+    with expect_error(RuntimeError, "NOT FOUND in first-col map"):
         ttnn.experimental.quasar.matmul(
             in0_t,
             in1_t,
