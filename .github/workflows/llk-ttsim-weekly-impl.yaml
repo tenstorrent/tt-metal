@@ -14,6 +14,10 @@ name: "[internal] LLK ttsim weekly impl"
 
 on:
   workflow_call:
+    secrets:
+      TTSIM_TOKEN:
+        required: false
+        description: "PAT with contents:read on tenstorrent/ttsim-private. Only the Quasar leg uses it."
     inputs:
       docker-image:
         required: true
@@ -44,6 +48,7 @@ env:
 
 jobs:
   load-test-matrix:
+    if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
@@ -88,7 +93,7 @@ jobs:
 
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.public-sim-libs != '[]' }}
+    if: ${{ github.repository == 'tenstorrent/tt-metal' && needs.load-test-matrix.outputs.public-sim-libs != '[]' }}
     runs-on: ubuntu-slim
     strategy:
       fail-fast: false
@@ -123,6 +128,7 @@ jobs:
       ${{
         always()
         && !cancelled()
+        && github.repository == 'tenstorrent/tt-metal'
         && needs.load-test-matrix.result == 'success'
         && needs.load-test-matrix.outputs.matrix != '[]'
         && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped')
@@ -182,9 +188,14 @@ jobs:
         if: ${{ steps.arch.outputs.name == 'quasar' }}
         shell: bash
         env:
+          REPO: ${{ github.repository }}
           TOKEN: ${{ secrets.TTSIM_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ "$REPO" != "tenstorrent/tt-metal" ]]; then
+            echo "::error::The Quasar leg uses TTSIM_TOKEN and only runs on tenstorrent/tt-metal, not on '${REPO}'."
+            exit 1
+          fi
           if [[ -z "$TOKEN" ]]; then
             echo "::error::Secret TTSIM_TOKEN is empty. Add a PAT with contents:read on tenstorrent/ttsim-private to this repository's secrets. GITHUB_TOKEN cannot clone another private repo."
             exit 1
@@ -229,6 +240,10 @@ jobs:
           TOKEN="${TOKEN//$'\r'/}"
           TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
           TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
+          # Actions masks the secret exactly as stored. If it was saved with stray
+          # whitespace the trimmed value is a different string and would print in the
+          # clear, so re-register it before it ever reaches a command line.
+          echo "::add-mask::$TOKEN"
           mkdir -p ttsim-private
           git -C ttsim-private init
           git -C ttsim-private fetch --depth 1 \

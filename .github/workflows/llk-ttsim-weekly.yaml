@@ -39,13 +39,16 @@ permissions:
 jobs:
   build-images:
     name: "🐳️ Docker setup"
+    if: github.repository == 'tenstorrent/tt-metal'
     uses: ./.github/workflows/build-docker-artifact.yaml
 
   ttsim-weekly:
     name: "🧪 LLK ttsim regression"
+    if: github.repository == 'tenstorrent/tt-metal'
     needs: build-images
     uses: ./.github/workflows/llk-ttsim-weekly-impl.yaml
-    secrets: inherit
+    secrets:
+      TTSIM_TOKEN: ${{ secrets.TTSIM_TOKEN }}
     with:
       docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
       quasar-ttsim-ref: ${{ inputs.quasar-ttsim-ref || '' }}
@@ -55,8 +58,9 @@ jobs:
     runs-on: ubuntu-latest
     # Only broadcast on scheduled runs — manual triggers are typically
     # ad-hoc debugging and don't need Slack noise. `always()` so the job
-    # still runs when the regression reports failures (it's expected to).
-    if: always() && github.event_name == 'schedule'
+    # still runs when the regression reports failures (it's expected to);
+    # that also means it would survive a skipped `needs`, hence the repo pin.
+    if: always() && github.event_name == 'schedule' && github.repository == 'tenstorrent/tt-metal'
     needs: ttsim-weekly
     steps:
       - name: Download blackhole report
