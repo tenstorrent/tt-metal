@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from itertools import chain
 from typing import TYPE_CHECKING, List, Tuple, Union
 
-from helpers.llk_params import L1Accumulation
+from helpers.llk_params import DestSync, EltwiseBinaryReuseDestType, L1Accumulation
 
 from .base_fpu import Fpu
 from .base_packer import Packer
@@ -38,6 +38,19 @@ Node = Union[FpuNode, SfpuNode, PackNode]
 Unit = Union[Fpu, Sfpu, Unpacker, Packer]
 
 
+def dest_tile_capacity(tile_shape, dest_sync: DestSync, dest_acc: bool) -> int:
+    faces = 32 if dest_sync == DestSync.Half else 64
+    if dest_acc:
+        faces //= 2
+    return faces // tile_shape.total_num_faces()
+
+
+def _check_tile_bounds(tiles, capacity: int, label: str) -> None:
+    invalid = next((tile for tile in sorted(tiles) if not 0 <= tile < capacity), None)
+    if invalid is not None:
+        raise ValueError(f"{label} accesses tile {invalid} outside [0, {capacity})")
+
+
 @dataclass(frozen=True)
 class PlannedNode:
     node: Node
@@ -57,21 +70,58 @@ class PlannedNode:
         return self.loop.emit_calls(render, constants)
 
     def dest_tiles(self, banks, slots) -> set:
-        is_block = (
-            self.role == "math"
-            and not self.loop.call_levels
-            and not self.loop.fanout_levels
-        )
-        size = self.block.block_cols * self.block.block_rows if is_block else 1
-        calls = chain.from_iterable(self.loop.calls(bank) for bank in banks)
-        tiles = chain.from_iterable((call,) + call.tiles for call in calls)
+        banks = tuple(banks)
+        return set().union(*(self._tiles(banks, slot) for slot in slots))
+
+    def _tiles(self, banks, slot, operand=None, operation=None) -> set:
+        if slot not in self.loop.slots:
+            return set()
+
         result = set()
-        for tile in tiles:
-            for slot in slots:
-                value = getattr(tile, slot)
-                if value is not None:
-                    result.update(range(value, value + size))
+        for call in chain.from_iterable(self.loop.calls(bank) for bank in banks):
+            if self.unit.granularity != InvocationGranularity.BLOCK:
+                result.update(getattr(tile, slot) for tile in (call,) + call.tiles)
+                continue
+
+            start = getattr(call, slot)
+            rows, cols = self.block.block_rows, self.block.block_cols
+            stride = operand.tile_count_x if operand is not None else cols
+            if self.role == "unpack" and operand is not None:
+                # Matmul's in0 selects an output block, which reads complete K slices.
+                output_cols = (
+                    operation.max_output_dimensions[1]
+                    // self.node.src_b.tile_shape.total_col_dim()
+                )
+                row, col = divmod(call.in0, output_cols)
+                if slot == "in0":
+                    start, cols = row * stride, stride
+                else:
+                    start, rows = col, operand.tile_count_y
+            for row in range(rows):
+                first = start + row * stride
+                result.update(range(first, first + cols))
         return result
+
+    def check_bounds(self, operation, banks, dest_capacity: int) -> None:
+        operands = {}
+        if self.role == "unpack":
+            operands = {"in0": self.node.src_a, "in1": self.node.src_b}
+        elif self.role == "pack":
+            operands = {"out": self.node.output}
+
+        for slot in self.loop.slots:
+            operand = operands.get(slot)
+            if operand is not None:
+                capacity, label = operand.tile_count, f"operand '{operand.name}'"
+            elif slot in DEST_SLOTS and self.role != "unpack":
+                capacity, label = dest_capacity, "(Dst)"
+            else:
+                continue
+            _check_tile_bounds(
+                self._tiles(banks, slot, operand, operation),
+                capacity,
+                f"{type(self.unit).__name__} {slot} {label}",
+            )
 
 
 @dataclass(frozen=True)
@@ -108,6 +158,11 @@ class PlannedBlock:
                 continue
             reads = ()
             if planned.role == "pack":
+                reads = ("dest",)
+            elif (
+                planned.role == "math"
+                and planned.node.reuse_dest != EltwiseBinaryReuseDestType.NONE
+            ):
                 reads = ("dest",)
             elif planned.role == "sfpu":
                 reads = ("src0", "src1") if planned.unit.input_count == 2 else ("dest",)
@@ -247,7 +302,12 @@ def _num_banks(nodes) -> int:
     return counts.pop()
 
 
-def plan_pipeline(operation: "L1Operation") -> List[PlannedBlock]:
+def plan_pipeline(
+    operation: "L1Operation", dest_acc: bool = False
+) -> List[PlannedBlock]:
+    dest_capacity = dest_tile_capacity(
+        operation.tile_shape, operation.dest_sync, dest_acc
+    )
     tile_count_x = (
         operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
     )
@@ -272,6 +332,9 @@ def plan_pipeline(operation: "L1Operation") -> List[PlannedBlock]:
         if operation.custom_op:
             bank = LoopPlan(bank_levels=(Level(BANK_VAR, _num_banks(nodes)),))
         planned = replace(planned, bank=bank, nodes=nodes)
+        banks = planned.bank.bank_assignments()
+        for node in nodes:
+            node.check_bounds(operation, banks, dest_capacity)
         planned.check_dest_reads()
         result.append(planned)
     return result

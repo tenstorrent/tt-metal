@@ -1,48 +1,38 @@
 # Column max reduce that reads in0 through the strided tilize unpack, then
 # untilizes the pooled output (maxpool over the column dimension).
 
+dest_acc: false
+
 operands:
-  - name: "input_A"
-    dims: [1024, 256]
-    format: "Float16_b"
-
-  - name: "input_B"
+  - name: input_A
+    dims: [2016, 160]
+    format: Float16_b
+  - name: input_B
     dims: [32, 32]
-    format: "Float16_b"
+    format: Float16_b
     const_value: 1.0
-
-  - name: "maxpool_out"
-    dims: [256, 256]
-    format: "Float16_b"
+  - name: maxpool_out
+    dims: [672, 480]
+    format: Float16_b
 
 operations:
   - math:
-      - type: "Fpu"
-        block_size: [256, 32]
-        in0: "input_A"
-        in1: "input_B"
-        operation: "Reduce"
-        reduce_dim: "REDUCE_COL"
-        reduce_pool: "MAX"
-        unpacker: "UnpackReduceTilize"
-        math_fidelity: "HiFi4"
+      - type: Fpu
+        operation: Reduce
+        reduce_dim: REDUCE_COL
+        reduce_pool: MAX
+        unpacker: UnpackReduceTilize
+        math_fidelity: HiFi4
+        in0: input_A
+        in1: input_B
+        block_size: [32, 160]
         loop:
-          in0: [0, 1, 2, 3, 4, 5, 6, 7,
-                64, 65, 66, 67, 68, 69, 70, 71,
-                128, 129, 130, 131, 132, 133, 134, 135,
-                192, 193, 194, 195, 196, 197, 198, 199]
+          in0: {count: 63, step: 5}
           in1:
-            multipliers: {tile_y: 0}
-          dest:
-            multipliers: {tile_y: 0}
+            multipliers: {tile_x: 0, tile_y: 0}
     pack:
-      - output: "maxpool_out"
-        block_size: [256, 32]
-        packer: "PackUntilize"
+      - output: maxpool_out
+        packer: PackUntilize
+        block_size: [32, 160]
         loop:
-          dest:
-            multipliers: {tile_y: 0}
-          out: [0, 1, 2, 3, 4, 5, 6, 7,
-                64, 65, 66, 67, 68, 69, 70, 71,
-                128, 129, 130, 131, 132, 133, 134, 135,
-                192, 193, 194, 195, 196, 197, 198, 199]
+          out: {count: 63, step: 5}

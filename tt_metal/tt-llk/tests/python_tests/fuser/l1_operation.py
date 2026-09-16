@@ -89,9 +89,9 @@ class L1Operation:
 
         return len({signature(op) for op in ops}) <= 1
 
-    def _batch_loop(self, body_fn, init_fn=None, uninit_fn=None) -> str:
+    def _batch_loop(self, config, body_fn, init_fn=None, uninit_fn=None) -> str:
         code = ""
-        for planned in plan_pipeline(self):
+        for planned in plan_pipeline(self, config.dest_acc.value):
             body = planned.bank.emit_banks(
                 lambda constants: body_fn(planned, constants)
             )
@@ -139,7 +139,7 @@ class L1Operation:
         init_code = ""
         init_code += unpack_common.dvalid_init(config=config, operation=self)
         init_code += config.sentinel.hw_configure_unpack(config, self)
-        if hoist_reconfig and unpack_ops and not config.skip_unpack_init:
+        if unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(config, self, unpack_ops[0])
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(self, config, None)
@@ -178,12 +178,14 @@ class L1Operation:
                     )
                 if not hoist:
                     body += cu.unpack_uninit(self, config, block)
+            if not hoist_reconfig and not config.skip_unpack_init:
+                body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
             return body
 
         code += self._zone_loop(
             config,
             "TILE_LOOP",
-            self._batch_loop(batch_body, init_fn, uninit_fn),
+            self._batch_loop(config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
@@ -204,7 +206,7 @@ class L1Operation:
         init_code += fpu_common.math_dest_remap_config(
             any(pn.packer.requires_dest_remap for pn in self._get_pack_nodes())
         )
-        if hoist_reconfig and fpu_ops and not config.skip_math_init:
+        if fpu_ops and not config.skip_math_init:
             init_code += config.sentinel.configure_math(config, self, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
             init_code += fpu_ops[0].fpu_init(self, config, None)
@@ -242,13 +244,15 @@ class L1Operation:
                         partial(cu.sfpu_call, self, config, block),
                     )
                     body += cu.sfpu_uninit(self, config, block)
+            if not hoist_reconfig and not config.skip_math_init:
+                body += config.sentinel.configure_math(config, self, fpu_ops[0])
             body += fpu_common.math_dest_section_done(config, self)
             return body
 
         code += self._zone_loop(
             config,
             "TILE_LOOP",
-            self._batch_loop(batch_body, init_fn, uninit_fn),
+            self._batch_loop(config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = ""
@@ -323,7 +327,7 @@ class L1Operation:
         code += self._zone_loop(
             config,
             "TILE_LOOP",
-            self._batch_loop(batch_body, init_fn, uninit_fn),
+            self._batch_loop(config, batch_body, init_fn, uninit_fn),
         )
 
         uninit_code = pack_common.packer_sync_with_unpacker(config, self)
@@ -335,7 +339,7 @@ class L1Operation:
         return code
 
     def golden(self, config):
-        blocks = plan_pipeline(self)
+        blocks = plan_pipeline(self, config.dest_acc.value)
         for golden_type in (GoldenType.L1_GOLDEN, GoldenType.MASTER_GOLDEN):
             GoldenExecutor(self, config, golden_type).run(blocks)
 

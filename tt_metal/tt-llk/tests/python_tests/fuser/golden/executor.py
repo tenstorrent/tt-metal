@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from helpers.llk_params import DestAccumulation, DestSync, GoldenType, format_dict
+from helpers.llk_params import GoldenType, format_dict
 
 from ..fpu_node import FpuNode
 from ..pack_node import PackNode
-from ..pipeline_plan import PlannedBlock, PlannedNode
+from ..pipeline_plan import PlannedBlock, PlannedNode, dest_tile_capacity
 from ..sfpu_node import SfpuNode
 from .state import (
     DestBank,
@@ -61,10 +61,11 @@ class GoldenExecutor:
     def _dest_size(self, planned: PlannedBlock) -> int:
         if not self.operation.custom_op:
             return planned.region.block_tiles
-        faces = 32 if self.operation.dest_sync == DestSync.Half else 64
-        if self.config.dest_acc == DestAccumulation.Yes:
-            faces //= 2
-        return faces // self.operation.tile_shape.total_num_faces()
+        return dest_tile_capacity(
+            self.operation.tile_shape,
+            self.operation.dest_sync,
+            self.config.dest_acc.value,
+        )
 
     def _run_node(self, planned: PlannedNode, bank, state: GoldenState) -> None:
         state.dest.block_tiles_x = planned.block.block_cols

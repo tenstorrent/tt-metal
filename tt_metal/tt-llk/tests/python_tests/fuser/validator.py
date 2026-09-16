@@ -20,6 +20,7 @@ from typing import Annotated, ClassVar, Dict, List, Literal, Optional, Tuple, Un
 from fuser.fpu_node import FpuNode
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from fuser.pipeline_plan import dest_tile_capacity, plan_pipeline
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
     AccToDest,
@@ -732,10 +733,7 @@ class OperationSchemaBase(BaseModel):
         tile_r = tile_shape.total_row_dim()
         tile_c = tile_shape.total_col_dim()
 
-        dest_faces = 32 if self.dest_sync == DestSync.Half else 64
-        if dest_acc:
-            dest_faces //= 2
-        dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
+        capacity = dest_tile_capacity(tile_shape, self.dest_sync, dest_acc)
 
         def node_block_dims(schema):
             block_r, block_c = schema.block_size
@@ -752,10 +750,10 @@ class OperationSchemaBase(BaseModel):
         node_dims = [node_block_dims(s) for s in all_schemas]
         bank_x = max(nx for nx, _ in node_dims)
         bank_y = max(ny for _, ny in node_dims)
-        if bank_x * bank_y > dest_tile_capacity:
+        if bank_x * bank_y > capacity:
             raise ValueError(
                 f"block bank needs {bank_x * bank_y} dest tiles but only "
-                f"{dest_tile_capacity} fit (dest_sync={self.dest_sync.name}, "
+                f"{capacity} fit (dest_sync={self.dest_sync.name}, "
                 f"dest_acc={dest_acc})"
             )
         bank_block_size = [bank_y * tile_r, bank_x * tile_c]
@@ -811,12 +809,14 @@ class OperationSchemaBase(BaseModel):
         }
         kwargs.update(self._arch_kwargs())
 
-        return L1Operation(
+        operation = L1Operation(
             math_nodes=math_ops,
             pack_nodes=pack_nodes,
             max_output_dimensions=max_out_dims,
             **kwargs,
         )
+        plan_pipeline(operation, dest_acc)
+        return operation
 
     def _calculate_max_output_dimensions(self, operands) -> Tuple[int, int]:
         dims = []
