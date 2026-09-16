@@ -41,25 +41,17 @@ struct DramSenderStateBlock {
     uint32_t num_receivers;
     uint32_t buffer_address;
     uint32_t fifo_size_per_receiver;
-    // Bank-local slab index of this sender's first receiver. Lets two DRISC cores split
-    // one bank's receiver set: the kernel reads slab (recv_index_base + r) for its local
-    // receiver r. 0 for a single sender / the first of a pair.
-    uint32_t recv_index_base;
-    // Largest receiver count across this GCB's senders. The Tensor prefetcher request page sizes
-    // each streaming tensor's rotation table for this maximum (so the layout-slot stride is
-    // uniform across senders and the host can pack every sender's page identically); the kernel
-    // reads it to recover that stride. Constant across senders, unlike num_receivers above.
-    uint32_t max_num_receivers;
     // ----- Followed in L1 by the receiver NOC XY table -----
     // 2 * num_receivers uint32s (x0, y0, x1, y1, ...), appended by the caller after
     // this struct's bytes since its length is dynamic; pointed to by receiver_noc_xy_ptr.
     //
     // (The per-receiver ring-index (g_r) rotation table that used to follow the NOC XY table is
     // gone: the streaming rotation is now host-owned and carried per-tensor in the request page,
-    // not stamped into L1. See tensor_prefetcher_request.hpp.)
+    // not stamped into L1. So are this sender's slab base and the set-wide max receiver count,
+    // which ride the request header. See tensor_prefetcher_request.hpp.)
 } __attribute__((packed));
 
-static_assert(sizeof(DramSenderStateBlock) == 12 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
+static_assert(sizeof(DramSenderStateBlock) == 10 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
 static_assert(
     offsetof(DramSenderStateBlock, is_sender) == 6 * sizeof(uint32_t),
     "config block must stay contiguous right after the loaded interface fields");
