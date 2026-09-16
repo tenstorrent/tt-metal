@@ -3885,7 +3885,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if page_table.shape[1] < num_blocks:
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
-            return page_table[:, :num_blocks]
+            page_table = page_table[:, :num_blocks].clone()
+            # Every column beyond the prompt's own blocks must be -1, which paged_fill_cache skips. The prefill
+            # kernels run on the padded length and write K/V for the pad tail too, and a serving block table is
+            # not clean there: vLLM's BlockTable.add_row rewrites only the first num_blocks entries of a reused row,
+            # so the tail columns carry stale block ids of earlier requests (the plugin pads with zeros only past
+            # the table's width). Without the mask the pad tail lands in blocks another live request owns, or in
+            # blocks this request was just re-issued -- corrupted K/V, non-deterministic output across identical
+            # requests, and garbage under load.
+            page_table[:, num_blocks_in_seq(prefill_len, block_size) :] = -1
+            return page_table
 
     ## Destructor
 

@@ -396,6 +396,26 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             False,  # run_in_ci
         ),
+        # Batch 32 on a single-row mesh (8x Blackhole P150 / T3K): TP=8, EP=1, users are NOT row-sharded
+        # and the MoE runs the low-latency experts on the whole 32-user tile (see experts/decode.py).
+        # Page table: 32 users x (8K / 64) blocks = 4096 blocks (~1.3 GB of paged KV per device).
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            32,  # batch_size
+            1,  # repeat_batches
+            8 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 32 * (8 * 1024 // 64)},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
         # Seqlen sweep: 1k-128k context lengths, one step per seqlen (on single-row meshes, >64k steps are skipped)
         (
             [
@@ -441,6 +461,7 @@ def prepare_gpt_oss_generator_args(
         "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
+        "batch32",
         "seqlen-sweep",
     ],
 )
@@ -474,17 +495,30 @@ def test_gpt_oss_demo(
     # On single-row meshes (T3K, LoudBox), cap max_seq_len at 64k for seqlen-sweep so steps >64k are skipped
     actual_max_seq_len = min(max_seq_len, 64 * 1024) if (is_seqlen_sweep and mesh_shape[0] == 1) else max_seq_len
     if mesh_shape[0] == 1:
-        if batch_size > 1:
+        if users_row_sharded or batch_size > 32:
             pytest.skip(
-                f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
+                f"Batch size {batch_size} (users_row_sharded={users_row_sharded}) skipped for mesh shape {mesh_shape}: "
+                "row-sharded / >32-user demos need a multi-row mesh; single-row meshes decode up to 32 users "
+                "on one row via the low-latency experts (see the batch32 case)."
+            )
+        elif batch_size > 1 and mesh_shape[1] < 8:
+            pytest.skip(
+                f"Batch size {batch_size} skipped for mesh shape {mesh_shape}: multi-user single-row decode is "
+                "validated for TP=8 (1x8) only."
             )
         elif max_seq_len > 64 * 1024 and not is_seqlen_sweep:
             # Seqlen sweep uses actual_max_seq_len (capped at 64k) for execution; skip only non-sweep tests
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
-    if is_blackhole() and batch_size > 1:
+    elif batch_size > 1 and not users_row_sharded:
         pytest.skip(
-            f"Batch size {batch_size} demo skipped on Blackhole: throughput experts are not supported, "
-            "only batch=1 low-latency experts run on this arch."
+            f"Batch size {batch_size} without row sharding skipped for multi-row mesh {mesh_shape}: "
+            "multi-row meshes batch users across rows (users_row_sharded=True, e.g. the batch128 case)."
+        )
+    if is_blackhole() and users_row_sharded:
+        pytest.skip(
+            f"Row-sharded batch size {batch_size} demo skipped on Blackhole: throughput experts (all_to_all "
+            "dispatch/combine + moe_gpt) are not supported on this arch. Single-row batch<=32 runs the "
+            "low-latency experts instead."
         )
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"

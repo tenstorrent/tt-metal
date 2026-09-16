@@ -1,16 +1,142 @@
 # GPT-OSS: Mixture of Experts Language Model
 
-Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators.
+Inference implementation for GPT-OSS models on Tenstorrent Wormhole and Blackhole accelerators.
 
 **Model Source**: [GPT-OSS on HuggingFace](https://huggingface.co/gpt-oss) (custom MoE architecture)
 
 **Target Hardware**:
 - **LoudBox**: Single Wormhole device (1×8 configuration)
 - **Galaxy**: Multi-device Wormhole mesh (4×8 configuration)
+- **Blackhole**: P150 (1×1), P300 / QuietBox 2 (1×2, 1×4), P150x8 (1×8)
 
 **Current Status**: This model is under active development.
-- ✅ Supported: Prefill up to sequence length 128, batch size 1, total sequence length 4096
-- 🚧 In Progress: Extended sequence lengths, larger batch sizes
+- ✅ Supported: batch size 1 on all meshes; batch 128 (32 users per mesh row, `users_row_sharded`) on Wormhole Galaxy
+- ✅ Supported: any batch size up to 32 on single-row 1×8 meshes (TP=8, EP=1), e.g. 8× Blackhole P150 — see *Multi-user decode on single-row meshes*
+- 🚧 In Progress: Extended sequence lengths, batched (multi-user) prefill on single-row meshes
+
+**Weight cache.** The expert gate/up projections are cached fused (`gate_up_proj_fused_tp*`, weight-cache format
+v3, `ModelArgs.WEIGHT_CACHE_FORMAT_VERSION`). A cache written by an older format has to be regenerated once per
+(model, dtype, mesh shape) by running without `--skip-model-load` (the stale marker is rejected and the run
+cold-loads); `--skip-model-load` against such a cache fails at construction with a message naming this.
+
+## Multi-user decode on single-row meshes
+
+On a 1×8 mesh every device holds a 1/8 slice (TP) of every expert and there is no mesh axis to
+expert-parallelize over, so the Galaxy "throughput experts" (`all_to_all` dispatch/combine +
+fused `moe_gpt`, which also only exist for Wormhole) cannot be used. Instead the low-latency
+experts (`tt/experts/decode.py`) process all users of a decode step as one 32-row tile:
+
+1. the dense per-user routing weights `[users, 128]` are summed over users on device into a
+   *union-of-active-experts* mask `[1, 1, 1, 128]`;
+2. the fused gate+up projection and the down projection run as `ttnn.sparse_matmul` over that
+   mask (`nnz` inferred on device);
+3. the per-(user, expert) routing weights zero every unselected pair, the result is reduced over
+   experts and the down bias is folded in through the routing weights, followed by the usual TP
+   all-reduce.
+
+The cost of `sparse_matmul` is dominated by a fixed per-active-expert overhead (~4 µs per call
+per expert on P150), so the number of calls matters more than their width: gate and up are
+therefore stored fused (`[gate | up]` per device, each half zero-padded to a tile multiple) and
+computed in one call. The activation footprint stays identical to batch 1 (M is a single 32-row
+tile either way).
+
+Constraints: users are not row-sharded; the decode batch must equal `max_batch_size` (pad unused
+slots); any `max_batch_size` ≤ 32 works — the per-user Q/K/V / KV-cache / SDPA core placement
+(`ProgramConfig.get_decode_user_grid`) follows RotarySetup's cos/sin placement and the model checks
+the two agree at construction; prefill of the users runs sequentially through the generator (one
+user per forward).
+
+Prefill on single-row meshes (EP=1, SP=1: every device holds all experts and the same tokens -- all Blackhole
+meshes and LoudBox) runs the MoE without `sparse_matmul` (`experts/prefill.py`). Multi-row meshes (Galaxy,
+sequence-parallel rows) keep the pre-existing sparse path, which multicasts in a 1D pattern that leaves the whole
+M on ≤24 cores and re-streams every expert's weights once per 32-token tile. The single-row paths:
+
+- splits of ≤256 tokens (the traced 128-token prefill): the activations are replicated per expert and ONE
+  batched matmul runs over all experts (128 separate launches cost ~30 µs each on device and dominated
+  128-token prefills), then a batched down matmul. Its program config keeps an expert's whole `[split, 2Ip]`
+  output block on one core (`per_core_M = M`, `per_core_N = N`: the batched kernel requires the full N per core
+  and reads the wrong expert with several smaller blocks per core) and only chooses the widest K block whose
+  circular buffers fit the device's worker L1: `in0_block_w = 6` at TP=8 (24 output tiles), 2 at TP=4 (45).
+  Where no K block fits (TP=1/2: 180 / 90 tiles per device) the matmul runs with ttnn's automatic, L1-checked
+  config on the same core grid instead;
+- longer splits, models with ≥64 experts (gpt-oss-120b): **hot/cold expert-sorted** MoE.
+  The routed-token counts of the split are read back once and a small cost model picks `cap`; experts above
+  it (typically 1–3, up to 16: real routing is very skewed) run dense over the whole split as a small batched
+  group, the rest run sorted: `topk` over the transposed routing weights gives each expert its `cap`
+  largest-weight tokens, `ttnn.embedding` gathers those rows (and one-hot rows from an identity generated on
+  device), gate/up and down run as batched matmuls over the `[E, cap, ·]` gathered rows only, each row is scaled
+  by its routing weight and the results are scattered back with `one-hot^T @ rows`. With top-4 routing over 128
+  experts a 1024-token split has ~32 tokens per expert (cap 64 typical), i.e. ~1/16 of the dense expert FLOPs,
+  and the math is identical (zero-weight filler slots contribute nothing). Models with fewer experts
+  (gpt-oss-20b, where the gathered rows are not much fewer than the dense ones) take the next path;
+- longer splits otherwise: one matmul per expert over the whole split, concatenated.
+
+No weight copies persist beyond the fused `[E, H, 2Ip]` gate/up and `[E, Ip, H]` down tensors (the latter K-padded
+once at load): the per-expert / hot-expert weights the loop and the sorted path need are sliced per call and freed.
+In all paths the down bias is folded into a `[split, E] × [E, H]` matmul added after the expert
+reduction and SwiGLU is a single `ttnn.mul` with per-input activation chains (`apply_swiglu_fused`:
+clamps, +1, α-scaled SiLU, 1/α), which decode uses as well.
+
+Measured prefill per user (= first-user TTFT) on P150x8, greedy (orig = before this series):
+
+| | 120B orig | 120B now | 20B orig | 20B now |
+|---|---|---|---|---|
+| batch 1, ISL 128 | 405 ms | 137 ms | 96 ms | 56 ms |
+| batch 1, ISL 1024 | 2.98 s | 0.37 s | 520 ms | 135–165 ms |
+| batch 1, ISL 8192 | 22.9 s | 2.09 s | 4.01 s | 0.89 s |
+| batch 32, ISL 128, last-user TTFT | 16.3 s | 3.9 s | 2.9 s | 1.4 s |
+| batch 32, ISL 1024, last-user TTFT | 126 s | 8.8 s | 16.3 s | 3.8 s |
+
+Decode is unchanged (120B 35 ms/step at batch 1, 47 / 36 ms at batch 32 for ISL 128 / 1024). The 120B
+sorted path is partly host-bound (one device→host count read per split, then ~45 small ops), so its
+1024-token prefill varies ±10–30% run to run; the remaining levers are trimming those ops and packing
+several users' prompts into one prefill for short-prompt TTFT at large batch.
+
+```bash
+export HF_MODEL=/path/to/gpt-oss-120b
+pytest models/demos/gpt_oss/demo/text_demo.py -k "1x8 and batch32"
+pytest models/demos/gpt_oss/tests/unit/test_modules.py -k "1x8 and decode_b32"
+# cross-user isolation check with real weights (teacher-forced logits across slot layouts)
+pytest models/demos/gpt_oss/tests/test_multi_user_consistency.py -k 1x8
+```
+
+Measured on 8× Blackhole P150 (1×8, greedy, ~128-token prompts, 200 generated tokens):
+
+| Model | Batch | Decode step | Per user | Aggregate | TTFT per user |
+|---|---|---|---|---|---|
+| gpt-oss-120b | 1 | 36.3 ms | 27.5 tok/s | 27.5 tok/s | 407 ms |
+| gpt-oss-120b | 32 | 49.0 ms | 20.4 tok/s | 653 tok/s | 399 ms |
+| gpt-oss-20b | 1 | 18.9 ms | 52.9 tok/s | 52.9 tok/s | 125 ms |
+| gpt-oss-20b | 32 | 20.8 ms | 48.1 tok/s | 1538 tok/s | 85 ms |
+
+TTFT at batch 32 is the per-user share of 32 sequential prefills (one user per forward); packing
+several users into one prefill forward is the main open item for multi-user TTFT.
+
+### Multi-user regression sweep
+
+`tests/test_multi_user_regression.py` runs the tt-inference-server benchmark ISL/OSL pairs
+(128/128, 128/1024, 1024/128, 2048/128, 4096/128, 8192/128, 8192/1024, 16384/128, 32768/128) for
+batch {1, 2, 4, 8, 16, 32} with a per-user context of min(64K, 512K/B) (pairs above it are skipped,
+as the server caps concurrency). Every cell is gated on token ids, on every user's first token being
+`<|channel|>`, on QA keyword accuracy at ISL 128 (32 distinct prompts) and on a degeneracy
+heuristic; it records prefill, TTFT (first / mean / last user), decode step mean/p50/p99, tok/s
+and board telemetry to `generated/gpt_oss_multi_user_regression/<model>_<mesh>.jsonl`.
+
+```bash
+export HF_MODEL=/path/to/gpt-oss-120b TT_CACHE_PATH=/path/to/cache/gpt-oss-120b
+# one process per batch size (function-scoped mesh device; pytest -k "batch1" also matches batch16)
+pytest "models/demos/gpt_oss/tests/test_multi_user_regression.py::test_multi_user_regression[blackhole-1x8-batch32]" \
+    --timeout 3600 --timeout-method thread
+```
+
+Knobs (env): `GPT_OSS_REGRESSION_PAIRS="128:128,1024:128"`, `_BATCHES="22,31"` (batch sizes, default 1,2,4,8,16,32), `_KV_TOKENS` (total KV budget, default
+512K), `_PAGE_TABLE_SEED`, `_DECODE_TRACE=0`, `_DECODE_K_CHUNK`, `_TAG` (results file suffix) and
+`_COOLDOWN_C` / `_COOLDOWN_TIMEOUT_S`: waits for all boards to cool below the threshold before each
+prefill and before the first decode step. On the 8× P150 box the hottest board reaches ~88 °C during
+long prefills and throttles to 800 MHz, and a traced decode step launched while a board is
+deep-throttled has deadlocked inside paged SDPA decode; `GPT_OSS_REGRESSION_COOLDOWN_C=84` avoided
+that for the whole sweep. All prefill lengths are compiled eagerly before the first trace is
+captured, because programs compiled while a trace is live can be overwritten by a later replay.
 
 ## Quick Start
 
