@@ -484,15 +484,34 @@ void broadcast_statistic_rows_to_dst(
 // against the FPU is the semaphore's job here.
 namespace pack_sfpu {
 
-// The exponential's polynomial for 2^f over the fraction f, taken as the
-// float value of its 23 bits (so c_k carries a factor 2^-23k): a minimax
-// fit of degree four with its ends pinned just inside [1, 2). Relative
-// error within 3e-6 everywhere.
-constexpr uint32_t kExpC0 = 0x3F80000Du;
-constexpr uint32_t kExpC1 = 0x33B16976u;
-constexpr uint32_t kExpC2 = 0x2777360Au;
-constexpr uint32_t kExpC3 = 0x1AD512EEu;
-constexpr uint32_t kExpC4 = 0x0E5DE35Du;
+// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 + c4 f^4: the
+// near-minimax fit with the constant term pinned to one (so it can be the
+// hardware's 1.0 register). Relative error within 2.9e-6, mean 1e-8.
+constexpr uint32_t kExpC1 = 0x3F316B63u;
+constexpr uint32_t kExpC2 = 0x3E771229u;
+constexpr uint32_t kExpC3 = 0x3D55FC32u;
+constexpr uint32_t kExpC4 = 0x3C5BFB9Cu;
+
+// Two independent chains share the eight general registers: the first
+// chain in 0..2, the second in 3..5, the bias and c1 in 6 and 7. The
+// scale, c2, c3 and c4 sit in the programmable constants 12, 13, 14, 11.
+// Register 11 is the -1.0 that sfpi-compiled code relies on, and the
+// register file is never reset between programs: a kernel that leaves c4
+// there breaks the next sfpi kernel on the core (measured: the forward's
+// output went wrong after a run of this kernel). So c4 is programmed right
+// before the exponentials and -1.0 put back right after them.
+constexpr uint32_t kBiasReg = p_sfpu::LREG6;
+constexpr uint32_t kC1Reg = p_sfpu::LREG7;
+constexpr uint32_t kScaleReg = p_sfpu::LREG12;
+constexpr uint32_t kC2Reg = p_sfpu::LREG13;
+constexpr uint32_t kC3Reg = p_sfpu::LREG14;
+constexpr uint32_t kC4Reg = p_sfpu::LREG11;  // borrowed from the sfpi compiler's -1.0, see exp_release
+
+// Instruction mode bits, from the Blackhole ISA documentation.
+constexpr uint32_t kMadNegateVa = 1u;         // SFPMAD: VD = -VA * VB + VC
+constexpr uint32_t kSetExpFromInt = 0u;       // SFPSETEXP: exponent = low 8 bits of VD
+constexpr uint32_t kCastIntToFloat = 0u;      // SFPCAST: sign-magnitude int -> FP32
+constexpr uint32_t kGtSetVd = 8u;             // SFPGT: VD = (VD > VC) ? all ones : 0
 
 inline void set_dst(const uint32_t tile) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << 6) + get_dest_buffer_base());
@@ -508,92 +527,110 @@ inline void clear_dst() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
-// Hold the packer until this thread's SFPU writes have landed.
 inline void wait_before_pack() {
     TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
 }
 
-// Once per kernel: the SFPU config register, the address mods the
-// exponential and the multiply walk the tile with, and the exponential's
-// constants (1/ln 2 in LREG12, its c2 in LREG13) -- what sdpa_exp_tile_init
-// does on the math thread, for this thread's copies of those registers.
-// Where K does not carry the softmax scale the exponential does: a / ln 2
-// in LREG12 makes it compute exp(a x), the one-multiply fold sdpa_fw uses.
+inline void load_constant(const uint32_t reg, const uint32_t bits) {
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(bits >> 16));
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_LOWER, static_cast<uint16_t>(bits & 0xFFFFu));
+}
+
+// The programmable constants are written through register 0.
+inline void program_constant(const uint32_t reg, const uint32_t bits) {
+    load_constant(p_sfpu::LREG0, bits);
+    TTI_SFPCONFIG(0, reg, 0);
+}
+
 inline void init() {
     ckernel::sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    // Two vectors (the even and the odd columns of four rows) per iteration.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     constexpr float exp_scale = __builtin_bit_cast(float, scaler_bits);
     constexpr uint32_t inv_ln2_bits = __builtin_bit_cast(uint32_t, exp_scale * 1.4426950408889634F);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(inv_ln2_bits >> 16));
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, static_cast<uint16_t>(inv_ln2_bits & 0xFFFFu));
-    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, kExpC2 >> 16);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, kExpC2 & 0xFFFFu);
-    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, kExpC4 >> 16);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, kExpC4 & 0xFFFFu);
-    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    program_constant(kScaleReg, inv_ln2_bits);
+    program_constant(kC2Reg, kExpC2);
+    program_constant(kC3Reg, kExpC3);
 }
 
-// The library clamps z = a x / ln 2 + 127 at 255 against overflow. Here x
-// is a score less its row's logsumexp, so exp(a x) <= 1 up to rounding and
-// the clamp is dead: two instructions per vector saved. The lower side,
-// -inf from the mask included, is the z > 0 mask in the body.
-
-// The exponential's constants into their registers: c0 in LREG7, c1 in
-// LREG6, c3 in LREG4, 127 in LREG5 (c2 and c4 sit in the programmable
-// constant registers 13 and 14 from init). Once per group of tiles, since
-// nothing else touches these registers between the group's exponentials.
+// The general registers the exponential relies on, reloaded before every
+// run of tiles because the multiplies in between are free to use them.
 inline void exp_prepare() {
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, exp_bias_bits >> 16);  // 127 - log2(sqrt d)
-    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, exp_bias_bits & 0xFFFFu);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, kExpC1 >> 16);
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, kExpC1 & 0xFFFFu);
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, kExpC0 >> 16);
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, kExpC0 & 0xFFFFu);
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, kExpC3 >> 16);
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, kExpC3 & 0xFFFFu);
+    load_constant(kBiasReg, exp_bias_bits);  // 127 - log2(sqrt d)
+    load_constant(kC1Reg, kExpC1);
+    program_constant(kC4Reg, kExpC4);
 }
 
-// One face (eight vectors) of exp(x) in place. The same instruction stream
-// as _sfpu_exp_21f_bf16_tti_ -- x / ln 2 split into integer and fraction
-// bits, the fraction refined by a polynomial, the integer part set as the
-// exponent -- less the overflow clamp, and with the polynomial raised from
-// degree two to four. The library's quadratic (and a 16-bit immediate for its constant term) leaves
-// P with a relative error of 1.2e-3 RMS and a mean of +2.2e-4: bfloat16
-// accuracy, and by far the largest error in every gradient once the
-// statistics are exact. Two more multiply-adds per vector, in registers
-// the exponential was not using, bring it to 3e-6, below the 19 bits the
-// Src registers keep. The polynomial is constrained to stay inside [1, 2)
-// over the whole fraction range, since SETEXP only replaces the exponent.
+// Register 11 back to the -1.0 every sfpi-compiled kernel assumes.
+inline void exp_release() {
+    program_constant(p_sfpu::LREG11, 0xBF800000u);
+}
+
+// One step of the exponential for one 32-lane vector held in registers
+// (x, i, f): 2^z with z = a x / ln 2 + bias, the bias carrying the exponent
+// offset and the 1/sqrt(d). Rounding z toward zero gives the integer i and
+// leaves f = z - i in [0, 1), exactly (both are multiples of z's unit); 2^f
+// in [1, 2) is the polynomial, whose mantissa the exponent field 2^i is set
+// on. It has to be the floor: the nearest integer would put f in [-1/2, 1/2)
+// and 2^f below one for half the entries, whose implicit exponent the set-
+// exponent then drops (measured: every such entry doubled). Where z <= 0
+// the exponent is masked to zero, so the fully masked entries (z = -inf,
+// whose polynomial is +inf with an all-zero mantissa) come out as exact
+// zeros and everything below 2^-127 flushes, as before.
+//
+// The min/max swap would clamp z in one instruction instead, but it reads
+// its operands on its first cycle without the automatic stall after a
+// multiply-add (a documented hardware bug) and measured as reading the
+// stale value; the compare and the AND are covered by the stall logic.
+#define EXP_STEP(step, x, i, f, column)                                                                     \
+    if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);              \
+    if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                     \
+    if constexpr (step == 2)                                                                                \
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);    \
+    if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                           \
+    if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                          \
+    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, kGtSetVd);                                  \
+    if constexpr (step == 6) TTI_SFPAND(0, x, i, 0);                                                        \
+    if constexpr (step == 7) TTI_SFPMAD(f, kC4Reg, kC3Reg, x, 0);                                          \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, kC2Reg, x, 0);                                               \
+    if constexpr (step == 9) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                               \
+    if constexpr (step == 10) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                    \
+    if constexpr (step == 11) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                      \
+    if constexpr (step == 12 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);   \
+    if constexpr (step == 12 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+
+constexpr uint32_t kExpSteps = 13;
+
+template <uint32_t step>
+inline void exp_pair_step() {
+    EXP_STEP(step, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    EXP_STEP(step, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+}
+
+template <uint32_t step = 0>
+inline void exp_pair_body() {
+    exp_pair_step<step>();
+    if constexpr (step + 1 < kExpSteps) {
+        exp_pair_body<step + 1>();
+    }
+}
+
+// A face is 16 x 16: four groups of four rows, each two vectors.
 inline void exp_face() {
-    // The body below is recorded into the replay buffer the first time and
-    // replayed for the other seven vectors; the count must match exactly.
-    constexpr int kBodyLen = 15;
+    // The two chains interleaved instruction by instruction, so a result is
+    // never read on the cycle right after its multiply-add (two cycles of
+    // latency) and the vector unit issues every cycle. The second store
+    // advances to the next four rows.
+    constexpr int kBodyLen = 2 * kExpSteps;
     TTI_REPLAY(0, kBodyLen, 1, 1);
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);           // x
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);      // z = a x / ln 2 + bias
-    TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);                                // exponent of z
-    TTI_SFPEXMAN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);                                // mantissa of z, hidden bit in
-    TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);                                 // fixed point: integer.fraction
-    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);         // the 23 fraction bits
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);                                    // as a float f in [0, 2^23)
-    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, p_sfpu::LREG2, 0);      // c4 f + c3
-    TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 8);                                // mask: z > 0
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG2, 0);      // .. f + c2
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG2, 0);       // .. f + c1
-    TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG0, 1);                      // integer part, 0 where z <= 0
-    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG1, 0);       // 2^fraction = .. f + c0
-    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, 2);                               // times 2^integer
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-#pragma GCC unroll 8
-    for (uint32_t i = 1; i < 8u; ++i) {
+    exp_pair_body();
+#pragma GCC unroll 4
+    for (uint32_t i = 1; i < 4u; ++i) {
         TTI_REPLAY(0, kBodyLen, 0, 0);
     }
 }
 
-// P = exp(a x) in place, four faces.
 inline void exp_tile(const uint32_t tile) {
     set_dst(tile);
     for (uint32_t face = 0; face < 4u; ++face) {
@@ -603,7 +640,6 @@ inline void exp_tile(const uint32_t tile) {
     clear_dst();
 }
 
-// out = a * b, Float32, four faces.
 inline void mul_tiles(const uint32_t a, const uint32_t b, const uint32_t out) {
     set_dst(0);
     for (uint32_t face = 0; face < 4u; ++face) {
@@ -877,31 +913,48 @@ void kernel_main() {
             // Pack thread: the exponentials as soon as S^T is posted, then --
             // after the math thread's commit, which says dP^T - D^T is in --
             // the multiplies, and the packs once the SFPU has written them.
-            PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
-            PACK((pack_sfpu::exp_prepare()));
-            for (uint32_t i = 0; i < kGroup; ++i) {
-                if (i >= n_live) {
-                    break;  // constant trip count keeps the loop unrolled
-                }
-                PACK((pack_sfpu::exp_tile(score_reg(i))));
+            {
+                DeviceZoneScopedN("P-WAIT-S");
+                PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
             }
-            PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+            {
+                DeviceZoneScopedN("P-EXP");
+                PACK((pack_sfpu::exp_prepare()));
+                for (uint32_t i = 0; i < kGroup; ++i) {
+                    if (i >= n_live) {
+                        break;  // constant trip count keeps the loop unrolled
+                    }
+                    PACK((pack_sfpu::exp_tile(score_reg(i))));
+                }
+                PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+                PACK((pack_sfpu::exp_release()));
+                PACK((pack_sfpu::wait_before_pack()));
+            }
             tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < kGroup; ++i) {
-                if (i >= n_live) {
-                    break;  // constant trip count keeps the loop unrolled
-                }
-                PACK((pack_sfpu::mul_tiles(grad_score_reg(i), score_reg(i), grad_score_reg(i))));
+            {
+                DeviceZoneScopedN("P-WAIT-DP");
+                tile_regs_wait();
             }
-            PACK((pack_sfpu::wait_before_pack()));
-            for (uint32_t i = 0; i < kGroup; ++i) {
-                if (i >= n_live) {
-                    break;  // constant trip count keeps the loop unrolled
+            {
+                DeviceZoneScopedN("P-MUL");
+                for (uint32_t i = 0; i < kGroup; ++i) {
+                    if (i >= n_live) {
+                        break;  // constant trip count keeps the loop unrolled
+                    }
+                    PACK((pack_sfpu::mul_tiles(grad_score_reg(i), score_reg(i), grad_score_reg(i))));
                 }
-                const uint32_t b = b0 + i;
-                pack_tile</* out_of_order */ true>(score_reg(i), cb_attention_weights, b * Bt + a);
-                pack_tile</* out_of_order */ true>(grad_score_reg(i), cb_grad_scores, b * Bt + a);
+                PACK((pack_sfpu::wait_before_pack()));
+            }
+            {
+                DeviceZoneScopedN("P-PACK");
+                for (uint32_t i = 0; i < kGroup; ++i) {
+                    if (i >= n_live) {
+                        break;  // constant trip count keeps the loop unrolled
+                    }
+                    const uint32_t b = b0 + i;
+                    pack_tile</* out_of_order */ true>(score_reg(i), cb_attention_weights, b * Bt + a);
+                    pack_tile</* out_of_order */ true>(grad_score_reg(i), cb_grad_scores, b * Bt + a);
+                }
             }
             tile_regs_release();
         }
