@@ -184,11 +184,18 @@ def test_the_default_key_matches_every_variant():
     assert key.specificity == 0
     assert key.matches(
         approx_mode=ApproximationMode.Yes,
+        input_format=DataFormat.Float32,
         output_format=DataFormat.Float32,
         dest_acc=DestAccumulation.No,
         arch=ChipArchitecture.WORMHOLE,
     )
-    assert key.matches(approx_mode=None, output_format=None, dest_acc=None, arch=None)
+    assert key.matches(
+        approx_mode=None,
+        input_format=None,
+        output_format=None,
+        dest_acc=None,
+        arch=None,
+    )
 
 
 def test_a_more_specific_key_wins_over_the_default():
@@ -300,13 +307,22 @@ def test_the_registry_resolves_unambiguously_for_every_variant():
 
 
 def test_an_unenrolled_op_keeps_todays_gate():
-    """Enrolment is incremental: nothing changes for an op until it is in the table."""
-    assert MathOperation.Exp not in enrolled_ops()
-    for fmt in ULP_FORMATS:
-        assert (
-            accuracy_contract(MathOperation.Exp, output_format=fmt, arch=MEASURED_ARCH)
-            is TOLERANCE_CONTRACT
-        )
+    """Enrolment is incremental: nothing changes for an op until it is in the table.
+
+    The op is picked from whatever is still unenrolled rather than named, so enrolling
+    another one later does not turn this into a false failure — which is exactly what it
+    did when the transcendentals landed and it still named ``Exp``.
+    """
+    unenrolled = sorted(
+        set(MathOperation) - set(enrolled_ops()), key=lambda op: op.name
+    )
+    assert unenrolled, "every op is enrolled; this test has nothing left to check"
+    for op in unenrolled[:5]:
+        for fmt in ULP_FORMATS:
+            assert (
+                accuracy_contract(op, output_format=fmt, arch=MEASURED_ARCH)
+                is TOLERANCE_CONTRACT
+            ), f"{op.name} is unenrolled but resolves to something other than tolerance"
 
 
 @pytest.mark.parametrize("fmt", BLOCK_FORMATS_WITHOUT_ULP, ids=lambda f: f.name)

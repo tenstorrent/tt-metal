@@ -1,0 +1,535 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Host-side guards for accuracy/emit_budget.py.
+
+No kernel, no device: the script reads a DataFrame and prints registry entries, so every
+rule in it is testable against a few synthetic rows. That matters more here than for most
+tooling, because the output of this script is *checked in as the gate*. A bug in the budget
+formula does not produce a crash, it produces a number that looks measured and gates the
+wrong thing — and the comment next to it will say it came from hardware.
+
+The rules under test are the four refusals in the module docstring, plus the arithmetic
+that turns a distribution into one integer.
+"""
+
+import math
+
+import pandas as pd
+import pytest
+import torch
+from accuracy.emit_budget import (
+    DEFAULT_HEADROOM,
+    NEAR_ZERO_MAX_SHARE,
+    CellMeasurement,
+    _collapse,
+    _to_enum_flag,
+    agreement_bits,
+    measure_cell,
+)
+from helpers.format_config import DataFormat
+from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.ulp import MAX_MEANINGFUL_ULP
+
+
+def _cell(**kwargs) -> CellMeasurement:
+    """A measurement with the all-lane view mirroring the bulk view by default.
+
+    A test that cares about the two diverging sets ``all_max_ulp`` explicitly; everything
+    else describes a cell with no near-zero lanes, where they are the same thing.
+    """
+    defaults = dict(
+        op=MathOperation.Tanh,
+        input_format=DataFormat.Float32,
+        output_format=DataFormat.Float16_b,
+        approx_mode=ApproximationMode.No,
+        dest_acc=DestAccumulation.No,
+        points=1000,
+        max_ulp=1,
+        percentile_ulp=1.0,
+        exact_fraction=0.9,
+        nonfinite_disagreements=0,
+        unmeasurable=0,
+        near_zero_points=0,
+        near_zero_max_ulp=0,
+        near_zero_max_abs_err=0.0,
+        all_max_ulp=None,
+        all_percentile_ulp=None,
+    )
+    defaults.update(kwargs)
+    if defaults["all_max_ulp"] is None:
+        defaults["all_max_ulp"] = defaults["max_ulp"]
+    if defaults["all_percentile_ulp"] is None:
+        defaults["all_percentile_ulp"] = defaults["percentile_ulp"]
+    return CellMeasurement(**defaults)
+
+
+def _rows(golden, hardware) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "golden_result": list(golden),
+            "hardware_result": list(hardware),
+        }
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Making two formats comparable
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_the_same_accuracy_reads_the_same_in_any_format():
+    """The figure that stops a five-figure float32 budget from reading as a loose gate.
+
+    One bfloat16 step and 65536 float32 steps are the same physical accuracy, because
+    float32 counts 2**16 finer steps over the same interval.
+    """
+    assert agreement_bits(1, DataFormat.Float16_b) == pytest.approx(7.0)
+    assert agreement_bits(65536, DataFormat.Float32) == pytest.approx(7.0)
+    assert agreement_bits(1, DataFormat.Float16) == pytest.approx(10.0)
+
+
+def test_an_exact_result_agrees_to_the_whole_mantissa():
+    for fmt in (DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b):
+        expected = math.log2(
+            MAX_MEANINGFUL_ULP[
+                {
+                    DataFormat.Float32: torch.float32,
+                    DataFormat.Float16: torch.float16,
+                    DataFormat.Float16_b: torch.bfloat16,
+                }[fmt]
+            ]
+        )
+        assert agreement_bits(0, fmt) == pytest.approx(expected)
+
+
+def test_a_disagreement_past_the_whole_mantissa_goes_negative():
+    """Which is the signal that the op belongs on the tolerance metric, not a budget."""
+    assert agreement_bits(1 << 20, DataFormat.Float16_b) < 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The budget formula
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_budget_is_never_below_the_measured_maximum():
+    """The gate is a max over lanes, so a budget under the measured max fails on the
+    first run. The percentile is a floor, not the answer."""
+    cell = _cell(max_ulp=40, percentile_ulp=4.0)
+    assert cell.budget(headroom=1.25) == 40
+
+
+def test_the_percentile_floor_lifts_a_tight_distribution():
+    """Where the distribution is tight, the budget gets headroom above it rather than
+    being pinned to the single worst observed lane."""
+    cell = _cell(max_ulp=8, percentile_ulp=8.0)
+    assert cell.budget(headroom=1.25) == 10
+
+
+def test_headroom_of_one_pins_the_budget_to_the_measurement():
+    cell = _cell(max_ulp=8, percentile_ulp=8.0)
+    assert cell.budget(headroom=1.0) == 8
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The near-zero floor, and when it must not be emitted
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_no_floor_when_the_near_zero_lanes_are_already_in_budget():
+    cell = _cell(
+        max_ulp=8, percentile_ulp=8.0, near_zero_points=10, near_zero_max_ulp=3
+    )
+    assert cell.near_zero_atol(DEFAULT_HEADROOM) is None
+
+
+def test_a_floor_appears_when_a_few_near_zero_lanes_blow_the_budget():
+    """The gelu(-4.18) / erfinv(0.0005) case: the hardware returns exactly 0 against a
+    small non-zero reference, which is a five-figure step count and says nothing about the
+    kernel elsewhere."""
+    cell = _cell(
+        max_ulp=1,
+        percentile_ulp=1.0,
+        points=1000,
+        near_zero_points=20,
+        near_zero_max_ulp=14337,
+        near_zero_max_abs_err=6.1e-05,
+    )
+    floor = cell.near_zero_atol(headroom=1.25)
+    assert floor is not None
+    assert floor == pytest.approx(6.1e-05 * 1.25, rel=1e-2)
+
+
+def test_no_floor_when_it_would_cover_most_of_the_lanes():
+    """The exp case. "Below 1% of the dynamic range" assumes a roughly linear-scale
+    tensor; over a domain whose output spans decades it swallows almost every lane, and a
+    floor covering the majority is not a floor, it is the gate — the magnitude-blind gate
+    the step count exists to replace."""
+    cell = _cell(
+        max_ulp=1,
+        percentile_ulp=1.0,
+        points=6144,
+        near_zero_points=6036,
+        near_zero_max_ulp=32767,
+        near_zero_max_abs_err=6.4e29,
+        all_max_ulp=32767,
+        all_percentile_ulp=32767.0,
+    )
+    assert cell.near_zero_points / cell.measurable_points > NEAR_ZERO_MAX_SHARE
+    assert cell.near_zero_atol(DEFAULT_HEADROOM) is None
+
+
+def test_the_share_guard_is_a_boundary_not_a_cliff():
+    below = _cell(
+        points=1000,
+        near_zero_points=int(1000 * NEAR_ZERO_MAX_SHARE) - 1,
+        near_zero_max_ulp=99999,
+        near_zero_max_abs_err=1e-4,
+    )
+    above = _cell(
+        points=1000,
+        near_zero_points=int(1000 * NEAR_ZERO_MAX_SHARE) + 1,
+        near_zero_max_ulp=99999,
+        near_zero_max_abs_err=1e-4,
+    )
+    assert below.near_zero_atol(DEFAULT_HEADROOM) is not None
+    assert above.near_zero_atol(DEFAULT_HEADROOM) is None
+
+
+def test_unmeasurable_lanes_do_not_count_toward_the_share():
+    """The denominator is the measurable lanes, so a cell full of NaN goldens cannot make
+    a genuine near-zero minority look like a majority."""
+    cell = _cell(points=1000, unmeasurable=900, near_zero_points=60)
+    assert cell.measurable_points == 100
+    assert cell.near_zero_points / cell.measurable_points > NEAR_ZERO_MAX_SHARE
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Measuring a cell: the gate's metric, not the sweep's diagnostic
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _measure(
+    golden, hardware, fmt=DataFormat.Float16_b, percentile=99.9, fraction=0.01
+):
+    return measure_cell(
+        _rows(golden, hardware),
+        MathOperation.Tanh,
+        DataFormat.Float32,
+        fmt,
+        ApproximationMode.No,
+        DestAccumulation.No,
+        percentile,
+        fraction,
+    )
+
+
+def test_a_cell_of_identical_values_measures_zero():
+    values = [1.0, 2.0, 4.0, 8.0] * 64
+    cell = _measure(values, values)
+    assert cell.max_ulp == 0
+    assert cell.exact_fraction == pytest.approx(1.0)
+    assert cell.gateable
+
+
+def test_the_metric_is_the_integer_step_count_not_the_fractional_one():
+    """One representable step below a power of two is 1, where the fractional
+    ``|err| / ulp(golden)`` the sweep also records would call it 0.5."""
+    golden = [1.0] * 128
+    # 1 - 2**-8, the bfloat16 value one step below 1.0 and exactly representable.
+    below = 0.99609375
+    assert float(torch.tensor(below, dtype=torch.bfloat16)) == below
+    cell = _measure(golden, [below] * 128)
+    assert cell.max_ulp == 1
+
+
+def test_a_non_finite_disagreement_makes_a_cell_ungateable():
+    """No budget can pass such a cell — the gate requires non-finites to agree
+    positionally before it looks at any step count — so emitting a number for it would be
+    emitting a lie."""
+    cell = _measure([1.0, 2.0, 3.0], [1.0, float("inf"), 3.0])
+    assert cell.nonfinite_disagreements == 1
+    assert not cell.gateable
+
+
+def test_matching_non_finites_are_unmeasurable_but_not_a_disagreement():
+    cell = _measure([1.0, float("nan")], [1.0, float("nan")])
+    assert cell.nonfinite_disagreements == 0
+    assert cell.unmeasurable == 1
+    assert cell.gateable
+
+
+def test_the_near_zero_split_keeps_a_tiny_golden_out_of_the_bulk():
+    """A lane at 1e-8 against a dynamic range of 100 is below the 1% cut, so its enormous
+    step count lands in the near-zero bucket and does not set the budget."""
+    golden = [100.0] * 99 + [1e-8]
+    hardware = [100.0] * 99 + [0.0]
+    cell = _measure(golden, hardware, fmt=DataFormat.Float32)
+    assert cell.max_ulp == 0  # the bulk is exact
+    assert cell.near_zero_points == 1
+    assert cell.near_zero_max_ulp > 1000
+    assert cell.near_zero_max_abs_err == pytest.approx(1e-8)
+
+
+def test_an_all_zero_golden_puts_every_lane_in_the_near_zero_bucket():
+    cell = _measure([0.0] * 8, [0.0] * 8)
+    assert cell.near_zero_points == 8
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Collapsing keys
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_dest_acc_collapses_when_both_settings_agree():
+    cells = [
+        _cell(dest_acc=DestAccumulation.No, max_ulp=1, percentile_ulp=1.0),
+        _cell(dest_acc=DestAccumulation.Yes, max_ulp=1, percentile_ulp=1.0),
+    ]
+    keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
+    assert len(keys) == 1
+    assert keys[0].dest_acc is None
+    assert "dest_acc" not in keys[0].key_source()
+
+
+def test_dest_acc_stays_in_the_key_when_the_settings_disagree():
+    """A key that keeps a dimension is itself the statement that the dimension mattered."""
+    cells = [
+        _cell(dest_acc=DestAccumulation.No, max_ulp=1, percentile_ulp=1.0),
+        _cell(dest_acc=DestAccumulation.Yes, max_ulp=40, percentile_ulp=40.0),
+    ]
+    keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
+    assert len(keys) == 2
+    assert all(k.dest_acc is not None for k in keys)
+
+
+def test_every_dimension_but_the_input_format_collapses_when_all_agree():
+    """The input format is never collapsed away, even here where everything agrees.
+
+    A key without it would extend the budget to input paths the sweep never measured --
+    the functional suite runs ``Bfp8_b`` inputs and the accuracy sweep does not -- and a
+    much coarser path silently inheriting a budget is the exact failure this dimension was
+    added to stop: 36 of 44 functional failures under the first cut of the table were
+    ``Bfp8_b``-input variants.
+    """
+    cells = [
+        _cell(
+            output_format=fmt,
+            approx_mode=approx,
+            dest_acc=dest,
+            max_ulp=0,
+            percentile_ulp=0.0,
+        )
+        for fmt in (DataFormat.Float32, DataFormat.Float16_b)
+        for approx in ApproximationMode
+        for dest in DestAccumulation
+    ]
+    keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
+    assert len(keys) == 1
+    source = keys[0].key_source()
+    assert source == "BudgetKey(input_format=DataFormat.Float32)"
+    for collapsed in ("output_format", "approx_mode", "dest_acc"):
+        assert collapsed not in source
+
+
+def test_a_budget_past_the_ceiling_is_emitted_as_a_tolerance_contract():
+    """The guard against "the sweep said 15616, so the budget is 15616"."""
+    cells = [
+        _cell(
+            output_format=DataFormat.Float16_b,
+            max_ulp=20000,
+            percentile_ulp=20000.0,
+            dest_acc=dest,
+        )
+        for dest in DestAccumulation
+    ]
+    keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
+    assert all(k.budget is None for k in keys)
+    assert all("Metric.TOLERANCE" in k.contract_source() for k in keys)
+
+
+def test_an_ungateable_cell_gets_no_budget():
+    cells = [
+        _cell(nonfinite_disagreements=3, dest_acc=dest) for dest in DestAccumulation
+    ]
+    keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
+    assert all(k.budget is None for k in keys)
+
+
+def test_an_emitted_contract_carries_the_floor_when_there_is_one():
+    cells = [
+        _cell(
+            dest_acc=dest,
+            max_ulp=1,
+            percentile_ulp=1.0,
+            points=1000,
+            near_zero_points=20,
+            near_zero_max_ulp=99999,
+            near_zero_max_abs_err=1e-4,
+        )
+        for dest in DestAccumulation
+    ]
+    keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
+    assert len(keys) == 1
+    source = keys[0].contract_source()
+    assert "max_ulp=" in source and "near_zero_atol=" in source
+
+
+def test_a_cell_with_a_floor_does_not_collapse_into_one_without():
+    cells = [
+        _cell(dest_acc=DestAccumulation.No, max_ulp=1, percentile_ulp=1.0),
+        _cell(
+            dest_acc=DestAccumulation.Yes,
+            max_ulp=1,
+            percentile_ulp=1.0,
+            points=1000,
+            near_zero_points=20,
+            near_zero_max_ulp=99999,
+            near_zero_max_abs_err=1e-4,
+        ),
+    ]
+    keys = _collapse(cells, DEFAULT_HEADROOM, DataFormat.Float32)
+    assert len(keys) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reading the sweep's own encoding
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("0", ApproximationMode.No),
+        ("1", ApproximationMode.Yes),
+        (0, ApproximationMode.No),
+        (1, ApproximationMode.Yes),
+        ("false", ApproximationMode.No),
+        ("True", ApproximationMode.Yes),
+        (ApproximationMode.Yes, ApproximationMode.Yes),
+    ],
+)
+def test_the_harness_flag_encoding_round_trips(raw, expected):
+    assert _to_enum_flag(raw, ApproximationMode) is expected
+
+
+def test_an_unreadable_flag_raises_rather_than_guessing():
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="cannot read"
+    ):
+        _to_enum_flag("maybe", DestAccumulation)
+
+
+def test_every_op_name_in_the_sweep_maps_back_to_a_math_operation():
+    """The join between the sweep's lowercase op names and the registry's enum. A miss
+    here silently drops an op from enrolment."""
+    by_lower = {op.name.lower(): op for op in MathOperation}
+    swept = [
+        "acosh",
+        "asinh",
+        "atanh",
+        "celu",
+        "cos",
+        "elu",
+        "erfinv",
+        "exp",
+        "exp2",
+        "gelu",
+        "hardsigmoid",
+        "log",
+        "log1p",
+        "reciprocal",
+        "rsqrt",
+        "silu",
+        "sin",
+        "sqrt",
+        "tanh",
+    ]
+    assert [n for n in swept if n not in by_lower] == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Budget and floor are decided together
+#
+# The subtle one, and the reason it is worth a section: a budget measured over the bulk
+# lanes is only valid while something else holds the near-zero ones.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_suppressing_the_floor_widens_the_budget_to_cover_every_lane():
+    """The exp/bfloat16/dest_acc=Yes case that caught this on hardware.
+
+    6036 of 6144 points sit under 1% of a dynamic range of 5.5e34, so the share guard
+    refuses a floor. The bulk lanes are all exact, and emitting the bulk budget alone gave
+    ``max_ulp=0`` with nothing holding the rest — the gate then saw all 6144 lanes, found
+    one a step out, and failed a budget the sweep had apparently justified.
+    """
+    cell = _cell(
+        max_ulp=0,
+        percentile_ulp=0.0,
+        points=6144,
+        near_zero_points=6036,
+        near_zero_max_ulp=1,
+        near_zero_max_abs_err=1e-40,
+        all_max_ulp=1,
+        all_percentile_ulp=1.0,
+    )
+    budget, floor = cell.resolve(DEFAULT_HEADROOM)
+    assert floor is None, "the share guard should refuse a floor here"
+    assert budget >= cell.all_max_ulp, (
+        "with no floor the budget has to cover the near-zero lanes too; a bulk-only "
+        "budget here was 0 and the gate failed on hardware"
+    )
+    assert budget > cell.max_ulp, "the bulk view alone would have emitted 0"
+
+
+def test_keeping_the_floor_keeps_the_budget_on_the_bulk_lanes():
+    """The other side of the same decision: a floor that *is* emitted is what lets the
+    budget stay tight, which is the entire point of having one."""
+    cell = _cell(
+        max_ulp=1,
+        percentile_ulp=1.0,
+        points=1000,
+        near_zero_points=20,
+        near_zero_max_ulp=14337,
+        near_zero_max_abs_err=6.1e-05,
+        all_max_ulp=14337,
+        all_percentile_ulp=1.0,
+    )
+    budget, floor = cell.resolve(DEFAULT_HEADROOM)
+    assert floor is not None
+    assert budget == 2, "the 14337-step near-zero lane must not set the budget"
+
+
+def test_a_cell_with_no_near_zero_lanes_resolves_the_same_either_way():
+    cell = _cell(max_ulp=6, percentile_ulp=6.0)
+    budget, floor = cell.resolve(DEFAULT_HEADROOM)
+    assert floor is None
+    assert budget == 8
+
+
+def test_the_ceiling_is_applied_to_the_resolved_budget_not_the_bulk_one():
+    """A cell whose bulk is tiny but whose all-lane view is hopeless still goes to
+    tolerance, rather than emitting the flattering bulk number."""
+    cell = _cell(
+        output_format=DataFormat.Float16_b,
+        max_ulp=1,
+        percentile_ulp=1.0,
+        points=6144,
+        near_zero_points=6000,
+        near_zero_max_ulp=99999,
+        near_zero_max_abs_err=1.0,
+        all_max_ulp=99999,
+        all_percentile_ulp=99999.0,
+    )
+    budget, floor = cell.resolve(DEFAULT_HEADROOM)
+    assert (budget, floor) == (None, None)
+
+
+def test_measure_cell_records_both_views():
+    golden = [100.0] * 99 + [1e-8]
+    hardware = [100.0] * 99 + [0.0]
+    cell = _measure(golden, hardware, fmt=DataFormat.Float32)
+    assert cell.max_ulp == 0, "the bulk lanes are exact"
+    assert cell.all_max_ulp > 1000, "the all-lane view sees the near-zero blow-up"

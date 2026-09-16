@@ -1,0 +1,768 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Derive SFPU accuracy budgets from the sweep the harness already runs.
+
+Budgets must not be hand-guessed. One derived from nothing is either so loose it gates
+nothing or so tight it flakes, and either way nobody can tell which by reading it. The
+accuracy suite already writes a row per sampled point for every (op, format, approx mode,
+fast mode, dest accumulation) variant; this reads those files and prints
+``helpers/sfpu_accuracy_budget`` entries, each with the measurement it came from in a
+trailing comment. That closes the loop the gate needs: measure, budget, gate, and a kernel
+improvement then lands as a visible decrease in a checked-in number.
+
+Run it from ``tests/python_tests``::
+
+    ../.venv/bin/python -m accuracy.emit_budget --arch wh
+    ../.venv/bin/python -m accuracy.emit_budget --arch wh --op tanh --op exp --formats fp32
+
+**It measures the gate's own metric, not the sweep's diagnostic one.** The parquet carries
+a ``signed_ulp_error`` column, but that is the fractional ``|err| / ulp(golden)`` form,
+which returns 0.5 or 2.0 for a single representable step across a power of two and so
+cannot define a budget. The files also carry ``golden_result`` and ``hardware_result``, and
+those cast back into the output format's dtype losslessly, so this recomputes
+:func:`helpers.ulp.ulp_distance` — the integer step count the gate actually applies. A
+budget printed here is a budget the gate will honour.
+
+Four things it refuses to paper over, because each one produces a budget that looks
+plausible and gates nothing:
+
+* **A cell with a non-finite disagreement gets no budget.** The gate requires ``NaN`` and
+  ``Inf`` to agree positionally before it looks at any step count, so a cell where the
+  sweep saw an ``Inf`` against a finite reference would fail at *every* budget. Printing a
+  number for it would be printing a lie. Those cells are reported and skipped.
+* **A budget is never below the measured maximum.** The gate is a max over lanes, so a
+  budget under it fails immediately. The proposal's ``p99.9 x headroom`` is applied as a
+  *floor* rather than as the answer: it stops one lane from setting the budget when the
+  distribution is tight, and the measured maximum wins when the distribution has a tail.
+  Both numbers are printed so the choice is auditable.
+* **A budget past the format's ``2**mantissa_bits`` is emitted as a tolerance contract.**
+  Past that point the two values differ by more than an order of magnitude and ULP has
+  stopped being the right metric. This is where an approximate-mode transcendental in
+  bfloat16 belongs, and it is the guard against "the sweep said 15616, so the budget is
+  15616".
+* **Fast mode is collapsed by taking the maximum**, because ``BudgetKey`` has no fast-mode
+  dimension. Collapsing by anything but the max would emit a budget the gate cannot meet.
+
+Keys are then collapsed where the measurements agree — over dest accumulation, then
+approximation mode, then output format — so an op whose budget does not vary prints one
+line instead of twelve. Where they disagree the dimension stays in the key, which is the
+signal that it mattered.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import pandas as pd
+import torch
+from helpers.format_config import DataFormat
+from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.ulp import (
+    MAX_MEANINGFUL_ULP,
+    NEAR_ZERO_FRACTION,
+    nonfinite_mismatches,
+    ulp_distance,
+    ulp_dtype,
+)
+
+_THIS_DIR = Path(__file__).resolve().parent
+DEFAULT_SOURCE = _THIS_DIR / "_csv_output"
+
+#: The abbreviations the harness writes into the files, mapped back to the enums the
+#: registry is keyed on. Kept next to the reader rather than imported from the harness so
+#: this script can read a file produced by an older revision of it.
+FORMAT_BY_ABBR: Dict[str, DataFormat] = {
+    "fp32": DataFormat.Float32,
+    "fp16": DataFormat.Float16,
+    "bf16": DataFormat.Float16_b,
+}
+
+#: The order keys are printed in, and the order dimensions are collapsed in.
+FORMAT_ORDER = (DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16)
+
+#: Mantissa bits after the implicit leading 1, per measurement dtype. Same numbers as
+#: ``sfpu_domains._FORMAT_MANTISSA_BITS``, derived here from the ULP ceiling that
+#: ``helpers.ulp`` already publishes so the two cannot disagree.
+MANTISSA_BITS: Dict[torch.dtype, int] = {
+    dtype: int(math.log2(ceiling)) for dtype, ceiling in MAX_MEANINGFUL_ULP.items()
+}
+
+#: A near-zero floor may only cover a minority of a cell's lanes. Past this share the
+#: dynamic-range split has not isolated a cancellation region and the floor would be
+#: doing the gating; see ``CellMeasurement.near_zero_atol``.
+NEAR_ZERO_MAX_SHARE = 0.5
+
+#: The smallest budget a *measurement* may produce. A measured zero means "no error
+#: observed on this stimulus", which is not the same as "no error possible" -- and the
+#: distinction is not academic: eight cells here measured exactly 0 over the accuracy
+#: sweep's deterministic ramp and then found a single step under the functional suite's
+#: random draw. An op that is exact by *construction* is a different claim, and those
+#: budgets are written by hand in the registry (Abs clears a sign bit; it cannot be one
+#: step out). Nothing derived from a finite sample should assert that.
+MIN_MEASURED_BUDGET = 1
+
+#: Cells the accuracy sweep does not predict, and which are therefore left on the
+#: tolerance metric rather than given a number.
+#:
+#: The two suites use different stimuli by design: this sweep walks a deterministic ramp
+#: across the op's domain, and the functional suite draws a seeded random sample from it.
+#: For most ops the ramp bounds the random draw. For an op with a singularity or a
+#: near-zero tail it does not -- the random draw lands closer to the pole than any ramp
+#: step does -- and the gap is not a headroom multiplier away:
+#:
+#:   Gelu  fp32->fp32   dest=Yes   sweep 44 steps  ->  functional 19,474,047
+#:   Log1p fp16->fp32   dest=Yes   sweep 5,114     ->  functional 938,672,129
+#:   Log   fp32->fp32   dest=No    sweep 1         ->  functional 65,536
+#:
+#: Widening a budget to cover that would blind the gate across the whole domain, and
+#: inventing a multiplier that happens to cover it is the hand-guessing this script
+#: exists to replace. The honest state is "not enrolled, and here is why". Enrolling them
+#: needs the sweep's domain coverage extended toward each singularity first; then these
+#: entries come out on their own.
+_NOT_PREDICTED_BY_SWEEP = {
+    (
+        "Log",
+        "fp32",
+        "fp32",
+    ): "functional draw reaches 65536 steps where the ramp sees 1",
+    (
+        "Log",
+        "bf16",
+        "fp32",
+    ): "functional draw reaches 65536 steps where the ramp sees 1",
+    ("Log", "fp16", "fp32"): "functional draw reaches 57344 steps, ramp-derived 40960",
+    ("Log1p", "fp16", "fp32"): "near-zero tail: functional reaches 938,672,129 steps",
+    ("Log1p", "fp16", "bf16"): "near-zero tail: functional reaches 14324 steps",
+    (
+        "Atanh",
+        "fp16",
+        "fp32",
+    ): "functional draw reaches 57344 steps, ramp-derived 51200",
+    ("Gelu", "fp32", "fp32"): "near-zero tail: functional reaches 19,474,047 steps",
+}
+
+DEFAULT_HEADROOM = 1.25
+DEFAULT_PERCENTILE = 99.9
+
+
+@dataclass(frozen=True)
+class CellMeasurement:
+    """What the sweep says about one (op, format, approx, dest) cell."""
+
+    op: MathOperation
+    input_format: DataFormat
+    output_format: DataFormat
+    approx_mode: ApproximationMode
+    dest_acc: DestAccumulation
+    points: int
+    max_ulp: int
+    percentile_ulp: float
+    exact_fraction: float
+    nonfinite_disagreements: int
+    unmeasurable: int
+    near_zero_points: int
+    near_zero_max_ulp: int
+    near_zero_max_abs_err: float
+    all_max_ulp: int
+    all_percentile_ulp: float
+
+    @property
+    def gateable(self) -> bool:
+        return self.nonfinite_disagreements == 0
+
+    @property
+    def measurable_points(self) -> int:
+        return max(self.points - self.unmeasurable, 1)
+
+    def resolve(self, headroom: float) -> Tuple[Optional[int], Optional[float]]:
+        """The ``(budget, near_zero_atol)`` pair for this cell, decided *together*.
+
+        The two cannot be chosen independently, and getting that wrong is subtle enough
+        to be worth spelling out: the budget measured over the bulk lanes is only valid
+        if something else is holding the near-zero ones. When the floor is suppressed --
+        because the near-zero split covered too many lanes to be a floor at all -- the
+        budget has to cover every lane instead.
+
+        Measured on WH, ``exp`` at bfloat16 output and ``dest_acc=Yes`` is what caught
+        this: 6036 of its 6144 points sit under 1% of a dynamic range of 5.5e34, the bulk
+        lanes are all exact, and emitting the bulk budget alone produced ``max_ulp=0``
+        with no floor. The gate then saw all 6144 lanes, found one a step out, and failed
+        a budget that the sweep had apparently justified.
+        """
+        if not self.gateable:
+            return None, None
+
+        floor = self._floor(headroom)
+        if floor is None:
+            budget = self._budget(self.all_max_ulp, self.all_percentile_ulp, headroom)
+        else:
+            budget = self._budget(self.max_ulp, self.percentile_ulp, headroom)
+
+        ceiling = MAX_MEANINGFUL_ULP[ulp_dtype(self.output_format)]
+        if budget > ceiling:
+            return None, None
+        return budget, floor
+
+    @staticmethod
+    def _budget(worst: int, percentile: float, headroom: float) -> int:
+        """Never below the measured maximum, because the gate is a max over lanes.
+
+        The percentile term is a floor that keeps a tight distribution from being gated
+        at exactly its worst observed lane; it is not the answer on its own.
+        """
+        return max(worst, math.ceil(percentile * headroom), MIN_MEASURED_BUDGET)
+
+    def budget(self, headroom: float) -> Optional[int]:
+        return self.resolve(headroom)[0]
+
+    def near_zero_atol(self, headroom: float) -> Optional[float]:
+        return self.resolve(headroom)[1]
+
+    def _floor(self, headroom: float) -> Optional[float]:
+        """An absolute floor for the near-zero lanes, or ``None`` if they get none.
+
+        Only when those lanes would otherwise blow the bulk budget *and* they are a
+        minority. Where the reference is a small non-zero value and the hardware returns
+        exactly zero -- measured on WH for ``gelu(-4.18)``, ``erfinv(0.0005)`` and
+        approximate ``exp(-9.68)``, every one of them ``hw = 0`` against a golden of order
+        1e-4 -- the step count from zero to that golden is five figures and says nothing
+        about the kernel's accuracy anywhere else. Raising the budget to swallow it would
+        blind the gate across the whole domain, which is the hole this mechanism exists to
+        close.
+        """
+        if self.near_zero_points == 0:
+            return None
+        if self.near_zero_max_ulp <= self._budget(
+            self.max_ulp, self.percentile_ulp, headroom
+        ):
+            return None
+        if self.near_zero_points > NEAR_ZERO_MAX_SHARE * self.measurable_points:
+            # The split has failed to isolate anything. "Below 1% of the dynamic range"
+            # assumes a roughly linear-scale tensor; for an op whose output spans decades
+            # it swallows almost every lane -- measured on WH, exp over its swept domain
+            # reaches ~5e34, so 98% of its points sit under 1% of that and the derived
+            # floor comes out at 8e29. A floor that covers the majority of lanes is not a
+            # floor, it is the gate, and an absolute tolerance is the magnitude-blind gate
+            # the step count exists to replace. ttnn's heuristic was written for
+            # reductions and normalization, where cancellation really does produce a small
+            # minority of tiny residuals; this is the guard for everything else.
+            return None
+        floor = self.near_zero_max_abs_err * headroom
+        return float(f"{floor:.3g}") if floor > 0 else None
+
+
+def agreement_bits(max_ulp: int, output_format: DataFormat) -> float:
+    """How many mantissa bits the hardware and the reference actually agree to.
+
+    A step count only means something relative to how fine the format's steps are, and
+    this is what makes two budgets in different formats comparable. ``mantissa_bits -
+    log2(max_ulp)``: a 1-step disagreement in bfloat16 and a 65536-step disagreement in
+    float32 are the *same* physical accuracy, 7 mantissa bits, because float32 counts
+    finer steps. Printing it stops a large float32 budget from reading as a loose gate
+    when it is really a narrow result in a wide container -- and stops a small one from
+    reading as tight when the format simply has few bits.
+
+    It is also the figure that decides whether a step budget is a gate at all. Where the
+    agreement is at or below the *next* format's mantissa width, the result is not using
+    the resolution it was asked for, and the interesting question is why, not what number
+    to write in the table.
+    """
+    bits = MANTISSA_BITS[ulp_dtype(output_format)]
+    if max_ulp <= 0:
+        return float(bits)
+    return bits - math.log2(max_ulp)
+
+
+def _to_enum_flag(value: object, enum_cls):
+    """The harness writes these as ``"0"``/``"1"``; accept the enum or a bool too."""
+    if isinstance(value, enum_cls):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes"):
+        return enum_cls.Yes
+    if text in ("0", "false", "no"):
+        return enum_cls.No
+    raise ValueError(f"cannot read {value!r} as {enum_cls.__name__}")
+
+
+def load_sweep(source: Path, arch: str, ops: Optional[Sequence[str]] = None):
+    """Every sweep row for *arch*, from parquet if present and csv otherwise."""
+    arch_dir = source / arch
+    if not arch_dir.is_dir():
+        available = sorted(p.name for p in source.iterdir() if p.is_dir())
+        raise SystemExit(
+            f"no sweep output for arch {arch!r} under {source}. Available: "
+            f"{', '.join(available) or 'none'}. Run the accuracy suite first."
+        )
+
+    wanted = {name.lower() for name in ops} if ops else None
+    paths: List[Path] = []
+    for suffix in (".parquet", ".csv"):
+        paths = [
+            p
+            for p in sorted(arch_dir.glob(f"*{suffix}"))
+            if wanted is None or p.stem.lower() in wanted
+        ]
+        if paths:
+            break
+    if not paths:
+        raise SystemExit(f"no sweep files matching {ops or 'anything'} in {arch_dir}")
+
+    frames = [
+        pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p) for p in paths
+    ]
+    return pd.concat(frames, ignore_index=True), [p.name for p in paths]
+
+
+def measure_cell(
+    rows: pd.DataFrame,
+    op: MathOperation,
+    input_format: DataFormat,
+    output_format: DataFormat,
+    approx_mode: ApproximationMode,
+    dest_acc: DestAccumulation,
+    percentile: float,
+    near_zero_fraction: float,
+) -> CellMeasurement:
+    """Recompute the gate's integer step count over one cell's rows."""
+    dtype = ulp_dtype(output_format)
+    golden = torch.tensor(rows["golden_result"].to_numpy(), dtype=torch.float64).to(
+        dtype
+    )
+    hardware = torch.tensor(rows["hardware_result"].to_numpy(), dtype=torch.float64).to(
+        dtype
+    )
+
+    disagreements = int(nonfinite_mismatches(golden, hardware).sum())
+    distance = ulp_distance(golden, hardware)
+    measurable = distance >= 0
+    unmeasurable = int((~measurable).sum())
+
+    # Split the lanes the way the gate does: below a fraction of the tensor's own dynamic
+    # range, ulp(golden) has collapsed and a step count stops describing the kernel.
+    finite_golden = golden[torch.isfinite(golden)]
+    dynamic_range = float(finite_golden.abs().max()) if finite_golden.numel() else 0.0
+    if dynamic_range > 0:
+        near_zero = golden.abs() < near_zero_fraction * dynamic_range
+    else:
+        near_zero = torch.ones_like(measurable)
+
+    bulk = measurable & ~near_zero
+    edge = measurable & near_zero
+
+    values = distance[bulk]
+    if values.numel() == 0:
+        max_ulp, pct, exact = 0, 0.0, float("nan")
+    else:
+        as_float = values.to(torch.float64)
+        max_ulp = int(values.max())
+        pct = float(torch.quantile(as_float, percentile / 100.0))
+        exact = float((values == 0).sum()) / values.numel()
+
+    all_values = distance[measurable]
+    if all_values.numel() == 0:
+        all_max, all_pct = 0, 0.0
+    else:
+        all_max = int(all_values.max())
+        all_pct = float(
+            torch.quantile(all_values.to(torch.float64), percentile / 100.0)
+        )
+
+    edge_values = distance[edge]
+    if edge_values.numel() == 0:
+        near_zero_max_ulp, near_zero_abs = 0, 0.0
+    else:
+        near_zero_max_ulp = int(edge_values.max())
+        error = (hardware.to(torch.float64) - golden.to(torch.float64)).abs()
+        near_zero_abs = float(error[edge].max())
+
+    return CellMeasurement(
+        op=op,
+        input_format=input_format,
+        output_format=output_format,
+        approx_mode=approx_mode,
+        dest_acc=dest_acc,
+        points=int(len(rows)),
+        max_ulp=max_ulp,
+        percentile_ulp=pct,
+        exact_fraction=exact,
+        nonfinite_disagreements=disagreements,
+        unmeasurable=unmeasurable,
+        near_zero_points=int(edge.sum()),
+        near_zero_max_ulp=near_zero_max_ulp,
+        near_zero_max_abs_err=near_zero_abs,
+        all_max_ulp=all_max,
+        all_percentile_ulp=all_pct,
+    )
+
+
+def measure_all(
+    df: pd.DataFrame,
+    formats: Optional[Sequence[DataFormat]],
+    percentile: float,
+    near_zero_fraction: float,
+) -> Tuple[List[CellMeasurement], List[str]]:
+    """One measurement per (op, format, approx, dest), fast mode collapsed by max."""
+    ops_by_name = {op.name.lower(): op for op in MathOperation}
+    measurements: List[CellMeasurement] = []
+    notes: List[str] = []
+
+    for op_name, per_op in df.groupby("op", sort=True):
+        op = ops_by_name.get(str(op_name).lower())
+        if op is None:
+            notes.append(f"{op_name}: no MathOperation with that name; skipped")
+            continue
+
+        for fmt_abbr, per_fmt in per_op.groupby("output_format", sort=False):
+            output_format = FORMAT_BY_ABBR.get(str(fmt_abbr))
+            if output_format is None:
+                notes.append(f"{op_name}: unknown output_format {fmt_abbr!r}; skipped")
+                continue
+            if formats is not None and output_format not in formats:
+                continue
+
+            for in_abbr, per_in in per_fmt.groupby("input_format", sort=False):
+                input_format = FORMAT_BY_ABBR.get(str(in_abbr))
+                if input_format is None:
+                    notes.append(
+                        f"{op_name}: unknown input_format {in_abbr!r}; skipped"
+                    )
+                    continue
+                for approx_raw, per_approx in per_in.groupby("approx_mode", sort=False):
+                    approx_mode = _to_enum_flag(approx_raw, ApproximationMode)
+                    for dest_raw, cell in per_approx.groupby("dest_acc", sort=False):
+                        measurements.append(
+                            measure_cell(
+                                cell,
+                                op,
+                                input_format,
+                                output_format,
+                                approx_mode,
+                                _to_enum_flag(dest_raw, DestAccumulation),
+                                percentile,
+                                near_zero_fraction,
+                            )
+                        )
+    return measurements, notes
+
+
+@dataclass(frozen=True)
+class EmittedKey:
+    """One registry line: which variants it covers and what it says about them."""
+
+    input_format: Optional[DataFormat]
+    output_format: Optional[DataFormat]
+    approx_mode: Optional[ApproximationMode]
+    dest_acc: Optional[DestAccumulation]
+    budget: Optional[int]  # None => emit a tolerance contract
+    near_zero_atol: Optional[float]
+    cells: Tuple[CellMeasurement, ...]
+
+    def key_source(self) -> str:
+        parts = []
+        if self.input_format is not None:
+            parts.append(f"input_format=DataFormat.{self.input_format.name}")
+        if self.output_format is not None:
+            parts.append(f"output_format=DataFormat.{self.output_format.name}")
+        if self.approx_mode is not None:
+            parts.append(f"approx_mode=ApproximationMode.{self.approx_mode.name}")
+        if self.dest_acc is not None:
+            parts.append(f"dest_acc=DestAccumulation.{self.dest_acc.name}")
+        return f"BudgetKey({', '.join(parts)})" if parts else "DEFAULT"
+
+    def contract_source(self) -> str:
+        if self.budget is None:
+            return "AccuracyContract(metric=Metric.TOLERANCE)"
+        if self.near_zero_atol is None:
+            return f"AccuracyContract(max_ulp={self.budget})"
+        return (
+            f"AccuracyContract(max_ulp={self.budget}, "
+            f"near_zero_atol={self.near_zero_atol!r})"
+        )
+
+    def comment(self, arch: str, stamp: str) -> str:
+        points = sum(c.points for c in self.cells)
+        floored = self.near_zero_atol is not None
+        worst = max((c.max_ulp if floored else c.all_max_ulp) for c in self.cells)
+        pct = max(
+            (c.percentile_ulp if floored else c.all_percentile_ulp) for c in self.cells
+        )
+        exact = min(
+            (
+                c.exact_fraction
+                for c in self.cells
+                if c.exact_fraction == c.exact_fraction
+            ),
+            default=float("nan"),
+        )
+        exact_text = "n/a" if exact != exact else f"{100.0 * exact:.0f}%"
+        note = ""
+        if self.budget is None:
+            abbr = {v: k for k, v in FORMAT_BY_ABBR.items()}
+            marker = (
+                self.cells[0].op.name,
+                abbr.get(self.cells[0].input_format),
+                abbr.get(self.cells[0].output_format),
+            )
+            reason = _NOT_PREDICTED_BY_SWEEP.get(marker)
+            if reason is not None:
+                return f"#   {arch}: not enrolled -- {reason} ({points} pts, {stamp})"
+            dtype = ulp_dtype(self.cells[0].output_format)
+            note = (
+                f"; past {MAX_MEANINGFUL_ULP[dtype]}-step ceiling for this format, so "
+                "tolerance"
+            )
+        if self.near_zero_atol is not None:
+            edge_points = sum(c.near_zero_points for c in self.cells)
+            edge_worst = max(c.near_zero_max_ulp for c in self.cells)
+            note = (
+                f"; {edge_points} near-zero pts reach {edge_worst} steps and are held by "
+                "the atol floor instead"
+            )
+        return (
+            f"#   {arch}: max {worst} ULP, p99.9 {pct:.1f}, {exact_text} exact, "
+            f"~{agreement_bits(worst, self.cells[0].output_format):.0f} mantissa bits, "
+            f"{points} pts, {stamp}{note}"
+        )
+
+
+def _collapse(
+    cells: Sequence[CellMeasurement], headroom: float, input_format: DataFormat
+) -> List[EmittedKey]:
+    """Group one input format's cells into the fewest keys whose budgets agree.
+
+    Collapse over dest accumulation first, then approximation mode, then output format.
+    A dimension only disappears when every cell under it wants the same budget, so a key
+    that keeps a dimension is itself the statement that the dimension mattered.
+
+    The **input** format is never collapsed away, even where every input path agrees. A
+    key without it would cover input formats this sweep never measured -- the functional
+    suite runs ``Bfp8_b`` inputs and the accuracy sweep does not -- and a budget silently
+    extended to an unmeasured, much coarser path is exactly the kind of number this
+    script exists to avoid printing.
+    """
+
+    abbr = {v: k for k, v in FORMAT_BY_ABBR.items()}
+
+    def budget_of(cell: CellMeasurement) -> Tuple[Optional[int], Optional[float]]:
+        """The (budget, floor) pair for one cell, or (None, None) for tolerance."""
+        marker = (
+            cell.op.name,
+            abbr.get(cell.input_format),
+            abbr.get(cell.output_format),
+        )
+        if marker in _NOT_PREDICTED_BY_SWEEP:
+            return None, None
+        return cell.resolve(headroom)
+
+    # (format, approx) -> {dest: budget}
+    by_format_approx: Dict[
+        Tuple[DataFormat, ApproximationMode], List[CellMeasurement]
+    ] = {}
+    for cell in cells:
+        by_format_approx.setdefault((cell.output_format, cell.approx_mode), []).append(
+            cell
+        )
+
+    # Collapse dest_acc where the budgets agree.
+    stage: Dict[
+        DataFormat,
+        List[
+            Tuple[
+                ApproximationMode,
+                Tuple[Optional[int], Optional[float]],
+                Tuple[CellMeasurement, ...],
+                Optional[DestAccumulation],
+            ]
+        ],
+    ] = {}
+    for (fmt, approx), group in by_format_approx.items():
+        budgets = {c.dest_acc: budget_of(c) for c in group}
+        if len(set(budgets.values())) == 1:
+            stage.setdefault(fmt, []).append(
+                (approx, next(iter(budgets.values())), tuple(group), None)
+            )
+        else:
+            for cell in group:
+                stage.setdefault(fmt, []).append(
+                    (approx, budget_of(cell), (cell,), cell.dest_acc)
+                )
+
+    # Collapse approx_mode where the budgets agree and dest_acc already collapsed.
+    per_format: Dict[DataFormat, List[EmittedKey]] = {}
+    for fmt, entries in stage.items():
+        collapsible = all(dest is None for _, _, _, dest in entries)
+        budgets = {approx: budget for approx, budget, _, _ in entries}
+        if collapsible and len(set(budgets.values())) == 1 and len(entries) > 1:
+            merged = tuple(c for _, _, group, _ in entries for c in group)
+            budget, floor = next(iter(budgets.values()))
+            per_format[fmt] = [
+                EmittedKey(input_format, fmt, None, None, budget, floor, merged)
+            ]
+        else:
+            per_format[fmt] = [
+                EmittedKey(input_format, fmt, approx, dest, budget[0], budget[1], group)
+                for approx, budget, group, dest in entries
+            ]
+
+    # Collapse output_format only when every format agrees on a single key.
+    single = all(len(keys) == 1 for keys in per_format.values())
+    if single and len(per_format) > 1:
+        budgets = {
+            fmt: (keys[0].budget, keys[0].near_zero_atol)
+            for fmt, keys in per_format.items()
+        }
+        if len(set(budgets.values())) == 1:
+            merged = tuple(c for keys in per_format.values() for c in keys[0].cells)
+            budget, floor = next(iter(budgets.values()))
+            return [EmittedKey(input_format, None, None, None, budget, floor, merged)]
+
+    ordered: List[EmittedKey] = []
+    for fmt in FORMAT_ORDER:
+        ordered.extend(per_format.get(fmt, []))
+    for fmt, keys in per_format.items():
+        if fmt not in FORMAT_ORDER:
+            ordered.extend(keys)
+    return ordered
+
+
+def render(
+    measurements: Sequence[CellMeasurement],
+    arch: str,
+    headroom: float,
+    stamp: str,
+) -> str:
+    by_op: Dict[MathOperation, Dict[DataFormat, List[CellMeasurement]]] = {}
+    for cell in measurements:
+        by_op.setdefault(cell.op, {}).setdefault(cell.input_format, []).append(cell)
+
+    lines: List[str] = []
+    for op in sorted(by_op, key=lambda o: o.name):
+        lines.append(f"    MathOperation.{op.name}: {{")
+        per_input = by_op[op]
+        for input_format in FORMAT_ORDER:
+            if input_format not in per_input:
+                continue
+            for key in _collapse(per_input[input_format], headroom, input_format):
+                lines.append(f"    {key.comment(arch, stamp)}")
+                lines.append(f"        {key.key_source()}: {key.contract_source()},")
+        lines.append("    },")
+    return "\n".join(lines)
+
+
+def render_skipped(measurements: Sequence[CellMeasurement]) -> List[str]:
+    out = []
+    for cell in sorted(
+        (c for c in measurements if not c.gateable),
+        key=lambda c: (c.op.name, c.output_format.name),
+    ):
+        out.append(
+            f"#   {cell.op.name} {cell.input_format.name}->{cell.output_format.name} "
+            f"approx={cell.approx_mode.name} dest_acc={cell.dest_acc.name}: "
+            f"{cell.nonfinite_disagreements} non-finite disagreement(s) in "
+            f"{cell.points} pts -- no budget can pass this cell; fix the op or the "
+            "sweep's domain first"
+        )
+    return out
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Print sfpu_accuracy_budget entries derived from the accuracy sweep.",
+    )
+    parser.add_argument("--arch", default="wh", help="arch subdirectory (wh/bh/qsr)")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=DEFAULT_SOURCE,
+        help=f"sweep output root (default {DEFAULT_SOURCE})",
+    )
+    parser.add_argument(
+        "--op",
+        action="append",
+        dest="ops",
+        help="restrict to this op (repeatable); defaults to every file present",
+    )
+    parser.add_argument(
+        "--formats",
+        default="fp32,bf16",
+        help="comma-separated output formats to emit, or 'all' (default fp32,bf16 -- "
+        "the order the proposal enrols them in)",
+    )
+    parser.add_argument(
+        "--headroom",
+        type=float,
+        default=DEFAULT_HEADROOM,
+        help=f"multiplier on the percentile floor (default {DEFAULT_HEADROOM})",
+    )
+    parser.add_argument(
+        "--percentile",
+        type=float,
+        default=DEFAULT_PERCENTILE,
+        help=f"percentile used as the floor (default {DEFAULT_PERCENTILE})",
+    )
+    parser.add_argument(
+        "--near-zero-fraction",
+        type=float,
+        default=NEAR_ZERO_FRACTION,
+        help="lanes below this fraction of the tensor's dynamic range are judged by an "
+        f"absolute floor rather than a step count (default {NEAR_ZERO_FRACTION})",
+    )
+    parser.add_argument(
+        "--stamp",
+        default=None,
+        help="date written into each comment (default: today)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.formats.strip().lower() == "all":
+        formats: Optional[List[DataFormat]] = None
+    else:
+        formats = []
+        for token in args.formats.split(","):
+            token = token.strip()
+            if token not in FORMAT_BY_ABBR:
+                raise SystemExit(
+                    f"unknown format {token!r}; expected from "
+                    f"{', '.join(FORMAT_BY_ABBR)} or 'all'"
+                )
+            formats.append(FORMAT_BY_ABBR[token])
+
+    df, files = load_sweep(args.source, args.arch, args.ops)
+    measurements, notes = measure_all(
+        df, formats, args.percentile, args.near_zero_fraction
+    )
+    if not measurements:
+        raise SystemExit("no measurable cells; check --op and --formats")
+
+    stamp = args.stamp or date.today().isoformat()
+    gateable = [c for c in measurements if c.gateable]
+
+    print(f"# Emitted by accuracy/emit_budget.py from {len(files)} sweep file(s)")
+    print(
+        f"# arch={args.arch} rows={len(df)} cells={len(measurements)} "
+        f"headroom={args.headroom} percentile=p{args.percentile}"
+    )
+    print("# Paste into _SFPU_ACCURACY_BUDGET; every number below is measured.")
+    for note in notes:
+        print(f"# note: {note}")
+    skipped = render_skipped(measurements)
+    if skipped:
+        print("#")
+        print("# Cells with a non-finite disagreement, deliberately given no budget:")
+        for line in skipped:
+            print(line)
+    print()
+    print(render(gateable, args.arch, args.headroom, stamp))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
