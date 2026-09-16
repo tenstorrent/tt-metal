@@ -126,8 +126,9 @@ Both variants use the same MoE two-stage denoising architecture with separate hi
 
 ## Step caching (DBCache)
 
-The pipeline supports [cache-dit](https://github.com/vipshop/cache-dit) style **Dual Block Cache** step
-skipping, ported to TT-NN in `models/tt_dit/utils/dbcache.py` (decision logic) and
+The pipeline runs [cache-dit](https://github.com/vipshop/cache-dit) style **Dual Block Cache** step
+skipping **by default** (pass `cache_config=None` to `WanPipelineConfig.default` or to a call to disable it),
+ported to TT-NN in `models/tt_dit/utils/dbcache.py` (decision logic) and
 `models/tt_dit/pipelines/wan/dbcache.py` (device buffers / tracers). On every denoising step the first
 `Fn` blocks are computed and the change they make to the hidden state is compared with the previous
 computed step (relative mean-L1). If the change is below `residual_diff_threshold`, the remaining
@@ -139,19 +140,25 @@ independently, mirroring cache-dit's `has_separate_cfg=True` dual-transformer se
 from models.tt_dit.pipelines.wan.dbcache import WanDBCacheConfig
 from models.tt_dit.utils.dbcache import DBCacheConfig
 
-# Default preset (cache-dit's Wan 2.2 settings with a TT-tuned 0.05 threshold): F1B0,
-# <= 2 consecutive cached steps, high-noise expert: 4 warmup steps / max 8 cached,
-# low-noise expert: 2 warmup / max 20 cached. See `WanDBCacheConfig.default` for the rationale.
-frames = pipeline(prompts=[...], num_inference_steps=40, cache_config=WanDBCacheConfig.default())
+# Default (nothing to pass): cache-dit's Wan 2.2 preset, F1B0, threshold 0.08, <= 2 consecutive
+# cached steps, high-noise expert: 4 warmup steps / max 8 cached, low-noise expert: 2 warmup /
+# max 20 cached. See `WanDBCacheConfig.default` for the rationale.
+frames = pipeline(prompts=[...], num_inference_steps=40)
 
-# Same knobs for both experts, custom threshold:
-frames = pipeline(prompts=[...], num_inference_steps=40, cache_config=DBCacheConfig(residual_diff_threshold=0.12))
+# Uncached (the original single-trace path):
+frames = pipeline(prompts=[...], num_inference_steps=40, cache_config=None)
+
+# Conservative preset (recommended with flow_shift=12):
+frames = pipeline(prompts=[...], num_inference_steps=40, flow_shift=12.0,
+                  cache_config=WanDBCacheConfig.default(residual_diff_threshold=0.05))
 
 pipeline.cache_summary()  # cached steps and residual diffs per expert / branch for the last call
 ```
 
-`cache_config=None` (the default) runs the original single-trace path. A default can also be set at
-construction time via `WanPipelineConfig.default(..., cache_config=...)`.
+The pipeline's scheduler defaults to `flow_shift=5.0` (cache-dit's and vLLM's 720p setting) rather than the
+official Wan 2.2 A14B T2V value of 12.0, because the flatter low-noise tail is what makes 15-16 of 40 steps
+cacheable (measurements below). `flow_shift=12.0` is available per call. An uncached pipeline can be built with
+`WanPipelineConfig.default(..., cache_config=None)`.
 
 A/B test (same seed, baseline vs. split-without-caching vs. DBCache, with PSNR against the baseline):
 
@@ -194,8 +201,8 @@ branch (starting at step 9) to match what F1 reaches with 8. Thresholds are not 
 (the residual after 8 blocks is roughly twice as large, so 0.08 never caches with F8). TaylorSeer order 1 on
 top of it: 1.20x, PCC 0.934.
 
-**The schedule decides how much can be cached.** This pipeline's scheduler uses `flow_shift=12` (the official
-Wan 2.2 A14B T2V setting), which puts 26 of 40 steps on the high-noise expert and compresses the low-noise expert
+**The schedule decides how much can be cached.** With `flow_shift=12` (the official Wan 2.2 A14B T2V setting,
+the pipeline's previous default), the schedule puts 26 of 40 steps on the high-noise expert and compresses the low-noise expert
 into the fast-changing end of the trajectory, where its residuals are never stable enough to cache. cache-dit's
 own Wan 2.2 example runs `flow_shift=3` (480p) / `5` (720p). Re-running 480p with those schedules
 (`pipeline(..., flow_shift=...)`, `WAN_DBCACHE_FLOW_SHIFT` in the A/B test), 40 steps, same prompt/seed:
@@ -209,9 +216,13 @@ own Wan 2.2 example runs `flow_shift=3` (480p) / `5` (720p). Re-running 480p wit
 | 3 | F1, 0.08 | 28.4s (1.61x) | 4 / 12 | 21.5 dB | 0.952 |
 | 5, **720p** | F1, 0.08 | 93.8s vs 142.9s (1.52x) | 6 / 9 | 17.7 dB | 0.894 |
 
+End-to-end wall clock per video on BH Galaxy 4x8 with the defaults (`flow_shift=5`, threshold 0.08): 480p
+29s (uncached 46s), 720p 95s (uncached 144s). Model load from the weight cache (~3 min) and mp4 export excluded.
+
 With cache-dit's schedule and threshold the low-noise expert caches 10 to 12 steps (including consecutive
-pairs) and the pipeline reaches 1.6x while staying above PCC 0.9, i.e. the GPU-class result. Whether to change
-the shipped schedule is a model-quality decision, not a caching one; the default preset stays tuned for shift 12.
+pairs) and the pipeline reaches 1.6x while staying near or above PCC 0.9, i.e. the GPU-class result. These
+are now the pipeline defaults; note that `flow_shift=5` changes the generated video relative to the official
+`flow_shift=12` schedule independently of caching.
 
 The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
