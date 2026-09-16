@@ -848,13 +848,13 @@
   sp_config: sc1
 
 
-# ===== Gemma4-31B D/P =================================================================================
+# ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the
 # canonical production shape (traced, 256k context, 8k chunk, 8x4 = CP8/TP4)
 # exercised end to end on real text. Golden GPU-trace comparisons are staged
 # separately on /mnt/models; this leg only checks the path runs.
-- name: "(Gemma4-31B-it) D/P prefill sanity 256k@8k"
+- name: "(Gemma4-31B-it) D_P prefill sanity 256k@8k"
   fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
