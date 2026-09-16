@@ -55,6 +55,9 @@ PERF_PATHS = [
     "tt_metal/hw/inc",
 ]
 
+# Below this, a difference between two commits is background, not a change.
+MIN_SEPARATION = 50
+
 POLL_SECONDS = 60
 RUN_TIMEOUT_SECONDS = 3 * 60 * 60
 
@@ -470,6 +473,19 @@ def measure(sha, args, state):
 # --- the search -------------------------------------------------------------
 
 
+def signal_fires(result, signal):
+    """Fires in the run type the search is tracking.
+
+    Not the total. L1_CONGESTION fires a little at every commit — 13 of the good
+    endpoint's 15 — so a total would drown the signal in a background that was
+    always there. L1_TO_L1 is what the gate gates on and it is clean at the good
+    endpoint, which makes it the sharpest thing to bisect.
+    """
+    if signal == "total":
+        return result["fires"]
+    return result["by_run_type"].get(signal, {}).get("fires", 0)
+
+
 def candidates(good, bad):
     """Perf-relevant commits in (good, bad], oldest first."""
     out = git("rev-list", "--reverse", f"{good}..{bad}", "--", *PERF_PATHS)
@@ -481,22 +497,29 @@ def bisect(args, state):
     print(f"{len(commits)} perf-relevant commit(s) between the endpoints")
 
     good_res = measure(args.good, args, state)
-    if good_res["fires"]:
-        print("\nThe good endpoint is ALSO unstable. Nothing to bisect: the cause is")
-        print("not a commit in this range. Suspect the measurement setup instead —")
-        print("every CI run lands on different cards, which single-card baselines")
-        print("never exercised.")
-        return
     bad_res = measure(args.bad, args, state)
-    if not bad_res["fires"]:
-        print("\nThe bad endpoint is stable. Nothing to bisect.")
+    lo_fires = signal_fires(good_res, args.signal)
+    hi_fires = signal_fires(bad_res, args.signal)
+    print(f"\n{args.signal} fires: good={lo_fires}  bad={hi_fires}")
+
+    # A handful of fires is the background every commit carries; the change being
+    # hunted is orders of magnitude larger. So the cut sits on a log scale between
+    # the two endpoints rather than at "more than zero".
+    if hi_fires < max(10 * (lo_fires + 1), MIN_SEPARATION):
+        print(
+            f"\nThe endpoints are not far enough apart on {args.signal} "
+            f"({lo_fires} vs {hi_fires}). Nothing to bisect — pick a different "
+            "signal, or endpoints that actually differ."
+        )
         return
+    threshold = max(int(((lo_fires + 1) * hi_fires) ** 0.5), MIN_SEPARATION // 2)
+    print(f"calling a commit unstable at >= {threshold} {args.signal} fire(s)\n")
 
     lo, hi = 0, len(commits)  # instability entered in commits[lo:hi]
     while lo < hi:
         mid = (lo + hi) // 2
         res = measure(commits[mid], args, state)
-        if res["fires"]:
+        if signal_fires(res, args.signal) >= threshold:
             hi = mid
         else:
             lo = mid + 1
@@ -541,6 +564,12 @@ def main(argv=None):
         "--use-runs",
         help="comma-separated run ids to use instead of dispatching, so a run "
         "that already happened is not wasted",
+    )
+    ap.add_argument(
+        "--signal",
+        default="L1_TO_L1",
+        help="run type whose fire count drives the search, or 'total' "
+        "(default L1_TO_L1: the gate's own run type, and clean at the good end)",
     )
     ap.add_argument("--refresh", action="store_true", help="re-measure cached commits")
     a = ap.parse_args(argv)
