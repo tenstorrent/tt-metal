@@ -27,6 +27,10 @@ from ....utils.tensor import bf16_tensor
 # Set to 0 to restore the double gather for an A/B.
 LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "true", "True")
 
+# Tuning hook: LTX_SDPA_EXP_APPROX=1 runs every SDPA in this module with the SFPU's approximate exp.
+# Off by default: it changes bf16 rounding, so a keep needs the absolute-quality gate, not just PCC.
+LTX_SDPA_EXP_APPROX = os.environ.get("LTX_SDPA_EXP_APPROX", "0") in ("1", "true", "True")
+
 # TEST ONLY: corrupt the gate's copy of the gathered activation, so the gate reads a wrong-but-
 # right-shaped tensor while Q/QKV reads the correct one. That is the failure the dedup introduces
 # silently if the two consumers end up wired to different tensors; the equivalence gate must catch
@@ -170,7 +174,7 @@ class LTXAttention(Module):
             compute_with_storage_grid_size=full_grid,
             q_chunk_size=256,
             k_chunk_size=256,
-            exp_approx_mode=False,
+            exp_approx_mode=LTX_SDPA_EXP_APPROX,
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
@@ -189,14 +193,14 @@ class LTXAttention(Module):
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
+            exp_approx_mode=LTX_SDPA_EXP_APPROX,
         )
         self._ring_pc_by_n = {
             n: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.sdpa_worker_grid,
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
-                exp_approx_mode=False,
+                exp_approx_mode=LTX_SDPA_EXP_APPROX,
             )
             for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
             if (b, sp, tp) == mesh_key
@@ -206,7 +210,7 @@ class LTXAttention(Module):
                 compute_with_storage_grid_size=full_grid,
                 q_chunk_size=chunk[0],
                 k_chunk_size=chunk[1],
-                exp_approx_mode=False,
+                exp_approx_mode=LTX_SDPA_EXP_APPROX,
             )
             for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
             if b == mesh_key[0]
@@ -219,7 +223,7 @@ class LTXAttention(Module):
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=cross_ring_q_chunk,
             k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
+            exp_approx_mode=LTX_SDPA_EXP_APPROX,
         )
 
         # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
