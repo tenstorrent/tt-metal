@@ -24,28 +24,41 @@ Unlike Wan2.2-A14B, TI2V-5B is **dense, not Mixture-of-Experts** — there is on
 
 ## Performance
 
-Measured on a single Blackhole Galaxy (4x8), 81 frames and 40 denoising steps, warm-traced. Performance is total seconds per video.
+Measured on a single Blackhole Galaxy (4x8), 81 frames and 40 denoising steps, warm-traced. Performance is total seconds per video. Each figure is the mean of 3 runs; the per-run `Std` printed by the perf test is a single sample, not a spread.
 
 ### 720p (1280x704)
 
 | Mode | System       | Arch | SP | TP | Text enc | Image enc | Denoise | VAE dec | **Total** |
 |------|--------------|------|----|----|----------|-----------|---------|---------|-----------|
-| T2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.089s   | —         | 12.045s | 4.632s  | **16.78s** |
-| I2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.090s   | 1.379s    | 12.728s | 4.649s  | **18.86s** |
+| T2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.094s   | —         | 12.184s | 1.095s  | **13.39s** |
+| I2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.089s   | 1.442s    | 12.726s | 0.972s  | **15.25s** |
 
 ### 480p (832x480)
 
-| Mode | System       | Arch | SP | TP | **Total** |
-|------|--------------|------|----|----|-----------|
-| T2V  | Galaxy (4x8) | BH   | 8  | 4  | **8.87s** |
+| Mode | System       | Arch | SP | TP | Text enc | Denoise | VAE dec | **Total** |
+|------|--------------|------|----|----|----------|---------|---------|-----------|
+| T2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.090s   | 6.267s  | 0.731s  | **7.09s** |
 
 > 480p is **out of distribution** for this checkpoint. The `4x32x32` total compression leaves only 15x26 tokens at 832x480 versus 22x40 at 1280x704, and output is visibly soft. Run quality and correctness work at 720p.
 
-I2V costs **+2.08s** over T2V. That is 1.379s of host-side VAE encode of the conditioning frame plus 0.68s of per-token AdaLN in the denoise loop; text encode and VAE decode are identical to T2V, so the T2V conv3d blockings carry over with no I2V-specific work.
+I2V costs **+1.86s** over T2V. That is 1.442s of host-side VAE encode of the conditioning frame plus 0.54s of per-token AdaLN in the denoise loop; text encode and VAE decode are identical to T2V, so the T2V conv3d blockings carry over with no I2V-specific work.
+
+VAE decode was **4.63s** until the `WanDupUp3D` shortcut was rewritten. An op-level profile of the
+production decode put 3.85s of its 4.92s device total inside that one module: it expresses a
+channel-to-space permutation through reshapes that drive the innermost dimension down to 1, 4 or 8
+elements, and ROW_MAJOR pads every row to 32B, so each was a 4-16x padded physical copy. Rewriting it
+to keep the output channel innermost — which also collapses the two nearest-neighbour instances into a
+single `ttnn.upsample` — took the decode to **~1.0s** with bit-identical output. The same decode serves
+both modes, so T2V and I2V improved together (-20.2% and -19.2% end to end).
 
 Performance work still open:
+- SDPA q-chunk: at the inherited `q_chunk=128` the 5B produces 114 work items on the 110-core SDPA
+  worker grid, taking 2 scheduling rounds for a 3.6% overshoot; `q=160` would be 90 items in one.
+  `sdpa_chunk_size_overrides` is plumbed through `WanPipelineConfig` for exactly this, and
+  `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` has a `wan2_2_ti2v_5b_1xGLX` sweep entry.
+  Denoise is now ~91% of the run, so this is the largest remaining lever.
 - `_register_5b_matmul_tables` in `pipeline_wan_ti2v_5b.py` registers M values the model never requests, so every transformer matmul falls back to the default `8x8x8` blocking (see Limitations)
-- Residual VAE encoder on device, which would remove most of the 1.379s host image encode
+- Residual VAE encoder on device, which would remove most of the 1.442s host image encode
 - `flow_shift` is currently forced to the A14B value (see Limitations)
 
 ## Prerequisites
