@@ -516,6 +516,8 @@ class Gemma4Attention:
                 if group is None:
                     continue
                 for t in group:
+                    if not hasattr(t, "deallocate"):
+                        continue
                     tid = id(t)
                     if tid in seen:
                         continue
