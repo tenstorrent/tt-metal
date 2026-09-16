@@ -92,6 +92,14 @@ _reduce_col_only = reject(
     "unpacker can only be paired with a column reduce (operation: Reduce, reduce_dim: REDUCE_COL)",
 )
 
+_int_reduce_row_only = reject(
+    lambda s, a, b: s.reduce_dim != ReduceDimension.Row
+    and any(
+        op is not None and op.data_format.needs_int8_math_config() for op in (a, b)
+    ),
+    "integer reduce is only supported for REDUCE_ROW; REDUCE_COL/REDUCE_SCALAR have no int FPU path",
+)
+
 _eltwise_checks = [
     NO_UNPACK_TO_DEST,
     _no_transpose_mismatch,
@@ -194,6 +202,7 @@ FPU_MAP = {
             NO_REUSE_DEST,
             NO_BROADCAST,
             REDUCE_PARAMS_REQUIRED,
+            _int_reduce_row_only,
             forced_unpackers("ReduceUnpacker", "UnpackReduceTilize"),
         ],
     ),
