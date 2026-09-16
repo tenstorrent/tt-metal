@@ -143,5 +143,5 @@ inline void _llk_unpack_reconfig_data_format_src_(const std::uint32_t unpack_src
  */
 inline void _llk_unpack_set_srcB_dummy_valid_()
 {
-    TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0, 0, 0, p_unpacr::UNP_NOP);
+    TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0, 0, 0, p_unpacr::UNP_NOP_SETDVALID);
 }
