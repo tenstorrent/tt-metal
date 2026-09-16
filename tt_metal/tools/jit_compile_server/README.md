@@ -30,14 +30,15 @@ Normally each tt-metal process compiles its own kernels with its own local compi
 processes, caching the results under `TT_METAL_CACHE`. The JIT compile server moves that
 compilation to one or more separate server processes:
 
-1. The client computes the kernel hash. If a valid ELF already exists in its local
-   `TT_METAL_CACHE`, **nothing is sent** — the local cache always wins (unless
-   `TT_METAL_FORCE_JIT_COMPILE` is set; see §5c).
-2. Otherwise it generates the kernel's JIT files and sends a compile request (compiler
-   path, flags, defines, include string, source list, and the contents of those JIT-generated
+1. The client generates the kernel's JIT files and sends a compile request (compiler path,
+   flags, defines, include string, source list, and the contents of those JIT-generated
    files) to a server and waits.
-3. The server compiles and links into its own on-disk cache, then returns the ELF bytes.
-4. The client writes the ELF into its local cache and loads it normally.
+2. The server compiles and links into its own on-disk cache, then returns the ELF bytes.
+3. The client writes the ELF into its local `TT_METAL_CACHE` and loads it.
+
+A later request for the same kernel still goes to the server; the *server's* cache is what
+avoids compiling it again. The local copy is for loading, not for skipping the RPC.
+(Preprocess mode is different; see §5b.)
 
 Two layers of deduplication make this worthwhile:
 
@@ -66,9 +67,9 @@ Two cases actually pay off.
 instead of once per process. That needs the same kernel hash on more than one process, or
 more than once over time. This is the usual win for §4a and §4b: the compile still runs on
 the workload hosts' CPUs, but overlapping kernels are not compiled N times. A shared
-on-disk `TT_METAL_CACHE` can reuse *finished* ELFs across processes on one host, but it is
-lock-free: there is no in-flight dedup, so near-simultaneous misses can all compile. A
-host-local cache also cannot share across hosts.
+`TT_METAL_CACHE` has no in-flight dedup across processes, so near-simultaneous local
+misses can all compile. The server eliminates that. A host-local cache also cannot share
+across hosts.
 
 **Scale-out.** A farm with *more* compile CPU than the application hosts, given a large
 unique kernel list. Kernels hash-shard across endpoints
@@ -84,7 +85,6 @@ and ELF transfer.
 | Same kernels requested later by a different process or host | Server cache hit; near-free |
 | Large unique kernel list on a scaled-out server pool | Wins if the farm has more CPU than the application hosts |
 | Unique kernels, same amount of compile CPU as compiling locally | **Net loss** — RPC and transfer for work local compile would have done |
-| Warm local `TT_METAL_CACHE` | No requests — same as not using the server |
 
 Rule of thumb: deploy for overlap, or for a large unique kernel list on a bigger CPU pool.
 
@@ -303,8 +303,12 @@ tree, no source files, no shared filesystem.
 
 **Do not enable it otherwise.** Preprocessing runs on the *client*, payloads get larger, and
 `.ii` units have no include tree so the server cannot write an object dephash and
-conservatively recompiles next time. Client-side reuse still works via a `.fulldephash`
-sidecar next to the ELF. Use this only when the farm cannot see your sources.
+conservatively recompiles next time. Use this only when the farm cannot see your sources.
+
+After a successful preprocess compile, the client writes `.fulldephash` and `.build_state`
+next to the ELF. A later run that finds those still valid **skips the RPC** and loads the
+local ELF. That skip does not apply in the default (non-preprocess) path. `TT_METAL_FORCE_JIT_COMPILE=1`
+disables it.
 
 ### 5c. Other limitations and gotchas
 
@@ -325,9 +329,8 @@ sidecar next to the ELF. Use this only when the farm cannot see your sources.
 - **A server failure is fatal to the client.** There is no automatic fallback to local
   compilation — an unreachable endpoint or a failed compile throws. For unattended runs,
   keep `TT_METAL_JIT_SERVER_ENABLE` easy to turn off.
-- **`TT_METAL_FORCE_JIT_COMPILE=1` bypasses all reuse**, including the client-side gate that
-  skips the remote round-trip. Every kernel gets sent. Useful for benchmarking the server,
-  wasteful otherwise.
+- **`TT_METAL_FORCE_JIT_COMPILE=1` bypasses local JIT reuse** (and the preprocess RPC skip
+  in §5b). Useful for benchmarking the server, wasteful otherwise.
 
 ---
 
@@ -341,8 +344,8 @@ sidecar next to the ELF. Use this only when the farm cannot see your sources.
 | `TT_METAL_JIT_SERVER_ENDPOINTS` | unset | Comma-separated `host:port` list. Must be identical and identically ordered across all clients that should share dedup. |
 | `TT_METAL_JIT_SERVER_ENDPOINT` | unset | Single-endpoint fallback, used only when `..._ENDPOINTS` is unset or empty. |
 | `TT_METAL_JIT_PREPROCESS` | unset (off) | Set (any value) to preprocess on the client and ship self-contained `.ii`. See §5b — use only when the server cannot see your sources. |
-| `TT_METAL_CACHE` | `$HOME/.cache/tt-metal-cache/`; falls back to `/tmp/tt-metal-cache/` when `$HOME` is unset or does not exist | Local kernel cache. Concurrent processes on one host may share it. Checked before any remote request. The fallback path collides with the server's default cache root — see §3. |
-| `TT_METAL_FORCE_JIT_COMPILE` | unset | Set to bypass all ELF reuse, local and remote. |
+| `TT_METAL_CACHE` | `$HOME/.cache/tt-metal-cache/`; falls back to `/tmp/tt-metal-cache/` when `$HOME` is unset or does not exist | Where the client writes returned ELFs. Concurrent processes on one host may share it. The fallback path collides with the server's default cache root — see §3. |
+| `TT_METAL_FORCE_JIT_COMPILE` | unset | Bypass local JIT reuse, and the preprocess RPC skip in §5b. |
 
 ### Server (`jit_compile_server`)
 
