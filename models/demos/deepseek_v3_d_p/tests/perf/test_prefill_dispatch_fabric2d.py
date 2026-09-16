@@ -115,11 +115,11 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
         )
         offs[g], counts[g], region[g] = o[0].to(torch.int32), c[0].to(torch.int32), r[0].to(torch.int32)
 
-    def shard(t, dims, dtype):
+    def shard(t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(
             t,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=layout,
             device=mesh_device,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -127,6 +127,13 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
 
     x = torch.randn(H, G, seq_len_per_chip, EMB_DIM, dtype=torch.bfloat16)
     tt_x = shard(x, (0, 1), ttnn.bfloat16)
+    # The model hands production dispatch TILED activations, and the op untilizes them on its worker
+    # cores while sending; fabric2d takes row-major only. Feeding both the row-major tensor measures
+    # production on a path the model never runs, so the tiled copy is available on request. Same
+    # values either way, so the routing draw and the outputs are unchanged.
+    prod_layout = os.environ.get("TT_DS_PROD_INPUT_LAYOUT", "row_major")
+    assert prod_layout in ("row_major", "tile"), f"TT_DS_PROD_INPUT_LAYOUT: expected row_major or tile, got {prod_layout!r}"
+    tt_x_prod = shard(x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) if prod_layout == "tile" else tt_x
     # Both ops take UINT16 indices, so the A/B feeds them the identical tensor.
     tt_idx_u16 = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
     tt_table = shard(table.unsqueeze(1), (None, 0), ttnn.int32)
@@ -151,6 +158,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
         f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS}"
     )
     logger.info(f"routing profile {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
+    logger.info(f"production dispatch input layout: {prod_layout}")
     # A drifting share is exactly how this measurement goes wrong without anyone noticing, in either
     # direction: too low reads as noise, too high overstates fan-out by roughly 3x.
     assert abs(realized - in_group_share) < 0.02, (
@@ -205,7 +213,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
     # fabric before it retires; starting dispatch_fabric2d underneath that traffic hangs a relay
     # waiting on pages that never arrive. It takes a heavy routing draw to show up -- uniform and hot
     # pass, hottest deadlocks -- which is exactly the shape of a bug that survives a perf harness.
-    production.forward(tt_x, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
+    production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
     ttnn.synchronize_device(mesh_device)
     fabric2d(False)
     fabric2d(True)
@@ -213,7 +221,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
 
     signpost("dispatch_baseline")
     for _ in range(ITERATIONS):
-        production.forward(tt_x, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
+        production.forward(tt_x_prod, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
     ttnn.synchronize_device(mesh_device)
 
     # Two transports, one routing draw, one board state. Store-and-forward moves the same bytes the
