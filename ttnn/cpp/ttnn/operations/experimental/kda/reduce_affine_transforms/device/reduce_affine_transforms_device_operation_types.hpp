@@ -22,6 +22,7 @@ struct ReduceAffineTransformsParams {
 struct ReduceAffineTransformsInputs {
     Tensor a;
     Tensor b;
+    std::optional<Tensor> chronology;
 };
 
 }  // namespace ttnn::experimental::prim

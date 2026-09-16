@@ -36,6 +36,7 @@ Tensor affine_exclusive_scan(
     uint32_t,
     bool,
     const tt::tt_metal::MemoryConfig&,
-    const DeviceComputeKernelConfig&);
+    const DeviceComputeKernelConfig&,
+    const std::optional<Tensor>&);
 
 }  // namespace ttnn::experimental::prim

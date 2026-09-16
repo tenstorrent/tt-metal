@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
 //
 // KDA scan reader: the initial state S [K,V] once, then vector-decay prep
 // intermediates v_beta, kd, q_decay, intra, k_dec_t, dl[K,1], t_inv. FP32 by default; selected intermediates may be
@@ -110,7 +112,8 @@ template <
     uint32_t summary_pair,
     uint32_t has_wrap_indicator,
     uint32_t emit_tail_summaries,
-    uint32_t groups_per_head>
+    uint32_t groups_per_head,
+    uint32_t dynamic_chronology>
 TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t reset_chunk) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
@@ -134,11 +137,36 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks, 
     DataflowBuffer summary_zero_tile(dfb::summary_zero_tile);
     Noc noc;
 
+    kda_chronology::Topology topology{};
+    if constexpr (dynamic_chronology) {
+        DataflowBuffer control(dfb::chronology_compute);
+        control.reserve_back(1);
+        const auto metadata = TensorAccessor(tensor::chronology);
+        noc.async_read(metadata, control, 32, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr()));
+        control.push_back(1);
+    }
+    if constexpr (dynamic_chronology) {
+        reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
+        DataflowBuffer writer_control(dfb::chronology_writer);
+        writer_control.reserve_back(1);
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_control.get_write_ptr());
+        words[0] = topology.boundary;
+        words[1] = topology.head_rows;
+        words[2] = topology.local_split;
+        words[3] = topology.rank;
+        words[4] = topology.final_owner;
+        words[5] = topology.split;
+        words[6] = topology.local_rows;
+        words[7] = 0;
+        writer_control.push_back(1);
+    }
     // One mesh program serves every device. Resolve the candidate wrap against
     // this device's scalar indicator. Compute follows the same chunk schedule on
     // every device; only the source of the carry at reset_chunk differs.
     bool device_wrap = reset_chunk != 0;
-    if constexpr (has_wrap_indicator) {
+    if constexpr (has_wrap_indicator && !dynamic_chronology) {
         const auto wrap_indicator = TensorAccessor(tensor::wrap_indicator);
         wrap_control.reserve_back(1);
         noc.async_read(wrap_indicator, wrap_control, sizeof(uint32_t), {.page_id = 0}, {});
@@ -160,7 +188,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks, 
         noc.write_zeros_l1_barrier();
         state.push_back(key_value_tiles);
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
-        if constexpr (emit_tail_summaries) {
+        if constexpr (emit_tail_summaries && !dynamic_chronology) {
             seed_identity_tile(summary_identity_tile, noc);
             summary_zero_tile.reserve_back(1);
             noc.async_write_zeros(summary_zero_tile, summary_zero_tile.get_entry_size());

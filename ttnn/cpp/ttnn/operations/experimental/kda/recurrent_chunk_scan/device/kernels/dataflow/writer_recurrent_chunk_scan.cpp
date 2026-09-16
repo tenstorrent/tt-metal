@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
 //
 // Phase B (scan) writer, value-parallel. This core produced ONE V-block of one head and writes that slice back into
 // the full output tensors using their full-V row stride.
@@ -104,9 +106,14 @@ FORCE_INLINE void write_summary(uint32_t head, uint32_t value_block) {
     write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, row_base, value_block);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t VtFull>
+template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, uint32_t dynamic_chronology>
 FORCE_INLINE void write_segmented_summary(
-    uint32_t head, uint32_t value_block, uint32_t group, uint32_t wrap_group, uint32_t split_in_group) {
+    uint32_t head,
+    uint32_t value_block,
+    uint32_t group,
+    uint32_t wrap_group,
+    uint32_t split_in_group,
+    bool dynamic_wrap) {
     const auto head_a_accessor = TensorAccessor(tensor::output);
     const auto head_b_accessor = TensorAccessor(tensor::final_state);
     const auto tail_a_accessor = TensorAccessor(tensor::tail_output);
@@ -120,15 +127,18 @@ FORCE_INLINE void write_segmented_summary(
     DataflowBuffer wrap_control(dfb::wrap_control);
     Noc noc;
 
-    wrap_control.wait_front(1);
-    const bool device_wrap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wrap_control.get_read_ptr())[0] != 0;
-    wrap_control.pop_front(1);
+    bool device_wrap = dynamic_wrap;
+    if constexpr (!dynamic_chronology) {
+        wrap_control.wait_front(1);
+        device_wrap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wrap_control.get_read_ptr())[0] != 0;
+        wrap_control.pop_front(1);
+    }
     const bool straddles = device_wrap && split_in_group != 0 && group == wrap_group;
     const bool head_active = !device_wrap || group < wrap_group || straddles;
     const bool tail_active = device_wrap && group >= wrap_group;
     const uint32_t row_base = head * Kt * VtFull;
 
-    if (!device_wrap && split_in_group != 0 && group == wrap_group) {
+    if (!dynamic_chronology && !device_wrap && split_in_group != 0 && group == wrap_group) {
         discard_streamed_value_slice<Kt, Vt>(split_head_a);
         discard_streamed_value_slice<Kt, Vt>(split_head_b);
     }
@@ -143,7 +153,7 @@ FORCE_INLINE void write_segmented_summary(
             write_value_slice<Kt, Vt, VtFull>(head_a_accessor, head_a, noc, row_base, value_block);
             write_value_slice<Kt, Vt, VtFull>(head_b_accessor, head_b, noc, row_base, value_block);
         }
-    } else {
+    } else if constexpr (!dynamic_chronology) {
         write_identity_pair<Kt, Vt, VtFull>(
             head_a_accessor, head_b_accessor, identity_tile, zero_tile, noc, row_base, value_block);
     }
@@ -151,12 +161,14 @@ FORCE_INLINE void write_segmented_summary(
     if (tail_active) {
         write_value_slice<Kt, Vt, VtFull>(tail_a_accessor, full_a, noc, row_base, value_block);
         write_value_slice<Kt, Vt, VtFull>(tail_b_accessor, full_b, noc, row_base, value_block);
-    } else {
+    } else if constexpr (!dynamic_chronology) {
         write_identity_pair<Kt, Vt, VtFull>(
             tail_a_accessor, tail_b_accessor, identity_tile, zero_tile, noc, row_base, value_block);
     }
-    identity_tile.pop_front(1);
-    zero_tile.pop_front(1);
+    if constexpr (!dynamic_chronology) {
+        identity_tile.pop_front(1);
+        zero_tile.pop_front(1);
+    }
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull>
@@ -175,7 +187,14 @@ FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t 
     write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, state_row_base, value_block);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair, uint32_t emit_tail_summaries>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t Vt_full,
+    uint32_t summary_pair,
+    uint32_t emit_tail_summaries,
+    uint32_t dynamic_chronology>
 TT_KERNEL void writer(
     uint32_t head,
     uint32_t value_block,
@@ -183,9 +202,21 @@ TT_KERNEL void writer(
     uint32_t group,
     uint32_t wrap_group,
     uint32_t split_in_group) {
+    bool dynamic_wrap = false;
+    if constexpr (dynamic_chronology) {
+        DataflowBuffer control(dfb::chronology_writer);
+        control.wait_front(1);
+        auto topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_read_ptr()));
+        control.pop_front(1);
+        uint32_t groups = topology.local_rows / 32 / num_chunks;
+        wrap_group = topology.wrap_group(groups);
+        split_in_group = topology.split_in_group(groups);
+        dynamic_wrap = topology.local_split;
+    }
     if constexpr (summary_pair) {
         if constexpr (emit_tail_summaries) {
-            write_segmented_summary<Kt, Vt, Vt_full>(head, value_block, group, wrap_group, split_in_group);
+            write_segmented_summary<Kt, Vt, Vt_full, dynamic_chronology>(
+                head, value_block, group, wrap_group, split_in_group, dynamic_wrap);
         } else {
             write_summary<Kt, Vt, Vt_full>(head, value_block);
         }

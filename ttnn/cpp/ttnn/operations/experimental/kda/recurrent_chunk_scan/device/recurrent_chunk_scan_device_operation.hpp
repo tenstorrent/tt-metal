@@ -42,6 +42,7 @@ std::vector<Tensor> recurrent_chunk_scan(
     uint32_t wrap_chunk,
     bool emit_tail_summaries,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const std::optional<Tensor>& chronology);
 
 }  // namespace ttnn::experimental::prim

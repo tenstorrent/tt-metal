@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/affine_exclusive_scan/device/affine_exclusive_scan_program_factory.hpp"
 
 #include <vector>
@@ -38,8 +40,9 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const uint32_t group_heads = attrs.batch_heads * groups_per_head;
     const uint32_t key_matrix_tiles = key_tiles * key_tiles;
     const uint32_t state_matrix_tiles = key_tiles * value_tiles;
-    const uint32_t reset_group =
-        attrs.segmented ? attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) - 1 : 0;
+    const uint32_t reset_group = attrs.segmented && !in.chronology.has_value()
+                                     ? attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) - 1
+                                     : 0;
 
     const auto grid = device.compute_with_storage_grid_size();
     auto distribution = kda_factory_detail::distribute_prep(grid, group_heads, group_heads);
@@ -304,6 +307,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         {wrap_indicator_tensor_name, wrap_indicator},
     };
 
+    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.chronology, in.a, false);
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(program_spec),
         .run_params = std::move(program_run_args),

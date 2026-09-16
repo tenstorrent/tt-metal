@@ -36,7 +36,7 @@ FORCE_INLINE void load_weight_block(
 // Rows of causal history per fragment: one fewer than the four learned taps.
 constexpr uint32_t history_rows_per_plane = 3;
 
-template <uint32_t block_ct, uint32_t num_blocks, uint32_t has_wrap_indicator>
+template <uint32_t block_ct, uint32_t num_blocks, uint32_t has_wrap_indicator, uint32_t dynamic_chronology>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -49,7 +49,15 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
     Noc noc;
 
     uint32_t device_wrap_row = wrap_row;
-    if constexpr (has_wrap_indicator) {
+    bool initial_from_predecessor = false;
+    if constexpr (dynamic_chronology) {
+        const auto chronology = TensorAccessor(tensor::chronology);
+        noc.async_read(chronology, CoreLocalMem<uint32_t>(activation.get_write_ptr()), 32, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        const auto control = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(activation.get_write_ptr());
+        device_wrap_row = control[2] ? control[1] : 0;
+        initial_from_predecessor = control[3] != control[0];
+    } else if constexpr (has_wrap_indicator) {
         const auto wrap_indicator = TensorAccessor(tensor::wrap_indicator);
         // The activation buffer has not been queued yet, so its first word is
         // available as temporary reader-local storage for the scalar control.
@@ -96,13 +104,34 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
             for (uint32_t row = 0; row < tile_height; ++row) {
                 const int32_t source_row = static_cast<int32_t>(mt * tile_height + row + tap) - 3;
                 if (source_row < row_floor) {
-                    noc.async_read(
-                        history,
-                        activation,
-                        block_row_bytes,
-                        {.page_id = static_cast<uint32_t>(source_row - row_floor + 3) + history_plane,
-                         .offset_bytes = ct_start * block_offset_scale},
-                        {.offset_bytes = row * block_row_bytes});
+                    if constexpr (dynamic_chronology) {
+                        const auto predecessor = TensorAccessor(tensor::predecessor_carry);
+                        if (initial_from_predecessor || row_floor != 0) {
+                            noc.async_read(
+                                predecessor,
+                                activation,
+                                block_row_bytes,
+                                {.page_id = static_cast<uint32_t>(source_row - row_floor + 3),
+                                 .offset_bytes = ct_start * block_offset_scale},
+                                {.offset_bytes = row * block_row_bytes});
+                        } else {
+                            noc.async_read(
+                                history,
+                                activation,
+                                block_row_bytes,
+                                {.page_id = static_cast<uint32_t>(source_row + 3),
+                                 .offset_bytes = ct_start * block_offset_scale},
+                                {.offset_bytes = row * block_row_bytes});
+                        }
+                    } else {
+                        noc.async_read(
+                            history,
+                            activation,
+                            block_row_bytes,
+                            {.page_id = static_cast<uint32_t>(source_row - row_floor + 3) + history_plane,
+                             .offset_bytes = ct_start * block_offset_scale},
+                            {.offset_bytes = row * block_row_bytes});
+                    }
                 } else {
                     noc.async_read(
                         input,

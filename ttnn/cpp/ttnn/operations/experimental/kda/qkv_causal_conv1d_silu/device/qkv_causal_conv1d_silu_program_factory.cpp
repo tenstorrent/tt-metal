@@ -116,7 +116,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         .compile_time_args =
             {{"block_ct", block_ct},
              {"num_blocks", num_blocks},
-             {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())}},
+             {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())},
+             {"dynamic_chronology", static_cast<uint32_t>(in.chronology.has_value())}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "wrap_row"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
@@ -129,6 +130,12 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         reader.tensor_bindings.push_back(
             tt::tt_metal::experimental::TensorBinding{input_tensor_name, "wrap_indicator"});
     }
+
+    const tt::tt_metal::experimental::TensorParamName chronology_name{"chronology"};
+    const tt::tt_metal::experimental::TensorParamName predecessor_name{"predecessor_carry"};
+    reader.tensor_bindings.push_back({in.chronology ? chronology_name : input_tensor_name, "chronology"});
+    reader.tensor_bindings.push_back(
+        {in.predecessor_carry ? predecessor_name : history_tensor_name, "predecessor_carry"});
 
     tt::tt_metal::experimental::KernelSpec writer{
         .unique_id = writer_kernel_name,
@@ -207,6 +214,14 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
             .unique_id = wrap_indicator_tensor_name, .spec = in.wrap_indicator->mesh_tensor().tensor_spec()});
     }
 
+    if (in.chronology) {
+        tensor_parameters.push_back({.unique_id = chronology_name, .spec = in.chronology->mesh_tensor().tensor_spec()});
+    }
+    if (in.predecessor_carry) {
+        tensor_parameters.push_back(
+            {.unique_id = predecessor_name, .spec = in.predecessor_carry->mesh_tensor().tensor_spec()});
+    }
+
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
@@ -240,6 +255,13 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     };
     if (in.wrap_indicator.has_value()) {
         run_args.tensor_args.emplace(wrap_indicator_tensor_name, in.wrap_indicator->mesh_tensor());
+    }
+
+    if (in.chronology) {
+        run_args.tensor_args.emplace(chronology_name, in.chronology->mesh_tensor());
+    }
+    if (in.predecessor_carry) {
+        run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry->mesh_tensor());
     }
 
     return ttnn::device_operation::ProgramArtifacts{
