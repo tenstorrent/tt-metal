@@ -82,8 +82,9 @@ class PatchMerger(LightweightModule):
             args.get_state_dict_prefix(self.__class__.__name__) if state_dict_prefix is None else state_dict_prefix
         )
 
-        # Norm: gather fractured input back to replicated hidden_size and run
-        # local LayerNorm. Mirrors the LLM's DistributedNorm just before LMHead.
+        # Norm: gather fractured input back to replicated hidden_size and run local LayerNorm.
+        # Mirrors the LLM's DistributedNorm just before LMHead. With replicated tower activations
+        # there is nothing to gather and this runs as a plain local LayerNorm.
         self.norm = DistributedLayerNorm(
             device=mesh_device,
             dim=self.hidden_size,
@@ -94,6 +95,8 @@ class PatchMerger(LightweightModule):
             weight_dtype=ttnn.bfloat16,
             eps=1e-6,  # Qwen3_VLPatchMerger hard-codes this
             ccl_topology=args.ccl_topology(),
+            replicated_input=getattr(args, "vision_replicated_acts", False),
+            ccl_kwargs=args.vision_ccl_kwargs,
         )
 
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
@@ -159,11 +162,28 @@ class PatchMerger(LightweightModule):
         x_norm = self.norm(x)
 
         # Merge spatial_merge_size^2 consecutive rows into one row of mlp_size.
-        # The reshape workaround through ROW_MAJOR matches the replicated PatchMerger
-        # (see tt-metal#29932 for the underlying tilized reshape hang).
+        # ROW_MAJOR workaround for the tilized-reshape hang (tt-metal#29932).
         x_norm = ttnn.to_layout(x_norm, ttnn.ROW_MAJOR_LAYOUT)
         x_norm = ttnn.reshape(x_norm, (x_norm.shape[0], x_norm.shape[1], -1, self.mlp_size))
         x_norm = ttnn.to_layout(x_norm, ttnn.TILE_LAYOUT)
+
+        rows = x_norm.shape[-2]
+        mlp_local = self.mlp_size // self.tp
+
+        # Both merger matmuls go through `vision_mm_plan`, which leaves them on auto at TP=2 and
+        # gives merger_fc2 a 2D config at TP=8, where the per-device N is 8x narrower.
+        fc1_plan = self.args.vision_mm_plan(
+            "merger_fc1",
+            rows=rows,
+            k=self.mlp_size,
+            n=mlp_local,
+            in0_dtype=x_norm.dtype,
+            in1_dtype=self.w1.dtype,
+            out_dtype=x_norm.dtype,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, False),
+        )
+        if fc1_plan.chunk != rows:
+            x_norm = ttnn.reshape(x_norm, [1, rows // fc1_plan.chunk, fc1_plan.chunk, self.mlp_size])
 
         # fc1 column-sharded: replicated in -> fractured-along-dim=3 out
         # (each device owns mlp_size/TP of the GELU activations).
@@ -171,19 +191,35 @@ class PatchMerger(LightweightModule):
             x_norm,
             self.w1,
             bias=self.b1,
-            activation="gelu",
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Only reachable on the auto fallback, which cannot fuse the activation.
+            activation=None if fc1_plan.program_config is not None else "gelu",
+            compute_kernel_config=fc1_plan.compute_kernel_config,
+            memory_config=fc1_plan.memory_config,
+            program_config=fc1_plan.program_config,
         )
         ttnn.deallocate(x_norm)
+
+        fc2_plan = self.args.vision_mm_plan(
+            "merger_fc2",
+            rows=rows,
+            k=mlp_local,
+            n=self.out_hidden_size,
+            in0_dtype=w1_out.dtype,
+            in1_dtype=self.w2.dtype,
+            out_dtype=w1_out.dtype,
+            in0_already_l1=fc1_plan.memory_config is ttnn.L1_MEMORY_CONFIG,
+        )
+        if fc2_plan.chunk != w1_out.shape[-2]:
+            w1_out = ttnn.reshape(w1_out, [1, rows // fc2_plan.chunk, fc2_plan.chunk, mlp_local])
 
         # fc2 row-sharded: each device produces partial sums for the full
         # out_hidden_size. Bias is folded in after the reduce_scatter.
         w2_partial = ttnn.linear(
             w1_out,
             self.w2,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=fc2_plan.compute_kernel_config,
+            memory_config=fc2_plan.memory_config,
+            program_config=fc2_plan.program_config,
         )
         ttnn.deallocate(w1_out)
 
@@ -200,6 +236,7 @@ class PatchMerger(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.args.ccl_dtype,
             topology=self.args.ccl_topology(),
+            **self.args.vision_ccl_kwargs,
         )
         if w2_frac is not w2_partial:
             ttnn.deallocate(w2_partial)
