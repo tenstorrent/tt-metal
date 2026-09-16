@@ -78,7 +78,7 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 565
+    wh_n300_civ2: 580  # +5 each for core and both fused groups (45-minute per-group budget).
     bh_p100: 545
     bh_p150b_civ2: 565
     bh_quietbox_2: 65
@@ -152,9 +152,9 @@ ttnn:
 
 train:
   merge_gate:
-    bh_p150b_civ2: 30
+    bh_p150b_civ2: 45
   unit:
-    bh_p100: 90
+    bh_p100: 105
     bh_p150b_civ2: 90
   perf:
     bh_p100: 160
@@ -190,6 +190,7 @@ shield:
     bh_p150: 2
   device_perf:
     wh_n150: 100
+    wh_n300_civ2: 10
     bh_p150: 60
   demo:
     bh_sc4: 100
@@ -200,7 +201,7 @@ scaleout:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 270
+    cpu_medium: 280
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
@@ -323,6 +324,9 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  ttnop:
+    wh_n150_civ2: 21600
+    bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
@@ -339,7 +343,6 @@ models:
     wh_galaxy_merge_gate: 5
   sanity:
     wh_galaxy_perf: 8
-    wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   stress:
@@ -375,7 +378,7 @@ models:
     bh_quietbox_2: 42
   unit_tier1:
     wh_llmbox: 155
-    wh_n150: 118
+    wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65
     bh_p150: 20

@@ -329,9 +329,19 @@ def test_unknown_shape_probes_and_is_correct(mesh_device, quiet_warnings):
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", SINGLE_DEVICE_PARAMS, indirect=True)
-def test_stale_row_falls_back_on_device(mesh_device, quiet_warnings):
-    """Force a row that cannot fit (full C=512 at K=7: the C*K activation block never fits L1) and check the chain
-    recovers to a working formulation with one warning and a correct result."""
+def test_stale_row_falls_back_on_device(mesh_device, quiet_warnings, monkeypatch):
+    """Table a row whose formulation fails on this device and check the chain recovers to a working chunked
+    formulation with one warning and a correct result. Whether the full-C conv1d at C=512, K=7 fits is
+    arch/grid dependent (it fits on an 8x8 Wormhole grid, not on Blackhole), so the stale-row failure is
+    injected: only the tabled full-C attempt raises, the chunked attempts run the real op."""
+    real_conv1d = audio_ops._depthwise_tap_conv1d
+
+    def failing_full_c(x_BTC, weight, *, C, **kwargs):
+        if C == 512:
+            raise RuntimeError("forced stale row: full-C conv1d does not fit")
+        return real_conv1d(x_BTC, weight, C=C, **kwargs)
+
+    monkeypatch.setattr(audio_ops, "_depthwise_tap_conv1d", failing_full_c)
     key = tap_device_key(mesh_device)
     saved_f = dict(tfc._FORMULATIONS.get(key, {}))
     saved_s = dict(tfc._SLICES.get(key, {}))
@@ -339,8 +349,8 @@ def test_stale_row_falls_back_on_device(mesh_device, quiet_warnings):
         tfc.clear_tap_configs(key)
         register_tap_configs(key, formulations={(512, 7, 1): "direct"})
         plan = _run_and_check(mesh_device, 512, 7, 1, 166, cache={})
-        assert plan[0] != "direct"
-        assert any("failed" in w for w in quiet_warnings)
+        assert plan[0] == 128, f"expected the widest chunked fallback, got {plan[0]!r}"
+        assert sum("failed" in w for w in quiet_warnings) == 1
     finally:
         tfc.clear_tap_configs(key)
         register_tap_configs(key, formulations=saved_f or None, slices=saved_s or None)
