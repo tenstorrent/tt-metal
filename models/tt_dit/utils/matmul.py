@@ -113,6 +113,18 @@ grid_88_configs = {
     (512, 8192, 5120): (4, 16, 4),
     (512, 16384, 5120): (2, 16, 8),
     (512, 32768, 5120): (4, 16, 8),
+    # FIBO on the T3000 (cfg=2, sp=2, tp=2) 2026-09-16
+    (2048, 3072, 1536): (8, 6, 6, (2, 2)),  # DiT attention out projection — 291.5 μs
+    (2048, 3072, 4608): (4, 6, 10, (2, 2)),  # DiT to_qkv — 835.3 μs
+    (2048, 3072, 6144): (8, 6, 12, (2, 2)),  # DiT ff1 (fused GELU) / proj_mlp — 1611.9 μs
+    (2048, 6144, 3072): (8, 6, 12, (2, 2)),  # DiT ff2 — 1012.0 μs
+    (2048, 7680, 3072): (8, 6, 12, (2, 2)),  # DiT single-block proj_out — 1236.8 μs
+    (1024, 2048, 1536): (4, 4, 6, (2, 2)),  # DiT per-layer text projection — 121.4 μs
+    (1024, 3072, 1536): (4, 4, 6, (2, 2)),  # DiT attention out projection — 173.0 μs
+    (1024, 3072, 4608): (4, 6, 10, (2, 2)),  # DiT to_qkv — 438.2 μs
+    (1024, 3072, 6144): (4, 6, 12, (2, 2)),  # DiT ff1 (fused GELU) / proj_mlp — 858.5 μs
+    (1024, 6144, 3072): (4, 6, 12, (2, 2)),  # DiT ff2 — 547.7 μs
+    (1024, 7680, 3072): (4, 8, 12, (2, 2)),  # DiT single-block proj_out — 680.8 μs
 }
 
 
@@ -224,6 +236,25 @@ grid_11_10_configs = {
     (2048, 6144, 4608): (4, 4, 15, (4, 1)),  # 462.3 μs  proj_mlp spatial
     (2048, 6144, 9216): (8, 8, 10, (2, 2)),  # 972.7 μs  ff1 / qkv spatial
     (64, 6144, 4608): (2, 8, 8, (2, 2)),  # 196.3 μs  proj_mlp prompt
+    # FIBO per-block ops on the 2x2 QB2 (tp=2) 2026-09-16
+    (2048, 3072, 4608): (4, 6, 15, (4, 1)),  # to_qkv spatial — 301.3 μs
+    (2048, 3072, 6144): (7, 6, 6, (1, 3)),  # ff.ff1 spatial (fused GELU; proj_mlp twin) — 639.5 μs
+    (2048, 7680, 3072): (4, 8, 9, (4, 1)),  # single-block proj_out spatial — 429.0 μs
+    (1024, 1920, 3072): (4, 3, 9, (4, 1)),  # single proj_out spatial — 82.8 μs
+    (1024, 3072, 1152): (4, 3, 4, (2, 2)),  # to_qkv spatial — 65.0 μs
+    (1024, 3072, 1536): (4, 3, 5, (4, 1)),  # dual ff.ff1 / proj_mlp spatial — 71.7 μs
+    (1024, 3072, 4608): (4, 6, 7, (4, 1)),  # to_qkv prompt — 167.7 μs
+    (1024, 3072, 6144): (4, 3, 9, (4, 1)),  # ff_context.ff1 prompt (fused GELU; proj_mlp twin) — 361.9 μs
+    (1024, 7680, 3072): (4, 4, 9, (4, 1)),  # single-block proj_out prompt — 252.4 μs
+    (256, 2048, 1536): (2, 4, 5, (2, 1)),  # caption_projection (M=256) — 37.4 μs
+    (256, 3072, 6144): (2, 32, 2, (2, 2)),  # ff_context.ff1 prompt (M=256, fused GELU; twin) — 187.6 μs
+    (256, 7680, 3072): (2, 6, 9, (1, 3)),  # single-block proj_out prompt (M=256) — 192.4 μs
+    (128, 1920, 3072): (2, 3, 9, (1, 3)),  # single proj_out prompt twin — 56.4 μs
+    # FIBO per-block ops for the 2x2 QB2 cfg=2 preset, which runs the spatial branch unsharded (2026-09-15).
+    (4096, 3072, 4608): (8, 2, 14, (2, 2)),  # DiT to_qkv spatial — 580.9 μs
+    (4096, 3072, 6144): (13, 4, 9, (1, 3)),  # DiT ff1 (fused GELU) / proj_mlp spatial — 1184.5 μs
+    (4096, 7680, 3072): (14, 8, 6, (2, 2)),  # DiT single-block proj_out spatial — 799.1 μs
+    (1024, 2048, 1536): (4, 2, 5, (4, 1)),  # DiT per-layer text projection / caption_projection — 55.9 μs
 }
 
 grid_12_9_configs = {
