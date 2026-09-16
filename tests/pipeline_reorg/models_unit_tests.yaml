@@ -730,7 +730,7 @@
   budget_type: unit
 
 # Both fabric modes are required: torus routing and the 1D fallback.
-# Two-case device run: 46.85 s; allow setup and cold kernel compilation.
+# Includes changing-input trace replay; allow setup and cold kernel compilation.
 - name: Kimi-K2.7 fused RMSNorm unit tests (BH Galaxy 8x4)
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886

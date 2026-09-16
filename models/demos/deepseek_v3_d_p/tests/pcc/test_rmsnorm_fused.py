@@ -22,13 +22,13 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=7168, l1_small_size=768),
+            dict(torus_xy_device_params(fabric_payload_size=7168, l1_small_size=768), trace_region_size=4194304),
             ttnn.Topology.Ring,
             id="torus-xy",
         ),
         pytest.param(
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 4194304},
             ttnn.Topology.Linear,
             id="linear-1d",
         ),
@@ -77,7 +77,7 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
     resources = next(iter(ccl.fused_rmsnorm_resources.values()))
     assert len(resources["pairs"]) == 2
     pair_ids = [(id(semaphores), id(stats)) for semaphores, stats in resources["pairs"]]
-    # Trace setup disables fusion; restoring eager mode must reuse its resources.
+    # An explicit opt-out and re-enable must reuse the initialized resources.
     for enabled in (False, True):
         for norm, x in zip(norms, xs):
             norm.set_fused_enabled(enabled)
@@ -123,5 +123,35 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
                 relative_error = ((actual - reference).square().mean() / reference.square().mean()).sqrt().item()
                 assert relative_error < 0.01, (i, relative_error)
             ttnn.deallocate(output)
+        # Odd trace lengths exercise reuse across replay boundaries, including
+        # the same scratch pair at the end of one replay and start of the next.
+        trace_input = ttnn.clone(xs[0])
+        for captured_calls in (1, 3):
+            ttnn.synchronize_device(mesh_device)
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            traced_outputs = [norms[i % 2](trace_input) for i in range(captured_calls)]
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            try:
+                for iteration in range(4):
+                    ttnn.copy(xs[iteration % 2], trace_input)
+                    eager_outputs = [norms[i % 2](trace_input) for i in range(captured_calls)]
+                    # Consecutive asynchronous replays must not accumulate stale
+                    # semaphore counts or consume statistics from an earlier input.
+                    for replay in range(3):
+                        ttnn.copy(xs[(iteration + replay) % 2], trace_input)
+                        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh_device)
+                    for eager, traced in zip(eager_outputs, traced_outputs):
+                        expected = ttnn.to_torch(eager, mesh_composer=composer)
+                        actual = ttnn.to_torch(traced, mesh_composer=composer)
+                        assert torch.equal(actual, expected)
+                        ttnn.deallocate(eager)
+            finally:
+                ttnn.release_trace(mesh_device, trace_id)
+                for output in traced_outputs:
+                    ttnn.deallocate(output)
+        ttnn.deallocate(trace_input)
+        assert len(ccl.fused_rmsnorm_resources) == 1
+        assert next(iter(ccl.fused_rmsnorm_resources.values())) is resources
     finally:
         clear_tt_ccl_cache()
