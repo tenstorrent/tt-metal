@@ -20,9 +20,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <sstream>
+#include <tuple>
 #include <type_traits>
 
 using namespace tt::tt_metal;
@@ -265,15 +268,30 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         } else {
             num_links = max_total / 2;
         }
-        log_warning(
-            tt::LogOp,
-            "neighbor_pad_async: Capped num_links from {} to {} and pad2_num_links from {} to {} "
-            "to fit device compute grid width {}",
-            operation_attributes.num_links,
-            num_links,
-            operation_attributes.pad2_num_links,
-            pad2_num_links,
+        // This fires once per mesh coordinate (i.e. once per device) with identical values whenever
+        // the same operation_attributes are dispatched across a mesh, flooding the log with
+        // duplicate lines. Warn once per distinct (requested, capped, grid-width) tuple instead.
+        static std::mutex capped_links_warned_mutex;
+        static std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> capped_links_warned;
+        auto capped_links_key = std::make_tuple(
+            operation_attributes.num_links, num_links, operation_attributes.pad2_num_links, pad2_num_links,
             compute_grid_size.x);
+        bool should_warn_capped_links = false;
+        {
+            std::lock_guard<std::mutex> lock(capped_links_warned_mutex);
+            should_warn_capped_links = capped_links_warned.insert(capped_links_key).second;
+        }
+        if (should_warn_capped_links) {
+            log_warning(
+                tt::LogOp,
+                "neighbor_pad_async: Capped num_links from {} to {} and pad2_num_links from {} to {} "
+                "to fit device compute grid width {}",
+                operation_attributes.num_links,
+                num_links,
+                operation_attributes.pad2_num_links,
+                pad2_num_links,
+                compute_grid_size.x);
+        }
     }
 
     uint32_t num_h_fabric_cores = num_links * 2;
