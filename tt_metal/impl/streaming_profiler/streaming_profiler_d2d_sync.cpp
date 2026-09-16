@@ -71,10 +71,14 @@ void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
 void D2dSyncConsumer::on_clock(const ClockSample& s) {
     if (s.kind == PP_CLOCK_LOCAL_REFCLK) {
         LocalState& l = local_[s.dev];
-        l.fit.add(s.value, s.ts);
-        if (csv_path_ != nullptr) {
-            l.samples.emplace_back(s.value, s.ts);
+        if (s.role == PP_CLOCK_LOCAL_RAW) {
+            l.model.add_raw();
+            if (csv_path_ != nullptr) {
+                l.samples.emplace_back(s.value, s.ts);
+            }
+            return;
         }
+        l.model.add_point(s.value, s.ts, s.round & 0xFFu, s.round >> 8, s.role == PP_CLOCK_LOCAL_CLOSE);
         if (publish_dev(s.dev)) {
             service().wake_consumers();
         }
@@ -146,8 +150,8 @@ int64_t D2dSyncConsumer::core_index(uint32_t dev, const CoreCoord& eth) const {
 }
 
 // Both stamp kinds solve in the refclk domain over the latest window of rounds with one regression. Hardware
-// stamps are refclk ticks already. Software wall stamps are put there through the tracker's run map (one line per
-// constant-rate run, so a DVFS excursion inside the window no longer bends them as one ratio per window did) and
+// stamps are refclk ticks already. Software wall stamps are put there through the chip's local clock model (one line
+// per constant-rate segment, so a DVFS excursion inside the window no longer bends them as one ratio per window did) and
 // keep their fastest quartile by round trip, since an ERISC stalled inside a round shows in its trip time.
 void D2dSyncConsumer::try_solve_links(bool final) {
     for (size_t li = 0; li < ctx_.links.size(); li++) {
@@ -183,15 +187,15 @@ void D2dSyncConsumer::try_solve_links(bool final) {
         }
         const auto la = local_.find(L.dev_a);
         const auto lb = local_.find(L.dev_b);
-        if (n == 0 || (!hw && (la == local_.end() || lb == local_.end() || la->second.fit.runs.empty() ||
-                               lb->second.fit.runs.empty()))) {
+        if (n == 0 || (!hw && (la == local_.end() || lb == local_.end() || la->second.model.runs.empty() ||
+                               lb->second.model.runs.empty()))) {
             continue;
         }
-        const auto to_refclk = [](const LocalClockFit& fit, uint64_t wall) {
+        const auto to_refclk = [](const LocalClockModel& fit, uint64_t wall) {
             const double wd = static_cast<double>(wall);
             return fit.run_at_wall(wd).refclk_of_wall(wd);
         };
-        const auto pos = [&](const Round& r) { return hw ? mid_a(r, true) : to_refclk(la->second.fit, r.t0.wall); };
+        const auto pos = [&](const Round& r) { return hw ? mid_a(r, true) : to_refclk(la->second.model, r.t0.wall); };
         const double newest = pos(rounds[n - 1]);
         // Live: the first solution once kFirstSolveTicks of rounds are in, so held records are released, then one
         // every half window. Final: whatever the window holds, if it is enough for a fit at all.
@@ -228,9 +232,9 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 if (r.t0.wall == 0 || r.t2.wall == 0 || r.t1.wall == 0 || r.t1b.wall == 0 || r.t2.wall < r.t0.wall) {
                     continue;
                 }
-                const double mid = 0.5 * (to_refclk(la->second.fit, r.t0.wall) + to_refclk(la->second.fit, r.t2.wall));
+                const double mid = 0.5 * (to_refclk(la->second.model, r.t0.wall) + to_refclk(la->second.model, r.t2.wall));
                 const double mid_rcv =
-                    0.5 * (to_refclk(lb->second.fit, r.t1.wall) + to_refclk(lb->second.fit, r.t1b.wall));
+                    0.5 * (to_refclk(lb->second.model, r.t1.wall) + to_refclk(lb->second.model, r.t1b.wall));
                 pts.push_back(RoundPoint{mid, mid_rcv - mid, static_cast<double>(r.t2.wall - r.t0.wall)});
             }
             std::sort(pts.begin(), pts.end(), [](const RoundPoint& a, const RoundPoint& b) { return a.rtt < b.rtt; });
@@ -354,30 +358,28 @@ double D2dSyncConsumer::max_closure_ns() const {
     return worst;
 }
 
-D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const LocalClockFit& fit, const RootXf& xf) const {
-    const std::vector<LocalClockFit::Run>& runs = fit.runs;
+D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
+    const std::vector<LocalClockModel::Run>& runs = fit.runs;
     // A node places one instant of a run on the root: its eth wall tick (the key every record of the chip is looked
     // up by, worker lanes through their tile offset) and the root's refclk at that instant, via the chip's refclk
     // and the solved links. Along a run the map is exactly linear.
-    const auto node_at = [&](const LocalClockFit::Run& run, double r) {
+    const auto node_at = [&](const LocalClockModel::Run& run, double r) {
         const double T = run.wall_of_refclk(r);
         const double root = xf.scale * r + xf.shift;
         const double tangent = xf.scale / run.slope();
-        const double wall_ghz = run.slope() * LocalClockFit::kRefclkHz * 1e-9;
+        const double wall_ghz = run.slope() * LocalClockModel::kRefclkHz * 1e-9;
         const double se_ns = wall_ghz > 0.0 ? run.se_ticks(r) / wall_ghz : 0.0;
         const double sigma = std::sqrt(se_ns * se_ns + xf.prec_ns * xf.prec_ns);
         if (!(tangent > 0.0 && tangent < 1.0)) {
             log_warning(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync: a node at refclk {:.0f} is not a rate; its run [{:.0f}, {:.0f}] has {} "
-                "samples, fitted slope {:.6f}, ratio {:.4f}, slope {:.6f}; root scale {:.9f}",
+                "[streaming profiler] d2d sync: a node at refclk {:.0f} is not a rate; its segment [{:.0f}, {:.0f}] has "
+                "{} samples, k8 {:.0f}; root scale {:.9f}",
                 r,
                 run.r_first,
                 run.r_last,
                 run.n,
-                run.fitted_slope(),
-                run.ratio(),
-                run.slope(),
+                run.k8,
                 xf.scale);
         }
         return Node{T, root, r, tangent, sigma};
@@ -397,8 +399,8 @@ D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const Local
         last_r = runs.front().r_first;
     }
     for (size_t i = s.knots; i + 1 < runs.size(); i++) {
-        const LocalClockFit::Run& a = runs[i];
-        const LocalClockFit::Run& b = runs[i + 1];
+        const LocalClockModel::Run& a = runs[i];
+        const LocalClockModel::Run& b = runs[i + 1];
         if (i + 2 == runs.size() && !b.settled()) {
             break;
         }
@@ -406,7 +408,7 @@ D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const Local
         // spurious split) are bridged by a node on each side of the seam. Past the knot the records lie on b, so the
         // knot leaves on b's tangent. The a-side node of a bridge is dropped when the frontier already passed it: a's
         // newest sample was handed to b after the tangent was frozen on it, and the frozen tangent's end is that node.
-        if (const auto r_x = LocalClockFit::knot(a, b)) {
+        if (const auto r_x = LocalClockModel::knot(a, b)) {
             if (*r_x < s.cover_r) {
                 log_warning(
                     tt::LogMetal,
@@ -429,14 +431,14 @@ D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const Local
         }
         out.knots_after = i + 1;
     }
-    // The open run's line reaches to now, but no node is frozen inside its last kProvisionalTicks: a small DVFS step
-    // hides below the tracker's threshold for ~10 us, so the newest samples may yet prove to belong to the next run,
-    // and a node frozen past a transition cannot be taken back -- it once froze 9.6 us past one, 45 ns off, and the
-    // knot then computed earlier in time was dropped behind it.
-    const LocalClockFit::Run& open = runs.back();
-    const double r_end = open.r_last - kProvisionalTicks;
-    if (open.settled() && open.slope() > 0.0 && r_end > last_r && out.knots_after + 1 == runs.size()) {
-        out.frontier = node_at(open, r_end);
+    // The open segment's line reaches to its newest point, which the pusher places behind its newest sample by more
+    // than the time it takes to confirm a step, so no node freezes past a transition. A closed segment gets no
+    // frontier: its close is the last sample still within the step threshold of its line, a few microseconds past
+    // the crossing, and the knot with the next segment is what ends it.
+    const LocalClockModel::Run& open = runs.back();
+    if (!open.closed && open.settled() && open.slope() > 0.0 && open.r_last > last_r &&
+        out.knots_after + 1 == runs.size()) {
+        out.frontier = node_at(open, open.r_last);
     }
     return out;
 }
@@ -500,7 +502,7 @@ bool D2dSyncConsumer::advance(Series& s, uint32_t chip, Fresh fresh) {
     if (fresh.frontier) {
         const Node& f = *fresh.frontier;
         const Node* last = s.nodes.empty() ? nullptr : &s.nodes.back();
-        const double freeze_ticks = kFreezeNs * LocalClockFit::kRefclkHz * 1e-9;
+        const double freeze_ticks = kFreezeNs * LocalClockModel::kRefclkHz * 1e-9;
         if (last != nullptr && f.H > s.cover_H &&
             std::abs(f.root - (last->root + last->tangent * (f.H - last->H))) <= freeze_ticks) {
             s.cover_H = f.H;
@@ -517,7 +519,7 @@ bool D2dSyncConsumer::advance(Series& s, uint32_t chip, Fresh fresh) {
 
 bool D2dSyncConsumer::publish_dev(uint32_t dev) {
     const auto st = local_.find(dev);
-    if (st == local_.end() || st->second.fit.runs.empty() || dev >= ctx_.devices.size()) {
+    if (st == local_.end() || st->second.model.runs.empty() || dev >= ctx_.devices.size()) {
         return false;
     }
     // Nothing is placed before the host series exists: a record converted then would land nowhere.
@@ -535,7 +537,7 @@ bool D2dSyncConsumer::publish_dev(uint32_t dev) {
         return false;
     }
     Published& pub = published_[dev];
-    return advance(pub.linked, ctx_.devices[dev].chip_id, fresh_nodes(pub.linked, st->second.fit, xf->second));
+    return advance(pub.linked, ctx_.devices[dev].chip_id, fresh_nodes(pub.linked, st->second.model, xf->second));
 }
 
 // Capture end: every chip's series from the final fits and solutions, then closed, so the consumers' remaining
@@ -554,14 +556,11 @@ void D2dSyncConsumer::log_summary() const {
         size_t nb = 0;
         double smin = std::numeric_limits<double>::max(), smax = 0.0;
         long double ssum = 0.0, wsum = 0.0;
-        for (const LocalClockFit::Run& b : l.fit.runs) {
-            if (b.n < 2) {
+        for (const LocalClockModel::Run& b : l.model.runs) {
+            if (b.n == 0 || b.slope() <= 0.0) {
                 continue;
             }
             const double s = b.slope();
-            if (s <= 0.0) {
-                continue;
-            }
             nb++;
             ssum += static_cast<long double>(s) * static_cast<long double>(b.n);
             wsum += static_cast<long double>(b.n);
@@ -572,37 +571,24 @@ void D2dSyncConsumer::log_summary() const {
         if (nb == 0) {
             log_warning(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync chip {}: {} local clock samples but no fittable constant-rate run",
+                "[streaming profiler] d2d sync chip {}: {} clock records but no segment of the local clock model",
                 chip,
-                l.fit.n_total);
+                l.model.n_total);
             continue;
         }
         const double mean = static_cast<double>(ssum / wsum);
-        const LocalClockFit::Run* longest = nullptr;
-        for (const LocalClockFit::Run& b : l.fit.runs) {
-            if (b.n >= 2 && (longest == nullptr || b.n > longest->n)) {
-                longest = &b;
-            }
-        }
-        const double off_ppm =
-            (longest != nullptr && longest->ratio() > 0.0) ? (longest->fitted_slope() / longest->ratio() - 1.0) * 1e6 : 0.0;
-        const double to_ghz = LocalClockFit::kRefclkHz * 1e-9;
+        const double to_ghz = LocalClockModel::kRefclkHz * 1e-9;
         const double anchor_ghz = dev < ctx_.devices.size() ? ctx_.devices[dev].clock.frequency_ghz : 0.0;
         log_info(
             tt::LogMetal,
-            "[streaming profiler] d2d sync chip {}: local clock {} samples in {} constant-rate runs ({} transitions, "
-            "{} runs merged back, {} glitch samples dropped, {} tail samples handed over; longest run {:+.3f} ppm off "
-            "its PLL multiple); applied AICLK mean {:.5f} GHz "
-            "(run min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} ppm; {} correction nodes, the tangent "
-            "extended {} times",
+            "[streaming profiler] d2d sync chip {}: local clock {} points in {} segments ({} steps), {} raw transition "
+            "samples; applied AICLK mean {:.5f} GHz (segment min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} "
+            "ppm; {} correction nodes, the tangent extended {} times",
             chip,
-            l.fit.n_total,
+            l.model.points,
             nb,
-            l.fit.transitions,
-            l.fit.merged,
-            l.fit.glitches,
-            l.fit.handed_over,
-            off_ppm,
+            l.model.transitions,
+            l.model.raws,
             mean * to_ghz,
             smin * to_ghz,
             smax * to_ghz,
@@ -796,8 +782,8 @@ void D2dSyncConsumer::dump_csv() const {
         for (const auto& kv : local_) {
             const uint32_t dev = kv.first;
             const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
-            for (const LocalClockFit::Run& b : kv.second.fit.runs) {
-                if (b.n < 2 || b.slope() <= 0.0) {
+            for (const LocalClockModel::Run& b : kv.second.model.runs) {
+                if (b.n == 0 || b.slope() <= 0.0) {
                     continue;
                 }
                 for (double r = b.r_first; r <= b.r_last; r += 50000.0) {
@@ -843,8 +829,8 @@ void D2dSyncConsumer::dump_csv() const {
         for (const auto& kv : local_) {
             const uint32_t dev = kv.first;
             const uint32_t chip = dev < ctx_.devices.size() ? ctx_.devices[dev].chip_id : dev;
-            for (const LocalClockFit::Run& b : kv.second.fit.runs) {
-                if (b.n < 2 || b.slope() <= 0.0) {
+            for (const LocalClockModel::Run& b : kv.second.model.runs) {
+                if (b.n == 0 || b.slope() <= 0.0) {
                     continue;
                 }
                 std::fprintf(
@@ -854,7 +840,7 @@ void D2dSyncConsumer::dump_csv() const {
                     b.wall_of_refclk(b.r_first),
                     b.wall_of_refclk(b.r_last),
                     static_cast<unsigned long long>(b.n),
-                    b.fitted_slope(),
+                    b.slope(),
                     b.ratio());
             }
         }
@@ -876,7 +862,7 @@ void D2dSyncConsumer::dump_csv() const {
 // The cross-chip refclk SCALE (chip b's refclk rate over chip a's -- the crystal ratio) as a RUNNING linear
 // regression over the link rounds, for the Tracy sink: each point is the regression over every round up to its time,
 // so the curve shows the estimate converging. Each round's wall stamps are converted to refclk through the chip's constant-rate
-// LocalClockFit run (the 3 us tracker), NOT the solver's single linear ratio per end: over a long baseline DVFS
+// LocalClockModel segment, NOT the solver's single linear ratio per end: over a long baseline DVFS
 // moves that ratio by percent and the solver's conversion error leaks relative DVFS into the rate (measured: +/-1000
 // ppm over 4 s), while the constant-rate runs track it and stay at the ~ppm crystal ratio. Same rounds and the solver's
 // shortest-25%-round-trip keep rule, regressing (receiver refclk - sender midpoint refclk) on the sender midpoint.
@@ -899,12 +885,12 @@ void D2dSyncConsumer::publish_rate_plots() {
         if (n < 16) {
             continue;
         }
-        const LocalClockFit& fa = la->second.fit;
-        const LocalClockFit& fb = lb->second.fit;
+        const LocalClockModel& fa = la->second.model;
+        const LocalClockModel& fb = lb->second.model;
         if (fa.runs.empty() || fb.runs.empty()) {
             continue;
         }
-        const auto refclk_at = [](const LocalClockFit& fit, double w) {
+        const auto refclk_at = [](const LocalClockModel& fit, double w) {
             return fit.run_at_wall(w).refclk_of_wall(w);
         };
         struct Rnd {
@@ -996,8 +982,8 @@ bool D2dSyncConsumer::round_error(
     }
     double wa = 0.0, wb = 0.0;
     if (hw) {
-        wa = la->second.fit.wall_at(mid_a(r, true));
-        wb = lb->second.fit.wall_at(mid_b(r, true));
+        wa = la->second.model.wall_at(mid_a(r, true));
+        wb = lb->second.model.wall_at(mid_b(r, true));
     } else if (r.t0.wall != 0 && r.t2.wall != 0 && r.t1.wall != 0 && r.t1b.wall != 0 && r.t2.wall >= r.t0.wall) {
         wa = 0.5 * (static_cast<double>(r.t0.wall) + static_cast<double>(r.t2.wall));
         wb = 0.5 * (static_cast<double>(r.t1.wall) + static_cast<double>(r.t1b.wall));
@@ -1011,7 +997,7 @@ bool D2dSyncConsumer::round_error(
     t.root_a = SyncCorrections::lookup_root(L.chip_a, std::llround(wa));
     t.root_b = SyncCorrections::lookup_root(L.chip_b, std::llround(wb));
     tsc_a = SyncCorrections::lookup_tsc(L.chip_a, std::llround(wa));
-    err = (t.root_b - t.root_a) * (1e9 / LocalClockFit::kRefclkHz);
+    err = (t.root_b - t.root_a) * (1e9 / LocalClockModel::kRefclkHz);
     if (terms != nullptr) {
         *terms = t;
     }

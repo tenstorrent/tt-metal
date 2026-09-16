@@ -19,279 +19,98 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-// The local half of the device<->device sync: one chip's AICLK wall clock against its eth tile's free-running
-// 50 MHz refclk, from the idle-eth tracker's PP_CLOCK(LOCAL) samples.
-//
-// AICLK is a PLL multiple of the crystal the refclk counts, so between DVFS transitions the wall clock is EXACTLY
-// linear in the refclk with a slope that is a multiple of 1/8 wall ticks per refclk tick (27 at 1.35 GHz, 26.875 at
-// 1.34375, 20.375 at 1.01875), and a transition is a ~3 us glide at most once per ms (the ARC firmware's DVFS timer).
-// The fit is therefore one straight line per RUN of constant rate, each relative to its own first sample: a sample
-// joins the open run while it lies on that run's exact line and opens a new run when it does not, so the run
-// boundaries ARE the transitions, and between two of them the map is one fitted line: its slope resolves the ratio
-// to 0.03 ppm within 10 ms and its intercept averages every sample of the run (~1 ns after a few dozen) -- where a
-// chord through a fixed window bends for the whole window when a transition falls inside it. The PLL multiple is
-// only nominal at the ppm level (a run of 10 s at the snapped 27.000 drifted 0.5 ppm off the samples), so the
-// multiple serves to name the rate, never to place a record.
-struct LocalClockFit {
+// The chip's AICLK wall clock against its refclk, as its idle-eth pusher models it (eth_clock_pusher.cpp): one
+// segment per PLL multiple, each a line the pusher sends POINTS of -- (refclk r, the line's wall at r) with the
+// multiple k8 and the count of samples behind the line in the record's round word. The newest point of the open
+// segment stands for it; a CLOSE point ends a segment at its last on-line sample; a new multiple, or a point after
+// a close, opens the next; and consecutive segments meet where their lines cross. The raw samples the pusher sends
+// around a transition are counted here and kept by the consumer for its CSV dump only.
+class LocalClockModel {
+public:
     static constexpr double kRefclkHz = 50e6;
-    // A sample this far (wall ticks) off the open run's line opens a new run: the refclk quantisation puts a sample
-    // at most ~14 ticks off the line, a single 1/8 step in the ratio walks 19 ticks per 3 us stride.
-    static constexpr double kSplitWallTicks = 64.0;
-    // Fewer samples than this fix the slope too loosely (>100 ppm) to test a newcomer against.
-    static constexpr uint64_t kSettledSamples = 16;
+    // A line behind fewer samples than this has its intercept fixed too loosely (>0.25 tick) to freeze a node on.
+    static constexpr uint32_t kSettledCount = 16;
+    // How far from a segment's close the crossing with the next line may lie: the pusher confirms a step within
+    // ~25 us of samples and the close is its last on-line sample, so the crossing precedes the close by at most that.
+    static constexpr double kKnotSlackTicks = 4000.0;
 
     struct Run {
-        bool anchored = false;
-        double ax = 0.0, ay = 0.0;  // this run's own origin: (refclk, wall)
-        double r_first = 0.0, r_last = 0.0;
-        double last_x = 0.0, last_y = 0.0;  // the newest sample, so it can be handed to the next run
-        double prev_x = 0.0;                // the sample before it, for r_last once the newest is removed
-        long double sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
-        uint64_t n = 0;
-        // Wall ticks per refclk tick over this run: the applied AICLK / 50 MHz.
-        double fitted_slope() const {
-            if (n < 2) {
-                return 0.0;
-            }
-            const long double nn = static_cast<long double>(n);
-            const long double den = nn * sxx - sx * sx;
-            return den > 0 ? static_cast<double>((nn * sxy - sx * sy) / den) : 0.0;
-        }
-        // The line's slope is the DVFS step's exact multiple whenever the fit lies within a step's width of one. A
-        // young run's fitted slope (16 samples over 48 us, refclk quantised to 20 ns) is off by up to ~100 ppm,
-        // which is 20 ns of placement 200 us in; runs longer than 50 ms all land on their multiple to <0.005 ppm.
-        double slope() const {
-            const double r = ratio();
-            return r != 0.0 ? r : fitted_slope();
-        }
-        // The DVFS step this run sits on: the nearest multiple of 1/8 (0 when the fit is not within 1000 ppm of one,
-        // a run cut across a glide).
-        double ratio() const {
-            const double s = fitted_slope();
-            const double sn = std::round(s * 8.0) / 8.0;
-            return (sn > 0.0 && std::abs(s - sn) <= 1000e-6 * sn) ? sn : 0.0;
-        }
-        // Whether the line is fixed well enough (slope to ~100 ppm, a stride's extrapolation to a fraction of a
-        // tick) to test a newcomer against it.
-        bool settled() const { return n >= kSettledSamples; }
-        double intercept() const {
-            if (n < 2) {
-                return 0.0;
-            }
-            return static_cast<double>((sy - static_cast<long double>(slope()) * sx) / static_cast<long double>(n));
-        }
-        // The fitted line, both ways, through this run's own anchor so a conversion never leaves the interval.
-        double wall_of_refclk(double r) const { return ay + intercept() + slope() * (r - ax); }
-        double refclk_of_wall(double w) const { return ax + (w - ay - intercept()) / slope(); }
-        void add(double x, double y) {
-            if (!anchored) {
-                ax = x;
-                ay = y;
-                r_first = x;
-                anchored = true;
-            }
-            r_last = x;
-            prev_x = last_x;
-            last_x = x;
-            last_y = y;
-            const long double dx = x - ax, dy = y - ay;
-            sx += dx;
-            sy += dy;
-            sxx += dx * dx;
-            sxy += dx * dy;
-            syy += dy * dy;
-            n++;
-        }
-        // The scatter of the run's samples about its line, in wall ticks: the refclk's 20 ns quantisation spread
-        // over the ~27 wall ticks it spans, ~8 ticks for any run long enough to fit.
-        double residual_ticks() const {
-            if (n < 3) {
-                return 0.0;
-            }
-            const long double b = slope();
-            const long double a = intercept();
-            const long double rss =
-                syy - 2 * a * sy - 2 * b * sxy + static_cast<long double>(n) * a * a + 2 * a * b * sx + b * b * sxx;
-            return rss > 0 ? std::sqrt(static_cast<double>(rss / static_cast<long double>(n - 2))) : 0.0;
-        }
-        // Standard error of the line's wall value at refclk r: the intercept's alone when the slope is the exact PLL
-        // multiple, with the slope's contribution when it had to be fitted.
-        double se_ticks(double r) const {
-            if (n < 3) {
-                return 0.0;
-            }
-            const double nn = static_cast<double>(n);
-            const double sigma = residual_ticks();
-            if (ratio() != 0.0) {
-                return sigma / std::sqrt(nn);
-            }
-            const double xbar = static_cast<double>(sx) / nn;
-            const double sxx_c = static_cast<double>(sxx) - static_cast<double>(sx) * xbar;
-            const double dx = (r - ax) - xbar;
-            return sigma * std::sqrt(1.0 / nn + (sxx_c > 0.0 ? dx * dx / sxx_c : 0.0));
-        }
-        // A sample older than the run's own (handed over from the run before): the sums and the start move, the
-        // newest-sample bookkeeping does not.
-        void add_front(double x, double y) {
-            r_first = std::min(r_first, x);
-            const long double dx = x - ax, dy = y - ay;
-            sx += dx;
-            sy += dy;
-            sxx += dx * dx;
-            sxy += dx * dy;
-            syy += dy * dy;
-            n++;
-        }
-        // Absorbs a later run on the same line: its sums re-based onto this anchor, its newest-sample bookkeeping
-        // taken over.
-        void merge(const Run& b) {
-            const long double d = b.ax - ax, e = b.ay - ay, nb = static_cast<long double>(b.n);
-            sxx += b.sxx + 2 * d * b.sx + nb * d * d;
-            sxy += b.sxy + d * b.sy + e * b.sx + nb * d * e;
-            syy += b.syy + 2 * e * b.sy + nb * e * e;
-            sx += b.sx + nb * d;
-            sy += b.sy + nb * e;
-            n += b.n;
-            r_last = b.r_last;
-            last_x = b.last_x;
-            last_y = b.last_y;
-            prev_x = b.prev_x;
-        }
-        // Takes the newest sample back out; the sums are exact, so this is exact.
-        void remove_last() {
-            const long double dx = last_x - ax, dy = last_y - ay;
-            sx -= dx;
-            sy -= dy;
-            sxx -= dx * dx;
-            sxy -= dx * dy;
-            syy -= dy * dy;
-            n--;
-            last_x = prev_x;
-            r_last = prev_x;
-        }
+        double k8 = 0.0;                     // wall ticks per refclk tick, in eighths
+        double ax = 0.0, ay = 0.0;           // the newest point: refclk, wall
+        double r_first = 0.0, r_last = 0.0;  // the first and the newest point's refclk
+        double w_first = 0.0;                // the first point's wall, the segment's key in wall order
+        uint32_t n = 0;                      // samples behind the line
+        bool closed = false;
+        double slope() const { return k8 / 8.0; }
+        double ratio() const { return slope(); }
+        bool settled() const { return n >= kSettledCount; }
+        double wall_of_refclk(double r) const { return ay + slope() * (r - ax); }
+        double refclk_of_wall(double w) const { return ax + (w - ay) / slope(); }
+        // A sample is the wall tick of one refclk update, caught to within a cycle; the intercept is their mean.
+        double residual_ticks() const { return 1.0; }
+        double se_ticks(double) const { return n > 0 ? residual_ticks() / std::sqrt(static_cast<double>(n)) : 0.0; }
     };
 
     std::vector<Run> runs;  // in time order, disjoint in refclk
-    uint64_t n_total = 0;
-    uint64_t transitions = 0;  // runs opened by two samples off the line or by a burst
-    uint64_t handed_over = 0;  // samples moved from a run's tail to the run after it
-    uint64_t merged = 0;       // runs that settled on their predecessor's multiple and were folded back into it
-    uint64_t glitches = 0;     // lone samples off the line, with the next one back on it
-    double prev_gap = 0.0;     // refclk between the last two samples
-    bool pending_handover = false;
-    bool pending_off = false;  // the previous sample was off the line; a second one opens the run
+    uint64_t n_total = 0;   // clock records received: points, closes and raw samples
+    uint64_t points = 0;
+    uint64_t raws = 0;
+    uint64_t transitions = 0;  // segments after the first
 
-    // The tracker emits a burst of consecutive 3 us samples when it detects a rate change, a sample per 100 us for
-    // the run's first ms, then one per ms: a sample following the previous one by less than kBurstGapTicks after a
-    // gap of at least kSparseGapTicks is the first of a burst, i.e. the tracker's own verdict that a new rate
-    // began, and opens a run whether or not it has yet left the old line by the threshold. Testing the same sample
-    // against a fitted line with the same threshold let it join the old run one sample too often, and that one
-    // sample pulled a 1 ms run's slope 40 ppm off, which a node frozen on it carried as 20-45 ns.
-    static constexpr double kBurstGapTicks = 300.0;    // 6 us
-    static constexpr double kSparseGapTicks = 1500.0;  // 30 us
-
-    void add(uint64_t refclk_ticks, uint64_t wall_ticks) {
-        const double r = static_cast<double>(refclk_ticks), w = static_cast<double>(wall_ticks);
+    // A point of the open segment's line, or the segment's close. An older point than the newest is superseded.
+    void add_point(uint64_t refclk, uint64_t wall, uint32_t k8, uint32_t n, bool close) {
         n_total++;
-        if (!runs.empty()) {
-            Run& cur = runs.back();
-            const double gap = r - cur.r_last;
-            const bool burst_start = cur.n >= 2 && gap < kBurstGapTicks && prev_gap >= kSparseGapTicks;
-            const bool off = cur.settled() && std::abs(w - cur.wall_of_refclk(r)) > kSplitWallTicks;
-            // One sample off a settled line is a glitch until the next one confirms it; a burst is the tracker's own
-            // verdict and needs no second sample.
-            if (off && !burst_start && !pending_off) {
-                pending_off = true;
-                prev_gap = gap;
-                return;
-            }
-            if (!off && !burst_start) {
-                glitches += pending_off ? 1 : 0;
-                pending_off = false;
-                cur.add(r, w);
-                prev_gap = gap;
-                settle_handover();
-                merge_settled();
-                return;
-            }
-            pending_off = false;
-            transitions++;
-            // The old run's newest sample may already sit on the new rate (a sparse sample landing in the ~12 us
-            // between a transition and the tracker's detection of it); judged once the new run's line is settled.
-            pending_handover = burst_start && cur.n >= 3;
-            prev_gap = gap;
+        points++;
+        const double r = static_cast<double>(refclk), w = static_cast<double>(wall);
+        if (runs.empty() || runs.back().closed || runs.back().k8 != static_cast<double>(k8)) {
+            transitions += runs.empty() ? 0 : 1;
+            runs.emplace_back();
+            runs.back().k8 = k8;
+            runs.back().r_first = r;
+            runs.back().w_first = w;
         }
-        runs.emplace_back();
-        runs.back().add(r, w);
-    }
-
-private:
-    // A run that has just settled on the same PLL multiple as the settled run before it, within half the split
-    // threshold of that run's line, is the same line: a glitch or a tracker burst on no real step opened it. Folding
-    // it back keeps the long run's intercept instead of a 16-sample one.
-    void merge_settled() {
-        if (runs.size() < 2 || runs.back().n != kSettledSamples) {
-            return;
-        }
-        Run& prev = runs[runs.size() - 2];
-        const Run& cur = runs.back();
-        const double k = cur.ratio();
-        if (k == 0.0 || !prev.settled() || prev.ratio() != k ||
-            std::abs(cur.wall_of_refclk(cur.r_first) - prev.wall_of_refclk(cur.r_first)) > kSplitWallTicks / 2) {
-            return;
-        }
-        prev.merge(cur);
-        runs.pop_back();
-        pending_handover = false;
-        merged++;
-    }
-    void settle_handover() {
-        if (!pending_handover || runs.size() < 2 || !runs.back().settled()) {
-            return;
-        }
-        pending_handover = false;
-        Run& prev = runs[runs.size() - 2];
         Run& cur = runs.back();
-        const double x = prev.last_x, y = prev.last_y;
-        const double off_prev = std::abs(y - prev.wall_of_refclk(x));
-        const double off_cur = std::abs(y - cur.wall_of_refclk(x));
-        if (off_cur < off_prev) {
-            prev.remove_last();
-            cur.add_front(x, y);
-            handed_over++;
+        if (r < cur.r_last) {
+            return;
         }
+        cur.ax = r;
+        cur.ay = w;
+        cur.r_last = r;
+        cur.n = n;
+        cur.closed = close;
+    }
+    void add_raw() {
+        n_total++;
+        raws++;
     }
 
-public:
-    // The run holding refclk r: the last one starting at or before it (the first, for anything earlier).
+    // The segment holding refclk r: the last one starting at or before it (the first, for anything earlier).
     const Run& run_at(double r) const {
         auto it = std::upper_bound(runs.begin(), runs.end(), r, [](double x, const Run& a) { return x < a.r_first; });
         return it == runs.begin() ? runs.front() : *(it - 1);
     }
-    // Where consecutive runs hand over: their lines' intersection, when it falls within kKnotSlackTicks of the seam
-    // (a small DVFS step stays inside the tracker's detection band for ~10 us, so the old run's last samples lie
-    // past the true transition). No value: the seam is bridged straight from a.r_last to b.r_first.
-    static constexpr double kKnotSlackTicks = 2500.0;
+    // Where consecutive segments hand over: their lines' intersection, when it lies within kKnotSlackTicks of the
+    // seam. No value (parallel lines, or a crossing far from the seam): the seam is bridged from a.r_last to b.r_first.
     static std::optional<double> knot(const Run& a, const Run& b) {
         const double ds = a.slope() - b.slope();
-        if (!(std::abs(ds) > 1e-6)) {
+        if (!(std::abs(ds) > 1e-9)) {
             return std::nullopt;
         }
-        const double r_x = (b.ay + b.intercept() - b.slope() * b.ax - a.ay - a.intercept() + a.slope() * a.ax) / ds;
+        const double r_x = (b.ay - b.slope() * b.ax - a.ay + a.slope() * a.ax) / ds;
         if (std::isfinite(r_x) && r_x >= a.r_last - kKnotSlackTicks && r_x <= b.r_first + kKnotSlackTicks) {
             return r_x;
         }
         return std::nullopt;
     }
-    // The wall instant of refclk tick r exactly as the published correction places a record there: each run's line
-    // up to its knot with the next, a straight bridge across a seam without one. 0 when no line holds r yet.
+    // The wall instant of refclk tick r exactly as the published correction places a record there: each segment's
+    // line up to its knot with the next, a straight bridge across a seam without one. 0 when no line holds r yet.
     double wall_at(double r) const {
         if (runs.empty()) {
             return 0.0;
         }
         const Run* run = &run_at(r);
         const size_t idx = static_cast<size_t>(run - runs.data());
-        const auto usable = [](const Run& b) { return b.n >= 2 && b.slope() > 0.0; };
+        const auto usable = [](const Run& b) { return b.n > 0 && b.slope() > 0.0; };
         if (idx + 1 < runs.size() && usable(runs[idx + 1])) {
             const Run& next = runs[idx + 1];
             if (const auto k = knot(*run, next)) {
@@ -310,16 +129,16 @@ public:
         }
         return usable(*run) ? run->wall_of_refclk(r) : 0.0;
     }
-    // The run holding wall tick w, by the runs' wall order (monotone with their refclk order).
+    // The segment holding wall tick w, by the segments' wall order (monotone with their refclk order).
     const Run& run_at_wall(double w) const {
-        auto it = std::upper_bound(runs.begin(), runs.end(), w, [](double x, const Run& a) { return x < a.ay; });
+        auto it = std::upper_bound(runs.begin(), runs.end(), w, [](double x, const Run& a) { return x < a.w_first; });
         return it == runs.begin() ? runs.front() : *(it - 1);
     }
 };
 
 // Device<->device sync from the PP_CLOCK samples the idle-eth pushers carry, and the correction it publishes.
 //
-// LOCAL samples feed one LocalClockFit per device. LINK samples (the boot-time eth sync rounds: sender round start
+// LOCAL points feed one LocalClockModel per device. LINK samples (the boot-time eth sync rounds: sender round start
 // and end, receiver arrival) are paired by round and solved refclk against refclk, so DVFS on either wall clock
 // cannot enter the link solve. From those the consumer publishes, per chip, a time-indexed correction to the baked
 // host anchor every Record carries (SyncCorrections; Record::host_time composes it):
@@ -339,8 +158,9 @@ public:
 
 private:
     struct LocalState {
-        LocalClockFit fit;
-        std::vector<std::pair<uint64_t, uint64_t>> samples;  // (refclk, wall) as received, kept for the CSV dump only
+        LocalClockModel model;
+        std::vector<std::pair<uint64_t, uint64_t>>
+            samples;  // the raw transition samples (refclk, wall), for the CSV dump
     };
     // One end's stamp of a round: the reading (refclk ticks for software stamps, ns for hardware ones) and the eth
     // core's wall clock when it was recorded.
@@ -468,7 +288,7 @@ private:
         std::optional<Node> frontier;
         size_t knots_after = 0;  // run boundaries consumed once the knots are placed
     };
-    Fresh fresh_nodes(const Series& s, const LocalClockFit& fit, const RootXf& xf) const;
+    Fresh fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const;
     // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
     bool publish_dev(uint32_t dev);
     // Appends the knots and, if the frontier left the newest tangent by more than kFreezeNs, freezes the tangent where
@@ -490,7 +310,6 @@ private:
     // A hardware round whose one-way delay inside the stamps sits this far from the window's median had a frame
     // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
     static constexpr double kPathDevNs = 2.0;
-    static constexpr double kProvisionalTicks = 1500.0;  // the open run's newest 30 us: no node is frozen there
     // A frontier within this much of the newest tangent extends the cover instead of freezing a node; the published
     // map then sits within it of the fit's own estimate. A mature run's estimate moves ~0.02 ns per keepalive sample,
     // so it adds a node every few hundred ms; a young run adds one per burst sample for its first ms.

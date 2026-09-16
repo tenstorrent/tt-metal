@@ -135,6 +135,9 @@ struct ppfmt {
     static constexpr uint32_t CLOCK_LOCAL_REFCLK = 0u;       // PP_CLOCK_LOCAL_REFCLK
     static constexpr uint32_t CLOCK_LINK_REFCLK = 1u;        // PP_CLOCK_LINK_REFCLK
     static constexpr uint32_t CLOCK_LINK_PTP = 2u;           // PP_CLOCK_LINK_PTP
+    static constexpr uint32_t CLOCK_LOCAL_RAW = 0u;          // PP_CLOCK_LOCAL_*
+    static constexpr uint32_t CLOCK_LOCAL_POINT = 1u;
+    static constexpr uint32_t CLOCK_LOCAL_CLOSE = 2u;
     static constexpr uint32_t CLOCK_ROLE_T0 = 0u;            // PP_CLOCK_ROLE_*
     static constexpr uint32_t CLOCK_ROLE_T1 = 1u;
     static constexpr uint32_t CLOCK_ROLE_T1B = 2u;

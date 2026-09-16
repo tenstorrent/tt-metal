@@ -4,14 +4,14 @@
 
 // Resident idle-eth clock tracker that PUSHES ITS OWN RING, and drains its chip's active eth cores too.
 //
-// Runs on one idle ethernet core per chip for the life of the profiling session. It samples this chip's AICLK
-// wall clock against the eth tile's free-running 50 MHz counter into its own SPSC lane as PP_CLOCK, then ships
-// that lane to the host over its OWN D2H socket in the relay wire format (SPSC span frames). Between its refclk
-// strides it also acts as a mini-relay for the chip's ACTIVE eth cores: those run the fabric router and can spend
-// no cycles on egress, so this core NoC-reads their control vectors and rings, packs a frame stamped with THEIR
-// coordinate, pushes it on the same socket, and writes their heads back -- the decoder resolves a frame's core by
-// its XY, so one socket carries every core this pusher serves, exactly as one relay socket carries its cores.
-// Nothing is fitted here; all fitting is on the host.
+// Runs on one idle ethernet core per chip for the life of the profiling session. It keeps the chip's AICLK wall
+// clock modelled against the eth tile's free-running 50 MHz counter (the local clock model below) and writes points
+// of that model into its own SPSC lane as PP_CLOCK, then ships that lane to the host over its OWN D2H socket in the
+// relay wire format (SPSC span frames). Between samples it also acts as a mini-relay for the chip's ACTIVE eth
+// cores: those run the fabric router and can spend no cycles on egress, so this core NoC-reads their control
+// vectors and rings, packs a frame stamped with THEIR coordinate, pushes it on the same socket, and writes their
+// heads back -- the decoder resolves a frame's core by its XY, so one socket carries every core this pusher serves,
+// exactly as one relay socket carries its cores.
 //
 // WHY THE ETH CORE PUSHES: the DRAM relay is unrolled for exactly five Tensix RISCs per core and an eth core has
 // two. Putting eth in the relay roster meant a heterogeneous frame format through the relay, the frame sizing and
@@ -34,7 +34,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/ethernet/eth_ptp_clock.hpp"
 
-constexpr uint32_t kStrideTicks = get_compile_time_arg_val(0);       // refclk ticks between samples (50/us)
+constexpr uint32_t kPointTicks = get_compile_time_arg_val(0);        // refclk between the open segment's points (50/us)
 constexpr uint32_t kSocketConfigAddr = get_compile_time_arg_val(1);  // D2HSocket config in this core's L1
 constexpr uint32_t kStageAddr = get_compile_time_arg_val(2);         // one frame slot in this core's L1
 constexpr uint32_t kCtrlAddr = get_compile_time_arg_val(3);          // done +0, heartbeat +4, go +8, stop +64
@@ -44,6 +44,7 @@ constexpr uint32_t kMyXy = get_compile_time_arg_val(4);              // y << 16 
 constexpr uint32_t kScratchAddr = get_compile_time_arg_val(5);
 constexpr uint32_t kTileTableAddr = get_compile_time_arg_val(6);  // hostdev EthTileTable
 constexpr uint32_t kMeasureOnly = get_compile_time_arg_val(7);    // write the tile table and exit
+constexpr uint32_t kRingAddr = get_compile_time_arg_val(8);       // model::kRingSamples raw samples, for transitions
 
 namespace kp = kernel_profiler;
 
@@ -59,90 +60,246 @@ constexpr uint32_t kWireCtrl = kp::SPSC_SPAN_WIRE_CTRL_WORDS;
 constexpr uint32_t kPageWords = kp::SPSC_SPAN_PAGE_WORDS;
 constexpr uint32_t kPageBytes = kPageWords * 4u;
 constexpr uint32_t kLenWord = 1;
-// Ship once the live lane holds this many words, or after this many strides regardless, so a trickle still
-// reaches the host within ~1 ms at a 3 us stride. The linked cores are swept on the same cadence.
+// Ship once the live lane holds this many words, or after this much refclk regardless, so a trickle still reaches
+// the host within ~1 ms. The linked cores are swept on the same cadence.
 constexpr uint32_t kShipWords = kRingWords / 4u;
-constexpr uint32_t kMaxDeferStrides = 333;
-constexpr uint32_t kMaxLinked = 16;  // BH has 14 eth cores
+constexpr uint32_t kSweepTicks = 50000;  // 1 ms
+constexpr uint32_t kMaxLinked = 16;      // BH has 14 eth cores
 
 namespace eth_ptp = tt::tt_metal::eth_ptp;
 
 #if defined(PROFILE_KERNEL)
 
-// A tracker sample is one Instant: the skew between the two clocks is one register read, constant in AICLK cycles and
-// therefore moving in ns with DVFS, so it has to be minimal. Emitted without room: skipped, never blocked on -- the
-// pairs are absolute, so a gap is still measurable as a straight segment between its neighbours.
-inline __attribute__((always_inline)) void emit(const eth_ptp::Instant& t) {
-    kp::ring_write_clock(kp::ppfmt::CLOCK_LOCAL_REFCLK, t.refclk, t.wall_lo, t.wall_hi, 0, 0);
-}
+// ---- local clock model -------------------------------------------------------------------------------------
+// AICLK is a PLL multiple of the crystal the refclk counts: k8/8 wall ticks per refclk tick, k8 an integer, exact
+// between DVFS steps (every run longer than 50 ms measured sits on its multiple to <0.005 ppm). So over one rate the
+// wall clock is a line whose slope is known once k8 is, and whose only free parameter is the phase of the refclk's
+// increment against the wall ticks -- the intercept. This core measures both, and the host receives POINTS of the
+// line, never samples to fit: a point is (refclk r, the line's wall at r), tagged with k8 and the sample count
+// behind it; a new k8, or a CLOSE point, starts the next segment, and two consecutive segments meet where their
+// lines cross.
+//
+// A sample brackets one wall-clock read between two refclk reads and counts only when the refclk changed inside
+// the bracket. The three loads pipeline, so the bracket is a couple of AICLK cycles wide (measured: the counter
+// changes inside it on 2 % of iterations), and the refclk the ERISC reads advances in steps of 4 ticks, 80 ns
+// apart: a counted sample is the wall time of one such update to within a cycle, with no quantisation noise, and
+// the update is uniform over the bracket, which is symmetric about the wall read, so there is no read-latency
+// term either. About one update in fifty is caught, one every ~5 us; a fresh segment's intercept is at a quarter
+// of a tick after 16 of them and keeps improving as 1/sqrt(n), and the host never places a record on a line drawn
+// through a handful of points.
+//
+// A step shows as kConfirm consecutive samples off the line by more than kOffTicks. The old segment's last on-line
+// sample closes it; the new slope is locked once the newest kWinTicks of samples lie on one line, which rejects the
+// PLL's glide; the samples of a transition go to the host raw so the glide itself can be seen. Nothing here is a
+// typed-in correction: the bracket cancels the read latency by construction, k8 is integer arithmetic, and the
+// intercept is a mean.
+namespace model {
+constexpr uint32_t kRingSamples = 128;  // raw samples kept, ~5 us apart: ~600 us deep
+constexpr uint32_t kRingStride = 1;
+constexpr uint32_t kConfirm = 4;           // consecutive off-line samples that make a step
+constexpr int64_t kOffTicks = 16;          // off the line by this much is off: a 1/8 step gets there in 2.6 us
+constexpr uint32_t kAcqTicks = 4096;       // refclk after a departure before the first lock test (82 us)
+constexpr uint32_t kWinTicks = 4096;       // the window that must lie on one line to lock its slope (~16 samples)
+constexpr uint32_t kWinSpreadTicks = 8;    // one line's samples spread less than this; a glide inside bends more
+constexpr uint32_t kAcqTestEvery = 8;      // samples between lock tests
+constexpr uint32_t kFirstPointN = 16;      // samples behind a segment's first point: a quarter of a tick
+constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the count up to here, then every kPointTicks
+constexpr uint32_t kCountMax = 1u << 22;   // the residue sum stops here, and it stays in 32 bits
+// A point lies this far behind the newest sample (164 us): a departure is confirmed within ~25 us of samples, and
+// a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
+constexpr uint32_t kPointLagTicks = 8192;
+constexpr uint64_t kReanchorTicks = 1ull << 30;  // multiple of 8: the anchor moves along the exact line
+constexpr uint32_t kPreDepartureRaw = 8;         // ring entries before a departure that go to the host with it
+static_assert((kRingSamples & (kRingSamples - 1)) == 0 && kReanchorTicks % 8 == 0);
 
-// What reaches the host. AICLK is a PLL multiple of the crystal the refclk counts, so between DVFS transitions the
-// wall clock is one straight line in the refclk, and the host fits exactly that: every stride is sampled, but a
-// sample is emitted only when it carries information. A new run (a sample off the line the current run predicts)
-// opens with a burst of kBurst consecutive samples -- the host needs that many to settle a line -- then a sample per
-// kTailTicks until the run is kTailTicks * kTailSamples old, so its slope is fixed to a few ppm before the gaps grow
-// to a keepalive per kKeepaliveTicks (the line's intercept stays fed). The line is anchored on
-// the run's first sample, its slope in eighths of a wall tick per refclk tick comes from the burst's span, and the
-// anchor is renewed every kReanchorTicks so the multiple is never extrapolated far.
-struct RateRun {
-    uint64_t r0 = 0, w0 = 0;  // anchor
-    uint64_t born = 0;        // refclk of the run's first sample
-    uint64_t last_emit = 0;   // refclk of the last emitted sample
-    uint32_t k8 = 0;          // wall ticks per refclk tick in eighths; 0 while the burst is still measuring it
-    uint32_t n = 0;           // samples since the anchor
+struct Raw {
+    uint32_t r_lo, r_hi, w_lo, w_hi;
 };
-constexpr uint32_t kBurst = 16;
-constexpr uint64_t kTailTicks = 5000;        // 100 us
-constexpr uint64_t kTailSamples = 10;        // the tail ends 1 ms into the run
-constexpr uint64_t kKeepaliveTicks = 50000;  // 1 ms
-// Quantisation puts a sample at most ~40 wall ticks off the anchored line; a single 1/8 step walks 19 per stride.
-constexpr int64_t kOffLineTicks = 64;
-constexpr uint64_t kReanchorTicks = 50'000'000;  // 1 s of refclk
+inline volatile tt_l1_ptr Raw* ring() { return reinterpret_cast<volatile tt_l1_ptr Raw*>(kRingAddr); }
+inline uint64_t raw_r(const volatile tt_l1_ptr Raw& e) { return (static_cast<uint64_t>(e.r_hi) << 32) | e.r_lo; }
+inline uint64_t raw_w(const volatile tt_l1_ptr Raw& e) { return (static_cast<uint64_t>(e.w_hi) << 32) | e.w_lo; }
 
-inline __attribute__((always_inline)) void restart(RateRun& run, uint64_t r, uint64_t w) {
-    run.r0 = r;
-    run.w0 = w;
-    run.born = r;
-    run.last_emit = r;
-    run.k8 = 0;
-    run.n = 1;
+struct Model {
+    uint32_t k8 = 0;          // wall ticks per refclk tick in eighths; 0 while a slope is being acquired
+    uint64_t ra = 0, wa = 0;  // anchor: the line passes 8*wa + c8 eighths at ra
+    int32_t sum = 0;          // residues 8*(w - wa) - k8*(r - ra) summed over the counted samples
+    uint32_t n = 0;
+    int32_t c8 = 0;          // sum / n, refreshed at each doubling of n
+    uint64_t r_last_on = 0;  // newest sample on the line
+    uint32_t off = 0;        // consecutive samples off the line
+    uint64_t r_dep = 0;      // the first of them
+    uint64_t r_acq0 = 0;     // where the acquisition began
+    uint32_t acq_count = 0;
+    uint64_t r_lock = 0;  // where the segment's line begins: the oldest sample of the window that locked it
+    uint64_t r_last_point = 0;
+    uint32_t stride = 0;
+    uint32_t ring_n = 0;    // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
+    bool emit_raw = false;  // ring pushes also go to the host: from a departure to the new segment's first point
+};
+
+inline __attribute__((always_inline)) void write_raw(uint64_t r, uint64_t w) {
+    if (kp::ring_has_room(kp::CLOCK_RECORD_WORDS)) {
+        kp::ring_write_clock(
+            kp::ppfmt::CLOCK_LOCAL_REFCLK,
+            r,
+            static_cast<uint32_t>(w),
+            static_cast<uint32_t>(w >> 32),
+            0,
+            kp::ppfmt::CLOCK_LOCAL_RAW);
+    }
 }
 
-// Whether this sample goes to the host; updates the run.
-inline __attribute__((always_inline)) bool consider(RateRun& run, const eth_ptp::Instant& s) {
-    const uint64_t w = s.wall(), r = s.refclk;
-    if (run.n == 0) {
-        restart(run, r, w);
-        return true;
+inline __attribute__((always_inline)) void ring_push(Model& m, uint64_t r, uint64_t w) {
+    volatile tt_l1_ptr Raw& e = ring()[m.ring_n & (kRingSamples - 1)];
+    e.r_lo = static_cast<uint32_t>(r);
+    e.r_hi = static_cast<uint32_t>(r >> 32);
+    e.w_lo = static_cast<uint32_t>(w);
+    e.w_hi = static_cast<uint32_t>(w >> 32);
+    m.ring_n++;
+    if (m.emit_raw) {
+        write_raw(r, w);
     }
-    if (run.k8 == 0) {
-        run.n++;
-        if (run.n >= kBurst) {
-            const uint64_t dr = r - run.r0, dw = w - run.w0;
-            run.k8 = static_cast<uint32_t>((dw * 8u + dr / 2u) / dr);
+}
+
+// The line's wall at refclk r, in eighths of a tick.
+inline int64_t line_w8(const Model& m, uint64_t r) {
+    return 8 * static_cast<int64_t>(m.wa) + m.c8 + static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
+}
+
+// A point of the line at refclk r, never before the segment's own start: the host keeps segments disjoint in refclk.
+// Skipped without room, never waited for: the next one carries the same line.
+inline void write_point(Model& m, uint64_t r, uint32_t role) {
+    r = r > m.r_lock ? r : m.r_lock;
+    m.r_last_point = r;
+    if (!kp::ring_has_room(kp::CLOCK_RECORD_WORDS)) {
+        return;
+    }
+    const uint64_t w = static_cast<uint64_t>((line_w8(m, r) + 4) >> 3);
+    const uint32_t n = m.n < kCountMax ? m.n : kCountMax - 1;
+    kp::ring_write_clock(
+        kp::ppfmt::CLOCK_LOCAL_REFCLK,
+        r,
+        static_cast<uint32_t>(w),
+        static_cast<uint32_t>(w >> 32),
+        m.k8 | (n << 8),
+        role);
+}
+
+inline void begin_acquire(Model& m, uint64_t r_from) {
+    m.k8 = 0;
+    m.n = 0;
+    m.sum = 0;
+    m.r_acq0 = r_from;
+    m.acq_count = 0;
+    m.emit_raw = true;
+}
+
+// Locks the slope from the newest kWinTicks of the ring when those samples lie on one line: the slope from the
+// window's ends, then every entry's residue against it within one refclk tick of phase. A window across a glide
+// bends more than that and the test is retried after kAcqTestEvery samples.
+__attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
+    const uint32_t avail = m.ring_n < kRingSamples ? m.ring_n : kRingSamples;
+    uint32_t cnt = 0;
+    for (uint32_t i = 1; i <= avail; i++) {
+        if (r_now - raw_r(ring()[(m.ring_n - i) & (kRingSamples - 1)]) > kWinTicks) {
+            break;
         }
-        run.last_emit = r;
-        return true;
+        cnt = i;
     }
-    const int64_t pred =
-        static_cast<int64_t>(run.w0) + static_cast<int64_t>((static_cast<uint64_t>(run.k8) * (r - run.r0)) / 8u);
-    const int64_t off = static_cast<int64_t>(w) - pred;
-    if (off > kOffLineTicks || off < -kOffLineTicks) {
-        restart(run, r, w);
-        return true;
+    if (cnt < 8) {
+        return false;
     }
-    run.n++;
-    if (r - run.r0 > kReanchorTicks) {
-        run.r0 = r;
-        run.w0 = w;
+    const volatile tt_l1_ptr Raw& oldest = ring()[(m.ring_n - cnt) & (kRingSamples - 1)];
+    const volatile tt_l1_ptr Raw& newest = ring()[(m.ring_n - 1) & (kRingSamples - 1)];
+    const uint64_t r_old = raw_r(oldest), w_old = raw_w(oldest);
+    const uint32_t dr = static_cast<uint32_t>(raw_r(newest) - r_old);
+    const uint32_t dw = static_cast<uint32_t>(raw_w(newest) - w_old);
+    if (dr < kWinTicks / 2) {
+        return false;
     }
-    const uint64_t spacing = (r - run.born < kTailTicks * kTailSamples) ? kTailTicks : kKeepaliveTicks;
-    if (r - run.last_emit >= spacing) {
-        run.last_emit = r;
-        return true;
+    const uint32_t k8 = (8u * dw + dr / 2u) / dr;
+    int32_t lo = 0, hi = 0, sum = 0;
+    for (uint32_t i = 1; i <= cnt; i++) {
+        const volatile tt_l1_ptr Raw& e = ring()[(m.ring_n - i) & (kRingSamples - 1)];
+        const int32_t res = 8 * static_cast<int32_t>(static_cast<uint32_t>(raw_w(e) - w_old)) -
+                            static_cast<int32_t>(k8 * static_cast<uint32_t>(raw_r(e) - r_old));
+        lo = i == 1 || res < lo ? res : lo;
+        hi = i == 1 || res > hi ? res : hi;
+        sum += res;
     }
-    return false;
+    if (static_cast<uint32_t>(hi - lo) > 8u * kWinSpreadTicks) {
+        return false;
+    }
+    m.k8 = k8;
+    m.ra = r_old;
+    m.wa = w_old;
+    m.r_lock = r_old;
+    m.n = cnt;
+    m.sum = sum;
+    m.c8 = sum / static_cast<int32_t>(cnt);
+    m.r_last_on = r_now;
+    m.off = 0;
+    return true;
 }
+
+// A confirmed step: the old line closes at its last on-line sample, the ring's recent entries give the host the
+// approach to the departure, and the slope acquisition restarts from the departure.
+__attribute__((noinline, cold)) void step(Model& m) {
+    write_point(m, m.r_last_on, kp::ppfmt::CLOCK_LOCAL_CLOSE);
+    const uint32_t avail = m.ring_n < kRingSamples ? m.ring_n : kRingSamples;
+    const uint32_t back = avail < kPreDepartureRaw ? avail : kPreDepartureRaw;
+    for (uint32_t i = back; i >= 1; i--) {
+        const volatile tt_l1_ptr Raw& e = ring()[(m.ring_n - i) & (kRingSamples - 1)];
+        write_raw(raw_r(e), raw_w(e));
+    }
+    begin_acquire(m, m.r_dep);
+}
+
+inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w) {
+    if (++m.stride == kRingStride) {
+        m.stride = 0;
+        ring_push(m, r, w);
+    }
+    if (m.k8 == 0) {
+        if (r - m.r_acq0 >= kAcqTicks && ++m.acq_count >= kAcqTestEvery) {
+            m.acq_count = 0;
+            try_lock(m, r);
+        }
+        return;
+    }
+    const int64_t e = 8 * static_cast<int64_t>(w - m.wa) - static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
+    const int64_t d = e - m.c8;
+    if (d > 8 * kOffTicks || d < -8 * kOffTicks) {
+        if (m.off++ == 0) {
+            m.r_dep = r;
+        }
+        if (m.off >= kConfirm) {
+            step(m);
+        }
+        return;
+    }
+    m.off = 0;
+    m.r_last_on = r;
+    if (m.n < kCountMax) {
+        m.sum += static_cast<int32_t>(e);
+        m.n++;
+        if ((m.n & (m.n - 1)) == 0) {
+            m.c8 = m.sum / static_cast<int32_t>(m.n);
+            if (m.n >= kFirstPointN && m.n <= kLastDoublingN) {
+                write_point(m, r - kPointLagTicks, kp::ppfmt::CLOCK_LOCAL_POINT);
+                m.emit_raw = false;
+            }
+        }
+    }
+    if (r - m.r_last_point >= kPointTicks) {
+        write_point(m, r - kPointLagTicks, kp::ppfmt::CLOCK_LOCAL_POINT);
+    }
+    if (r - m.ra >= kReanchorTicks) {
+        m.ra += kReanchorTicks;
+        m.wa += static_cast<uint64_t>(m.k8) * (kReanchorTicks / 8u);
+    }
+}
+}  // namespace model
 
 // ---- tile offsets ------------------------------------------------------------------------------------------
 // Each Tensix tile keeps its own wall clock. They tick on the one AICLK, but the reset that starts them reaches the
@@ -462,39 +619,44 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
-    uint32_t strides = 0;
-    RateRun run;
-    uint64_t target = eth_ptp::read_cfr() + kStrideTicks;
+    // The loop reads three registers per sample -- refclk, wall, refclk -- and carries both clocks' high words
+    // itself from the low words' wraps, which at this rate no sweep can hide (86 s and 3.2 s periods).
+    const eth_ptp::Instant start = eth_ptp::read_instant();
+    uint32_t r_hi = static_cast<uint32_t>(start.refclk >> 32), prev_r_lo = static_cast<uint32_t>(start.refclk);
+    uint32_t w_hi = start.wall_hi, prev_w_lo = start.wall_lo;
+    model::Model m;
+    model::begin_acquire(m, start.refclk);
+    uint64_t r_sweep = start.refclk;
+    uint32_t iter = 0;
     while (true) {
-        // Pace in REFCLK, not wall clock: a cadence DVFS cannot stretch.
-        uint64_t rc = eth_ptp::read_cfr();
-        while (rc < target) {
-            rc = eth_ptp::read_cfr();
+        const uint32_t ra_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        const uint32_t w_lo = eth_ptp::rd(eth_ptp::kWallClockLo);
+        const uint32_t rb_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);
+        r_hi += rb_lo < prev_r_lo;
+        w_hi += w_lo < prev_w_lo;
+        prev_r_lo = rb_lo;
+        prev_w_lo = w_lo;
+        const uint64_t r = (static_cast<uint64_t>(r_hi) << 32) | rb_lo;
+        if (rb_lo != ra_lo) {
+            model::feed(m, r, (static_cast<uint64_t>(w_hi) << 32) | w_lo);
         }
-        target = rc + kStrideTicks;
+        if ((++iter & 255u) != 0u) {
+            continue;
+        }
         (*hb)++;
-
-        const eth_ptp::Instant smp = eth_ptp::read_instant();
-        if (consider(run, smp) && kp::ring_has_room(kp::CLOCK_RECORD_WORDS)) {
-            emit(smp);
-        }
-
         // Sweep on fill or on time.
         invalidate_l1_cache();
         const uint32_t fill = kp::profiler_control_buffer[kp::TAIL_INDEX] - kp::profiler_control_buffer[kp::HEAD_INDEX];
-        if (fill >= kShipWords || ++strides >= kMaxDeferStrides) {
-            strides = 0;
+        if (fill >= kShipWords || r - r_sweep >= kSweepTicks) {
+            r_sweep = r;
             sweep();
         }
-
         // Teardown: the relay stop word, written by the host at quiesce. The streaming control layout has no
         // terminate slot; this word is the only stop signal a resident eth kernel gets.
-        invalidate_l1_cache();
         if (*stop != 0u) {
             break;
         }
     }
-
     // Final sweep, then the relay done protocol: Drained once the last page is pushed, Done once every byte acked.
     sweep();
     *done = kp::kRelayDrainedWord;

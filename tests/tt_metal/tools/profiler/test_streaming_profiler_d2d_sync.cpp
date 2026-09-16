@@ -132,16 +132,36 @@ int main() {
 
     D2dSyncConsumer sync;
     sync.on_attach(ctx);
-    // Trackers: a LOCAL sample every 3 us on all three chips over one second, except that chip 1 goes silent from
-    // 0.40 to 0.75 s: longer than the refclk's 24-bit period, so a stream reassembled from its neighbours would come
-    // back a wrap off, and the check at 0.5 s lies inside the hole.
-    for (double tau = 0.0; tau < 1.0; tau += 3e-6) {
+    // Trackers: the pushers' model points, one per ms on all three chips over one second, each behind 4095 samples,
+    // except that chip 1 goes silent from 0.40 to 0.75 s: longer than the refclk's 24-bit period, so a stream
+    // reassembled from its neighbours would come back a wrap off, and the check at 0.5 s lies inside the hole. Chip
+    // 0's step: its first segment closes a microsecond before the switch, the next opens 50 us after it behind 64
+    // samples and settles behind 1024 a hundred microseconds later.
+    constexpr uint32_t kK8Fast = 216, kK8Slow = 215;  // 27.0 and 26.875 wall ticks per refclk tick, in eighths
+    const auto point = [&](int c, double tau, uint32_t k8, uint32_t n, bool close) {
+        sync.on_clock(sample(
+            static_cast<uint32_t>(c),
+            0,
+            PP_CLOCK_LOCAL_REFCLK,
+            k8 | (n << 8),
+            close ? PP_CLOCK_LOCAL_CLOSE : PP_CLOCK_LOCAL_POINT,
+            refclk(c, tau),
+            wall(c, tau)));
+    };
+    bool switched = false;
+    for (int k = 0; k < 1000; k++) {
+        const double tau = k * 1e-3;
+        if (!switched && tau > kTauSwitch) {
+            point(0, kTauSwitch - 1e-6, kK8Fast, 4095, true);
+            point(0, kTauSwitch + 50e-6, kK8Slow, 64, false);
+            point(0, kTauSwitch + 150e-6, kK8Slow, 1024, false);
+            switched = true;
+        }
         for (int c = 0; c < 3; c++) {
             if (c == 1 && tau > 0.40 && tau < 0.75) {
                 continue;
             }
-            sync.on_clock(
-                sample(static_cast<uint32_t>(c), 0, PP_CLOCK_LOCAL_REFCLK, 0, 0, refclk(c, tau), wall(c, tau)));
+            point(c, tau, c == 0 && tau > kTauSwitch ? kK8Slow : kK8Fast, 4095, false);
         }
     }
     // Two boot-time link bursts, 300 rounds each, 10 us apart. For (snd_dev, snd_lane) sender and (rcv_dev, rcv_lane)

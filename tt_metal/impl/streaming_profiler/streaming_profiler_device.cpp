@@ -62,11 +62,12 @@ constexpr uint32_t kCfgReserve = 8 * 1024;
 constexpr uint32_t kMiscBytes = 1024;  // done(64) + stop(64), with headroom
 constexpr uint32_t kPageSize = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
-// Idle-eth clock pushers: one socket per idle-eth core. A 4-5 word PP_CLOCK sample every 3 us is well under 1 MB/s,
-// so 1 MiB of host FIFO (a single 2 MiB-aligned carve of the host channel) is generous; the relays' budget is
-// untouched.
+// Idle-eth clock pushers: one socket per idle-eth core. A 5-word PP_CLOCK record per ms, plus a few dozen around each
+// DVFS step, is well under 1 MB/s even at hundreds of steps a second, so 1 MiB of host FIFO (a single 2 MiB-aligned
+// carve of the host channel) is generous; the relays' budget is untouched.
 constexpr uint32_t kEthFifoBytes = 1u << 20;
-constexpr uint32_t kEthStrideUs = 3;
+constexpr uint32_t kEthPointUs = 1000;   // the open segment's line reaches the host at least this often
+constexpr uint32_t kEthRingBytes = 2048;  // model::kRingSamples raw samples of 16 B (eth_clock_pusher.cpp)
 constexpr uint32_t kEthCtrlBytes = 128;  // done(+0)/heartbeat(+4) at 0, stop at 64
 // Pusher scratch for one linked core: its control vector, then its two ring images (BH eth has DM0 and DM1).
 constexpr uint32_t kEthScratchBytes = 4608;
@@ -291,14 +292,16 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
         eth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::PROFILER);
         const uint32_t ebase = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         const uint32_t esize = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-        const uint32_t need = kCfgReserve + kEthCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthTableBytes + kPageSize;
+        const uint32_t need =
+            kCfgReserve + kEthCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthTableBytes + kEthRingBytes + kPageSize;
         if (esize >= need) {
             eth_cfg_ = ebase + esize - kCfgReserve;
             eth_ctrl_ = eth_cfg_ - kEthCtrlBytes;
             eth_stage_ = (eth_ctrl_ - slot_bytes_) & ~(kPageSize - 1u);  // the pack pads assume a page-aligned slot
             eth_scratch_ = (eth_stage_ - kEthScratchBytes) & ~(kPageSize - 1u);
             eth_table_ = (eth_scratch_ - kEthTableBytes) & ~(kPageSize - 1u);
-            eth_ok_ = eth_table_ >= ebase;
+            eth_ring_ = eth_table_ - kEthRingBytes;
+            eth_ok_ = eth_ring_ >= ebase;
         }
         if (!eth_ok_) {
             log_warning(
@@ -743,14 +746,15 @@ void Devices::read_tile_offsets(DeviceCtx& ctx) {
             eth_table_);
         Program p = CreateProgram();
         const std::vector<uint32_t> ca = {
-            kEthStrideUs * 50u,
+            kEthPointUs * 50u,
             eth_cfg_,
             eth_stage_,
             eth_ctrl_,
             packed_xy(e.helper_virt),
             eth_scratch_,
             eth_table_,
-            1u};
+            1u,
+            eth_ring_};
         auto kid = CreateKernel(
             p,
             "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
@@ -949,7 +953,7 @@ bool Devices::launch_eth_pusher(
 
         auto program = std::make_unique<Program>(CreateProgram());
         const std::vector<uint32_t> ca = {
-            kEthStrideUs * 50u, eth_cfg_, eth_stage_, eth_ctrl_, packed_xy(e.virt), eth_scratch_, eth_table_, 0u};
+            kEthPointUs * 50u, eth_cfg_, eth_stage_, eth_ctrl_, packed_xy(e.virt), eth_scratch_, eth_table_, 0u, eth_ring_};
         auto kid = CreateKernel(
             *program,
             "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",

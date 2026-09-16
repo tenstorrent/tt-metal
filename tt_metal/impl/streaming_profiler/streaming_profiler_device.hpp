@@ -182,7 +182,7 @@ private:
     // ctrl words (done/heartbeat, stop), one frame slot, the linked-core scratch, the tile table.
     bool eth_ok_ = false;
     uint64_t eth_prof_l1_ = 0;
-    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0, eth_scratch_ = 0, eth_table_ = 0;
+    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0, eth_scratch_ = 0, eth_table_ = 0, eth_ring_ = 0;
     bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
     uint64_t aeth_prof_l1_ = 0;
     uint32_t aeth_unreserved_ = 0, aeth_unres_size_ = 0;  // ACTIVE_ETH unreserved region: the resident sync stop word
