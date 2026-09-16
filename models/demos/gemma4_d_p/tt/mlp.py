@@ -4,6 +4,7 @@
 """Tensor-parallel dense MLP for Gemma4-31B prefill."""
 
 import ttnn
+from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
@@ -78,10 +79,18 @@ class MLP:
 
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
-        gate = ttnn.linear(hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
-        gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
-        up = ttnn.linear(hidden_states, self.up_proj, compute_kernel_config=self.compute_kernel_config)
-        hidden = ttnn.mul(gate, up)
+        # Short-lived MLP activations in L1 when GEMMA4_PREFILL_L1_ACT=1, same as attention.
+        # down_proj's output stays DRAM (allreduce CB clash), so this only widens the memory_config
+        # of gate/up/hidden, which never reach a collective op.
+        act_mc = prefill_short_lived_memcfg()
+        gate = ttnn.linear(
+            hidden_states, self.gate_proj, memory_config=act_mc, compute_kernel_config=self.compute_kernel_config
+        )
+        gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh, memory_config=act_mc)
+        up = ttnn.linear(
+            hidden_states, self.up_proj, memory_config=act_mc, compute_kernel_config=self.compute_kernel_config
+        )
+        hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
         output = ttnn.linear(hidden, self.down_proj, compute_kernel_config=self.compute_kernel_config)

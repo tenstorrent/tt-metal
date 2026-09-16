@@ -24,9 +24,9 @@ Sources: `tt/common.py`, `tt/model_config.py`, `demo/text_demo_prefill.py`.
 | `GEMMA4_MAX_SEQ_LEN` | Test context length | Overrides the model's KV-cache context capacity in the demo. |
 | `GEMMA4_PREFILL_TRACE_REGION_SIZE` | `256_000_000` bytes | Device trace-memory reservation for demo fixtures; read at module import. |
 | `GEMMA4_PREFILL_LOAD_FULL_WEIGHTS` | `0` | Force full checkpoint/state-dict loading instead of the cache-first path. |
-| `GEMMA4_PREFILL_L1_ACT` | `0` | Use L1 instead of DRAM for short-lived attention activations selected by `prefill_short_lived_memcfg()`. |
+| `GEMMA4_PREFILL_L1_ACT` | `0` | Use L1 instead of DRAM for short-lived attention and MLP activations selected by `prefill_short_lived_memcfg()`. |
 
-Sources: `demo/text_demo_prefill.py`, `tt/attention/operations.py`.
+Sources: `demo/text_demo_prefill.py`, `tt/attention/operations.py`, `tt/mlp.py`.
 
 ## Communication
 
