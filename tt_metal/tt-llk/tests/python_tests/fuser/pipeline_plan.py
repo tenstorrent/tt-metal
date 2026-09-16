@@ -218,16 +218,8 @@ def _plan_node(
         node.block_tiles_x,
         node.block_tiles_y,
     )
-    indices = dict(plan.slots)
-    if role == "sfpu":
-        offsets = {
-            "dest": getattr(unit, "dst_index_out", None) or getattr(unit, "dest_idx", 0)
-        }
-        if unit.input_count == 2:
-            offsets.update(src0=unit.dst_index_in0, src1=unit.dst_index_in1)
-        for slot, offset in offsets.items():
-            indices[slot] = replace(indices[slot], base=indices[slot].base + offset)
     if role == "pack" and node.pack_l1_accumulation == L1Accumulation.Yes:
+        indices = dict(plan.slots)
         indices["out"] = SlotIndex(
             multipliers={
                 var: value
@@ -235,7 +227,8 @@ def _plan_node(
                 if var.startswith("tile_")
             }
         )
-    plan = apply_loop_spec(replace(plan, slots=indices), node.loop_spec)
+        plan = replace(plan, slots=indices)
+    plan = apply_loop_spec(plan, node.loop_spec)
     return PlannedNode(node, role, unit, planned.block_for(node), plan)
 
 

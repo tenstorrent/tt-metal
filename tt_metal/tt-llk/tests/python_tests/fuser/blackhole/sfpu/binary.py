@@ -27,9 +27,6 @@ class BinarySfpu(Sfpu):
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
-        dst_index_in0: int = 0,
-        dst_index_in1: int = 1,
-        dst_index_out: int = 0,
     ):
         if not operation in MathOperation.get_sfpu_binary_operations():
             raise ValueError(
@@ -38,9 +35,6 @@ class BinarySfpu(Sfpu):
         self.operation = operation
         self.approx_mode = approx_mode
         self.iterations = iterations
-        self.dst_index_in0 = dst_index_in0
-        self.dst_index_in1 = dst_index_in1
-        self.dst_index_out = dst_index_out
 
     def get_headers(self) -> List[str]:
         return [

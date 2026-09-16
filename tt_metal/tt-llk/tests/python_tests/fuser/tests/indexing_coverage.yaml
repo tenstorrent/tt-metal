@@ -275,7 +275,8 @@ operations:
         operation: "Exp"
         approximation_mode: false
         iterations: 32
-        dst_dest_tile_index: 0
+        loop:
+          dest: 0
     pack:
       - output: "sfpu_out"
         block_size: [32, 32]

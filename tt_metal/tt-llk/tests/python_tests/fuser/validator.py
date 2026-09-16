@@ -365,7 +365,6 @@ class UnarySfpuMathSchema(BaseModel):
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
     iterations: Literal[8, 32] = 8
-    dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
     loop: Optional[Union[str, LoopSchema]] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
@@ -395,7 +394,6 @@ class UnarySfpuMathSchema(BaseModel):
             self.operation,
             self.approximation_mode,
             self.iterations,
-            self.dst_dest_tile_index,
             self.fill_const_value,
         )
         return SfpuNode(sfpu=sfpu, loop_spec=self.loop)
@@ -420,9 +418,6 @@ class BinarySfpuMathSchema(BaseModel):
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
     iterations: Literal[8, 32] = 8
-    src1_dest_tile_index: Annotated[int, Field(ge=0)] = 0
-    src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
-    dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     loop: Optional[Union[str, LoopSchema]] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
@@ -451,9 +446,6 @@ class BinarySfpuMathSchema(BaseModel):
             self.operation,
             self.approximation_mode,
             self.iterations,
-            self.src1_dest_tile_index,
-            self.src2_dest_tile_index,
-            self.dst_dest_tile_index,
         )
         return SfpuNode(sfpu=sfpu, loop_spec=self.loop)
 

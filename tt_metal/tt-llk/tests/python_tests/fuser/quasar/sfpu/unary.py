@@ -26,7 +26,6 @@ class UnarySfpu(Sfpu):
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
-        dest_idx: int = 0,
         fill_const_value=5,
     ):
         if not operation in MathOperation.get_sfpu_unary_operations():
@@ -36,7 +35,6 @@ class UnarySfpu(Sfpu):
         self.iterations = iterations
         self.approx_mode = approx_mode
         self.operation = operation
-        self.dest_idx = dest_idx
         self.fill_const_value = fill_const_value
 
     def get_headers(self) -> List[str]:

@@ -41,50 +41,11 @@ operations:
         operation: "SfpuElwadd"
         approximation_mode: false
         iterations: 32
-        src1_dest_tile_index: 0
-        src2_dest_tile_index: 1
-        dst_dest_tile_index: 2
+        loop:
+          src0: 0
+          src1: 1
+          dest: 2
     pack:
       - output: "datacopy_out"
         block_size: [32, 128]
-        packer: "Packer"
-  - math:
-      - type: "Fpu"
-        block_size: [16, 128]
-        in0: "compact_r_input"
-        operation: "Datacopy"
-        unpacker: "UnpackerA"
-        math_fidelity: "LoFi"
-        unpack_to_dest: true
-      - type: "BinarySfpu"
-        block_size: [16, 32]
-        operation: "SfpuElwadd"
-        approximation_mode: false
-        iterations: 8
-        src1_dest_tile_index: 0
-        src2_dest_tile_index: 1
-        dst_dest_tile_index: 2
-    pack:
-      - output: "compact_r_out"
-        block_size: [16, 128]
-        packer: "Packer"
-  - math:
-      - type: "Fpu"
-        block_size: [32, 64]
-        in0: "compact_c_input"
-        operation: "Datacopy"
-        unpacker: "UnpackerA"
-        math_fidelity: "LoFi"
-        unpack_to_dest: true
-      - type: "BinarySfpu"
-        block_size: [32, 16]
-        operation: "SfpuElwadd"
-        approximation_mode: false
-        iterations: 8
-        src1_dest_tile_index: 0
-        src2_dest_tile_index: 1
-        dst_dest_tile_index: 2
-    pack:
-      - output: "compact_c_out"
-        block_size: [32, 64]
         packer: "Packer"
