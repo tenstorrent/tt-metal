@@ -127,6 +127,12 @@ PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 PRODUCER_LOG="${MR_DIR}/producer.log"
 mkdir -p "${PCC_DIR}" "${RANKLOGS}"
+# ttrun writes generated/ttrun/<id>/ relative to its own CWD and hands the ranks that path as an
+# absolute one. Launched from TT_METAL_HOME, rank 0 lands rank_bindings.yaml on its own node, where
+# the launcher -- a different machine in CI -- cannot see it and calls Phase 1 silently failed.
+# MR_DIR is the shared scratch both sides mount, so ttrun bookkeeping belongs under it.
+TTRUN_CWD="${MR_DIR}/ttrun-cwd"
+mkdir -p "${TTRUN_CWD}"
 
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 TCP_IFACE="${PREFILL_TCP_IFACE:-ens5f0np0}"
@@ -174,6 +180,7 @@ cleanup() {
 # cleanup can reach the other hosts directly.
 trap cleanup EXIT INT TERM
 
+cd "${TTRUN_CWD}"
 python3 "${TTRUN_PY}" \
   --skip-executable-check \
   --tcp-interface "${TCP_IFACE}" \
@@ -209,6 +216,7 @@ python3 "${TTRUN_PY}" \
     export LOGURU_LEVEL=INFO; \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
 RUNNER_PID=$!
+cd "${TT_METAL_HOME}"
 
 # Wait for the table. The REAL guard is runner liveness below -- a dead runner is detected in seconds --
 # so the deadline only bounds a silent hang and must not be mistaken for a load-time budget. Sizing it
@@ -251,15 +259,18 @@ PY
 # c10u14). So the rankfile is replayed through --map-by rankfile:file= to pin placement explicitly,
 # with --host kept alongside because a rankfile alone is rejected as "host not allocated". A CI head
 # node that happens to be ttrun's rank 0 masks this; a reversed assignment does not.
-RANKFILE=$(ls -t "${TT_METAL_HOME}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
-[ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TT_METAL_HOME}/generated/ttrun/*/rankfile" >&2; exit 1; }
+RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
+[ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile" >&2; exit 1; }
 PRODUCER_HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); sub(/[[:space:]].*/,"",h); print n" "h}' "${RANKFILE}" \
   | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
 [ -n "${PRODUCER_HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}" >&2; exit 1; }
 # RELATIVE path, deliberately: PRRTE's --map-by qualifier parser rejects an absolute one with
 # "The map-by directive contains an unrecognized qualifier: file=/..." (while listing file= as valid,
-# so the message points nowhere). Relative to --wdir, which is TT_METAL_HOME for both launches.
-RANKFILE_REL="${RANKFILE#"${TT_METAL_HOME}"/}"
+# so the message points nowhere). It resolves against TT_METAL_HOME, which is both the launch CWD here
+# and the --wdir below; the rankfile itself lives on shared scratch outside it, so copy it in.
+mkdir -p "${TT_METAL_HOME}/generated/ttrun"
+cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
+RANKFILE_REL="generated/ttrun/producer_rankfile"
 echo "producer host order from tt-run discovery: ${PRODUCER_HOSTS} (PREFILL_HOSTS was ${HOSTS})"
 
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
