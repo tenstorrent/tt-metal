@@ -4,6 +4,7 @@
 
 #include "dispatch.hpp"
 
+#include <algorithm>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
 #include "impl/buffers/semaphore.hpp"
@@ -116,6 +117,11 @@ void DispatchKernel::GenerateStaticConfigs() {
     static_config_.dispatch_telemetry_control_addr = my_dispatch_constants.get_device_command_queue_addr(
         CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, cq_id_);
 
+    // Must match the host's get_packed_write_max_unicast_sub_cmds(): the worker fan-out, but never below
+    // one sub-command per CQ so event records can reach every dispatch core on a tiny worker grid.
+    const uint32_t packed_write_max_unicast_sub_cmds = std::max<uint32_t>(
+        device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y,
+        device_->num_hw_cqs());
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
@@ -143,8 +149,7 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.prefetch_h_max_credits = 0;                   // unused prefetch_downstream_buffer_pages
 
-        static_config_.packed_write_max_unicast_sub_cmds =
-            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+        static_config_.packed_write_max_unicast_sub_cmds = packed_write_max_unicast_sub_cmds;
         static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
@@ -195,8 +200,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = 0;  // Unused
 
         static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
-        static_config_.packed_write_max_unicast_sub_cmds =
-            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+        static_config_.packed_write_max_unicast_sub_cmds = packed_write_max_unicast_sub_cmds;
         static_config_.dispatch_s_sync_sem_base_addr = 0;       // Unused
         static_config_.max_num_worker_sems = 1;                 // Used for array sizing, set to 1 even if unused
         static_config_.max_num_go_signal_noc_data_entries = 1;  // Used for array sizing, sset to 1 even if unused
@@ -229,8 +233,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
 
-        static_config_.packed_write_max_unicast_sub_cmds =
-            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
+        static_config_.packed_write_max_unicast_sub_cmds = packed_write_max_unicast_sub_cmds;
         static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
