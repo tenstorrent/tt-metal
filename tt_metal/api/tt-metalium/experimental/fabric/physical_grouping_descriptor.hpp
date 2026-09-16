@@ -222,36 +222,34 @@ public:
     // Get all groupings
     std::vector<GroupingInfo> get_all_groupings() const;
 
-    // Main matching algorithm: Find valid groupings for MGD instances
-    // Returns a nested map: instance_type -> instance_name -> vector of valid GroupingInfo matches
-    // There can be multiple valid groupings for each MGD instance
-    // Requires a PhysicalSystemDescriptor reference for validation/filtering
-    // pinnings: optional many-to-many pinning groups keyed by local mesh id (same shape as
-    // MeshGraphDescriptor::get_pinnings()), applied during PGD<->MGD topology matching
-    // require_placement: when true (the default) a mesh that cannot be placed on the PSD is fatal, since the
-    // caller is discovering footprints and has nothing to fall back on. Callers that already have a rank-bound
-    // physical graph and only want preferred pinnings pass false: the mesh is simply omitted from the result.
+    // PGD<->MGD matching for one descriptor: valid PGD groupings per MGD instance (PGD commits only).
+    // Returns instance_type -> instance_name -> vector of GroupingInfo. pinnings use local mesh ids (same
+    // shape as MeshGraphDescriptor::get_pinnings()). require_placement: when true (default), a mesh with
+    // no placeable PGD match is fatal for footprint discovery; rank-bound pinning enrichment passes false.
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
         bool require_placement = true) const;
 
-    // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
-    // Includes torus wrap-around edges when the MGD device topology uses RING dimensions.
-    // Intended for use by topology_mapper_utils when no PGD grouping successfully embeds into the PSD.
-    static std::vector<GroupingInfo> get_mgd_mesh_groupings_for_placement(
-        const MeshGraphDescriptor& mesh_graph_descriptor);
+    // MGD-native mesh groupings that embed on the PSD (torus wraps when the MGD uses RING dims). Pair of
+    // get_valid_groupings_for_mgd; SAT placement adds these to the candidate pool only after PGD variants
+    // are exhausted without a joint placement.
+    ValidGroupingsMap get_mgd_placement_fallbacks_for_mgd(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
 
-    // Run get_valid_groupings_for_mgd for every MGD and merge into one map. Keys are prefixed "mgd{i}_"
-    // so the same logical instance name in different descriptors does not collide. For each (type,
-    // instance-name) tuple, drains each MGD's vector in round-robin (mgd0 head, mgd1 head, …, repeat)
-    // into the corresponding mgd{i}_ prefixed bucket. Contents per prefixed key match sequential per-MGD merge.
-    // mesh_graph_descriptors: const reference to the caller's vector (no copy of the container).
-    // per_mgd_pinnings: optional pinning constraints keyed by each MGD's LOCAL mesh id, parallel to
-    // mesh_graph_descriptors; entry i (if present) is forwarded to that MGD's get_valid_groupings_for_mgd so the
-    // PGD<->MGD match honours the pins. An empty vector (or a std::nullopt entry) means no pins for that MGD.
+    // Same as get_valid_groupings_for_mgd for every MGD, merged into one map. Keys are prefixed "mgd{i}_"
+    // when there is more than one descriptor. per_mgd_pinnings[i] is forwarded to MGD i (local mesh ids).
     ValidGroupingsMap get_valid_groupings_for_mgds(
+        const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
+        const;
+
+    // Pair of get_valid_groupings_for_mgds; same key prefixing and deferred SAT pool insertion as above.
+    ValidGroupingsMap get_mgd_placement_fallbacks_for_mgds(
         const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
@@ -285,15 +283,15 @@ public:
     std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> find_any_in_psd(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
         std::size_t max_solutions = 1,
         const std::optional<MappingConstraints<LogicalChipId, tt::tt_metal::AsicID>>& extra_constraints = std::nullopt,
         std::vector<std::string>* errors_out = nullptr) const;
 
-    // Same, but builds the flat ASIC adjacency graph from the PSD itself.
+    // Same, with a prebuilt flat ASIC adjacency graph from the PSD.
     std::vector<MappingResult<LogicalChipId, tt::tt_metal::AsicID>> find_any_in_psd(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
         std::size_t max_solutions = 1,
         const std::optional<MappingConstraints<LogicalChipId, tt::tt_metal::AsicID>>& extra_constraints = std::nullopt,
         std::vector<std::string>* errors_out = nullptr) const;
@@ -345,20 +343,46 @@ public:
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::size_t node_budget = 0,
-        PlacementSolveStats* stats_out = nullptr) const;
+        PlacementSolveStats* stats_out = nullptr,
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
 
+    // Multi-MGD overload; per_mgd_pinnings forwarded for MGD placement fallback embed checks.
     std::vector<PsdPlacement> solve_adjacency_guided_placement(
         const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::size_t node_budget = 0,
-        PlacementSolveStats* stats_out = nullptr) const;
+        PlacementSolveStats* stats_out = nullptr,
+        const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
+        const;
+
+    // Same as solve_adjacency_guided_placement, but returns up to max_solutions footprint-distinct seatings.
+    // max_solutions defaults to 1. 0 means as many as exist, capped by the caller's enumeration limit
+    // (see kPhysicalMultiMeshGraphEnumerationCap in topology_mapper_utils.hpp).
+    std::vector<std::vector<PsdPlacement>> solve_adjacency_guided_placement_n(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        const ValidGroupingsMap& valid_groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        std::size_t max_solutions = 1,
+        std::size_t node_budget = 0,
+        PlacementSolveStats* stats_out = nullptr,
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
+
+    std::vector<std::vector<PsdPlacement>> solve_adjacency_guided_placement_n(
+        const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
+        const ValidGroupingsMap& valid_groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        std::size_t max_solutions = 1,
+        std::size_t node_budget = 0,
+        PlacementSolveStats* stats_out = nullptr,
+        const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
+        const;
 
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
 
-    // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
+    // Same, with PSD validation/filtering when flattening.
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
 

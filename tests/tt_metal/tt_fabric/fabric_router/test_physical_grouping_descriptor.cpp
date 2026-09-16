@@ -57,9 +57,9 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
 
 // Splits a committed list into the PGD layouts and the MGD fallback.
 //
-// get_valid_groupings_for_mgd offers the MGD's own topology last, under the mesh descriptor's own name, after
-// any PGD groupings that committed. It is a fallback rather than a layout and carries no chip -> slot pinning,
-// so a test reading a committed list for where chips landed has to set it aside first.
+// get_mgd_placement_fallbacks_for_mgd returns the MGD's own topology when it embeds on the PSD. It is not mixed
+// into get_valid_groupings_for_mgd; SAT placement adds it to the candidate pool only after PGD variants are
+// exhausted. Tests that inspect PGD commits use pgd_layouts only; MGD fallbacks are queried separately.
 struct CommittedGroupings {
     std::vector<GroupingInfo> pgd_layouts;     // In priority order, as the matcher committed them.
     std::optional<GroupingInfo> mgd_fallback;  // The MGD's own topology, when it was offered at all.
@@ -2122,13 +2122,13 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_SingleGalaxy4
         }
     }
 
-    // A 4x8 (32-ASIC) mesh matches both the MESH and a torus variant of the 4x8_Mesh grouping → 2 matches,
-    // and the MGD's own topology is offered after them, so the committed list holds three entries.
-    ASSERT_EQ(total_groupings, 3u)
-        << "Should have two valid grouping matches (mesh + torus variant) plus the MGD fallback";
+    // A 4x8 (32-ASIC) mesh matches both the MESH and a torus variant of the 4x8_Mesh grouping → 2 PGD commits.
+    ASSERT_EQ(total_groupings, 2u) << "Should have two valid PGD grouping matches (mesh + torus variant)";
     const auto committed = split_off_mgd_fallback(valid_groupings.at("MESH").at("M0"), "M0");
     EXPECT_EQ(committed.pgd_layouts.size(), 2u) << "the mesh and its torus variant are the PGD matches";
-    EXPECT_TRUE(committed.mgd_fallback.has_value()) << "the MGD's own topology should be offered after them";
+    EXPECT_FALSE(committed.mgd_fallback.has_value()) << "MGD fallback is not in get_valid_groupings_for_mgd";
+    const auto mgd_fallbacks = pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd);
+    ASSERT_EQ(mgd_fallbacks.at("MESH").at("M0").size(), 1u);
 
     // Check that we have matches for MESH instances
     ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
@@ -2599,13 +2599,10 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     EXPECT_TRUE(found_single_host_mesh) << "Expected 4x4_Mesh (single-host two-tray) grouping to match";
     EXPECT_TRUE(found_split_host) << "Expected 4x4_SplitHost grouping to be committed alongside 4x4_Mesh";
 
-    // The committed list ends with the MGD fallback, which carries no pinning, so only the PGD layouts are
-    // placed below: a placement keeps its grouping's pinning but not the grouping, leaving no way to tell
-    // an unpinned placement from a pinned one afterwards.
     const auto committed = split_off_mgd_fallback(valid_groupings.at("MESH").at("M0"), "M0");
     ASSERT_FALSE(committed.pgd_layouts.empty()) << "M0 should have at least one matching PGD grouping";
-    ASSERT_TRUE(committed.mgd_fallback.has_value())
-        << "the MGD's own topology should be offered alongside the PGD groupings that committed";
+    EXPECT_FALSE(committed.mgd_fallback.has_value());
+    EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
     // TODO(plan 3 §8(a)): rewrite onto solve_adjacency_guided_placement when find_all_in_psd is deleted.
     const auto placements = pgd.find_all_in_psd(committed.pgd_layouts, psd);
@@ -3231,19 +3228,11 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
             << " this split on a machine cut by column, and it committed " << committed_on_split.size()
             << " grouping(s)";
 
-        // The same rule reaches the MGD fallback, the last-resort variant offered under the mesh
-        // descriptor's own name. It is the MGD's own topology, so it carries the declared split directly,
-        // and a split laid across the machine's boundary leaves it unplaceable and so unoffered. Were it
-        // exempt, refusing the PGD grouping would achieve nothing: the fallback would seat the same mesh
-        // with the same rank straddling the same two hosts.
-        bool fallback_offered_on_split = false;
-        for (const auto& [preset, by_instance] : on_split) {
-            for (const auto& [instance, groupings] : by_instance) {
-                for (const auto& grouping : groupings) {
-                    fallback_offered_on_split = fallback_offered_on_split || grouping.name == "M0";
-                }
-            }
-        }
+        // The same rule applies to the MGD placement fallback (queried separately from PGD commits).
+        const auto fallbacks_on_split = pgd.get_mgd_placement_fallbacks_for_mgd(mgd, machine_cut_by_column);
+        const bool fallback_offered_on_split = fallbacks_on_split.contains("MESH") &&
+                                               fallbacks_on_split.at("MESH").contains("M0") &&
+                                               !fallbacks_on_split.at("MESH").at("M0").empty();
         EXPECT_EQ(fallback_offered_on_split, seats_on_this_machine)
             << host_dims << ": the MGD fallback should be " << (seats_on_this_machine ? "offered" : "withheld")
             << " on a machine cut by column";
@@ -5531,20 +5520,16 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
 
-    // get valid groupings
-    // The committed grouping's name is what separates the two paths: a committed PGD grouping keeps
-    // its own flattened name, while the MGD fallback grouping is named after the mesh instance.
-    // PGD is first (preferred); MGD is appended last when it also embeds, so the list is not a
-    // replacement of one by the other.
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
     const auto& committed = valid_groupings.at("MESH").at("M0");
     std::vector<std::string> committed_names;
     for (const auto& grouping : committed) {
         committed_names.push_back(grouping.name);
     }
-    EXPECT_THAT(committed_names, ::testing::ElementsAre("1x2_Mesh_flat", "M0"))
-        << "the PGD grouping embeds into the PSD, so it should be committed first, with the MGD "
-           "grouping offered last as fallback";
+    EXPECT_THAT(committed_names, ::testing::ElementsAre("1x2_Mesh_flat"))
+        << "get_valid_groupings_for_mgd returns PGD commits only";
+    EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty())
+        << "MGD fallback is offered separately when it embeds on the PSD";
 
     // Whichever path commits, the grouping carries the shape as its own adjacency graph, and that
     // is what placement then has to embed: two nodes, joined.
@@ -5638,8 +5623,9 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     for (const auto& grouping : committed) {
         committed_names.push_back(grouping.name);
     }
-    ASSERT_THAT(committed_names, ::testing::ElementsAre("1x2_Mesh_OnePair_flat", "M0"))
-        << "both must be on the list, PGD first, or this is not a priority test";
+    ASSERT_THAT(committed_names, ::testing::ElementsAre("1x2_Mesh_OnePair_flat"))
+        << "get_valid_groupings_for_mgd must list PGD commits only";
+    EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
     // build logical
     const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
@@ -5778,20 +5764,18 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
             << "the same seating LinkedMeshesPlaceAdjacentlyOnLine gets from the unpinned grouping";
     }
 
-    // Only now, the grouping list that has to be there for the above to be reachable: the pinned PGD
-    // grouping AND the MGD grouping, so the search has something to fall back to for the instance the
-    // pinned one cannot serve. A single entry means one of the two was dropped at commit time.
     const auto& committed = valid_groupings.at("MESH").at("M0");
     std::vector<std::string> committed_names;
     for (const auto& grouping : committed) {
         committed_names.push_back(grouping.name);
     }
-    EXPECT_THAT(committed_names, ::testing::UnorderedElementsAre("1x2_Mesh_OnePair_flat", "M0"))
-        << "both the committed PGD grouping and the MGD grouping should be available as variants";
+    EXPECT_THAT(committed_names, ::testing::ElementsAre("1x2_Mesh_OnePair_flat"));
+    const auto mgd_fallbacks = pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd);
+    ASSERT_EQ(mgd_fallbacks.at("MESH").at("M0").size(), 1u);
 
-    // Either way round, each describes the same 1x2 shape, so placement has the same adjacency graph
-    // to embed: two nodes, joined.
-    for (const auto& grouping : committed) {
+    std::vector<GroupingInfo> pgd_and_mgd_variants = committed;
+    pgd_and_mgd_variants.push_back(mgd_fallbacks.at("MESH").at("M0").front());
+    for (const auto& grouping : pgd_and_mgd_variants) {
         EXPECT_EQ(grouping.adjacency_graph.get_nodes().size(), 2u) << "grouping " << grouping.name;
         EXPECT_THAT(grouping.adjacency_graph.get_neighbors(0u), ::testing::ElementsAre(1u));
         EXPECT_THAT(grouping.adjacency_graph.get_neighbors(1u), ::testing::ElementsAre(0u));

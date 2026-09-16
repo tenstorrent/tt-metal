@@ -56,6 +56,9 @@ private:
 
 // Internal SAT function declarations — implemented in topology_solver_sat.cpp.
 
+// At-most-one on listed positive literals: pairwise for small n, else Sinz sequential encoding.
+void topology_sat_add_at_most_one(TopologySatSolver& solver, const std::vector<int>& lits);
+
 bool topology_sat_encode_hard_constraints(
     TopologySatSolver& solver,
     const TopologySatGraphView& graph_data,
@@ -68,6 +71,19 @@ bool topology_sat_decode_hard_solution(
 
 bool topology_sat_add_blocking_clause_for_mapping(
     TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes);
+
+// indicator <=> OR_p (a_p & b_p) for positive seat/assign literals (Tseitin AND-of-pair OR).
+bool topology_sat_define_indicator_as_or_of_pairwise_and(
+    TopologySatSolver& solver, int indicator, const std::vector<std::pair<int, int>>& pair_lits);
+
+// At-least-k on listed literals; optional extra_lit guards the constraint (extra_lit => at-least-k).
+bool topology_sat_add_at_least_k_literals(
+    TopologySatSolver& solver,
+    const std::vector<int>& lits,
+    std::size_t k,
+    std::size_t max_combination_clauses,
+    std::string* trivial_reason,
+    int extra_lit = 0);
 
 // Template overload: converts GraphIndexData/ConstraintIndexData to views and delegates.
 // TODO: drop the views (see TopologySatGraphView in topology_solver.hpp) once SAT can take a

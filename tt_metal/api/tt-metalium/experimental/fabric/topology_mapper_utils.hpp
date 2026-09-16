@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -500,6 +501,22 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const std::optional<PinningsByMesh>& pinnings = std::nullopt);
 
+/** Default cap on distinct physical graphs from adjacency-guided placement when max_graphs is 0. */
+inline constexpr std::size_t kPhysicalMultiMeshGraphEnumerationCap = 64;
+
+/**
+ * @brief Build up to max_graphs distinct physical multi-mesh graphs from adjacency-guided placement.
+ *
+ * max_graphs defaults to 1 (same as build_physical_multi_mesh_adjacency_graph). 0 means "as many as exist"
+ * up to kPhysicalMultiMeshGraphEnumerationCap. Footprint-distinct seatings only.
+ */
+std::vector<PhysicalMultiMeshGraph> build_physical_multi_mesh_adjacency_graph_n(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const std::optional<PinningsByMesh>& pinnings = std::nullopt,
+    std::size_t max_graphs = 1);
+
 /**
  * @brief Build a physical multi-mesh adjacency graph using multiple MGDs (one PSD, one PGD)
  *
@@ -516,6 +533,14 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
     const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings = {});
+
+/** Multi-MGD overload of build_physical_multi_mesh_adjacency_graph_n (see single-MGD variant). */
+std::vector<PhysicalMultiMeshGraph> build_physical_multi_mesh_adjacency_graph_n(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings = {},
+    std::size_t max_graphs = 1);
 
 /**
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
@@ -709,6 +734,35 @@ private:
     bool host_cap_relaxed_ = false;
     // Intra-mesh forbid/retry state
     std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
+};
+
+/**
+ * @brief Round-robin MultiMeshSolutionEnumerator over several physical multi-mesh graphs.
+ *
+ * Each next() tries the next physical graph's enumerator in cyclic order until one yields a completed
+ * mapping, or all enumerators are exhausted in one full pass.
+ */
+class MultiPhysicalMultiMeshSolutionEnumerator {
+public:
+    MultiPhysicalMultiMeshSolutionEnumerator(
+        const LogicalMultiMeshGraph& adjacency_map_logical,
+        const std::vector<PhysicalMultiMeshGraph>& adjacency_maps_physical,
+        const TopologyMappingConfig& config,
+        bool unique_shapes = false,
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+
+    MultiPhysicalMultiMeshSolutionEnumerator(const MultiPhysicalMultiMeshSolutionEnumerator&) = delete;
+    MultiPhysicalMultiMeshSolutionEnumerator& operator=(const MultiPhysicalMultiMeshSolutionEnumerator&) = delete;
+
+    std::optional<TopologyMappingResult> next();
+
+    std::size_t solutions_returned() const { return emitted_; }
+
+private:
+    std::vector<std::unique_ptr<MultiMeshSolutionEnumerator>> per_physical_;
+    std::size_t next_physical_index_ = 0;
+    std::size_t emitted_ = 0;
 };
 
 /** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
