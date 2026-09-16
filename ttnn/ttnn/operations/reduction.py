@@ -2,13 +2,42 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple, Union, Optional
+from typing import NamedTuple, Tuple, Union, Optional
 
 import ttnn
 from ttnn.operations.golden_common import golden_compute_gradients, golden_prepare_grad_inputs
 
 
+class _ReductionGoldenSpec(NamedTuple):
+    """Per-op knowledge mapping a TTNN reduction onto its PyTorch reference."""
+
+    torch_name: str
+    # torch.max/min accept a single axis; multi-axis TTNN reductions map to amax/amin instead.
+    multi_axis_torch_name: Optional[str] = None
+    # Dimensional torch.max/min return (values, indices), while TTNN returns values only.
+    values_only: bool = False
+    # TTNN exposes correction explicitly, so the golden must not fall back to PyTorch's default.
+    passes_correction: bool = False
+    # PyTorch has no unsigned argmax kernel; widening preserves the ordering of every value.
+    widen_unsigned: bool = False
+    # argmax reduces the flattened tensor when dim is None instead of expanding to all dims.
+    dim_none_means_flatten: bool = False
+
+
+_REDUCTION_GOLDEN_SPECS = {
+    "mean": _ReductionGoldenSpec("mean"),
+    "sum": _ReductionGoldenSpec("sum"),
+    "max": _ReductionGoldenSpec("max", multi_axis_torch_name="amax", values_only=True),
+    "min": _ReductionGoldenSpec("min", multi_axis_torch_name="amin", values_only=True),
+    "var": _ReductionGoldenSpec("var", passes_correction=True),
+    "std": _ReductionGoldenSpec("std", passes_correction=True),
+    "argmax": _ReductionGoldenSpec("argmax", widen_unsigned=True, dim_none_means_flatten=True),
+}
+
+
 def _create_golden_function(torch_function_name):
+    spec = _REDUCTION_GOLDEN_SPECS[torch_function_name]
+
     def golden_function(
         input_tensor: ttnn.Tensor,
         dim: Optional[Union[int, Tuple[int]]] = None,
@@ -18,32 +47,28 @@ def _create_golden_function(torch_function_name):
     ):
         import torch
 
-        torch_function = getattr(torch, torch_function_name)
-        if torch_function_name == "argmax" and input_tensor.dtype in (torch.uint16, torch.uint32):
-            # PyTorch has no unsigned argmax kernel; widening preserves the ordering of every value.
+        if spec.widen_unsigned and input_tensor.dtype in (torch.uint16, torch.uint32):
             input_tensor = input_tensor.to(torch.int64)
 
         function_kwargs = {"keepdim": keepdim}
-        if torch_function_name in ("std", "var") and correction is not None:
-            # TTNN exposes correction explicitly, so the golden must not fall back to PyTorch's default.
+        if spec.passes_correction and correction is not None:
             function_kwargs["correction"] = correction
 
         if dim is None:
-            if torch_function_name == "argmax":
-                return torch_function(input_tensor, dim=None, **function_kwargs)
+            if spec.dim_none_means_flatten:
+                return getattr(torch, spec.torch_name)(input_tensor, dim=None, **function_kwargs)
             if not keepdim:
+                # When dim is None, PyTorch reduces over all dimensions; keepdim is not accepted.
                 function_kwargs.pop("keepdim")
-                return torch_function(input_tensor, **function_kwargs)
+                return getattr(torch, spec.torch_name)(input_tensor, **function_kwargs)
+            # For keepdim to work, we need to specify all dimensions explicitly.
             dim = tuple(range(len(input_tensor.shape)))
 
-        if torch_function_name in ("max", "min") and isinstance(dim, (tuple, list)):
-            # Multi-axis TTNN max/min maps to amax/amin because torch.max/min only accepts one axis.
-            torch_function = torch.amax if torch_function_name == "max" else torch.amin
-            return torch_function(input_tensor, dim=dim, **function_kwargs)
+        if spec.multi_axis_torch_name is not None and isinstance(dim, (tuple, list)):
+            return getattr(torch, spec.multi_axis_torch_name)(input_tensor, dim=dim, **function_kwargs)
 
-        output = torch_function(input_tensor, dim=dim, **function_kwargs)
-        if torch_function_name in ("max", "min"):
-            # Dimensional torch max/min returns values and indices, while TTNN returns values only.
+        output = getattr(torch, spec.torch_name)(input_tensor, dim=dim, **function_kwargs)
+        if spec.values_only:
             output = output.values
         return output
 

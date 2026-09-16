@@ -286,6 +286,7 @@ def _sdpa_decode_reference(
     attention_sink=None,
     scale=None,
     sliding_window_size=None,
+    **_,
 ):
     import torch
 
@@ -316,36 +317,8 @@ def _sdpa_decode_reference(
     return output.permute(2, 0, 1, 3)
 
 
-def _golden_function_sdpa_decode(
-    input_tensor_q,
-    input_tensor_k,
-    input_tensor_v,
-    *,
-    is_causal=True,
-    attn_mask=None,
-    cur_pos=None,
-    cur_pos_tensor=None,
-    attention_sink=None,
-    scale=None,
-    sliding_window_size=None,
-    **_,
-):
-    return _sdpa_decode_reference(
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        is_causal=is_causal,
-        attn_mask=attn_mask,
-        cur_pos=cur_pos,
-        cur_pos_tensor=cur_pos_tensor,
-        attention_sink=attention_sink,
-        scale=scale,
-        sliding_window_size=sliding_window_size,
-    )
-
-
 ttnn.attach_golden_function(
-    ttnn.transformer.scaled_dot_product_attention_decode, golden_function=_golden_function_sdpa_decode
+    ttnn.transformer.scaled_dot_product_attention_decode, golden_function=_sdpa_decode_reference
 )
 
 

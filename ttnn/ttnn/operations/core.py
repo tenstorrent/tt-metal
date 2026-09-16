@@ -517,14 +517,22 @@ ttnn.attach_golden_function(ttnn.allocate_tensor_on_device, golden_function=_gol
 ttnn.attach_golden_function(ttnn.allocate_tensor_on_host, golden_function=_golden_function_allocate_tensor)
 
 
-def _make_copy_transfer_golden_function(source_arg_index, destination_arg_index):
-    """Build a golden for a void host<->device copy that keeps the destination's stored golden in sync."""
+def _make_copy_transfer_golden_function(source_name, destination_name):
+    """Build a golden for a void host<->device copy that keeps the destination's stored golden in sync.
 
-    def golden_function(*args, _ttnn_global_golden=False, **__):
+    Args are resolved by nanobind kwarg name first, falling back to the idiomatic positional order
+    (source, destination); both bindings declare source as arg 0 and destination as arg 1.
+    """
+
+    def golden_function(*args, _ttnn_global_golden=False, **kwargs):
         # The op returns None, so the golden must also return None to preserve the output contract.
         # Only the global golden path passes tensors that alias the stored golden graph; mutate there.
         if _ttnn_global_golden:
-            args[destination_arg_index].copy_(args[source_arg_index])
+            source = kwargs.get(source_name, args[0] if len(args) > 0 else None)
+            destination = kwargs.get(destination_name, args[1] if len(args) > 1 else None)
+            if source is None or destination is None:
+                raise ValueError(f"copy transfer golden requires {source_name} and {destination_name}")
+            destination.copy_(source)
         return None
 
     golden_function._ttnn_mutates_global_inputs = True
@@ -534,7 +542,10 @@ def _make_copy_transfer_golden_function(source_arg_index, destination_arg_index)
 ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
-ttnn.attach_golden_function(ttnn.copy_host_to_device_tensor, golden_function=_make_copy_transfer_golden_function(0, 1))
+ttnn.attach_golden_function(
+    ttnn.copy_host_to_device_tensor,
+    golden_function=_make_copy_transfer_golden_function("host_tensor", "device_tensor"),
+)
 doc = """
 Copies host tensor data into a pre-allocated device tensor, writing only the shards mapped to cores in :attr:`logical_core_filter`.
 
@@ -564,7 +575,10 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",
 )(ttnn._ttnn.operations.core.copy_device_to_host_tensor)
-ttnn.attach_golden_function(ttnn.copy_device_to_host_tensor, golden_function=_make_copy_transfer_golden_function(0, 1))
+ttnn.attach_golden_function(
+    ttnn.copy_device_to_host_tensor,
+    golden_function=_make_copy_transfer_golden_function("device_tensor", "host_tensor"),
+)
 
 doc = """
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
