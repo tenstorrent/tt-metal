@@ -295,6 +295,7 @@ class WanTransformer3DModel(Module):
         model_type: str = "t2v",
         output_dtype: ttnn.DataType = ttnn.float32,
         lora_enabled: bool = False,
+        sdpa_chunk_size_overrides: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -358,6 +359,7 @@ class WanTransformer3DModel(Module):
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
                 lora_enabled=lora_enabled,
+                sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             )
             for i in range(num_layers)
         )
@@ -839,10 +841,16 @@ class WanCheckpoint:
         is_fsdp: bool,
         model_type: str,
         lora_enabled: bool = False,
+        sdpa_chunk_size_overrides: dict | None = None,
     ) -> WanTransformer3DModel:
         """Construct a ``WanTransformer3DModel`` for this checkpoint (weights NOT loaded).
 
         Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+
+        ``sdpa_chunk_size_overrides`` layers on top of the ``WanAttention`` chunk table,
+        which is keyed only on ``(is_blackhole, sp, tp)`` and is therefore shared with the
+        14B at the same parallelism. Retuning a single variant goes through here so the
+        other one does not move.
         """
         c = self._config
         return WanTransformer3DModel(
@@ -864,6 +872,7 @@ class WanCheckpoint:
             is_fsdp=is_fsdp,
             model_type=model_type,
             lora_enabled=lora_enabled,
+            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
         )
 
     def load(
