@@ -28,7 +28,7 @@ on:
         required: false
         type: string
         default: "off"
-        description: "Matmul registry mode for single-host test processes"
+        description: "Matmul registry mode for test processes"
       tier:
         required: true
         type: string
@@ -290,5 +290,6 @@ jobs:
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode }}
       prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
       summary-scope: ${{ inputs.summary-scope }}
