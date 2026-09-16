@@ -3106,6 +3106,154 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_release_decoder()
 
 
+class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
+    """dFlash on the PLUGIN CONTRACT rail (vllm-tt-plugin#110), B=1 greedy.
+
+    The block rail (:class:`Gemma4DFlashForCausalLM`) owns its own loop: it
+    drafts, verifies, walks acceptance and emits ``output_tokens_per_step``
+    committed tokens per engine step. This class hands the same drafter to the
+    RUNNER instead, per the review on tt-metal#56048: one iteration per step,
+    ``output_tokens_per_step`` 1, the runner supplies the candidate block and
+    owns the accept walk, and no internal block filling or truncation.
+
+    HOW IT AVOIDS A SECOND TRACE. The fused body drafts and verifies those same
+    drafts in ONE replay, emitting ``[K | P_v]`` ids -- the drafts and their
+    verify posterior together. The contract wants the two halves in two calls,
+    ordered verify-then-propose, so:
+
+      * ``propose_draft_tokens`` replays once and returns the drafts, keeping
+        that replay's posterior;
+      * the NEXT step's ``decode_forward`` IS the verify of the block those
+        drafts became, so it returns the kept posterior and the runner walks it.
+
+    The posterior is a real device verify of exactly the block the runner sent
+    -- checked, not assumed: the block's draft columns must equal the drafts
+    this model proposed, and a mismatch raises rather than answering for tokens
+    the device never evaluated.
+
+    ``spec_plan`` is INHERITED deliberately: it is already contract-shaped
+    (accept_modes ``argmax_ids``, one lane, K pinned to GEMMA4_DFLASH_VERIFY)
+    and it carries the per-session byte accounting the review asks to validate
+    jointly. Duplicating that arithmetic here is how the two copies drift.
+    """
+
+    _SPEC_CONTRACT_K = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
+
+    model_capabilities = {
+        **Gemma4ForCausalLM.model_capabilities,
+        # The committed width per step is the runner's business now, and the
+        # adaptive width-1 baseline branch is NOT contract verification -- so
+        # tt_adaptive_block_output is deliberately absent.
+        "output_tokens_per_step": 1,
+        "supports_sample_on_device": False,  # the host accept walk owns it
+        "supports_async_decode": False,  # first adapter is synchronous
+        "supports_spec_decode": True,
+        # Drafts on device from the target's hidden; the hidden never leaves the
+        # device, so the runner holds no handle for it.
+        "spec_requirements": ("device_propose", "hidden_feed"),
+        "spec_hidden_handoff": ("on_device",),
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The posterior kept from the last propose replay, and the drafts that
+        # replay proposed: the next verify answers for exactly these.
+        self._ct_posterior = None
+        self._ct_drafts = None
+        logger.info(
+            f"Gemma4DFlash CONTRACT rail: K={self._SPEC_CONTRACT_K}, B=1 greedy, "
+            "one iteration per step (output_tokens_per_step=1)"
+        )
+
+    # -- contract: propose ----------------------------------------------------
+    def propose_draft_tokens(self, num_drafts, committed, positions, counts, hidden=None):
+        """``[1, K]`` int32 drafts for the next step, drafted on device.
+
+        ``hidden`` is None by contract for an on-device handoff: the drafter
+        reads the taps the verify left in place.
+        """
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        del positions, hidden  # on-device handoff: taps are already in place
+        k = int(num_drafts)
+        dec = self._spec_decoder
+        if dec is None or not self._spec_active:
+            # No session, so no real drafts. A zero-width proposal is how the
+            # contract says "nothing this step"; inventing ids would have the
+            # runner verify tokens no drafter produced.
+            return DraftOutput(draft_token_ids=torch.zeros((1, 0), dtype=torch.int32))
+        # Commit what the runner accepted for the PREVIOUS step BEFORE drafting
+        # again: the fused body merges the previous replay's tap rows at the
+        # start of the next replay, so the count has to be in place first.
+        if self._ct_posterior is not None:
+            n = int(counts.reshape(-1)[0]) if counts is not None else 1
+            row = committed.reshape(-1)
+            anchor = int(row[max(0, min(n, int(row.numel())) - 1)])
+            dec.contract_commit(n, anchor)
+        drafts, posterior = dec.contract_replay(first=self._spec_first_step)
+        self._spec_first_step = False
+        self._ct_drafts = [int(t) for t in drafts[:k]]
+        self._ct_posterior = [int(t) for t in posterior]
+        out = torch.zeros((1, k), dtype=torch.int32)
+        out[0, : len(self._ct_drafts)] = torch.tensor(self._ct_drafts, dtype=torch.int32)
+        return DraftOutput(draft_token_ids=out)
+
+    # -- contract: verify -----------------------------------------------------
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        """Verify the runner's ``[1, 1+K]`` candidate block.
+
+        Returns ``VerifyOutput(spec_mode="argmax_ids")`` carrying the
+        per-position argmax the fused verify already produced for exactly these
+        drafts. A step the runner did not mark speculative falls through to the
+        plain decode, so a non-speculating launch is unchanged.
+        """
+        spec_mode = kwargs.pop("spec_mode", None)
+        num_valid = kwargs.pop("num_valid_drafts", None)
+        kwargs.pop("accepted_counts", None)  # consumed by propose, where the commit belongs
+        kwargs.pop("draft_token_ids", None)
+        if spec_mode is None:
+            # Skip the block rail's loop entirely: plain decode.
+            return Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        from vllm_tt_plugin.spec_decode import PLACEHOLDER_TOKEN_ID, VerifyOutput
+
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        if self._ct_posterior is None:
+            raise RuntimeError(
+                "Gemma4DFlash contract verify ran before any proposal, so there "
+                "is no device posterior for this block. The contract's step "
+                "order is verify then propose, so a session bootstrap must "
+                "leave a posterior behind"
+            )
+        # The kept posterior answers for the drafts WE proposed. Check the block
+        # carries them rather than assuming: the runner may truncate a row to
+        # num_valid_drafts, which is fine, but a different token in a draft
+        # column would mean answering for a token the device never evaluated.
+        block = tokens.reshape(-1).tolist()
+        valid = int(num_valid.reshape(-1)[0]) if num_valid is not None else len(self._ct_drafts)
+        valid = max(0, min(valid, len(self._ct_drafts), max(0, len(block) - 1)))
+        sent = [int(t) for t in block[1 : 1 + valid]]
+        mine = self._ct_drafts[:valid]
+        if sent != mine:
+            raise ValueError(
+                "Gemma4DFlash contract verify was sent draft ids this model did "
+                f"not propose: block={sent} proposed={mine}. The device verified "
+                "its OWN drafts, so answering here would report a posterior for "
+                "tokens it never evaluated"
+            )
+        width = self._SPEC_CONTRACT_K + 1
+        ids = torch.full((1, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        post = self._ct_posterior[:width]
+        ids[0, : len(post)] = torch.tensor(post, dtype=torch.int32)
+        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
+
+    def release_request(self, row: int) -> None:
+        super().release_request(row)
+        self._ct_posterior = None
+        self._ct_drafts = None
+
+
 class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
     """Gemma4 with the it-assistant (KV-shared) drafter, serving at B=1.
 
