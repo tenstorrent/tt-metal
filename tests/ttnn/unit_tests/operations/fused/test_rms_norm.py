@@ -143,3 +143,36 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("val", [0.0, 1e-7, -1e-7, 1e-3, -2e-3, 1.0, -1.0, 5.0, -5.0])
+@pytest.mark.parametrize("eps", [1e-5, 1e-12])
+@pytest.mark.parametrize("with_weight", [False, True])
+@pytest.mark.parametrize("with_bias", [False, True])
+def test_rms_norm_rank_0(device, val, eps, dtype, with_weight, with_bias):
+    torch_input = torch.tensor(val, dtype=dtype)
+    torch_weight = torch.tensor(1.5, dtype=dtype) if with_weight else None
+    torch_bias = torch.tensor(0.5, dtype=dtype) if with_bias else None
+
+    torch_ref = torch.nn.functional.rms_norm(
+        torch_input.reshape(1),
+        (1,),
+        weight=torch_weight.reshape(1) if with_weight else None,
+        eps=eps,
+    ).reshape(())
+    if with_bias:
+        torch_ref = torch_ref + torch_bias
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT) if with_weight else None
+    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT) if with_bias else None
+
+    ttnn_out = ttnn.rms_norm(ttnn_input, epsilon=eps, weight=ttnn_weight, bias=ttnn_bias)
+    out = ttnn.to_torch(ttnn.from_device(ttnn_out))
+
+    if dtype == torch.bfloat16:
+        assert torch.allclose(torch_ref, out, atol=1e-2, rtol=1e-2)
+    else:
+        assert torch.allclose(torch_ref, out, atol=1e-4, rtol=1e-4)
+
