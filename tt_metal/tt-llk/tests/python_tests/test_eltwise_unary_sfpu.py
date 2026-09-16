@@ -158,41 +158,13 @@ FORMATS_BFP4_B = [
     ]
 ]
 
-# Ops whose `#pragma GCC unroll X` loops miscompile to invalid assembly under coverage
-# instrumentation, so they are skipped only when WITH_COVERAGE is set:
-#   https://github.com/tenstorrent/tt-metal/issues/33268
-#   https://github.com/tenstorrent/tt-llk/issues/883
-# Covers ops from both sweep profiles.
-COVERAGE_COMPILE_SKIP_OPS = [
-    MathOperation.Acosh,
-    MathOperation.Log,
-    MathOperation.Log1p,
-    MathOperation.Reciprocal,
-    MathOperation.Sin,
-    MathOperation.Sqrt,
-    MathOperation.Rsqrt,
-    MathOperation.Square,
-    MathOperation.Celu,
-    MathOperation.Silu,
-    MathOperation.Neg,
-    MathOperation.Exp2,
-    MathOperation.Hardsigmoid,
-    MathOperation.Threshold,
-    MathOperation.ReluMax,
-    MathOperation.ReluMin,
-    MathOperation.Tanh,
-    MathOperation.Gelu,
-    MathOperation.GeluDerivative,
-    MathOperation.LogWithBase,
-    MathOperation.GeluAppx,
-]
-
 
 def _skip_coverage_unsupported(mathop):
     """Coverage-build exclusions, shared by every sweep that drives the unary ops.
 
-    The exclusions are properties of the op under coverage instrumentation rather than of
-    any one sweep's envelope, so every sweep that compiles these kernels needs this guard.
+    Only the sweep envelope is narrowed now: no unary op is excluded from the coverage
+    build for its own sake. Every sweep that can select a broad-profile op needs the
+    guard, so it stays a helper rather than an inline check.
     """
     if not TestConfig.WITH_COVERAGE:
         return
@@ -202,14 +174,6 @@ def _skip_coverage_unsupported(mathop):
         pytest.skip(
             reason="Broad-profile ops are not run under coverage: "
             "https://github.com/tenstorrent/tt-llk/issues/1435"
-        )
-
-    if mathop in COVERAGE_COMPILE_SKIP_OPS:
-        pytest.skip(
-            reason="`#pragma GCC unroll X` loops in these ops compile to invalid "
-            "assembly under coverage instrumentation: "
-            "https://github.com/tenstorrent/tt-metal/issues/33268 , "
-            "https://github.com/tenstorrent/tt-llk/issues/883"
         )
 
 
@@ -873,10 +837,9 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # ReluMin is in both BROAD_SWEEP_OPS and COVERAGE_COMPILE_SKIP_OPS, so this sweep needs
-    # the same coverage guard the float ones use. It was unreachable before ReluMin joined
-    # _INT_UNARY_OPS -- no integer-only op is in either list -- but without it the coverage
-    # job compiles the relu_min kernel and fails at build time instead of skipping.
+    # ReluMin is in BROAD_SWEEP_OPS, so this sweep needs the same coverage guard the float
+    # ones use. It was unreachable before ReluMin joined _INT_UNARY_OPS -- no integer-only
+    # op is in that list.
     _skip_coverage_unsupported(mathop)
 
     int_format = (
@@ -1189,8 +1152,8 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # ReluMin/ReluMax are COVERAGE_COMPILE_SKIP_OPS members, so this sweep needs the guard
-    # too now that _THRESHOLD_OPS carries them.
+    # ReluMin/ReluMax are BROAD_SWEEP_OPS members, so this sweep needs the guard too now
+    # that _THRESHOLD_OPS carries them.
     _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
