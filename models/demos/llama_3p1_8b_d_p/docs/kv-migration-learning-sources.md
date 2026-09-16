@@ -175,7 +175,7 @@ No source supports a concrete destination NoC address for the planned two-slot d
 - RMSNorm tests passed.
 These results were published through tt-metal revision `4cf42fb`.
 
-### Uncommitted Task 6 attention evidence
+### Task 6 attention evidence
 
 - Task 026 passed 20 real-weight cases across ten intervals and two cache dtypes.
 - Task 026 passed pre-O heads and the post-O projection at its tested inputs.
@@ -199,7 +199,7 @@ These results were published through tt-metal revision `4cf42fb`.
 - Exact cache gather, order, masks, and padded-zero checks passed on all 32 chips.
 - Task 031 recorded `actual/verified = 0` and closed cleanly at 11:29:34.830.
 - The candidate uses selected packed-cache gather, reorder, explicit masking, and supported stock FP32 SDPA.
-- Production adoption, reuse, cache immutability, and validation tests remain pending.
+- Production acceptance, reuse, cache immutability, and validation tests remain pending.
 - Task 032 raw synthetic hash characterization completed against the original limits.
 - BF16 source hashes pass 3 of 10 cases. BF8_B source hashes pass 3 of 10 cases.
 - BF8_B exact-cache hashes pass 7 of 10 cases.
@@ -213,18 +213,87 @@ These results were published through tt-metal revision `4cf42fb`.
 - Both paths have maximum absolute error 0.000705384649336338.
 - This parity shows that the local mask did not introduce this row's error.
 - It does not identify one underlying operation or explain every raw hash failure.
-- A ten-interval, two-dtype stock-causal parity test is planned.
+- Task 034 completes the ten-interval, two-dtype stock-causal parity test.
 - Its prechosen per-chip gates are PCC 0.9999 and NL2 1%.
-- Production candidate and permanent validation work are authorized. Task 6 remains unaccepted.
+- At Task 034, production still needed independent model and structural gates.
 - Permanent isolation, reuse, and real-weight tests are authorized and pending.
 - Evidence anchor: `evidence/task-6-attention/attempt-033-224-stock-causal-control/root-verification.txt`.
+- Task 034 passes all 20 production-to-stock comparisons on identical inputs.
+- BF16 minimum PCC is 0.9999989380946639. Maximum NL2 is 0.0015097182062556041.
+- BF8_B minimum PCC is 0.9999989379186667. Maximum NL2 is 0.0015106677367818795.
+- All 1,760 metrics were finite across 32 chips.
+- Task 034 recorded actual exit 0, one pass, and no skips.
+- Devices closed cleanly at 12:10:23.889 UTC.
+- The original verified-exit 1 is preserved. It searched for a nonexistent teardown message.
+- Root independently verified the actual UMD close marker. No rerun or numerical waiver occurred.
+- Q uses BF16. Production cache uses BF8_B, while diagnostics can use BF16 cache.
+- Attention destination, QK intermediate, softmax sum, and exact position vectors use FP32.
+- Many other intermediates use BF16. Output returns BF16.
+- At the worst hash row, reference RMS is about 0.002414 and error RMS is about 0.000224.
+- The small reference scale makes that error about 9.29% NL2.
+- Stock parity does not replace the independent float-source or Hugging Face oracle.
+- At Task 034, production still needed structural and independent real-weight tests.
+- Evidence anchor: `evidence/task-6-attention/attempt-034-permanent-stock-parity/root-verification.txt`.
+- Task 035 passes 20 real-weight and 12 token-stream cases at unchanged gates.
+- Four validation groups pass. The pulse PCC test fails, so the overall result is FAIL.
+- Token-stream evidence contains 7,240 finite values. Real-weight evidence contains 7,360 finite values.
+- Task 035 preserves actual and verified exit 1. Devices closed cleanly at 12:26:18.748 UTC.
+- BF16 rounding of the exact pulse oracle gives minimum PCC 0.9923447 at pulse 256.
+- The same baseline gives minimum PCC 0.9920718 at pulse 1,024, with NL2 near 0.0023.
+- This is a rounding baseline, not a strict mathematical PCC ceiling.
+- It does not explain the observed device minimum PCC 0.97959.
+- Host omit and shift mutations fail all eight exposed TP shards at each boundary.
+- A stronger feature-variation fixture is proposed with unchanged thresholds.
+- Attempt 036 passes its first three pulses but fails last-pulse PCC.
+- Attempt 037 matches production and stock outputs exactly on all eight valid chips for both cache dtypes.
+- Stock-versus-source minimum PCC is 0.9975303 for BF16 and 0.9974257 for BF8_B.
+- Maximum stock-versus-source NL2 is 0.0106381 for BF16 and 0.0106487 for BF8_B.
+- Attempt 037 passes structure but fails the source numerical pulse gate.
+- All 136,048 numeric values are finite. Devices closed cleanly at 12:45:50.624 UTC.
+- The same-input stock control finds no production-specific mask or gather difference for this case.
+- It does not prove source accuracy or Task 6 acceptance.
+- A bounded host replay of repeated BF16 partial-numerator rounding does not explain the actual error.
+- Its error-direction cosine is weak or negative.
+- Attempt 038 uses the tested Q128 and K512 configuration.
+- Both cache dtypes pass the original source and cache pulse gates.
+- BF16 source minimum PCC is 0.9996941, with maximum NL2 0.0040727.
+- BF8_B source minimum PCC is 0.9996955, with maximum NL2 0.0040555.
+- Production and stock outputs match exactly on all eight valid chips.
+- Production attention source hash is `ab1808733e9d5ed4a515cdd94c35c5b5cd848a157878de3020ac991fc7fc10e2`.
+- Q chunk size is 128. K chunk size is 512.
+- Actual circular-buffer allocation is 1,241,088 bytes per core.
+- The conservative L1 gate is 1,273,856 bytes per core.
+- Attempt 041 records actual exit 0 and verified exit 0.
+- Eight tests passed with no skips on all 32 chips.
+- All 32 real-weight and token-stream cases passed unchanged numerical gates.
+- The final suite includes passing K512 pulse checks for both cache dtypes.
+- Devices closed cleanly at 13:19:12.853 UTC.
+- Attempt 041 supplies final Task 6 acceptance evidence.
+- Original periodic-hash source failures remain characterization evidence.
+- The exact internal numerical cause remains unresolved.
+- Attempt 035 evidence: `evidence/task-6-attention/attempt-035-remaining-permanent-suite/root-verification.txt`.
+- Attempt 037 evidence: `evidence/task-6-attention/attempt-037-pulse-stock-control/root-verification.txt`.
+- Attempt 038 evidence: `evidence/task-6-attention/attempt-038-pulse-k512-contrast/root-verification.txt`.
+- K512 audit: `evidence/task-6-attention/k512-production-audit.md`.
+- Attempt 041 verification: `evidence/task-6-attention/attempt-041-final-full-suite/root-verification.txt`.
+- Attempt 041 log: `evidence/task-6-attention/attempt-041-final-full-suite/device.log`.
+- Task 7 prepared three decoder files under `tmp/decoder-preparation`.
+- Root copied those exact three files into the canonical tree.
+- The launch contract is open. Device validation is starting.
+- The order is `residual001`, `smoke002`, `full003`, then `Watcher004`.
+- No decoder device result exists yet.
+- Host decoder parity has maximum absolute difference 1.1920928955078125e-07.
+- This host result validates oracle construction. It does not measure device accuracy.
+- Decoder BF16 output gates are PCC 0.999 and NL2 0.025.
+- Decoder BF8_B output gates are PCC 0.999 and NL2 0.05.
+- Task 7 report: `.superpowers/sdd/2026-09-15-prefill-execution/task-7-report.md`.
 - Original hash source failures remain documented characterization evidence.
 - The old ring path still fails.
 - The BF16 gates remain PCC 0.999 and NL2 0.03. The BF8_B gates remain PCC 0.995 and NL2 0.05.
 - No threshold was relaxed.
-- Task 6 remains unaccepted.
+- Attempt 041 supplies final Task 6 acceptance evidence.
 
-The real-weight prototype gates pass. Stock causal parity bounds one failure, while raw hash diagnosis continues.
+Production K512 passes the final Task 6 suite. Decoder and full-model gates remain open.
 
 ### Completed common runtime evidence
 

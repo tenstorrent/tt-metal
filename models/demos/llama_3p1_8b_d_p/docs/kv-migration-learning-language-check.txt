@@ -5,7 +5,7 @@ Numbered procedural steps above 20 words: 0
 HTML parse: PASS
 Internal link targets missing: []
 Inline SVG pairs: 3 3
-Expandable detail pairs: 22 22
+Expandable detail pairs: 24 24
 Source manifest links: 2
 Review report links: 1
 External script tags: False
@@ -23,7 +23,18 @@ Manual term review: PASS
 - Historical failures and test-only prototype passes are separate.
 - Passing real-weight gates and unresolved raw hash checks are separate.
 - Stock causal parity bounds one row without claiming a complete cause.
-- Task 6 and production attention remain unaccepted.
+- Production-to-stock parity and independent model correctness are separate.
+- The mixed-precision terms have explicit tensor and operation scopes.
+- Historical K128 pulse failures and final K512 passes are separate.
+- Final Task 6 acceptance and pending decoder validation are separate.
+- Attempt 037 K128 parity and its failing source gate are separate.
+- Attempts 038 and 041 identify the accepted K512 scope.
+- The bounded host rounding replay is labeled negative, not causal.
+- The exact internal numerical cause remains unresolved.
+- Host oracle parity and device accuracy are separate.
+- Canonical decoder preparation and pending device results are separate.
+- The pulse rounding baseline is not described as a mathematical ceiling.
+- The guide records final Task 6 acceptance evidence.
 - Current, proposed, tested, failed, and pending claims are labeled.
 
 Limitation: This scan is a heuristic. It is not formal ASD-STE100 certification.

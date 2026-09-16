@@ -33,15 +33,16 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <a class="nav-2" href="#debugging-checklist">Debugging checklist</a>
 <a class="nav-2" href="#questions-and-exercises">Questions and exercises</a>
 <a class="nav-2" href="#glossary">Glossary</a>
-<a class="nav-2" href="#language-and-review-method">Language and review method</a></aside><main><div class="scope"><strong>The test-only attention prototype passes real-weight stress gates.</strong> Stock causal control matches one raw failure. Production attention remains unaccepted. Full-model native migration across five Galaxies remains pending.</div><div class="toolbar"><button onclick="document.querySelectorAll('details').forEach(x=>x.open=true)">Expand details</button><button onclick="window.print()">Print guide</button></div><h1 id="llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</h1>
+<a class="nav-2" href="#language-and-review-method">Language and review method</a></aside><main><div class="scope"><strong>Production K512 attention passed the final Task 6 suite.</strong> All 32 real-weight and token-stream cases pass unchanged gates. Full-model native migration across five Galaxies remains pending.</div><div class="toolbar"><button onclick="document.querySelectorAll('details').forEach(x=>x.open=true)">Expand details</button><button onclick="window.print()">Print guide</button></div><h1 id="llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</h1>
 <h2 id="purpose">Purpose</h2>
 <p>This guide explains one disaggregated Llama 3.1 8B request from input text to streamed output.</p>
-<blockquote><strong>A test-only attention prototype passes real-weight stress gates.</strong> Stock causal control matches one raw failure. Production attention remains unaccepted.</blockquote>
+<blockquote><strong>Production K512 attention passed the final Task 6 suite.</strong> All 32 real-weight and token-stream cases pass unchanged gates.</blockquote>
 <p>It centers on the native <code>tt-d-gen</code> KV Manager, called native KVM in this guide.</p>
 <p>The target uses five Blackhole Galaxies. One Galaxy runs prefill. Four Galaxies form one SC4 decode system.</p>
 <p>The model is Llama 3.1 8B Instruct. The target deployment has two request slots and 2,048 total token positions.</p>
 <p>This page separates verified code, completed tests, proposed wiring, and required integration tests.</p>
 <p>The prototype evidence does not change production model code. It does not accept Task 6.</p>
+<p>Stock parity compares implementations on identical inputs. It does not replace an independent Hugging Face oracle.</p>
 <p>Open the <a href="kv-migration-learning-sources.md">sources and evidence manifest</a> or the <a href="kv-migration-learning-report.md">review report</a>.</p>
 <h2 id="read-the-status-labels-first">Read the status labels first</h2>
 <div class="table-wrap"><table>
@@ -323,6 +324,12 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <tr><td>Attention task 031</td><td>Test-only FP32 boundary stress</td><td>PASS for 12 exact boundary cases and all six original task 027 real-weight cases</td><td>Production adoption, reuse, immutability, and validation</td></tr>
 <tr><td>Attention task 032</td><td>Raw cancellation-heavy synthetic hash characterization</td><td>Completed against the original limits</td><td>Candidate misses some source and exact-cache hash limits; diagnosis continues</td></tr>
 <tr><td>Attention task 033</td><td>Stock standard FP32 causal control at <code>[224,257)</code></td><td>Matches the explicit-local-mask path on the worst row</td><td>One shared row does not explain every raw hash failure</td></tr>
+<tr><td>Attention task 034</td><td>Permanent production-to-stock parity</td><td>PASS for all 20 original interval-and-dtype comparisons</td><td>Independent float-source correctness or complete model acceptance</td></tr>
+<tr><td>Attention task 035</td><td>Remaining permanent validation suite</td><td>PASS for 20 real-weight and 12 token-stream cases; four validation groups pass</td><td>Pulse PCC fails; overall result is FAIL</td></tr>
+<tr><td>Attention task 036</td><td>Stronger positive-pulse fixture</td><td>First three pulses pass</td><td>Last-pulse PCC fails</td></tr>
+<tr><td>Attention task 037</td><td>Production-to-stock K128 pulse control</td><td>Exact output match on all eight valid chips for both cache dtypes</td><td>Source PCC gate fails at K128</td></tr>
+<tr><td>Attention task 038</td><td>Direct K512 pulse contrast</td><td>PASS for BF16 and BF8_B at original source and cache gates</td><td>Broader acceptance suite still required at that stage</td></tr>
+<tr><td>Attention task 041</td><td>Final K512 production suite</td><td>PASS: eight tests, no skips, all 32 real-weight and token-stream cases</td><td>Decoder and full-model tests remain separate</td></tr>
 <tr><td>Prefill reshuffle</td><td>191 host cases for exact helper</td><td>Host token ordering for aligned starts and tails</td><td>H2D transport or device writes</td></tr>
 <tr><td>Layer-ready channel</td><td>Common runner source and host contracts</td><td>Required metadata and 32 layer notifications</td><td>Correct Llama device synchronization</td></tr>
 <tr><td>Native table import</td><td>KVM unit and source checks</td><td>Multi-config import, ID checks, read/write index construction</td><td>Correct Llama-specific table content</td></tr>
@@ -332,7 +339,7 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <tr><td>Five-Galaxy request</td><td>Pending</td><td>Nothing yet</td><td>End-to-end correctness, latency, failure recovery</td></tr>
 </table></div>
 <p>Published QKV, cache, RoPE, MLP, and RMSNorm results are through tt-metal revision <code>4cf42fb</code>.</p>
-<p>Attention tasks 026 through 033 are uncommitted Task 6 evidence. Task 6 remains unaccepted.</p>
+<p>Attention tasks 026 through 041 record Task 6 history. Attempt 041 supplies the final acceptance evidence.</p>
 <p>Tasks 027 and 028 record historical failures. The old ring path still fails.</p>
 <p>Tasks 030 and 031 validate a test-only candidate. They do not change production attention.</p>
 <details><summary id="verified-test-only-attention-prototype">Verified test-only attention prototype</summary><div class="detail-body">
@@ -372,11 +379,99 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>It also does not explain every raw hash failure.</p>
 <p>Attempt 033 recorded <code>actual = 0</code> and <code>verified = 0</code>. One test passed.</p>
 <p>All 2,800 reported metric scalars were finite. The device closed cleanly at 11:46:34.296 UTC.</p>
-<p>A broader stock-causal parity test is planned for ten intervals and two cache dtypes.</p>
-<p>Its prechosen per-chip gates are PCC 0.9999 and NL2 1%.</p>
+<p>Attempt 034 completes the broader stock-causal parity test across ten intervals and two cache dtypes.</p>
+<p>Every chip passes the prechosen gates of PCC 0.9999 and NL2 1%.</p>
 <p>Production candidate work is authorized. Permanent validation, isolation, reuse, and real-weight tests are authorized and required.</p>
+</div></details><details><summary id="production-stock-parity-and-mixed-precision">Production stock parity and mixed precision</summary><div class="detail-body">
+<p>Attempt 034 compares production attention with stock standard FP32 causal attention on identical inputs.</p>
+<p>All 20 original interval-and-dtype comparisons pass.</p>
+<div class="table-wrap"><table>
+<tr><th>Cache dtype</th><th>Minimum PCC</th><th>Maximum NL2</th></tr>
+<tr><td>BF16</td><td>0.9999989380946639</td><td>0.0015097182062556041</td></tr>
+<tr><td>BF8_B</td><td>0.9999989379186667</td><td>0.0015106677367818795</td></tr>
+</table></div>
+<p>All 1,760 metric scalars were finite across all 32 chips.</p>
+<p>The test recorded <code>actual = 0</code>, one pass, and no skips. Devices closed cleanly at 12:10:23.889 UTC.</p>
+<p>The original wrapper preserved <code>verified = 1</code>. It searched for a teardown message that does not exist.</p>
+<p>Root verified the actual UMD close marker independently. This correction changes no numerical result or gate.</p>
+<p>The attention path uses mixed precision.</p>
+<p>Q uses BF16. The production cache uses BF8_B, while the diagnostic cache can use BF16.</p>
+<p>The attention destination, QK intermediate, and softmax sum use FP32.</p>
+<p>Many other intermediates use BF16. The output returns BF16.</p>
+<p>Exact position vectors use FP32.</p>
+<p>At the worst historical hash row, reference RMS is about 0.002414. Error RMS is about 0.000224.</p>
+<p>The absolute error is small. The reference is also small, so their ratio produces about 9.29% NL2.</p>
+<p>The identical stock result supports a shared numerical limitation for that row.</p>
+<p>It does not prove float-source correctness. Complete correctness still requires independent model gates.</p>
+<p>Original float-source hash failures remain characterization evidence. Stock parity does not replace the Hugging Face oracle.</p>
+<p>Attempt 035 runs the remaining permanent validation suite.</p>
+<p>All 20 real-weight cases and 12 token-stream cases pass the unchanged gates.</p>
+<p>Four validation groups pass. The pulse PCC test fails, so the overall result is FAIL.</p>
+<div class="table-wrap"><table>
+<tr><th>Input set</th><th>Cache</th><th>Source-head minimum PCC / maximum NL2</th><th>Output minimum PCC / maximum NL2</th></tr>
+<tr><td>Token stream</td><td>BF16</td><td>0.9997846133 / 0.0209190180</td><td>0.9999621894 / 0.0104071685</td></tr>
+<tr><td>Token stream</td><td>BF8_B</td><td>0.9996511653 / 0.0327059192</td><td>0.9999156025 / 0.0152525783</td></tr>
+<tr><td>Real weight</td><td>BF16</td><td>0.9999355569 / 0.0114075796</td><td>0.9998020043 / 0.0198961604</td></tr>
+<tr><td>Real weight</td><td>BF8_B</td><td>0.9999179059 / 0.0129186379</td><td>0.9997823408 / 0.0210593207</td></tr>
+</table></div>
+<p>The run preserved actual and verified exit 1. Devices closed cleanly at 12:26:18.748 UTC.</p>
+<p>All 7,240 token-stream values and 7,360 real-weight values were finite.</p>
+<p>The original synthetic float-source limitations remain visible. No gate changed.</p>
+<p>At this stage, production attention remained unaccepted because the pulse PCC test failed.</p>
+<p>The old pulse fixture has narrow feature variation.</p>
+<p>Rounding its exact float oracle to BF16 gives minimum PCC 0.9923447 at pulse 256.</p>
+<p>The same baseline gives minimum PCC 0.9920718 at pulse 1,024. NL2 stays near 0.0023.</p>
+<p>This rounding result is a baseline, not a strict mathematical PCC ceiling.</p>
+<p>It does not explain the full device error, where minimum PCC is 0.97959.</p>
+<p>Host omit and shift mutations fail on all eight exposed TP shards at each boundary.</p>
+<p>A stronger feature-variation fixture is proposed. Thresholds remain unchanged.</p>
+<p>Attempt 036 used the stronger positive-pulse fixture. The first three pulses passed.</p>
+<p>The last-pulse PCC failed. Attempt 036 does not pass the pulse gate.</p>
+<p>Attempt 037 compared production with stock attention on the same stored inputs.</p>
+<p>The outputs match exactly on all eight valid chips for both cache dtypes.</p>
+<div class="table-wrap"><table>
+<tr><th>Cache</th><th>Stock versus source minimum PCC</th><th>Maximum NL2</th></tr>
+<tr><td>BF16</td><td>0.9975303</td><td>0.0106381</td></tr>
+<tr><td>BF8_B</td><td>0.9974257</td><td>0.0106487</td></tr>
+</table></div>
+<p>The structure check passed. The source numerical pulse gate still failed.</p>
+<p>All 136,048 numeric values were finite. Devices closed cleanly at 12:45:50.624 UTC.</p>
+<p>This control finds no production-specific mask or gather difference for this case.</p>
+<p>It does not prove that the K128 source result is accurate. Attention remained unaccepted at this stage.</p>
+<p>A bounded host replay tested repeated BF16 partial-numerator rounding.</p>
+<p>It does not explain the actual error. Its error-direction cosine is weak or negative.</p>
+<p>Attempt 038 tested one 512-key grouping directly. Both cache dtypes passed the original source and cache gates.</p>
+<div class="table-wrap"><table>
+<tr><th>Cache</th><th>Production versus source minimum PCC</th><th>Maximum NL2</th></tr>
+<tr><td>BF16</td><td>0.9996941</td><td>0.0040727</td></tr>
+<tr><td>BF8_B</td><td>0.9996955</td><td>0.0040555</td></tr>
+</table></div>
+<p>Production and stock outputs were exact matches on all eight valid chips.</p>
+<p>Production now uses Q128 and K512. Its attention source hash is <code>ab1808733e9d5ed4a515cdd94c35c5b5cd848a157878de3020ac991fc7fc10e2</code>.</p>
+<p>The actual circular-buffer allocation is 1,241,088 bytes per core.</p>
+<p>The conservative L1 gate is 1,273,856 bytes per core.</p>
+<p>Attempt 041 ran the final production suite with unchanged numerical gates.</p>
+<p>All eight tests passed without skips. All 32 real-weight and token-stream cases passed.</p>
+<p>The final suite includes passing K512 pulse checks for both cache dtypes.</p>
+<p>The run used all 32 chips. Actual and verified exit codes were zero.</p>
+<p>Devices closed cleanly at 13:19:12.853 UTC.</p>
+<p>This result supplies final Task 6 acceptance evidence.</p>
+<p>The original periodic-hash source failures remain characterization evidence.</p>
+<p>The bounded host replay remains a negative result. The exact internal numerical cause remains unresolved.</p>
+</div></details><details><summary id="isolated-decoder-preparation">Isolated decoder preparation</summary><div class="detail-body">
+<p>Task 7 prepared a decoder layer and two test files.</p>
+<p>Root copied the exact three prepared files into the canonical tree.</p>
+<p>The launch contract is open. Device validation is starting.</p>
+<p>The planned order is <code>residual001</code>, <code>smoke002</code>, <code>full003</code>, then <code>Watcher004</code>.</p>
+<p>No decoder device result exists yet.</p>
+<p>Host checks passed. The independent host decoder comparison has maximum absolute difference <code>1.1920928955078125e-07</code>.</p>
+<p>This value proves host oracle parity only. It is not a device-accuracy result.</p>
+<p>The frozen complete-output gates are PCC 0.999 and NL2 0.025 for BF16 cache.</p>
+<p>The BF8_B complete-output gates are PCC 0.999 and NL2 0.05.</p>
+<p>Prepared tests also cover K/V values, branch isolation, cache preservation, validation, reuse, and memory stability.</p>
+<p>The isolated Task 7 preparation is complete. Decoder device validation is starting, with no result yet.</p>
 <p>No active allocation is implied. This guide ran no device commands.</p>
-<p>Task 6 closure, decoder assembly, full model, runtime wiring, table publication, and migration remain pending.</p>
+<p>Decoder device validation, full model, runtime wiring, table publication, and migration remain pending.</p>
 </div></details><h2 id="required-test-plan-for-the-worked-example">Required test plan for the worked example</h2>
 <details><summary id="gate-1-device-free-request-plan">Gate 1: device-free request plan</summary><div class="detail-body">
 <ol>
@@ -443,10 +538,15 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>GQA reduces transfer payload because eight K/V heads serve 32 query heads.</p>
 <p>Block-aligned migration keeps the final prompt block on decode. This makes the first-token rule explicit.</p>
 <h2 id="limitations-and-subtle-risks">Limitations and subtle risks</h2>
-<p>The supported-FP32 candidate remains test-only. Production adoption, reuse, cache immutability, and validation tests remain pending.</p>
+<p>The production K512 path passes the final Task 6 suite. Decoder and full-model validation remain pending.</p>
 <p>Task 032 raw synthetic hash accuracy remains unresolved. Diagnosis continues.</p>
 <p>Task 033 explains one mask question only. It does not close the broader raw hash diagnosis.</p>
-<p>The old ring attention path still fails. Task 6 remains unaccepted.</p>
+<p>Task 034 proves production-to-stock parity on the 20 original cases. It does not prove independent float-source accuracy.</p>
+<p>Task 035 passes model-value gates, but its K128 pulse PCC fails.</p>
+<p>Task 036 fails its last K128 pulse. Task 037 matches K128 stock exactly, but its source gate fails.</p>
+<p>Task 038 passes the direct K512 pulse check. Task 041 passes the final K512 suite.</p>
+<p>Decoder host parity does not prove decoder device accuracy. Device validation is starting, with no result yet.</p>
+<p>The old ring attention path remains historical failure evidence. The accepted production path uses K512 stock SDPA.</p>
 <p>The current Llama runtime and table exporters are incomplete. Native cross-endpoint migration is therefore unproven.</p>
 <p>The current main serving client named <code>migration</code> uses the legacy migration layer. Its name does not imply native KVM.</p>
 <p>The native manager accepts layout tables as truth. A consistent wrong table can move bytes without an obvious transport error.</p>

@@ -7,7 +7,7 @@
 
 This guide explains one disaggregated Llama 3.1 8B request from input text to streamed output.
 
-> **A test-only attention prototype passes real-weight stress gates.** Stock causal control matches one raw failure. Production attention remains unaccepted.
+> **Production K512 attention passed the final Task 6 suite.** All 32 real-weight and token-stream cases pass unchanged gates.
 
 It centers on the native `tt-d-gen` KV Manager, called native KVM in this guide.
 
@@ -18,6 +18,8 @@ The model is Llama 3.1 8B Instruct. The target deployment has two request slots 
 This page separates verified code, completed tests, proposed wiring, and required integration tests.
 
 The prototype evidence does not change production model code. It does not accept Task 6.
+
+Stock parity compares implementations on identical inputs. It does not replace an independent Hugging Face oracle.
 
 Open the [sources and evidence manifest](kv-migration-learning-sources.md) or the [review report](kv-migration-learning-report.md).
 
@@ -440,6 +442,12 @@ The output projection can reduce visible error. Check both pre-O and post-O resu
 | Attention task 031 | Test-only FP32 boundary stress | PASS for 12 exact boundary cases and all six original task 027 real-weight cases | Production adoption, reuse, immutability, and validation |
 | Attention task 032 | Raw cancellation-heavy synthetic hash characterization | Completed against the original limits | Candidate misses some source and exact-cache hash limits; diagnosis continues |
 | Attention task 033 | Stock standard FP32 causal control at `[224,257)` | Matches the explicit-local-mask path on the worst row | One shared row does not explain every raw hash failure |
+| Attention task 034 | Permanent production-to-stock parity | PASS for all 20 original interval-and-dtype comparisons | Independent float-source correctness or complete model acceptance |
+| Attention task 035 | Remaining permanent validation suite | PASS for 20 real-weight and 12 token-stream cases; four validation groups pass | Pulse PCC fails; overall result is FAIL |
+| Attention task 036 | Stronger positive-pulse fixture | First three pulses pass | Last-pulse PCC fails |
+| Attention task 037 | Production-to-stock K128 pulse control | Exact output match on all eight valid chips for both cache dtypes | Source PCC gate fails at K128 |
+| Attention task 038 | Direct K512 pulse contrast | PASS for BF16 and BF8_B at original source and cache gates | Broader acceptance suite still required at that stage |
+| Attention task 041 | Final K512 production suite | PASS: eight tests, no skips, all 32 real-weight and token-stream cases | Decoder and full-model tests remain separate |
 | Prefill reshuffle | 191 host cases for exact helper | Host token ordering for aligned starts and tails | H2D transport or device writes |
 | Layer-ready channel | Common runner source and host contracts | Required metadata and 32 layer notifications | Correct Llama device synchronization |
 | Native table import | KVM unit and source checks | Multi-config import, ID checks, read/write index construction | Correct Llama-specific table content |
@@ -450,7 +458,7 @@ The output projection can reduce visible error. Check both pre-O and post-O resu
 
 Published QKV, cache, RoPE, MLP, and RMSNorm results are through tt-metal revision `4cf42fb`.
 
-Attention tasks 026 through 033 are uncommitted Task 6 evidence. Task 6 remains unaccepted.
+Attention tasks 026 through 041 record Task 6 history. Attempt 041 supplies the final acceptance evidence.
 
 Tasks 027 and 028 record historical failures. The old ring path still fails.
 
@@ -517,15 +525,169 @@ Attempt 033 recorded `actual = 0` and `verified = 0`. One test passed.
 
 All 2,800 reported metric scalars were finite. The device closed cleanly at 11:46:34.296 UTC.
 
-A broader stock-causal parity test is planned for ten intervals and two cache dtypes.
+Attempt 034 completes the broader stock-causal parity test across ten intervals and two cache dtypes.
 
-Its prechosen per-chip gates are PCC 0.9999 and NL2 1%.
+Every chip passes the prechosen gates of PCC 0.9999 and NL2 1%.
 
 Production candidate work is authorized. Permanent validation, isolation, reuse, and real-weight tests are authorized and required.
 
+### Production stock parity and mixed precision
+
+Attempt 034 compares production attention with stock standard FP32 causal attention on identical inputs.
+
+All 20 original interval-and-dtype comparisons pass.
+
+| Cache dtype | Minimum PCC | Maximum NL2 |
+|---|---:|---:|
+| BF16 | 0.9999989380946639 | 0.0015097182062556041 |
+| BF8_B | 0.9999989379186667 | 0.0015106677367818795 |
+
+All 1,760 metric scalars were finite across all 32 chips.
+
+The test recorded `actual = 0`, one pass, and no skips. Devices closed cleanly at 12:10:23.889 UTC.
+
+The original wrapper preserved `verified = 1`. It searched for a teardown message that does not exist.
+
+Root verified the actual UMD close marker independently. This correction changes no numerical result or gate.
+
+The attention path uses mixed precision.
+
+Q uses BF16. The production cache uses BF8_B, while the diagnostic cache can use BF16.
+
+The attention destination, QK intermediate, and softmax sum use FP32.
+
+Many other intermediates use BF16. The output returns BF16.
+
+Exact position vectors use FP32.
+
+At the worst historical hash row, reference RMS is about 0.002414. Error RMS is about 0.000224.
+
+The absolute error is small. The reference is also small, so their ratio produces about 9.29% NL2.
+
+The identical stock result supports a shared numerical limitation for that row.
+
+It does not prove float-source correctness. Complete correctness still requires independent model gates.
+
+Original float-source hash failures remain characterization evidence. Stock parity does not replace the Hugging Face oracle.
+
+Attempt 035 runs the remaining permanent validation suite.
+
+All 20 real-weight cases and 12 token-stream cases pass the unchanged gates.
+
+Four validation groups pass. The pulse PCC test fails, so the overall result is FAIL.
+
+| Input set | Cache | Source-head minimum PCC / maximum NL2 | Output minimum PCC / maximum NL2 |
+|---|---|---:|---:|
+| Token stream | BF16 | 0.9997846133 / 0.0209190180 | 0.9999621894 / 0.0104071685 |
+| Token stream | BF8_B | 0.9996511653 / 0.0327059192 | 0.9999156025 / 0.0152525783 |
+| Real weight | BF16 | 0.9999355569 / 0.0114075796 | 0.9998020043 / 0.0198961604 |
+| Real weight | BF8_B | 0.9999179059 / 0.0129186379 | 0.9997823408 / 0.0210593207 |
+
+The run preserved actual and verified exit 1. Devices closed cleanly at 12:26:18.748 UTC.
+
+All 7,240 token-stream values and 7,360 real-weight values were finite.
+
+The original synthetic float-source limitations remain visible. No gate changed.
+
+At this stage, production attention remained unaccepted because the pulse PCC test failed.
+
+The old pulse fixture has narrow feature variation.
+
+Rounding its exact float oracle to BF16 gives minimum PCC 0.9923447 at pulse 256.
+
+The same baseline gives minimum PCC 0.9920718 at pulse 1,024. NL2 stays near 0.0023.
+
+This rounding result is a baseline, not a strict mathematical PCC ceiling.
+
+It does not explain the full device error, where minimum PCC is 0.97959.
+
+Host omit and shift mutations fail on all eight exposed TP shards at each boundary.
+
+A stronger feature-variation fixture is proposed. Thresholds remain unchanged.
+
+Attempt 036 used the stronger positive-pulse fixture. The first three pulses passed.
+
+The last-pulse PCC failed. Attempt 036 does not pass the pulse gate.
+
+Attempt 037 compared production with stock attention on the same stored inputs.
+
+The outputs match exactly on all eight valid chips for both cache dtypes.
+
+| Cache | Stock versus source minimum PCC | Maximum NL2 |
+|---|---:|---:|
+| BF16 | 0.9975303 | 0.0106381 |
+| BF8_B | 0.9974257 | 0.0106487 |
+
+The structure check passed. The source numerical pulse gate still failed.
+
+All 136,048 numeric values were finite. Devices closed cleanly at 12:45:50.624 UTC.
+
+This control finds no production-specific mask or gather difference for this case.
+
+It does not prove that the K128 source result is accurate. Attention remained unaccepted at this stage.
+
+A bounded host replay tested repeated BF16 partial-numerator rounding.
+
+It does not explain the actual error. Its error-direction cosine is weak or negative.
+
+Attempt 038 tested one 512-key grouping directly. Both cache dtypes passed the original source and cache gates.
+
+| Cache | Production versus source minimum PCC | Maximum NL2 |
+|---|---:|---:|
+| BF16 | 0.9996941 | 0.0040727 |
+| BF8_B | 0.9996955 | 0.0040555 |
+
+Production and stock outputs were exact matches on all eight valid chips.
+
+Production now uses Q128 and K512. Its attention source hash is `ab1808733e9d5ed4a515cdd94c35c5b5cd848a157878de3020ac991fc7fc10e2`.
+
+The actual circular-buffer allocation is 1,241,088 bytes per core.
+
+The conservative L1 gate is 1,273,856 bytes per core.
+
+Attempt 041 ran the final production suite with unchanged numerical gates.
+
+All eight tests passed without skips. All 32 real-weight and token-stream cases passed.
+
+The final suite includes passing K512 pulse checks for both cache dtypes.
+
+The run used all 32 chips. Actual and verified exit codes were zero.
+
+Devices closed cleanly at 13:19:12.853 UTC.
+
+This result supplies final Task 6 acceptance evidence.
+
+The original periodic-hash source failures remain characterization evidence.
+
+The bounded host replay remains a negative result. The exact internal numerical cause remains unresolved.
+
+### Isolated decoder preparation
+
+Task 7 prepared a decoder layer and two test files.
+
+Root copied the exact three prepared files into the canonical tree.
+
+The launch contract is open. Device validation is starting.
+
+The planned order is `residual001`, `smoke002`, `full003`, then `Watcher004`.
+
+No decoder device result exists yet.
+
+Host checks passed. The independent host decoder comparison has maximum absolute difference `1.1920928955078125e-07`.
+
+This value proves host oracle parity only. It is not a device-accuracy result.
+
+The frozen complete-output gates are PCC 0.999 and NL2 0.025 for BF16 cache.
+
+The BF8_B complete-output gates are PCC 0.999 and NL2 0.05.
+
+Prepared tests also cover K/V values, branch isolation, cache preservation, validation, reuse, and memory stability.
+
+The isolated Task 7 preparation is complete. Decoder device validation is starting, with no result yet.
+
 No active allocation is implied. This guide ran no device commands.
 
-Task 6 closure, decoder assembly, full model, runtime wiring, table publication, and migration remain pending.
+Decoder device validation, full model, runtime wiring, table publication, and migration remain pending.
 
 ## Required test plan for the worked example
 
@@ -608,13 +770,23 @@ Block-aligned migration keeps the final prompt block on decode. This makes the f
 
 ## Limitations and subtle risks
 
-The supported-FP32 candidate remains test-only. Production adoption, reuse, cache immutability, and validation tests remain pending.
+The production K512 path passes the final Task 6 suite. Decoder and full-model validation remain pending.
 
 Task 032 raw synthetic hash accuracy remains unresolved. Diagnosis continues.
 
 Task 033 explains one mask question only. It does not close the broader raw hash diagnosis.
 
-The old ring attention path still fails. Task 6 remains unaccepted.
+Task 034 proves production-to-stock parity on the 20 original cases. It does not prove independent float-source accuracy.
+
+Task 035 passes model-value gates, but its K128 pulse PCC fails.
+
+Task 036 fails its last K128 pulse. Task 037 matches K128 stock exactly, but its source gate fails.
+
+Task 038 passes the direct K512 pulse check. Task 041 passes the final K512 suite.
+
+Decoder host parity does not prove decoder device accuracy. Device validation is starting, with no result yet.
+
+The old ring attention path remains historical failure evidence. The accepted production path uses K512 stock SDPA.
 
 The current Llama runtime and table exporters are incomplete. Native cross-endpoint migration is therefore unproven.
 

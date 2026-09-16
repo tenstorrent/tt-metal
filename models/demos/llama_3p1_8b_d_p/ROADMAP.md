@@ -175,9 +175,10 @@ slots must satisfy justified correlation and magnitude limits with no skipped ha
 
 **Current candidate (16 September 2026).** Gather the selected packed K/V plane across SP4, restore
 natural token order, and build an exact absolute-position causal mask on the device. Use supported
-stock SDPA with FP32 destination accumulation. Q and output remain BF16; cache storage is BF16 for
-diagnostics and BF8_B for migration. This replaces the earlier indexed ring attention candidate,
-which failed a real-token continuation check. The indexed ring FP32 guard remains intact.
+stock SDPA. Q, output, and many intermediates remain BF16. The attention destination, QK
+intermediate, softmax sum, and exact position vectors use FP32. Cache storage is BF16 for diagnostics
+and BF8_B for migration. This replaces the earlier indexed ring attention candidate, which failed a
+real-token continuation check. The indexed ring FP32 guard remains intact.
 
 **Required production tests.**
 
@@ -192,6 +193,10 @@ which failed a real-token continuation check. The indexed ring FP32 guard remain
 - Use a positive-value causal prefix-average fixture with pulses at page and SP boundaries.
   Omitted and shifted pulses must fail the same independent oracle. Include zero-value and
   future-tail poisoning cases so correlation cannot hide illegal reads.
+  The original narrow-variance fixture has BF16-oracle baseline PCC 0.992345 at pulse 256 and
+  0.992072 at pulse 1024, with normalized L2 about 0.0023. This is not a strict PCC ceiling and does
+  not explain the observed device minimum PCC 0.97959. A stronger feature-variation fixture may
+  improve conditioning, but thresholds stay unchanged.
 - Replay A, B, then A with changed input and cache addresses. Verify unchanged input/cache data,
   refreshed runtime arguments, stable warmed program counts, and bounded persistent allocations.
   Invalid calls must fail before cache changes; a subsequent valid call must work.
@@ -207,14 +212,21 @@ normalized L2 0.092928. Their outputs at the failing row are identical. BF8_B ca
 also causes large relative error in some synthetic cases before attention runs. Keep the original
 fixtures, limits, and measured failures in executable characterization tools. Do not label them as
 passing, silently relax their limits, or claim that one identified arithmetic operation explains all
-cases. Production attention remains unaccepted until the required checks above pass.
+cases. These periodic-hash failures remain characterization evidence after K512 acceptance.
 
 ### 6. One prefill transformer decoder layer
 
 **Input/setup.** Add the decoder-layer composition and
-`tests/unit/test_decoder_layer_vs_ref.py` (**planned**), combining input RMSNorm, GQA, residual,
-post-attention RMSNorm, dense MLP, and the second residual. Use synthetic isolation cases and real Llama layers 0 and 13, with cache checks for K and V.
+`tests/unit/test_decoder_layer_vs_ref.py`, combining input RMSNorm, GQA, residual,
+post-attention RMSNorm, dense MLP, and the second residual. Use synthetic isolation cases and real
+Llama layers 0 and 13, with cache checks for K and V.
 Share accepted attention resources across layers. Validate the request and cache before writing K/V.
+
+**Preparation status (16 September 2026).** Root copied the exact three prepared files into the
+canonical tree. Host checks pass, including independent Hugging Face decoder parity with maximum
+absolute difference `1.1920928955078125e-07`. That value checks the host oracle and fixture only; it
+is not device accuracy. The launch contract is open. Device validation is starting in this order:
+`residual001`, `smoke002`, `full003`, then `Watcher004`. No decoder device result exists yet.
 
 **Independent reference and expected behavior.** A standalone Hugging Face/PyTorch Llama decoder
 layer, fed identical rounded inputs and weights, supplies hidden-state and cache references.
@@ -223,7 +235,8 @@ layer, fed identical rounded inputs and weights, supplies hidden-state and cache
 residuals, local/global layer indices, composition precision loss, and cache writes occurring at the
 wrong stage. Every-chip hidden output and K/V must meet their separately justified correlation and
 magnitude limits, while residual inputs and unrelated cache regions remain intact. The selected
-layer-output gates are PCC >= 0.999 with normalized L2 <= 0.03 for BF16 cache or <= 0.05 for BF8_B.
+layer-output gates are PCC >= 0.999 with normalized L2 <= 0.025 for BF16 cache. BF8_B uses
+PCC >= 0.999 and normalized L2 <= 0.05. This strict BF16 gate was fixed before hardware execution.
 Keep the published independent KV gates: PCC >= 0.9999 / normalized L2 <= 0.01 for BF16 and
 PCC >= 0.999 / normalized L2 <= 0.02 for BF8_B. Use zero-branch and isolated-branch runs to prove
 that residual magnitude cannot hide missing attention or MLP output. Check all tensors and metrics
@@ -302,8 +315,29 @@ cross-endpoint, and serving gates run in increasing scope; no required hardware 
   0.999651 / 0.032706 for BF8_B. These are prototype results.
 - Attempt 032 retained the failed synthetic limits. Attempt 033 reproduced the worst failing row
   with stock causal attention. A completed diagnostic is not a numerical acceptance pass.
-- Production attention validation is in progress. Decoder-layer, full-model, runtime, migration,
-  Blaze-handoff, and serving gates have not run.
+- Attempt 034 passed all 20 production-to-stock parity cases at the fixed per-chip gates. Attempt 035
+  passed 20 real-weight and 12 token-stream cases at unchanged gates, but K128 pulse PCC failed. At
+  that stage, production attention remained unaccepted. The original failures remain characterization.
+  Host omit and shift mutations fail all eight exposed TP shards at each boundary. Attempt 036
+  passed its first three stronger pulses but failed last-pulse PCC. Attempt 037 matched production
+  and stock outputs exactly on all eight valid chips for both cache dtypes. Its source minimum PCC was
+  0.9975303 for BF16 and 0.9974257 for BF8_B, so the source gate still failed. All 136,048 numeric
+  values were finite, and devices closed cleanly. A bounded host replay of repeated BF16 partial-
+  numerator rounding did not explain the error; error-direction cosine was weak or negative.
+- Attempt 038 tested Q128/K512 directly. Both cache dtypes passed the original source and cache pulse
+  gates, and production matched stock exactly on all eight valid chips. Production source hash is
+  `ab1808733e9d5ed4a515cdd94c35c5b5cd848a157878de3020ac991fc7fc10e2`. Actual circular-buffer
+  allocation is 1,241,088 bytes per core; the conservative L1 gate is 1,273,856 bytes per core.
+- Attempt 041 passed the final production suite at unchanged numerical gates: actual exit 0, verified
+  exit 0, eight tests, no skips, all 32 chips, and all 32 real-weight and token-stream cases. K512 pulse
+  checks passed for both cache dtypes. Devices closed cleanly at 13:19:12.853 UTC. This supplies final
+  Task 6 acceptance evidence. Original periodic-hash failures remain characterization evidence, and
+  the exact internal cause is unresolved.
+- Task 7 isolated preparation completed, and root copied the exact three files into the canonical
+  tree. Host oracle parity reached maximum absolute difference `1.1920928955078125e-07`; this is not
+  device accuracy. The launch contract is open. Device validation is starting with `residual001`,
+  `smoke002`, `full003`, then `Watcher004`; no decoder device result exists yet.
+- Decoder-layer, full-model, runtime, migration, Blaze-handoff, and serving gates have not run.
 
 The evidence filenames are stored outside Git under
 `/data/divanovic/llama31-8b-disagg/evidence`. References to those logs do not imply that the logs are
