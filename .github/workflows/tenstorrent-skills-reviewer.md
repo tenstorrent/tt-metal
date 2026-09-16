@@ -239,22 +239,23 @@ safe-outputs:
   messages:
     footer: "> 🔷 *Reviewed using [Tenstorrent domain skills](https://github.com/tenstorrent/skills) by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
     run-failure: 🔷 [{workflow_name}]({run_url}) {status} during the Tenstorrent skills review.
+# Use canonical paths: bare names also match the packaged plugin copies.
 skills:
-- tenstorrent/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- tenstorrent/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/skills/common/tt-review-core@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/common/tt-review-router@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/ttnn/ttnn-op-kernel-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/metal/tt-l1-memory-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/models/tt-model-bringup-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/models/tt-multichip-ccl-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/models/tt-trace-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/models/tt-precision-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/common/tt-test-coverage-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/llk/llk-race-audit-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/llk/llk-perf-audit-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/inference/tt-vllm-serving-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/common/tt-perf-claim-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/common/tt-comment-hygiene-review@17dd7791b59a386f345d95f86d570b56dfc2569a
+- tenstorrent/skills/skills/common/tt-split-pr-by-codeowners@17dd7791b59a386f345d95f86d570b56dfc2569a
 timeout-minutes: 15
 ---
 
@@ -374,7 +375,7 @@ These describe **impact, not merge gates**. This workflow is advisory and cannot
 Load `/tt-split-pr-by-codeowners` for the semantics and the judgement, and run its matcher against those files:
 
 ```bash
-python3 .github/skills/tt-split-pr-by-codeowners/scripts/codeowners_map.py \
+python3 .github/skills/common/tt-split-pr-by-codeowners/scripts/codeowners_map.py \
   --codeowners /tmp/gh-aw/agent/CODEOWNERS.base \
   --files-from /tmp/gh-aw/agent/pr-files.txt \
   --expect-files <changed_files> \
