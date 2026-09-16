@@ -4,6 +4,7 @@
 
 import os
 import shlex
+import signal
 import subprocess
 from pathlib import Path
 import pandas as pd
@@ -189,6 +190,18 @@ def run_multi_pass(
         merge_pass_csv(pass1_csv, pass2_csv)
 
 
+def _kill_process_group(proc):
+    """Best-effort SIGKILL of the whole session started for `proc`."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
 def run_device_profiler(
     command,
     output_logs_subdir,
@@ -227,7 +240,18 @@ def run_device_profiler(
             is_command_binary_exe,
         )
         logger.info(profiler_cmd)
-        subprocess.run([profiler_cmd], shell=True, check=True)
+        # Run the profiler in its own session so that when the caller is interrupted (typically
+        # pytest-timeout raising inside wait()) the whole tree dies with it. Otherwise only the
+        # `sh -c` wrapper is killed and the orphaned `python -m tracy` plus its captured test keep
+        # the job's stdout pipe open until the CI step budget runs out.
+        proc = subprocess.Popen([profiler_cmd], shell=True, start_new_session=True)
+        try:
+            returncode = proc.wait()
+        except BaseException:
+            _kill_process_group(proc)
+            raise
+        if returncode != 0:
+            raise subprocess.CalledProcessError(returncode, profiler_cmd)
 
 
 def get_samples_per_s(time_ns, num_samples):
