@@ -448,9 +448,7 @@ def diff_block_bench(mesh, grid: Grid = STAGE5_GRID, *, ccl: CCLManager | None =
     timestep = ttnn.from_torch(
         torch.tensor([0.7] * grid.batch).reshape(1, 1, -1, 1), device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
     )
-    modulation = model.shared_adaln(
-        model.t_embedder(ttnn.multiply(timestep, cfg.timestep_scale_multiplier)), grid.batch
-    )
+    modulation = model.modulation(timestep, grid.batch)
     tables = model.rope_tables(grid)
     band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
     brick = model._stage5_brick(grid) if model._keep_bricked else None

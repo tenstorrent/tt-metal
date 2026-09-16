@@ -22,7 +22,7 @@ from loguru import logger
 
 import ttnn
 
-from ...layers.embeddings import TimestepEmbedding, Timesteps
+from ...layers.embeddings import LTXAdaLayerNormSingle
 from ...layers.feedforward import SwiGLU
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
@@ -459,32 +459,6 @@ def _bands(t: int, *, frames: int | None, kernel: int, align: int = 1) -> tuple[
 # ---------------------------------------------------------------------------
 
 
-class _TimestepEmbedder(Module):
-    """``PixArtAlphaCombinedTimestepSizeEmbeddings`` with ``size_emb_dim=0``."""
-
-    def __init__(self, t_emb_dim: int, *, mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType) -> None:
-        super().__init__()
-        self.time_proj = Timesteps(
-            num_channels=256,
-            cos_first=True,
-            downscale_freq_shift=0,
-            dtype=dtype,
-            mesh_device=mesh_device,
-        )
-        self.mlp = TimestepEmbedding(256, t_emb_dim, act_fn="silu", dtype=dtype, mesh_device=mesh_device)
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # The checkpoint ships a bare Sequential (mlp.0 / mlp.2), not linear_{1,2}.
-        for src, dst in (("0", "linear_1"), ("2", "linear_2")):
-            for leaf in ("weight", "bias"):
-                key = f"mlp.{src}.{leaf}"
-                if key in state:
-                    state[f"mlp.{dst}.{leaf}"] = state.pop(key)
-
-    def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
-        return self.mlp(self.time_proj(timestep))
-
-
 class _NeighborhoodAttention3D(Module):
     """Q/K/V projection, per-head QK RMSNorm, absolute RoPE, NA3D, output projection."""
 
@@ -893,36 +867,6 @@ class DiffusionNABlock(Module):
         return joined
 
 
-class _SharedAdaLNZero(Module):
-    """``proj(silu(t_emb))`` broadcast to the per-site modulation layout."""
-
-    def __init__(
-        self,
-        config: DiffVAEStage5Config,
-        *,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType,
-        out_dtype: ttnn.DataType,
-    ) -> None:
-        super().__init__()
-        self.out_dtype = out_dtype
-        self.proj = Linear(
-            config.t_emb_dim,
-            NUM_ADALN_CHUNKS * config.dim,
-            bias=True,
-            mesh_device=mesh_device,
-            dtype=dtype,
-        )
-
-    def forward(self, t_emb: ttnn.Tensor, batch: int) -> ttnn.Tensor:
-        """``t_emb``: ``(1, 1, batch, t_emb_dim)``. Returns ``(1, batch, 1, 7 * dim)``, upstream's
-        ``(B, 1, 1, 1, C)`` view."""
-        mod = self.proj(ttnn.silu(t_emb))
-        if mod.dtype != self.out_dtype:
-            mod = ttnn.typecast(mod, self.out_dtype)
-        return retile(mod, (1, batch, 1, mod.shape[-1]))
-
-
 class DiffVAEStage5(Module):
     """The stage-5 diffusion stack: ``forward_diff_step`` plus patch packing."""
 
@@ -977,9 +921,11 @@ class DiffVAEStage5(Module):
         self._rope_cache: dict[Grid, _RopeTables] = {}
 
         self.conv_in_x_t = Linear(self.padded_patch_channels, cfg.dim, bias=True, mesh_device=mesh_device, dtype=dtype)
-        # The timestep chain feeds multiplicative modulation in every block, so it runs at higher precision.
-        self.t_embedder = _TimestepEmbedder(cfg.t_emb_dim, mesh_device=mesh_device, dtype=modulation_dtype)
-        self.shared_adaln = _SharedAdaLNZero(cfg, mesh_device=mesh_device, dtype=modulation_dtype, out_dtype=dtype)
+        # Upstream's t_embedder + shared_adaln: sinusoidal timestep -> MLP -> silu -> Linear to the
+        # 7 AdaLN chunks. It feeds multiplicative modulation in every block, so it runs at higher precision.
+        self.adaln = LTXAdaLayerNormSingle(
+            cfg.t_emb_dim, mesh_device=mesh_device, dtype=modulation_dtype, out_features=NUM_ADALN_CHUNKS * cfg.dim
+        )
         self.diff_blocks = ModuleList(
             DiffusionNABlock(
                 cfg,
@@ -1011,6 +957,18 @@ class DiffVAEStage5(Module):
         for key, dim in (("conv_in_x_t.weight", 1), ("conv_out.weight", 0), ("conv_out.bias", 0)):
             if key in state:
                 state[key] = pad_dim(state[key], dim, self.padded_patch_channels)
+
+        # The checkpoint's t_embedder (a bare Sequential, mlp.0 / mlp.2) and shared_adaln.proj are
+        # one LTXAdaLayerNormSingle here.
+        renames = {
+            "t_embedder.mlp.0.": "adaln.emb.timestep_embedder.linear_1.",
+            "t_embedder.mlp.2.": "adaln.emb.timestep_embedder.linear_2.",
+            "shared_adaln.proj.": "adaln.linear.",
+        }
+        for key in list(state):
+            for src, dst in renames.items():
+                if key.startswith(src):
+                    state[dst + key[len(src) :]] = state.pop(key)
 
     def _stage5_brick(self, grid: Grid) -> tuple[int, int, int]:
         """The brick the whole stage converts with: the same choice the attention op would make."""
@@ -1167,6 +1125,18 @@ class DiffVAEStage5(Module):
             ttnn.deallocate(uploaded)
         return out
 
+    def modulation(self, timestep: ttnn.Tensor, batch: int) -> ttnn.Tensor:
+        """The shared AdaLN-Zero modulation of ``timestep`` ``(1, 1, batch, 1)``, in the modulation dtype.
+
+        Returns ``(1, batch, 1, 7 * dim)`` in the activation dtype: upstream's ``(B, 1, 1, 1, C)``
+        view, which the blocks add their own ``scale_shift_table`` to.
+        """
+        scaled = ttnn.multiply(timestep, self.config.timestep_scale_multiplier)
+        mod, _ = self.adaln(scaled)
+        if mod.dtype != self.dtype:
+            mod = ttnn.typecast(mod, self.dtype)
+        return retile(mod, (1, batch, 1, mod.shape[-1]))
+
     @timing_tree.span("mesh_device", "stage5 diff-blocks (attn+MLP)")
     def forward_diff_step(
         self,
@@ -1182,10 +1152,8 @@ class DiffVAEStage5(Module):
         Upstream carries context and x as one ``[context | conv_in_x_t(x)]`` buffer; they are kept
         apart here, which is exact since no block writes the context half.
         """
-        cfg = self.config
         with timing_tree.span(self.mesh_device, "stage5 setup: AdaLN + rope tables", category=timing_tree.SETUP):
-            scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
-            modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
+            modulation = self.modulation(timestep, grid.batch)
             tables = self.rope_tables(grid)
             band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
         log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")

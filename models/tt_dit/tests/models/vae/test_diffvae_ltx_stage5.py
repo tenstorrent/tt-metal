@@ -405,8 +405,7 @@ def test_stage5_parity(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, pcc: 
         return parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=-2)
 
     x_bands = model.embed_x_t(x_t, bands)
-    scaled_t = ttnn.multiply(tt_t, config.timestep_scale_multiplier)
-    modulation = model.shared_adaln(model.t_embedder(scaled_t), grid.batch)
+    modulation = model.modulation(tt_t, grid.batch)
     tables = model.rope_tables(grid)
     band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
 

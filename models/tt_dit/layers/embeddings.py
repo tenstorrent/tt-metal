@@ -653,7 +653,9 @@ class LTXAdaLayerNormSingle(Module):
 
     Embeds a timestep via sinusoidal projection + MLP, then projects to
     `embedding_coefficient * embedding_dim` modulation parameters (shift/scale/gate
-    groups for self-attn, cross-attn, and feedforward).
+    groups for self-attn, cross-attn, and feedforward). `out_features` sets the modulation
+    width directly when it is not a multiple of the embedding: the LTX-2.5 DiffVAE's stage 5
+    projects its `t_emb_dim` to `7 * dim` (upstream's `AdaLNZero`).
 
     Reference: LTX-2 adaln.py AdaLayerNormSingle
     """
@@ -664,20 +666,22 @@ class LTXAdaLayerNormSingle(Module):
         embedding_coefficient: int = 6,
         mesh_device=None,
         dtype=ttnn.float32,
+        out_features: int | None = None,
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.embedding_coefficient = embedding_coefficient
+        self.out_features = out_features if out_features is not None else embedding_coefficient * embedding_dim
         self.mesh_device = mesh_device
 
         # Timestep embedding: sinusoidal(256) -> MLP(256 -> embedding_dim)
         # Use fp32 for precision in sinusoidal projection
         self.emb = _LTXTimestepEmbedding(embedding_dim, mesh_device=mesh_device, dtype=dtype)
 
-        # Project to modulation params: SiLU -> Linear(embedding_dim, coefficient * embedding_dim)
+        # Project to modulation params: SiLU -> Linear(embedding_dim, out_features)
         self.linear = Linear(
             embedding_dim,
-            embedding_coefficient * embedding_dim,
+            self.out_features,
             bias=True,
             mesh_device=mesh_device,
             dtype=dtype,
@@ -696,7 +700,7 @@ class LTXAdaLayerNormSingle(Module):
 
         Returns:
             (modulation_params, embedded_timestep) where:
-            - modulation_params: (1, 1, B, coefficient * embedding_dim)
+            - modulation_params: (1, 1, B, out_features)
             - embedded_timestep: (1, 1, B, embedding_dim)
         """
         embedded_timestep = self.emb(timestep)
