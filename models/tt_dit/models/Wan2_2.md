@@ -170,8 +170,19 @@ Measured on Blackhole Galaxy (4x8, sp=8, tp=4, ring), 832x480, 81 frames, 40 ste
 
 Same mesh at 1280x720 (81 frames, 40 steps): baseline 142.4s, split path bit-exact (PCC 1.0), default preset
 129.9s (1.10x) with 4 cached steps per branch, PSNR 26.7 dB / PCC 0.991. At 720p most high-noise residual
-diffs sit just above the 0.05 threshold (0.05-0.07), so fewer steps cache than at 480p; a per-resolution
-threshold (e.g. 0.06 at 720p) is a natural follow-up.
+diffs sit just above the 0.05 threshold (0.05-0.07), so fewer steps cache than at 480p. Threshold sweep at 720p
+(`cache_config=WanDBCacheConfig.default(residual_diff_threshold=...)`):
+
+| Threshold | Denoising | Cached steps per branch | PSNR vs. baseline | PCC vs. baseline |
+|---|---|---|---|---|
+| 0.05 (default) | 129.9s (1.10x) | 4 | 26.7 dB | 0.991 |
+| 0.06 | 110.3s (1.30x) | 10 | 18.5 dB | 0.943 |
+| 0.07 | 105.4s (1.36x) | 11 | 12.3 dB | 0.748 |
+| 0.08 | 101.9s (1.40x) | 12 | 12.3 dB | 0.748 |
+
+The cliff between 0.06 and 0.07 is about *when* caching starts rather than how many steps cache: at 0.07 the
+high-noise expert starts caching at step 5, at 0.06 at step 10. Steps before ~10 change the trajectory
+strongly, so 0.06 is the recommended setting for 720p.
 
 The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
