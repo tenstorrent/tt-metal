@@ -12,6 +12,10 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -21,6 +25,69 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::prim {
+
+namespace detail {
+
+// Total tile capacity at each fixed PREP CB index.  Indices 0, 1, 2 and 16 are bf16; the rest are
+// fp32.  Keep indices 0..30 byte-identical to the monolithic layout: the Horner matmul path is
+// layout-sensitive.  Index 31 (s3) is last and is only a one-tile invert_block temporary, so
+// right-sizing it cannot move any other CB.
+constexpr std::array<uint32_t, 32> chunk_gdn_prep_cb_tile_capacities(
+    uint32_t Ct, uint32_t Kt, uint32_t Vt) {
+    const uint32_t cc = Ct * Ct;
+    const uint32_t ck = Ct * Kt;
+    const uint32_t cv = Ct * Vt;
+    const uint32_t kv = Kt * Vt;
+    const uint32_t kc = Kt * Ct;
+    const uint32_t scratch = std::max({cc, ck, cv, kv, kc});
+    return {
+        ck,       // q
+        ck,       // k
+        cv,       // v
+        Ct,       // g
+        Ct,       // beta
+        cc,       // eye
+        cc,       // tril
+        cc,       // ones
+        2 * kv,   // S
+        Ct,       // decay
+        Ct,       // decay_exp
+        Ct,       // decayfac
+        cc,       // lmask
+        cc,       // Tinv
+        cv,       // vbeta
+        ck,       // kbeta
+        2 * cv,   // out
+        cv,       // u / quadrant masks
+        ck,       // w / kd
+        ck,       // qdecay
+        cc,       // intra
+        2 * kv,   // s2
+        cv,       // vnew / dl
+        cv,       // ointer
+        kc,       // kdec_t
+        kv,       // supd
+        kv,       // stmp
+        kv,       // final_s
+        scratch,  // scr1
+        scratch,  // scr2
+        scratch,  // scr3
+        1,        // s3: one-tile invert_block temporary; last CB preserves all preceding addresses
+    };
+}
+
+constexpr uint32_t chunk_gdn_prep_cb_bytes(uint32_t Ct, uint32_t Kt, uint32_t Vt) {
+    constexpr uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    constexpr uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
+    const auto capacities = chunk_gdn_prep_cb_tile_capacities(Ct, Kt, Vt);
+    uint32_t bytes = 0;
+    for (std::size_t i = 0; i < capacities.size(); ++i) {
+        bytes += capacities[i] * ((i == 0 || i == 1 || i == 2 || i == 16) ? bf16_tile_bytes : fp32_tile_bytes);
+    }
+    return bytes;
+}
+
+}  // namespace detail
 
 // ---------------------------------------------------------------------------
 // PREP

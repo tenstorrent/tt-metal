@@ -15,6 +15,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add.cpp
     test_add_int.cpp
     test_broadcast_to.cpp
+    test_chunk_gdn_prep_cb_sizes.cpp
     test_convert_to_hwc_gather.cpp
     test_gelu_bw_ulp.cpp
     test_gelu_bw_main_ulp.cpp

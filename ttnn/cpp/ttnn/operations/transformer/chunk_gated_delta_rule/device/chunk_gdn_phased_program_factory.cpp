@@ -177,8 +177,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
 
-    const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kv = Kt * Vt, kc = Kt * Ct;
-    uint32_t scr = std::max({cc, ck, cv, kv, kc});
+    const auto cb_tiles = detail::chunk_gdn_prep_cb_tile_capacities(Ct, Kt, Vt);
 
     const tt::DataFormat df_io = tt::DataFormat::Float16_b;  // bf16 q/k/v
 
@@ -204,38 +203,38 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
 
     // Allocate the full CB set in the SAME order/sizes as the monolithic op, so the prep phase's
     // L1 layout is byte-identical (the Horner's matmul L1 access pattern is layout-sensitive).
-    add_cb(pcb::q, ck, 1, df_io);
-    add_cb(pcb::k, ck, 1, df_io);
-    add_cb(pcb::v, cv, 1, df_io);
-    add_cb(pcb::g, Ct);
-    add_cb(pcb::beta, Ct);
-    add_cb(pcb::eye, cc);
-    add_cb(pcb::tril, cc);
-    add_cb(pcb::ones, cc);
-    add_cb(pcb::S, kv, 2);
-    add_cb(pcb::decay, Ct);
-    add_cb(pcb::decay_exp, Ct);
-    add_cb(pcb::decayfac, Ct);
-    add_cb(pcb::lmask, cc);
-    add_cb(pcb::Tinv, cc);
-    add_cb(pcb::vbeta, cv);
-    add_cb(pcb::kbeta, ck);
-    add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::u, cv);
-    add_cb(pcb::w, ck);
-    add_cb(pcb::qdecay, ck);
-    add_cb(pcb::intra, cc);
-    add_cb(pcb::s2, kv, 2);
-    add_cb(pcb::vnew, cv);  // aliased as cb_dl in the prep kernel (1 tile used)
-    add_cb(pcb::ointer, cv);
-    add_cb(pcb::kdec_t, kc);
-    add_cb(pcb::supd, kv);
-    add_cb(pcb::stmp, kv);
-    add_cb(pcb::final_s, kv);
-    add_cb(pcb::scr1, scr);
-    add_cb(pcb::scr2, scr);
-    add_cb(pcb::scr3, scr);
-    add_cb(pcb::s3, kv, 2);
+    add_cb(pcb::q, cb_tiles[pcb::q], 1, df_io);
+    add_cb(pcb::k, cb_tiles[pcb::k], 1, df_io);
+    add_cb(pcb::v, cb_tiles[pcb::v], 1, df_io);
+    add_cb(pcb::g, cb_tiles[pcb::g]);
+    add_cb(pcb::beta, cb_tiles[pcb::beta]);
+    add_cb(pcb::eye, cb_tiles[pcb::eye]);
+    add_cb(pcb::tril, cb_tiles[pcb::tril]);
+    add_cb(pcb::ones, cb_tiles[pcb::ones]);
+    add_cb(pcb::S, cb_tiles[pcb::S]);
+    add_cb(pcb::decay, cb_tiles[pcb::decay]);
+    add_cb(pcb::decay_exp, cb_tiles[pcb::decay_exp]);
+    add_cb(pcb::decayfac, cb_tiles[pcb::decayfac]);
+    add_cb(pcb::lmask, cb_tiles[pcb::lmask]);
+    add_cb(pcb::Tinv, cb_tiles[pcb::Tinv]);
+    add_cb(pcb::vbeta, cb_tiles[pcb::vbeta]);
+    add_cb(pcb::kbeta, cb_tiles[pcb::kbeta]);
+    add_cb(pcb::out, cb_tiles[pcb::out], 1, df_io);
+    add_cb(pcb::u, cb_tiles[pcb::u]);
+    add_cb(pcb::w, cb_tiles[pcb::w]);
+    add_cb(pcb::qdecay, cb_tiles[pcb::qdecay]);
+    add_cb(pcb::intra, cb_tiles[pcb::intra]);
+    add_cb(pcb::s2, cb_tiles[pcb::s2]);
+    add_cb(pcb::vnew, cb_tiles[pcb::vnew]);
+    add_cb(pcb::ointer, cb_tiles[pcb::ointer]);
+    add_cb(pcb::kdec_t, cb_tiles[pcb::kdec_t]);
+    add_cb(pcb::supd, cb_tiles[pcb::supd]);
+    add_cb(pcb::stmp, cb_tiles[pcb::stmp]);
+    add_cb(pcb::final_s, cb_tiles[pcb::final_s]);
+    add_cb(pcb::scr1, cb_tiles[pcb::scr1]);
+    add_cb(pcb::scr2, cb_tiles[pcb::scr2]);
+    add_cb(pcb::scr3, cb_tiles[pcb::scr3]);
+    add_cb(pcb::s3, cb_tiles[pcb::s3]);
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/";
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
