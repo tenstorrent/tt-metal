@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from itertools import chain, product
 
 import pytest
@@ -159,16 +160,33 @@ FORMATS_BFP4_B = [
 ]
 
 
-# Ops that return wrong results under coverage instrumentation, so they are skipped only
-# when WITH_COVERAGE is set. Reciprocal is the only op in the sweep that emits
-# SFPLOADMACRO, and the gcov counters interleaved into its loop perturb the macro
-# sequence's issue timing: 46 of its 153 variants come back with alternate elements stale
-# on Blackhole, while its sfp* instruction stream stays byte-identical to the
-# non-coverage build. An op that starts emitting SFPLOADMACRO belongs here too.
+# Ops whose coverage build returns wrong results, per arch, so they are skipped only when
+# WITH_COVERAGE is set. Membership is measured, never inferred: run the op under
+# `--coverage` on the arch in question before adding it here.
+#
+# Reciprocal on Blackhole is the only entry the sweep has. 46 of its 153 Blackhole
+# variants come back with alternate elements stale while its sfp* instruction stream
+# stays byte-identical to the non-coverage build, which is what makes it a timing fault
+# rather than a codegen one. Two things are needed to reproduce it, and neither predicts
+# it on its own:
+#
+#   - It needs the SFPLOADMACRO path: `--coverage --disable-sfploadmacro` passes 153/153.
+#     But emitting SFPLOADMACRO does not imply failing. Counting the mnemonic in the
+#     coverage-built math.elf of a Wormhole sweep that passes 6377/6377: Exp at
+#     ApproximationMode.Yes has 16 (the sweeps below hardcode CLAMP_NEGATIVE(True), which
+#     selects the macro branch), Signbit has 8, and the int max/min ops in _INT_UNARY_OPS
+#     have 8. So the macro is the mechanism, not the criterion.
+#   - It is Blackhole-only. calculate_reciprocal reaches the hand-written macro sequences
+#     only on Blackhole; Wormhole takes the pure sfpi Newton path and emits no
+#     SFPLOADMACRO at all -- 0 in every built math.elf, in the same audit that finds 8
+#     for Signbit. Its 168 Wormhole variants give 162 passed / 6 xfailed under coverage,
+#     the same split the non-coverage build gives, so keying on the arch keeps them in
+#     the coverage lane.
+#
 #   https://github.com/tenstorrent/tt-metal/issues/56751
-COVERAGE_SFPLOADMACRO_SKIP_OPS = [
-    MathOperation.Reciprocal,
-]
+COVERAGE_MISMATCH_SKIP_OPS = {
+    ChipArchitecture.BLACKHOLE: [MathOperation.Reciprocal],
+}
 
 
 def _skip_coverage_unsupported(mathop):
@@ -182,9 +200,15 @@ def _skip_coverage_unsupported(mathop):
     if not TestConfig.WITH_COVERAGE:
         return
 
-    if mathop in COVERAGE_SFPLOADMACRO_SKIP_OPS:
+    # Every entry in the table is mediated by SFPLOADMACRO, and -DDISABLE_SFPLOADMACRO
+    # compiles the non-macro path instead -- the build the exclusion is not about. Revisit
+    # this early return if an entry that is not macro-mediated is ever added.
+    if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
+        return
+
+    if mathop in COVERAGE_MISMATCH_SKIP_OPS.get(TestConfig.CHIP_ARCH, ()):
         pytest.skip(
-            reason="SFPLOADMACRO returns wrong results under coverage instrumentation: "
+            reason="wrong results under coverage instrumentation: "
             "https://github.com/tenstorrent/tt-metal/issues/56751"
         )
 
@@ -849,10 +873,11 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # No op in _INT_UNARY_OPS is currently excluded under coverage, so this call skips
-    # nothing today. It stays because the exclusion list is per-op: the last time this
-    # sweep's pool changed -- ReluMin joining _INT_UNARY_OPS -- it needed the guard, and
-    # the coverage job built a kernel it should not have.
+    # No op in _INT_UNARY_OPS is excluded under coverage on any arch, so this call skips
+    # nothing today -- including the int max/min ops, which emit SFPLOADMACRO and pass.
+    # It stays because the exclusion table is per-op: the last time this sweep's pool
+    # changed -- ReluMin joining _INT_UNARY_OPS -- it needed the guard, and the coverage
+    # job built a kernel it should not have.
     _skip_coverage_unsupported(mathop)
 
     int_format = (
@@ -1167,7 +1192,7 @@ def test_eltwise_unary_sfpu_threshold(
 ):
     # As in test_eltwise_unary_sfpu_int: nothing in _THRESHOLD_OPS is excluded under
     # coverage today, and the call stays so that a change to the pool cannot silently
-    # bypass the exclusion list.
+    # bypass the exclusion table.
     _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
