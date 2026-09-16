@@ -591,14 +591,16 @@ void D2dSyncConsumer::log_summary() const {
         log_info(
             tt::LogMetal,
             "[streaming profiler] d2d sync chip {}: local clock {} samples in {} constant-rate runs ({} transitions, "
-            "{} "
-            "tail samples handed over; longest run {:+.3f} ppm off its PLL multiple); applied AICLK mean {:.5f} GHz "
+            "{} runs merged back, {} glitch samples dropped, {} tail samples handed over; longest run {:+.3f} ppm off "
+            "its PLL multiple); applied AICLK mean {:.5f} GHz "
             "(run min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} ppm; {} correction nodes, the tangent "
             "extended {} times",
             chip,
             l.fit.n_total,
             nb,
             l.fit.transitions,
+            l.fit.merged,
+            l.fit.glitches,
             l.fit.handed_over,
             off_ppm,
             mean * to_ghz,

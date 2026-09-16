@@ -37,9 +37,6 @@ struct LocalClockFit {
     // A sample this far (wall ticks) off the open run's line opens a new run: the refclk quantisation puts a sample
     // at most ~14 ticks off the line, a single 1/8 step in the ratio walks 19 ticks per 3 us stride.
     static constexpr double kSplitWallTicks = 64.0;
-    // A run is cut after this much refclk (0.5 s) regardless: the ratio wanders with temperature at the 0.01 ppm/s
-    // level, which one line per half second follows to ~ns, and the relative sums stay small.
-    static constexpr double kMaxRunTicks = 25e6;
     // Fewer samples than this fix the slope too loosely (>100 ppm) to test a newcomer against.
     static constexpr uint64_t kSettledSamples = 16;
 
@@ -145,6 +142,21 @@ struct LocalClockFit {
             syy += dy * dy;
             n++;
         }
+        // Absorbs a later run on the same line: its sums re-based onto this anchor, its newest-sample bookkeeping
+        // taken over.
+        void merge(const Run& b) {
+            const long double d = b.ax - ax, e = b.ay - ay, nb = static_cast<long double>(b.n);
+            sxx += b.sxx + 2 * d * b.sx + nb * d * d;
+            sxy += b.sxy + d * b.sy + e * b.sx + nb * d * e;
+            syy += b.syy + 2 * e * b.sy + nb * e * e;
+            sx += b.sx + nb * d;
+            sy += b.sy + nb * e;
+            n += b.n;
+            r_last = b.r_last;
+            last_x = b.last_x;
+            last_y = b.last_y;
+            prev_x = b.prev_x;
+        }
         // Takes the newest sample back out; the sums are exact, so this is exact.
         void remove_last() {
             const long double dx = last_x - ax, dy = last_y - ay;
@@ -161,10 +173,13 @@ struct LocalClockFit {
 
     std::vector<Run> runs;  // in time order, disjoint in refclk
     uint64_t n_total = 0;
-    uint64_t transitions = 0;  // runs opened by a sample off the line or by a burst (the kMaxRunTicks cuts are not counted)
+    uint64_t transitions = 0;  // runs opened by two samples off the line or by a burst
     uint64_t handed_over = 0;  // samples moved from a run's tail to the run after it
+    uint64_t merged = 0;       // runs that settled on their predecessor's multiple and were folded back into it
+    uint64_t glitches = 0;     // lone samples off the line, with the next one back on it
     double prev_gap = 0.0;     // refclk between the last two samples
     bool pending_handover = false;
+    bool pending_off = false;  // the previous sample was off the line; a second one opens the run
 
     // The tracker emits a burst of consecutive 3 us samples when it detects a rate change, a sample per 100 us for
     // the run's first ms, then one per ms: a sample following the previous one by less than kBurstGapTicks after a
@@ -183,13 +198,24 @@ struct LocalClockFit {
             const double gap = r - cur.r_last;
             const bool burst_start = cur.n >= 2 && gap < kBurstGapTicks && prev_gap >= kSparseGapTicks;
             const bool off = cur.settled() && std::abs(w - cur.wall_of_refclk(r)) > kSplitWallTicks;
-            if (!off && !burst_start && r - cur.r_first < kMaxRunTicks) {
+            // One sample off a settled line is a glitch until the next one confirms it; a burst is the tracker's own
+            // verdict and needs no second sample.
+            if (off && !burst_start && !pending_off) {
+                pending_off = true;
+                prev_gap = gap;
+                return;
+            }
+            if (!off && !burst_start) {
+                glitches += pending_off ? 1 : 0;
+                pending_off = false;
                 cur.add(r, w);
                 prev_gap = gap;
                 settle_handover();
+                merge_settled();
                 return;
             }
-            transitions += (off || burst_start) ? 1 : 0;
+            pending_off = false;
+            transitions++;
             // The old run's newest sample may already sit on the new rate (a sparse sample landing in the ~12 us
             // between a transition and the tracker's detection of it); judged once the new run's line is settled.
             pending_handover = burst_start && cur.n >= 3;
@@ -200,6 +226,25 @@ struct LocalClockFit {
     }
 
 private:
+    // A run that has just settled on the same PLL multiple as the settled run before it, within half the split
+    // threshold of that run's line, is the same line: a glitch or a tracker burst on no real step opened it. Folding
+    // it back keeps the long run's intercept instead of a 16-sample one.
+    void merge_settled() {
+        if (runs.size() < 2 || runs.back().n != kSettledSamples) {
+            return;
+        }
+        Run& prev = runs[runs.size() - 2];
+        const Run& cur = runs.back();
+        const double k = cur.ratio();
+        if (k == 0.0 || !prev.settled() || prev.ratio() != k ||
+            std::abs(cur.wall_of_refclk(cur.r_first) - prev.wall_of_refclk(cur.r_first)) > kSplitWallTicks / 2) {
+            return;
+        }
+        prev.merge(cur);
+        runs.pop_back();
+        pending_handover = false;
+        merged++;
+    }
     void settle_handover() {
         if (!pending_handover || runs.size() < 2 || !runs.back().settled()) {
             return;
