@@ -11,6 +11,7 @@ from typing import List, Optional
 
 import torch
 from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 
@@ -24,17 +25,15 @@ DEVICE_SEED_MAX = 1_000_000
 _UINT64_MASK = (1 << 64) - 1
 
 
-def _mark_trace_buffers_corruptible(bucket, value):
+def _acknowledge_trace_buffers_corruptible(bucket, value):
     """Acknowledge bucketed trace I/O that another live trace may overwrite."""
     if bucket is None or value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
-            _mark_trace_buffers_corruptible(bucket, item)
+            _acknowledge_trace_buffers_corruptible(bucket, item)
         return
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is not None:
-        mark_corruptible(value)
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:
@@ -350,6 +349,13 @@ class SamplingGenerator:
         if self._penalties_active:
             self.tt_penalties.reset_output_tokens()
 
+    def _copy_warmup_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        # clone chooses its own core grid, which can cross the prefetcher/worker
+        # sub-device boundary on Galaxy.
+        if self.sub_core_grids is not None:
+            return ttnn.identity(logits, sub_core_grids=self.sub_core_grids)
+        return ttnn.clone(logits)
+
     def precompile(
         self,
         logits: ttnn.Tensor,
@@ -372,6 +378,11 @@ class SamplingGenerator:
         callers pass ``skip_precompile=True``, executes its program for the first time inside a live
         trace capture -- TT_FATAL !is_capturing_trace, which kills the engine rather than erroring.
         """
+        # Capture's penalty precompile uses a copy because penalties rewrite
+        # logits in place. Warm that copy program before any trace is live too.
+        if all_configs or self._penalties_active:
+            logits = self._copy_warmup_logits(logits)
+
         if not all_configs:
             self._run_sampling(
                 logits,
@@ -432,7 +443,7 @@ class SamplingGenerator:
             )
             # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
             # leave the capture buffer already penalized and make the first replay penalize it twice.
-            scratch = ttnn.clone(logits) if penalties_on else logits
+            scratch = self._copy_warmup_logits(logits) if penalties_on else logits
             self._run_sampling(
                 scratch,
                 penalties_on=penalties_on,
@@ -442,14 +453,19 @@ class SamplingGenerator:
             if scratch is not logits:
                 ttnn.deallocate(scratch)
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-        sampled = self._run_sampling(
-            logits,
-            penalties_on=penalties_on,
-            tt_out_tok=tt_out_tok,
-        )
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
-        ttnn.synchronize_device(self.mesh_device)
+        # Whatever sampling allocates inside the capture window (e.g. the argmax output when no
+        # feedback buffer is supplied) belongs to the trace being recorded and must stay allocated
+        # for replay. Acknowledge the window (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as the
+        # model decode capture does; measured: 1 buffer left live across every replay on Qwen2.5-VL.
+        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+            sampled = self._run_sampling(
+                logits,
+                penalties_on=penalties_on,
+                tt_out_tok=tt_out_tok,
+            )
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
+            ttnn.synchronize_device(self.mesh_device)
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):
@@ -463,7 +479,7 @@ class SamplingGenerator:
         slot["input"] = logits
         slot["output"] = output
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
-        _mark_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
+        _acknowledge_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
 
         return slot["output"]
 

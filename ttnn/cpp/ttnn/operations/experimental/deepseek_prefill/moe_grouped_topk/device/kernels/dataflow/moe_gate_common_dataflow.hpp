@@ -34,6 +34,13 @@ constexpr uint32_t face_size_bytes = elements_per_face * bytes_per_element;  // 
 constexpr uint32_t tile_size_bytes = elements_per_tile * bytes_per_element;  // 2048
 }  // namespace index_tile
 
+namespace index32_tile {
+constexpr uint32_t bytes_per_element = 4;                                    // uint32 (template-side index tiles)
+constexpr uint32_t face_line_bytes = columns_per_face * bytes_per_element;   // 64
+constexpr uint32_t face_size_bytes = elements_per_face * bytes_per_element;  // 1024
+constexpr uint32_t tile_size_bytes = elements_per_tile * bytes_per_element;  // 4096
+}  // namespace index32_tile
+
 FORCE_INLINE void generate_reduce_scalar(
     const uint32_t cb_reduce_ones_scalar, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
     Noc noc;

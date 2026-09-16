@@ -17,11 +17,11 @@ void kernel_main() {
 
     const auto s = TensorAccessor(tensor::dst);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_out(dfb::out);
     const auto out_tile_bytes = dfb_out.get_tile_size();
 
-    uint32_t end_id = start_id + num_tiles;
+    const uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {
         dfb_out.wait_front(onetile);
         noc.async_write(dfb_out, s, out_tile_bytes, {.offset_bytes = 0}, {.page_id = i});

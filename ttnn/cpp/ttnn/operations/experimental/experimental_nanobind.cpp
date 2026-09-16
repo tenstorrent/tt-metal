@@ -60,7 +60,6 @@
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
@@ -90,6 +89,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_padding_config/moe_padding_config_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/mhc_split_sinkhorn/mhc_split_sinkhorn_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
@@ -169,6 +169,7 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
     deepseek_prefill::moe_padding_config::detail::bind_moe_padding_config(mod);
     deepseek_prefill::detail::bind_outbound_socket_service_sync(mod);
+    deepseek_prefill::mhc_split_sinkhorn::detail::bind_experimental_mhc_split_sinkhorn_operation(mod);
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(mod);
@@ -187,8 +188,6 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_inbound_socket_service_sync(mod);
     ttnn::experimental::detail::bind_rgb_to_yuv(mod);
     reshape::detail::bind_view(mod);
-
-    gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
 
     test::bind_test_hang_device_operation(mod);
     test::bind_test_dram_prefetcher_consumer(mod);

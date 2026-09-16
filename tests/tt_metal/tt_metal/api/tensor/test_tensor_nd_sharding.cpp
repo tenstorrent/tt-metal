@@ -13,6 +13,7 @@
 // (loopback/region/BDS-creation/perf/buffer-size) that exercise the runtime
 // MeshTensor/HostTensor API on a single-device mesh via MeshDevice1x1Fixture.
 
+#include "impl/buffers/compute_page_mapping.hpp"
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
