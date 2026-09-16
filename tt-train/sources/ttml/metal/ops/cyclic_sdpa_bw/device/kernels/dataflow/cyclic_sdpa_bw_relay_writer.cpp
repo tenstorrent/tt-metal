@@ -83,6 +83,7 @@ void kernel_main() {
     // here: dK and dV belong to the key side.
     const uint32_t chunks = get_arg_val<uint32_t>(arg++);
     const uint32_t pairs = get_arg_val<uint32_t>(arg++);
+    const uint32_t heads = get_arg_val<uint32_t>(arg++);
     const uint32_t pair_table_arg = arg;
 
     constexpr uint32_t kCores = get_compile_time_arg_val(0);
@@ -182,9 +183,9 @@ void kernel_main() {
         mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, get_semaphore(release_sem_id));
 
     for (uint32_t s = 0; s < slice_count; ++s) {
-    const uint32_t sl = first_slice + s * slice_stride;
-    const uint32_t bh = sl / pairs;
-    const uint32_t col_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * (sl % pairs) + 1u);
+    const uint32_t sl = first_slice + s * slice_stride;  // pair-major, as the reader
+    const uint32_t bh = sl % heads;
+    const uint32_t col_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * (sl / heads) + 1u);
     row_base = (bh * chunks + col_chunk) * 2u * kCores * row_tiles;
     val_base = (bh * chunks + col_chunk) * 2u * kCores * val_tiles;
     for (uint32_t t = 0; t < kTimesteps; ++t) {
