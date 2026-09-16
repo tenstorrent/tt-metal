@@ -188,7 +188,7 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
-    //    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     //    bool using_persistent_buffers,
     const bool force_transpose,
     const uint32_t num_workers_per_link,
@@ -584,6 +584,42 @@ all_gather_minimal_matmul_async_factory_helper(
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
 
+    // Cross-device entry barrier feasibility (see the barrier block in dm_in0_sender.cpp).
+    // An in0 fabric core owns exactly one fabric direction, so the barrier can only reach every
+    // peer if each direction that has peers to reach also has a mux connection on this device.
+    // dir 0 (mux_backward) carries the physical FORWARD direction and dir 1 (mux_forward) the
+    // physical BACKWARD one. Ring satisfies this on every device. Linear satisfies it only on a
+    // 2-device line: the uni-ring mux allocation above gives rank 0 the forward direction only and
+    // every other rank the backward direction only, so on a longer line an interior device could
+    // never announce its arrival to the devices ahead of it.
+    if (barrier_semaphore.has_value()) {
+        TT_FATAL(
+            num_targets_forward + num_targets_backward == ring_size - 1,
+            "all_gather_minimal_matmul_async barrier_semaphore requires the forward ({}) and backward ({}) target "
+            "counts to cover all ring_size-1 ({}) peers",
+            num_targets_forward,
+            num_targets_backward,
+            ring_size - 1);
+        TT_FATAL(
+            num_targets_forward == 0 || mux_connection_valid(0),
+            "all_gather_minimal_matmul_async barrier_semaphore is not supported for topology {} with ring_size {} at "
+            "ring_index {}: this device must reach {} peer(s) in the forward direction but the op only creates the "
+            "backward fabric mux here. Use topology Ring, or a 2-device line, or keep the barrier on the host side.",
+            static_cast<uint32_t>(topology),
+            ring_size,
+            ring_index,
+            num_targets_forward);
+        TT_FATAL(
+            num_targets_backward == 0 || mux_connection_valid(1),
+            "all_gather_minimal_matmul_async barrier_semaphore is not supported for topology {} with ring_size {} at "
+            "ring_index {}: this device must reach {} peer(s) in the backward direction but the op only creates the "
+            "forward fabric mux here. Use topology Ring, or a 2-device line, or keep the barrier on the host side.",
+            static_cast<uint32_t>(topology),
+            ring_size,
+            ring_index,
+            num_targets_backward);
+    }
+
     std::vector<CoreRange> mux_core_ranges;
     mux_core_ranges.reserve(num_mux_cores);
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
@@ -948,6 +984,10 @@ all_gather_minimal_matmul_async_factory_helper(
         in0_receiver_fabric_compile_time_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
     in0_receiver_fabric_compile_time_args.insert(
         in0_receiver_fabric_compile_time_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+    // use_barrier_sem: gates the cross-device entry barrier. Only the fabric variant of the in0
+    // kernel can run it (it is the only one holding a mux connection), so only this kernel's
+    // compile-time arg list carries it; the sender / no-fabric variants are untouched.
+    in0_receiver_fabric_compile_time_args.push_back(barrier_semaphore.has_value() ? 1u : 0u);
     append_accessors(
         in0_receiver_fabric_compile_time_args,
         ag_output_tensor,
@@ -1085,6 +1125,10 @@ all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            // Propagate the DEST sync mode: the host validates subblock_h*subblock_w against
+            // get_dest_reg_count(compute_kernel_config) (8 fp32 tiles with full sync), so the kernel must
+            // be built in the same mode or an 8-tile subblock overflows the 4-tile half-sync DEST.
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
@@ -1181,6 +1225,13 @@ all_gather_minimal_matmul_async_factory_helper(
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in0_common_args.push_back(mm_output_tensor.buffer()->address());
+        }
+        // Barrier semaphore address, appended AFTER the output addresses so the default layout is
+        // unchanged. Set on all three in0 kernels (only the fabric one reads it) so that
+        // override_runtime_arguments can refresh it uniformly on program-cache hits, the same way
+        // it refreshes semaphore.at(0/1) for the out_ready semaphores.
+        if (barrier_semaphore.has_value()) {
+            in0_common_args.push_back(barrier_semaphore.value().address());
         }
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_sender_kernels_id, in0_common_args);
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_fabric_kernels_id, in0_common_args);
@@ -1311,6 +1362,19 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_core_order.size(),
             in0_fwd_idx,
             in0_bwd_idx};
+        // Cross-device entry barrier: NOC coordinates of this chain's two fabric cores. Each of
+        // them owns a single fabric direction, so each increments the barrier semaphore on BOTH of
+        // these coordinates on every device it can reach; together they cover every peer exactly
+        // once per coordinate. Pushed before the mux connection args to match the kernel's parse
+        // order, and only when the barrier is enabled so the default layout is unchanged.
+        if (barrier_semaphore.has_value() && in0_is_fabric_core) {
+            auto in0_fwd_core_physical = device->worker_core_from_logical_core(in0_fwd_core);
+            auto in0_bwd_core_physical = device->worker_core_from_logical_core(in0_bwd_core);
+            in0_args.push_back((std::uint32_t)in0_fwd_core_physical.x);
+            in0_args.push_back((std::uint32_t)in0_fwd_core_physical.y);
+            in0_args.push_back((std::uint32_t)in0_bwd_core_physical.x);
+            in0_args.push_back((std::uint32_t)in0_bwd_core_physical.y);
+        }
         if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
 
@@ -1617,6 +1681,11 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     for (size_t i = mm_outputs_start; i < output_tensor.size(); ++i) {
         in0_common.push_back(output_tensor[i].buffer()->address());
     }
+    // Barrier semaphore address (trailing entry; see the create path). A GlobalSemaphore is
+    // re-allocated per call, so this must be refreshed on every program-cache hit.
+    if (attributes.barrier_semaphore.has_value()) {
+        in0_common.push_back(attributes.barrier_semaphore.value().address());
+    }
 
     // Build in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b], output_addrs...]
     // When FSDP fusion is active, in1 reads from the gathered persistent_weight_buffer
@@ -1664,6 +1733,16 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
             tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_receiver_fabric_kernels_id);
         auto& in0_receiver_no_fabric_common =
             tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_receiver_no_fabric_kernels_id);
+        // barrier_semaphore presence changes the in0 common-arg layout and the in0 fabric kernel's
+        // use_barrier_sem compile-time arg, but it is NOT part of the program-cache key. Catch a
+        // cached program built with the other setting instead of writing out of bounds here (or,
+        // worse, silently dropping the barrier / hanging on a stale semaphore address).
+        TT_FATAL(
+            in0_sender_common.size() == in0_common.size(),
+            "all_gather_minimal_matmul_async: barrier_semaphore was {} on this call but the cached program was built "
+            "the other way round. barrier_semaphore is not part of the program-cache key, so it must be passed "
+            "consistently for a given op configuration.",
+            attributes.barrier_semaphore.has_value() ? "given" : "omitted");
         for (size_t i = 0; i < in0_common.size(); ++i) {
             in0_sender_common[i] = in0_common[i];
             in0_receiver_fabric_common[i] = in0_common[i];
@@ -1706,7 +1785,7 @@ all_gather_minimal_matmul_async_factory(
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<ttnn::GlobalSemaphore>& semaphore,
-    // const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
+    const std::optional<ttnn::GlobalSemaphore>& barrier_semaphore,
     // bool using_persistent_buffers,
     const bool force_transpose,
     const uint32_t num_workers_per_link,
@@ -1746,7 +1825,7 @@ all_gather_minimal_matmul_async_factory(
             ring_index,
             topology,
             semaphore,
-            // barrier_semaphore,
+            barrier_semaphore,
             // using_persistent_buffers,
             force_transpose,
             num_workers_per_link,
@@ -1824,7 +1903,7 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         device_index,
         attributes.topology,
         attributes.semaphore,
-        // attributes.barrier_semaphore,
+        attributes.barrier_semaphore,
         // attributes.using_persistent_buffers,
         attributes.force_transpose,
         attributes.num_workers_per_link,

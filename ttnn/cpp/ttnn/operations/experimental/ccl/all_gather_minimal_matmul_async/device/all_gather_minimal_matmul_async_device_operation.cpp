@@ -112,6 +112,20 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
             2 * tt::constants::TILE_WIDTH);
     }
 
+    // Cross-device entry barrier. Optional: without it the op behaves exactly as before, and the
+    // caller may still run a host-side barrier instead. When given, every in0 fabric core must be
+    // able to announce its arrival to every peer. On a Linear topology the op creates only one
+    // fabric mux direction per device (rank 0 forward, every other rank backward), so all-to-all
+    // reachability exists only on a 2-device line; the program factory re-checks this per device.
+    if (attributes.barrier_semaphore.has_value()) {
+        TT_FATAL(
+            attributes.topology != ttnn::ccl::Topology::Linear || attributes.ring_size <= 2,
+            "all_gather_minimal_matmul_async barrier_semaphore is not supported for topology Linear with ring_size {} "
+            "(> 2): the op creates a single fabric mux direction per device on a line, so interior devices cannot "
+            "reach the devices ahead of them. Use topology Ring, or keep the barrier on the host side.",
+            attributes.ring_size);
+    }
+
     // FSDP fusion validation
     if (attributes.fsdp_cluster_axis.has_value()) {
         TT_FATAL(

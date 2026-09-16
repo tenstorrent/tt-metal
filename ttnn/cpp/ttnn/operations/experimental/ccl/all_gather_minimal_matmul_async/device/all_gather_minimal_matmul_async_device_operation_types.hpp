@@ -120,7 +120,10 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
-        "fuse_swiglu");
+        "fuse_swiglu",
+        // The compute kernel is built from this config (fidelity, DEST format/sync, approx mode): two calls with
+        // identical shapes and block config but a different compute config must not share a program.
+        "compute_kernel_config");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -139,7 +142,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
-            this->fuse_swiglu);
+            this->fuse_swiglu,
+            this->compute_kernel_config);
     }
 };
 

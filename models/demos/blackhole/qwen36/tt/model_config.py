@@ -12,6 +12,33 @@ from pathlib import Path
 
 from models.tt_transformers.tt.model_config import ModelArgs
 
+# Qwen3.6-27B Blackhole (P300X2/P150x4 TP) serving optimizations are ON BY DEFAULT. These are the
+# validated "optimized" config from BENCHMARKS.md (TTFT 1.4-4.2x, TPOT 1.3-2.2x vs the reference
+# build); each is set via setdefault so any flag can still be overridden from the environment (set a
+# flag to its old value to disable it). Runs at import of this module, before any layer __init__
+# reads a flag. QWEN_SDPA_BF8 is the one precision change (bf16->bf8 KV; decode PCC 0.9999,
+# 64k retrieval matches bf16) and is included by request; export QWEN_SDPA_BF8=0 for bf16 KV.
+_QWEN36_SERVING_OPT_DEFAULTS = {
+    "QWEN36_GDN_OUT_MODE": "agmm",
+    "QWEN36_GDN_CONV": "kda",
+    "QWEN36_AGMM_LAYOUT": "nt11x8",
+    "QWEN36_SDPA_K_CHUNK": "256",
+    "QWEN36_GDN_DECODE_FUSED": "2",
+    "QWEN36_GDN_SLOT_DEVICE_COPY": "2",
+    "TT_SDPA_GQA_MCAST": "1",
+    "TT_GDN_SCAN_MCAST": "1",
+    "TT_SDPA_GQA_MCAST_QPAIR": "1",
+    "QWEN36_GDN_PROJ_CHUNKS": "1",
+    "QWEN36_GDN_GB_BF16": "1",
+    "QWEN36_KDA_TILE_IN": "1",
+    "QWEN36_AGMM_BARRIER": "1",
+    "QWEN36_PREFILL_LOGITS_FAST": "1",
+    "QWEN36_PREFILL_BUCKET_TRACE": "1",
+    "QWEN_SDPA_BF8": "1",
+}
+for _k, _v in _QWEN36_SERVING_OPT_DEFAULTS.items():
+    os.environ.setdefault(_k, _v)
+
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
 
