@@ -14,6 +14,7 @@ import torch
 from PIL import Image
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
 from ....utils.tensor import from_torch
@@ -146,10 +147,12 @@ def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> to
 
 # ---- transformer test fixtures, shared by the correctness and perf tests so they cannot drift ----
 
-# The transformer tests take the axes explicitly: TP stays on axis 0 at factor 4 and SP absorbs the
-# rest, so 4x8 -> 4x32 moves only `sp_factor`, which every test body derives from `mesh_device.shape`.
-# `device_params` travels inside the tuple because the router payload differs per shape; crossing them
-# independently would pair a 4x8 mesh with the 4x32 router config.
+# Both Galaxy 4x8 rows below ask for 32 devices, so `require_exact_physical_num_devices` cannot tell
+# them apart the way it separates 4x8 from 4x32 -- only the arch can. Without these marks a Wormhole
+# cluster would also collect the Blackhole row and silently measure it at nl2 with an 8 KB payload.
+_BH_ONLY = pytest.mark.skipif(not is_blackhole(), reason="Blackhole-only mesh configuration")
+_WH_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole-only mesh configuration")
+
 # The transformer tests take the axes explicitly: TP stays on axis 0 at factor 4 and SP absorbs the
 # rest, so 4x8 -> 4x32 moves only `sp_factor`, which every test body derives from `mesh_device.shape`.
 # `device_params` travels inside the tuple because the router payload differs per shape; crossing them
@@ -159,8 +162,33 @@ GALAXY_RING = pytest.mark.parametrize(
     [
         # 4x8 takes the 8 KB router payload like 4x32: sp_sim runs on it emulate the 4x32 machine,
         # and the exp ring SDPA's fabric all-gather packs 4 tiles per packet only at 8 KB.
-        pytest.param((4, 8), 1, 0, 2, _ring_8k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"),
-        pytest.param((4, 32), 1, 0, 2, _ring_8k_trace, ttnn.Topology.Ring, False, id="4x32sp1tp0nl2_ring_is_fsdp0"),
+        pytest.param(
+            (4, 8), 1, 0, 2, _ring_8k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0", marks=_BH_ONLY
+        ),
+        pytest.param(
+            (4, 32),
+            1,
+            0,
+            2,
+            _ring_8k_trace,
+            ttnn.Topology.Ring,
+            False,
+            id="4x32sp1tp0nl2_ring_is_fsdp0",
+            marks=_BH_ONLY,
+        ),
+        # Wormhole Galaxy, mirroring `MESH_4X8_RING_WH` and `_PRESETS_WH`: 4 links and the 4 KB router
+        # payload the WH meshes open with, on the 8x9 compute grid (against Blackhole's 12x10). Every
+        # blocking the model carries was swept on Blackhole, so this row is what measures the gap.
+        #
+        # Both FSDP settings are listed because the pipeline's default is still open: fsdp1 is what a
+        # 12 GB part actually runs at 10 s and 15 s, fsdp0 is the comparison point that separates the
+        # per-layer weight all-gather from the matmul cost.
+        pytest.param(
+            (4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl4_ring_is_fsdp0", marks=_WH_ONLY
+        ),
+        pytest.param(
+            (4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1", marks=_WH_ONLY
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
