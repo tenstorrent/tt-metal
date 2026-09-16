@@ -120,6 +120,10 @@ class WanPipelineConfig:
     vae_dtype: ttnn.DataType
     vae_t_chunk_size: int | None
     sdpa_t_fracture_w_only: bool
+    # Layered on top of WanAttention.sdpa_chunk_size_map, which is keyed only on
+    # (is_blackhole, sp, tp) and so is shared between the 5B and the 14B at the same
+    # parallelism. Per-variant retuning goes here rather than editing that table.
+    sdpa_chunk_size_overrides: dict | None = None
 
     height: int
     width: int
@@ -147,6 +151,7 @@ class WanPipelineConfig:
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_t_chunk_size: object = _UNSET,
         sdpa_t_fracture_w_only: bool | None = None,
+        sdpa_chunk_size_overrides: dict | None = None,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -194,6 +199,7 @@ class WanPipelineConfig:
                 if sdpa_t_fracture_w_only is not None
                 else preset.get("sdpa_t_fracture_w_only", False)
             ),
+            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             height=height,
             width=width,
             num_frames=num_frames,
@@ -396,6 +402,7 @@ class WanPipeline(PipelineAPIMixin):
             is_fsdp=self.is_fsdp,
             model_type=self.model_type,
             lora_enabled=lora_enabled,
+            sdpa_chunk_size_overrides=config.sdpa_chunk_size_overrides,
         )
 
         self.transformer_2 = (
@@ -407,6 +414,7 @@ class WanPipeline(PipelineAPIMixin):
                 is_fsdp=self.is_fsdp,
                 model_type=self.model_type,
                 lora_enabled=lora_enabled,
+                sdpa_chunk_size_overrides=config.sdpa_chunk_size_overrides,
             )
         )
 

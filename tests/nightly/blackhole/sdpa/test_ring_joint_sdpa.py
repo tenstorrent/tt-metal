@@ -198,6 +198,30 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # WAN 2.2 TI2V-5B 720p — 1×Galaxy deployment (SP8/TP4, 1280x704, 81f)
+    # Self-attention per device: M=2336 (q_local_padded_N), 24 heads / TP4 = 6 local.
+    # Work items are B*NH*ceil(M/q) spread flat over 110 cores (the SDPA worker grid
+    # reserves one column for CCL), so 5B is acutely sensitive to the chunk landing
+    # just above a multiple of 110: the shipped q=128 gives 19*6 = 114 items = 2 rounds,
+    # while q=160 gives 15*6 = 90 in one. Sweep across that boundary.
+    configs.append(
+        ModelConfig(
+            name="wan2_2_ti2v_5b_1xGLX",
+            nhq=6,
+            nhk=6,
+            nhv=6,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[128, 160, 192, 224, 256],
+            k_chunk_sizes=[128, 256, 512],
+            seq_len=2336,
+        )
+    )
+
     # VideogenModel1 720p — 1×Galaxy deployment (115,200 total tokens)
     # Single benchmark config: Sq_chunk_t=7 (q=224), k=512
     # Galaxy: 14400/dev, q_per_core=6. QB: 13440/dev, q_per_core=6.
