@@ -116,7 +116,7 @@ $WORK/                   = /proj_sw/user_dev/$USER/SDPA
                          every measurement harness under analysis/, and the runners, campaign
                          scripts and reducers under analysis/campaigns/ (the calibration vehicle)
   tt-metal-fresh/        second checkout or worktree, branch mvlahovic/analyze_sdpa_fresh: main tip
-                         plus the profiler firmware patch (the TopK campaign and the kernel checks)
+                         at stock firmware (the TopK campaign and the kernel checks)
   polaris/               clone, branch mvlahovic/roofline_model_sdpa or mvlahovic/roofline_model_topk
 ```
 
@@ -454,13 +454,12 @@ Other campaign branches that exist in the development clone and are not needed t
 here: `mvlahovic/sdpa_revamp`, `mvlahovic/sdpa_revamp_topk`, `mvlahovic/sdpa_revamp_topk2`,
 `mvlahovic/sdpa_wall_recast`, `mvlahovic/topk_roofline`.
 
-### 1.6 The profiler firmware patch
+### 1.6 The profiler firmware region: leave it alone
 
-On Blackhole main tip the profiler-enabled `brisc.elf` is 0x2204 bytes against a 0x2200 firmware
-region, so a profiler build fails to link BRISC firmware on first device run. The fix is one constant
-in `tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h`, committed on
-both measurement branches (`b2c7f9de8d2` on `mvlahovic/analyze_sdpa_fresh` and the same change as
-`b781c4ef94e` on `mvlahovic/sdpa_topk_harness`) and present in `origin/main` on neither:
+On Blackhole main tip the profiler-enabled `brisc.elf` used to come out at 0x2204 bytes against a
+0x2200 firmware region, so a profiler build failed to link BRISC firmware on first device run, and the
+response was to bump one constant in `tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h`. That
+bump is gone from both measurement branches and must not come back:
 
 ```bash
 cd $TTM        # and $TTM_FRESH
