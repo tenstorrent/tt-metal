@@ -4,6 +4,8 @@
 
 #pragma once
 
+// Write operands, compile-time type checks, and field encoding.
+
 #include <cstdint>
 #include <type_traits>
 
@@ -83,76 +85,47 @@ public:
 namespace hal::cfg::detail
 {
 
-template <typename T>
-class is_field_assignment : public std::false_type
-{
-};
+// Operand type checks used by write overloads and backend dispatch.
 
+// Reject all types except FieldAssignment and ConstantFieldAssignment.
+template <typename T>
+inline constexpr bool is_field_assignment_v = false;
+
+// Accept runtime field assignments (FieldAssignment) returned by set().
 template <const Field& F, Sec S>
-class is_field_assignment<FieldAssignment<F, S>> : public std::true_type
-{
-};
+inline constexpr bool is_field_assignment_v<FieldAssignment<F, S>> = true;
 
+// Accept constant field assignments (ConstantFieldAssignment) returned by set().
 template <const Field& F, Sec S, std::uint32_t Value>
-class is_field_assignment<ConstantFieldAssignment<F, S, Value>> : public std::true_type
-{
-};
+inline constexpr bool is_field_assignment_v<ConstantFieldAssignment<F, S, Value>> = true;
 
+// Reject all types except ConstantFieldAssignment, including runtime FieldAssignment.
 template <typename T>
-class is_constant_field_assignment : public std::false_type
-{
-};
+inline constexpr bool is_constant_field_assignment_v = false;
 
+// Accept ConstantFieldAssignment for immediate instruction emission.
 template <const Field& F, Sec S, std::uint32_t Value>
-class is_constant_field_assignment<ConstantFieldAssignment<F, S, Value>> : public std::true_type
-{
-};
+inline constexpr bool is_constant_field_assignment_v<ConstantFieldAssignment<F, S, Value>> = true;
 
+// Reject all types except GprWrite.
 template <typename T>
-inline constexpr bool is_field_assignment_v = is_field_assignment<T>::value;
+inline constexpr bool is_gpr_write_v = false;
 
-template <typename T>
-inline constexpr bool is_constant_field_assignment_v = is_constant_field_assignment<T>::value;
-
-template <typename T>
-class is_gpr_write : public std::false_type
-{
-};
-
+// Accept GPR transfers (GprWrite) returned by from_gpr().
 template <const Field& F, Sec S, typename Source>
-class is_gpr_write<GprWrite<F, S, Source>> : public std::true_type
-{
-};
+inline constexpr bool is_gpr_write_v<GprWrite<F, S, Source>> = true;
 
-template <typename T>
-inline constexpr bool is_gpr_write_v = is_gpr_write<T>::value;
-
+// Accept FieldAssignment, ConstantFieldAssignment, or GprWrite.
 template <typename T>
 inline constexpr bool is_write_operation_v = is_field_assignment_v<T> || is_gpr_write_v<T>;
 
+// Destination and overlap checks.
+
+// Assignments share a physical word only when both scope and address match.
 template <typename Lhs, typename Rhs>
 inline constexpr bool assignments_share_word_v = Lhs::scope == Rhs::scope && Lhs::addr == Rhs::addr;
 
-template <typename... Assignments>
-class assignment_groups_disjoint;
-
-template <>
-class assignment_groups_disjoint<> : public std::true_type
-{
-};
-
-template <typename Assignment>
-class assignment_groups_disjoint<Assignment> : public std::true_type
-{
-};
-
-template <typename First, typename... Rest>
-class assignment_groups_disjoint<First, Rest...>
-    : public std::bool_constant<
-          ((!assignments_share_word_v<First, Rest> || ((First::mask & Rest::mask) == 0u)) && ...) && assignment_groups_disjoint<Rest...>::value>
-{
-};
-
+// Compare FieldAssignment/ConstantFieldAssignment masks or GprWrite word ranges.
 template <typename Lhs, typename Rhs>
 inline constexpr bool write_operations_disjoint_pair()
 {
@@ -178,25 +151,24 @@ inline constexpr bool write_operations_disjoint_pair()
     }
 }
 
+// Require every pair of write operations to have non-overlapping destinations.
 template <typename... Operations>
 class write_operations_disjoint;
 
+// An empty list has no overlapping operations; this ends the recursion.
 template <>
 class write_operations_disjoint<> : public std::true_type
 {
 };
 
-template <typename Operation>
-class write_operations_disjoint<Operation> : public std::true_type
-{
-};
-
+// Check the first operation against the rest, then repeat for the rest.
 template <typename First, typename... Rest>
 class write_operations_disjoint<First, Rest...>
     : public std::bool_constant<(write_operations_disjoint_pair<First, Rest>() && ...) && write_operations_disjoint<Rest...>::value>
 {
 };
 
+// Position the value in its field and clear bits outside the field mask.
 template <typename Assignment>
 inline constexpr std::uint32_t encode(const Assignment& assignment)
 {
