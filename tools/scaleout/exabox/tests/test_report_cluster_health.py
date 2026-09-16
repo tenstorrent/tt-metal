@@ -649,6 +649,20 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             _assert_world_date_dir_mode(self, date_dir)
 
+    def test_world_mode_date_dir_skips_group_mismatch_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            os.chmod(root, 0o777)
+            stderr = io.StringIO()
+            with patch("report_cluster_health.os.fchown", side_effect=PermissionError) as fchown, redirect_stderr(
+                stderr
+            ):
+                date_dir_fd = _ensure_date_dir(root, "2026-08-19")
+            os.close(date_dir_fd)
+            fchown.assert_not_called()
+            self.assertNotIn("date directory group does not match store root group", stderr.getvalue())
+            _assert_world_date_dir_mode(self, root / "2026-08-19")
+
     def test_date_dir_is_assigned_store_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_gid = Path(tmp).stat().st_gid

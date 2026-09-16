@@ -665,19 +665,17 @@ def _ensure_date_dir(root: Path, date_name: str) -> int:
         os.close(root_fd)
 
     try:
+        current_mode = os.fstat(date_dir_fd).st_mode
+        # Never undo a world-writable date dir created by wrappers or an earlier
+        # world-writable root; only repair toward desired_mode.
+        mode = STORE_DIR_MODE_WORLD if current_mode & STORE_OTHER_WRITE else desired_mode
         try:
-            os.fchown(date_dir_fd, -1, root_gid)
-        except OSError:
-            if os.fstat(date_dir_fd).st_gid != root_gid:
-                _warn(f"date directory group does not match store root group ({root_gid})")
-        try:
-            current_mode = os.fstat(date_dir_fd).st_mode
-            # Never undo a world-writable date dir created by wrappers or an
-            # earlier world-writable root; only repair toward desired_mode.
-            if current_mode & STORE_OTHER_WRITE:
-                mode = STORE_DIR_MODE_WORLD
-            else:
-                mode = desired_mode
+            if mode == STORE_DIR_MODE:
+                try:
+                    os.fchown(date_dir_fd, -1, root_gid)
+                except OSError:
+                    if os.fstat(date_dir_fd).st_gid != root_gid:
+                        _warn(f"date directory group does not match store root group ({root_gid})")
             os.fchmod(date_dir_fd, mode)
         except OSError:
             pass
