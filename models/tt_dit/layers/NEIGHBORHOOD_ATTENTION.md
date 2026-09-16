@@ -7,7 +7,8 @@ generalization (GNA), across **two independent implementations** that live side 
 dense masked SDPA over it (`neighborhood_attention_3d_linear_order`, plan in
 `neighborhood_attention_plan.py`). Runs stage 1 and is the replicated oracle for the sharded tests.
 - **ours** — a self-contained `neighborhood_sdpa` op with all geometry in one host-testable
-file. Newer, stage-5 only, selected by backend name.
+file. Runs the deterministic stages 2-4 and stage 5 (the bricked executor), selected by backend
+name.
 
 Read the terminology first: the two implementations use *different words for the same things*,
 and that is the single biggest obstacle to reading them together.
@@ -47,7 +48,7 @@ and that is the single biggest obstacle to reading them together.
 | **query chunk**       | ours      | The set of queries sharing **one gather**. Derived from the stride, never tuned: a multi-brick chunk must equal the stride exactly.                                           |
 | **block**             | reference | Their equivalent of chunk+brick combined — a `(bt,bh,bw)` box of queries reordered to be contiguous. See `_pick_block`.                                                       |
 | **op order**          | reference | Their kernel works in `(W, H, T)` axis order, **not** `(t,h,w)`. Physical strides are permuted on the way in. This is why an error about `t=8` can really be about *width*.   |
-| **band / slab**       | reference | A range of frames processed together to bound peak memory. `DIFFVAE_SLAB_FRAMES`.                                                                                             |
+| **band / slab**       | reference | A range of frames processed together to bound peak memory. `DiffVAEOptions.slab_frames`.                                                                                                |
 | **halo**              | both      | The border sites a shard or band needs from its neighbour because windows reach across the boundary.                                                                          |
 | **shard**             | both      | One device's portion of the volume. Here always split along **W**.                                                                                                            |
 | **gather / box**      | ours      | The union of the windows of **every** query in the chunk, rounded out to brick boundaries. What actually gets fetched. `gather_brick_count` in the plan, `gather=N tiles` in the log. |
@@ -97,23 +98,26 @@ sense above.
 Pure C++. No ttnn, no kernel, no device includes, on purpose: the geometry is where the bugs
 are, and this way it is testable on the host against a brute-force oracle with no hardware.
 
-#### `ttnn/.../sdpa/device/neighborhood_plan.hpp` (~200 lines)
+#### `ttnn/.../sdpa/device/neighborhood_plan.hpp` (~180 lines)
 
-The vocabulary. Everything else imports its nouns from here.
+The vocabulary. Everything else imports its nouns from here; the point and shape types themselves
+come from `kernels/neighborhood_point3.hpp` (section 2.4), which host and kernels share.
 
 ```cpp
 constexpr uint32_t SITES_PER_BRICK = 32;
-enum class Axis   { Time, Height, Width };
-enum class Order  { Natural, Bricked };
 enum class Regime { Low, Interior, High };
 
-struct Extent3 { std::array<uint32_t,3> by_axis; };   // a SIZE, in sites
-struct Site    { std::array<uint32_t,3> by_axis; };   // a POSITION, in sites
-struct Offset3 { std::array<int32_t,3>  by_axis; };   // a SIGNED position -- see sharding
+// from neighborhood_point3.hpp: Point3<Scalar, Unit> and Shape<MeasuredIn, Per>
+using Site         = Point3<uint32_t, Unit::Sites>;   // a POSITION, in sites
+using SiteOffset   = Point3<int32_t,  Unit::Sites>;   // a SIGNED position -- see sharding
+using BrickPoint   = Point3<uint32_t, Unit::Bricks>;
+using ShapeInSites = Shape<Unit::Sites>;              // a SIZE, in sites
+using ShapeInBricks = Shape<Unit::Bricks>;
+using BrickShapeInSites = Shape<Unit::Sites, Unit::Bricks>;   // sites per brick
 ```
 
-`Extent3` and `Site` are deliberately distinct types so a size cannot be passed where a
-position belongs.
+A size and a position are distinct types, and so are the units, so a brick grid cannot be passed
+where a site region belongs and a chunk index cannot be mistaken for a brick index.
 
 `NeighborhoodConfig` — the complete description of one problem:
 
@@ -123,10 +127,11 @@ position belongs.
 | `volume`             | the **global** token grid                                          |
 | `context_window`     | what one query group attends to                                    |
 | `stride`             | query group extent                                                 |
-| `brick`              | layout unit; `brick.sites() == 32`                                 |
+| `brick`              | layout unit; `brick.count() == 32`                                 |
 | `query_chunk_bricks` | how many bricks share one gather                                   |
 | `shard_extent`       | what this device holds (owned + halo); zero means "same as volume" |
 | `shard_origin`       | **signed** — where that sits in the global volume                  |
+| `query_extent`, `query_origin` | the sub-region of the resident tensor this device produces output for (Q and the output are sized by it; K, V and the gather by the resident extent). Zero means "all of it" |
 
 
 `NeighborhoodPlan` — what `build_plan` produces, cached because it uploads index tables:
@@ -134,8 +139,9 @@ position belongs.
 
 | field                                           | meaning                                                                    |
 | ----------------------------------------------- | -------------------------------------------------------------------------- |
-| `volume_bricks`, `brick_count`                  | the volume measured in bricks                                              |
-| `volume_chunks`, `chunk_count`                  | the volume measured in **work items**                                      |
+| `volume_bricks`, `brick_count`                  | the **resident** region measured in bricks                                 |
+| `query_bricks`, `query_brick_count`, `query_origin_bricks` | the query region measured in bricks, and where it starts       |
+| `volume_chunks`, `chunk_count`                  | the query region measured in **work items**                                |
 | `gather_extent`, `gather_sites`, `gather_tiles` | site-exact gather                                                          |
 | `gather_bricks`, `gather_brick_count`           | rounded out to whole bricks — what a tile-granular read can actually fetch |
 | `gather_origin_by_chunk`                        | one origin per chunk, rounded **down** to a brick boundary                 |
@@ -148,7 +154,7 @@ position belongs.
 
 | function                                          | does                                                                                                                                                                                                          |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `choose_brick(window)`                            | Enumerates the eight factorisations of 32, returns the one minimising `∏(window_axis + brick_axis − 1)`. **A function, not a constant**: an 11³ window wants `(2,4,4)`; a `(1,11,11)` window wants `(1,4,8)`. |
+| `choose_brick(window)`                            | Enumerates the power-of-two factorisations of 32, returns the one minimising `∏(window_axis + brick_axis − 1)`, ties broken toward the most cubic brick. **A function, not a constant**: an 11³ window wants `(2,4,4)`; a `(1,11,11)` window wants `(1,4,8)`. Exposed as `ttnn.transformer.neighborhood_choose_brick`; the sharded planner wraps it in `_choose_sharded_brick` (section 3). |
 | `context_window_for(site, config)`                | Where one group's window starts.                                                                                                                                                                              |
 | `validate_config(config)`                         | Throws on a config that cannot be built. **Named** `validate_config` **not** `validate` because a repo hook pattern-matches a member called `validate` as a legacy device op.                                 |
 | `build_plan(config)`                              | Everything above, assembled.                                                                                                                                                                                  |
@@ -239,31 +245,173 @@ every shard would believe it sat at the origin and clamp its windows at its own 
 Also: `reader_arg`, `compute_arg`, `writer_arg` enums, and
 
 ```cpp
-struct AxisExtents        { uint32_t time, height, width; };
-struct SignedAxisOffsets  { int32_t  time, height, width; };
-struct NeighborhoodExtents { AxisExtents brick_sites, context_window, stride, volume,
-                             query_chunk, resident; SignedAxisOffsets shard_origin; };
+struct NeighborhoodExtents {
+    BrickShapeInSites brick_sites;   // sites per brick -- a conversion factor, not a region
+    ShapeInSites context_window, stride, volume, query_chunk, resident;
+    SiteOffset shard_origin;         // signed
+};
 ```
+
+One struct rather than nine loose arguments, so the mask generator's caller cannot transpose
+height and width without noticing.
 
 
 
 #### `kernels/neighborhood_chunk_layout.hpp` (~90 lines)
 
 Small named helpers shared by reader and writer, so the two cannot decode a chunk differently:
+`linear_to_point3` / `point3_to_linear` (row-major over `(time, height, width)`, applied once at
+chunk level and once at brick level, with the unit named at the call site), the chunk's first brick
+and its `index`-th brick, `point3_is_inside` (a brick hanging past the volume holds only ghost
+sites) and `tile_offset` (where one `(brick, head)` pair's tiles begin in the **site-major**
+`[batch, bricks * 32, heads, head_dim]` layout).
 
+### 2.3 The op — ttnn plumbing, no geometry
+
+| file | lines | holds |
+| --- | --- | --- |
+| `device/neighborhood_sdpa_device_operation_types.hpp` | ~60 | `NeighborhoodSDPAParams` and `NeighborhoodSDPAInputs` |
+| `device/neighborhood_sdpa_device_operation.{hpp,cpp}` | ~280 | validation, output spec, the explicit program hash |
+| `device/neighborhood_sdpa_program_factory.cpp` | ~350 | work split, circular buffers, compile args, kernel launch |
+| `neighborhood_sdpa_nanobind.{cpp,hpp}` | ~280 | the three Python entry points |
+
+`NeighborhoodSDPAParams`: a `NeighborhoodConfig`, `head_count` (cannot be read off the shape: Q is
+`[batch, 1, bricked_sites, heads * head_dim]` so that a TILE row is 32 sites), `scale` (1.0; LTX
+pre-scales Q), `tiles_per_kv_chunk` (key bricks per flash step) and the compute / memory configs.
+`NeighborhoodSDPAInputs`: Q, K, V in TILE layout and bricked order; the uint32 `gather_origin_table`,
+one row per chunk, **uploaded rather than computed in the kernel** so the reader and the host planner
+cannot disagree about geometry; an optional `interior_mask` (the uploaded mask table of section 3);
+an optional preallocated output.
+
+Validation runs `validate_config` first, so a bad geometry fails as geometry and not as a tensor
+shape. K and V must match each other; Q need not match them, since with a query sub-region Q spans
+only the owned sites while K and V span owned plus halo. Site counts are checked against the plan's
+brick counts, not against the volume, because the permute pads to whole bricks.
+`tiles_per_kv_chunk` is bounded twice: by whole bricks, and by DST capacity (8 tiles, half that
+under fp32 accumulation), because a chunk wider than DST returns wrong numbers rather than faulting.
+The program hash is explicit: the eight stage-5 blocks must share one compiled program, and the
+origin table's contents are a runtime buffer.
+
+The factory makes one work item per `(batch, head, query chunk)`, bricks varying fastest so a core's
+items are spatially adjacent. It picks the mask mode: a chunk wider than the stride needs a mask per
+brick (reachable only under `DIFFVAE_NA_UNSAFE_CHUNK`); otherwise one tile per gather slot broadcasts
+down the chunk. `cb_mask` is sized to a whole work item so its pages cycle back to the same L1
+addresses every item, which is what lets the reader skip rewriting them for a run of unclamped
+bricks; that size must agree with `interior_table_supported` in the reader. `cb_resident_mask` holds
+one regime's whole uploaded mask set. `subblock_h` is always 1 (`matmul_blocks` re-reads the mask
+from the CB front per in0 subblock, which is only right when each subblock is one query row).
+Compile-time arguments are written by name from the `kernel_args` enums; `REDUCE_OP`, `REDUCE_DIM`
+and `EXP_APPROX_MODE` go in as defines because `compute_common.hpp` reads them as macros.
+
+The binding exposes `ttnn.transformer.neighborhood_choose_brick(context_window)`,
+`neighborhood_plan(volume, context_window, stride, brick, query_chunk_bricks=, shard_extent=,
+shard_origin=, query_extent=, query_origin=)` (a dict: `brick_count`, `query_bricks`, `chunk_count`,
+`volume_chunks`, `gather_extent` / `gather_sites` / `gather_tiles` / `gather_bricks` /
+`gather_brick_count`, the flattened `gather_origin_table` and its `gather_origin_columns`) and
+`neighborhood_scaled_dot_product_attention(q, k, v, gather_origin_table, interior_mask=, <the same
+geometry>, head_count, scale=1.0, tiles_per_kv_chunk=8, memory_config=, compute_kernel_config=)`.
+
+### 2.4 Kernels
+
+#### `kernels/dataflow/neighborhood_reader.cpp` (~900 lines)
+
+The only kernel that knows what a context window is. Per work item it feeds the Q tiles of the
+chunk's bricks, then the gather's K and V tiles `tiles_per_kv_chunk` bricks at a time with a
+matching additive mask. The chunk is what makes this affordable: its bricks form one query group,
+so the gather happens once per chunk and the mask is one tile per gather slot.
+
+Where a mask tile comes from, in order of preference: the uploaded **relative** table at stride 1
+(indexed by `key_brick - query_brick` per axis; `relative_span_low/high` and
+`relative_table_index` mirror `relative_mask_span` and `_build_relative_masks` in the plan module
+and must match them to the tile); the uploaded **per-regime** set under a GNA stride (`chunk_regime`
+picks one of the 27 clamp classes); or **generated on device** for the bricks that straddle a
+clamp transition, at most one per edge per axis. A brick's mask depends on its position only
+through clamping, which is the same collapse the linear-order plan gets by grouping query tiles by
+window geometry. Persistence (skipping the rewrite when the CB pages cycle, and keeping per-brick
+blocks keyed on the chunk's clamp signature) is described in `kernels/MASK_PERSISTENCE.md`.
+
+#### `kernels/dataflow/neighborhood_mask_gen.hpp` (~280 lines)
+
+The device-side mask generator, under `dataflow/` on purpose: the compute kernel never sees a
+window. `to_global_site` (a low-edge halo device sits at a negative origin), `classify_brick` into
+`BrickCoverage {AllVisible, NoneVisible, Mixed}` so uniform bricks are a constant fill, and
+`fill_mask_tile` for the mixed ones, which knows that a bfloat16 tile is four 16x16 faces and not
+`row * 32 + column`. Its window rule is `neighborhood_window_rule.hpp`, the same header the host
+planner includes.
+
+#### `kernels/compute/neighborhood_sdpa.cpp` (~180 lines)
+
+Flash attention over one query chunk. **Readability invariant: no neighborhood concepts** -- it
+receives query tile rows, a stream of K/V tiles and an additive mask, and runs online softmax.
+A chunk is a whole number of tile rows, so `query_tile_rows` is both the matmul's M and its in0
+subblock count and `subblock_h` is always 1. `mask_subblock_stride` 0 broadcasts one mask down the
+chunk; `tiles_per_kv_chunk` selects one mask per brick. The shared `compute_common.hpp::matmul_blocks`
+is the only code this op shares with the general SDPA kernels.
+
+#### `kernels/dataflow/neighborhood_writer.cpp` (~120 lines)
+
+Drains one query brick's normalised output per work item, **in bricked order**, so the next block
+consumes it without a permute. Builds the three constant tiles once (the reduce identity, a genuine
+zero tile that `matmul_blocks` folds the mask through, and ones down column 0 for the deferred
+row-sum) and skips bricks that hang past the volume.
+
+#### `kernels/neighborhood_point3.hpp` (~170 lines)
+
+`Point3<Scalar, Unit>` and `Shape<MeasuredIn, Per>` with `Unit {Sites, Bricks, Chunks}` tags, and the
+aliases section 2.1 uses. It replaced seven earlier spellings of "three numbers" (`Site`, `Offset3`,
+`SignedAxisOffsets`, `SiteInBrick`, `BrickCoordinate`, `Extent3`, `AxisExtents`) so a unit mismatch
+is a compile error. Header-only, no includes beyond `<cstdint>` and `<array>`, included by the host
+planner and every kernel.
+
+### 2.5 Python
+
+#### `models/tt_dit/layers/neighborhood_permute.py` (~220 lines)
+
+Natural <-> bricked token order, ROW_MAJOR only: `padded_volume`, `brick_grid`, `brick_count`,
+`sites_per_t_brick`, `to_bricked_grid` / `to_bricked` and `from_bricked_grid` / `to_natural`.
+Bricks tile the volume time-major, the same order `neighborhood_chunk_layout.hpp` decodes. Applied
+once at stage entry and exit on the keep-bricked path, per block on the deterministic stages.
+
+#### `models/tt_dit/layers/neighborhood_reference.py` (~190 lines)
+
+The definition of correct: dense masked attention over the whole volume, test-sized only.
+`context_window_origin` is **the** Python window rule (the plan module's `window_bounds` and
+`_window_origin` are wrappers over it); `snap_extent`, `validate` (rejects what the device op
+rejects), `neighborhood_mask`, `neighborhood_attention_3d`.
+
+#### `models/tt_dit/layers/neighborhood_attention.py` (~620 lines)
+
+The three executors, one contract: `q`/`k`/`v` are `(B, T, H, W, heads, head_dim)`, normed, RoPE'd
+and Q pre-scaled; the return is `(B, T, H, W, heads * head_dim)` ROW_MAJOR.
+
+- `neighborhood_attention_3d_linear_order` -- natural order, `ttnn.embedding` gather per query
+  group, dense masked SDPA, optionally query-sharded across the mesh with K/V replicated. Stage 1
+  and the oracle. Refuses a non-trivial `gna_stride`.
+- `neighborhood_attention_3d_bricked` -- the whole volume on every chip: `to_bricked`, the op,
+  `to_natural`. `DIFFVAE_NA_WINDOW` is read here.
+- `neighborhood_attention_3d_bricked_w_sharded` -- this chip's W-shard: `as_volume` (the flat
+  head-major form `nlp_create_qkv_heads` emits is transposed to site-major), brick, halo-exchange K
+  and V by whole bricks on `W_br` through `_halo_exchange` (`neighbor_pad_async` pinned to Linear,
+  sticks split by `_halo_split` when they exceed what the op moves intact), the op with
+  `query_extent` / `query_origin` so Q and the output address the owned grid while K, V and the
+  gather address the resident one, `to_natural` unless `already_bricked`, then the head all-gather
+  over `tp_axis`. `_compute_kernel_config` is HiFi2 with an exact exp, matching the general SDPA op
+  the oracle runs; `_tp_trace` is the hang locator.
 
 ### 2.6 Tests
 
 
 | file                                                      | covers                           |
 | --------------------------------------------------------- | -------------------------------- |
-| `tests/ttnn/unit_tests/gtests/test_neighborhood_plan.cpp` | geometry vs a brute-force oracle |
-| `models/tt_dit/tests/unit/test_neighborhood_permute.py`   | bricked↔natural round-trip       |
-| `models/tt_dit/tests/unit/test_neighborhood_reference.py` | the torch reference itself       |
-| `models/tt_dit/tests/unit/test_neighborhood_sdpa.py`      | the op vs torch — 26 cases       |
+| `tests/ttnn/unit_tests/gtests/test_neighborhood_plan.cpp` | geometry vs a brute-force oracle, 11 cases (not in the default build graph; compile it standalone) |
+| `models/tt_dit/tests/unit/test_neighborhood_permute.py`   | bricked↔natural round-trip, the index formula, W_br padding and T_br slicing against pad/slice-then-brick |
+| `models/tt_dit/tests/unit/test_neighborhood_reference.py` | the torch reference itself: window rule vs NATTEN at every stride, same-count / inside-own-window / full-attention invariants, `window_bounds` and `na3d_torch` held equal to it |
+| `models/tt_dit/tests/unit/test_neighborhood_sdpa.py`      | the op vs torch — 44 cases       |
 | `models/tt_dit/tests/unit/test_neighborhood_sdpa_perf.py` | scale timing, no correctness     |
+| `models/tt_dit/tests/unit/test_neighborhood_linear_order.py` | the linear-order executor vs `na3d_torch`, replicated and mesh-sharded; `NA3DPlan.describe()` accounts for every tile |
+| `models/tt_dit/tests/unit/test_neighborhood_bricked_w_sharded.py` | the W-sharded bricked executor vs the host reference on the 4x8 mesh, heads presharded, volume and flat forms |
 | `models/tt_dit/tests/models/vae/test_diffvae_rope.py`     | the three RoPE encodings vs one torch oracle and each other, lane level, float32 |
-| `models/tt_dit/tests/models/vae/test_diffvae_ltx.py`      | NABlock, its DIFFVAE_DET_* arms, DeterministicStages and DiffVAEDecoder: gates vs upstream captures, bricked vs replicated, timing instruments |
+| `models/tt_dit/tests/models/vae/test_diffvae_ltx.py`      | NABlock, its DetBlockOptions arms, DeterministicStages and DiffVAEDecoder: gates vs upstream captures, bricked vs replicated, timing instruments |
 | `models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py` | stage 5 vs ltx_core: RoPE, parity replicated / sharded / bricked, production-width, band geometry |
 
 
@@ -274,7 +422,12 @@ The op test's parametrisation is where the coverage lives:
 - `widest_chunk` / `narrow_chunk` — whether the online rescale runs
 - `one_tile_row` **/** `two_tile_row` — `head_dim` 32 vs 64. Added after the K-layout bug.
 - `test_shards_match_the_whole_volume` — two shards, different origins, same program
-- `test_symmetric_halo_shards_match_the_whole_volume` — three shards including a **negative** origin
+- `test_symmetric_halo_shards_match_the_whole_volume` — three shards including a **negative** origin,
+  with an even brick and with the width-1 brick the odd shard widths use
+- `test_interior_table_matches_generated_masks` / `test_interior_table_per_brick_persistence` — the
+  uploaded relative table against the device generator, and the persistent per-brick block
+- `test_choose_sharded_brick_*` — the production and deterministic-stage brick choices pinned, the
+  stride > 1 delegation, and the oversized-brick rejection
 
 ---
 
@@ -284,7 +437,7 @@ The op test's parametrisation is where the coverage lives:
 
 
 
-### `models/tt_dit/layers/neighborhood_attention_plan.py` (~1060 lines)
+### `models/tt_dit/layers/neighborhood_attention_plan.py` (~940 lines)
 
 Everything that depends on the geometry (volume, window, stride, brick, mesh) and on no weights, for
 both executors, built once per shape and cached. Nothing here imports `neighborhood_attention.py`.
@@ -334,7 +487,7 @@ bricked executor:
 
 Naming: the deleted path is the **block-permute executor**, the surviving one the **bricked
 executor**. Neither is "fused" -- both fuse the gather into the kernel, and the word already names
-`DIFFVAE_SP_FUSED`, fused RoPE/qkv and the `fused-sdpa` timing-tree row.
+the fused RoPE / qkv / SwiGLU forms and the `fused-sdpa` timing-tree row.
 
 Decisions taken on the way, still in force:
 
@@ -343,7 +496,7 @@ Decisions taken on the way, still in force:
   one head. Dropping TP was rejected: up to 4x attention compute per chip to save a 10-line change.
 - **Shard widths that are not brick-aligned (stages 2 and 3) are handled by brick width 1**, found
   by `_choose_sharded_brick`'s odd-width search. The alternative, swapping the SP and TP mesh axes
-  for the deterministic stages, was priced with `DIFFVAE_STAGES_SP_AXIS` and rejected: it costs
+  for the deterministic stages, was priced with `DiffVAEOptions.stages_sp_axis` and rejected: it costs
   2.2 s per decode because stage 5 cannot follow (4 heads do not TP 8 ways), so the W-sharded
   deterministic -> stage-5 context handoff becomes a gather and reshard.
 - Stage 1 (index 0) stays on the replicated linear-order backend: W=60 does not divide the size-8
@@ -357,15 +510,14 @@ the ledgers before `diffvae_gate_compare.py --record`.
 
 Open, optional speed work: running the deterministic stages keep-bricked (convert to bricked
 order once at stage entry and back at exit, as stage 5 does). Stage 1, replicated on the linear-order
-executor, is ~525 ms of the decode now that the pipeline exports `DIFFVAE_DET_FUSED_QKV=1` (~630 ms
+executor, is ~525 ms of the decode now that the production options set `det.fused_qkv` (~630 ms
 under block profiling, ~1080 ms before with three separate projections and the unfused rotation;
 that stage has no TP axis, so the column-parallel flag the other stages get fused qkv from never
 reached it). The production pipeline's VAE decode is 12.00 s with it, from 12.2-12.35 s.
 
-Two things that bit during the migration and will again: kernel sources are JIT-only, so the host
-syntax check never sees them (run the JIT compile command with `-fsyntax-only` after a kernel edit,
-before touching the device); and the pipeline scripts' `DIFFVAE_*` exports change executor paths,
-so never carry them into a unit-test shell.
+One thing that bit during the migration and will again: kernel sources are JIT-only, so the host
+syntax check never sees them. Run the JIT compile command with `-fsyntax-only` after a kernel edit,
+before touching the device.
 
 ### `models/tt_dit/utils/timing_tree.py` (~360 lines)
 
@@ -395,22 +547,36 @@ upstream behaviour) is what lets the per-brick mask advance down the query rows.
 
 
 
-## 4. Environment variables
+## 4. Configuration
 
+### Decoder options (constructor arguments)
 
+How the decoder runs is a `DiffVAEOptions` (in `diffvae_ltx.py`), built once by whoever
+constructs the decoder and handed down; nothing below `DiffVAEDecoder.__init__` reads the
+environment. `DiffVAEOptions.production()` is what the runner scripts ship. The pipeline takes it
+as `create_pipeline(..., diffusion_decoder=True, diffvae_options=...)`; the pytest entry points
+build it from the `--diffvae-*` options (`pytest --help`, group "LTX-2.5 DiffVAE"), and
+`time_module` from its own flags.
 
-### Ours
+| field                        | does                                                                                          |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `stage5_backend`, `stage5_sp_axis`, `stage5_tp_axis` | the stage-5 executor (`linear_order` replicated, `bricked` replicated, `bricked_sp_w_sharded`), its shard axis and the TP-over-heads axis |
+| `stages_backend`, `stages_sp_axis`, `stages_tp_axis` | the same for the deterministic stages 1–3 — **separate choice**, does not reach stage 5; stage 1 always runs replicated |
+| `det` (a `DetBlockOptions`)  | the deterministic block forms: `fused_qkv`, `colpar_qkv`, `fused_rope`, `fused_swiglu`, `tp_mlp`. `resolve(tp_axis)` applies the implications (colpar implies fused qkv, tp_mlp implies fused swiglu, both need a TP axis) |
+| `stage5_fused_qkv`, `stage5_tp_proj` | the stage-5 projection forms; `tp_proj` is column-parallel qkv over `stage5_tp_axis`, on by default |
+| `gna_stride`                 | stage-5 stride, physical `(t,h,w)`, feeding every stage-5 backend                             |
+| `slab_frames`                | frame banding. **Off by default**; required at 6 s 1080p                                       |
+| `device_boundaries`          | the decode's two host boundaries run on device (ghost pad and flatten in; noise, pad trim and depth-to-space out). Needed by the traced decode and by `yuv` output |
+| `exclusive_residency`        | evict the DiT before decoding; None means "unless stage 5 is sharded"                          |
 
+### Environment variables — ours
 
 | variable                    | does                                                                                          |
 | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `DIFFVAE_STAGE5_BACKEND`    | selects the stage-5 executor: `bricked_sp_w_sharded` (default), `bricked` (replicated) or `linear_order` (replicated) |
-| `DIFFVAE_DET_NA3D_BACKEND`  | same choice for the deterministic stages 1–4 only — **separate knob**, does not reach stage 5  |
-| `DIFFVAE_STAGES_BACKEND`    | the executor for the W-sharded deterministic stages 1–3 when `DIFFVAE_STAGES_WSP=1`; `bricked_sp_w_sharded` (default) is the only W-sharded one left. Read by the pipeline adapter and `test_decode_timing.py` |
-| `DIFFVAE_S5_GNA_STRIDE`     | stage-5 stride, physical `(t,h,w)`; read only by `DiffVAEStage5Config.resolved_gna_stride`, which feeds every stage-5 backend. An explicit `gna_stride=` on the config wins over it. |
 | `DIFFVAE_NA_WINDOW`         | overrides the architectural context window                                                    |
 | `DIFFVAE_NA_BRICK`          | overrides the derived brick: `bt,bh,bw` for every volume, or keyed by full volume `T,H,W:bt,bh,bw;...` so one stage can be forced without moving the others |
 | `DIFFVAE_NA_KV_CHUNK_TILES` | tiles per flash step; 8 = 256 tokens                                                          |
+| `DIFFVAE_NA_FIDELITY`, `DIFFVAE_NA_APPROX_EXP` | A/B knobs on the op's compute config; the default is HiFi2 with an exact exp |
 
 
 ### Ours — diagnostics
@@ -425,8 +591,9 @@ once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from
 | `DIFFVAE_NA_UNSAFE_CHUNK`      | lift the plan's `chunk == stride` check, needed with the above at stride 1. The factory then switches to per-brick masks on its own — see `neighborhood_plan.cpp` |
 | `DIFFVAE_NA_HALO_TOPOLOGY`     | `ring` retries the halo on ring — see the deadlock note in `_halo_exchange` |
 | `DIFFVAE_NA_HALO_LINKS`        | halo link count only                                                     |
-| `DIFFVAE_NA_HALO_PERSISTENT`   | halo without the persistent buffer                                       |
-| `DIFFVAE_EXCLUSIVE`            | restore the DiffVAE's evict-the-DiT residency behaviour                  |
+| `DIFFVAE_TP_TRACE`             | sync and log around every step of the sharded executor, so a hang names the op |
+| `DIFFVAE_AG_CHUNKS`, `DIFFVAE_AG_WORKERS`, `DIFFVAE_AG_BUFS` | all-gather hyperparameters in `parallel/manager.py` |
+| `DIFFVAE_MEM_LOG`              | the DRAM / CCL-cache probes in `utils/memory_log.py`                     |
 
 
 
@@ -436,26 +603,23 @@ once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from
 
 | variable                                     | does                                                     |
 | -------------------------------------------- | -------------------------------------------------------- |
-| `DIFFVAE_TP_PROJ`, `DIFFVAE_TP_HEADS`        | tensor-parallel over heads                               |
-| `DIFFVAE_STAGES_WSP=1`                       | W-shard the deterministic stages too                     |
-| `DIFFVAE_SLAB_FRAMES`                        | frame banding. **Off by default**; required at 6 s 1080p |
 | `TT_DIT_STAGE_TIMING`, `TT_DIT_BLOCK_PROF`, `TT_DIT_STAGE_LOG` | the timing tree, and its live progress lines |
-| `DIFFVAE_NUM_LINKS`                          | CCL links                                                |
+| `TT_DIT_TREE_DEPTH`, `TT_DIT_TREE_OUT`, `TT_DIT_TREE_ALL` | rendered depth, a file to write the trees to, and rendering the warm-up passes too |
+| `DIFFVAE_CHECKPOINT`, `DIFFVAE_CAPTURE`, `LTX_CORE_SRC` | where the standalone tests find the weights, the upstream capture and ltx_core |
 
 
 
 ### Known constraints
 
 * `neighbor_pad_async` deadlocks on `Topology.Ring`. `_halo_exchange` pins that one call to Linear
-  while everything else still runs ring; its docstring records what was ruled out (channel width,
-  link count, persistent buffer).
+  while everything else still runs ring; `DIFFVAE_NA_HALO_TOPOLOGY=ring` is the retest switch.
 * Exact NA at 6 s 1080p does not fit co-resident with the DiT. Either band harder
-  (`DIFFVAE_SLAB_FRAMES=48`) or fall back to exclusive residency (`DIFFVAE_EXCLUSIVE=1`). The
+  (`slab_frames=48`) or fall back to exclusive residency (`exclusive_residency=True`). The
   decode-only timing test runs fine at the default banding because nothing else is resident.
-* The `DIFFVAE_DET_*` and `DIFFVAE_S5_FUSED_QKV` flags change which parameters a block owns (one fused
+* The `DetBlockOptions` forms and `stage5_fused_qkv` change which parameters a block owns (one fused
   `qkv` or three projections; packed `gate_up` or `w_gate` + `w_up`), and the weight cache is keyed by
   parallel config, mesh and dtype alone. `DiffVAEDecoder.parameter_layout()` therefore names the cache
-  subfolder (`diffvae/det-q1m1-q1m1-q1m1-q1m1_s5-q3/...`), read off the built modules. Change a flag
+  subfolder (`diffvae/det-q1m1-q1m1-q1m1-q1m1_s5-q3/...`), read off the built modules. Change a form
   and the first run writes a fresh cache under the new token; the old directory is left behind.
 
 
@@ -473,7 +637,7 @@ latent
        └─ stages 2-4: W-sharded, "bricked_sp_w_sharded" PER CALL -- every block does
             to_bricked -> halo exchange -> neighborhood_sdpa -> to_natural on its own
   └─ DiffVAEStage5.forward          KEEP-BRICKED: the volume is converted once, not per block
-       ├─ bands = _bands(t, DIFFVAE_SLAB_FRAMES, kernel)
+       ├─ bands = _bands(t, slab_frames, kernel)
        ├─ brick x + context           (_brick_activation, once per band; RoPE tables built bricked)
        ├─ rope tables (factored: frame piece + time piece)
        └─ for block in 8 x DiffusionNABlock, for band in bands:
