@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -623,33 +624,26 @@ LogicalMultiMeshGraph remap_logical_multi_mesh_for_merge(
 
 void validate_shared_inter_mesh_policy(
     const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors) {
-    const auto policy_name = [](::tt::tt_fabric::InterMeshChannelPolicy policy) {
-        return policy == ::tt::tt_fabric::InterMeshChannelPolicy::Relaxed ? "RELAXED" : "STRICT";
-    };
-
-    std::optional<::tt::tt_fabric::InterMeshChannelPolicy> shared;
+    std::optional<bool> shared_relaxed;
     std::size_t shared_index = 0;
     for (std::size_t index = 0; index < mesh_graph_descriptors.size(); ++index) {
         TT_FATAL(mesh_graph_descriptors[index] != nullptr, "Mesh graph descriptor {} is null", index);
-        const auto policy = mesh_graph_descriptors[index]->inter_mesh_policy();
-        if (!policy.has_value()) {
-            continue;
-        }
-        if (!shared.has_value()) {
-            shared = policy;
+        const bool relaxed = mesh_graph_descriptors[index]->is_inter_mesh_policy_relaxed();
+        if (!shared_relaxed.has_value()) {
+            shared_relaxed = relaxed;
             shared_index = index;
             continue;
         }
         TT_FATAL(
-            *policy == *shared,
+            relaxed == *shared_relaxed,
             "Mesh graph descriptors merged into one topology must agree on the inter-mesh channel policy, but "
             "descriptor {} is {} while descriptor {} is {}. Mixed policies are not supported yet: the merged solve "
             "applies one policy to every seam, so one descriptor's policy would be applied to the other's. "
             "See https://github.com/tenstorrent/tt-metal/issues/49960",
             shared_index,
-            policy_name(*shared),
+            *shared_relaxed ? "RELAXED" : "STRICT",
             index,
-            policy_name(*policy));
+            relaxed ? "RELAXED" : "STRICT");
     }
 }
 
@@ -794,11 +788,13 @@ std::map<MeshId, MeshPhysicalLayout> mesh_physical_layouts_from_psd_placements(
     return layouts;
 }
 
-PhysicalMultiMeshGraph build_physical_from_adjacency_guided_placement(
+std::vector<PhysicalMultiMeshGraph> build_physical_from_adjacency_guided_placement_n(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const std::vector<const tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors,
-    const tt::tt_fabric::ValidGroupingsMap& valid_groupings) {
+    const tt::tt_fabric::ValidGroupingsMap& valid_groupings,
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings,
+    std::size_t max_graphs) {
     using namespace ::tt::tt_fabric;
 
     TT_FATAL(valid_groupings.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
@@ -806,37 +802,95 @@ PhysicalMultiMeshGraph build_physical_from_adjacency_guided_placement(
         !valid_groupings.at("MESH").empty(),
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
 
-    const auto placements = physical_grouping_descriptor.solve_adjacency_guided_placement(
-        mesh_graph_descriptors, valid_groupings, physical_system_descriptor);
+    const std::size_t solution_cap = max_graphs == 0 ? kPhysicalMultiMeshGraphEnumerationCap : max_graphs;
+    const auto placement_sets = physical_grouping_descriptor.solve_adjacency_guided_placement_n(
+        mesh_graph_descriptors,
+        valid_groupings,
+        physical_system_descriptor,
+        solution_cap,
+        /*node_budget=*/0,
+        nullptr,
+        per_mgd_pinnings);
     TT_FATAL(
-        !placements.empty(),
+        !placement_sets.empty(),
         "Topology mapper failed to find adjacency-guided placements for {} mesh graph descriptor(s) on a system with "
-        "{} "
-        "ASICs",
+        "{} ASICs",
         mesh_graph_descriptors.size(),
         physical_system_descriptor.get_asic_descriptors().size());
 
     log_info(
         tt::LogFabric,
-        "Adjacency-guided placement seated {} mesh(es) from {} descriptor(s)",
-        placements.size(),
+        "Adjacency-guided placement produced {} footprint-distinct seating(s); {} mesh(es) per seating from {} "
+        "descriptor(s)",
+        placement_sets.size(),
+        placement_sets.front().size(),
         mesh_graph_descriptors.size());
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
-    return build_hierarchical_from_flat_graph(flat_graph, placements);
+    std::vector<PhysicalMultiMeshGraph> graphs;
+    graphs.reserve(placement_sets.size());
+    for (const auto& placements : placement_sets) {
+        if (placements.empty()) {
+            continue;
+        }
+        graphs.push_back(build_hierarchical_from_flat_graph(flat_graph, placements));
+    }
+    return graphs;
+}
+
+PhysicalMultiMeshGraph build_physical_from_adjacency_guided_placement(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<const tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors,
+    const tt::tt_fabric::ValidGroupingsMap& valid_groupings,
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings) {
+    auto graphs = build_physical_from_adjacency_guided_placement_n(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        mesh_graph_descriptors,
+        valid_groupings,
+        per_mgd_pinnings,
+        /*max_graphs=*/1);
+    TT_FATAL(!graphs.empty(), "Internal error: adjacency-guided placement returned no physical graph");
+    return std::move(graphs.front());
 }
 
 }  // namespace
+
+std::vector<PhysicalMultiMeshGraph> build_physical_multi_mesh_adjacency_graph_n(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const std::optional<PinningsByMesh>& pinnings,
+    std::size_t max_graphs) {
+    const auto gv_start = std::chrono::steady_clock::now();
+    auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgd(
+        mesh_graph_descriptor, physical_system_descriptor, pinnings);
+    const auto gv_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gv_start).count();
+    log_info(tt::LogFabric, "TIMING get_valid_groupings_for_mgd: {} ms", gv_ms);
+    std::vector<std::optional<PinningsByMesh>> per_mgd_pinnings;
+    if (pinnings.has_value()) {
+        per_mgd_pinnings.push_back(*pinnings);
+    }
+    return build_physical_from_adjacency_guided_placement_n(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        {&mesh_graph_descriptor},
+        valid_groupings,
+        per_mgd_pinnings,
+        max_graphs);
+}
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const std::optional<PinningsByMesh>& pinnings) {
-    auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgd(
-        mesh_graph_descriptor, physical_system_descriptor, pinnings);
-    return build_physical_from_adjacency_guided_placement(
-        physical_system_descriptor, physical_grouping_descriptor, {&mesh_graph_descriptor}, valid_groupings);
+    auto graphs = build_physical_multi_mesh_adjacency_graph_n(
+        physical_system_descriptor, physical_grouping_descriptor, mesh_graph_descriptor, pinnings, /*max_graphs=*/1);
+    TT_FATAL(!graphs.empty(), "Internal error: build_physical_multi_mesh_adjacency_graph produced no graph");
+    return std::move(graphs.front());
 }
 
 namespace {
@@ -857,7 +911,10 @@ void assign_pgd_pinnings_to_rank_bound_physical_graph(
     }
 
     const auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgd(
-        mesh_graph_descriptor, physical_system_descriptor, pinnings);
+        mesh_graph_descriptor,
+        physical_system_descriptor,
+        pinnings,
+        /*require_placement=*/false);
     if (!valid_groupings_map.contains("MESH") || valid_groupings_map.at("MESH").empty()) {
         log_debug(
             tt::LogFabric,
@@ -948,7 +1005,31 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgds(
         mesh_graph_descriptors, physical_system_descriptor, per_mgd_pinnings);
     return build_physical_from_adjacency_guided_placement(
-        physical_system_descriptor, physical_grouping_descriptor, descriptor_ptrs, valid_groupings);
+        physical_system_descriptor, physical_grouping_descriptor, descriptor_ptrs, valid_groupings, per_mgd_pinnings);
+}
+
+std::vector<PhysicalMultiMeshGraph> build_physical_multi_mesh_adjacency_graph_n(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings,
+    std::size_t max_graphs) {
+    std::vector<const tt::tt_fabric::MeshGraphDescriptor*> descriptor_ptrs;
+    descriptor_ptrs.reserve(mesh_graph_descriptors.size());
+    for (const auto& descriptor : mesh_graph_descriptors) {
+        descriptor_ptrs.push_back(&descriptor);
+    }
+    validate_shared_inter_mesh_policy(descriptor_ptrs);
+
+    auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgds(
+        mesh_graph_descriptors, physical_system_descriptor, per_mgd_pinnings);
+    return build_physical_from_adjacency_guided_placement_n(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        descriptor_ptrs,
+        valid_groupings,
+        per_mgd_pinnings,
+        max_graphs);
 }
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
@@ -2072,6 +2153,11 @@ TopologyMappingResult complete_intra_mesh_for_placement(
                 physical_exit_node_graph,
                 inter_mesh_validation_mode);
             if (!exit_node_constraints_success) {
+                log_debug(
+                    tt::LogFabric,
+                    "DIAG intra-mesh: logical mesh {} -> physical mesh {} FAILED (exit-node constraints)",
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get());
                 result.success = false;
                 if (failing_pair_out) {
                     *failing_pair_out = {logical_mesh_id, physical_mesh_id};
@@ -2084,6 +2170,11 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto pinning_constraint_failure =
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
         if (pinning_constraint_failure.has_value()) {
+            log_debug(
+                tt::LogFabric,
+                "DIAG intra-mesh: logical mesh {} -> physical mesh {} FAILED (MGD pinning constraints)",
+                logical_mesh_id.get(),
+                physical_mesh_id.get());
             result.success = false;
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
@@ -2112,12 +2203,27 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);
         if (!sub_mapping.success) {
+            log_debug(
+                tt::LogFabric,
+                "DIAG intra-mesh: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)) FAILED (solve): {}",
+                logical_mesh_id.get(),
+                logical_graph.get_nodes().size(),
+                physical_mesh_id.get(),
+                physical_graph.get_nodes().size(),
+                sub_mapping.error_message);
             result.success = false;
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
             }
             return result;
         }
+        log_debug(
+            tt::LogFabric,
+            "DIAG intra-mesh: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)) OK",
+            logical_mesh_id.get(),
+            logical_graph.get_nodes().size(),
+            physical_mesh_id.get(),
+            physical_graph.get_nodes().size());
         for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
             result.fabric_node_to_asic.insert({fabric_node, asic});
             result.asic_to_fabric_node.insert({asic, fabric_node});
@@ -2263,6 +2369,43 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         // returned placement already respects it -- an infeasible cap surfaces as the session finding no placement,
         // handled by the relax on the !placement.success path above. No post-hoc cap filter is needed here.
         excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
+        // DIAG: report every pairing whose physical footprint is too small for the logical mesh, plus the
+        // footprint handed to each of the largest logical meshes (the ones most likely to be undersized).
+        std::vector<std::string> undersized_pairs;
+        std::vector<std::string> big_mesh_pairs;
+        std::size_t largest_logical = 0;
+        for (const auto& [logical_id, logical_adj] : adjacency_map_logical_.mesh_adjacency_graphs_) {
+            largest_logical = std::max(largest_logical, logical_adj.get_nodes().size());
+        }
+        for (const auto& [logical_id, physical_id] : placement.target_to_global) {
+            auto logical_it = adjacency_map_logical_.mesh_adjacency_graphs_.find(logical_id);
+            auto physical_it = adjacency_map_physical_.mesh_adjacency_graphs_.find(physical_id);
+            if (logical_it == adjacency_map_logical_.mesh_adjacency_graphs_.end() ||
+                physical_it == adjacency_map_physical_.mesh_adjacency_graphs_.end()) {
+                continue;
+            }
+            const std::size_t logical_nodes = logical_it->second.get_nodes().size();
+            const std::size_t physical_asics = physical_it->second.get_nodes().size();
+            const std::string pair_text =
+                fmt::format("L{}({})->P{}({})", logical_id.get(), logical_nodes, physical_id.get(), physical_asics);
+            if (logical_nodes > physical_asics) {
+                undersized_pairs.push_back(pair_text);
+            }
+            if (logical_nodes == largest_logical) {
+                big_mesh_pairs.push_back(pair_text);
+            }
+        }
+        std::sort(big_mesh_pairs.begin(), big_mesh_pairs.end());
+        std::sort(undersized_pairs.begin(), undersized_pairs.end());
+        log_info(
+            tt::LogFabric,
+            "DIAG multi-solution: inter-mesh placement #{} returned ({} mesh pair(s)); largest meshes [{}]; "
+            "{} undersized pair(s) [{}]",
+            excluded_.size(),
+            placement.target_to_global.size(),
+            fmt::join(big_mesh_pairs, " "),
+            undersized_pairs.size(),
+            fmt::join(undersized_pairs, " "));
 
         std::unordered_map<MeshId, MeshId> mesh_mappings(
             placement.target_to_global.begin(), placement.target_to_global.end());
@@ -2302,6 +2445,34 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
                     inter_mesh_validation_mode_,
                     forbid_result,
                     "intra-mesh completion failed");
+                log_info(
+                    tt::LogFabric,
+                    "DIAG multi-solution: placement #{} rejected, forbidding logical mesh {} -> physical mesh {} "
+                    "(can_retry={}, forbidden so far={})",
+                    excluded_.size(),
+                    intra_failing_pair->first.get(),
+                    intra_failing_pair->second.get(),
+                    can_retry,
+                    intra_failed_mesh_pairs_.size() + current_attempt_failed_pairs.size());
+                // The forbidden constraint already makes every mapping that assigns this pair unreachable, so a
+                // blocking clause for such an excluded mapping is redundant -- and cannot be encoded at all once
+                // the pair has left the target's allowed domain, which would fail the whole re-encode.
+                if (can_retry) {
+                    const MeshId forbidden_logical = intra_failing_pair->first;
+                    const MeshId forbidden_physical = intra_failing_pair->second;
+                    const std::size_t removed = std::erase_if(excluded_, [&](const std::map<MeshId, MeshId>& mapping) {
+                        auto it = mapping.find(forbidden_logical);
+                        return it != mapping.end() && it->second == forbidden_physical;
+                    });
+                    log_debug(
+                        tt::LogFabric,
+                        "DIAG multi-solution: dropped {} redundant excluded mapping(s) containing forbidden pair "
+                        "{} -> {}; {} exclusion(s) remain",
+                        removed,
+                        forbidden_logical.get(),
+                        forbidden_physical.get(),
+                        excluded_.size());
+                }
                 // Re-encode with the new forbidden constraint; excluded_ is re-applied so already-returned
                 // placements cannot re-emerge. The forbidden pair makes the just-tried orientation unreachable.
                 session_ = {};
@@ -2317,6 +2488,35 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         ++emitted_;
         return full;
     }
+}
+
+MultiPhysicalMultiMeshSolutionEnumerator::MultiPhysicalMultiMeshSolutionEnumerator(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const std::vector<PhysicalMultiMeshGraph>& adjacency_maps_physical,
+    const TopologyMappingConfig& config,
+    bool unique_shapes,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    per_physical_.reserve(adjacency_maps_physical.size());
+    for (const PhysicalMultiMeshGraph& physical : adjacency_maps_physical) {
+        per_physical_.push_back(std::make_unique<MultiMeshSolutionEnumerator>(
+            adjacency_map_logical, physical, config, unique_shapes, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank));
+    }
+}
+
+std::optional<TopologyMappingResult> MultiPhysicalMultiMeshSolutionEnumerator::next() {
+    if (per_physical_.empty()) {
+        return std::nullopt;
+    }
+    for (std::size_t pass = 0; pass < per_physical_.size(); ++pass) {
+        MultiMeshSolutionEnumerator& enumerator = *per_physical_[next_physical_index_];
+        next_physical_index_ = (next_physical_index_ + 1) % per_physical_.size();
+        if (auto solution = enumerator.next()) {
+            ++emitted_;
+            return solution;
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric

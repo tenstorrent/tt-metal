@@ -118,6 +118,17 @@ struct AsicPinningGroup {
 // on the generated proto enum (which is only forward-declared in this header).
 enum class InterMeshChannelPolicy : uint8_t { Strict, Relaxed };
 
+// The grid a mesh or switch descriptor declares, with the proto enums already resolved, so that
+// consumers reading a descriptor's shape do not have to take a dependency on the generated proto.
+struct DeclaredTopology {
+    std::vector<int32_t> dims;       // device_topology dims; empty when the descriptor declares none
+    std::vector<int32_t> host_dims;  // host_topology dims; empty when the descriptor declares none
+    // Per device dim, whether it was declared RING rather than LINE. Reported as written: a RING on an
+    // axis too short to make a distinct wrap edge is still a RING here, and it is the reader's call
+    // whether that matters to it.
+    std::vector<bool> ring_dims;
+};
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
@@ -216,15 +227,18 @@ public:
         return get_instance(ids[0]).type;
     }
 
-    // The descriptor's inter-mesh channel policy, or nullopt when it states none. Taken from the first
-    // FABRIC connection, which speaks for all of them since validation forbids mixing policies within one
-    // descriptor, and falling back to the top-level graph topology when there are no connections.
-    //
-    // Callers must decide what "unspecified" means for them rather than reading it as STRICT: a descriptor
-    // that is silent should not override a sibling that is not. Per-connection policies are not supported
-    // downstream, which is why this is one value for the whole descriptor.
-    // https://github.com/tenstorrent/tt-metal/issues/49960
-    std::optional<InterMeshChannelPolicy> inter_mesh_policy() const;
+    // Intra-mesh channel policy for a mesh or switch instance, keyed by its local mesh id (same sources and
+    // semantics as MeshGraph::is_intra_mesh_policy_relaxed).
+    bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
+
+    // Inter-mesh channel policy from the first FABRIC connection, or top-level graph topology when there are
+    // none. Defaults to STRICT when the descriptor states none (mirrors MeshGraph::is_inter_mesh_policy_relaxed).
+    bool is_inter_mesh_policy_relaxed() const;
+
+    // The device and host grid an instance's descriptor declares. Graph instances, and descriptors with
+    // no device_topology, come back with empty dims. Switches declare no host topology.
+    DeclaredTopology get_declared_topology(GlobalNodeId instance_id) const;
+    DeclaredTopology get_declared_topology(const InstanceData& instance) const;
 
     // Calculate chip count from device_topology dimensions for a mesh instance
     // Returns the product of all dimensions in device_topology.dims()
@@ -288,6 +302,8 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
+    std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+    bool inter_mesh_relaxed_policy_ = false;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
@@ -333,6 +349,7 @@ private:
 
     // Populate Connections
     void populate_connections();
+    void populate_inter_mesh_policy();
 
     void pre_populate_connections_lookups();
 

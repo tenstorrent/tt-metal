@@ -42,11 +42,14 @@ mesh_descriptors {
   channels { count: 2 policy: RELAXED }
 }
 
+# NOTE: With this 4x4 host topology 1x1, we shouldn't be allocating to split host should we?
+# TODO: Have to add back host definition in PGD and use it to prefetch the host divisions
+# TODO: Go and fix the the PGD to PSD matching constraints to allow splits of host, but not the other way around
 mesh_descriptors {
   name: "S4x4"
   arch: BLACKHOLE
-  device_topology { dims: [ 4, 4 ] dim_types: [ RING, LINE ] }
-  host_topology   { dims: [ 1, 1 ] }
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 2, 1 ] }
   channels { count: 2 policy: RELAXED }
 }
 

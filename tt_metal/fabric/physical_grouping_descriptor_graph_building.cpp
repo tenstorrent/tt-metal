@@ -22,7 +22,6 @@
 #include <fmt/format.h>
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
-#include "protobuf/mesh_graph_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -455,6 +454,17 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         const auto& custom = grouping.custom();
         info.adjacency_graph = build_custom_connections_graph(node_ids, custom);
     } else {
+        // A host is a tile, not a bag of chips: meshes are composed by referencing HOSTS, so how a
+        // host's own instances are arranged is what a mesh built out of hosts inherits. Left off, the
+        // grouping would carry an empty adjacency graph and describe a host with no internal
+        // connectivity at all, which is never true of a real machine. Any of the connection types may
+        // say it -- row_major_mesh for a grid, custom for anything that is not one.
+        TT_FATAL(
+            grouping.preset_type() != proto::HOSTS,
+            "Physical groupings: HOSTS grouping '{}' declares no connection. A host must declare its own "
+            "topology (row_major_mesh, custom, or all_to_all) so that meshes composed from it inherit the "
+            "right layout.",
+            info.name);
         // No connection specified - empty adjacency graph (instances are not connected)
         info.adjacency_graph = tt::tt_fabric::AdjacencyGraph<GroupingChipId>();
     }
@@ -1042,46 +1052,50 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
     // name_suffix gives each topology variant a distinct grouping name (in addition to the GroupingInfo::type
     // field) so logs and committed groupings make clear which variant matched/placed. The MESH variant keeps
     // the plain "_flat" name; torus variants append "_torus_x/_y/_xy".
-    static const std::array<std::tuple<const char*, const char*, std::array<bool, 2>>, 4> k_variants = {{
-        {"MESH", "", {false, false}},
-        {"TORUSX", "_torus_x", {true, false}},
-        {"TORUSY", "_torus_y", {false, true}},
-        {"TORUSXY", "_torus_xy", {true, true}},
-    }};
-
-    std::vector<tt::tt_fabric::GroupingInfo> result;
-    result.reserve(k_variants.size());
+    struct TopologyVariantSpec {
+        const char* type;
+        const char* name_suffix;
+        std::array<bool, 2> ring_dims;
+    };
 
     const auto& node_grid_dims = mesh.node_grid_dims;
     const size_t expected_node_count = node_grid_dims.size() >= 2
                                            ? static_cast<size_t>(node_grid_dims[0] * node_grid_dims[1])
                                            : mesh.graph.get_nodes().size();
     const bool can_add_torus_wrap = node_grid_dims.size() >= 2 && mesh.graph.get_nodes().size() == expected_node_count;
+    // Size-1 and size-2 axes are ordinary mesh links; only dims > 2 can carry a distinct torus wrap.
+    const bool wrap_x = can_add_torus_wrap && is_genuine_torus_dimension(node_grid_dims[0]);
+    const bool wrap_y =
+        can_add_torus_wrap && node_grid_dims.size() > 1 && is_genuine_torus_dimension(node_grid_dims[1]);
 
-    for (const auto& [topo_type, name_suffix, ring_dims_template] : k_variants) {
+    std::vector<TopologyVariantSpec> variant_specs;
+    variant_specs.reserve(4);
+    variant_specs.push_back({"MESH", "", {false, false}});
+    if (wrap_x) {
+        variant_specs.push_back({"TORUSX", "_torus_x", {true, false}});
+    }
+    if (wrap_y) {
+        variant_specs.push_back({"TORUSY", "_torus_y", {false, true}});
+    }
+    if (wrap_x && wrap_y) {
+        variant_specs.push_back({"TORUSXY", "_torus_xy", {true, true}});
+    }
+
+    std::vector<tt::tt_fabric::GroupingInfo> result;
+    result.reserve(variant_specs.size());
+
+    for (const auto& spec : variant_specs) {
         tt::tt_fabric::GroupingInfo info = grouping;
-        info.name = grouping.name + "_flat" + name_suffix;
-        info.type = topo_type;
+        info.name = grouping.name + "_flat" + spec.name_suffix;
+        info.type = spec.type;
         rebuild_items_from_flattened_mesh(info, mesh);
 
-        const bool is_mesh = std::strcmp(topo_type, "MESH") == 0;
+        const bool is_mesh = std::strcmp(spec.type, "MESH") == 0;
         if (is_mesh) {
             info.adjacency_graph = mesh.graph;
-        } else if (can_add_torus_wrap) {
-            std::vector<bool> ring_dims(ring_dims_template.begin(), ring_dims_template.end());
-            // Drop wrap only on axes of size 2 or less; keep any genuine wrap on the other axis.
-            if (ring_dims[0] && !is_genuine_torus_dimension(node_grid_dims[0])) {
-                ring_dims[0] = false;
-            }
-            if (ring_dims.size() > 1 && ring_dims[1] && !is_genuine_torus_dimension(node_grid_dims[1])) {
-                ring_dims[1] = false;
-            }
-            if (!ring_dims[0] && (ring_dims.size() < 2 || !ring_dims[1])) {
-                continue;
-            }
-            info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);
         } else {
-            continue;
+            std::vector<bool> ring_dims(spec.ring_dims.begin(), spec.ring_dims.end());
+            info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);
         }
 
         info.flattened_node_grid_dims = node_grid_dims;
@@ -1093,6 +1107,69 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
 }  // namespace
 
 namespace tt::tt_fabric {
+
+void PhysicalGroupingDescriptor::assign_pgd_host_groups(
+    GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const {
+    flattened_mesh.mesh_node_to_pgd_host_group.clear();
+
+    // A grouping's chips in node order, each with the slot it names. A slot left unspecified names no chip,
+    // so it is dropped: there is nothing there to attribute to a host.
+    auto named_slots_of = [](const GroupingInfo& grouping) {
+        std::vector<std::pair<GroupingChipId, tt::tt_metal::ASICPosition>> named_slots;
+        std::vector<GroupingChipId> node_ids = grouping.adjacency_graph.get_nodes();
+        std::sort(node_ids.begin(), node_ids.end());
+        for (GroupingChipId node_id : node_ids) {
+            if (node_id >= grouping.items.size()) {
+                continue;
+            }
+            const GroupingItemInfo& item = grouping.items[node_id];
+            if (*item.tray_id == 0 || *item.asic_location == 0) {
+                continue;
+            }
+            named_slots.emplace_back(node_id, tt::tt_metal::ASICPosition{item.tray_id, item.asic_location});
+        }
+        return named_slots;
+    };
+
+    // Topology variants of one declared host hold the same chips, differing only in how they are wired,
+    // so the distinct slot sets are the hosts.
+    std::vector<std::set<tt::tt_metal::ASICPosition>> host_slots;
+    for (const GroupingInfo& declared_host : flattened_declared_hosts) {
+        std::set<tt::tt_metal::ASICPosition> slots;
+        for (const auto& [_, slot] : named_slots_of(declared_host)) {
+            slots.insert(slot);
+        }
+        if (!slots.empty() && std::find(host_slots.begin(), host_slots.end(), slots) == host_slots.end()) {
+            host_slots.push_back(std::move(slots));
+        }
+    }
+    if (host_slots.empty()) {
+        return;
+    }
+
+    // Two hosts of one machine carry the same tray labels, since a descriptor describes a host once and the
+    // machine repeats it, so the slots alone cannot tell them apart. What does tell them apart is repetition:
+    // a host holds each of its slots once, so the nth time a slot comes round it belongs to that host's nth
+    // copy. Counting rounds is what separates a mesh spanning two hosts into two groups.
+    std::map<std::pair<std::size_t, tt::tt_metal::ASICPosition>, std::size_t> rounds_seen;
+    std::map<std::pair<std::size_t, std::size_t>, uint32_t> group_of_host_round;
+    for (const auto& [node_id, slot] : named_slots_of(flattened_mesh)) {
+        std::vector<std::size_t> holders;
+        for (std::size_t host = 0; host < host_slots.size(); ++host) {
+            if (host_slots[host].contains(slot)) {
+                holders.push_back(host);
+            }
+        }
+        // A slot no declared host holds, or one several of them claim, cannot be attributed to a host.
+        if (holders.size() != 1) {
+            continue;
+        }
+        const std::size_t round = rounds_seen[{holders.front(), slot}]++;
+        flattened_mesh.mesh_node_to_pgd_host_group[node_id] =
+            group_of_host_round.try_emplace({holders.front(), round}, static_cast<uint32_t>(group_of_host_round.size()))
+                .first->second;
+    }
+}
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
@@ -1128,8 +1205,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
         for (auto& meshe : meshes) {
             for (auto& variant : flattened_mesh_to_topology_variants(grouping, meshe)) {
-                if (physical_system_descriptor != nullptr &&
-                    !can_map_to_psd(variant, *physical_system_descriptor)) {
+                if (physical_system_descriptor != nullptr && !can_map_to_psd(variant, *physical_system_descriptor)) {
                     continue;
                 }
                 result.push_back(std::move(variant));

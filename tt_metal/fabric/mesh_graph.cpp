@@ -375,13 +375,8 @@ void MeshGraph::initialize_from_mgd(
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
 
-    // Determine inter-mesh policy from the descriptor. Unspecified leaves the STRICT default alone but is
-    // recorded as such, so a silent MGD is not read as STRICT against a sibling MGD that does specify.
-    const auto inter_mesh_policy = mgd.inter_mesh_policy();
-    this->inter_mesh_policy_specified_ = inter_mesh_policy.has_value();
-    if (inter_mesh_policy.has_value()) {
-        this->inter_mesh_relaxed_policy_ = (*inter_mesh_policy == InterMeshChannelPolicy::Relaxed);
-    }
+    this->inter_mesh_policy_specified_ = true;
+    this->inter_mesh_relaxed_policy_ = mgd.is_inter_mesh_policy_relaxed();
 
     // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
     mesh_edge_ports_to_chip_id_.resize(all_meshes.size() + all_switches.size());

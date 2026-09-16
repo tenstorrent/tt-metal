@@ -484,13 +484,13 @@ inline void topology_sat_add_at_least_k_counter(
 
 // At-least-k on independent literals.  Uses the small combinatorial encoding when affordable (O(C(m,m-k+1))
 // clauses), otherwise falls back to the sequential counter encoding (O(m*k) clauses + aux vars).
-inline bool topology_sat_add_at_least_k_literals(
+bool topology_sat_add_at_least_k_literals(
     TopologySatSolver& solver,
     const std::vector<int>& lits,
     size_t k,
     size_t max_combination_clauses,
     std::string* trivial_reason,
-    int extra_lit = 0) {
+    int extra_lit) {
     const size_t m = lits.size();
     if (k == 0) {
         return true;
@@ -533,40 +533,46 @@ inline bool topology_sat_add_at_least_k_literals(
     return true;
 }
 
-// Sequential (Sinz 2005) at-most-one encoding: O(n) clauses + O(n) auxiliary register variables instead of the
-// O(n^2) pairwise binary clauses.  Sequential encoding improves unit-propagation on large domains.
-inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, const std::vector<int>& lits) {
-    const size_t n = lits.size();
+namespace {
+constexpr std::size_t kPairwiseAtMostOneCutoff = 8;
+}  // namespace
+
+void topology_sat_add_at_most_one(TopologySatSolver& solver, const std::vector<int>& lits) {
+    const std::size_t n = lits.size();
     if (n <= 1) {
         return;
     }
-    if (n == 2) {
-        solver.add(-lits[0]);
-        solver.add(-lits[1]);
-        solver.add(0);
+    if (n <= kPairwiseAtMostOneCutoff) {
+        for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t j = i + 1; j < n; ++j) {
+                solver.add(-lits[i]);
+                solver.add(-lits[j]);
+                solver.add(0);
+            }
+        }
         return;
     }
-    std::vector<int> r;
-    r.reserve(n - 1);
-    for (size_t i = 0; i < n - 1; ++i) {
-        r.push_back(solver.declare_one_more_variable());
+    std::vector<int> chain;
+    chain.reserve(n - 1);
+    for (std::size_t i = 0; i < n - 1; ++i) {
+        chain.push_back(solver.declare_one_more_variable());
     }
     solver.add(-lits[0]);
-    solver.add(r[0]);
+    solver.add(chain[0]);
     solver.add(0);
-    for (size_t i = 1; i < n - 1; ++i) {
+    for (std::size_t i = 1; i + 1 < n; ++i) {
         solver.add(-lits[i]);
-        solver.add(r[i]);
+        solver.add(chain[i]);
         solver.add(0);
-        solver.add(-r[i - 1]);
-        solver.add(r[i]);
+        solver.add(-chain[i - 1]);
+        solver.add(chain[i]);
         solver.add(0);
-        solver.add(-r[i - 1]);
         solver.add(-lits[i]);
+        solver.add(-chain[i - 1]);
         solver.add(0);
     }
-    solver.add(-r[n - 2]);
-    solver.add(-lits[n - 1]);
+    solver.add(-lits.back());
+    solver.add(-chain.back());
     solver.add(0);
 }
 
@@ -909,7 +915,7 @@ void topology_sat_encode_exactly_one_per_target(TopologySatSolver& solver, const
             solver.add(lit);
         }
         solver.add(0);
-        topology_sat_add_at_most_one_sequential(solver, lits);
+        topology_sat_add_at_most_one(solver, lits);
     }
 }
 
@@ -928,7 +934,7 @@ void topology_sat_encode_injectivity(
         }
     }
     for (size_t g = 0; g < ng; ++g) {
-        topology_sat_add_at_most_one_sequential(solver, lits_per_global[g]);
+        topology_sat_add_at_most_one(solver, lits_per_global[g]);
     }
 }
 
@@ -1051,8 +1057,16 @@ void topology_sat_encode_adjacency_support(
 
 // Step 7: Same-rank group constraints.
 // Targets in the same group (target_to_group[t] == tg, tg != SIZE_MAX) must all map to
-// globals that share the same global_to_same_rank_group label.  Pairs with different
-// labels get a binary incompatibility clause not x_{t1,g1} v not x_{t2,g2}.
+// globals that share the same global_to_same_rank_group label.
+//
+// Said through one indicator variable per (group, label): landing a target on a global implies its
+// group took that global's label, and a group may hold at most one label at a time. That is exactly
+// the transitive closure of "no two members of a group may sit on differently labelled globals", so
+// it constrains the same assignments as forbidding each such pair would -- at a fraction of the size.
+// Forbidding pairs costs C(|group|,2) x |domain|^2 clauses, and the domain here is the machine: a
+// grouping that pins no tray or ASIC location leaves every ASIC in every target's domain, which for a
+// 16-chip mesh on 1152 ASICs is ~74 million clauses and minutes of encoding per candidate. The
+// indicator form is linear in the domains, ~18 thousand for that same mesh.
 void topology_sat_encode_same_rank_groups(
     TopologySatSolver& solver,
     [[maybe_unused]] const TopologySatGraphView& graph_data,
@@ -1064,40 +1078,39 @@ void topology_sat_encode_same_rank_groups(
     if (target_to_group.empty() || global_rank.empty()) {
         return;
     }
-    for (size_t t1 = 0; t1 < nt; ++t1) {
-        if (t1 >= target_to_group.size()) {
+    std::map<std::pair<size_t, int>, int> label_indicator;
+    std::map<size_t, std::vector<int>> indicators_of_group;
+    for (size_t t = 0; t < nt; ++t) {
+        if (t >= target_to_group.size()) {
             continue;
         }
-        const size_t tg = target_to_group[t1];
+        const size_t tg = target_to_group[t];
         if (tg == SIZE_MAX) {
             continue;
         }
-        for (size_t t2 = t1 + 1; t2 < nt; ++t2) {
-            if (t2 >= target_to_group.size() || target_to_group[t2] != tg) {
-                continue;
+        const auto& gidx = enc.allowed_global_idx[t];
+        const auto& lit = enc.assign_lit[t];
+        for (size_t i = 0; i < gidx.size(); ++i) {
+            const size_t glob = gidx[i];
+            if (glob >= global_rank.size()) {
+                continue;  // carries no label, so it is held to none, as forbidding pairs also left it
             }
-            const auto& gidx1 = enc.allowed_global_idx[t1];
-            const auto& lit1 = enc.assign_lit[t1];
-            const auto& gidx2 = enc.allowed_global_idx[t2];
-            const auto& lit2 = enc.assign_lit[t2];
-            for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
-                const size_t glob1 = gidx1[i1];
-                if (glob1 >= global_rank.size()) {
-                    continue;
-                }
-                const int L1 = global_rank[glob1];
-                for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
-                    const size_t glob2 = gidx2[i2];
-                    if (glob2 >= global_rank.size()) {
-                        continue;
-                    }
-                    const int L2 = global_rank[glob2];
-                    if (L1 != L2) {
-                        solver.add(-lit1[i1]);
-                        solver.add(-lit2[i2]);
-                        solver.add(0);
-                    }
-                }
+            const auto [entry, fresh] = label_indicator.try_emplace({tg, global_rank[glob]}, 0);
+            if (fresh) {
+                entry->second = solver.declare_one_more_variable();
+                indicators_of_group[tg].push_back(entry->second);
+            }
+            solver.add(-lit[i]);  // sitting here means the group took this label
+            solver.add(entry->second);
+            solver.add(0);
+        }
+    }
+    for (const auto& [_, indicators] : indicators_of_group) {
+        for (size_t a = 0; a < indicators.size(); ++a) {
+            for (size_t b = a + 1; b < indicators.size(); ++b) {
+                solver.add(-indicators[a]);  // one label per group, so the members cannot split
+                solver.add(-indicators[b]);
+                solver.add(0);
             }
         }
     }
@@ -1298,7 +1311,7 @@ void topology_sat_append_preferred_hit_indicators(
 }
 
 // indicator <=> OR_p (a_p & b_p)  (Tseitin on pairwise AND of two positive assign literals).
-inline bool topology_sat_define_indicator_as_or_of_pairwise_and(
+bool topology_sat_define_indicator_as_or_of_pairwise_and(
     TopologySatSolver& solver, int indicator, const std::vector<std::pair<int, int>>& pair_lits) {
     if (pair_lits.empty()) {
         solver.add(-indicator);

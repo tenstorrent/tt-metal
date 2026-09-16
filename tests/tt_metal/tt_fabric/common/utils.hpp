@@ -45,9 +45,8 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 // Helper function to check generated ASIC mapping files against golden files
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "");
 
-// Per-host rank-group dispatch and split-host 4x4 mesh checks (called from layout tests).
+// Per-host rank-group dispatch (two-tray and split-host 4x4; called from layout tests).
 void expect_galaxy_rank_group_checks(const ControlPlane& control_plane);
-void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane);
 
 // Per-host rank-group checks for supported MGD slice shapes (dim0 x dim1 or dim1 x dim0; implementations in utils.cpp).
 void expect_galaxy_rank_group_1x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
@@ -62,9 +61,7 @@ void expect_galaxy_rank_group_4x16_check(const ControlPlane& control_plane, Mesh
 void expect_galaxy_rank_group_4x32_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 void expect_galaxy_rank_group_8x16_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 
-// Split-host 4x4 torus rank checks (mesh device shape 4x4; used by TestGalaxy4x4SplitHostLayoutCheck).
-void expect_galaxy_rank_group_1x1_4x4split_check(
-    const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+// Mesh-wide four-tray split-host 4x4 check (dispatched from expect_galaxy_rank_group_checks).
 void expect_galaxy_rank_group_4x4_4x4split_check(
     const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
 
