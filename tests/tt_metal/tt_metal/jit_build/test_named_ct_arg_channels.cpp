@@ -166,7 +166,7 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyBlazeKernelsCompile) {
     program.impl().compile(devices_.at(0).get());
 }
 
-// No API includes: the generated prolog must supply the accessors to all three TRISCs.
+// No API includes: the kernel wrapper must supply the accessors to all three TRISCs.
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyComputeArgsWithoutApiIncludes) {
     Program program = CreateProgram();
     CreateKernelFromString(
