@@ -193,12 +193,20 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     binop_with_scalar_tile_init();
     add_unary_tile(reg_acc, get_eps_fp32_bits());
 
-    // REDUCE_ROW output: only column 0 carries data, so use the first-column SFPU
-    // variants (8 iterations instead of 32 per tile).
+    // REDUCE_ROW output: only column 0 carries data. sqrt uses the first-column variant
+    // (8 iterations instead of 32). recip stays on recip_tile<false>, restricted to
+    // VectorMode::C (16 instead of 32): a first-column recip would have to change the
+    // reciprocal algorithm (the only first-column body in tree, calculate_recip_first_column,
+    // uses sfpu_reciprocal_iter, while recip_tile<false> resolves to
+    // _calculate_reciprocal_fast_8b_3c_). The extra 2x is worth ~0.04% end-to-end (PR #56288),
+    // below what polynorm_fusion_benchmark resolves, and PolyNormOpTest's 2e-2 tolerance
+    // cannot show the swap is bit-safe.
+    // TODO(#42980): revisit in a separate change with lane-level accuracy tests, ideally by
+    // fusing sqrt+recip into a first-column rsqrt (_calculate_sqrt_body_ has a RECIPROCAL flag).
     sqrt_tile_init();
     sqrt_tile_first_column(reg_acc);
     recip_tile_init<false>();
-    recip_tile_first_column(reg_acc);
+    recip_tile<false>(reg_acc, VectorMode::C);
 
     tile_regs_commit();
     pack_and_push(reg_acc, cb_inv_rms);
