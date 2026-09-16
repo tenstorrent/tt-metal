@@ -144,7 +144,7 @@
     curl -fsS http://127.0.0.1:8000/health
 
     pushd "$work/vllm-tt-plugin"
-    python -m pytest tests/tt/test_sampling_routes.py tests/tt/test_request_isolation.py \
+    python -m pytest --confcutdir=. tests/tt/test_sampling_routes.py tests/tt/test_request_isolation.py \
         tests/tt/test_host_only_params.py tests/tt/test_tt_penalties.py tests/tt/test_logprobs.py \
         --tt-server-url http://127.0.0.1:8000 --tt-model-name google/gemma-4-31B-it \
         --tt-max-num-seqs 32 --junitxml "$results/api.xml"
