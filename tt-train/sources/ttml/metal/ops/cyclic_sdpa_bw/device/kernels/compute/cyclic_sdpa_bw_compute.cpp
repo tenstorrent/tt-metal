@@ -531,6 +531,14 @@ inline void wait_before_pack() {
     TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
 }
 
+// tile_regs_wait gates only the packer on the math thread's commit; the
+// vector unit's loads need their own gate on the same semaphore, or they
+// read the registers before the matmuls have written them (measured on a
+// fused variant: the score gradient came in stale).
+inline void wait_for_math_done() {
+    TTI_SEMWAIT(p_stall::STALL_SFPU, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+}
+
 inline void load_constant(const uint32_t reg, const uint32_t bits) {
     TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(bits >> 16));
     TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_LOWER, static_cast<uint16_t>(bits & 0xFFFFu));
@@ -937,6 +945,7 @@ void kernel_main() {
             }
             {
                 DeviceZoneScopedN("P-MUL");
+                PACK((pack_sfpu::wait_for_math_done()));
                 for (uint32_t i = 0; i < kGroup; ++i) {
                     if (i >= n_live) {
                         break;  // constant trip count keeps the loop unrolled
