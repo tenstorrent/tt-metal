@@ -22,6 +22,8 @@ set(UNIT_TESTS_LLK_SRC
     test_quasar_bfd_datacopy.cpp
     test_reconfig.cpp
     test_reduce.cpp
+    test_rmsnorm_chunked.cpp
+    test_sdpa_reconciliation.cpp
     test_sfpu_binary_bcast.cpp
     test_sfpu_compute.cpp
     test_single_core_binary_compute.cpp
