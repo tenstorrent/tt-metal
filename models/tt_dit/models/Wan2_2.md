@@ -194,6 +194,24 @@ branch (starting at step 9) to match what F1 reaches with 8. Thresholds are not 
 (the residual after 8 blocks is roughly twice as large, so 0.08 never caches with F8). TaylorSeer order 1 on
 top of it: 1.20x, PCC 0.934.
 
+**The schedule decides how much can be cached.** This pipeline's scheduler uses `flow_shift=12` (the official
+Wan 2.2 A14B T2V setting), which puts 26 of 40 steps on the high-noise expert and compresses the low-noise expert
+into the fast-changing end of the trajectory, where its residuals are never stable enough to cache. cache-dit's
+own Wan 2.2 example runs `flow_shift=3` (480p) / `5` (720p). Re-running 480p with those schedules
+(`pipeline(..., flow_shift=...)`, `WAN_DBCACHE_FLOW_SHIFT` in the A/B test), 40 steps, same prompt/seed:
+
+| flow_shift | Config | Denoising | Cached steps per branch (high / low) | PSNR vs. baseline | PCC vs. baseline |
+|---|---|---|---|---|---|
+| 12 (ours) | F1, 0.08 | 32.7s (1.38x) | 8 / 4 | 15.7 dB | 0.849 |
+| 5 | F1, 0.05 (default) | 39.4s (1.15x) | 1 / 5 | 31.6 dB | 0.995 |
+| 5 | F1, 0.08 | 28.2s (1.60x) | 6 / 10 | 18.6 dB | 0.909 |
+| 3 | F1, 0.05 (default) | 39.8s (1.14x) | 0 / 6 | 35.6 dB | 0.998 |
+| 3 | F1, 0.08 | 28.4s (1.61x) | 4 / 12 | 21.5 dB | 0.952 |
+
+With cache-dit's schedule and threshold the low-noise expert caches 10 to 12 steps (including consecutive
+pairs) and the pipeline reaches 1.6x while staying above PCC 0.9, i.e. the GPU-class result. Whether to change
+the shipped schedule is a model-quality decision, not a caching one; the default preset stays tuned for shift 12.
+
 The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
 bit-exact as well.
