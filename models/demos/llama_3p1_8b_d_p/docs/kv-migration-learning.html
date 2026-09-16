@@ -1,0 +1,467 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
+
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Llama 3.1 8B: prefill to native KV migration</title>
+<style>
+:root{--bg:#07131d;--panel:#0d202d;--panel2:#112b39;--text:#e9f4f5;--muted:#a7c0c5;--teal:#50d6c7;--blue:#72a9ff;--gold:#ffcf66;--line:#254657;--danger:#ff8b8b;--ok:#82e6a7}
+*{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:radial-gradient(circle at 80% 0,#12394b 0,#07131d 38%);color:var(--text);font:16px/1.62 system-ui,-apple-system,Segoe UI,sans-serif}
+a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:5px;padding:.1em .35em;color:#bcefe8} pre{overflow:auto;background:#061018;border:1px solid var(--line);padding:1rem;border-radius:12px}
+.layout{display:grid;grid-template-columns:290px minmax(0,1fr);max-width:1500px;margin:auto} aside{height:100vh;position:sticky;top:0;padding:24px 20px;border-right:1px solid var(--line);background:#081722ee;overflow:auto} aside h2{font-size:1rem;margin:0 0 12px;color:var(--teal)} aside a{display:block;text-decoration:none;color:var(--muted);padding:5px 8px;border-left:2px solid transparent} aside a:hover{color:white;border-left-color:var(--teal)} .nav-1{font-weight:750} .nav-2{font-size:.86rem} main{max-width:1060px;padding:38px 52px 100px} h1{font-size:clamp(2.1rem,5vw,4.4rem);line-height:1.02;letter-spacing:-.04em;margin:0 0 1.2rem;background:linear-gradient(100deg,#fff,#73e8db 55%,#79adff);-webkit-background-clip:text;color:transparent} h2{margin-top:3.4rem;padding-top:1rem;border-top:1px solid var(--line);font-size:1.8rem} h3{margin-top:2rem;color:#b4e8ff} p{max-width:82ch} blockquote{border-left:4px solid var(--gold);background:#162534;padding:12px 18px;margin:1.2rem 0;color:#ffe7ad} details{margin:1rem 0;border:1px solid var(--line);border-radius:12px;background:#0a1b26} summary{cursor:pointer;padding:12px 16px;color:#b4e8ff;font-weight:750;font-size:1.06rem} .detail-body{padding:0 16px 12px} .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;margin:1.2rem 0} table{border-collapse:collapse;width:100%;background:#0b1d29} th{text-align:left;background:#153343;color:#d8fbf5} th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top} tr:last-child td{border-bottom:0} li{margin:.25rem 0} .diagram{margin:2.4rem 0;padding:12px;background:linear-gradient(145deg,#0d2431,#0a1924);border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 35px #0006} .diagram svg{width:100%;height:auto} figcaption{color:var(--muted);padding:8px 10px 2px} svg text{fill:var(--text);font:700 18px system-ui} svg .small{font-size:14px;fill:var(--muted);font-weight:500} svg .label,svg .tick{font-size:13px;fill:#c7dce0;font-weight:600} svg .box{stroke-width:2} svg .front{fill:#182e3a;stroke:#6d98aa} svg .prefill{fill:#123a38;stroke:var(--teal)} svg .kvm{fill:#25304c;stroke:var(--blue)} svg .decode{fill:#3b3020;stroke:var(--gold)} svg .flow{stroke:var(--teal);stroke-width:4;fill:none;marker-end:url(#arrow)} svg .return{stroke:var(--gold);stroke-width:3;fill:none;marker-end:url(#arrow)} svg .axis,svg .lane line{stroke:#537080;stroke-width:2} svg .phase{stroke-width:2} svg .a{fill:#123a38;stroke:var(--teal)} svg .b{fill:#3b3020;stroke:var(--gold)} svg .c{fill:#25304c;stroke:var(--blue)} svg .move{stroke:var(--teal);stroke-width:5} svg .replay{stroke:var(--gold);stroke-width:5} svg .seq{stroke:var(--blue);stroke-width:3;marker-end:url(#arrow)} svg .lane line{stroke-dasharray:5 6} svg .ready{fill:#123a38;stroke:var(--ok)} .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0} button{border:1px solid var(--line);color:var(--text);background:#102733;padding:7px 11px;border-radius:8px;cursor:pointer} .scope{border:1px solid #6b5a31;background:#2b2519;padding:14px 18px;border-radius:12px;color:#ffe8b1} .toplink{display:none;position:fixed;right:20px;bottom:20px;background:#173c48;padding:8px 12px;border-radius:20px;text-decoration:none}
+@media(max-width:900px){.layout{display:block}aside{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line);max-height:290px}main{padding:30px 20px 80px}.toplink{display:block}}
+@media print{aside,.toolbar,.toplink{display:none}.layout{display:block}main{max-width:none;padding:0}body{background:white;color:#111}a{color:#145}code,pre,table{color:#111;background:#f5f5f5}h1{color:#111}}
+</style></head><body><div class="layout"><aside><h2>Guide navigation</h2><a class="nav-1" href="#llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</a>
+<a class="nav-2" href="#purpose">Purpose</a>
+<a class="nav-2" href="#read-the-status-labels-first">Read the status labels first</a>
+<a class="nav-2" href="#system-map">System map</a>
+<a class="nav-2" href="#worked-example-1-033-prompt-tokens-and-16-output-tokens">Worked example: 1,033 prompt tokens and 16 output tokens</a>
+<a class="nav-2" href="#three-sizes-that-must-stay-distinct">Three sizes that must stay distinct</a>
+<a class="nav-2" href="#why-only-k-and-v-migrate">Why only K and V migrate</a>
+<a class="nav-2" href="#source-cache-geometry">Source cache geometry</a>
+<a class="nav-2" href="#address-tables-and-the-layout-opaque-mover">Address tables and the layout-opaque mover</a>
+<a class="nav-2" href="#source-to-destination-layout-map">Source-to-destination layout map</a>
+<a class="nav-2" href="#native-kvm-control-and-completion-sequence">Native KVM control and completion sequence</a>
+<a class="nav-2" href="#slot-lifecycle-cancellation-failure-and-retry">Slot lifecycle, cancellation, failure, and retry</a>
+<a class="nav-2" href="#capacity-and-payload-arithmetic">Capacity and payload arithmetic</a>
+<a class="nav-2" href="#read-numerical-test-results">Read numerical test results</a>
+<a class="nav-2" href="#test-evidence-by-phase">Test evidence by phase</a>
+<a class="nav-2" href="#required-test-plan-for-the-worked-example">Required test plan for the worked example</a>
+<a class="nav-2" href="#advantages">Advantages</a>
+<a class="nav-2" href="#limitations-and-subtle-risks">Limitations and subtle risks</a>
+<a class="nav-2" href="#debugging-checklist">Debugging checklist</a>
+<a class="nav-2" href="#questions-and-exercises">Questions and exercises</a>
+<a class="nav-2" href="#glossary">Glossary</a>
+<a class="nav-2" href="#language-and-review-method">Language and review method</a></aside><main><div class="scope"><strong>Attention accuracy is under investigation.</strong> Repeated-token pre-O heads fail. Full-model native migration across five Galaxies remains pending.</div><div class="toolbar"><button onclick="document.querySelectorAll('details').forEach(x=>x.open=true)">Expand details</button><button onclick="window.print()">Print guide</button></div><h1 id="llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</h1>
+<h2 id="purpose">Purpose</h2>
+<p>This guide explains one disaggregated Llama 3.1 8B request from input text to streamed output.</p>
+<blockquote><strong>Attention accuracy is under investigation.</strong> Repeated-token pre-O heads currently fail, although post-O output passes.</blockquote>
+<p>It centers on the native <code>tt-d-gen</code> KV Manager, called native KVM in this guide.</p>
+<p>The target uses five Blackhole Galaxies. One Galaxy runs prefill. Four Galaxies form one SC4 decode system.</p>
+<p>The model is Llama 3.1 8B Instruct. The target deployment has two request slots and 2,048 total token positions.</p>
+<p>This page separates verified code, completed tests, proposed wiring, and required integration tests.</p>
+<p>Open the <a href="kv-migration-learning-sources.md">sources and evidence manifest</a> or the <a href="kv-migration-learning-report.md">review report</a>.</p>
+<h2 id="read-the-status-labels-first">Read the status labels first</h2>
+<div class="table-wrap"><table>
+<tr><th>Label</th><th>Meaning</th></tr>
+<tr><td><strong>Verified source</strong></td><td>The cited source implements the stated behavior.</td></tr>
+<tr><td><strong>Passed test</strong></td><td>A recorded test passed on the named revision and scope.</td></tr>
+<tr><td><strong>Proposed</strong></td><td>The design is selected, but the complete path is not implemented.</td></tr>
+<tr><td><strong>Integration gate</strong></td><td>The team must verify this contract before production use.</td></tr>
+</table></div>
+<p>Source inspection cannot prove hardware behavior. A host test cannot prove cross-endpoint visibility or model quality.</p>
+
+<figure class="diagram" aria-labelledby="overview-caption">
+<svg viewBox="0 0 1100 320" role="img" aria-label="Five Galaxy prefill and decode system">
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#50d6c7"/></marker></defs>
+  <rect x="25" y="105" width="170" height="92" rx="18" class="box front"/><text x="110" y="140" text-anchor="middle">Frontend</text><text x="110" y="168" text-anchor="middle" class="small">UUID + token IDs</text>
+  <rect x="255" y="45" width="220" height="210" rx="18" class="box prefill"/><text x="365" y="82" text-anchor="middle">Prefill Galaxy</text><text x="365" y="112" text-anchor="middle" class="small">SP4 × TP8</text><text x="365" y="142" text-anchor="middle" class="small">source slot 0</text><text x="365" y="172" text-anchor="middle" class="small">32 layer-ready ACKs</text><text x="365" y="202" text-anchor="middle" class="small">prefill table</text>
+  <rect x="535" y="72" width="210" height="155" rx="18" class="box kvm"/><text x="640" y="108" text-anchor="middle">Native KVM</text><text x="640" y="138" text-anchor="middle" class="small">table-driven mover</text><text x="640" y="168" text-anchor="middle" class="small">DMK + RDMA</text><text x="640" y="198" text-anchor="middle" class="small">terminal outcomes</text>
+  <rect x="805" y="25" width="265" height="250" rx="18" class="box decode"/><text x="937" y="62" text-anchor="middle">SC4 Decode</text><text x="937" y="92" text-anchor="middle" class="small">four Galaxies</text><text x="937" y="122" text-anchor="middle" class="small">destination slot 1</text><text x="937" y="152" text-anchor="middle" class="small">decode table</text><text x="937" y="182" text-anchor="middle" class="small">tail replay</text><text x="937" y="212" text-anchor="middle" class="small">streamed tokens</text>
+  <path d="M195 135 H255" class="flow"/><path d="M475 135 H535" class="flow"/><path d="M745 135 H805" class="flow"/><path d="M805 235 H195" class="return"/>
+  <text x="505" y="120" text-anchor="middle" class="label">K/V pages</text><text x="500" y="260" text-anchor="middle" class="label">user-visible tokens</text>
+</svg><figcaption id="overview-caption">One prefill Galaxy supplies K/V state to the existing SC4 decode system.</figcaption></figure>
+<h2 id="system-map">System map</h2>
+<p>The frontend sends the same request identity to the prefill and decode engines.</p>
+<p>The prefill Galaxy computes prompt activations and K/V cache entries. It does not generate the user-visible response here.</p>
+<p>Native KVM moves selected K/V cache pages. It uses serialized address tables for both cache layouts.</p>
+<p>The SC4 decode system replays the prompt tail. It then produces one output token per decode step.</p>
+<p>The KVM code does not understand Llama tensor layouts. The address tables provide every physical location.</p>
+<details><summary id="five-galaxy-data-path">Five-Galaxy data path</summary><div class="detail-body">
+<ol>
+<li>The frontend tokenizes the request.</li>
+<li>The prefill engine assigns a source slot.</li>
+<li>The decode engine assigns a destination slot.</li>
+<li>The prefill Galaxy computes all prompt tokens.</li>
+<li>Each source layer reports readiness after its K/V writes finish.</li>
+<li>Native KVM moves the requested K/V prefix.</li>
+<li>The destination engine waits for a landing report.</li>
+<li>The decode system replays the prompt tail.</li>
+<li>The decode system streams generated tokens.</li>
+</ol>
+</div></details>
+<figure class="diagram" aria-labelledby="timeline-caption">
+<svg viewBox="0 0 1100 330" role="img" aria-label="Worked 1033 token request timeline">
+  <line x1="70" y1="85" x2="1030" y2="85" class="axis"/>
+  <rect x="70" y="55" width="615" height="60" rx="10" class="phase a"/><text x="377" y="90" text-anchor="middle">Migrated prefix 0–1023</text>
+  <rect x="685" y="55" width="130" height="60" rx="10" class="phase b"/><text x="750" y="80" text-anchor="middle">tail</text><text x="750" y="101" text-anchor="middle" class="small">1024–1032</text>
+  <rect x="815" y="55" width="180" height="60" rx="10" class="phase c"/><text x="905" y="90" text-anchor="middle">16 outputs</text>
+  <text x="70" y="40" class="tick">0</text><text x="665" y="40" class="tick">1024</text><text x="795" y="40" class="tick">1033</text><text x="973" y="40" class="tick">1049</text>
+  <path d="M70 170 H685" class="move"/><text x="377" y="155" text-anchor="middle" class="label">migrate [0,1024): 68 MiB logical payload</text>
+  <path d="M685 230 H815" class="replay"/><text x="750" y="215" text-anchor="middle" class="label">replay nine prompt tokens</text>
+  <circle cx="815" cy="230" r="9" fill="#ffcf66"/><text x="815" y="267" text-anchor="middle" class="label"><tspan x="815">final prompt forward</tspan><tspan x="815" dy="20">produces token at 1033</tspan></text>
+</svg><figcaption id="timeline-caption">The destination imports 1,024 prompt positions, then replays the remaining nine tokens.</figcaption></figure>
+<h2 id="worked-example-1-033-prompt-tokens-and-16-output-tokens">Worked example: 1,033 prompt tokens and 16 output tokens</h2>
+<p>Assume the tokenizer produces exactly 1,033 tokens. This token count is an example input to the mechanics.</p>
+<p>The shortened prompt text below is illustrative. It does not claim a specific tokenizer result.</p>
+<blockquote>“Explain why a migrated KV cache must preserve RoPE position and head identity.”</blockquote>
+<p>Assume the source gets slot 0. Assume the destination gets slot 1. These slot numbers are example assignments.</p>
+<p>The request allows 16 new tokens. The final position is below the 2,048-position deployment limit.</p>
+<details><summary id="phase-a-admission-and-planning">Phase A: admission and planning</summary><div class="detail-body">
+<p>The frontend gives both engines one request UUID. The engines use this UUID for rendezvous.</p>
+<p>The prefill engine stores all 1,033 token IDs. It plans two 1,024-token prefill chunks.</p>
+<p>The first prefill chunk covers logical positions <code>[0, 1024)</code>. The second prefill chunk covers <code>[1024, 1033)</code> plus padding.</p>
+<p>The decode engine computes a reusable prefix cap. The cap is the last 32-token boundary below the prompt length.</p>
+<p>For 1,033 prompt tokens, the reusable prefix cap is 1,024 tokens.</p>
+<p>The decode engine therefore requests migration for <code>[0, 1024)</code>. It retains nine prompt tokens for local replay.</p>
+</div></details><details><summary id="phase-b-prefill-compute">Phase B: prefill compute</summary><div class="detail-body">
+<p>The source runs 32 transformer layers for both prefill chunks.</p>
+<p>The 1,024-token prefill chunk gives each SP row 256 tokens.</p>
+<p>The nine-token tail uses a padded physical buffer. Its valid range remains <code>[1024, 1033)</code>.</p>
+<p>For global position <code>g</code>, the source SP owner is <code>(g % 1024) // 256</code>.</p>
+<p>The local cache row is <code>(g // 1024) * 256 + (g % 256)</code>.</p>
+<p>Positions 1,024 through 1,032 therefore belong to SP row 0. They use local rows 256 through 264.</p>
+<p>Each layer writes post-RoPE K and raw V. Q remains a temporary attention activation.</p>
+<p>The runner must publish one layer-ready acknowledgement after device completion for each source layer.</p>
+<p>The current common runner has this acknowledgement channel. The future Llama runtime must add the required device wait.</p>
+</div></details><details><summary id="phase-c-native-kvm-transfer">Phase C: native KVM transfer</summary><div class="detail-body">
+<p>The destination announces UUID, destination slot 1, and range <code>[0, 1024)</code>.</p>
+<p>The source pairs this announcement with source slot 0. It clips every queued layer range to the requested span.</p>
+<p>The native client submits one migration command per ready layer. Each command names source and destination slots.</p>
+<p>The command also names one layer range and one token range. The KVM resolves both layouts through tables.</p>
+<p>The transfer contains 32 KV transfer chunks per config. Each transfer chunk covers 32 token positions.</p>
+<p>There are 16 configs. The required order is <code>k_h0</code> through <code>k_h7</code>, then <code>v_h0</code> through <code>v_h7</code>.</p>
+<p>There are 32 layers. Each BF8_B transfer chunk contains four physical tiles and uses 4,352 bytes.</p>
+<p>The logical payload for this example is <code>32 × 16 × 32 × 4,352 = 71,303,168</code> bytes.</p>
+<p>That value is exactly 68 MiB. It excludes retries, protocol records, replication, staging, and scratch space.</p>
+<p>The destination device writer retires a command after its final NoC write barrier.</p>
+<p>The host observes the device kernel completion counter after that barrier. The writer then reports all channels settled.</p>
+<p>The drain path writes its credit only after those device writes settle. KVM success follows successful drain completion.</p>
+<p>The source engine then sends a landing report to the destination engine. The destination can admit the migrated prefix.</p>
+<p>This ordering is source-verified. The five-Galaxy Llama path has not yet validated it on hardware.</p>
+</div></details><details><summary id="phase-d-prompt-tail-replay-and-first-output-token">Phase D: prompt-tail replay and first output token</summary><div class="detail-body">
+<p>The destination starts with positions <code>[0, 1024)</code> resident in slot 1.</p>
+<p>It forwards prompt positions 1,024 through 1,032 through the decode model.</p>
+<p>The first eight tail forwards build K/V and discard their intermediate logits.</p>
+<p>The forward at position 1,032 is the final prompt forward. Its logits produce the first generated token at position 1,033.</p>
+<p>The current engine does not consume prefill logits for this handoff. Tail replay does not overwrite migrated positions below 1,024.</p>
+<p>The Llama device codec and SC4 runtime must preserve this engine contract. That work remains an integration gate.</p>
+</div></details><details><summary id="phase-e-streaming-response">Phase E: streaming response</summary><div class="detail-body">
+<p>The decoder feeds each generated token back as the next input token.</p>
+<p>Each feedback step writes that token's K/V at its generated position. The next result advances the response.</p>
+<p>After 16 outputs, the request ends because of its generation limit, an EOS token, or another configured stop.</p>
+<p>An illustrative response could be: “RoPE binds each K vector to its absolute position and head frame.”</p>
+<p>This sentence is an example only. No current end-to-end test produced it.</p>
+</div></details><h2 id="three-sizes-that-must-stay-distinct">Three sizes that must stay distinct</h2>
+<div class="table-wrap"><table>
+<tr><th>Term</th><th>Size</th><th>Purpose</th></tr>
+<tr><td><strong>Prefill chunk</strong></td><td>1,024 tokens</td><td>One host-to-device prefill work unit.</td></tr>
+<tr><td><strong>KV transfer chunk</strong></td><td>32 tokens</td><td>One K or V head page moved by KVM.</td></tr>
+<tr><td><strong>Physical tile</strong></td><td>32 by 32 values</td><td>TT tile storage and compute unit.</td></tr>
+</table></div>
+<p>Do not use the word “chunk” alone in reviews. Name the specific unit.</p>
+<p>A 128-wide K or V head uses four physical tiles for 32 tokens.</p>
+<p>One BF8_B physical tile uses 1,088 bytes. One BF8_B KV transfer chunk therefore uses 4,352 bytes.</p>
+<p>The 32-token divisor does not describe a DRAM bank count.</p>
+<p>The cache allocator obtains the actual bank grid from <code>get_num_dram_banks(mesh_device)</code>.</p>
+<h2 id="why-only-k-and-v-migrate">Why only K and V migrate</h2>
+<p>Llama attention has 32 query heads and eight K/V heads. Four query heads share one K/V head.</p>
+<p>This design is grouped-query attention, or GQA. It reduces cached state and transfer volume.</p>
+<p>Q is needed only during the current attention calculation. Future decode steps never read an old Q value.</p>
+<p>K and V are the attention memory for prior positions. Every later token reads them.</p>
+<p>Weights already exist on both model systems. Moving weights per request would be wasteful.</p>
+<p>Intermediate activations are also transient. Decode reconstructs its needed activations from tokens, weights, and K/V.</p>
+<h2 id="source-cache-geometry">Source cache geometry</h2>
+<p>The prefill mesh shape is 4 by 8. SP uses four rows, and TP uses eight columns.</p>
+<p>TP assigns one K/V head to each column. SP assigns token groups to rows.</p>
+<p>Each K or V cache has local shape <code>[64, 1, 512, 128]</code> on each device.</p>
+<p>The leading dimension packs two users times 32 layers. The local sequence length is <code>2048 / 4 = 512</code>.</p>
+<p>The cache uses tiled DRAM. Its NdShard page shape is <code>[1, 1, 32, 128]</code>.</p>
+<p>Pages use row-major orientation and round-robin one-dimensional distribution across the real DRAM bank grid.</p>
+<p>The source cache writes post-RoPE K. It writes V without RoPE.</p>
+<details><summary id="rope-frame-rule">RoPE frame rule</summary><div class="detail-body">
+<p>Hugging Face and Meta use different Q/K element arrangements around RoPE.</p>
+<p>The prefill weights must convert Q and K to the Meta adjacent-pair frame.</p>
+<p>Blaze decode uses that Meta frame. A wrong frame can copy identical bytes and still produce wrong attention.</p>
+<p>Byte equality therefore proves transport fidelity only. It cannot prove RoPE, head, config, layer, slot, or position identity.</p>
+</div></details><h2 id="address-tables-and-the-layout-opaque-mover">Address tables and the layout-opaque mover</h2>
+<p>Each endpoint publishes a serialized <code>KvChunkAddressTable</code>. It also publishes a device map.</p>
+<p>The prefill table describes source locations. The decode table describes destination locations.</p>
+<p>The native manager imports every named config. It checks that config IDs are unique and contiguous.</p>
+<p>It also requires matching name-to-ID assignments across prefill and decode tables.</p>
+<p>The manager builds immutable read and write indexes. The data plane queries those indexes during movement.</p>
+<p>The read index deduplicates replicas. The write index returns all local replica destinations.</p>
+<p>Each lookup returns a device group, encoded DRAM address, byte size, and 32-token position bounds.</p>
+<p>The mover does not calculate Llama strides. Table producers own all layout arithmetic.</p>
+<p>This separation permits different source and destination layouts. It also makes wrong tables a high-risk failure source.</p>
+<details><summary id="required-llama-table-contract">Required Llama table contract</summary><div class="detail-body">
+<p>The planned Llama tables use 16 named configs. Names and IDs must match on both endpoints.</p>
+<p>The planned order is K heads 0 through 7, followed by V heads 0 through 7.</p>
+<p>Every config describes two slots, 32 layers, 2,048 positions, 32-token pages, and 4,352-byte BF8_B pages.</p>
+<p>The prefill table must follow the SP4 and TP8 source packing. The decode table must follow the SC4 cache packing.</p>
+<p>The Llama-specific table exporters and cross-layout migration test remain proposed.</p>
+<p>Do not publish a concrete NoC address until both table builders exist and a lookup test verifies the address.</p>
+</div></details><h2 id="source-to-destination-layout-map">Source-to-destination layout map</h2>
+<p>Source and destination tables share each config identity. They do not share physical placement.</p>
+<p>A config identity selects K or V and one global K/V head. Physical placement selects devices, banks, slots, and byte offsets.</p>
+<p>Native KVM reads both table entries and copies their bytes. The native data plane should require no Llama-specific change.</p>
+<p>The Llama table builders must translate each logical coordinate into the allocation that its endpoint actually uses.</p>
+<div class="table-wrap"><table>
+<tr><th>Coordinate</th><th>Prefill source</th><th>Decode destination</th></tr>
+<tr><td>K/V head</td><td>TP8 gives one global K/V head to each TP column.</td><td>TP2 gives four global K/V heads to each TP shard.</td></tr>
+<tr><td>Token position</td><td>SP4 distributes 256-position blocks within each 1,024-position group.</td><td>Each TP shard keeps the full 2,048-position sequence axis.</td></tr>
+<tr><td>Slot</td><td>Two slots use user-major layer planes.</td><td>The pinned Llama allocation has one slot. Two-slot placement remains pending.</td></tr>
+<tr><td>Layer</td><td>Slot and layer select one packed source plane.</td><td>Each decoder stage owns its live cache tensors.</td></tr>
+<tr><td>DRAM placement</td><td>NdShard uses the device's real DRAM bank grid.</td><td>The live allocator selects banks per head, bank order, and base addresses.</td></tr>
+</table></div>
+<p>The decode mesh mapper shards tensor dimension one. That dimension is the K/V head dimension.</p>
+<p>Eight K/V heads cross two TP shards. Therefore, each destination TP shard receives four contiguous global heads.</p>
+<p>For global head <code>h</code>, the destination TP shard is <code>h // 4</code>. Its local head index is <code>h % 4</code>.</p>
+<p>The destination keeps logical positions in one full sequence axis. Its update kernel starts with <code>tile_row = position // 32</code>.</p>
+<p>The kernel then maps that tile row into the allocated bank layout. The migration table builder must use the same mapping.</p>
+<details><summary id="logical-walk-head-5-position-1-024-layer-13">Logical walk: head 5, position 1,024, layer 13</summary><div class="detail-body">
+<p>This is a separate address example. Position 1,024 is outside the worked example's migrated range. It requires a longer migrated prefix.</p>
+<p>This walk uses K config <code>k_h5</code>, which has config ID 5. Config <code>v_h5</code> repeats the walk with config ID 13.</p>
+<ol>
+<li>The request selects source slot 0, destination slot 1, layer 13, and position 1,024.</li>
+<li>Source TP column 5 owns global K/V head 5.</li>
+<li>Source SP row <code>(1024 % 1024) // 256</code> is row 0.</li>
+<li>The source local cache row is <code>(1024 // 1024) * 256 + 1024 % 256</code>, which is 256.</li>
+<li>Source slot 0 and layer 13 select packed plane <code>0 * 32 + 13</code>, which is plane 13.</li>
+<li>The source table must return the real location for config 5, plane 13, row 256.</li>
+<li>Destination TP shard <code>5 // 4</code> is shard 1. Head 5 becomes local head <code>5 % 4</code>, which is 1.</li>
+<li>Destination position 1,024 starts at tile row <code>1024 // 32</code>, which is 32.</li>
+<li>Layer 13 selects that decoder stage's cache tensor and gathered base address.</li>
+<li>Destination slot 1 has no verified stride in the pinned Llama allocation.</li>
+<li>A future two-slot allocation and its update kernel must define the slot 1 placement.</li>
+<li>The destination table must return that verified placement before migration can use this walk.</li>
+</ol>
+<p>This walk stops before a NoC address. It does not invent a bank, base address, layer stride, or slot stride.</p>
+<p>The pinned Blaze configuration sets <code>BATCH_SIZE=1</code> and <code>n_slots=1</code>. Its Llama entry also lacks <code>kv_migration_spec</code>.</p>
+<p>The generic update kernel contains a paged multi-slot formula. That formula becomes relevant only when the Llama allocation uses it.</p>
+<p>The actual table must derive two-slot strides from live Blaze tensors. It must match the update kernel and bank order.</p>
+<p>Config identity stays stable across endpoints. Physical placement can change without changing the native KVM data plane.</p>
+</div></details>
+<figure class="diagram" aria-labelledby="completion-caption">
+<svg viewBox="0 0 1100 410" role="img" aria-label="Native KVM completion ordering">
+  <g class="lane"><text x="90" y="35">Source engine</text><line x1="90" y1="50" x2="90" y2="380"/></g>
+  <g class="lane"><text x="345" y="35">Native KVM</text><line x1="345" y1="50" x2="345" y2="380"/></g>
+  <g class="lane"><text x="620" y="35">Destination DMK</text><line x1="620" y1="50" x2="620" y2="380"/></g>
+  <g class="lane"><text x="930" y="35">Destination engine</text><line x1="930" y1="50" x2="930" y2="380"/></g>
+  <path d="M930 82 H90" class="seq"/><text x="510" y="72" text-anchor="middle" class="label">announce UUID, slot, and range</text>
+  <path d="M90 132 H345" class="seq"/><text x="217" y="122" text-anchor="middle" class="label">layer command</text>
+  <path d="M345 182 H620" class="seq"/><text x="482" y="172" text-anchor="middle" class="label">destination writes</text>
+  <path d="M620 232 H345" class="seq"/><text x="482" y="222" text-anchor="middle" class="label">NoC barrier, doneCount, drain credit</text>
+  <path d="M345 282 H90" class="seq"/><text x="217" y="272" text-anchor="middle" class="label">terminal outcome</text>
+  <path d="M90 332 H930" class="seq"/><text x="510" y="322" text-anchor="middle" class="label">landing report after all outcomes</text>
+  <rect x="810" y="350" width="240" height="42" rx="10" class="ready"/><text x="930" y="376" text-anchor="middle">admit migrated prefix</text>
+</svg><figcaption id="completion-caption">Destination admission follows the landing report, which follows native command completion.</figcaption></figure>
+<h2 id="native-kvm-control-and-completion-sequence">Native KVM control and completion sequence</h2>
+<p>Native KVM has a control plane, a data plane, device I/O, and an engine adapter.</p>
+<p>The engine adapter sends commands over ZMQ. The native manager returns one terminal outcome per accepted command.</p>
+<p>The data plane reads source pages, transfers batches, drains destination pages, and returns credits.</p>
+<p>The device movement kernel copies data through four L1 bounce slots. It issues a final NoC write barrier per command.</p>
+<p>The device kernel publishes <code>doneCount</code> after this barrier. The host link retires work from that completion count.</p>
+<p><code>DeviceWriteSession</code> settles only after every planned operation is issued and every device channel has zero in-flight work.</p>
+<p><code>DrainSession</code> finishes after device settlement and credit writeback. The control plane then returns command success.</p>
+<p>The proposed native <code>KvmClient</code> waits for all command outcomes. It then reports the landing to the destination engine.</p>
+<p>The landing report is the destination engine's admission signal. A command submission or source ACK is insufficient.</p>
+<details><summary id="current-implementation-boundary">Current implementation boundary</summary><div class="detail-body">
+<p>Pinned tt-d-gen main <code>10b66f8</code> contains native KVM and <code>EngineAdapter</code>.</p>
+<p>Current inspected main <code>9a8c531</code> also contains the native manager and adapter.</p>
+<p>Current main registers <code>MigrationKvManagerClient</code> under <code>migration</code>. That client uses the vendored legacy migration layer.</p>
+<p>PR head <code>7ee35d8</code> adds <code>KvmClient</code>. It registers the native client under <code>kvm</code> and links <code>kvm::engine_adapter</code>.</p>
+<p>The present PR state was not available through authenticated API access during this review.</p>
+<p>Do not infer merge state from these revisions. Use the deployed build's registry and CMake output.</p>
+</div></details><h2 id="slot-lifecycle-cancellation-failure-and-retry">Slot lifecycle, cancellation, failure, and retry</h2>
+<details><summary id="normal-source-lifecycle">Normal source lifecycle</summary><div class="detail-body">
+<p>The prefill engine registers the UUID before source K/V exists. This prevents a destination announcement from racing registration.</p>
+<p>The source slot stays pinned while the burst is open. Each layer-ready acknowledgement can queue one layer transfer.</p>
+<p>The source seals the burst after its final prefill chunk retires. It releases the pin after terminal completion.</p>
+</div></details><details><summary id="normal-destination-lifecycle">Normal destination lifecycle</summary><div class="detail-body">
+<p>The destination enters <code>AWAITING_MIGRATION</code>. It cannot decode from the slot yet.</p>
+<p>The destination receives a landing report after the source observes all native command outcomes.</p>
+<p>Successful landing marks the migrated prefix resident. The runtime then queues prompt-tail replay.</p>
+</div></details><details><summary id="cancellation">Cancellation</summary><div class="detail-body">
+<p>The proposed native client sends a failed landing for a cancelled source transfer with an armed destination.</p>
+<p>It releases the UUID immediately. It retains submitted command handles until their outcomes drain.</p>
+<p>An inbound cancellation drops the local binding. The runtime owns the destination request terminal event.</p>
+<p>UUID release does not make the source slot reusable. Submitted native writes can still reference its cache buffers.</p>
+<p>Integration must prove that the source pin and buffers remain valid until every submitted command reaches a terminal outcome.</p>
+<p>Treat this proof as a required lifecycle audit before native serving acceptance.</p>
+</div></details><details><summary id="timeout-and-peer-loss">Timeout and peer loss</summary><div class="detail-body">
+<p>The engine adapter maps command timeouts and manager failures to terminal outcomes.</p>
+<p>The native client has an inbound timeout for announcements or landings that never arrive.</p>
+<p>Peer loss fails related transfers. The runtime can then release, reject, or locally recompute according to request state.</p>
+</div></details><details><summary id="retry-rule">Retry rule</summary><div class="detail-body">
+<p>Do not retry blindly into the same destination slot. A failed transfer can leave a partial destination range.</p>
+<p>First invalidate or overwrite the complete requested range. Then issue a new transfer with a new correlation identity.</p>
+<p>This retry policy is a required integration decision. Current tests do not cover every cancellation and retry interleaving.</p>
+</div></details><h2 id="capacity-and-payload-arithmetic">Capacity and payload arithmetic</h2>
+<p>One 2,048-position K or V head contains 64 KV transfer chunks.</p>
+<p>The complete logical cache payload for one request is <code>64 × 16 × 32 × 4,352</code> bytes.</p>
+<p>That product is 142,606,336 bytes, or exactly 136 MiB.</p>
+<p>Two slots contain 272 MiB of aggregate logical K/V payload across the prefill mesh.</p>
+<p>These totals exclude replicas, temporary tensors, allocator padding, address tables, staging slabs, and scratch buffers.</p>
+<p>They also do not equal per-chip storage. TP and SP distribute the payload across the source mesh.</p>
+<p>They do not equal network traffic. Retries, headers, credits, and transport behavior can change network bytes.</p>
+<p>A 2,048-token prompt does not migrate all 64 pages under the current tail-replay rule.</p>
+<p>Its reusable cap is 2,016 tokens, or 63 pages. The last prompt block remains for decode-side replay.</p>
+<h2 id="read-numerical-test-results">Read numerical test results</h2>
+<p>PCC compares correlation between actual and reference values. A high PCC can hide scale error.</p>
+<p>NL2 is <code>norm(actual - reference) / norm(reference)</code>. Lower values indicate smaller relative error.</p>
+<p>An all-zero reference makes this ratio undefined. Use exact or absolute-error checks for zero references.</p>
+<p>Pre-O is the attention head output before the output projection. Post-O is the result after that projection.</p>
+<p>The output projection can reduce visible error. Check both pre-O and post-O results.</p>
+<h2 id="test-evidence-by-phase">Test evidence by phase</h2>
+<div class="table-wrap"><table>
+<tr><th>Phase or risk</th><th>Evidence</th><th>What it proves</th><th>What it does not prove</th></tr>
+<tr><td>Model constants</td><td>Config cross-check against Llama dimensions</td><td>32 layers, 32 Q heads, eight K/V heads, head width 128</td><td>Correct weights or runtime behavior</td></tr>
+<tr><td>QKV projection</td><td>Real-weight module tests</td><td>Projection values and TP head placement at tested cases</td><td>Full attention or migration</td></tr>
+<tr><td>Indexed RoPE</td><td>Module tests against Hugging Face</td><td>Position selection and Meta frame at tested positions</td><td>Transport config identity</td></tr>
+<tr><td>Cache allocation</td><td>Galaxy tests in both BF16 and BF8_B</td><td>Shape, zero state, bank-grid use, 32 by 128 page geometry</td><td>Decode cache geometry</td></tr>
+<tr><td>Cache writes</td><td>Boundary and tail cases</td><td>SP ownership, local row, slot/layer packing, zero padding</td><td>Native transfer or decode consumption</td></tr>
+<tr><td>QKV, RoPE, cache composition</td><td>Real-weight layer-zero tests</td><td>Post-RoPE K and raw V reach correct source cache positions</td><td>All layers or cross-endpoint movement</td></tr>
+<tr><td>MLP and RMSNorm</td><td>Module tests</td><td>Isolated module numerics at tested shapes</td><td>Complete decoder block</td></tr>
+<tr><td>Attention task 026</td><td>Uncommitted Task 6 run</td><td>Twenty real-weight interval cases passed pre-O heads and post-O projection</td><td>Repeated-token stability or task acceptance</td></tr>
+<tr><td>Attention task 027</td><td>Uncommitted repeated-token run</td><td>Post-O output passes</td><td>Pre-O heads fail: BF16 worst NL2 0.12608; BF8 worst NL2 0.09887</td></tr>
+<tr><td>Attention task 028</td><td>Uncommitted exact-input residual run</td><td>Reproduces a focused input condition</td><td>Pre-O residual remains NL2 0.10081</td></tr>
+<tr><td>Attention task 029</td><td>Uncommitted stock-FP32 isolation</td><td>Independent SOURCE-HF pre-O gate passes every valid chip</td><td>Production FP32 path is absent; ring and stock BF16 still show about 0.10 NL2</td></tr>
+<tr><td>Prefill reshuffle</td><td>191 host cases for exact helper</td><td>Host token ordering for aligned starts and tails</td><td>H2D transport or device writes</td></tr>
+<tr><td>Layer-ready channel</td><td>Common runner source and host contracts</td><td>Required metadata and 32 layer notifications</td><td>Correct Llama device synchronization</td></tr>
+<tr><td>Native table import</td><td>KVM unit and source checks</td><td>Multi-config import, ID checks, read/write index construction</td><td>Correct Llama-specific table content</td></tr>
+<tr><td>Native engine adapter</td><td>Adapter tests and source</td><td>Command backpressure, timeout, matching terminal outcome</td><td>Llama serving integration</td></tr>
+<tr><td>Native client branch</td><td>Two-process tests with mock device I/O and TCP</td><td>Rendezvous and command lifecycle in tested host scenarios</td><td>Real DMK, RDMA, SC4, or five Galaxies</td></tr>
+<tr><td>DMK byte tests</td><td>Native device-I/O test surface</td><td>Device mover can verify bytes in its own scope</td><td>Correct RoPE frame or table semantics</td></tr>
+<tr><td>Five-Galaxy request</td><td>Pending</td><td>Nothing yet</td><td>End-to-end correctness, latency, failure recovery</td></tr>
+</table></div>
+<p>Published QKV, cache, RoPE, MLP, and RMSNorm results are through tt-metal revision <code>4cf42fb</code>.</p>
+<p>Attention tasks 026 through 029 are uncommitted Task 6 evidence. Task 6 remains unaccepted.</p>
+<p>Attention accuracy remains under investigation. Post-O agreement does not clear the repeated-token pre-O failure.</p>
+<p>No active allocation is implied. This guide ran no device commands.</p>
+<p>Task 6 closure, decoder assembly, full model, runtime wiring, table publication, and migration remain pending.</p>
+<h2 id="required-test-plan-for-the-worked-example">Required test plan for the worked example</h2>
+<details><summary id="gate-1-device-free-request-plan">Gate 1: device-free request plan</summary><div class="detail-body">
+<ol>
+<li>Create a 1,033-token request with a fixed UUID.</li>
+<li>Assert two source prefill chunks.</li>
+<li>Assert source valid ranges <code>[0,1024)</code> and <code>[1024,1033)</code>.</li>
+<li>Assert destination reusable cap 1,024.</li>
+<li>Assert destination migration range <code>[0,1024)</code>.</li>
+</ol>
+<p>This gate catches an off-by-one error before hardware runs.</p>
+</div></details><details><summary id="gate-2-source-cache-correctness">Gate 2: source cache correctness</summary><div class="detail-body">
+<ol>
+<li>Run both source prefill chunks through all 32 layers.</li>
+<li>Read selected K and V pages from both slots.</li>
+<li>Compare post-RoPE K and raw V with the reference.</li>
+<li>Verify SP owner and local row at positions 1,023, 1,024, and 1,032.</li>
+</ol>
+<p>This gate proves source content. It does not prove transport.</p>
+</div></details><details><summary id="gate-3-table-parity">Gate 3: table parity</summary><div class="detail-body">
+<ol>
+<li>Export all 16 prefill configs.</li>
+<li>Export all 16 decode configs.</li>
+<li>Assert matching config names and IDs.</li>
+<li>Assert every lookup uses 32 tokens and 4,352 bytes.</li>
+<li>Check both slots, every layer, and every boundary page.</li>
+<li>Compare table lookups with actual allocated buffers.</li>
+</ol>
+<p>This gate catches wrong head, layer, slot, position, bank, and stride mapping.</p>
+</div></details><details><summary id="gate-4-native-movement">Gate 4: native movement</summary><div class="detail-body">
+<ol>
+<li>Fill source pages with identity-coded patterns.</li>
+<li>Fill destination pages with a distinct sentinel.</li>
+<li>Migrate <code>[0,1024)</code> from source slot 0 to destination slot 1.</li>
+<li>Wait for the destination landing report.</li>
+<li>Read every migrated destination page.</li>
+<li>Confirm positions <code>[1024,2048)</code> still contain the sentinel.</li>
+</ol>
+<p>This gate proves cross-layout byte placement for the requested range.</p>
+<p>It does not prove the values have the correct model meaning.</p>
+</div></details><details><summary id="gate-5-semantic-handoff">Gate 5: semantic handoff</summary><div class="detail-body">
+<ol>
+<li>Use one real 1,033-token prompt.</li>
+<li>Run disaggregated prefill and native migration.</li>
+<li>Replay the nine-token tail on SC4.</li>
+<li>Capture the first generated token at position 1,033.</li>
+<li>Compare logits and tokens with a non-disaggregated baseline.</li>
+<li>Continue for 16 generated tokens.</li>
+</ol>
+<p>This gate tests the exact first-token convention and later decode continuity.</p>
+</div></details><details><summary id="gate-6-failure-paths">Gate 6: failure paths</summary><div class="detail-body">
+<ol>
+<li>Cancel before any layer-ready acknowledgement.</li>
+<li>Cancel after some native commands finish.</li>
+<li>Drop the rendezvous connection before landing.</li>
+<li>Force one command timeout.</li>
+<li>Confirm both slot managers reach a terminal state.</li>
+<li>Confirm no UUID, source pin, or destination wait remains.</li>
+</ol>
+<p>Run retry tests only after the team defines destination invalidation behavior.</p>
+</div></details><h2 id="advantages">Advantages</h2>
+<p>Prefill and decode can scale independently. Long prompts do not occupy decode compute during full prompt processing.</p>
+<p>Layer-ready transfer can overlap migration with later prefill work. This overlap can reduce handoff latency.</p>
+<p>Address tables let source and destination use different cache layouts. The mover remains model-agnostic.</p>
+<p>GQA reduces transfer payload because eight K/V heads serve 32 query heads.</p>
+<p>Block-aligned migration keeps the final prompt block on decode. This makes the first-token rule explicit.</p>
+<h2 id="limitations-and-subtle-risks">Limitations and subtle risks</h2>
+<p>The current Llama runtime and table exporters are incomplete. Native cross-endpoint migration is therefore unproven.</p>
+<p>The current main serving client named <code>migration</code> uses the legacy migration layer. Its name does not imply native KVM.</p>
+<p>The native manager accepts layout tables as truth. A consistent wrong table can move bytes without an obvious transport error.</p>
+<p>Layer-ready acknowledgement requires a real device completion wait. A host enqueue is not sufficient.</p>
+<p>KVM command success is only one part of destination admission. The engine also needs the landing rendezvous record.</p>
+<p>Cancellation cannot cancel an already submitted device or RDMA operation immediately. Cleanup must drain terminal outcomes.</p>
+<p>The current native client branch tests use mock device I/O. They do not cover all hardware timing interleavings.</p>
+<p>Two slots limit concurrency. A stuck source pin or destination wait can block new requests quickly.</p>
+<p>The 2,048-position limit includes prompt and generated tokens. Admission must reject any request that exceeds this combined limit.</p>
+<h2 id="debugging-checklist">Debugging checklist</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>First check</th><th>Likely contract</th></tr>
+<tr><td>Fluent but wrong output</td><td>Compare Meta RoPE frame and config order</td><td>Semantic identity</td></tr>
+<tr><td>Correct first prefill chunk, wrong tail</td><td>Check SP owner and local row formulas</td><td>Source packing</td></tr>
+<tr><td>Destination wait never ends</td><td>Inspect landing rendezvous and inbound timeout</td><td>Control completion</td></tr>
+<tr><td>Source slot never releases</td><td>Inspect command outcomes and source pin count</td><td>Source lifecycle</td></tr>
+<tr><td>Wrong head only</td><td>Compare config name-to-ID mapping</td><td>Table parity</td></tr>
+<tr><td>Wrong layer only</td><td>Compare packed slot/layer plane and command layer range</td><td>Layer identity</td></tr>
+<tr><td>Every 32-token boundary fails</td><td>Check transfer page size and DRAM page mapping</td><td>Page geometry</td></tr>
+<tr><td>Byte copy passes, logits fail</td><td>Check RoPE frame and decode tail replay</td><td>Model meaning</td></tr>
+<tr><td>Retry corrupts later tokens</td><td>Check destination invalidation before retry</td><td>Retry policy</td></tr>
+</table></div>
+<h2 id="questions-and-exercises">Questions and exercises</h2>
+<ol>
+<li>Why does a 1,033-token prompt migrate 1,024 tokens under the current engine rule?</li>
+<li>Which component owns the mapping from position 1,024 to a physical DRAM address?</li>
+<li>Why can a correct byte comparison still hide a wrong RoPE frame?</li>
+<li>Which signal allows the destination engine to leave <code>AWAITING_MIGRATION</code>?</li>
+<li>Why does native command completion wait for the device channel in-flight count to reach zero?</li>
+<li>What changes in the payload calculation for BF16 cache pages?</li>
+<li>Which test would catch a swapped <code>k_h3</code> and <code>v_h3</code> config ID?</li>
+<li>Why must a retry invalidate the complete destination range first?</li>
+<li>Where does global head 5 reside after TP8-to-TP2 remapping?</li>
+<li>Why can the guide calculate tile row 32 but not a destination NoC address?</li>
+</ol>
+<h2 id="glossary">Glossary</h2>
+<div class="table-wrap"><table>
+<tr><th>Term</th><th>Definition</th></tr>
+<tr><td><strong>Acknowledgement</strong></td><td>A control signal that confirms a defined completion point.</td></tr>
+<tr><td><strong>Config identity</strong></td><td>A stable config name and ID for one K or V global head.</td></tr>
+<tr><td><strong>Decode</strong></td><td>Autoregressive work that produces user-visible output tokens.</td></tr>
+<tr><td><strong>Device map</strong></td><td>A file that maps fabric nodes to local devices and hosts.</td></tr>
+<tr><td><strong>DMK</strong></td><td>The native data movement kernel that copies bytes through NoC.</td></tr>
+<tr><td><strong>GQA</strong></td><td>Grouped-query attention, where several Q heads share one K/V head.</td></tr>
+<tr><td><strong>KV cache</strong></td><td>Stored K and V vectors for prior token positions.</td></tr>
+<tr><td><strong>KV transfer chunk</strong></td><td>One 32-token page for one K or V head.</td></tr>
+<tr><td><strong>Landing report</strong></td><td>The source engine's message that completes destination inbound wait.</td></tr>
+<tr><td><strong>Native KVM</strong></td><td>The tt-d-gen native KV Manager control and data planes.</td></tr>
+<tr><td><strong>NL2</strong></td><td>Relative L2 error between actual and reference values. Lower is better.</td></tr>
+<tr><td><strong>NoC</strong></td><td>The on-chip network used for device memory movement.</td></tr>
+<tr><td><strong>PCC</strong></td><td>Pearson correlation between actual and reference values. Higher is better.</td></tr>
+<tr><td><strong>Physical tile</strong></td><td>A 32 by 32 tensor storage unit.</td></tr>
+<tr><td><strong>Physical placement</strong></td><td>The device, bank, base address, and byte offset for stored data.</td></tr>
+<tr><td><strong>Post-O</strong></td><td>Attention output after the output projection.</td></tr>
+<tr><td><strong>Prefill</strong></td><td>Prompt processing that creates KV cache entries.</td></tr>
+<tr><td><strong>Prefill chunk</strong></td><td>One 1,024-token source work unit in this deployment.</td></tr>
+<tr><td><strong>Pre-O</strong></td><td>Attention head output before the output projection.</td></tr>
+<tr><td><strong>RoPE</strong></td><td>Rotary position embedding applied to Q and K.</td></tr>
+<tr><td><strong>SC4</strong></td><td>The four-Galaxy decode system used by this deployment.</td></tr>
+<tr><td><strong>Slot</strong></td><td>One fixed cache region assigned to a request.</td></tr>
+<tr><td><strong>SP</strong></td><td>Sequence parallelism across four prefill mesh rows.</td></tr>
+<tr><td><strong>TP</strong></td><td>Tensor parallelism that divides heads across devices. Prefill uses eight columns, and decode uses two shards.</td></tr>
+</table></div>
+<h2 id="language-and-review-method">Language and review method</h2>
+<p>This guide follows selected ASD-STE100 Issue 9 writing rules. It uses short sentences, active voice, and defined technical terms.</p>
+<p>The review uses the official <a href="https://www.asd-ste100.org/">ASD-STE100 site</a>, <a href="https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf">Issue 9 PDF</a>, and <a href="https://www.asd-ste100.org/about_STE.html">official explanation</a>.</p>
+<p>The automated sentence scan is only a screening tool. It does not certify formal ASD-STE100 compliance.</p>
+<p>See the <a href="kv-migration-learning-sources.md">source manifest</a> for revisions, anchors, evidence limits, and the language-check artifact.</p></main></div><a class="toplink" href="#llama-3-1-8b-prefill-and-native-kv-migration">Top</a></body></html>

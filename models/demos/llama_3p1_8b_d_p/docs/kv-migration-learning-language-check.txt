@@ -1,0 +1,25 @@
+ASD-STE100 screening artifact
+Source: notes/kv-migration-learning.md
+Descriptive sentences above 25 words: 0
+Numbered procedural steps above 20 words: 0
+HTML parse: PASS
+Internal link targets missing: []
+Inline SVG pairs: 3 3
+Expandable detail pairs: 21 21
+Source manifest links: 2
+Review report links: 1
+External script tags: False
+External stylesheet tags: False
+
+Manual term review: PASS
+- Prefill chunk means 1,024-token source work unit.
+- KV transfer chunk means one 32-token K or V head page.
+- Physical tile means 32 by 32 values.
+- PCC, NL2, pre-O, and post-O have compact definitions.
+- Config identity and physical placement have separate definitions.
+- Native KVM and legacy migration client are distinct.
+- Source and destination slot numbers are example assignments.
+- The guide labels destination slot 1 placement as unimplemented.
+- Current, proposed, tested, failed, and pending claims are labeled.
+
+Limitation: This scan is a heuristic. It is not formal ASD-STE100 certification.

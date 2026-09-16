@@ -10,10 +10,14 @@ into the model-agnostic `models/demos/common/prefill` engine. Decode runs separa
 Umbrella: [tt-blaze#4137](https://github.com/tenstorrent/tt-blaze/issues/4137) ·
 prefill: [#4138](https://github.com/tenstorrent/tt-blaze/issues/4138)
 
-The scaffold/configuration checks and the host/device RoPE tests pass at the recorded base, and the
-device RoPE change is independently reviewed and approved. RMSNorm, MLP, attention, the full
-prefill model, runtime, and migration have not passed yet. See the
-[implementation and verification roadmap](ROADMAP.md) for the staged plan and evidence snapshot.
+Host/device RoPE, RMSNorm, MLP, QKV projection, and source-cache tests have recorded passes.
+These modules are published through commit 4cf42fb. Attention accuracy remains under investigation.
+The decoder block, full model, runtime, and migration have not passed their integration gates.
+See the [implementation and verification roadmap](ROADMAP.md) for the staged plan.
+
+The [native KV migration learning guide](docs/kv-migration-learning.md) explains the complete
+request path, address layouts, completion signals, and required tests. Its
+[standalone HTML edition](docs/kv-migration-learning.html) includes diagrams and expandable sections.
 
 ## Configuration
 
@@ -46,8 +50,10 @@ reference/ scripts/ tests/ tests/unit/ utils/   reference, test, and support are
 
 ## Correctness reference
 
-Bottom-up PCC against a self-contained torch/HF reference (`reference/model.py`, lands with
-[#4147](https://github.com/tenstorrent/tt-blaze/issues/4147)), plus CPU-generated golden KV for the
-full-model check. Thresholds: norm/rope ≥ 0.999, attention/MLP ≥ 0.99. Goldens must round-trip
-weights through the device dtype (bf8_b cache) before PCC, or a full-precision golden leaves a
-spurious ~0.94–0.96 gap that reads as a real bug.
+Module tests compare against independent PyTorch/Hugging Face references. The full-model reference
+is planned with [#4147](https://github.com/tenstorrent/tt-blaze/issues/4147).
+The roadmap and individual tests record their numerical limits.
+
+Report both correlation and magnitude-sensitive error. Keep device-input precision diagnostics
+separate from source-reference acceptance. Exact cache-byte checks establish placement; they do
+not establish complete model correctness.
