@@ -403,7 +403,7 @@ ALWI void reduce(
     }
     scaler_dfb.wait_front(1);  // Wait for scaler tile
     if constexpr (is_sfpu) {
-        PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
+        PACK((llk_pack_reduce_mask_config<reduce_type, reduce_dim, PackMode::Default>(output_dfb_id)));
     }
 
     constexpr uint32_t onetile = 1;

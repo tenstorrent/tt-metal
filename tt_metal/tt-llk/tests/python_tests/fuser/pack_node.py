@@ -10,7 +10,13 @@ if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
 
-from helpers.llk_params import L1Accumulation, PackerReluType
+from helpers.golden_generators import ReduceGolden
+from helpers.llk_params import (
+    L1Accumulation,
+    PackerReluType,
+    ReduceDimension,
+    ReducePool,
+)
 
 from .arch_common import pack_common
 from .base_packer import Packer
@@ -73,6 +79,20 @@ class PackNode:
         operation: "L1Operation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
+        if operation.reduce_pool == ReducePool.Max:
+            # Reapply the edge mask after any fused math/SFPU operations and before pack transforms.
+            mask = torch.ones_like(tensor, dtype=torch.bool)
+            tile_rows, tile_cols = operation.tile_shape.tile_dims
+            if operation.reduce_dim == ReduceDimension.Row:
+                mask[:, ::tile_cols] = False
+            elif operation.reduce_dim == ReduceDimension.Column:
+                mask[::tile_rows, :] = False
+            else:
+                mask[::tile_rows, ::tile_cols] = False
+            tensor = tensor.masked_fill(
+                mask,
+                ReduceGolden.padding_value(ReducePool.Max, self.output.data_format),
+            )
         return self.packer.golden(tensor, self, operation, config)
 
     def get_headers(self) -> List[str]:

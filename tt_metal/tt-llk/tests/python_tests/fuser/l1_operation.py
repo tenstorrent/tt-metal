@@ -9,6 +9,7 @@ from helpers.llk_params import (
     DestSync,
     GoldenType,
     ReduceDimension,
+    ReducePool,
     StochasticRounding,
     Tilize,
 )
@@ -36,6 +37,7 @@ class L1Operation:
     dest_sync: DestSync = DestSync.Half
     block_size: Tuple[int, int] = (32, 32)
     reduce_dim: Optional[ReduceDimension] = None
+    reduce_pool: Optional[ReducePool] = None
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):

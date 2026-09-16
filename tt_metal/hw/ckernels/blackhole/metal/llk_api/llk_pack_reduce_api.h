@@ -11,19 +11,35 @@
  * LLK PACK REDUCE
  *************************************************************************/
 
-// Unified core (explicit face_r_dim), shared by the CB-id API and the LLKOperand API (experimental/2_0/).
-template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_reduce_mask_config_impl(const std::uint32_t face_r_dim) {
-    _llk_pack_reduce_mask_config_<dim, pack_mode>(face_r_dim);
+// Select the LLK specialization locally so callers can keep passing a runtime output CB.
+// The LLKOperand API (experimental/2_0/) supplies the same geometry from its output TensorShape.
+template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
+inline void llk_pack_reduce_mask_config_impl(const std::uint32_t face_r_dim, const TileGeometry geometry) {
+    switch (geometry) {
+        case TileGeometry::Faces1x1:
+            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces1x1>(face_r_dim);
+            break;
+        case TileGeometry::Faces1x2:
+            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces1x2>(face_r_dim);
+            break;
+        case TileGeometry::Faces2x1:
+            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces2x1>(face_r_dim);
+            break;
+        case TileGeometry::Faces2x2:
+            _llk_pack_reduce_mask_config_<reduce_type, dim, pack_mode, TileGeometry::Faces2x2>(face_r_dim);
+            break;
+    }
 }
 
-// Use the runtime face_r_dim of the output CB. Required for narrow tiles
-// (e.g. tile_dimensions=[1,32]) where face_r_dim differs from FACE_R_DIM.
-template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
+// Derive the face grid from the output CB's tile dimensions and face height.
+template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config(std::uint32_t ocb) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(ocb);
-    llk_pack_reduce_mask_config_impl<dim, pack_mode>(get_output_face_r_dim(output_id));
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const auto geometry =
+        get_tile_geometry(get_output_tile_r_dim(output_id) / face_r_dim, get_output_tile_c_dim(output_id) / FACE_C_DIM);
+    llk_pack_reduce_mask_config_impl<reduce_type, dim, pack_mode>(face_r_dim, geometry);
 }
 
 inline void llk_pack_reduce_mask_clear() {

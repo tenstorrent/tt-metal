@@ -159,7 +159,8 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
             0.0f));
 
         if (batch == 0) {
-            PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(ocb)));
+            PACK((
+                llk_pack_reduce_mask_config<PoolType::SUM, ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(ocb)));
         }
         MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
         for (uint32_t j = 1; j < count; ++j) {
