@@ -131,8 +131,10 @@ class WanPipelineConfig:
 
     checkpoint_name: str
 
-    # Optional DBCache (cache-dit style) step skipping, applied by default to every call.
-    # `WanPipeline.__call__(cache_config=...)` overrides it per request.
+    # DBCache (cache-dit style) step skipping, applied to every call unless the call passes its own
+    # `cache_config` (``None`` disables caching for that call). `WanPipelineConfig.default` fills
+    # this with `WanDBCacheConfig.default()`; pass ``cache_config=None`` there to build an uncached
+    # pipeline.
     cache_config: WanDBCacheConfig | None = None
 
     @classmethod
@@ -159,10 +161,13 @@ class WanPipelineConfig:
         cfg_enabled: bool = True,
         max_sequence_length: int = 512,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
-        cache_config: WanDBCacheConfig | DBCacheConfig | None = None,
+        cache_config: WanDBCacheConfig | DBCacheConfig | None = _UNSET,
     ) -> WanPipelineConfig:
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
         preset = preset_dict.get(tuple(mesh_shape), {})
+
+        if cache_config is _UNSET:
+            cache_config = WanDBCacheConfig.default()
 
         if dit_parallel_config is None or vae_parallel_config is None or encoder_parallel_config is None:
             sp_axis = preset["sp_axis"]
@@ -431,7 +436,11 @@ class WanPipeline(PipelineAPIMixin):
 
         self._solver = solver_for_scheduler(
             scheduler
-            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
+            # flow_shift 5.0 (cache-dit's / vLLM's 720p setting) instead of the official Wan 2.2
+            # A14B T2V value of 12.0: it spreads the schedule toward low noise, which is what lets
+            # DBCache skip 15-16 of 40 steps instead of 8 (see models/tt_dit/models/Wan2_2.md).
+            # Per call: `pipeline(..., flow_shift=12.0)`.
+            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=5.0)
         )
 
         # persistent latent buffers to enable safe tracing.

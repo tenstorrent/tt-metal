@@ -218,13 +218,13 @@ def test_wan_dbcache_ab(
     )
     seed = int(os.environ.get("WAN_DBCACHE_SEED", "0"))
     flow_shift_env = os.environ.get("WAN_DBCACHE_FLOW_SHIFT")
-    flow_shift = float(flow_shift_env) if flow_shift_env else None  # None -> pipeline default (12.0)
+    flow_shift = float(flow_shift_env) if flow_shift_env else None  # None -> pipeline default (5.0)
 
     configs = {
         "baseline": None,
         # Same head/body/tail path as dbcache but never allowed to cache.
         "split_nocache": DBCacheConfig(residual_diff_threshold=0.0, max_warmup_steps=0),
-        # The shipped default preset (asserted on below).
+        # The shipped default preset (asserted on below); also what a call with no cache_config gets.
         "dbcache": WanDBCacheConfig.default(**shared),
         # Matrix: plain residual reuse vs. TaylorSeer forecasting orders, and cache-dit's 0.08 threshold.
         "dbcache_ts0": WanDBCacheConfig.default(**shared, taylorseer_order=0),
@@ -277,7 +277,10 @@ def test_wan_dbcache_ab(
             for branch, diffs in enumerate(s["residual_diffs"]):
                 logger.info(f"    branch {branch} diffs: " + ", ".join(f"{k}:{v:.3f}" for k, v in diffs.items()))
             if s["profile_ms"]:
-                logger.info("    profile (ms, mean per branch-call): " + ", ".join(f"{k}={v:.1f}" for k, v in s["profile_ms"].items()))
+                logger.info(
+                    "    profile (ms, mean per branch-call): "
+                    + ", ".join(f"{k}={v:.1f}" for k, v in s["profile_ms"].items())
+                )
             # Steps where both branches cached, in global step numbering (experts run back to back).
             branch_sets = [set(b) for b in s["cached_steps"]]
             both = set.intersection(*branch_sets) if branch_sets else set()
