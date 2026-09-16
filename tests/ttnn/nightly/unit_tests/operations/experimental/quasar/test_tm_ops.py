@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_ulp
 L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
 
-def _explicit_height_shard_config(device, ncores, sh, sw):
+def _explicit_height_shard_config(device, ncores, sh, sw, buffer_type=ttnn.BufferType.L1):
     compute_grid = device.compute_with_storage_grid_size()
     if ncores > compute_grid.x * compute_grid.y:
         pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
@@ -23,7 +23,7 @@ def _explicit_height_shard_config(device, ncores, sh, sw):
         (sh, sw),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, spec)
 
 
 def _run_quasar_slice(shape, begins, ends, step, imc, omc, device):
