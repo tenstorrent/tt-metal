@@ -464,6 +464,8 @@ struct FillTileTag : DestOnlyTag {};
 struct PrngSeedTag {};
 /// RNG → DEST (no CB read).
 struct RandTileTag : DestOnlyTag, PrngSeedTag {};
+/// Counter-based RNG → DEST (no CB read, no hardware PRNG state).
+struct ThreefryTileTag : DestOnlyTag {};
 
 // Trait predicates — which predicate drives each chain decision:
 //
