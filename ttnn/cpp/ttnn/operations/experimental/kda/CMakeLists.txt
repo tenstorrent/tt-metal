@@ -6,14 +6,37 @@ add_library(TTNN::Ops::Experimental::KDA::Common ALIAS ttnn_op_experimental_kda_
 tt_reuse_precompile_headers(ttnn_op_experimental_kda_common TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_kda_common)
 
+set_target_properties(
+    ttnn_op_experimental_kda_common
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+
+file(GLOB_RECURSE kernels device/kernels/*.hpp)
+
 target_sources(
     ttnn_op_experimental_kda_common
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         factory/kda_factory_utils.cpp
         kda_performance_model.cpp
 )
 target_include_directories(ttnn_op_experimental_kda_common PRIVATE ${FixmeOpAPIDir})
 target_link_libraries(ttnn_op_experimental_kda_common PRIVATE TT::Metalium PUBLIC TTNN::Core)
+install(
+    TARGETS
+        ttnn_op_experimental_kda_common
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/kda
+        COMPONENT ttnn-runtime
+)
+
 install(TARGETS ttnn_op_experimental_kda_common LIBRARY COMPONENT tar)
 
 add_subdirectory(sigmoid_gated_rms_norm)
