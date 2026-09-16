@@ -6,7 +6,12 @@
 
 #include <bit>
 #include <cstdint>
+#include <map>
+#include <string>
+#include <tt-metalium/program_descriptors.hpp>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -111,6 +116,83 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
 }
 
 namespace ttml::metal {
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Descriptor counterparts of create_circular_buffer / create_*_kernel, for program factories that return a
+// tt::tt_metal::ProgramDescriptor from create_descriptor(). The framework builds the Program from the descriptor and,
+// on a program-cache hit, re-patches every buffer bound through KernelDescriptor::emplace_runtime_args(), so such a
+// factory has no shared_variables_t and no override_runtime_arguments(). Same parameter order as the Program-based
+// helpers above, minus the Program.
+// ---------------------------------------------------------------------------------------------------------------------
+
+inline tt::tt_metal::CBDescriptor make_cb_descriptor(
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    uint32_t cb_index,
+    tt::DataFormat data_format,
+    uint32_t single_tile_size,
+    uint32_t num_tiles) {
+    return tt::tt_metal::CBDescriptor{
+        .total_size = num_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_index),
+            .data_format = data_format,
+            .page_size = single_tile_size,
+        }}},
+    };
+}
+
+inline tt::tt_metal::KernelDescriptor make_kernel_descriptor(
+    const std::string& kernel_path,
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    const std::vector<uint32_t>& compile_time_args,
+    const std::map<std::string, std::string>& defines,
+    tt::tt_metal::KernelDescriptor::ConfigDescriptor config) {
+    tt::tt_metal::KernelDescriptor kernel;
+    kernel.kernel_source = kernel_path;
+    kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    kernel.core_ranges = core_ranges;
+    kernel.compile_time_args = compile_time_args;
+    kernel.defines.assign(defines.begin(), defines.end());
+    kernel.config = std::move(config);
+    return kernel;
+}
+
+inline tt::tt_metal::KernelDescriptor make_reader_kernel_descriptor(
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    const std::vector<uint32_t>& compile_time_args,
+    const std::map<std::string, std::string>& defines,
+    const std::string& kernel_path) {
+    return make_kernel_descriptor(
+        kernel_path, core_ranges, compile_time_args, defines, tt::tt_metal::ReaderConfigDescriptor{});
+}
+
+inline tt::tt_metal::KernelDescriptor make_writer_kernel_descriptor(
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    const std::vector<uint32_t>& compile_time_args,
+    const std::map<std::string, std::string>& defines,
+    const std::string& kernel_path) {
+    return make_kernel_descriptor(
+        kernel_path, core_ranges, compile_time_args, defines, tt::tt_metal::WriterConfigDescriptor{});
+}
+
+inline tt::tt_metal::KernelDescriptor make_compute_kernel_descriptor(
+    const tt::tt_metal::CoreRangeSet& core_ranges,
+    const std::vector<uint32_t>& compile_time_args,
+    const std::map<std::string, std::string>& defines,
+    const std::string& kernel_path,
+    const bool fp32_dest_acc_en) {
+    return make_kernel_descriptor(
+        kernel_path,
+        core_ranges,
+        compile_time_args,
+        defines,
+        tt::tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = false,
+        });
+}
 
 // One core's share of the work, as handed out by for_each_core_with_work.
 struct CoreWork {
