@@ -1,0 +1,84 @@
+{
+  "status": "PASS_ACTUAL_REDUCED_MODEL_CONTROL",
+  "numeric_checks": 768,
+  "source": "actual FP8/BFP8-LoFi serial vs B2",
+  "full64": false,
+  "serving_integrated": false,
+  "timing_measured": false,
+  "owner_sample_period_seconds": 0.1,
+  "maximum_observed_sample_gap_seconds": 0.102484330534935,
+  "owner_limitation": "100 ms sampled ownership; sub-sample events are not excluded",
+  "retry_native_binding": true,
+  "retry_bindings_sha256": "fe401dc4182f7669421f96202c84bd4ef638b4a6271c1912a022fdb894b49962",
+  "evidence": {
+    "actual.json": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision5/retry1/actual.json",
+      "sha256": "05d95feecfbd0a3816d9fdd82f0eddb50b524a7d90874949b4b745e7050e07d9"
+    },
+    "actual_execution.json": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision5/retry1/actual_execution.json",
+      "sha256": "78e664bbb367024a4436afd66e85af3e62d97d0596ea53e836c9430fb1bdf4eb"
+    },
+    "actual.log": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision5/retry1/actual.log",
+      "sha256": "a84da60b4e2654d85b238d92e355996d5c906f146b3b30afafd0ce55cbcc889f"
+    },
+    "owner_observation.json": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision5/retry1/owner_observation.json",
+      "sha256": "ec7fb1d341ab26e4f5d2d929ab9e3526353a3ce8d60d980f9d4cb26585951ea0"
+    },
+    "native_runtime_binding.json": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision5/retry1/native_runtime_binding.json",
+      "sha256": "f26ec9a3b37a2835e11493a156b51b22a73615a00c831bb7d82c0fbf4c7d6bed"
+    },
+    "verification_execution.json": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision5/retry1/verification_execution.json",
+      "sha256": "5c8b38825e30c61269044fb79c52f91bc8af80688312dd46198a6ff24cdf9233"
+    }
+  },
+  "accepted_scope": "Exact five-line inactive decode logits repair; reduced FP8 target layers0/3 serial versus B2 only",
+  "started_utc": "2026-09-16T08:38:08.833621+00:00",
+  "finished_utc": "2026-09-16T08:39:19.256069+00:00",
+  "actual_child_pid": 1134061,
+  "actual_child_exit": 0,
+  "actual_wrapper_exit": 0,
+  "ownership_status": "pass_observed_ownership",
+  "ownership_samples": 704,
+  "ownership_errors": 0,
+  "owners_after": {
+    "/proc/driver/tenstorrent/0/pids": [],
+    "/proc/driver/tenstorrent/1/pids": [],
+    "/proc/driver/tenstorrent/2/pids": [],
+    "/proc/driver/tenstorrent/3/pids": []
+  },
+  "candidate_before_sha256": "a8348dac14766d88564dad335f258b3ba07981685c15c673c6819961a5693182",
+  "candidate_after_sha256": "5a7bbdee4c1009fe3fdbf5673727e4a2fe21cd802503b7bf6a0fce83c17cb3c0",
+  "numeric_min_pcc": 1.0,
+  "numeric_max_abs": 0.0,
+  "exact_all32_metadata": true,
+  "warmups": 24,
+  "replay_snapshots": 32,
+  "guarded_native_captures": 48,
+  "original_ownership_failed_attempt": "preserved diagnostic only, 57 error samples of812",
+  "original_stage11_complete": false,
+  "source_preparation_review": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/inactive-logits-candidate/REVIEW_preparation.md",
+    "sha256": "512168a496d7b3c9e2996a28b477d5706c288b86f8a3aee1842061d4055d9bdd"
+  },
+  "runtime_diagnostic_review": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/inactive-logits-candidate/REVIEW_runtime_diagnostic.md",
+    "sha256": "40a8cb10862afd43fa797bdeb81d3d463408c1633a754a735cd3a6b3d8eb9fe2"
+  },
+  "promotion": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/inactive-logits-candidate/promotion.json",
+    "sha256": "5961105493c1fe6d4b343bcf653020c74dbb00b7a4c10b3fada0f861202699ec"
+  },
+  "host_integration": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/inactive-logits-integration/applied_host_execution.json",
+    "sha256": "5a40c2c92c25a6995dc91e7314bbbd32bc6c32c8e432ccc31f5e6b50b3f1a9a7"
+  },
+  "runtime_acceptance_review": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/inactive-logits-candidate/REVIEW_runtime_accepted.md",
+    "sha256": "d1838680d640b4db97c29173b3bbdf1b7d41ef91b8444a09c45be405371d6d7f"
+  }
+}

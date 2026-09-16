@@ -419,6 +419,11 @@ class QwenGenerator(Generator):
             active_slots=self.active_slots,
         )
         b = self.cache.batch_size
+        if self.active_slots is not None and len(self.active_slots) != b:
+            # Inactive SDPA rows are unwritten; never sample their undefined logits.
+            zero = ttnn.zeros_like(logits[:, :, :1, :])
+            rows = [logits[:, :, slot : slot + 1, :] if slot in self.active_slots else zero for slot in range(b)]
+            logits = ttnn.concat(rows, dim=2) if b > 1 else rows[0]
         if b != 32:
             logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, 32 - b), (0, 0)], value=0.0)
         ttnn.plus_one(self.positions, skip_negative_entries=True)
