@@ -170,6 +170,34 @@ bank and ring counts and are written to `benchmark.log`, `results.jsonl`, and
 `relative-to-static-000.csv`. Set `MPFE_MATMUL_SHAPE=8B_FF1_2d` to run the
 other historically strong FF1 shape.
 
+For an adaptive search that tunes the complete integer `0/M/H` space and then
+answers the static-versus-dynamic question in one invocation, run:
+
+```bash
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_optimize.py
+```
+
+The runner performs three stages:
+
+1. Five randomized passes over all 36 tuples where `0 <= M <= H <= 7`.
+   `static-000` runs before and after every pass to normalize drift.
+2. Fifteen randomized confirmation passes over the six leaders.
+3. Twenty randomized static, dynamic (`000` idle), and forced-sync comparisons
+   for the two winners on both the FF1 matmul and repeated-request contention
+   benchmarks.
+
+The stages are adaptive: finalist tuples are selected from the preceding
+stage's measured results. The output directory contains compact ranking CSVs,
+the final static/dynamic comparison, raw JSONL, and a separate pytest log.
+Interrupted runs can resume by supplying the same `OUTPUT_DIR`; completed cases
+are reused.
+
+Tune the run counts with `MPFE_TUNING_ITERATIONS`,
+`MPFE_CONFIRM_ITERATIONS`, and `MPFE_LIFECYCLE_ITERATIONS`. The matmul and
+contention trace lengths use `BENCH_TRACE_REPEATS` and
+`CONTENTION_TRACE_REPEATS`, respectively. `MPFE_RANDOM_SEED` makes the
+randomized order reproducible.
+
 These environment variables apply to every workload that calls
 `ttnn.experimental.start_tensor_prefetcher`, so the same policy matrix can also
 wrap a full-model performance command. Keep the model command and all other
