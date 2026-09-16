@@ -473,17 +473,28 @@ def measure(sha, args, state):
 # --- the search -------------------------------------------------------------
 
 
-def signal_fires(result, signal):
-    """Fires in the run type the search is tracking.
+# The run types that were clean at the good endpoint: the full pipeline and the
+# three stages measured in isolation. L1_CONGESTION is deliberately outside it —
+# it fired 13 times at the good endpoint against L1_TO_L1's 0, so it is the
+# background this search has to see past, not part of the signal.
+CORE_RUN_TYPES = ("L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE")
 
-    Not the total. L1_CONGESTION fires a little at every commit — 13 of the good
-    endpoint's 15 — so a total would drown the signal in a background that was
-    always there. L1_TO_L1 is what the gate gates on and it is clean at the good
-    endpoint, which makes it the sharpest thing to bisect.
-    """
+
+def resolve_signal(signal):
+    """`core`, `total`, or a comma-separated list of run types."""
     if signal == "total":
+        return None  # every run type
+    if signal == "core":
+        return CORE_RUN_TYPES
+    return tuple(t.strip() for t in signal.split(",") if t.strip())
+
+
+def signal_fires(result, signal):
+    """Fires summed over the run types the search is tracking."""
+    wanted = resolve_signal(signal)
+    if wanted is None:
         return result["fires"]
-    return result["by_run_type"].get(signal, {}).get("fires", 0)
+    return sum(v["fires"] for k, v in result["by_run_type"].items() if k in wanted)
 
 
 def candidates(good, bad):
@@ -500,7 +511,9 @@ def bisect(args, state):
     bad_res = measure(args.bad, args, state)
     lo_fires = signal_fires(good_res, args.signal)
     hi_fires = signal_fires(bad_res, args.signal)
-    print(f"\n{args.signal} fires: good={lo_fires}  bad={hi_fires}")
+    tracked = resolve_signal(args.signal)
+    print(f"\ntracking: {', '.join(tracked) if tracked else 'every run type'}")
+    print(f"{args.signal} fires: good={lo_fires}  bad={hi_fires}")
 
     # A handful of fires is the background every commit carries; the change being
     # hunted is orders of magnitude larger. So the cut sits on a log scale between
@@ -567,9 +580,10 @@ def main(argv=None):
     )
     ap.add_argument(
         "--signal",
-        default="L1_TO_L1",
-        help="run type whose fire count drives the search, or 'total' "
-        "(default L1_TO_L1: the gate's own run type, and clean at the good end)",
+        default="core",
+        help="which run types drive the search: 'core' (L1_TO_L1 plus the three "
+        "isolate modes, all clean at the good endpoint), 'total' (adds "
+        "L1_CONGESTION, which fires everywhere), or a comma-separated list",
     )
     ap.add_argument("--refresh", action="store_true", help="re-measure cached commits")
     a = ap.parse_args(argv)
