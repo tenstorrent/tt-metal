@@ -375,9 +375,11 @@ public:
             // The mesh workload descriptor — built ONCE per workload (cache
             // miss) by create_workload_descriptor() and held here so its resource
             // members (semaphores, buffers) outlive the cached workload via
-            // the program cache.  Default-constructed (empty vectors) for
-            // ProgramDescriptor-variant factories.
-            tt::tt_metal::WorkloadDescriptor workload_descriptor;
+            // the program cache.  Shared, not copied: every coordinate's entry
+            // points at the one descriptor the factory built, so a 32-coordinate
+            // workload holds one copy instead of 32.  Null for
+            // ProgramDescriptor-variant factories, which have no descriptor.
+            std::shared_ptr<const tt::tt_metal::WorkloadDescriptor> workload_descriptor;
             // Resolved buffer bindings for the fast cache-hit path.
             // Non-empty when the factory used emplace_runtime_args() with
             // Buffer* args (or, for the WorkloadDescriptor variant, declared any CB buffer binding).
@@ -409,14 +411,16 @@ public:
         static CollectedTensorBuffers collect_tensor_buffers(
             const tensor_args_t& tensor_args,
             const tensor_return_value_t& tensor_return_value,
-            const tt::tt_metal::WorkloadDescriptor& workload_descriptor) {
+            const tt::tt_metal::WorkloadDescriptor* workload_descriptor = nullptr) {
             CollectedTensorBuffers collected;
-            auto& buffers = collected.buffers;
+            ttsl::SmallVector<tt::tt_metal::Buffer*, 16>& buffers = collected.buffers;
             extract_tensor_buffers_into(tensor_args, buffers);
             collected.num_input_buffers = buffers.size();
             extract_tensor_buffers_into(tensor_return_value, buffers);
-            for (const auto& wb : workload_descriptor.buffers) {
-                buffers.push_back(wb.buffer);
+            if (workload_descriptor != nullptr) {
+                for (const auto& wb : workload_descriptor->buffers) {
+                    buffers.push_back(wb.buffer);
+                }
             }
             return collected;
         }
@@ -548,15 +552,18 @@ public:
                 // populate the cached MeshWorkload.
                 //
                 // `programs` is moved out before the loop — each per-range
-                // shared_variables copy only needs to carry the resources
+                // shared_variables entry only needs to carry the resources
                 // (semaphores, buffers) and resolved bindings.  The per-coord
                 // ProgramDescriptors have already been consumed into Programs.
-                tt::tt_metal::WorkloadDescriptor workload_descriptor = DescriptorFactory::create_workload_descriptor(
-                    attrs, tensor_args, tensor_return_value, tensor_coords);
-                auto programs = std::move(workload_descriptor.programs);
+                auto shared_descriptor =
+                    std::make_shared<tt::tt_metal::WorkloadDescriptor>(DescriptorFactory::create_workload_descriptor(
+                        attrs, tensor_args, tensor_return_value, tensor_coords));
+                auto programs = std::move(shared_descriptor->programs);
+                // Coordinate-invariant: tensor_args and the descriptor's workload buffers are the same
+                // for every program, so enumerate once rather than per coordinate.
+                auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, shared_descriptor.get());
                 for (auto& [device_range, desc] : programs) {
                     tt::tt_metal::Program program{desc};
-                    auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, workload_descriptor);
                     // The WorkloadDescriptor variant has NO slow-path rebuild (apply_descriptor only
                     // re-applies resolved bindings + dynamic args), so it must ALWAYS allow the in-place
                     // output_tensor alias — otherwise resolve_bindings bails to an EMPTY ResolvedBindings
@@ -572,13 +579,11 @@ public:
                         /*allow_inplace_output_tensor_alias=*/true);
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
-                        .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(bindings)};
+                        .workload_descriptor = shared_descriptor, .resolved_bindings = std::move(bindings)};
                 }
                 return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
             } else {
                 // ProgramDescriptor variant — simple per-coord create_descriptor.
-                tt::tt_metal::WorkloadDescriptor empty_descriptor;
-
                 const auto build_and_add_program =
                     [&](const ttnn::MeshCoordinateRange& device_range,
                         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
@@ -595,7 +600,7 @@ public:
                             mesh_workload.add_program(device_range, std::move(program));
                             shared_variables[device_range] = shared_variables_t{};
                         } else {
-                            auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, empty_descriptor);
+                            auto collected = collect_tensor_buffers(tensor_args, tensor_return_value);
                             auto bindings = tt::tt_metal::resolve_bindings(
                                 program, desc, collected.buffers, collected.num_input_buffers);
                             mesh_workload.add_program(device_range, std::move(program));
@@ -646,6 +651,11 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
+            // WorkloadDescriptor variant: the buffer enumeration is coordinate-invariant — the tensors
+            // are the same and every coordinate shares one descriptor — so fill it on the first
+            // coordinate that needs it and reuse it for the rest.
+            std::optional<CollectedTensorBuffers> shared_collected;
+
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
@@ -657,9 +667,11 @@ public:
                     // fast path covers cache hits even when the factory only sets
                     // `desc.cbs[i].buffer` and declares no rt-arg buffer bindings.
                     if (!sv.resolved_bindings.empty()) {
-                        auto collected =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        if (!shared_collected.has_value()) {
+                            shared_collected =
+                                collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor.get());
+                        }
+                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, shared_collected->buffers);
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
                     if constexpr (has_override_runtime_arguments()) {
@@ -734,8 +746,7 @@ public:
                     }
                     if (!sv.resolved_bindings.rt_args.empty() ||
                         (!dynamic_args.empty() && !sv.resolved_bindings.empty())) {
-                        auto collected =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        auto collected = collect_tensor_buffers(tensor_args, tensor_return_value);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
                         tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
 #ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
