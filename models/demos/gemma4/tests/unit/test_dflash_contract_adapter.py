@@ -334,10 +334,20 @@ def _stub_plain_decode(monkeypatch, seen):
         return "tt_out"
 
     def read_decode_output(self, tt_out, async_read=False, *_, **__):
-        return torch.arange(500, 500 + seen["batch"], dtype=torch.int32)
+        return ["host_tensors_per_dp_group"]
+
+    def process_decode_output_host(self, host, is_tokens=False):
+        # Logits, as a launch that samples on host produces them: [B, S, vocab]
+        # concatenated across data-parallel ranks, argmax row r -> 500+r.
+        b = seen["batch"]
+        logits = torch.full((b, 1, 600), -1.0)
+        for r in range(b):
+            logits[r, 0, 500 + r] = 1.0
+        return logits, None
 
     monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", decode_forward)
     monkeypatch.setattr(Gemma4ForCausalLM, "read_decode_output", read_decode_output)
+    monkeypatch.setattr(Gemma4ForCausalLM, "process_decode_output_host", process_decode_output_host)
 
 
 def test_a_batched_step_decodes_the_committed_column_not_the_whole_block(monkeypatch):

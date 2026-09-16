@@ -3481,6 +3481,15 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             args[1] = col0(args[1])
         return tuple(args), kwargs
 
+    @staticmethod
+    def _contract_is_host(tt_out):
+        """The runner's own test for a decode output that needs no device read."""
+        if isinstance(tt_out, torch.Tensor):
+            return True
+        if isinstance(tt_out, tuple):
+            return all(t is None or isinstance(t, torch.Tensor) for t in tt_out)
+        return False
+
     def _contract_plain_argmax(self, args, kwargs, page_tables_per_layer, rows):
         """Each row's next-token argmax from an ordinary decode, as int32 [rows].
 
@@ -3492,12 +3501,30 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         is greedy).
         """
         args, kwargs = self._contract_col0(args, kwargs, rows)
+        # The runner sends sampling_params on exactly the steps it asked the
+        # device to sample on, which is the same bit it passes the base reader
+        # as is_tokens -- so it tells us whether tt_out holds ids or logits
+        # without the model guessing from a shape (a [1,1,1,32] id buffer and a
+        # 32-wide logit row are indistinguishable by shape alone).
+        is_tokens = kwargs.get("sampling_params") is not None
         tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
-        host = Gemma4ForCausalLM.read_decode_output(self, tt_out, async_read=False)
+        # Both halves of the runner's own read path: read_decode_output brings
+        # the per-DP-group tensors to host, process_decode_output_host converts
+        # and concatenates them across data-parallel ranks. Reimplementing
+        # either here read a list of group tensors as one batch.
+        host = tt_out
+        if not self._contract_is_host(tt_out):
+            # read_from_device=False (the runner's usual decode submit): bring
+            # the per-DP-group tensors to host and let the base converter
+            # concatenate them across ranks. A read_from_device=True submit
+            # (the DP-lane path) already handed us host tensors.
+            host = Gemma4ForCausalLM.read_decode_output(self, tt_out, async_read=False)
+            host = Gemma4ForCausalLM.process_decode_output_host(self, host, is_tokens=is_tokens)
+        if isinstance(host, tuple):
+            host = host[0]  # (logits-or-ids, log_probs)
         if not isinstance(host, torch.Tensor):
             host = torch.as_tensor(host)
-        flat = host.reshape(rows, -1) if host.numel() >= rows else host.reshape(1, -1)
-        ids = flat.argmax(dim=-1) if flat.shape[-1] > 1 else flat[:, 0]
+        ids = host.reshape(-1) if is_tokens else host.reshape(-1, int(host.shape[-1])).argmax(dim=-1)
         out = torch.zeros(rows, dtype=torch.int32)
         n = min(rows, int(ids.numel()))
         out[:n] = ids.reshape(-1)[:n].to(torch.int32)
