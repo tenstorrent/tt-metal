@@ -298,8 +298,9 @@ python warm_all_kernels.py
 ```
 
 In this mode the client runs `-E` with the exact compile flags and ships a self-contained
-`.ii` (headers and defines inlined). The server then needs only the toolchain — no include
-tree, no source files, no shared filesystem.
+`.ii` (headers and defines inlined). The server compiles that without an include tree or
+kernel sources. Link still needs the linker script and extra link objects at the absolute
+paths in the recipe, plus `g++` at the requested path; firmware is uploaded separately.
 
 **Do not enable it otherwise.** Preprocessing runs on the *client*, payloads get larger, and
 `.ii` units have no include tree so the server cannot write an object dephash and
@@ -307,8 +308,7 @@ conservatively recompiles next time. Use this only when the farm cannot see your
 
 After a successful preprocess compile, the client writes `.fulldephash` and `.build_state`
 next to the ELF. A later run that finds those still valid **skips the RPC** and loads the
-local ELF. That skip does not apply in the default (non-preprocess) path. `TT_METAL_FORCE_JIT_COMPILE=1`
-disables it.
+local ELF.
 
 ### 5c. Other limitations and gotchas
 
