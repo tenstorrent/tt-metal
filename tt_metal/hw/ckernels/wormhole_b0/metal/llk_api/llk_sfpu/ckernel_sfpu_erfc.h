@@ -4,71 +4,75 @@
 
 #pragma once
 
-#include <array>
-
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_converter.h"
-
-#include "ckernel_sfpu_piecewise_rational.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 
 // ======================================================================
-// LUT-based erfc via piecewise rational P(x)/Q(x)
+// erfc(x), two plain polynomials and no rational.
 //
-// Uses abs(x) symmetry: erfc(-x) = 2 - erfc(x)
-// Fit on [0, 5.0] only, 2 segments with n4/d5 rational per segment.
-// BF16 MaxULP=118 (was 128 with 3-seg n4/d4 on [-5,5])
-// FP32 MaxULP≈9M  (was 1.47B)
-// 18 FMAs          (was 24)
+// Uses abs(x) symmetry: erfc(-x) = 2 - erfc(x).
+//   |x| <  1.5:  erfc(x) = 1 - x*g(x^2), g a degree-5 minimax in x^2
+//   |x| >= 1.5:  erfc(x) = exp(-x^2)/x * P(1/x^2), P absorbing 1/sqrt(pi)
+//
+// The asymptotic is accurate far below where an asymptotic expansion is
+// normally trusted: measured in float64 it holds to 0.0073 BF16 ULP from 1.5,
+// and still to 0.27 BF16 ULP from 1.0. Letting it take everything above 1.5
+// leaves the low region an easy fit, which is what removes the piecewise
+// rational and its LUT.
+//
+// Inputs are clamped to 9.3 before squaring, so every lane -- including the ones
+// whose branch result is discarded -- satisfies the unsafe exp's precondition,
+// which holds while -x^2 stays above -88.03. Past ~9.25 the result underflows to
+// 0 on its own, which is the correct saturation for a function decaying to 0, so
+// the bound costs nothing: erfc(9.3) is already below the smallest FP32 normal.
 // ======================================================================
 
-constexpr uint32_t ERFC_NUM_DEGREE = 4;
-constexpr uint32_t ERFC_DEN_DEGREE = 5;
-constexpr uint32_t ERFC_NUM_SEGMENTS = 2;
-constexpr uint32_t ERFC_LUT_SIZE = 25;
-constexpr std::array<float, ERFC_LUT_SIZE> ERFC_LUT = {{// Breakpoints
-                                             0.0000000000e+00f,
-                                             2.5000000000e+00f,
-                                             5.0000000000e+00f,
-                                             // Segment 0 [0, 2.5]: numerator (degree 4)
-                                             1.0000233650e+00f,
-                                             -1.3375675678e+00f,
-                                             6.8185544014e-01f,
-                                             -1.5691982210e-01f,
-                                             1.3746744953e-02f,
-                                             // Segment 0 [0, 2.5]: denominator (degree 5)
-                                             1.0000000000e+00f,
-                                             -2.0801517367e-01f,
-                                             4.3667086959e-01f,
-                                             -3.4568668343e-03f,
-                                             2.5104774162e-02f,
-                                             2.8375532478e-02f,
-                                             // Segment 1 [2.5, 5.0]: numerator (degree 4)
-                                             -2.5655237550e-05f,
-                                             2.1275576728e-05f,
-                                             -6.6162156145e-06f,
-                                             9.1439767402e-07f,
-                                             -4.7387182178e-08f,
-                                             // Segment 1 [2.5, 5.0]: denominator (degree 5)
-                                             1.0000000000e+00f,
-                                             -1.6457208991e-01f,
-                                             -2.0572184026e-01f,
-                                             -1.3888636231e-01f,
-                                             1.2677097321e-01f,
-                                             -2.1375391632e-02f}};
+constexpr float ERFC_ASYMPTOTIC_THRESHOLD = 1.5f;
+constexpr float ERFC_MAX_INPUT = 9.3f;
+
+// Asymptotic branch, outlined so its intermediates do not stay live across the
+// polynomial path.
+sfpi_inline sfpi::vFloat calculate_erfc_asymptotic_(const sfpi::vFloat abs_x) {
+    const sfpi::vFloat axc = sfpi::min(abs_x, ERFC_MAX_INPUT);
+    const sfpi::vFloat neg_x2 = -(axc * axc);
+    const sfpi::vFloat exp_value = _sfpu_exp_21f_bf16_unsafe_<true>(neg_x2);
+    // Zero Newton iterations, spelled as the iteration count rather than as
+    // sfpu_reciprocal<true>: the reciprocal refines an asymptotic whose residual is set by
+    // other terms, so the approximate seed costs ~2 ULP rather than orders of magnitude.
+    const sfpi::vFloat inv = sfpu_reciprocal_iter<0>(axc);
+    // P(t), t = 1/x^2, degree 4, minimax on [1/100, 1/2.25]; 0.0073 BF16 ULP
+    // measured after rounding the coefficients to float32. Carries 1/sqrt(pi).
+    const sfpi::vFloat correction = PolynomialEvaluator::eval(
+        inv * inv, 5.6414234638e-01f, -2.7857559919e-01f, 3.5396602750e-01f, -4.4328993559e-01f, 2.8342172503e-01f);
+    return exp_value * inv * correction;
+}
 
 template <int ITERATIONS = 8>
 inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        // Clamp |x| to 5.0 before evaluation (avoids extrapolation, saves one branch)
-        sfpi::vFloat ax = sfpi::min(sfpi::abs(x), 5.0f);
-        sfpi::vFloat r =
-            piecewise_rational_eval<ERFC_NUM_DEGREE, ERFC_DEN_DEGREE, ERFC_NUM_SEGMENTS, ERFC_LUT_SIZE, false, true>(
-                ERFC_LUT, ax);
+        const sfpi::vFloat abs_x = sfpi::abs(x);
+
+        // Low path, computed unconditionally: erfc(x) = 1 - x*g(x^2).
+        // g is fitted on [0, 2.25] in x^2; 0.0035 BF16 ULP measured.
+        const sfpi::vFloat x2 = x * x;
+        sfpi::vFloat r = 1.0f - abs_x * PolynomialEvaluator::eval(
+                                            x2,
+                                            1.1283125367e+00f,
+                                            -3.7556339817e-01f,
+                                            1.1125811263e-01f,
+                                            -2.4775019023e-02f,
+                                            3.7510146011e-03f,
+                                            -2.8441375985e-04f);
+
+        v_if(abs_x >= ERFC_ASYMPTOTIC_THRESHOLD) { r = calculate_erfc_asymptotic_(abs_x); }
+        v_endif;
         // erfc(-x) = 2 - erfc(x)
         v_if(x < 0.0f) { r = 2.0f - r; }
         v_endif;
