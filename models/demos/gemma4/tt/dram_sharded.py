@@ -708,6 +708,38 @@ class DramShardedLinear:
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
 
     def __call__(self, x, compute_kernel_config=None, out_memory_config=None):
+        """Run the DRAM-sharded matmul on an interleaved activation.
+
+        Everything in ``_call_interleaved`` -- the flattening reshape, the
+        pad-to-one-tile, and the tuned decode/prefill program configs -- assumes
+        in0 is interleaved, which is all this class was ever handed: the shared
+        MLP and attention both fed it straight out of DRAM.
+
+        The width-sharded L1 residual island added for decode and short prefill
+        broke that assumption. The interleaved matmul path handles the same
+        activation explicitly (``SharedMLP._gate_up_linear`` either matches the
+        program config to the shard grid via
+        ``prefill_progcfg_1d_for_width_sharded_in0`` or falls back to
+        ``sharded_to_interleaved``); this path never got the equivalent, so it
+        reached a kernel with a shard spec describing a different core grid.
+
+        In practice this is Blackhole-only -- ``can_dram_shard`` returns False on
+        Wormhole -- and it only bites when the island's shard is wider than one
+        tile, which is why 31B (hidden 5376 -> 84 cores x 2 tiles) hit it and 12B
+        (hidden 3840 -> 120 cores x 1 tile) did not.
+        """
+        if not x.is_sharded():
+            return self._call_interleaved(x, compute_kernel_config, out_memory_config)
+        rows = matmul_rows(x)
+        # Decode fits L1 comfortably; keep tall prefill off it.
+        dest = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE else ttnn.DRAM_MEMORY_CONFIG
+        activation = ttnn.sharded_to_interleaved(x, dest)
+        try:
+            return self._call_interleaved(activation, compute_kernel_config, out_memory_config)
+        finally:
+            activation.deallocate(True)
+
+    def _call_interleaved(self, x, compute_kernel_config=None, out_memory_config=None):
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
         # DecoderLayer). Row count for the matmul is the product of all leading
