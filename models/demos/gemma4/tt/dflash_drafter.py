@@ -1893,45 +1893,26 @@ class DFlashFusedDecoder:
                 ttnn.copy_host_to_device_tensor(h, buf)
                 h.deallocate(True)
 
-    def step(self, first=False):
-        """One iteration: (replay unless first) -> acceptance -> commit -> host updates.
+    def _replay_and_read(self, first=False):
+        """One replay, then the ids it produced: (drafts, posterior).
 
-        Returns (accepted_tokens_list, bonus, produced)."""
-        _prof = _os.environ.get("GEMMA4_DFLASH_PROF") == "1"
-        if _prof:
-            import time as _t
-
-            _t0 = _t.perf_counter()
+        Everything up to the accept walk. Shared by both rails: the BLOCK rail
+        walks acceptance itself in step(); the CONTRACT rail hands the drafts to
+        the runner, which walks acceptance and reports the count back.
+        """
         if (not first) or self._replay_on_first:
             self._upload_iter_inputs(self.anchor, self.start)
-            if _prof:
-                _t1 = _t.perf_counter()
             ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
             self._replay_on_first = False
-        elif _prof:
-            _t1 = _t0
-        out_ids_t, fc_out = self._out
+        out_ids_t, _fc_out = self._out
         # Verify truncation: only the first V drafts were verified (P_v rows).
         ids = self._read_ids(out_ids_t)
-        drafts = ids[: self.V]
-        posterior = ids[self.K : self.K + self.P_v]
-        if _prof:
-            _t2 = _t.perf_counter()
-        if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
-            print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
-        acc = 0
-        for dtok, ptok in zip(drafts, posterior[:-1]):
-            if dtok == ptok:
-                acc += 1
-            else:
-                break
-        bonus = posterior[acc]
-        produced = acc + 1
-        # Commit taps ON DEVICE: fc rows [0..produced) are positions
-        # [start..start+produced). Build the row map the NEXT replay's start-of-
-        # body merge applies to [ctx_dev | fc_prev]: identity (optionally window-
-        # shifted) for kept rows, cap+j for committed row j. ~8 KB upload
-        # replaces the old fc readback + full ctx re-upload (~22 MB/iter).
+        return ids[: self.V], ids[self.K : self.K + self.P_v]
+
+    def _commit_rows(self, produced):
+        """Row map the NEXT replay's start-of-body merge applies to
+        [ctx_dev | fc_prev]: identity (optionally window-shifted) for kept
+        rows, cap+j for each of ``produced`` committed rows."""
         win_len = self.ctx_len - self.win_first
         idx = torch.arange(self.cap, dtype=torch.int64)
         if win_len + produced <= self.cap:
@@ -1952,6 +1933,70 @@ class DFlashFusedDecoder:
         )
         ttnn.copy_host_to_device_tensor(h, self.merge_idx)
         h.deallocate(True)
+
+    # ── contract rail (vllm-tt-plugin#110): the runner owns the accept walk ──
+    def contract_replay(self, first=False):
+        """Propose half: this replay's (drafts, posterior).
+
+        The fused body emits both in ONE output ([K | P_v] ids) because it
+        drafts and verifies those same drafts in a single trace. The contract
+        splits them across two calls, so the caller hands the drafts to the
+        runner now and the posterior to the runner's verify of the block those
+        drafts become -- no second trace, and no re-verification of tokens the
+        device already verified.
+        """
+        return self._replay_and_read(first=first)
+
+    def contract_commit(self, produced, anchor):
+        """Verify half: commit what the RUNNER accepted, not our own walk.
+
+        ``produced`` is the runner's accepted count for the previous step (its
+        accepted_counts domain is [1, 1+K]) and ``anchor`` the last token it
+        committed. This is the ONLY place the rails differ: step() derives both
+        from its own comparison of drafts against the posterior.
+        """
+        produced = max(1, min(int(produced), self.P_v))
+        self._commit_rows(produced)
+        if self.ctx_cache:
+            cp = torch.arange(self.start, self.start + self.P_v, dtype=torch.int64).reshape(1, self.P_v)
+            h = ttnn.from_torch(cp, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
+            ttnn.copy_host_to_device_tensor(h, self.commit_pos)
+            h.deallocate(True)
+        self.ctx_len = self.start + produced
+        self.anchor = int(anchor)
+        self.start = self.start + produced
+        return self.start
+
+    def step(self, first=False):
+        """One iteration: (replay unless first) -> acceptance -> commit -> host updates.
+
+        Returns (accepted_tokens_list, bonus, produced)."""
+        _prof = _os.environ.get("GEMMA4_DFLASH_PROF") == "1"
+        if _prof:
+            import time as _t
+
+            _t0 = _t.perf_counter()
+        drafts, posterior = self._replay_and_read(first=first)
+        if _prof:
+            _t1 = _t.perf_counter()
+        if _prof:
+            _t2 = _t.perf_counter()
+        if _os.environ.get("GEMMA4_DFLASH_DEBUG_STEP") == "1":
+            print(f"[dbg] start={self.start} drafts={drafts} posterior={posterior}", flush=True)
+        acc = 0
+        for dtok, ptok in zip(drafts, posterior[:-1]):
+            if dtok == ptok:
+                acc += 1
+            else:
+                break
+        bonus = posterior[acc]
+        produced = acc + 1
+        # Commit taps ON DEVICE: fc rows [0..produced) are positions
+        # [start..start+produced). Build the row map the NEXT replay's start-of-
+        # body merge applies to [ctx_dev | fc_prev]: identity (optionally window-
+        # shifted) for kept rows, cap+j for committed row j. ~8 KB upload
+        # replaces the old fc readback + full ctx re-upload (~22 MB/iter).
+        self._commit_rows(produced)
         if self.ctx_cache:
             # positions of fc_prev's rows for the NEXT replay's roped commit
             # (pre-advance start: row j holds position start + j).
