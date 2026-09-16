@@ -620,9 +620,6 @@
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
     export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
-    # Chunked replacement for test_glm_prefill_block: teacher-forced indexer-K + KVPE + block
-    # output vs the 55k golden (layers 2/6/30/62/74, 11x5k). Needs the populated ttnn cache and
-    # indexer-kcache trace, unlike the old random-weight fused-block job.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_glm_prefill_block_indexer_teacher_forced -k "torus-xy-8x4 and glm52 and chunks11" -vvv --tb=short --timeout=900

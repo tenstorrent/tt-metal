@@ -176,8 +176,11 @@ def _pcc_opt(fn, label: str, ref, dev: torch.Tensor, thr: float):
 
 
 def _log_kvpe_position_breakdown(golden: torch.Tensor, dev: torch.Tensor, kv_lora: int, sp: int) -> None:
-    """Per-band PCC, so a localised miss (last partial chunk, padding tail, final tile) is
-    distinguishable from a uniform precision/convention miss. Diagnostic only -- asserts nothing."""
+    """Per-band PCC over the KVPE cache. A single PCC over the whole tensor cannot say WHERE the error
+    is, and the two failure shapes need different fixes: a uniform miss is precision/convention, a
+    localised one is a boundary (last partial chunk, padding tail, final tile). The non-chunked test
+    gates the equivalent block behind KVPE_POSITION_BREAKDOWN=1; here it runs on every accuracy run,
+    so the bands are in the log whenever a PCC assert above fires. Diagnostic only -- asserts nothing."""
     ref_pe = interleave_pe(golden[:, kv_lora:].float())
     dev_pe = dev[:, kv_lora:].float()
     ref_kv = golden[:, :kv_lora].float()
@@ -416,6 +419,9 @@ def run_chunked_block(
                 logger.info(f"  chunk {c} done (kv_actual={kv_actual})")
         profiler.end("tt_forward")
 
+        if it % log_every == 0 or it == passes - 1:
+            logger.info(f"  pass {it + 1}/{passes} done")
+
         if not determinism_check:
             continue
         if it == 0:
@@ -434,8 +440,6 @@ def run_chunked_block(
                         f"iter {it} {name}: {int((base != cur).sum())} elements differ, "
                         f"PCC {comp_pcc(base, cur)[1]:.6f}"
                     )
-        if it % log_every == 0 or it == passes - 1:
-            logger.info(f"  determinism pass {it + 1}/{passes} done")
         if len(repeat_failures) >= 10:
             break  # a 2000-pass run diverging every pass would otherwise stall in comp_pcc
 
@@ -448,7 +452,7 @@ def run_chunked_block(
     g_comp_nope = None if g_compressed is None else g_compressed[:, :kv_lora]
     g_comp_pe = None if g_compressed is None else g_compressed[:, kv_lora:]
     _pcc_opt(_pcc, "compressed_kv[nope]", g_comp_nope, kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
-    _pcc_opt(_pcc, "compressed_kv[pe]", g_comp_pe, kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
+    _pcc_opt(_pcc_pe, "compressed_kv[pe]", g_comp_pe, kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
     _pcc_opt(_pcc, "kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
     _pcc_opt(_pcc_pe, "kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
     _pcc("kv_post_transform[nope]", g_post[:, :kv_lora], kv_accum["tt_kvpe"][:, :kv_lora], THRESHOLDS.kv_nope)
@@ -925,7 +929,7 @@ def run_chunked_block_padded(
     g_comp_nope = None if g_compressed is None else g_compressed[:, :kv_lora]
     g_comp_pe = None if g_compressed is None else g_compressed[:, kv_lora:]
     _pcc_opt(_pcc, "compressed_kv[nope]", g_comp_nope, kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
-    _pcc_opt(_pcc, "compressed_kv[pe]", g_comp_pe, kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
+    _pcc_opt(_pcc_pe, "compressed_kv[pe]", g_comp_pe, kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
     _pcc_opt(_pcc, "kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
     _pcc_opt(_pcc_pe, "kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
     _pcc("kv_post_transform[nope]", g_post[:, :kv_lora], kv_accum["tt_kvpe"][:, :kv_lora], THRESHOLDS.kv_nope)
