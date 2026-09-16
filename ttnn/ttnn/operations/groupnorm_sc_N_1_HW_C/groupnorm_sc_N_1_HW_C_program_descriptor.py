@@ -31,7 +31,22 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # ---------------------------------------------------------------------------
 # Knobs (single source of truth — see op_design.md → Parameters / Buffer-depth knobs)
 # ---------------------------------------------------------------------------
-CHUNK_TILES_TARGET = 16  # tiles per (chunk_rows x cols_per_group) block; chunk_rows derives from it
+# Tiles per (chunk_rows x cols_per_group) block; chunk_rows derives from it. Keyed by the per-image core count
+# (Refinement 4, 11x10 BH grid, bf16): with >= 32 cores contending for DRAM a finer chunk pipelines the reads /
+# column sums / stores under the long DRAM latency — 32 -> 16 -> 8 measured 67.4 -> 66.2 -> 64.7 us on
+# (1,1,16384,320) and 36.2 -> 35.2 -> 32.5 us on (1,1,1024,1920); 64 (one chunk per core) lost the pass-1 read /
+# compute overlap (+7 %). With few cores per image (single_core_per_image, 4-core pins) every extra chunk is a
+# helper pass with nothing to hide behind (8 cost +2.5..3.8 % there), so those keep 16.
+CHUNK_TILES_TARGET_BY_CORES = [(32, 4), (0, 16)]  # (min cores per image rectangle, target) — first match wins
+
+
+def _chunk_tiles_target(cores_per_image: int) -> int:
+    for min_cores, target in CHUNK_TILES_TARGET_BY_CORES:
+        if cores_per_image >= min_cores:
+            return target
+    return CHUNK_TILES_TARGET_BY_CORES[-1][1]
+
+
 X_DEPTH = 2  # streaming x ring depth, in chunks
 X_RM_DEPTH = 2  # RM stick ring depth, in tile-rows
 MEMBERSHIP_DEPTH = 1  # membership (E) blocks buffered
@@ -392,7 +407,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
 
     # ---- block knobs (derived once, on the max per-core extents) --------------------------
     cols = _balanced_block(Ct_core_max, dest_limit)  # cols_per_group (<= DEST cap of the REDUCE_COL block)
-    chunk_rows = _balanced_block(Ht_core_max, max(1, CHUNK_TILES_TARGET // cols))
+    chunk_rows = _balanced_block(Ht_core_max, max(1, _chunk_tiles_target(p_max) // cols))
     num_col_groups_max = math.ceil(Ct_core_max / cols)
     num_row_chunks_max = math.ceil(Ht_core_max / chunk_rows)
     chunk = chunk_rows * cols
