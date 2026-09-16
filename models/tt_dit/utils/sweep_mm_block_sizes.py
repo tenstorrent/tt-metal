@@ -130,6 +130,7 @@ def resolve_config(name):
 #
 # use_case controls per-shape configuration to match model behavior:
 #   "plain"     - no fused activation or addcmul
+#   "plain_approx" - plain matmul with approximate math enabled
 #   "ff2"       - RowParallelLinear (no fused activation, label only)
 #   "qkv"       - attention QKV projection (chunks=3, math_approx_mode=True)
 #   "to_out"    - attention to_out projection (addcmul fused, math_approx_mode=True)
@@ -148,6 +149,11 @@ SHAPES = [
     (9472, 5120, 1280, 12, 9, True, "to_out"),
     # ff1_gelu: FFN first linear with fused GELU activation (Wan2.2 720p AGMM, 12x9 grid)
     (9472, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    # Wan2.2 480p production contracts captured from the full 32-chip pipeline.
+    (4096, 5120, 3840, 12, 9, True, "qkv"),
+    (4096, 5120, 1280, 12, 9, True, "to_out"),
+    (4096, 5120, 1280, 12, 9, True, "plain_approx"),
+    (4096, 5120, 3456, 12, 9, True, "plain"),
     # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
     (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
     # WH AGMM Wan2.2 shapes (8x8 grid), K-fractured across 4 devices.
@@ -459,6 +465,7 @@ SHAPE_IDS = [
 # Per-use-case configuration overrides applied in the worker.
 USE_CASE_CONFIGS = {
     "plain": {},
+    "plain_approx": {"math_approx_mode": True},
     "ff2": {},
     "qkv": {
         "chunks": 3,
