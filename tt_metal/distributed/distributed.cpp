@@ -119,7 +119,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
     }
 
-    auto& ctx = tt::tt_metal::MetalContext::instance();
+    auto& ctx = tt::tt_metal::MetalContext::instance(mesh_cq.device()->impl().get_context_id());
     if (ctx.rtoptions().get_compile_only()) {
         // Compile-only: compile this workload's kernels but don't dispatch.
         // Synchronous call, concurrency comes from inside compile(), which defers the builds.
