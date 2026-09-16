@@ -460,7 +460,6 @@ def _mxint_block_aware_compare(
     """
 
     BLOCK = 32
-    TILE_SIZE = 1024
 
     g_flat = golden.float().flatten()
     r_flat = result.float().flatten()
@@ -519,6 +518,14 @@ _RECORD_TEST_ORDER: bool = False
 #   max_steps = accepted adjacent-representable steps (same role as MxInt's
 #     max_ulp_steps). max_normal and min_subnormal define the element lattice
 #     used with each block's inferred E8M0 scale.
+#: Element mantissa bits per MX-float format, for anything that needs to reason
+#: in lattice steps the way _mxfp_block_aware_compare does.
+MXFP_MANTISSA_BITS = {
+    DataFormat.MxFp4: 1,
+    DataFormat.MxFp8R: 2,
+    DataFormat.MxFp8P: 3,
+}
+
 _MXFP_COMPARE_PARAMS = {
     DataFormat.MxFp4: (1, 2, 6.0, 2.0**-1),  # E2M1
     DataFormat.MxFp8R: (2, 2, 57344.0, 2.0**-16),  # E5M2
