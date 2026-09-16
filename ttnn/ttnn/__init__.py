@@ -174,6 +174,7 @@ from ttnn._ttnn.fabric import (
     get_fabric_kernel_defines,
     fabric_connection_rt_args,
     compute_fabric_connection_rt_args,
+    compute_fabric_connection_rt_args_with_sem_addresses,
 )
 
 # Import cluster functions and types
