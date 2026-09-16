@@ -25,12 +25,17 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool use_tt_poly_bf16 = false>
 ALWI void erfinv_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX, use_tt_poly_bf16), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfinv_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfinv, sfpu::erfinv_init, (APPROX))); }
+template <bool use_tt_poly_bf16 = false>
+ALWI void erfinv_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(erfinv, sfpu::erfinv_init, (APPROX, use_tt_poly_bf16)));
+}
 }  // namespace ckernel
