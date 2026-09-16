@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "llk_unpack_AB_api.h"  // legacy CB-id API + unified llk_unpack_AB_init_impl / llk_unpack_AB_impl
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -22,6 +23,7 @@
 
 template <ckernel::experimental::LLKMemDescriptor DESC_A, BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const ckernel::Transpose transpose = ckernel::Transpose::None) {
+    SAN_HOOK(unsupported());
     llk_unpack_AB_init_impl<BType>(DESC_A.shape, transpose);
 }
 
@@ -30,5 +32,6 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     std::uint8_t OperandBFormat = 0>
 inline void llk_unpack_AB(std::uint32_t base_ptr_a, std::uint32_t base_ptr_b, std::uint32_t bcast_row_idx = 0) {
+    SAN_HOOK(unsupported());
     llk_unpack_AB_impl<BType>(base_ptr_a, base_ptr_b, bcast_row_idx, OperandBFormat);
 }

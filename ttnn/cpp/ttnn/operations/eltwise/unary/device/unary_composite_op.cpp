@@ -239,18 +239,13 @@ Tensor clamp(
             output_memory_config,
             output_tensor);
     }
+    // y = max(min(x, max), lo) with lo = min(min, max).
+    // torch.clamp defines the degenerate case min > max as "every element becomes max"; clamping the
+    // lower bound to the upper bound first folds that case into the plain two-op form, so the whole
+    // tensor-bounds path is three device kernels instead of seven (issue #49996).
+    Tensor lo = ttnn::minimum(min.value(), max.value(), std::nullopt, output_memory_config);
     Tensor a_max = ttnn::minimum(input_a, max.value(), std::nullopt, output_memory_config);
-    Tensor temp = ttnn::where(
-        ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
-        ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config),
-        output_memory_config);
-    return ttnn::where(
-        ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
-        max.value(),
-        temp,
-        output_memory_config,
-        output_tensor);
+    return ttnn::maximum(a_max, lo, std::nullopt, output_memory_config, output_tensor);
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))

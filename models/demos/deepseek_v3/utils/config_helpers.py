@@ -274,6 +274,34 @@ def get_activation_sharding_core_counts_for_dram_matmul(activation_width: int, m
     )
 
 
+DRAM_BANKS_FOR_DECODE = 8  # Blackhole DRAM banks; one in1 reader per bank
+
+
+def dram_decode_in0_block_w(k_tiles: int, n_tiles: int, input_num_shards: int) -> int:
+    """in0_block_w for a DRAM-sharded decode matmul.
+
+    The activation multicast is one semaphore-gated block per sender, chained across senders, so
+    its cost is the block count k_tiles / in0_block_w. The factory lets a block span several
+    consecutive activation shards, so the width is no longer bounded by the shard grid. It is
+    bounded by L1: each worker buffers in0_block_w x per-worker-N weight tiles three deep.
+
+    Only ever widen. A wide-N projection already buffers more than the budget at the stock width,
+    and returning the largest width that fits would make its block count worse, not better.
+    """
+    per_core_k = even_int_div(k_tiles, input_num_shards)
+    base = find_largest_divisor(per_core_k)
+    per_worker_n = ttnn.core.divup(n_tiles, DRAM_BANKS_FOR_DECODE)
+    budget_tiles = 800 * 1024 // (3 * 1088)
+    for bw in range(min(16, k_tiles), base, -1):
+        if k_tiles % bw:
+            continue
+        if per_core_k % bw and bw % per_core_k:
+            continue
+        if bw * per_worker_n <= budget_tiles:
+            return bw
+    return base
+
+
 def get_dram_sharded_matmul_config(m: int, k: int, n: int, input_num_shards: int, output_num_shards: int):
     # TODO: add documentation
     m_tiles = ttnn.core.divup(m, ttnn.TILE_SIZE)
@@ -287,9 +315,7 @@ def get_dram_sharded_matmul_config(m: int, k: int, n: int, input_num_shards: int
         n_tiles % output_num_shards == 0
     ), "The output tensor must evenly shard across output_num_shards (without padding)"
     return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=find_largest_divisor(
-            even_int_div(k_tiles, input_num_shards)
-        ),  # in0_block_w has to divide k_tiles evenly
+        in0_block_w=dram_decode_in0_block_w(k_tiles, n_tiles, input_num_shards),
         per_core_M=m_tiles,
         per_core_N=even_int_div(n_tiles, output_num_shards),
         fused_activation=None,

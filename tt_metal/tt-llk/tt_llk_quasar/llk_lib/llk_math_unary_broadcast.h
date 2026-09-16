@@ -243,8 +243,9 @@ inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx)
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
-    // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
+    // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit. MATH drains the
+    // preceding math instructions so their source-bank release has landed before SRCB_VLD tests it.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 

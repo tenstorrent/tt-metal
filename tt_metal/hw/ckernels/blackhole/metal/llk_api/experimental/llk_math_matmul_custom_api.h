@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_matmul_custom_no_mop.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATMUL NO MOP
@@ -39,6 +40,7 @@ inline void llk_math_matmul_init_no_mop(
     const bool transpose = false,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1) {
+    SAN_HOOK(unsupported());
     const MatmulNoMopGeom g = matmul_no_mop_geom(operandA, operandB);
     _llk_math_matmul_init_no_mop_<math_fidelity, THROTTLE_LEVEL>(
         g.in0_tile_r_dim, g.in0_tile_c_dim, g.in1_tile_r_dim, g.in1_tile_c_dim, g.partial_face, transpose, ct_dim, rt_dim);
@@ -51,6 +53,7 @@ inline void llk_math_matmul_no_mop(
     const uint dst_index,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1) {
+    SAN_HOOK(unsupported());
     // Re-derive operand tile geometry so the execute replays the geometry-correct length recorded at
     // init/reinit (16x32 tiny tiles record a shorter face-row-confined replay than full 32x32 tiles).
     const MatmulNoMopGeom g = matmul_no_mop_geom(operandA, operandB);
@@ -65,6 +68,7 @@ inline void llk_math_matmul_reinit_no_mop(
     const bool transpose = false,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1) {
+    SAN_HOOK(unsupported());
     // Re-derive operand tile geometry so reinit restores the shape-aware addrmods for 16x32 tiny
     // tiles (SDPA reinits the QK^T matmul between q-subblocks). Mirrors llk_math_matmul_init_no_mop.
     const MatmulNoMopGeom g = matmul_no_mop_geom(operandA, operandB);

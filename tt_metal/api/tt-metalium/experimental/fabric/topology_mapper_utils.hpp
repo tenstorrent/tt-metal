@@ -679,8 +679,9 @@ private:
     ::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId> session_;
     std::vector<std::map<MeshId, MeshId>> excluded_;  // found placements, blocked on subsequent next()
     std::size_t emitted_ = 0;
-    // One-shot relaxation of the hard minimal-host cap, mirroring the single-solve fallback: when the
-    // capped encoding is UNSAT, next() clears the cap and re-encodes a fresh session (see next()).
+    // One-shot relaxation of the hard minimal-host cap: when the capped session is UNSAT, next() clears the
+    // cap, sets minimize_same_rank_groups_used (SOFT), and restarts the session (see next()). The solver does
+    // not fall back internally.
     bool host_cap_relaxed_ = false;
     // Intra-mesh forbid/retry state
     std::vector<std::pair<MeshId, MeshId>> intra_failed_mesh_pairs_;
