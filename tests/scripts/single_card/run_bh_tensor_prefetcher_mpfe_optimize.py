@@ -3,11 +3,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Find and validate MPFE weights for the Device-side Tensor Prefetcher.
+"""Tune static MPFE weights for the Device-side Tensor Prefetcher.
 
-Stage 1 exhaustively sweeps static 0/M/H tuples, Stage 2 confirms the six
-leaders, and Stage 3 compares static, dynamic, and forced-sync forms of the
-two finalists on both FF1 matmul throughput and repeated-request contention.
+Stage 1 exhaustively sweeps static 0/M/H tuples. Stage 2 confirms the six
+leaders with more randomized samples. Static 0/0/0 runs before and after each
+pass so the rankings can compensate for linear performance drift.
 """
 
 from __future__ import annotations
@@ -32,20 +32,8 @@ MATMUL_TEST = (
     "tests/ttnn/unit_tests/operations/transformers/"
     "test_prefetcher_BH_bench.py::test_bench_dram_core_repeats_recv_contig"
 )
-CONTENTION_TEST = (
-    "tests/ttnn/unit_tests/operations/transformers/"
-    "test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention"
-)
 MPFE_ENV_PREFIX = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_"
-MPFE_ENV_NAMES = (
-    "PRIORITY_POLICY",
-    "HIGH_WEIGHT",
-    "MEDIUM_WEIGHT",
-    "ACTIVE_WEIGHT",
-    "IDLE_WEIGHTS",
-    "ACTIVE_WEIGHTS",
-    "FORCE_REQUEST_SYNC",
-)
+MPFE_ENV_NAMES = ("FREE_SENDER_WEIGHT", "NOC1_SENDER_WEIGHT", "ORDINARY_WEIGHT")
 BENCHMARK_ENV_NAMES = (
     "BENCH_K",
     "BENCH_N",
@@ -61,12 +49,7 @@ BENCHMARK_ENV_NAMES = (
 @dataclass(frozen=True)
 class Case:
     label: str
-    idle: tuple[int, int, int] | None = None
-    active: tuple[int, int, int] | None = None
-    force_sync: bool = False
-    named_policy: str | None = None
-    weight_tuple: tuple[int, int, int] | None = None
-    mode: str = "static"
+    weights: tuple[int, int, int]
 
 
 def env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -84,6 +67,18 @@ def tuple_label(weights: tuple[int, int, int]) -> str:
     return "".join(str(weight) for weight in weights)
 
 
+def static_case(weights: tuple[int, int, int]) -> Case:
+    return Case(label=f"static-{tuple_label(weights)}", weights=weights)
+
+
+def baseline_case(position: str) -> Case:
+    return Case(label=f"static-000-{position}", weights=(0, 0, 0))
+
+
+def mean(values: Iterable[float]) -> float:
+    return statistics.fmean(values)
+
+
 class OptimizationRunner:
     def __init__(self, pytest_args: list[str]) -> None:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -99,14 +94,12 @@ class OptimizationRunner:
         self.python = shlex.split(os.environ.get("PYTHON", sys.executable))
         self.pytest_args = pytest_args
         self.matmul_shape = os.environ.get("MPFE_MATMUL_SHAPE", "3B_FF1")
-        self.matmul_repeats = env_int("BENCH_TRACE_REPEATS", 100)
-        self.contention_repeats = env_int("CONTENTION_TRACE_REPEATS", 50)
+        self.trace_repeats = env_int("BENCH_TRACE_REPEATS", 100)
         self.seed = env_int("MPFE_RANDOM_SEED", 0x4D504645, minimum=0)
         self.tuning_iterations = env_int("MPFE_TUNING_ITERATIONS", 5)
         self.confirm_iterations = env_int("MPFE_CONFIRM_ITERATIONS", 15)
-        self.lifecycle_iterations = env_int("MPFE_LIFECYCLE_ITERATIONS", 20)
         self.manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "git_revision": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"],
                 cwd=TT_METAL_HOME,
@@ -115,26 +108,13 @@ class OptimizationRunner:
             "python": self.python,
             "pytest_args": self.pytest_args,
             "matmul_shape": self.matmul_shape,
-            "matmul_trace_repeats": self.matmul_repeats,
-            "contention_trace_repeats": self.contention_repeats,
+            "trace_repeats": self.trace_repeats,
             "random_seed": self.seed,
             "tuning_iterations": self.tuning_iterations,
             "confirmation_iterations": self.confirm_iterations,
-            "lifecycle_iterations": self.lifecycle_iterations,
         }
-        if self.manifest_path.exists():
-            with self.manifest_path.open(encoding="utf-8") as source:
-                saved_manifest = json.load(source)
-            if saved_manifest != self.manifest:
-                raise RuntimeError(
-                    f"{self.output_dir} belongs to a different benchmark configuration; "
-                    "choose a new OUTPUT_DIR or restore the settings in manifest.json"
-                )
-        else:
-            with self.manifest_path.open("w", encoding="utf-8") as output:
-                json.dump(self.manifest, output, indent=2, sort_keys=True)
-                output.write("\n")
-        self.existing: dict[tuple[str, str, int, str], dict] = {}
+        self._validate_manifest()
+        self.existing: dict[tuple[str, int, str], dict] = {}
         self.hardware_signature: tuple[int, int] | None = None
         if self.results_path.exists():
             with self.results_path.open(encoding="utf-8") as source:
@@ -147,41 +127,47 @@ class OptimizationRunner:
                             raise RuntimeError(f"{self.results_path} mixes multiple device topologies")
                         self.hardware_signature = signature
 
+    def _validate_manifest(self) -> None:
+        if self.manifest_path.exists():
+            with self.manifest_path.open(encoding="utf-8") as source:
+                saved_manifest = json.load(source)
+            if saved_manifest != self.manifest:
+                raise RuntimeError(
+                    f"{self.output_dir} belongs to a different benchmark configuration; "
+                    "choose a new OUTPUT_DIR or restore the settings in manifest.json"
+                )
+            return
+        with self.manifest_path.open("w", encoding="utf-8") as output:
+            json.dump(self.manifest, output, indent=2, sort_keys=True)
+            output.write("\n")
+
     @staticmethod
-    def key(record: dict) -> tuple[str, str, int, str]:
-        return (
-            record["optimization_stage"],
-            record["optimization_benchmark"],
-            record["suite_iteration"],
-            record["run_label"],
-        )
+    def key(record: dict) -> tuple[str, int, str]:
+        return (record["optimization_stage"], record["suite_iteration"], record["run_label"])
 
     def log(self, message: str) -> None:
         print(message, flush=True)
         with self.summary_log_path.open("a", encoding="utf-8") as output:
             output.write(message + "\n")
 
-    def test_args(self, benchmark: str) -> tuple[list[str], int]:
-        if benchmark == "matmul":
-            return [MATMUL_TEST, "-k", f"{self.matmul_shape} and shard_contiguous"], self.matmul_repeats
-        if benchmark == "contention":
-            return [CONTENTION_TEST], self.contention_repeats
-        raise ValueError(f"unknown benchmark {benchmark}")
+    def randomized(self, stage: str, iteration: int, cases: Iterable[Case]) -> list[Case]:
+        shuffled = list(cases)
+        stage_seed = sum((index + 1) * ord(character) for index, character in enumerate(stage))
+        random.Random(self.seed + stage_seed + iteration).shuffle(shuffled)
+        return shuffled
 
     def run_case(
         self,
         stage: str,
-        benchmark: str,
         iteration: int,
         case: Case,
         sequence: int,
         sequence_count: int,
     ) -> dict:
-        record_key = (stage, benchmark, iteration, case.label)
+        record_key = (stage, iteration, case.label)
         if record_key in self.existing:
             return self.existing[record_key]
 
-        test_args, trace_repeats = self.test_args(benchmark)
         environment = os.environ.copy()
         for name in MPFE_ENV_NAMES:
             environment.pop(f"{MPFE_ENV_PREFIX}{name}", None)
@@ -192,29 +178,32 @@ class OptimizationRunner:
             {
                 "ARCH_NAME": "blackhole",
                 "BENCH_DUAL_SENDERS": "1",
-                "BENCH_TRACE_REPEATS": str(trace_repeats),
+                "BENCH_TRACE_REPEATS": str(self.trace_repeats),
                 "PYTHONPATH": str(TT_METAL_HOME)
                 + (f":{environment['PYTHONPATH']}" if environment.get("PYTHONPATH") else ""),
                 "TT_METAL_BENCHMARK_RESULT_JSONL": str(self.temp_result_path),
                 "TT_METAL_BENCHMARK_RUN_LABEL": case.label,
                 "TT_METAL_BENCHMARK_SUITE_ITERATION": str(iteration),
+                f"{MPFE_ENV_PREFIX}FREE_SENDER_WEIGHT": str(case.weights[0]),
+                f"{MPFE_ENV_PREFIX}NOC1_SENDER_WEIGHT": str(case.weights[1]),
+                f"{MPFE_ENV_PREFIX}ORDINARY_WEIGHT": str(case.weights[2]),
             }
         )
-        if case.named_policy is not None:
-            environment[f"{MPFE_ENV_PREFIX}PRIORITY_POLICY"] = case.named_policy
-        else:
-            if case.idle is None or case.active is None:
-                raise ValueError(f"{case.label} has no MPFE weights")
-            environment[f"{MPFE_ENV_PREFIX}IDLE_WEIGHTS"] = tuple_string(case.idle)
-            environment[f"{MPFE_ENV_PREFIX}ACTIVE_WEIGHTS"] = tuple_string(case.active)
-        if case.force_sync:
-            environment[f"{MPFE_ENV_PREFIX}FORCE_REQUEST_SYNC"] = "1"
 
         self.temp_result_path.unlink(missing_ok=True)
-        command = self.python + ["-m", "pytest", "-q", "--tb=short", *self.pytest_args, *test_args]
+        command = self.python + [
+            "-m",
+            "pytest",
+            "-q",
+            "--tb=short",
+            *self.pytest_args,
+            MATMUL_TEST,
+            "-k",
+            f"{self.matmul_shape} and shard_contiguous",
+        ]
         with self.pytest_log_path.open("a", encoding="utf-8") as output:
             output.write(
-                f"\n== {stage} {benchmark} iteration={iteration} case={case.label} ==\n"
+                f"\n== {stage} iteration={iteration} case={case.label} ==\n"
                 f"$ {shlex.join(command)}\n"
             )
             output.flush()
@@ -227,12 +216,10 @@ class OptimizationRunner:
                 check=False,
             )
         if completed.returncode != 0:
-            raise RuntimeError(
-                f"{stage}/{benchmark}/{iteration}/{case.label} failed; see {self.pytest_log_path}"
-            )
+            raise RuntimeError(f"{stage}/{iteration}/{case.label} failed; see {self.pytest_log_path}")
         if not self.temp_result_path.exists():
             raise RuntimeError(
-                f"{stage}/{benchmark}/{iteration}/{case.label} produced no result (possibly skipped); "
+                f"{stage}/{iteration}/{case.label} produced no result (possibly skipped); "
                 f"see {self.pytest_log_path}"
             )
         with self.temp_result_path.open(encoding="utf-8") as source:
@@ -245,11 +232,9 @@ class OptimizationRunner:
         record.update(
             {
                 "optimization_stage": stage,
-                "optimization_benchmark": benchmark,
-                "optimization_mode": case.mode,
                 "optimization_sequence": sequence,
                 "optimization_sequence_count": sequence_count,
-                "weight_tuple": list(case.weight_tuple) if case.weight_tuple is not None else None,
+                "weight_tuple": list(case.weights),
             }
         )
         signature = (record["num_dram_banks"], record["ring_size"])
@@ -263,50 +248,11 @@ class OptimizationRunner:
             json.dump(record, output, sort_keys=True)
             output.write("\n")
         self.existing[record_key] = record
-        metric_name = "tflops" if benchmark == "matmul" else "combined_gbps"
-        self.log(
-            f"PASS {stage} {benchmark} iteration={iteration} {case.label}: "
-            f"{record[metric_name]:.6f} {metric_name}"
-        )
+        self.log(f"PASS {stage} iteration={iteration} {case.label}: {record['tflops']:.6f} tflops")
         return record
 
-    def randomized(self, stage: str, iteration: int, cases: Iterable[Case]) -> list[Case]:
-        shuffled = list(cases)
-        stage_seed = sum((index + 1) * ord(character) for index, character in enumerate(stage))
-        random.Random(self.seed + stage_seed + iteration).shuffle(shuffled)
-        return shuffled
 
-
-def static_case(weights: tuple[int, int, int], label_prefix: str = "static") -> Case:
-    return Case(
-        label=f"{label_prefix}-{tuple_label(weights)}",
-        idle=weights,
-        active=weights,
-        weight_tuple=weights,
-        mode="static",
-    )
-
-
-def baseline_case(position: str) -> Case:
-    weights = (0, 0, 0)
-    return Case(
-        label=f"static-000-{position}",
-        idle=weights,
-        active=weights,
-        weight_tuple=weights,
-        mode="baseline",
-    )
-
-
-def mean(values: Iterable[float]) -> float:
-    return statistics.fmean(values)
-
-
-def write_ranking(
-    path: Path,
-    records: list[dict],
-    candidate_labels: set[str],
-) -> list[tuple[int, int, int]]:
+def write_ranking(path: Path, records: list[dict], candidate_labels: set[str]) -> list[tuple[int, int, int]]:
     baselines: dict[int, tuple[dict, dict]] = {}
     iterations = sorted({record["suite_iteration"] for record in records})
     for iteration in iterations:
@@ -347,11 +293,10 @@ def write_ranking(
                 (record["tflops"] / interpolated_baseline(record) - 1.0) * 100.0
                 for record in samples
             ]
-        weights_value = samples[0]["weight_tuple"]
-        weights = tuple(weights_value) if weights_value is not None else None
+        weights = tuple(samples[0]["weight_tuple"])
         rows.append(
             {
-                "tuple": tuple_string(weights) if weights is not None else label,
+                "tuple": tuple_string(weights),
                 "mean_tflops": mean(record["tflops"] for record in samples),
                 "mean_vs_static_000_percent": mean(deltas),
                 "stdev_vs_static_000_percent": statistics.stdev(deltas) if len(deltas) > 1 else 0.0,
@@ -382,96 +327,32 @@ def write_ranking(
                     "samples": row["samples"],
                 }
             )
-    return [row["_weights"] for row in rows if row["_weights"] is not None]
+    return [row["_weights"] for row in rows]
 
 
-def write_lifecycle_summary(path: Path, records: list[dict]) -> None:
-    grouped: dict[tuple[str, tuple[int, int, int], str], list[dict]] = {}
-    for record in records:
-        weights_value = record.get("weight_tuple")
-        if weights_value is None:
-            continue
-        key = (
-            record["optimization_benchmark"],
-            tuple(weights_value),
-            record["optimization_mode"],
+def records_for(runner: OptimizationRunner, stage: str) -> list[dict]:
+    return [record for record in runner.existing.values() if record["optimization_stage"] == stage]
+
+
+def run_bracketed_stage(
+    runner: OptimizationRunner,
+    stage: str,
+    iterations: int,
+    candidates: list[Case],
+) -> None:
+    for iteration in range(1, iterations + 1):
+        ordered_cases = runner.randomized(stage, iteration, candidates)
+        sequence_count = len(ordered_cases) + 2
+        runner.run_case(stage, iteration, baseline_case("start"), 0, sequence_count)
+        for sequence, case in enumerate(ordered_cases, start=1):
+            runner.run_case(stage, iteration, case, sequence, sequence_count)
+        runner.run_case(
+            stage,
+            iteration,
+            baseline_case("end"),
+            sequence_count - 1,
+            sequence_count,
         )
-        grouped.setdefault(key, []).append(record)
-
-    rows = []
-    for (benchmark, weights, mode), samples in grouped.items():
-        metric_name = "tflops" if benchmark == "matmul" else "combined_gbps"
-        static_by_iteration = {
-            record["suite_iteration"]: record[metric_name]
-            for record in grouped.get((benchmark, weights, "static"), [])
-        }
-        baseline_by_iteration = {
-            record["suite_iteration"]: record[metric_name]
-            for record in grouped.get((benchmark, (0, 0, 0), "baseline"), [])
-        }
-        vs_static = [
-            (record[metric_name] / static_by_iteration[record["suite_iteration"]] - 1.0) * 100.0
-            for record in samples
-            if record["suite_iteration"] in static_by_iteration
-        ]
-        vs_baseline = [
-            (record[metric_name] / baseline_by_iteration[record["suite_iteration"]] - 1.0) * 100.0
-            for record in samples
-            if record["suite_iteration"] in baseline_by_iteration
-        ]
-        rows.append(
-            {
-                "benchmark": benchmark,
-                "tuple": tuple_string(weights),
-                "mode": mode,
-                "metric": metric_name,
-                "mean": mean(record[metric_name] for record in samples),
-                "vs_same_tuple_static_percent": mean(vs_static) if vs_static else "",
-                "stdev_vs_same_tuple_static_percent": (
-                    statistics.stdev(vs_static) if len(vs_static) > 1 else ""
-                ),
-                "vs_static_000_percent": mean(vs_baseline) if vs_baseline else "",
-                "stdev_vs_static_000_percent": (
-                    statistics.stdev(vs_baseline) if len(vs_baseline) > 1 else ""
-                ),
-                "samples": len(samples),
-            }
-        )
-    rows.sort(key=lambda row: (row["benchmark"], row["tuple"], row["mode"]))
-    with path.open("w", encoding="utf-8", newline="") as output:
-        fieldnames = [
-            "benchmark",
-            "tuple",
-            "mode",
-            "metric",
-            "mean",
-            "vs_same_tuple_static_percent",
-            "stdev_vs_same_tuple_static_percent",
-            "vs_static_000_percent",
-            "stdev_vs_static_000_percent",
-            "samples",
-        ]
-        writer = csv.DictWriter(output, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            row["mean"] = f"{row['mean']:.6f}"
-            for field in (
-                "vs_same_tuple_static_percent",
-                "stdev_vs_same_tuple_static_percent",
-                "vs_static_000_percent",
-                "stdev_vs_static_000_percent",
-            ):
-                if row[field] != "":
-                    row[field] = f"{row[field]:.3f}"
-            writer.writerow(row)
-
-
-def records_for(runner: OptimizationRunner, stage: str, benchmark: str) -> list[dict]:
-    return [
-        record
-        for record in runner.existing.values()
-        if record["optimization_stage"] == stage and record["optimization_benchmark"] == benchmark
-    ]
 
 
 def main() -> int:
@@ -479,123 +360,34 @@ def main() -> int:
     runner.log(f"MPFE optimization output: {runner.output_dir}")
     runner.log(
         f"shape={runner.matmul_shape} tuning={runner.tuning_iterations} "
-        f"confirmation={runner.confirm_iterations} lifecycle={runner.lifecycle_iterations}"
+        f"confirmation={runner.confirm_iterations}"
     )
 
     all_tuples = [(0, medium, high) for medium in range(8) for high in range(medium, 8)]
     tuning_candidates = [static_case(weights) for weights in all_tuples if weights != (0, 0, 0)]
     runner.log(f"Stage 1: exhaustive static sweep ({len(all_tuples)} tuples)")
-    for iteration in range(1, runner.tuning_iterations + 1):
-        ordered_cases = runner.randomized("tuning", iteration, tuning_candidates)
-        sequence_count = len(ordered_cases) + 2
-        runner.run_case("tuning", "matmul", iteration, baseline_case("start"), 0, sequence_count)
-        for sequence, case in enumerate(ordered_cases, start=1):
-            runner.run_case("tuning", "matmul", iteration, case, sequence, sequence_count)
-        runner.run_case(
-            "tuning",
-            "matmul",
-            iteration,
-            baseline_case("end"),
-            sequence_count - 1,
-            sequence_count,
-        )
-    tuning_records = records_for(runner, "tuning", "matmul")
+    run_bracketed_stage(runner, "tuning", runner.tuning_iterations, tuning_candidates)
     tuning_ranking_path = runner.output_dir / "stage1-tuning-ranking.csv"
     tuning_ranking = write_ranking(
         tuning_ranking_path,
-        tuning_records,
+        records_for(runner, "tuning"),
         {case.label for case in tuning_candidates} | {"static-000"},
     )
     finalists = tuning_ranking[:6]
     runner.log(f"Stage 1 leaders: {', '.join(tuple_string(weights) for weights in finalists)}")
 
     confirmation_candidates = [static_case(weights) for weights in finalists]
-    production = Case(
-        label="production-default",
-        named_policy="dynamic-007",
-        mode="production",
-    )
     runner.log("Stage 2: randomized finalist confirmation")
-    for iteration in range(1, runner.confirm_iterations + 1):
-        cases = [*confirmation_candidates, production]
-        ordered_cases = runner.randomized("confirmation", iteration, cases)
-        sequence_count = len(ordered_cases) + 2
-        runner.run_case("confirmation", "matmul", iteration, baseline_case("start"), 0, sequence_count)
-        for sequence, case in enumerate(ordered_cases, start=1):
-            runner.run_case("confirmation", "matmul", iteration, case, sequence, sequence_count)
-        runner.run_case(
-            "confirmation",
-            "matmul",
-            iteration,
-            baseline_case("end"),
-            sequence_count - 1,
-            sequence_count,
-        )
-    confirmation_records = records_for(runner, "confirmation", "matmul")
+    run_bracketed_stage(runner, "confirmation", runner.confirm_iterations, confirmation_candidates)
     confirmation_ranking_path = runner.output_dir / "stage2-confirmation-ranking.csv"
     confirmation_ranking = write_ranking(
         confirmation_ranking_path,
-        confirmation_records,
-        {case.label for case in confirmation_candidates} | {production.label},
+        records_for(runner, "confirmation"),
+        {case.label for case in confirmation_candidates},
     )
-    # A 000 winner is already represented by the lifecycle baseline and has no
-    # meaningful idle-to-active transition. Compare the best two nonzero tuples.
-    winners = [weights for weights in confirmation_ranking if weights != (0, 0, 0)][:2]
-    runner.log(f"Stage 2 winners: {', '.join(tuple_string(weights) for weights in winners)}")
-
-    lifecycle_cases = []
-    for weights in winners:
-        label = tuple_label(weights)
-        lifecycle_cases.extend(
-            [
-                static_case(weights),
-                Case(
-                    label=f"dynamic-000-to-{label}",
-                    idle=(0, 0, 0),
-                    active=weights,
-                    weight_tuple=weights,
-                    mode="dynamic",
-                ),
-                Case(
-                    label=f"static-{label}-forced-sync",
-                    idle=weights,
-                    active=weights,
-                    force_sync=True,
-                    weight_tuple=weights,
-                    mode="static-forced-sync",
-                ),
-            ]
-        )
-    lifecycle_baseline = Case(
-        label="static-000",
-        idle=(0, 0, 0),
-        active=(0, 0, 0),
-        weight_tuple=(0, 0, 0),
-        mode="baseline",
-    )
-    runner.log("Stage 3: static versus dynamic lifecycle comparison")
-    for iteration in range(1, runner.lifecycle_iterations + 1):
-        for benchmark in ("matmul", "contention"):
-            cases = [lifecycle_baseline, *lifecycle_cases]
-            ordered_cases = runner.randomized(f"lifecycle-{benchmark}", iteration, cases)
-            for sequence, case in enumerate(ordered_cases):
-                runner.run_case(
-                    "lifecycle",
-                    benchmark,
-                    iteration,
-                    case,
-                    sequence,
-                    len(ordered_cases),
-                )
-    lifecycle_records = records_for(runner, "lifecycle", "matmul") + records_for(
-        runner, "lifecycle", "contention"
-    )
-    lifecycle_summary_path = runner.output_dir / "stage3-static-vs-dynamic.csv"
-    write_lifecycle_summary(lifecycle_summary_path, lifecycle_records)
-
+    runner.log(f"Stage 2 winner: {tuple_string(confirmation_ranking[0])}")
     runner.log(f"Stage 1 ranking: {tuning_ranking_path}")
     runner.log(f"Stage 2 ranking: {confirmation_ranking_path}")
-    runner.log(f"Static/dynamic summary: {lifecycle_summary_path}")
     runner.log(f"Raw results: {runner.results_path}")
     runner.log(f"Pytest log: {runner.pytest_log_path}")
     return 0

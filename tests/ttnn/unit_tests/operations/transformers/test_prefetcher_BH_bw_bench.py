@@ -56,8 +56,8 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
 )
 from tests.ttnn.unit_tests.operations.transformers.mpfe_benchmark_utils import (
     append_benchmark_jsonl,
-    policy_result_fields,
-    resolve_mpfe_benchmark_policy,
+    resolve_mpfe_benchmark_weights,
+    weight_result_fields,
 )
 
 
@@ -220,9 +220,9 @@ def test_mpfe_priority_contention(device):
     against that bank. The first and last layers are byte-validated; only cached
     contention-consumer trace replays are timed.
 
-    Run each policy in a fresh process via
-    TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY. Nominal weight 7 can
-    be swept independently with TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT.
+    Override the free-sender, NOC1-sender, and ordinary-operation weights with
+    the corresponding TT_METAL_BENCHMARK_TENSOR_PREFETCHER_*_WEIGHT variables.
+    Run each tuple in a fresh process.
     """
     if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") is not None:
         pytest.skip("MPFE contention benchmark requires fast dispatch")
@@ -239,7 +239,7 @@ def test_mpfe_priority_contention(device):
     page_size = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
     ordinary_read_bytes = int(os.environ.get("BENCH_ORDINARY_READ_BYTES", page_size))
     trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "20"))
-    policy = resolve_mpfe_benchmark_policy()
+    mpfe_weights = resolve_mpfe_benchmark_weights()
 
     assert trace_repeats > 0
     assert ordinary_read_bytes > 0 and ordinary_read_bytes % 64 == 0
@@ -280,9 +280,7 @@ def test_mpfe_priority_contention(device):
     )
 
     logger.info(
-        f"[mpfe_contention] setup policy={policy.name} "
-        f"idle(free/noc1/ordinary)={policy.idle_weights} active={policy.active_weights} "
-        f"request_sync={policy.request_sync} "
+        f"[mpfe_contention] setup weights(free/noc1/ordinary)={mpfe_weights.weights} "
         f"banks={num_dram_banks} "
         f"K={K} N={N} ring={ring_size} repeats={trace_repeats}"
     )
@@ -387,9 +385,7 @@ def test_mpfe_priority_contention(device):
     ordinary_gbps = _gbps(ordinary_bytes, elapsed)
     combined_gbps = _gbps(prefetch_bytes + ordinary_bytes, elapsed)
     logger.info(
-        f"[mpfe_contention] policy={policy.name} "
-        f"idle(free/noc1/ordinary)={policy.idle_weights} active={policy.active_weights} "
-        f"request_sync={policy.request_sync} "
+        f"[mpfe_contention] weights(free/noc1/ordinary)={mpfe_weights.weights} "
         f"banks={num_dram_banks} dual_senders=True "
         f"K={K} N={N} ring={ring_size} repeats={trace_repeats} elapsed={elapsed * 1e3:.2f}ms "
         f"prefetch={prefetch_gbps:.2f}GB/s "
@@ -403,7 +399,7 @@ def test_mpfe_priority_contention(device):
     append_benchmark_jsonl(
         {
             "benchmark": "mpfe_contention",
-            **policy_result_fields(policy),
+            **weight_result_fields(mpfe_weights),
             "num_dram_banks": num_dram_banks,
             "dual_senders": True,
             "k": K,

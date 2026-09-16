@@ -1,205 +1,99 @@
-# Tensor Prefetcher MPFE policy benchmark
+# Tensor Prefetcher MPFE weight benchmark
 
-The Device-side Tensor Prefetcher reads its benchmark policy when it starts.
-Build Metal/TTNN once after changing the C++ or DRISC sources. Policy and weight
-changes after that require only a fresh test process; they do not require another
-build.
+The Blackhole Device-side Tensor Prefetcher holds static GDDR MPFE weights from
+startup until shutdown. Production defaults, in free-sender / NOC1-sender /
+ordinary-operation order, are:
 
-## Policy controls
-
-Set `TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY` to one of:
-
-| Policy | Idle (sender 0 / sender 1 / ordinary) | While prefetching |
-| --- | --- | --- |
-| `dynamic-007` (default) | `H/H/H` | `0/0/H` |
-| `dynamic-000` | `0/0/0` | `0/0/H` |
-| `static-000` | `0/0/0` | `0/0/0` |
-| `static-777` | `H/H/H` | `H/H/H` |
-| `static-007` | `0/0/H` | `0/0/H` |
-| `static-037` | `0/M/H` | `0/M/H` |
-| `static-770` | `H/H/0` | `H/H/0` |
-
-`H` defaults to 7. Override it with
-`TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT=0..7`. For example,
-`dynamic-000` with `HIGH_WEIGHT=5` uses `0/0/0` while idle and `0/0/5`
-while prefetching.
-
-`M` defaults to 3 and is controlled by
-`TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT=0..7`. In `static-037`,
-the first sender is the free subchannel, the second sender is the NOC1-endpoint
-subchannel, and the final slot is ordinary-operation traffic.
-
-The older `TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT=0..7` sweep
-remains available with `dynamic-007`. Do not combine it with another policy.
-
-For arbitrary experiments without adding another named policy, set both generic
-tuples in free-sender/NOC1-sender/ordinary order:
-
-```bash
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_IDLE_WEIGHTS=0,2,5
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHTS=0,3,7
+```text
+0 / 1 / 5
 ```
 
-Tuple overrides cannot be combined with a named policy or individual weight
-settings.
+Stopping the Tensor Prefetcher restores all three hardware weights to `0/0/0`.
 
-Stopping the Tensor Prefetcher restores all three hardware weights to `0/0/0`,
-regardless of the selected benchmark policy.
+## Benchmark controls
 
-## Contention test
-
-Run each configuration in a fresh process from the repository root:
+Override any weight for benchmark experiments:
 
 ```bash
-PYTHONPATH=$PWD TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=dynamic-000 \
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT=5 \
-BENCH_TRACE_REPEATS=50 \
-pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FREE_SENDER_WEIGHT=0
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_NOC1_SENDER_WEIGHT=1
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT=5
 ```
 
-After building, run the compact sanity matrix before collecting performance
-numbers:
+Each value must be an integer from 0 through 7. The Tensor Prefetcher reads the
+variables when it starts, so each configuration must run in a fresh process.
+Changing weights does not require another Metal/TTNN build.
+
+## Validation and contention
+
+After building, run the compact sanity matrix:
 
 ```bash
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_sanity.sh
 ```
 
-It runs the production default, every named policy, a generic tuple, and a
-forced-synchronization baseline in separate processes. Each case performs
-initial and final byte validation and verifies that the Tensor Prefetcher stops cleanly.
-Set `BENCH_TRACE_REPEATS` to change the default two replays, or append pytest
-arguments such as `--timeout=60`.
+It covers the production default, `000`, `014`, `037`, and `777`. Every case
+performs initial and final byte validation and verifies clean shutdown.
 
-Sweep the most useful comparison matrix:
-
-```bash
-for policy in static-000 static-777 static-007 static-037 dynamic-007 dynamic-000; do
-  for high in 3 5 7; do
-    PYTHONPATH=$PWD \
-    TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=$policy \
-    TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT=$high \
-    BENCH_TRACE_REPEATS=50 \
-    pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
-  done
-done
-```
-
-Run the static middle ground directly with independently configurable medium
-and high weights:
+Run one contention measurement directly:
 
 ```bash
 PYTHONPATH=$PWD \
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=static-037 \
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT=3 \
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT=7 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FREE_SENDER_WEIGHT=0 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_NOC1_SENDER_WEIGHT=1 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT=5 \
 BENCH_TRACE_REPEATS=50 \
-pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
+pytest -sv \
+tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
 ```
 
-The test reports the effective idle and active tuples, total elapsed time,
-Tensor Prefetcher bandwidth, ordinary-read bandwidth, and combined bandwidth.
+Set `TT_METAL_BENCHMARK_RESULT_JSONL` to append machine-readable metrics.
 
-Set `TT_METAL_BENCHMARK_RESULT_JSONL` to append the same metrics as one JSON
-object per run:
+## End-to-end matmul
 
-```bash
-TT_METAL_BENCHMARK_RESULT_JSONL=$PWD/generated/mpfe-results.jsonl \
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=dynamic-000 \
-BENCH_TRACE_REPEATS=50 \
-pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
-```
-
-Run the complete policy and weight matrix repeatedly with:
-
-```bash
-BENCH_SUITE_ITERATIONS=3 BENCH_TRACE_REPEATS=50 \
-tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_benchmarks.sh
-```
-
-The runner creates a timestamped directory under `generated/` containing
-`benchmark.log` and `results.jsonl`. Its default matrix covers high weights
-3/5/7, valid medium weights 1/3/5, active weights 1/3/5/7, all named policies,
-the production default, and the forced-sync control. Override
-`MPFE_HIGH_WEIGHTS`, `MPFE_MEDIUM_WEIGHTS`, `MPFE_ACTIVE_WEIGHTS`, or
-`OUTPUT_DIR` as needed.
-
-To isolate the cost of the per-request sender synchronization used by
-`dynamic-000`, compare `static-007` with and without forced synchronization.
-Both runs use identical weights, so their difference measures synchronization
-overhead rather than MPFE weighting:
-
-```bash
-for force_sync in 0 1; do
-  TT_METAL_BENCHMARK_RESULT_JSONL=$PWD/generated/mpfe-sync-overhead.jsonl \
-  TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=static-007 \
-  TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FORCE_REQUEST_SYNC=$force_sync \
-  BENCH_TRACE_REPEATS=50 \
-  pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
-done
-```
-
-## End-to-end matmul test
-
-The operation-level end-to-end receiver-contiguous benchmark measures real
-Tensor-Prefetcher-to-matmul overlap. It uses all available Blackhole DRAM banks,
-keeps eight receivers per bank, and pads the model shape for the resulting ring.
-An unharvested device retains the production scattered 64-core topology; a
-harvested device uses a compact logical receiver grid.
+The receiver-contiguous benchmark measures real Tensor-Prefetcher-to-matmul
+overlap. It uses every available Blackhole DRAM bank, keeps eight receivers per
+bank, and pads the model shape for the resulting ring. An unharvested device
+retains the production scattered 64-core topology; a harvested device uses a
+compact logical receiver grid.
 
 ```bash
 PYTHONPATH=$PWD \
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=dynamic-000 \
-TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT=5 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FREE_SENDER_WEIGHT=0 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_NOC1_SENDER_WEIGHT=1 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT=5 \
 BENCH_TRACE_REPEATS=100 \
 pytest -sv \
 tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bench.py::test_bench_dram_core_repeats_recv_contig \
--k '1B_FF1 and shard_contiguous'
+-k '3B_FF1 and shard_contiguous'
 ```
 
-Run the complete priority matrix on `3B_FF1`, the shape with the clearest
-historical end-to-end Tensor Prefetcher gain, with:
+## Static-weight optimization
 
-```bash
-BENCH_SUITE_ITERATIONS=3 BENCH_TRACE_REPEATS=100 \
-tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_ff1_benchmarks.sh
-```
-
-Each iteration runs `static-000` first as the baseline, followed by every policy
-and configured weight in the standard MPFE matrix. Results include the detected
-bank and ring counts and are written to `benchmark.log`, `results.jsonl`, and
-`relative-to-static-000.csv`. Set `MPFE_MATMUL_SHAPE=8B_FF1_2d` to run the
-other historically strong FF1 shape.
-
-For an adaptive search that tunes the complete integer `0/M/H` space and then
-answers the static-versus-dynamic question in one invocation, run:
+Run the adaptive optimizer when model workload or device topology changes:
 
 ```bash
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_optimize.py
 ```
 
-The runner performs three stages:
+The optimizer:
 
-1. Five randomized passes over all 36 tuples where `0 <= M <= H <= 7`.
-   `static-000` runs before and after every pass to normalize drift.
-2. Fifteen randomized confirmation passes over the six leaders.
-3. Twenty randomized static, dynamic (`000` idle), and forced-sync comparisons
-   for the two winners on both the FF1 matmul and repeated-request contention
-   benchmarks.
+1. Runs five randomized passes over all 36 tuples `0/M/H`, where
+   `0 <= M <= H <= 7`.
+2. Selects the six leaders and runs fifteen randomized confirmation passes.
+3. Brackets every pass with `static-000` and linearly interpolates between
+   those sentinels to compensate for performance drift.
 
-The stages are adaptive: finalist tuples are selected from the preceding
-stage's measured results. The output directory contains compact ranking CSVs,
-the final static/dynamic comparison, raw JSONL, and a separate pytest log.
-Interrupted runs can resume by supplying the same `OUTPUT_DIR`; completed cases
-are reused.
+Outputs include `stage1-tuning-ranking.csv`,
+`stage2-confirmation-ranking.csv`, `results.jsonl`, `summary.log`, and a
+separate `pytest.log`. Interrupted runs can resume with the same `OUTPUT_DIR`;
+the manifest prevents mixing configurations or device topologies.
 
-Tune the run counts with `MPFE_TUNING_ITERATIONS`,
-`MPFE_CONFIRM_ITERATIONS`, and `MPFE_LIFECYCLE_ITERATIONS`. The matmul and
-contention trace lengths use `BENCH_TRACE_REPEATS` and
-`CONTENTION_TRACE_REPEATS`, respectively. `MPFE_RANDOM_SEED` makes the
-randomized order reproducible.
+Configure the run with:
 
-These environment variables apply to every workload that calls
-`ttnn.experimental.start_tensor_prefetcher`, so the same policy matrix can also
-wrap a full-model performance command. Keep the model command and all other
-settings identical, use a fresh process for each policy, and compare the model's
-device throughput or latency rather than the synthetic bandwidth alone.
+- `MPFE_MATMUL_SHAPE` (default `3B_FF1`)
+- `MPFE_TUNING_ITERATIONS` (default `5`)
+- `MPFE_CONFIRM_ITERATIONS` (default `15`)
+- `BENCH_TRACE_REPEATS` (default `100`)
+- `MPFE_RANDOM_SEED`
+- `OUTPUT_DIR`
