@@ -546,8 +546,9 @@ class Runner:
             score_func="softmax" if p["softmax"] else "sigmoid",
         )
         W = torch.randn(H, p["N"], dtype=torch.bfloat16)
-        bias = torch.zeros(p["N"], dtype=torch.bfloat16)
-        gate = TTMoEGate(self.device, cfg, W, bias)
+        # No score-correction bias: these cells are the n_group=1 generalized gate, and the config leaves
+        # score_correction_bias False, which forbids passing torch_gate_bias (it is the deepseek path).
+        gate = TTMoEGate(self.device, cfg, W)
         x = ttnn.from_torch(
             torch.randn(1, 1, p["B"], H, dtype=torch.bfloat16),
             ttnn.bfloat16,

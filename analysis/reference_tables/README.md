@@ -12,6 +12,7 @@ produced it.
 | `refit_r2_walls.csv` | 110 | The same walls priced by the model, with signed error per wall and the fit / prediction / hold-out set each belongs to. Includes the 2026-09-16 MLA decode slice and cores-per-group sweeps. |
 | `floor_verification_configs.csv` | 20 | Perf counter readings (FPU, SFPU, MATH) per configuration on the unmodified kernel, per-core mean and wall-setting core. |
 | `model_components_grid1.csv` | 14 | Measured wall against the model's named wall terms, per configuration. |
+| `topk_counters.csv` | 1485 | Perf counter busy fractions per top-k cell and counter (10 cells, 155 counters), each divided by its own reference count on the same core. Reduced by `analysis/topk_counters_reduce.py`, which also recovers the cells from the run host ID order because a multipass capture emits no ops report. |
 | `floor_verification_fits.json` | - | The fitted floor constants and the overlap fits behind them. |
 
 ## How to use them
