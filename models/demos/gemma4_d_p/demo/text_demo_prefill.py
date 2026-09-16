@@ -5,6 +5,7 @@
 
 import functools
 import hashlib
+import json
 import os
 import pathlib
 import time
@@ -12,9 +13,11 @@ import time
 import pytest
 import torch
 from loguru import logger
+from safetensors.torch import load_file
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
+from models.demos.gemma4_d_p.demo.kv_pcc_report import KvPccRun, digest, select_reference_blocks
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
@@ -33,6 +36,9 @@ MODEL_DTYPE = ttnn.bfloat16
 GEMMA4_SLIDING_WINDOW_TOKENS = 1024
 PREFILL_CHUNK_SIZES = (4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
+KV_PCC_REFERENCE_DIR = pathlib.Path(
+    "/mnt/models/huggingface/gpu_traces/google--gemma-4-31B-it/hf-gemma4-31b-36db66e9-262144tok"
+)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -133,6 +139,124 @@ def _cp_gather_torch(tensor, mesh_config):
     return torch.cat(rows, dim=-2)
 
 
+def _ring_cache_rows(full, start, end, chunk, cp, num_heads):
+    """Convert a composed [1, TP-heads, CP*capacity, D] cache to [tokens, num_heads, D]."""
+    _, heads, rows, dim = full.shape
+    assert rows % cp == 0 and heads % num_heads == 0
+    # TP > KV heads replicates each head on consecutive columns (GQA assignment).
+    full = full[:, :: heads // num_heads].reshape(num_heads, cp, rows // cp, dim)
+    positions = torch.arange(start, end)
+    slab = chunk // cp
+    ranks = positions.remainder(chunk) // slab
+    local_rows = (positions // chunk) * slab + positions.remainder(slab)
+    return full[:, ranks, local_rows, :].permute(1, 0, 2)
+
+
+def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.to(torch.float64).flatten()
+    b = b.to(torch.float64).flatten()
+    a = a - a.mean()
+    b = b - b.mean()
+    d = a.norm() * b.norm()
+    if d == 0:
+        return float("nan")
+    return float(torch.clamp((a @ b) / d, -1.0, 1.0))
+
+
+def rel_l2(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.to(torch.float64).flatten()
+    b = b.to(torch.float64).flatten()
+    n = b.norm()
+    return float("nan") if n == 0 else float((a - b).norm() / n)
+
+
+def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, chunk, cp):
+    """With --kv-pcc, compare populated caches against the matching reference after all replays complete.
+
+    Score each reference block separately.
+    """
+    from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
+        GLOBAL_HEAD_DIM,
+        GLOBAL_ROTARY_DIM,
+        pack_global_kv_reference,
+        sliding_kv_indices,
+    )
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
+
+    reference_tokens = torch.tensor(metadata["token_ids"][: tokens.shape[-1]], dtype=torch.int64).unsqueeze(0)
+    assert torch.equal(
+        tokens.to(torch.int64), reference_tokens
+    ), "GPU traces and the device model implementation must use the same input"
+    assert len(kv_streams) == len(model.layers), "KV reference layer count differs from model"
+    for layer_idx, blocks in enumerate(kv_streams):
+        next_row = 0
+        for block in blocks:
+            assert (
+                block["row_start"] == next_row and block["row_end"] > next_row
+            ), f"layer {layer_idx}: KV reference ranges must be contiguous and start at zero"
+            next_row = min(block["row_end"], tokens.shape[-1])
+        assert (
+            next_row == tokens.shape[-1]
+        ), f"layer {layer_idx}: KV reference rows must match the complete input sequence"
+
+    records = []
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1))
+    for layer_idx, layer in enumerate(model.layers):
+        attn = layer.self_attn
+        assert attn.ring_kv_cache is not None, f"layer {layer_idx}: missing ring cache"
+        heads, dim = attn.config.num_key_value_heads, attn.config.head_dim
+        packed = isinstance(attn.ring_kv_cache, GlobalRingKVCache)
+        cache_parts = (
+            (("K_effective", attn.ring_kv_cache.kv), ("V", attn.ring_kv_cache.kv))
+            if packed
+            else (("K", attn.ring_kv_cache.k), ("V", attn.ring_kv_cache.v))
+        )
+        for part, tensor in cache_parts:
+            # Read one tensor at a time to bound host memory for long contexts.
+            full = ttnn.to_torch(tensor, mesh_composer=composer).float()
+            scores = []
+            for block_idx, block in enumerate(kv_streams[layer_idx]):
+                start, end = block["row_start"], min(block["row_end"], tokens.shape[-1])
+                path = ref_dir / block["path"]
+                golden = load_file(str(path))[f"kv_post_transform_layer_{layer_idx}"]
+                assert golden.shape == (block["row_end"] - start, 2 * heads * dim), f"{path}: invalid KV shape"
+                golden = golden[: end - start]
+                golden_k = golden[:, : heads * dim].reshape(end - start, heads, dim)
+                golden_v = golden[:, heads * dim :].reshape(end - start, heads, dim)
+                actual = _ring_cache_rows(full, start, end, chunk, cp, heads)
+                if packed:
+                    # Global cache is [Krot128 | Vnonrot384 | Vrot128]. Non-rotary
+                    # K gamma lives on Q, so compare the effective cached K view.
+                    golden_packed = pack_global_kv_reference(golden_k, golden_v)
+                    channels = slice(0, GLOBAL_HEAD_DIM) if part == "K_effective" else slice(GLOBAL_ROTARY_DIM, None)
+                    golden = golden_packed[..., channels]
+                    actual = actual[..., channels]
+                elif part == "K":
+                    golden = golden_k.index_select(-1, sliding_kv_indices(dim))
+                else:
+                    golden = golden_v
+                value, error = pcc(actual, golden), rel_l2(actual, golden)
+                records.append(
+                    {
+                        "layer": layer_idx,
+                        "part": "K" if part == "K_effective" else part,
+                        "chunk": block_idx,
+                        "row_start": start,
+                        "row_end": end,
+                        "pcc": value,
+                        "rel_l2": error,
+                    }
+                )
+                scores.append(value)
+                logger.info(f"[kv_pcc] layer={layer_idx} {part} rows=[{start},{end}) pcc={value:.6f} relL2={error:.6f}")
+            logger.info(
+                f"[kv_pcc] layer={layer_idx} {part} mean={sum(scores) / len(scores):.6f} "
+                f"min={min(scores):.6f} max={max(scores):.6f}"
+            )
+            del full
+    return records
+
+
 # ── Eager / traced execution ──────────────────────────────────────────────────
 
 
@@ -188,7 +312,13 @@ def _build_prefill_model(mesh_config, model_path, chunk_size, context_len=None):
 def test_prefill_long_context_traced(
     mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
 ):
-    """Measure all prefill chunks using one replayed ring-attention trace."""
+    """Measure all prefill chunks using one replayed ring-attention trace.
+
+    Pass --kv-pcc to report per-layer K/V PCC and relative L2 instead of
+    performance, using the fixed GPU trace directory. Input token IDs must match the
+    reference prefix; index.json locates its blocks. Save JSON measurements and
+    fail when a block regresses beyond the approved baseline tolerances.
+    """
 
     mesh_config = _mesh_config(mesh_device)
     cp = mesh_config.cp_degree
@@ -203,6 +333,38 @@ def test_prefill_long_context_traced(
     if context_len % chunk_size != 0:
         pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
 
+    kv_ref_dir = KV_PCC_REFERENCE_DIR if request.config.getoption("--kv-pcc") else None
+    kv_metadata = None
+    kv_run = None
+    if kv_ref_dir is not None:
+        for name in ("metadata.json", "index.json"):
+            path = kv_ref_dir / name
+            if not path.is_file():
+                raise FileNotFoundError(f"Missing GPU KV reference: {path}")
+        kv_metadata = json.loads((kv_ref_dir / "metadata.json").read_text())
+        index = json.loads((kv_ref_dir / "index.json").read_text())
+        assert context_len <= len(kv_metadata["token_ids"]), "KV reference is shorter than the requested context"
+        kv_streams = select_reference_blocks(index, kv_metadata["n_layers"], context_len)
+        for blocks in kv_streams:
+            for block in blocks:
+                path = kv_ref_dir / block["path"]
+                assert path.is_file(), f"Missing KV reference: {path}"
+        configuration = {
+            "model": _model_path(),
+            "mesh_shape": list(mesh_device.shape),
+            "chunk_size": chunk_size,
+            "context_len": context_len,
+            "token_source": token_source,
+            "token_ids_sha256": digest(kv_metadata["token_ids"][:context_len]),
+            "reference_metadata_sha256": digest(kv_metadata),
+            "reference_index_sha256": digest(index),
+            "layer_types": kv_metadata["layer_types"],
+            "cache_comparison": "global_effective_k_and_packed_v_sliding_reordered_k_v1",
+        }
+        kv_run = KvPccRun(
+            configuration, request.node.nodeid, baseline_path=request.config.getoption("--kv-pcc-baseline")
+        )
+
     model_path = _model_path()
     n_chunks = context_len // chunk_size
     model_args, model, kv_cache = _build_prefill_model(
@@ -213,6 +375,13 @@ def test_prefill_long_context_traced(
     )
 
     tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
+    if kv_metadata is not None:
+        assert kv_metadata["n_layers"] == len(model.layers), "KV reference layer count differs from model"
+        reference_tokens = torch.tensor(kv_metadata["token_ids"][:context_len], dtype=torch.int64).unsqueeze(0)
+        assert torch.equal(
+            tokens_all.to(torch.int64), reference_tokens
+        ), "GPU traces and the device model implementation must use the same input"
+        logger.info(f"[kv_pcc] Input tokens match {kv_ref_dir}; performance reporting disabled")
 
     host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
@@ -317,14 +486,22 @@ def test_prefill_long_context_traced(
                 assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
                 readback_s += time.time() - t_rb
             # Report per-chunk latency and cumulative device and wall time.
-            logger.info(
-                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
-                f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
-                f"total device={sum(per_chunk):.1f}s wall={time.time() - t_run:.1f}s"
-            )
+            if kv_ref_dir is None:
+                logger.info(
+                    f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
+                    f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
+                    f"total device={sum(per_chunk):.1f}s wall={time.time() - t_run:.1f}s"
+                )
         total_s = time.time() - t_run
     finally:
         ttnn.release_trace(mesh_device, tid_ring)
+
+    if kv_ref_dir is not None:
+        records = _measure_kv_pcc(model, mesh_device, kv_ref_dir, kv_streams, kv_metadata, tokens_all, chunk_size, cp)
+        report_path = kv_run.finish(records)
+        logger.info("[kv_pcc] PASS: all K/V measurements are within baseline tolerances.")
+        logger.info(f"[kv_pcc] JSON report: {report_path}")
+        return
 
     device_s = sum(per_chunk)
     # Three different numbers, because conflating them understates the model by ~2x.
