@@ -760,26 +760,33 @@ void ControlPlane::validate_fabric_config_across_ranks() {
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
     const auto rank = static_cast<uint32_t>(*distributed_context.rank());
 
-    TT_FATAL(!this->local_mesh_binding_.mesh_ids.empty(), "Local mesh binding must be initialized before validation");
-    TT_FATAL(
-        *this->local_mesh_binding_.host_rank != *MESH_HOST_RANK_UNSET,
-        "Local mesh host rank must be initialized before validation");
+    // Source the local mesh ids and per-mesh host rank from the topology mapper (the actual mapped
+    // values) rather than from local_mesh_binding_, whose host_rank can be MESH_HOST_RANK_UNSET when a
+    // rank binding omits mesh_host_rank -- the topology mapper derives it from the mesh graph.
+    // See get_local_host_rank_id_binding().
+    const auto local_mesh_ids = this->get_local_mesh_id_bindings();
+    TT_FATAL(!local_mesh_ids.empty(), "No local mesh ids found for FabricConfig validation");
 
     static_assert(
         std::is_trivially_copyable_v<MeshFabricConfigObservation>,
         "MeshFabricConfigObservation is exchanged as raw bytes between ranks");
 
-    uint32_t local_binding_count = static_cast<uint32_t>(this->local_mesh_binding_.mesh_ids.size());
+    uint32_t local_binding_count = static_cast<uint32_t>(local_mesh_ids.size());
     uint32_t max_binding_count = 0;
     distributed_context.all_reduce(
         ttsl::Span<uint32_t>(&local_binding_count, 1), ttsl::Span<uint32_t>(&max_binding_count, 1), ReduceOp::MAX);
 
     std::vector<MeshFabricConfigObservation> local_observations(max_binding_count);
     for (uint32_t i = 0; i < local_binding_count; ++i) {
+        const auto mesh_host_rank = this->topology_mapper_->get_local_host_rank(local_mesh_ids[i]);
+        TT_FATAL(
+            mesh_host_rank.has_value(),
+            "Could not determine local host rank for mesh {} from the topology mapper",
+            *local_mesh_ids[i]);
         local_observations[i] = MeshFabricConfigObservation{
-            .mesh_id = this->local_mesh_binding_.mesh_ids[i],
+            .mesh_id = local_mesh_ids[i],
             .rank = rank,
-            .mesh_host_rank = *this->local_mesh_binding_.host_rank,
+            .mesh_host_rank = *mesh_host_rank.value(),
             .fabric_config = this->fabric_config_};
     }
 
