@@ -3176,12 +3176,17 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
 
         del positions, hidden  # on-device handoff: taps are already in place
         k = int(num_drafts)
+        # The contract is [rows, K]: one row per row the VERIFY answered for,
+        # padding rows included -- the runner checks this shape and drops the
+        # padding rows only after its accept walk. B=1 means only row 0 carries
+        # drafts, but the shape follows the block, not the session.
+        rows = int(committed.shape[0]) if committed is not None and committed.dim() > 1 else 1
         dec = self._spec_decoder
         if dec is None or not self._spec_active:
             # No session, so no real drafts. A zero-width proposal is how the
             # contract says "nothing this step"; inventing ids would have the
             # runner verify tokens no drafter produced.
-            return DraftOutput(draft_token_ids=torch.zeros((1, 0), dtype=torch.int32))
+            return DraftOutput(draft_token_ids=torch.zeros((rows, 0), dtype=torch.int32))
         # Commit what the runner accepted for the PREVIOUS step BEFORE drafting
         # again: the fused body merges the previous replay's tap rows at the
         # start of the next replay, so the count has to be in place first.
@@ -3194,7 +3199,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         self._spec_first_step = False
         self._ct_drafts = [int(t) for t in drafts[:k]]
         self._ct_posterior = [int(t) for t in posterior]
-        out = torch.zeros((1, k), dtype=torch.int32)
+        out = torch.zeros((rows, k), dtype=torch.int32)
         out[0, : len(self._ct_drafts)] = torch.tensor(self._ct_drafts, dtype=torch.int32)
         return DraftOutput(draft_token_ids=out)
 
@@ -3230,7 +3235,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         # carries them rather than assuming: the runner may truncate a row to
         # num_valid_drafts, which is fine, but a different token in a draft
         # column would mean answering for a token the device never evaluated.
-        block = tokens.reshape(-1).tolist()
+        row0 = tokens[0] if tokens.dim() > 1 else tokens
+        block = row0.reshape(-1).tolist()
         valid = int(num_valid.reshape(-1)[0]) if num_valid is not None else len(self._ct_drafts)
         valid = max(0, min(valid, len(self._ct_drafts), max(0, len(block) - 1)))
         sent = [int(t) for t in block[1 : 1 + valid]]
@@ -3243,7 +3249,11 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
                 "tokens it never evaluated"
             )
         width = self._SPEC_CONTRACT_K + 1
-        ids = torch.full((1, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        rows = int(tokens.shape[0]) if tokens is not None and tokens.dim() > 1 else 1
+        # Padding rows are verified with the rest and dropped by the runner
+        # after its walk, so PLACEHOLDER in them is harmless; row 0 is the live
+        # request at B=1.
+        ids = torch.full((rows, width), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
         post = self._ct_posterior[:width]
         ids[0, : len(post)] = torch.tensor(post, dtype=torch.int32)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)

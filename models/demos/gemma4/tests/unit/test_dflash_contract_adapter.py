@@ -195,3 +195,37 @@ def test_a_non_speculative_step_is_not_a_verify():
     finally:
         Gemma4ForCausalLM.decode_forward = orig
     assert called == {"plain": True}
+
+
+# ── row dimension: the contract is [rows, ...], padding rows included ───────
+
+
+def test_propose_returns_one_row_per_verified_row():
+    """The runner checks ``draft_token_ids.shape == (rows, K)`` where rows is
+    the VERIFIED row count, padding included -- it drops padding rows only
+    after its accept walk. B=1 fills row 0; the shape follows the block."""
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    committed = torch.zeros((4, 6), dtype=torch.int32)  # wire padded to 4 rows
+    committed[0, 0] = 11
+    out = m.propose_draft_tokens(5, committed, None, torch.tensor([1, 1, 1, 1], dtype=torch.int32))
+    assert tuple(out.draft_token_ids.shape) == (4, 5)
+    assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
+    assert int(out.draft_token_ids[1:].sum()) == 0  # padding rows carry no draft
+
+
+def test_verify_returns_one_row_per_block_row():
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    committed = torch.zeros((4, 6), dtype=torch.int32)
+    committed[0, 0] = 11
+    m.propose_draft_tokens(5, committed, None, torch.tensor([1, 1, 1, 1], dtype=torch.int32))
+    block = torch.zeros((4, 6), dtype=torch.int32)
+    block[0] = torch.tensor([11, 21, 22, 23, 24, 25], dtype=torch.int32)
+    out = m.decode_forward(
+        tokens=block,
+        start_pos=torch.zeros((4, 6), dtype=torch.int32),
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.tensor([5, 0, 0, 0], dtype=torch.int32),
+        accepted_counts=torch.tensor([1, 1, 1, 1], dtype=torch.int32),
+    )
+    assert tuple(out.argmax_ids.shape) == (4, 6)
+    assert out.argmax_ids[0].tolist() == [31, 32, 33, 34, 35, 36]
