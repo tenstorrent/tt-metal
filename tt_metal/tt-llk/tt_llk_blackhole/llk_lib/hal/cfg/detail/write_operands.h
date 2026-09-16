@@ -7,19 +7,76 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "../access_types.h"
 #include "../field.h"
 
 namespace hal::cfg
 {
 
+/**
+ * @brief One field assignment, not yet written to hardware.
+ *
+ * Use @ref set to construct one. Assignments from different generated classes
+ * can be combined when their fields occupy the same physical CFG word.
+ */
 template <const Field& F, Sec S>
-class FieldAssignment;
+class FieldAssignment
+{
+public:
+    static_assert(F.width <= 32, "field wider than 32b cannot be assigned through a single value");
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
+    static constexpr RegisterScope scope = F.scope;
+    static constexpr std::uint32_t addr  = F.addr32(S);
+    static constexpr std::uint32_t shift = F.shamt(S);
+    static constexpr std::uint32_t mask  = F.mask(S);
+
+    std::uint32_t value;
+};
+
+/**
+ * @brief One compile-time field assignment.
+ *
+ * Unlike @ref FieldAssignment, the value is part of the type. Combining only
+ * constant assignments therefore emits immediate TTI_RMWCIB/TTI_SETC16
+ * instructions without constructing an opcode at runtime.
+ */
 template <const Field& F, Sec S, std::uint32_t Value>
-class ConstantFieldAssignment;
+class ConstantFieldAssignment
+{
+public:
+    static_assert(F.width <= 32, "field wider than 32b cannot be assigned through a single value");
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    static_assert(Value <= ((std::uint64_t {1} << F.width) - 1u), "value exceeds field width");
 
+    static constexpr RegisterScope scope = F.scope;
+    static constexpr std::uint32_t addr  = F.addr32(S);
+    static constexpr std::uint32_t shift = F.shamt(S);
+    static constexpr std::uint32_t mask  = F.mask(S);
+    static constexpr std::uint32_t value = Value;
+};
+
+/**
+ * @brief One destination-bound whole-word GPR transfer.
+ *
+ * Use @ref from_gpr to construct one. Unlike a field assignment, this operation
+ * replaces one or four complete state-CFG words and acts as an ordering barrier
+ * between automatically grouped assignment runs.
+ */
 template <const Field& F, Sec S, typename Source>
-class GprWrite;
+class GprWrite
+{
+public:
+    static_assert(F.scope == RegisterScope::State, "GPR-backed CFG writes require a state-CFG destination");
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    static_assert(F.shamt(S) == 0, "GPR-backed CFG writes must start at the beginning of a CFG word");
+
+    static constexpr RegisterScope scope = F.scope;
+    static constexpr std::uint32_t addr  = F.addr32(S);
+    static constexpr std::uint32_t words = Source::size == GprTransferSize::Bits128 ? 4u : 1u;
+
+    Source source;
+};
 
 } // namespace hal::cfg
 
