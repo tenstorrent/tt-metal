@@ -495,10 +495,18 @@ Board create_board(BoardType board_type) {
 
 BoardType get_board_type_from_string(const std::string& board_name) {
     auto board_type = enchantum::cast<BoardType>(board_name, ttsl::ascii_caseless_comp);
-    if (!board_type.has_value()) {
-        throw std::runtime_error("Invalid board type: " + std::string(board_name));
+    if (board_type.has_value()) {
+        return *board_type;
     }
-    return *board_type;
+    // Reflection surfaces one name per enumerator, so a board the enum spells twice -- UBB_WORMHOLE
+    // aliases UBB -- is reachable by only one of them, and descriptors written elsewhere use the
+    // other. UMD's own table carries those spellings, along with the board revisions that map onto a
+    // single type.
+    BoardType aliased_type = tt::board_type_from_string(board_name);
+    if (aliased_type != BoardType::UNKNOWN) {
+        return aliased_type;
+    }
+    throw std::runtime_error("Invalid board type: " + std::string(board_name));
 }
 
 std::ostream& operator<<(std::ostream& os, const AsicChannel& asic_channel) {
