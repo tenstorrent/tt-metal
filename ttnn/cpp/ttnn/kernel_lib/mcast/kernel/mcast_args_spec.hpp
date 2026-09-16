@@ -26,7 +26,7 @@ struct SpecMcastRuntime {
 
 // The three *_type compiler definitions name native sem::<accessor>_t aliases, or
 // std::nullptr_t for unused roles. Absent channels instantiate no resource operations.
-#define MCAST_SPEC_ARGS(prefix)                                                                                       \
+#define MCAST_ARGS(prefix)                                                                                            \
     dataflow_kernel_lib::detail::McastArgsImpl<                                                                       \
         (get_arg(args::TT_MCAST_SPEC_NAME(prefix, tag)) == dataflow_kernel_lib::mcast_wire::FAMILY),                  \
         dataflow_kernel_lib::mcast_wire::FamilyMetadata{TT_MCAST_SPEC_METADATA(TT_MCAST_SPEC_READ_METADATA, prefix)}, \

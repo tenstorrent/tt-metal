@@ -83,7 +83,8 @@ struct McastConfig {
     // Select the data-ready signaling mode.
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
     // Exact first owned semaphore ID. Descriptor attachment and Program binding
-    // allocate free IDs when omitted.
+    // allocate free IDs when omitted. Direct Program construction checks this against
+    // the IDs returned by CreateSemaphore; it cannot reserve an arbitrary ID.
     std::optional<uint32_t> base_sem_id = std::nullopt;
     // Adopt caller-owned ids: data_ready, consumer_ready (required with handshake), and
     // signal_source (required for resolved ChainUnicast). Chain IDs must be distinct and
@@ -173,6 +174,10 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
+    // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
+    // existing zero-initialized semaphores covering every participating core.
+    // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
+    // the Program; discard that Program after a failed append.
     void append_semaphores(tt::tt_metal::Program& program);
 
     // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
@@ -258,7 +263,7 @@ private:
     // Preparation is the last use of the borrowed device; attachment uses these snapshots.
     tt::ARCH prepared_arch_{};
     tt::tt_metal::CoreCoord prepared_device_grid_;
-    std::optional<tt::tt_metal::ProgramId> bound_program_id_;
+    const tt::tt_metal::detail::ProgramImpl* bound_program_ = nullptr;
     std::array<uint32_t, 3> program_semaphore_ids_{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
     const Group* group_for_core_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<Group> groups_;
@@ -339,6 +344,10 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
+    // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
+    // existing zero-initialized semaphores covering every participating core.
+    // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
+    // the Program; discard that Program after a failed append.
     void append_semaphores(tt::tt_metal::Program& program);
 
     // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
@@ -426,6 +435,10 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
+    // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
+    // existing zero-initialized semaphores covering every participating core.
+    // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
+    // the Program; discard that Program after a failed append.
     void append_semaphores(tt::tt_metal::Program& program);
 
     // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.

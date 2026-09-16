@@ -364,7 +364,7 @@ TEST_F(McastHostFixture, WrapperRowsColumnsFixedAndRotating) {
                 const uint32_t span = (row ? end.x : end.y) - 1;
                 McastConfig cfg;
                 cfg.noc = noc;
-                cfg.base_sem_id = 2;
+                cfg.base_sem_id = 0;
                 for (auto placement : {Mcast1DSenderPlacement::Uniform, Mcast1DSenderPlacement::Diagonal}) {
                     std::vector<GroupInput> groups;
                     for (uint32_t i = 0; i < lines; ++i) {
@@ -383,7 +383,7 @@ TEST_F(McastHostFixture, WrapperRowsColumnsFixedAndRotating) {
                     EXPECT_EQ(wrapper.sender_only_cores(), family.sender_only_cores());
                     const auto owned = allocated_semaphores(wrapper);
                     ASSERT_FALSE(owned.empty());
-                    EXPECT_EQ(owned.back().id + 1, 4u);
+                    EXPECT_EQ(owned.back().id + 1, 2u);
                     for (auto& group : groups) {
                         check_group(device_, family, group);
                     }
@@ -605,7 +605,7 @@ TEST_F(McastHostFixture, FlagsSemaphoresAndAckPrecedence) {
                     cfg.data_ready = signal;
                     cfg.handshake = handshake;
                     cfg.ack_count_override = config_ack;
-                    cfg.base_sem_id = 4;
+                    cfg.base_sem_id = 0;
                     GroupInput group(receivers, std::vector<CoreCoord>{{2, 2}}, group_ack);
                     auto family = make_family(device_, {group}, cfg);
                     EXPECT_EQ(runtime_args(family, {2, 2})[wire::ACK], group_ack.value_or(config_ack.value_or(2)));
@@ -620,7 +620,7 @@ TEST_F(McastHostFixture, FlagsSemaphoresAndAckPrecedence) {
                     EXPECT_EQ(allocated_semaphores(family).size(), handshake ? 2u : 1u);
                     const auto owned = allocated_semaphores(family);
                     ASSERT_FALSE(owned.empty());
-                    EXPECT_EQ(owned.back().id + 1, handshake ? 6u : 5u);
+                    EXPECT_EQ(owned.back().id + 1, handshake ? 2u : 1u);
                     cfg.sem_ids = handshake ? std::vector<uint32_t>{6, 7} : std::vector<uint32_t>{6};
                     auto adopted = make_family(device_, {group}, cfg);
                     EXPECT_TRUE(allocated_semaphores(adopted, *cfg.sem_ids).empty());
@@ -989,18 +989,18 @@ TEST_F(McastHostFixture, SameInputsCanPrepareDifferentFamilyTransports) {
 TEST_F(McastHostFixture, ChainSignalSourceAllocationAndWire) {
     const GroupInput group(cores({{0, 0}, {2, 0}}), {{0, 0}});
     auto cfg = chain_config();
-    cfg.base_sem_id = 3;
+    cfg.base_sem_id = 0;
     auto family = make_family(device_, {group}, cfg);
-    const std::vector<uint32_t> expected{1, 1, 3, 4, 1, 9, 0, 4, 1, 2, 0, 5};
+    const std::vector<uint32_t> expected{1, 1, 0, 1, 1, 9, 0, 4, 1, 2, 0, 2};
     EXPECT_EQ(compile_args(family), expected);
     EXPECT_EQ(allocated_semaphores(family).size(), 3u);
     const auto owned = allocated_semaphores(family);
     ASSERT_FALSE(owned.empty());
-    EXPECT_EQ(owned.back().id + 1, 6u);
+    EXPECT_EQ(owned.back().id + 1, 3u);
     const auto semaphores = allocated_semaphores(family);
     ASSERT_EQ(semaphores.size(), 3u);
     for (uint32_t i = 0; i < 3; ++i) {
-        EXPECT_EQ(semaphores[i].id, 3u + i);
+        EXPECT_EQ(semaphores[i].id, i);
         EXPECT_EQ(semaphores[i].initial_value, 0u);
         EXPECT_EQ(semaphores[i].core_ranges, family.participating_cores());
     }
@@ -1011,7 +1011,11 @@ TEST_F(McastHostFixture, ChainSignalSourceAllocationAndWire) {
     }
     cfg.sem_ids = std::vector<uint32_t>{3, 4, 5};
     const auto adopted = make_family(device_, {group}, cfg);
-    EXPECT_EQ(compile_args(adopted, {3, 4, 5}), expected);
+    auto adopted_expected = expected;
+    adopted_expected[wire::DATA_READY] = 3;
+    adopted_expected[wire::CONSUMER_READY] = 4;
+    adopted_expected[wire::SIGNAL_SOURCE] = 5;
+    EXPECT_EQ(compile_args(adopted, {3, 4, 5}), adopted_expected);
     EXPECT_TRUE(allocated_semaphores(adopted, {3, 4, 5}).empty());
     EXPECT_EQ(allocated_semaphores(adopted, {3, 4, 5}).size(), 0u);
     // A rectangular family resolves to multicast and needs only two semaphore IDs.
@@ -1672,21 +1676,28 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     EXPECT_ANY_THROW(family.attach(spec, run_args, "weights", {}));
 }
 
-TEST_F(McastHostFixture, ProgramBindingValidatesAllRolesBeforeMutationAndSupportsAdoption) {
+TEST_F(McastHostFixture, ProgramBindingChecksAllocatedIdsAndSupportsAdoption) {
     using namespace tt::tt_metal;
     const auto participants = grid({0, 0}, {1, 0});
-    Program collision;
-    collision.impl().add_semaphore(participants, 3, 0, tt::CoreType::WORKER);
     auto exact = make_family(device_, {{participants, {{0, 0}}}}, {.base_sem_id = 2});
-    EXPECT_ANY_THROW(exact.append_semaphores(collision));
-    ASSERT_EQ(collision.impl().semaphores().size(), 1u);
+    Program mismatch;
+    EXPECT_ANY_THROW(exact.append_semaphores(mismatch));
+    // CreateSemaphore chooses the next free ID; an expected-ID mismatch is detected afterwards.
+    ASSERT_EQ(mismatch.impl().semaphores().size(), 1u);
+    EXPECT_EQ(mismatch.impl().semaphores().front().id(), 0u);
     std::vector<uint32_t> ct;
     EXPECT_ANY_THROW(exact.append_compile_time_args_to(ct));
+
     Program program;
+    EXPECT_EQ(CreateSemaphore(program, participants, 7), 0u);
+    EXPECT_EQ(CreateSemaphore(program, participants, 9), 1u);
     exact.append_semaphores(program);
     exact.append_compile_time_args_to(ct);
     EXPECT_EQ(ct[wire::DATA_READY], 2u);
     EXPECT_EQ(ct[wire::CONSUMER_READY], 3u);
+    ASSERT_EQ(program.impl().semaphores().size(), 4u);
+    EXPECT_EQ(program.impl().semaphores()[2].initial_value(), 0u);
+    EXPECT_EQ(program.impl().semaphores()[3].initial_value(), 0u);
 
     Mcast2D passive(
         device_,
@@ -1698,27 +1709,27 @@ TEST_F(McastHostFixture, ProgramBindingValidatesAllRolesBeforeMutationAndSupport
     passive.append_compile_time_args_to(ct);
     EXPECT_EQ(ct[wire::DATA_READY], 2u);
     EXPECT_EQ(ct[wire::CONSUMER_READY], UNUSED_SEM_ID);
-    EXPECT_EQ(program.impl().semaphores().size(), 2u);
+    EXPECT_EQ(program.impl().semaphores().size(), 4u);
 
     Mcast1D another(device_, participants, Mcast1DShape::PerRow, Mcast1DFixedSenderConfig{});
     another.append_semaphores(program);
     ct.clear();
     another.append_compile_time_args_to(ct);
-    EXPECT_EQ(ct[wire::DATA_READY], 0u);
-    EXPECT_EQ(ct[wire::CONSUMER_READY], 1u);
-    EXPECT_EQ(program.impl().semaphores().size(), 4u);
+    EXPECT_EQ(ct[wire::DATA_READY], 4u);
+    EXPECT_EQ(ct[wire::CONSUMER_READY], 5u);
+    EXPECT_EQ(program.impl().semaphores().size(), 6u);
 
-    auto missing = make_family(device_, {{participants, {{0, 0}}}}, {.sem_ids = std::vector<uint32_t>{4, 5}});
-    EXPECT_ANY_THROW(missing.append_semaphores(program));
-    EXPECT_EQ(program.impl().semaphores().size(), 4u);
-    Program nonzero;
-    nonzero.impl().add_semaphore(participants, 4, 1, tt::CoreType::WORKER);
-    nonzero.impl().add_semaphore(participants, 5, 0, tt::CoreType::WORKER);
-    EXPECT_ANY_THROW(missing.append_semaphores(nonzero));
-    EXPECT_EQ(nonzero.impl().semaphores().size(), 2u);
+    for (const auto& ids : std::vector<std::vector<uint32_t>>{{2, 2}, {2, NUM_SEMAPHORES}, {2, 3, 4}}) {
+        auto invalid = make_family(device_, {{participants, {{0, 0}}}}, {.sem_ids = ids});
+        EXPECT_ANY_THROW(invalid.append_semaphores(program));
+        EXPECT_EQ(program.impl().semaphores().size(), 6u);
+    }
+    auto invalid_base = make_family(device_, {{participants, {{0, 0}}}}, {.base_sem_id = NUM_SEMAPHORES - 1});
+    EXPECT_ANY_THROW(invalid_base.append_semaphores(program));
+    EXPECT_EQ(program.impl().semaphores().size(), 6u);
 }
 
-TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedPrograms) {
+TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndCompiledPrograms) {
     using namespace tt::tt_metal;
     auto chain = make_family(device_, {{cores({{0, 0}, {1, 1}, {2, 0}}), {{0, 0}}}}, chain_config());
     Program chain_program;
@@ -1735,18 +1746,15 @@ TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedProgra
         full.impl().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
     }
     EXPECT_ANY_THROW(family.append_semaphores(full));
-    EXPECT_EQ(full.impl().semaphores().size(), NUM_SEMAPHORES - 1);
-    Program partial;
-    partial.impl().add_semaphore(grid({0, 0}, {0, 0}), 0, 0, tt::CoreType::WORKER);
-    partial.impl().add_semaphore(participants, 1, 0, tt::CoreType::WORKER);
-    auto adopted = make_family(device_, {{participants, {{0, 0}}}}, {.sem_ids = std::vector<uint32_t>{0, 1}});
-    EXPECT_ANY_THROW(adopted.append_semaphores(partial));
-    EXPECT_EQ(partial.impl().semaphores().size(), 2u);
-
-    Program spec_program;
-    spec_program.impl().mark_created_from_spec();
-    EXPECT_ANY_THROW(family.append_semaphores(spec_program));
-    EXPECT_TRUE(spec_program.impl().semaphores().empty());
+    // The public allocator has no transaction/rollback: the first role consumes the last slot.
+    EXPECT_EQ(full.impl().semaphores().size(), NUM_SEMAPHORES);
+    EXPECT_ANY_THROW(family.append_compile_time_args_to(ct));
+    Program fresh;
+    family.append_semaphores(fresh);
+    ct.clear();
+    family.append_compile_time_args_to(ct);
+    EXPECT_EQ(ct[wire::DATA_READY], 0u);
+    EXPECT_EQ(ct[wire::CONSUMER_READY], 1u);
     ProgramDescriptor descriptor;
     KernelDescriptor kernel;
     kernel.kernel_source = "void kernel_main() {}";

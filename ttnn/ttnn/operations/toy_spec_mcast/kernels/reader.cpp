@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // One sender per grid row reads that row's tile from DRAM and broadcasts it across the row.
-// The mcast wire is decoded by MCAST_SPEC_ARGS(row): every name it reads -- the two sem:: bindings and
+// The mcast wire is decoded by MCAST_ARGS(row): every name it reads -- the two sem:: bindings and
 // the named metadata and vararg base -- was written by native attachment on the host,
 // so this kernel chains no CT or RT offsets.
 
@@ -21,7 +21,7 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_tile(dfb::tile);
-    constexpr auto mc = MCAST_SPEC_ARGS(row);
+    constexpr auto mc = MCAST_ARGS(row);
 
     const uint32_t tile_bytes = dfb_tile.get_tile_size();
 

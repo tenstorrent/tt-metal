@@ -4,25 +4,6 @@
 
 include(sources.cmake)
 
-# Preserve unity batching for existing sources while adding the attachment backends.
-set_source_files_properties(
-    cpp/ttnn/kernel_lib/mcast/host/mcast_resources.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_descriptor.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_spec.cpp
-    PROPERTIES
-        SKIP_UNITY_BUILD_INCLUSION
-            ON
-)
-
-# Direct Program attachment inspects internal semaphore occupancy. Limit its internal
-# header search paths to this backend rather than changing every TTNN translation unit.
-set_source_files_properties(
-    cpp/ttnn/kernel_lib/mcast/host/mcast_resources.cpp
-    PROPERTIES
-        INCLUDE_DIRECTORIES
-            "${PROJECT_SOURCE_DIR}/tt_metal;${PROJECT_SOURCE_DIR}/tt_metal/hw/inc;${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium"
-)
-
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
 
 # FIXME: Many lambda functions in ttnn capture variables and don't use them.

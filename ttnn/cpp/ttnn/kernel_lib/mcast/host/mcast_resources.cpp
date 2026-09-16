@@ -7,18 +7,18 @@
 #include <algorithm>
 #include <tt_stl/assert.hpp>
 #include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/program/program_impl.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::kernel_lib::host {
 using namespace tt::tt_metal;
 
 void McastFamily::require_program_bound_() const {
     require_arguments_prepared_();
-    TT_FATAL(bound_program_id_.has_value(), "Call append_semaphores(program) before appending multicast arguments");
+    TT_FATAL(bound_program_ != nullptr, "Call append_semaphores(program) before appending multicast arguments");
 }
 
 void McastFamily::require_unbound_() const {
-    TT_FATAL(!bound_program_id_, "A Program-bound multicast family cannot use another attachment or legacy query path");
+    TT_FATAL(!bound_program_, "A Program-bound multicast family cannot use another attachment or legacy query path");
 }
 
 void McastFamily::validate_semaphores_present_and_zeroed_(
@@ -76,37 +76,45 @@ std::array<uint32_t, 3> McastFamily::resolve_semaphore_ids_(std::span<const Sema
 
 void McastFamily::append_semaphores(Program& program) {
     require_arguments_prepared_();
-    auto& impl = program.impl();
-    TT_FATAL(!impl.created_from_spec(), "Multicast Program binding requires a regular Program");
-    TT_FATAL(!impl.is_compiled(), "Cannot bind multicast semaphores to a compiled Program");
-    TT_FATAL(!bound_program_id_ || *bound_program_id_ == impl.get_id(), "Multicast family is bound to another Program");
-
-    std::vector<SemaphoreDescriptor> existing;
-    existing.reserve(impl.semaphores().size());
-    for (const auto& sem : impl.semaphores()) {
-        existing.push_back(
-            {.id = sem.id(),
-             .core_type = sem.core_type(),
-             .core_ranges = sem.core_range_set(),
-             .initial_value = sem.initial_value()});
-    }
-    if (bound_program_id_) {
-        validate_semaphores_present_and_zeroed_(existing, program_semaphore_ids_);
+    TT_FATAL(!program.is_compiled(), "Cannot bind multicast semaphores to a compiled Program");
+    // Compare opaque identities only: this preserves binding across Program moves without
+    // including ProgramImpl or inspecting its resources.
+    const auto* identity = &program.impl();
+    TT_FATAL(!bound_program_ || bound_program_ == identity, "Multicast family is bound to another Program");
+    if (bound_program_) {
         return;
     }
 
-    const auto ids = resolve_semaphore_ids_(existing);
-    if (!cfg_.sem_ids) {
-        // Check every role before the first insertion; validation cannot leave a partial channel.
-        for (uint32_t role = 0; role < required_semaphores_(); ++role) {
-            impl.validate_semaphore_id(participating_, ids[role], tt::CoreType::WORKER);
+    std::array<uint32_t, 3> ids{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
+    const auto count = required_semaphores_();
+    if (cfg_.sem_ids) {
+        // Existing resources belong to the caller; the public Program API does not expose
+        // their placement or initial values. Validate the IDs without recreating them.
+        TT_FATAL(cfg_.sem_ids->size() == count, "Adopt exactly the required multicast semaphore roles");
+        for (uint32_t role = 0; role < count; ++role) {
+            ids[role] = (*cfg_.sem_ids)[role];
+            TT_FATAL(ids[role] < NUM_SEMAPHORES, "No valid multicast semaphore slot available");
+            TT_FATAL(
+                std::find(ids.begin(), ids.begin() + role, ids[role]) == ids.begin() + role,
+                "Multicast semaphore roles must use distinct IDs");
         }
-        for (uint32_t role = 0; role < required_semaphores_(); ++role) {
-            impl.add_semaphore(participating_, ids[role], 0, tt::CoreType::WORKER);
+    } else {
+        if (cfg_.base_sem_id) {
+            TT_FATAL(*cfg_.base_sem_id <= NUM_SEMAPHORES - count, "Multicast semaphore base exceeds available slots");
+        }
+        for (uint32_t role = 0; role < count; ++role) {
+            ids[role] = CreateSemaphore(program, participating_, 0);
+            if (cfg_.base_sem_id) {
+                TT_FATAL(
+                    ids[role] == *cfg_.base_sem_id + role,
+                    "Expected multicast semaphore id {}, got {}",
+                    *cfg_.base_sem_id + role,
+                    ids[role]);
+            }
         }
     }
     program_semaphore_ids_ = ids;
-    bound_program_id_ = impl.get_id();
+    bound_program_ = identity;
 }
 
 void Mcast1D::append_semaphores(Program& program) { family_->append_semaphores(program); }

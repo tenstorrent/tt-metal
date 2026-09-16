@@ -13,7 +13,7 @@ tile. The sender may sit inside the rectangle or outside it.
 
 The point of the op is the mcast plumbing: one McastFamily.attach() call writes the semaphores,
 bindings, named CT args and per-core varargs into the spec, and the kernel reads them back with
-MCAST_SPEC_ARGS(row). Neither side spells a CT or RT offset -- and the SAME reader kernel serves both
+MCAST_ARGS(row). Neither side spells a CT or RT offset -- and the SAME reader kernel serves both
 topologies using the metadata and per-core roles emitted by native attachment.
 """
 
@@ -141,7 +141,7 @@ def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=N
     if sender.x >= grid_size.x or sender.y >= grid_size.y:
         raise NotImplementedError(f"sender ({sender.x},{sender.y}) is outside device grid {grid_size.x}x{grid_size.y}")
 
-    # The kernel spells MCAST_SPEC_ARGS(row), so the prefix stays "row" for the 2D family too: the macro
+    # The kernel spells MCAST_ARGS(row), so the prefix stays "row" for the 2D family too: the macro
     # names a family, not a topology.
     mcast = ttnn.McastFamily(device, ttnn.McastConfig(noc=ttnn.NOC.NOC_0))
     mcast.add_group(rect, [sender])
