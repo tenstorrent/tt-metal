@@ -34,6 +34,28 @@ def _skip_branches_needing_layernorm_descriptors(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _skip_branches_needing_matmul_descriptors(monkeypatch):
+    """Skip tests whose matmul branch selects a factory that has migrated to Metal 2.0.
+
+    A matmul factory that no longer produces a ``ProgramDescriptor`` is not bound to Python at all,
+    so the call to ``matmul_select_program_factory`` raises a ``TypeError`` before the branch ever
+    asks for a descriptor.
+    """
+    select_program_factory = ttnn.matmul_select_program_factory
+
+    def _select(*args, **kwargs):
+        try:
+            return select_program_factory(*args, **kwargs)
+        except TypeError as exc:
+            # Only the unregistered-alternative conversion failure; anything else is a real error.
+            if "Unable to convert function return value" not in str(exc):
+                raise
+            pytest.skip("the selected matmul factory produces a ProgramSpec; a fusion branch needs a ProgramDescriptor")
+
+    monkeypatch.setattr(ttnn, "matmul_select_program_factory", _select)
+
+
+@pytest.fixture(autouse=True)
 def _enable_parallel_sequential(monkeypatch):
     """Opt this suite in to Sequential/Parallel fusion.
 
