@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_reduce.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK REDUCE
@@ -12,6 +13,7 @@
 
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpose = 0) {
+    SAN_HOOK(unsupported());
     constexpr std::uint32_t unpA_operand_id = 0;
 
     const std::uint32_t unpB_src_format = (std::uint32_t)DataFormat::Float32;
@@ -27,6 +29,7 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t tile_index) {
+    SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;

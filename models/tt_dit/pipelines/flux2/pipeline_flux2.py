@@ -36,6 +36,17 @@ if TYPE_CHECKING:
     from PIL import Image
 
 
+def _release_module_trace(module: object | None) -> None:
+    """Release the trace captured on ``module.forward``, if it has one."""
+    forward = getattr(type(module), "forward", None)
+    tracers = getattr(forward, "_tracers", None)
+    if tracers is None:
+        return
+    tracer = tracers.get(module)
+    if tracer is not None:
+        tracer.release_trace()
+
+
 class Flux2TransformerState:
     def __init__(self) -> None:
         self._tt_embedded_prompt = StateTensor()
@@ -234,7 +245,24 @@ class Flux2Pipeline:
             traced=traced,
         )
 
+    def _release_denoise_trace(self) -> None:
+        """Release the captured denoise trace, if any."""
+        tracer = type(self)._step._tracers.get(self)
+        if tracer is not None:
+            logger.debug("releasing denoise trace: the transformer it captured is being evicted")
+            tracer.release_trace()
+
+    def release_traces(self) -> None:
+        """Release every trace captured by this pipeline or its submodules."""
+        self._release_denoise_trace()
+        _release_module_trace(self._vae_decoder)
+        _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
+
     def _prepare_transformer(self) -> None:
+        # A trace bakes its weights' addresses, so drop the traces this load will evict.
+        if self.dynamic_load and not self.transformer.is_loaded():
+            _release_module_trace(self._vae_decoder)
+            _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
         cache.load_model(
             tt_model=self.transformer,
             get_torch_state_dict=self._torch_transformer.state_dict,
@@ -248,10 +276,16 @@ class Flux2Pipeline:
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_prompt_encoder(self) -> None:
+        encoder = getattr(self._prompt_encoder, "_encoder", None)
+        encoder_is_loaded = getattr(encoder, "is_loaded", None)
+        if self.dynamic_load and encoder_is_loaded is not None and not encoder_is_loaded():
+            self._release_denoise_trace()
         self._prompt_encoder.load_weights()
         ttnn.synchronize_device(self._mesh_device)
 
     def _prepare_vae(self) -> None:
+        if self.dynamic_load and not self._vae_decoder.is_loaded():
+            self._release_denoise_trace()
         cache.load_model(
             tt_model=self._vae_decoder,
             get_torch_state_dict=self._torch_vae.state_dict,
