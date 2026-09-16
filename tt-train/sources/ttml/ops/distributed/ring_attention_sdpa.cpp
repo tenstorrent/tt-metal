@@ -349,13 +349,15 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
             grad_Q_accum = device_zeros_like(query_tensor, ttnn::DataType::FLOAT32);
             grad_K_accum = device_zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
             grad_V_accum = device_zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
-            lse_pad_full = pad_lse_to_intermediates_layout(lse_full);
-            row_scalar_full = pad_lse_to_intermediates_layout(ttml::ttnn_fixed::sum_ttnn(
-                ttnn::multiply(
-                    ttnn::typecast(grad_output, ttnn::DataType::FLOAT32),
-                    ttnn::typecast(attn_output, ttnn::DataType::FLOAT32)),
-                /* dim */ 3,
-                /* keep_dim */ true));
+            // The cyclic kernels read one Float32 tile per 32 rows and take
+            // the statistic from its column 0, which is the tiled layout of a
+            // (B, H, S, 1) tensor as it is: no padding to 32 columns. D's
+            // product is formed in Float32 by the multiply itself (bf16 by
+            // bf16 is exact there), which saves the two typecasts. Nine
+            // dispatches of setup became five.
+            lse_pad_full = lse_full;
+            row_scalar_full = ttml::ttnn_fixed::sum_ttnn(
+                ttnn::multiply(grad_output, attn_output, ttnn::DataType::FLOAT32), /* dim */ 3, /* keep_dim */ true);
         }
         profile.mark("setup (accumulators, D)");
 
@@ -693,7 +695,9 @@ autograd::TensorPtr ring_attention_sdpa(
         // u = rowsum(dO * O_global) is the global softmax-backward correction. Per-chunk
         // contributions then sum to the exact dQ/dK/dV. Feeding per-chunk O/lse here would
         // bias dQ/dK (per-chunk u instead of global) — only dV would come out right.
-        ttnn::Tensor global_intermediates = pad_lse_to_intermediates_layout(final_lse);
+        // Padded for the two-pass kernels; the cyclic ones take the (B, H, S, 1)
+        // tensor as it is (see the zigzag path).
+        ttnn::Tensor global_intermediates = cyclic ? final_lse : pad_lse_to_intermediates_layout(final_lse);
 
         // The cyclic backward needs D = rowsum(dO . O), which the two-pass
         // backward computes for itself inside its dQ pass, once per ring step.
@@ -702,12 +706,8 @@ autograd::TensorPtr ring_attention_sdpa(
         // subtracted from dP, so a rounding here lands directly in dS.
         ttnn::Tensor row_scalar;
         if (cyclic) {
-            row_scalar = pad_lse_to_intermediates_layout(ttml::ttnn_fixed::sum_ttnn(
-                ttnn::multiply(
-                    ttnn::typecast(grad_output, ttnn::DataType::FLOAT32),
-                    ttnn::typecast(attn_output, ttnn::DataType::FLOAT32)),
-                /* dim */ 3,
-                /* keep_dim */ true));
+            row_scalar = ttml::ttnn_fixed::sum_ttnn(
+                ttnn::multiply(grad_output, attn_output, ttnn::DataType::FLOAT32), /* dim */ 3, /* keep_dim */ true);
         }
 
         profile.mark("setup (accumulators, D)");
