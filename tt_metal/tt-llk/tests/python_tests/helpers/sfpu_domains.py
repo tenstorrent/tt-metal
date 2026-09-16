@@ -19,7 +19,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
-from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
+import torch
+
+from .format_config import MX_FORMAT_MAX_NORMAL, MX_FORMAT_MIN_NORMAL, DataFormat
 from .llk_params import MathOperation
 from .sfpu_dispatch_constants import (
     CLAMP_MAX,
@@ -82,9 +84,16 @@ class OperandSpecs:
 # Picking which format bounds the domain
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Largest finite magnitude each format can hold. Only formats with a narrower
-# exponent field than bfloat16 need an entry; every other format shares
-# bfloat16's ceiling and is therefore never the binding constraint.
+# Largest finite magnitude each format can *bound a domain* with. Only formats with a
+# narrower exponent field than bfloat16 need an entry; every other format shares bfloat16's
+# ceiling and is therefore never the binding constraint.
+#
+# Float32 is deliberately absent even though its ceiling is higher: the fallback makes it tie
+# with Float16_b, and narrowest_range_format() resolves that tie to its first argument, which
+# is the *stimulus* format. That is what keeps a probe on a (Float32 -> Float16_b) pipeline
+# spaced by an fp32 ULP rather than a bfloat16 one -- the output's narrower mantissa bounds
+# the result, not how finely the input can be dialled. format_max_magnitude() below is the
+# other question, "what can this format hold", and there fp32's own ceiling is the answer.
 #
 # The MX rows come from MX_FORMAT_MAX_NORMAL rather than being restated here: MxFp8R is
 # E5M2 (ceiling 57344) and MxFp8P is E4M3 (ceiling 448).
@@ -96,6 +105,42 @@ _FORMAT_MAX_MAGNITUDE: Dict[DataFormat, float] = {
 }
 
 _BF16_MAX_MAGNITUDE = 3.3895314e38
+_FP32_MAX_MAGNITUDE = float(torch.finfo(torch.float32).max)
+
+
+def format_max_magnitude(fmt: DataFormat) -> float:
+    """The largest finite magnitude *fmt* itself can represent.
+
+    _FORMAT_MAX_MAGNITUDE answers the neighbouring question -- which format bounds a domain --
+    and leaves Float32 out on purpose (see its comment). Callers asking what a format *holds*
+    need fp32's real ceiling: cat F probes it, and clip_to_format() must not drop the probe it
+    emits there.
+    """
+    if fmt == DataFormat.Float32:
+        return _FP32_MAX_MAGNITUDE
+    return _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE)
+
+
+def _has_own_ceiling(fmt: DataFormat) -> bool:
+    """Does *fmt* carry its own ceiling, or borrow bfloat16's from the fallback?
+
+    The domain-bounding table's rows do, and so does Float32 -- the one format
+    format_max_magnitude() adds on top of it.
+    """
+    return fmt in _FORMAT_MAX_MAGNITUDE or fmt == DataFormat.Float32
+
+
+# Smallest positive *normal* of each format: the other end of the exponent range from
+# _FORMAT_MAX_MAGNITUDE. From torch.finfo / the MX tables, because _FTZ_THRESHOLD comes from
+# the same call and a probe on the wrong side of the flush-to-zero cliff tests nothing.
+_FORMAT_MIN_NORMAL: Dict[DataFormat, float] = {
+    **MX_FORMAT_MIN_NORMAL,  # MxFp8R 2^-14, MxFp8P 2^-6, MxFp4 1.0
+    DataFormat.Float32: float(torch.finfo(torch.float32).tiny),
+    DataFormat.Float16_b: float(torch.finfo(torch.bfloat16).tiny),
+    DataFormat.Float16: float(torch.finfo(torch.float16).tiny),
+    # Plain E4M3 with no per-block scale, so the same 2^-6 as MxFp8P.
+    DataFormat.Fp8_e4m3: MX_FORMAT_MIN_NORMAL[DataFormat.MxFp8P],
+}
 
 
 def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
@@ -113,6 +158,21 @@ def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
         candidates,
         key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
     )
+
+
+def narrowest_ceiling_format(*formats: Optional[DataFormat]) -> DataFormat:
+    """Return whichever of *formats* has the lowest ceiling, fp32's own ceiling included.
+
+    narrowest_range_format()'s sibling, and they differ on exactly one pair. There the
+    (Float32, Float16_b) tie resolves to the stimulus format, which is what spaces a probe by
+    an fp32 ULP on that pipeline. Here it resolves to Float16_b, because a magnitude probe has
+    to survive *both* legs: 3.40e38 into a bfloat16 output is a value the pack cannot hold,
+    which is the saturation sweep's subject rather than cat F's.
+    """
+    candidates = [fmt for fmt in formats if fmt is not None]
+    if not candidates:
+        raise ValueError("narrowest_ceiling_format() requires at least one format")
+    return min(candidates, key=format_max_magnitude)
 
 
 def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
@@ -1559,6 +1619,12 @@ def boundary_probes(
     if singularities:
         for point, side in singularities:
             probes.append(point)
+            if point == 0.0:
+                # Cat G. A zero pole is two probes: 1/+0 is +inf and 1/-0 is -inf, and the
+                # same split runs through div, fmod, remainder, xlogy, atan2, addcdiv and
+                # snake_beta. Emitted unconditionally -- edge_values() drops it on the
+                # pipelines that flatten a -0.0, which this function has no dest_acc to judge.
+                probes.append(math.copysign(0.0, -math.copysign(1.0, point)))
             if include_undefined or side in (
                 SingularitySide.BOTH,
                 SingularitySide.BELOW,
@@ -1658,6 +1724,68 @@ def format_specials(fmt: DataFormat) -> Tuple[float, ...]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Cat F — finite magnitude extremes
+#
+# format_specials()' counterpart at the other end. The widest registered domain is +/-1000, so
+# the input space jumps from ~10 straight to infinity, with nothing in the thirty-odd decades
+# between or in the band just above zero the goldens model flush-to-zero for. Its own axis, not
+# a flag on `specials`: a subnormal survives an unpack that destroys a NaN.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def format_extremes(fmt: DataFormat) -> Tuple[float, ...]:
+    """Finite magnitude extremes of *fmt*, both signs: the ceiling, the largest step below it,
+    the smallest normal, and half of that.
+
+    Both top magnitudes are rounded onto the *ceiling's* format grid: the bfloat16 fallback
+    literal sits a hair above the true maximum, and an fp32-sized step below a bfloat16 ceiling
+    truncates back onto it. Raises for integer and block-float formats.
+    """
+    if fmt.is_integer():
+        raise ValueError(
+            f"{fmt.name} is an integer format: its extremes are cat C, from "
+            "integer_specials(), not cat F"
+        )
+    if fmt not in _FORMAT_MIN_NORMAL:
+        raise ValueError(
+            f"{fmt.name} has no per-element smallest normal (see _FORMAT_MIN_NORMAL): its "
+            "small end is set by the exponent shared across a block, so a cat-F probe would "
+            "be wrong for every block but one"
+        )
+    ceiling_fmt = fmt if _has_own_ceiling(fmt) else DataFormat.Float16_b
+    ceiling = _truncate_mantissa(format_max_magnitude(fmt), ceiling_fmt)
+    below_ceiling = _truncate_mantissa(
+        ceiling - format_ulp(ceiling_fmt, ceiling), ceiling_fmt
+    )
+    min_normal = _FORMAT_MIN_NORMAL[fmt]
+    magnitudes = (ceiling, below_ceiling, min_normal, min_normal / 2.0)
+    return tuple(-m for m in magnitudes) + magnitudes
+
+
+def extremes_safe(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: Union[bool, Enum],
+) -> bool:
+    """May format_extremes() be injected on this (input, output, dest_acc) triple?
+
+    Deliberately **not** specials_safe(): its breakers are about +/-inf and NaN surviving an
+    unpack, and every pipeline that carries 1.0 carries 3.39e38 and 2^-126. What this excludes
+    is block-float and MX on either leg, one exponent across 16 elements against a probe list
+    spanning thirty-odd decades. ``dest_acc`` does not change the answer today.
+    """
+    _dest_acc_flag(dest_acc)
+
+    if input_format.is_integer() or output_format.is_integer():
+        return False
+    if input_format.is_block_float() or input_format.is_mx_format():
+        return False
+    if output_format.is_block_float() or output_format.is_mx_format():
+        return False
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Op-specific discrete edges
 #
 # Only points that are not already a domain boundary: piecewise knees, comparison
@@ -1694,6 +1822,35 @@ _ZERO_EDGE_OPS = (
     MathOperation.Xielu,  # _xielu switches alpha_p/alpha_n at 0
 )
 
+# Ops smooth at zero whose value there is known and exactly representable, so a fit off by a
+# constant at the origin is visible there and nowhere else -- the registered domains are
+# symmetric uniforms where a random draw never lands on exactly 0.0. Measured on a Blackhole
+# p150: all fourteen agree, two with a constant error this probe now holds in place
+# (erfc(+0) = 0.99612 against erfc(-0) = 1.00388, tanh_derivative(+/-0) = 0.99920 on a 32-bit
+# dest). The gamma family excludes itself: poles at zero and domains starting above it.
+# fmt: off
+_EXACT_AT_ZERO_OPS = (
+    MathOperation.Erf, MathOperation.Erfc, MathOperation.Gelu,
+    MathOperation.GeluDerivative, MathOperation.Sigmoid, MathOperation.SigmoidAppx,
+    MathOperation.Tanh, MathOperation.TanhDerivative, MathOperation.TanhDerivativeLut,
+    MathOperation.Expm1Cw, MathOperation.I1, MathOperation.Rpow,
+    MathOperation.UnaryPower, MathOperation.CastFp32ToFp16a,
+)
+# fmt: on
+
+# The integer binary ops whose answer at zero is a knee: gcd and lcm have identities there, 0
+# annihilates the multiply and is neutral for max/min, and 1 comes with it as the
+# multiplicative identity. Here rather than in the test, so an op joins by gaining a table
+# entry and cat D derives from the same place. The divisor ops are absent -- a zero divisor is
+# undefined for them (_INT_ZERO_UNDEFINED_DIVISOR) and a zero dividend is ordinary.
+# fmt: off
+_INT_ZERO_KNEE_OPS = (
+    MathOperation.SfpuGcd, MathOperation.SfpuLcm, MathOperation.SfpuMulInt32,
+    MathOperation.SfpuMaxInt32, MathOperation.SfpuMinInt32,
+    MathOperation.SfpuMaxUint32, MathOperation.SfpuMinUint32,
+)
+# fmt: on
+
 _COMPARISON_EDGE_OPS = (
     MathOperation.UnaryGt,
     MathOperation.UnaryLt,
@@ -1705,6 +1862,8 @@ _COMPARISON_EDGE_OPS = (
 
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
+    **{op: (0.0, -0.0) for op in _EXACT_AT_ZERO_OPS},
+    **{op: (0.0, 1.0) for op in _INT_ZERO_KNEE_OPS},
     # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(), which is what consumes these.
     #
     # UnaryEq, UnaryNe and LogicalNot below have no consumer today, and are listed anyway.
@@ -1979,9 +2138,65 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 # * Only a 32-bit input at dest_acc=Yes delivers a -0.0, which is what scopes Sqrt's and
 #   Rsqrt's xfails to unpack-to-dest.
 #
-# Log stays out: the kernel clamps a non-finite input to the format maximum and logs that, so
-# every special comes back finite where the golden gives inf or NaN. Kernel behaviour with no
-# ISA ruling, so the right outcome needs an owner -- as does RsqrtCompat(0).
+# One record here went stale: this comment used to say Log clamps a non-finite input to the
+# format maximum and logs that. It does not any more (Blackhole p150), so Log and LogWithBase
+# are enrolled below.
+SPECIALS_READY_OPS = SPECIALS_READY_OPS | frozenset(
+    {
+        MathOperation.Log,  # log(+inf) = +inf, log(-inf) = NaN, log(+/-0) = -inf
+        MathOperation.LogWithBase,  # Log scaled by a compile-time multiply
+    }
+)
+
+# The other half of the unary partition: the ops measured to diverge, so nothing records cat B
+# as off for them by omission. Driven on a Blackhole p150 over the full specials set on every
+# specials-safe cell; five causes, not twenty-five, which is what the grouping records.
+_UNARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
+    {
+        # (1) A reciprocal composition returning +0 for 1/NaN. Identical to the divergence
+        # already recorded against unary Reciprocal, through the same SFPARECIP.
+        MathOperation.Rdiv,
+        MathOperation.ReciprocalCompat,
+        MathOperation.RsqrtCompat,
+        MathOperation.Sigmoid,
+        MathOperation.TanhDerivative,
+        # (2) A LUT or polynomial fit evaluated at a non-finite. SFPLUTFP32 documents no
+        # NaN/inf handling, so each returns whatever its fit produces from a saturated
+        # argument -- Erf(NaN) = 1.0, Gelu(-inf) = 0, TanhDerivativeLut(+/-inf) = +inf,
+        # Digamma(NaN) = 89. An LLK decision, not an ISA one.
+        MathOperation.Digamma,
+        MathOperation.Erf,
+        MathOperation.Erfc,
+        MathOperation.Gelu,
+        MathOperation.GeluDerivative,
+        MathOperation.Lgamma,
+        MathOperation.Polygamma,
+        MathOperation.SigmoidAppx,
+        MathOperation.Tanh,
+        MathOperation.TanhDerivativeLut,
+        # (3) Saturates a non-finite input to +/-1.1547668e37, which _i1_bessel's own comment
+        # already records.
+        MathOperation.I1,
+        # (4) The *golden* is the wrong party: both route a NaN through a finite-input
+        # comparison that is false for it, landing in the zero branch (Sign -> 0,
+        # Heaviside -> 0.5). The kernel answers 1.0, the SFPU total order's reading that let
+        # UnaryGt, Clamp, ReluMax and Hardsigmoid enrol. Needs a golden change, not a
+        # measurement; their separate SFPSETCC -0.0 divergence survives the fix.
+        MathOperation.Sign,
+        MathOperation.Heaviside,
+        # (5) Each its own question, and none a composition the groups above cover.
+        MathOperation.CastFp32ToFp16a,  # cast(NaN) reaches L1 as +inf on fp32 end-to-end
+        MathOperation.Expm1Cw,  # expm1_cw(+inf) = NaN; the subtraction of 1, not the exp
+        MathOperation.Erfinv,  # erfinv(-inf) = -inf against the golden's +inf
+        MathOperation.Frac,  # frac(-inf) = +inf; kernel, golden and IEEE all disagree
+        MathOperation.Rpow,  # rpow(-inf) = +inf; the exp(x ln b) sign is not carried
+        MathOperation.UnaryPower,  # power(NaN) = +inf, as SfpuElwpow's exp(b ln a) does
+    }
+)
+
+assert not (
+    SPECIALS_READY_OPS & _UNARY_SPECIALS_NOT_READY
+), "an op cannot be both enrolled in cat B and recorded as not ready for it"
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
@@ -2055,6 +2270,33 @@ def negative_zero_delivered(
     it never received.
 
     dest_acc=None means the caller does not know the pipeline, so keep the probe.
+    """
+    if dest_acc is None:
+        return True
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
+def _is_subnormal(value: float, fmt: DataFormat) -> bool:
+    """Is *value* a non-zero magnitude below *fmt*'s smallest normal?
+
+    Block floats answer False: their small end is the shared exponent, not a per-value fact.
+    """
+    min_normal = _FORMAT_MIN_NORMAL.get(fmt)
+    if min_normal is None:
+        return False
+    return value != 0.0 and abs(value) < min_normal
+
+
+def subnormal_delivered(
+    input_format: DataFormat, dest_acc: Optional[Union[bool, Enum]]
+) -> bool:
+    """Does a subnormal written to L1 still have a non-zero magnitude when the SFPU reads it?
+
+    Only on the unpack-to-dest path -- a 32-bit input at dest_acc=Yes; everywhere else it goes
+    through SrcA and the datacopy, which normalises. Measured on a Blackhole p150 with
+    +/-2^-127 through Ceil, Floor, Sign and Signbit, the four cat-F ops whose answer at a
+    subnormal differs from their answer at zero: everywhere but Float32->Float32 at
+    dest_acc=Yes all four answer as though the input were +0.0. False drops the probe.
     """
     if dest_acc is None:
         return True
@@ -2239,15 +2481,265 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
         # operand; needs a per-cell read-back to say which is wrong before either is touched.
         MathOperation.SfpuIsclose,
-        # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
-        # ignores it, so a cat-B probe in B asserts nothing.
+        # Operand B is *derived*, not free. This entry used to read "effectively unary -- the
+        # kernel reads B only on its x > 4 branch", which was true of the *test*: the sweep
+        # stopped at x = 3.9. It runs now, and this is still not a candidate *here* -- cat B in
+        # this sweep is a product of two independent lists while the contract is
+        # in1 == exp(-in0). Driven by test_eltwise_binary_sfpu_logsigmoid_specials instead.
         MathOperation.SfpuLogsigmoid,
+        # Not element-wise: add_top_row reduces one tile's first row across the other operand,
+        # and BinarySFPUGolden returns for it *before* the Dest and pack modelling, so a
+        # non-finite would be judged against a reference that models neither step.
+        MathOperation.SfpuAddTopRow,
     }
 )
 
 assert not (
     set(BINARY_SPECIALS_READY_OPS) & set(_BINARY_SPECIALS_NOT_READY)
 ), "an op cannot be both enrolled in cat B and recorded as not ready for it"
+
+
+# Cat B, ternary family. Two gates, as everywhere: a *_READY_OPS entry says the op's
+# *golden* defines an answer at a non-finite operand, specials_safe() says the *pipeline*
+# delivers one intact. Measured host-side over all 5x5x5 special triples, then on a
+# Blackhole p150 driving each op's specials into A, B and C separately. The goldens had to
+# be fixed first -- neither modelled the store into Dest or the pack out of it, so the
+# packer's substituted infinity read as the kernel having computed one, 10 of the 16
+# failing cells.
+
+# The ternary family, which the cat-B partition below is asked about. Listed rather than
+# derived from _OP_DOMAIN_REGISTRY: no ternary op has a registry entry, so a derivation would
+# give the empty set and the totality check would pass by asking about nothing.
+_SFPU_TERNARY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.SfpuAddcmul,
+        MathOperation.SfpuAddcdiv,
+        MathOperation.SfpuLerp,
+        MathOperation.SfpuSnakeBeta,
+        MathOperation.TTNNWhere,
+    }
+)
+
+TERNARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        # Plain SFPMAD arithmetic, which the ISA specifies as IEEE for a non-finite input:
+        # inf*0 = NaN, inf+(-inf) = NaN, NaN propagates. Green on both safe cells for all
+        # three operands.
+        MathOperation.SfpuAddcmul,  # a + value*b*c
+        MathOperation.SfpuLerp,  # a + c*(b - a); inf - inf from an ordinary interpolation
+        # Enrolled on the strength of operands A and B, which agree everywhere, and of
+        # c = +/-inf, where the quotient is +/-0 and the result is a. c = NaN is a genuine
+        # kernel divergence -- the reciprocal returns +0 instead of propagating, exactly as
+        # unary Reciprocal does -- and is xfailed per cell rather than papered over.
+        MathOperation.SfpuAddcdiv,  # a + value*b/c
+        MathOperation.SfpuSnakeBeta,  # a + sin(b*a)^2/c; also diverges at an infinite sin arg
+        # An element-wise select, so every special is returned verbatim from whichever operand
+        # was chosen and there is no arithmetic to specify. Green once WhereGolden modelled the
+        # pack's NaN substitution, except a -0.0 *condition* on the unpack-to-dest path, which
+        # carries the same SFPSETCC caveat that scopes Sign and Heaviside.
+        MathOperation.TTNNWhere,
+    }
+)
+
+# Empty by measurement, not by omission. Kept so the totality check has both halves.
+_TERNARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset()
+
+assert not (
+    TERNARY_SPECIALS_READY_OPS & _TERNARY_SPECIALS_NOT_READY
+), "an op cannot be both enrolled in cat B and recorded as not ready for it"
+assert (
+    TERNARY_SPECIALS_READY_OPS | _TERNARY_SPECIALS_NOT_READY
+) == _SFPU_TERNARY_OPS, (
+    "every ternary op needs a cat-B verdict, and only ternary ops have one"
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cat F enrolment
+#
+# Opt-in per op: driving exp(3.39e38) on a golden that does not model saturation gives a wall
+# of failures with one root cause. An entry claims the ceiling, its neighbour and the smallest
+# normal on every cell, and the subnormal on the one cell that delivers one.
+#
+# Tranche 1 is the ops that cannot overflow, so it says nothing about saturation. Measured on a
+# Blackhole p150 in two passes: the first failed 12 of 70 cells across Ceil, Floor, Sign and
+# Signbit, every failing lane the +/-2^-127 subnormal on every cell but Float32->Float32 at
+# dest_acc=Yes -- one finding, not four, recorded as subnormal_delivered(). Tranche 2 made the
+# class total: the 74 remaining sweep-reachable float ops, 55 agreeing and 19 in
+# _EXTREMES_NOT_READY. What the 55 assert is narrower than it looks -- for an op whose domain
+# is a *definedness* bound the answer at 3.39e38 is NaN on both sides.
+# ─────────────────────────────────────────────────────────────────────────────
+
+EXTREMES_READY_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        # Tranche 1: closed over the format, so the probe asks only whether the pipeline
+        # delivered the datum.
+        MathOperation.Abs,
+        MathOperation.Neg,
+        MathOperation.Identity,  # pass-through: measures the pipeline and no arithmetic
+        MathOperation.Fill,  # read narrowly: an extreme input must not corrupt the fill
+        # Sign and Signbit read the sign bit, so they are two of the four instruments that
+        # measured subnormal_delivered(); green once the probe stopped being sent where the
+        # datacopy flattens it.
+        MathOperation.Sign,
+        MathOperation.Signbit,
+        # Above 2**mantissa every float is already an integer, so at the ceiling and its
+        # neighbour all four must be the identity -- an assertion nothing else here makes.
+        # Ceil and Floor were the other two subnormal_delivered() instruments.
+        MathOperation.Floor,
+        MathOperation.Ceil,
+        MathOperation.Trunc,
+        MathOperation.Round,
+        # x against UNARY_COMP_THRESHOLD: an extreme operand is an ordinary one on the far
+        # side, and 0.0/1.0 is representable everywhere. UnaryEq and UnaryNe are outside
+        # _OP_DOMAIN_REGISTRY and never reach the sweep -- see the note above _OP_EDGE_POINTS.
+        MathOperation.UnaryGt,
+        MathOperation.UnaryLt,
+        MathOperation.UnaryGe,
+        MathOperation.UnaryLe,
+        # Tranche 2: measured at format_extremes() on both specials-safe cells and agreed with
+        # its golden at every probe.
+        MathOperation.Acos,
+        MathOperation.Acosh,
+        MathOperation.Add1,
+        MathOperation.Asin,
+        MathOperation.Asinh,
+        MathOperation.Atan,
+        MathOperation.Atanh,
+        MathOperation.CastFp32ToFp16a,
+        MathOperation.Cbrt,
+        MathOperation.Celu,
+        MathOperation.Clamp,
+        MathOperation.Elu,
+        MathOperation.EqualZero,
+        MathOperation.Erf,
+        MathOperation.Erfc,
+        MathOperation.Fmod,
+        MathOperation.Frac,
+        MathOperation.Gelu,
+        MathOperation.GeluAppx,
+        MathOperation.GeluDerivative,
+        MathOperation.GeluTanh,
+        MathOperation.GreaterThanEqualZero,
+        MathOperation.GreaterThanZero,
+        MathOperation.Hardmish,
+        MathOperation.Hardshrink,
+        MathOperation.Hardsigmoid,
+        MathOperation.Hardtanh,
+        MathOperation.Heaviside,
+        MathOperation.I0,
+        MathOperation.LessThanEqualZero,
+        MathOperation.LessThanZero,
+        MathOperation.Log1p,
+        MathOperation.Lrelu,
+        MathOperation.Mish,
+        MathOperation.NotEqualZero,
+        MathOperation.Prelu,
+        MathOperation.Rdiv,
+        MathOperation.ReluMax,
+        MathOperation.ReluMin,
+        MathOperation.Selu,
+        MathOperation.Sigmoid,
+        MathOperation.SigmoidAppx,
+        MathOperation.Silu,
+        MathOperation.Softplus,
+        MathOperation.Softshrink,
+        MathOperation.Sqrt,
+        MathOperation.Tanh,
+        MathOperation.TanhDerivative,
+        MathOperation.TanhDerivativeLut,
+        MathOperation.Tanhshrink,
+        MathOperation.Threshold,
+        MathOperation.UnaryMax,
+        MathOperation.UnaryMin,
+        MathOperation.UnaryPower,
+        MathOperation.Xielu,
+    }
+)
+
+# The 19 that diverge, in five groups. Each group says what was measured; none claims the op
+# has been investigated on its own.
+_EXTREMES_NOT_READY: FrozenSet[MathOperation] = frozenset(
+    {
+        # (1) Trig at a magnitude no range reduction reaches: sin/cos/tan return +/-inf or NaN
+        # at 3.39e38 against a bounded golden. Whether the kernel should reduce that far is an
+        # open contract question.
+        MathOperation.Sin,
+        MathOperation.Cos,
+        MathOperation.Tan,
+        # (2) The op's arithmetic flushes a subnormal *input* where the golden does not.
+        # Measured at 2**-127: log -inf against -88.03, reciprocal +inf against 1.70e38,
+        # remainder 0 against 2. The goldens model flush-to-zero on the *result* only, so
+        # closing this is a change to every golden, not a probe.
+        MathOperation.Log,
+        MathOperation.LogWithBase,
+        MathOperation.Reciprocal,
+        MathOperation.ReciprocalCompat,
+        MathOperation.Rsqrt,
+        MathOperation.Remainder,
+        # (3) The composition overflows or loses the sign at the ceiling: softsign's
+        # denominator overflows so it returns 0 against +/-1; expm1_cw and erfinv return a
+        # wrongly-signed infinity; rpow and sqrt_custom return +inf against 0 and NaN;
+        # rsqrt_compat returns 0 and +inf against NaN.
+        MathOperation.Softsign,
+        MathOperation.Expm1Cw,
+        MathOperation.Erfinv,
+        MathOperation.Rpow,
+        MathOperation.SqrtCustom,
+        MathOperation.RsqrtCompat,
+        # (4) Saturates a non-finite *result* to +/-1.1547668e37, the same constant I1's golden
+        # comment records for a non-finite input.
+        MathOperation.I1,
+        # (5) The gamma family, for the reason recorded above _OP_SINGULARITIES for their
+        # poles: fits valid only well inside a positive domain.
+        MathOperation.Digamma,
+        MathOperation.Lgamma,
+        MathOperation.Polygamma,
+    }
+)
+
+assert not (
+    EXTREMES_READY_OPS & _EXTREMES_NOT_READY
+), "an op cannot be both enrolled in cat F and recorded as not ready for it"
+
+
+def _deliverable_extremes(
+    range_fmt: DataFormat,
+    input_format: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]],
+) -> List[float]:
+    """format_extremes(*range_fmt*) minus the probes this pipeline cannot deliver: today the
+    subnormal alone. Keyed off *input_format*, not *range_fmt*, delivery being about how the
+    datum reaches the LREG."""
+    return [
+        v
+        for v in format_extremes(range_fmt)
+        if not _is_subnormal(v, range_fmt)
+        or subnormal_delivered(input_format, dest_acc)
+    ]
+
+
+def extreme_values(
+    input_format: DataFormat,
+    output_format: Optional[DataFormat] = None,
+    dest_acc: Optional[Union[bool, Enum]] = None,
+) -> List[float]:
+    """The cat-F probe for this pipeline, and nothing else.
+
+    Separate from edge_values() because a sweep wants one failure class per variant. No *op*
+    argument: the ceiling and the subnormal band are properties of the pipeline, and which ops
+    may be *driven* at them is EXTREMES_READY_OPS' question.
+
+    Bounded by narrowest_ceiling_format() rather than narrowest_range_format(): every probe
+    here is a magnitude that has to survive both legs of the pipeline, and the two disagree
+    on (Float32 -> Float16_b) -- see that function."""
+    range_fmt = narrowest_ceiling_format(input_format, output_format)
+    return _dedup_representable(
+        clip_to_format(
+            _deliverable_extremes(range_fmt, input_format, dest_acc), range_fmt
+        ),
+        range_fmt,
+    )
 
 
 def generated_nan_sign_is_asserted(
@@ -2275,6 +2767,60 @@ def generated_nan_sign_is_asserted(
     return on_wormhole and not nan_survives_to_l1(input_format, output_format, dest_acc)
 
 
+def signed_zero_pole_cells(
+    formats: List["InputOutputFormat"],  # noqa: F821 - test-side type, duck-typed
+    dest_accs,
+) -> Tuple[Tuple[DataFormat, DataFormat, object], ...]:
+    """The cells of *formats* x *dest_accs* where a -0.0 driven into a pole reaches the LREG.
+
+    The cat-A twin of the cat-B gate above and, unlike it, takes no specials_safe(): the -0.0
+    at a registered pole comes from boundary_probes(), so delivery alone decides it."""
+    return tuple(
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in formats
+        for dest_acc in dest_accs
+        if negative_zero_delivered(fmt.input_format, dest_acc)
+    )
+
+
+# Mixed-magnitude block-float blocks. Bfp8_b, Bfp4_b and Bfp2_b share one exponent per
+# BLOCK_SPREAD_ELEMENTS-element block, so the stimulus that exercises the format is a
+# block of one large element and fifteen small ones -- every other spec here is a
+# narrow-range uniform where the shared exponent never bites.
+
+BLOCK_SPREAD_ELEMENTS = 16
+
+# Binary decades below the block's largest element: 4 keeps every element inside Bfp8_b's 7
+# magnitude bits and is the control, 12 flushes the tail, 24 flushes most of it.
+BLOCK_SPREAD_DECADES = (4, 12, 24)
+
+# The largest element of every block. 1.0 rather than an op's domain ceiling: exact in every
+# format, and it keeps the whole spread inside the domain of the ops the sweeps select.
+BLOCK_SPREAD_HIGH = 1.0
+
+
+def block_spread_spec(decades: int, seed: int = 0) -> StimuliSpec:
+    """One element at BLOCK_SPREAD_HIGH per block, the rest log-spaced *decades* below it.
+
+    Log-spaced, not linear: what the shared exponent does to an element depends on its distance
+    from the block maximum in *binades*. *seed* only makes a multi-operand caller's specs
+    distinguishable objects; the pattern is identical across them."""
+
+    def face(size, dtype, generator):
+        steps = torch.tensor(
+            [0.0]
+            + [
+                -(decades * i) / (BLOCK_SPREAD_ELEMENTS - 1)
+                for i in range(1, BLOCK_SPREAD_ELEMENTS)
+            ],
+            dtype=torch.float32,
+        )
+        block = BLOCK_SPREAD_HIGH * torch.pow(2.0, steps)
+        return block.repeat(-(-size // BLOCK_SPREAD_ELEMENTS))[:size].to(dtype)
+
+    return StimuliSpec(distribution=face, seed=seed)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # edge_spec — the one builder the per-family edge tests call
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2286,7 +2832,7 @@ def clip_to_format(values: List[float], fmt: DataFormat) -> List[float]:
     Non-finite values are the *point* of a cat-B probe, so they are never clipped — the
     decision about whether they belong at all is specials_safe()'s, made before this.
     """
-    limit = _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE)
+    limit = format_max_magnitude(fmt)
     return [v for v in values if not math.isfinite(v) or abs(v) <= limit]
 
 
@@ -2308,6 +2854,10 @@ def edge_values(
         specials_safe(input_format, output_format, dest_acc); it is off by default
         because injecting them on the wrong triple is a wall of failures with one root
         cause (see the section above).
+
+    Cat F is not here: a format extreme is a different failure class from a pole or a special,
+    and one tensor carrying both would let a saturation xfail hide an unpack one. It has its
+    own entry point, extreme_values(), and its own sweeps.
 
     Clipped against the *narrowest* format in the pipeline, not the input format: a caller
     that passes a spec to a driver bypasses the driver's own for_op_pipeline() resolution
@@ -2332,27 +2882,20 @@ def edge_values(
     # Cat D, per operand. For A this is _OP_EDGE_POINTS, the op's own knees; a binary op's
     # B-side knees are domain boundaries and come from cat A instead. A *ternary* op's third
     # operand can have knees of its own (lerp's weight), so every operand is asked.
-    edge_points = list(op_edge_points(op, operand))
-    if not range_fmt.is_integer() and not negative_zero_delivered(
-        input_format, dest_acc
-    ):
-        # The same gate the cat-B injection below uses, applied to cat D's zero knees: the
-        # comparison-to-zero ops list -0.0 as a knee, and on the datacopy path it arrives as
-        # +0.0.
-        edge_points = [v for v in edge_points if not _is_negative_zero(v)]
-    vals += edge_points
+    vals += list(op_edge_points(op, operand))
     if specials:
         # Specials are an exponent-range property, so they key off range_fmt: it is what
         # decides integer extremes vs IEEE non-finites, and what clip_to_format honours.
-        injected = list(format_specials(range_fmt))
-        if not range_fmt.is_integer() and not negative_zero_delivered(
-            input_format, dest_acc
-        ):
-            # Drop -0.0 where the datacopy path would hand the kernel +0.0 instead. The
-            # probe keys off input_format, not range_fmt: delivery is a property of how the
-            # datum reaches the LREG, not of the magnitudes the pipeline can represent.
-            injected = [v for v in injected if not _is_negative_zero(v)]
-        vals += injected
+        vals += list(format_specials(range_fmt))
+
+    if not range_fmt.is_integer() and not negative_zero_delivered(
+        input_format, dest_acc
+    ):
+        # One pass over every source, not one per source: -0.0 now arrives from a zero pole
+        # (cat A), the comparison-to-zero knees (cat D) and FLOAT_SPECIALS (cat B), and a
+        # per-source filter is one a fourth source can be added without. On the datacopy path
+        # the LREG holds +0.0, so the probe there blames the kernel for a datum it never got.
+        vals = [v for v in vals if not _is_negative_zero(v)]
     return _dedup_representable(clip_to_format(vals, range_fmt), range_fmt)
 
 
@@ -2372,10 +2915,14 @@ def edge_spec(
     domain: many unary SFPU ops are smooth everywhere, with no knee and no pole, and for
     those an edge sweep has nothing to add beyond cat B.
 
-    ``custom`` places the values at the head of every face and zero-fills the remainder,
-    which is what we want here — a face is far larger than these lists, and 0.0 is itself
-    a useful probe. It is per-face only (generate_full_tensor raises), so the values
-    repeat in every face; ``custom_faces`` is available when faces must differ.
+    ``custom`` with ``cycle=True`` tiles the values across every face instead of writing them
+    at its head with a zero tail. That tail was not free: the median edge list is four values
+    against a 256-element face, so ~98% of the tensor was 0.0, and it drove an unrecorded
+    out-of-domain 0.0 into Acosh, Log and Rsqrt. ``cycle=False`` is still there for a probe
+    that depends on the tail.
+
+    ``custom`` is per-face only (generate_full_tensor raises), so the pattern repeats in every
+    face; ``custom_faces`` is available when faces must differ.
 
     Integer formats: format_specials() returns the integer extremes, but INT_MIN cannot
     be delivered through any spec — CustomStrategy clamps through _get_integer_bounds,
@@ -2399,6 +2946,7 @@ def edge_spec(
             f"{input_format.name}: StimuliSpec.custom clamps INT_MIN to INT_MIN + 1. "
             f"Use a raw src_A_override tensor instead."
         )
+    kwargs.setdefault("cycle", True)
     return StimuliSpec.custom(values=vals, seed=0, **kwargs)
 
 
@@ -2486,3 +3034,60 @@ def edge_pair_values(
     if not a or not b:
         return []
     return [(x, y) for x in a for y in b]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The coverage ratchet
+#
+# Per class of input value, how many ops the stimulus machinery drives that class for.
+#
+# Coverage loss in this suite is silent: drop an op from an enrolment table and nothing fails,
+# the sweep just collects fewer variants. Measured, removing three ops from the cat-F enrolment
+# took 24 device variants out of the unary sweep without one failure.
+#
+# Counts rather than a per-op matrix, which would be a second copy of the tables that goes
+# stale, and every number is asked of the machinery that builds the stimuli. Classes delivered
+# from the test modules are floored there.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The classes this module's own tables can account for, and where each comes from.
+COVERAGE_CLASSES = {
+    "A": "singularities -- _OP_SINGULARITIES, straddled by boundary_probes()",
+    "B": "ieee_specials -- the three *_SPECIALS_READY_OPS gates",
+    "D": "knees -- _OP_EDGE_POINTS / _OP_OPERAND_EDGE_POINTS",
+    "F": "magnitude_extremes -- EXTREMES_READY_OPS",
+    "G": "signed_zero_at_a_pole -- a -0.0 boundary_probes() emits at a registered pole",
+}
+
+
+def _emits_negative_zero_at_a_pole(op: MathOperation) -> bool:
+    """Does boundary_probes() actually emit a -0.0 for *op*, on any operand?
+
+    Asked of the probe builder, not of _OP_SINGULARITIES: reading the table would report
+    coverage from the moment a pole was *registered*, true for years before anything drove it.
+    """
+    return any(
+        _is_negative_zero(value)
+        for operand in Operand
+        for value in boundary_probes(op, operand, DataFormat.Float32)
+    )
+
+
+def coverage_counts() -> Dict[str, int]:
+    """Per class in COVERAGE_CLASSES, the ops this module drives that class of value for."""
+    singular = ops_with_singularity()
+    return {
+        "A": len(singular),
+        "B": len(
+            SPECIALS_READY_OPS | BINARY_SPECIALS_READY_OPS | TERNARY_SPECIALS_READY_OPS
+        ),
+        "D": len(set(_OP_EDGE_POINTS) | set(_OP_OPERAND_EDGE_POINTS)),
+        "F": len(EXTREMES_READY_OPS),
+        "G": sum(1 for op in singular if _emits_negative_zero_at_a_pole(op)),
+    }
+
+
+if __name__ == "__main__":  # pragma: no cover - developer entry point
+    _counts = coverage_counts()
+    for _cls, _what in COVERAGE_CLASSES.items():
+        print(f"  {_cls} {_counts[_cls]:>3} ops   {_what}")
