@@ -1,4 +1,4 @@
-import { captureAppearance, linkAppearance, stallStroke } from "./color.js";
+import { captureAppearance, linkAppearance } from "./color.js";
 import { renderCardinal } from "./chip.js";
 import { layoutModel, PORT } from "./layout.js";
 
@@ -274,14 +274,13 @@ export class FabricMap {
       const look = captureAppearance(port.router.capture?.status);
       const dimmed = matching instanceof Set && !matching.has(port.key);
       const selectedPort = port.key === selected;
-      const stall = port.router.capture?.status === "ok" ? stallStroke(port.router.stall_score) : look.stroke;
       const node = svg("circle", {
         class: `port${look.outline ? " reset" : ""}${dimmed ? " dimmed" : ""}${selectedPort ? " selected" : ""}`,
         cx: port.x,
         cy: port.y,
         r: selectedPort ? PORT / 2 + 2 : PORT / 2,
         fill: look.hatch ? "url(#torn-hatch)" : look.fill,
-        stroke: stall,
+        stroke: look.stroke,
         "stroke-width": look.outline || selectedPort ? 2.5 : 1.5,
         "data-router": port.key,
       });
@@ -296,6 +295,9 @@ export class FabricMap {
 
     svgNode.append(wraps, straights, chipLayer, portLayer);
     svgNode.addEventListener("wheel", (event) => {
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
       event.preventDefault();
       const point = this.pointerToSvg(event);
       this.zoom(event.deltaY < 0 ? 0.9 : 1.1, point);

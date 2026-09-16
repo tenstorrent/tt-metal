@@ -1,18 +1,5 @@
-const COOL = [93, 226, 194];
-const HOT = [255, 114, 114];
+const LINK = "#5de2c2";
 const GREY = "#82939c";
-
-function hex(parts) {
-  return `#${parts.map((value) => Math.round(value).toString(16).padStart(2, "0")).join("")}`;
-}
-
-export function stallStroke(score) {
-  if (score === null || score === undefined || Number.isNaN(Number(score))) {
-    return GREY;
-  }
-  const t = Math.min(1, Math.max(0, Number(score)));
-  return hex(COOL.map((channel, index) => channel + (HOT[index] - channel) * t));
-}
 
 export function linkAppearance(link) {
   const status = link.status || link.srcRouter?.capture?.status || "unknown";
@@ -25,7 +12,7 @@ export function linkAppearance(link) {
     intermesh: link.link_class === "intermesh",
     crossHost: Boolean(link.cross_host),
     wrap: Boolean(link.wrap),
-    stroke: missing ? GREY : stallStroke(link.stall_score),
+    stroke: missing ? GREY : LINK,
   };
 }
 

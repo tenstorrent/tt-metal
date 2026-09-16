@@ -76,7 +76,7 @@ python3 tt_metal/fabric/debug/visualizer/decode/cli.py \
 
 Pass directories or individual JSON files. `--slots none` skips packet-header decode (Galaxy size control); ring summaries still include occupancy counts from streams. `--expert-raw` embeds hex for captured regions up to 64 bytes. `--allow-manifest-mismatch` pairs by run identity when the exact hash is unavailable.
 
-Decode does not invent occupancy from packet headers. Sender `occupied` is `depth - free_slots`; receiver `pkts_pending` is the `pkts_sent` stream; every ring slot stays `slot_state: unknown` because the kernel read/write indices live in RISC locals. `stall_score` is a heuristic in `[0, 1]` for later colouring, not a diagnosis: idle-healthy and hung-backpressure can look the same in one snapshot.
+Decode does not invent occupancy from packet headers. Sender `occupied` is `depth - free_slots`; receiver `pkts_pending` is the `pkts_sent` stream; every ring slot stays `slot_state: unknown` because the kernel read/write indices live in RISC locals. There is no computed health score: backpressure is read directly as full senders (`occupied == depth`) and starved downstream edges (`free_slots == 0`). Idle-healthy and hung-drained can look the same at occupancy 0.
 
 #### Offline tests
 
@@ -131,9 +131,9 @@ kill -9 <owner-pid>
 Decode of those same artifacts (`slice_e_live.json` / `slice_e_killed.json`, 2026-09-15):
 
 1. `40/40` routers `ok`; `exit_state` `running_or_host_gone` on all 40; routing-table identity matches the manifest row on all 40; `routing_l1_info_t.my_mesh_coord` equals `chip.mesh_coord`; `mesh_shape` is `{y: 2, x: 4}`; telemetry `static_info.mesh_id/device_id` match the endpoint.
-2. Credits on the idle fabric: 160 enabled senders `occupied 0` (worker depth 14, three upstream depth 4); 40 receivers `pkts_pending 0`; 64 enabled downstream edges `free_slots 4`. All 200 packet rings `occupancy_status ok` with `occupied_count 0`. `stall_score` is `0` on every router and every outgoing link.
-3. `connection_sem` is **not** all `unused` while idle: 72 `open`, 88 `unused`. Worker (and some upstream) connections stay open after fabric init; occupancy still reads empty.
-4. Liveness is `advancing` on 20 routers and `insufficient` on 20 (those 20 sampled only `0xABCD…` base-FW words). None classified `static`. Live vs killed decode differs in `owner_alive` (`true` → `null`) and the heartbeat sample values; occupancy and stall scores do not change.
+2. Credits on the idle fabric: 160 enabled senders `occupied 0` (worker depth 14, three upstream depth 4); 40 receivers `pkts_pending 0`; 64 enabled downstream edges `free_slots 4`. All 200 packet rings `occupancy_status ok` with `occupied_count 0`.
+3. `connection` is **not** all `unused` while idle: 72 `open`, 88 `unused`. Worker (and some upstream) connections stay open after fabric init; occupancy still reads empty.
+4. Liveness is `advancing` on 20 routers and `insufficient` on 20 (those 20 sampled only `0xABCD…` base-FW words). None classified `static`. Live vs killed decode differs in `owner_alive` (`true` → `null`) and the heartbeat sample values; occupancy does not change.
 5. Heartbeat after `SIGKILL` still moves because the ERISC keeps running without a host process, and because that word is shared with ethernet base firmware. Kill-then-capture is still the hang-debug premise for **L1 retention**, not for a frozen heartbeat.
 
 `BaseFabricFixture` now reads `MetalContext::instance().get_cluster().arch()` instead of `get_umd_arch_name()`, which was a second UMD topology discovery.
@@ -165,8 +165,9 @@ payload size, source channel, destination and route fields). It is still residua
 occupancy is `occupied/depth` from streams, while every physical `slot_state` remains `unknown`
 because the live read/write indices are not captured. Raw packet payload bytes are not embedded.
 
-`stall_score` is a colour heuristic: idle-healthy and hung-backpressure can look the same at occupancy
-0. The stalled-link fixture is the hot-edge check; idle T3K is uniformly cool.
+Backpressure has no computed score: look for full senders (`occupied == depth`) and starved downstream
+edges (`free_slots == 0`, shown as starved chips). The stalled-link fixture demonstrates that state;
+idle T3K shows empty senders and open edges.
 
 #### Open a T3K decode
 
@@ -181,12 +182,12 @@ python3 tt_metal/fabric/debug/visualizer/viewer/serve.py
 Expected on idle Wormhole T3K (`FABRIC_2D` 2×4):
 
 1. Coverage `40/40 ok`, header `WORMHOLE_B0` / `FABRIC_2D` / `HybridMeshPacketHeaderT<36>`.
-2. One 2×4 chip grid; 40 ports; 40 edges all cool (`stall_score` 0).
+2. One 2×4 chip grid; 40 ports; 40 edges, all quiet on idle (senders empty, downstream open).
 3. Click a port: senders occupied 0 (worker depth 14, upstream 4), receivers pending 0, some `connection` `open`. Region tree shows named credits without the UI knowing stream ids.
 4. Identity matches; `exit_state` `running_or_host_gone`; liveness `advancing` or `insufficient` — insufficient is not reset.
 5. Killed decode: same map; `owner_alive` null in capture provenance.
 
-**2026-09-15 picker pass** (`/tmp/decoded_slice_e_live.json`, same artifacts as decode slice E): coverage `ok: 40`, `stall_score` 0 on every router and link, 40 cool ports on a 2×4 grid. The stalled-link fixture is required to see a hot edge.
+**2026-09-15 picker pass** (`/tmp/decoded_slice_e_live.json`, same artifacts as decode slice E): coverage `ok: 40`, senders empty and downstream open on every router, 40 quiet ports on a 2×4 grid. The stalled-link fixture shows the backpressured state.
 
 #### Producing a manifest for a live capture
 

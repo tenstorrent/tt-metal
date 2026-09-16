@@ -416,6 +416,11 @@ json make_debug_instance_json(
     out["sender_channels_per_vc"] = instance.sender_channels_per_vc;
     out["receiver_channels_per_vc"] = instance.receiver_channels_per_vc;
     out["worker_sender_channel"] = instance.worker_sender_channel;
+    json producers = json::array();
+    for (const auto& producer : instance.sender_producers) {
+        producers.push_back(producer.has_value() ? json(*producer) : json(nullptr));
+    }
+    out["sender_producers"] = std::move(producers);
     out["credit_plan"] = {
         {"vc0_uses_counters", instance.credit_plan.vc0_uses_counters},
         {"vc1_uses_counters", instance.credit_plan.vc1_uses_counters},

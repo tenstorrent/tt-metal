@@ -224,7 +224,6 @@ def stalled_link() -> dict:
         for router_row in decoded["routers"]
         if router_row["id"] == {"mesh_id": 0, "chip_id": 0, "eth_chan": 0}
     )
-    target["stall_score"] = 1.0
     for sender in target["channels"]["senders"]:
         if sender["depth"]:
             sender["occupied"] = sender["depth"]
@@ -238,7 +237,6 @@ def stalled_link() -> dict:
             ring["occupancy_status"] = "ok"
     for link in decoded["topology"]["links"]:
         if link["src"] == target["id"]:
-            link["stall_score"] = 1.0
             link["status"] = "ok"
             break
     return decoded

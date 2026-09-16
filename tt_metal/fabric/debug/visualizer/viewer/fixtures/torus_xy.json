@@ -6,14 +6,14 @@
     {
       "manifest": {
         "path": "fixtures/source/manifest.json",
-        "sha256": "edf1eb4fc57d9c75bc9e545981c069c62eb668c7ab76d65a16322c43858bc334",
+        "sha256": "d4c5ab0cc96be18477d67cc920c7c3e6f47d239ebab1e2a7fe2885bd031a0185",
         "mpi_rank": 0,
         "host_rank": 0,
         "sha_verified": true
       },
       "snapshot": {
         "path": "fixtures/source/snapshot.json",
-        "sha256": "3ca2f81106cb6cff52a42526ab75084890a62ce84b2153ecac6b911958d26577",
+        "sha256": "50b83574d97bdec170234a3bb22a58e760e01b36601aa9744fb9b4b3bf79ea14",
         "captured_at": "2026-09-15T00:00:00Z",
         "provenance": {
           "ttexalens_version": "test",
@@ -233,7 +233,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -252,7 +251,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -271,7 +269,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -290,7 +287,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -309,7 +305,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -328,7 +323,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -347,7 +341,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -366,7 +359,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -385,7 +377,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -404,7 +395,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -423,7 +413,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -442,7 +431,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -461,7 +449,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -480,7 +467,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -499,7 +485,6 @@
         "link_class": "intramesh",
         "wrap": false,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       },
       {
@@ -518,7 +503,6 @@
         "link_class": "intramesh",
         "wrap": true,
         "cross_host": false,
-        "stall_score": 0.0,
         "status": "ok"
       }
     ]
@@ -552,6 +536,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -784,7 +771,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -1130,6 +1117,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -1164,8 +1152,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -1195,6 +1182,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -1427,7 +1417,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -1773,6 +1763,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -1807,8 +1798,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -1838,6 +1828,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -2070,7 +2063,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -2416,6 +2409,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -2450,8 +2444,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -2481,6 +2474,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -2713,7 +2709,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -3059,6 +3055,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -3093,8 +3090,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -3124,6 +3120,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -3356,7 +3355,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -3702,6 +3701,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -3736,8 +3736,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -3767,6 +3766,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -3999,7 +4001,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -4345,6 +4347,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -4379,8 +4382,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -4410,6 +4412,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -4642,7 +4647,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -4988,6 +4993,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -5022,8 +5028,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -5053,6 +5058,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -5285,7 +5293,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -5631,6 +5639,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -5665,8 +5674,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -5696,6 +5704,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -5928,7 +5939,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -6274,6 +6285,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -6308,8 +6320,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -6339,6 +6350,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -6571,7 +6585,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -6917,6 +6931,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -6951,8 +6966,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -6982,6 +6996,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -7214,7 +7231,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -7560,6 +7577,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -7594,8 +7612,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -7625,6 +7642,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -7857,7 +7877,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -8203,6 +8223,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -8237,8 +8258,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -8268,6 +8288,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -8500,7 +8523,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -8846,6 +8869,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -8880,8 +8904,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -8911,6 +8934,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -9143,7 +9169,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -9489,6 +9515,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -9523,8 +9550,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -9554,6 +9580,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -9786,7 +9815,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -10132,6 +10161,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -10166,8 +10196,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     },
     {
       "id": {
@@ -10197,6 +10226,9 @@
         "tensix_extension": false,
         "udm_mode": false,
         "worker_sender_channel": 0,
+        "sender_producers": [
+          "worker"
+        ],
         "credit_plan": {
           "vc0_uses_counters": false,
           "vc1_uses_counters": false,
@@ -10429,7 +10461,7 @@
           "value": null
         },
         {
-          "id": "sender.0.control.connection_sem",
+          "id": "sender.0.control.connection",
           "parent": "",
           "backing": "unreserved_l1",
           "schema": "u32",
@@ -10775,6 +10807,7 @@
             "index": 0,
             "vc": 0,
             "role": "worker",
+            "producer": "worker",
             "depth": 2,
             "free_slots": 2,
             "occupied": 0,
@@ -10809,8 +10842,7 @@
             "status": "ok"
           }
         ]
-      },
-      "stall_score": 0.0
+      }
     }
   ],
   "coverage": {

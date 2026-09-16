@@ -195,15 +195,6 @@ export function renderSummary(router) {
     identity.matches === true ? "identity matches" : identity.matches === false ? "identity mismatch" : "identity —",
   );
   badges.append(identityBadge);
-  badges.append(
-    el(
-      "span",
-      "status",
-      router.stall_score === null || router.stall_score === undefined
-        ? "stall —"
-        : `stall ${Number(router.stall_score).toFixed(2)}`,
-    ),
-  );
   section.append(badges);
 
   const meta = el("div", "kv-grid");
@@ -226,11 +217,32 @@ export function renderSummary(router) {
   return section;
 }
 
-function senderCredits(sender) {
+export function senderCredits(sender) {
   if (sender.credit_backing === "counter") {
     return `ack ${dash(sender.counters?.to_sender_ack)} / done ${dash(sender.counters?.to_sender_completion)}`;
   }
   return `ack ${dash(sender.acked_pending)} / done ${dash(sender.completed_pending)}`;
+}
+
+const ETH_ORDER = ["E", "W", "N", "S", "Z"];
+
+export function edgeDirection(facing, edge) {
+  const facingIndex = ETH_ORDER.indexOf(facing);
+  const compact = Number(edge) - 1;
+  if (facingIndex < 0 || !Number.isInteger(compact) || compact < 0) {
+    return null;
+  }
+  return ETH_ORDER[compact < facingIndex ? compact : compact + 1] ?? null;
+}
+
+export function senderRoleLabel(sender) {
+  if (sender.producer === "worker") {
+    return "local worker";
+  }
+  if (sender.producer) {
+    return `from ${sender.producer}`;
+  }
+  return dash(sender.role);
 }
 
 function renderSenderRow(sender) {
@@ -238,7 +250,9 @@ function renderSenderRow(sender) {
   const id = el("span", "mono");
   id.append(el("b", null, `ch${sender.index}`));
   row.append(id);
-  row.append(el("span", "role-chip", dash(sender.role)));
+  const role = el("span", "role-chip", senderRoleLabel(sender));
+  role.title = sender.producer ? `producer intent from manifest: ${sender.producer}` : `role: ${dash(sender.role)}`;
+  row.append(role);
   row.append(el("span", "muted mono", sender.vc === null || sender.vc === undefined ? "—" : `VC${sender.vc}`));
   const occ = el("span", "sender-occ");
   occ.append(occupancyBar(sender.occupied, sender.depth, sender.status));

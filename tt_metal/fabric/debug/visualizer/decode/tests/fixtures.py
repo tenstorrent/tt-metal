@@ -107,6 +107,7 @@ def write_input(
     for chip_row in manifest_data["meshes"][0]["chips"]:
         for router_row in chip_row.get("routers", []):
             router_row["instance"]["worker_sender_channel"] = 0
+            router_row["instance"]["sender_producers"] = ["worker"]
             router_row["instance"]["credit_plan"] = {
                 "vc0_uses_counters": False,
                 "vc1_uses_counters": False,
@@ -173,7 +174,7 @@ def write_input(
                 "schema": "future_type",
             },
             {
-                "id": "sender.0.control.connection_sem",
+                "id": "sender.0.control.connection",
                 "parent": "",
                 "backing": "unreserved_l1",
                 "address": 176,

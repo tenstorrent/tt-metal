@@ -67,6 +67,7 @@ struct FabricRouterDebugInstance {
     std::array<uint32_t, builder_config::MAX_NUM_VCS> sender_channels_per_vc = {};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> receiver_channels_per_vc = {};
     uint32_t worker_sender_channel = 0;
+    std::vector<std::optional<std::string>> sender_producers;
     CreditTransportPlan credit_plan;
     bool first_level_ack_vc0 = false;
     uint32_t downstream_edm_mask_vc0 = 0;

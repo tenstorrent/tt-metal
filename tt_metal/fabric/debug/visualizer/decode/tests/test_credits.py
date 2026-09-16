@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tt_metal.fabric.debug.visualizer.decode.credits import annotate_links, decode_channels, stall_score
+from tt_metal.fabric.debug.visualizer.decode.credits import annotate_links, decode_channels
 from tt_metal.fabric.debug.visualizer.decode.inputs import discover_inputs
 from tt_metal.fabric.debug.visualizer.decode.output import build_decoded
 from tt_metal.fabric.debug.visualizer.decode.tests.fixtures import write_input
@@ -37,6 +37,7 @@ def synthetic_router(regions, *, rings=None, instance=None, status="ok"):
         or {
             "worker_sender_channel": 0,
             "sender_channels_per_vc": [1, 1, 0, 0],
+            "sender_producers": ["worker", "E"],
             "receiver_channels_per_vc": [1, 0],
             "credit_plan": {
                 "vc0_uses_counters": False,
@@ -55,7 +56,7 @@ IDLE_REGIONS = [
     region("sender.0.free_slots", value=stream(14)),
     region("sender.0.credits.acked", value=stream(0)),
     region("sender.0.credits.completed", value=stream(0)),
-    region("sender.0.control.connection_sem", value={"word": 0, "words": [0]}),
+    region("sender.0.control.connection", value={"word": 0, "words": [0]}),
     region("credits.sender.1.free_slots", enabled=False, value=stream(11987)),
     region("receiver.0.ring", count=8),
     region("receiver.0.pkts_sent", value=stream(0)),
@@ -73,15 +74,15 @@ class CreditsTest(unittest.TestCase):
         sender = channels["senders"][0]
         self.assertEqual(sender["occupied"], 0)
         self.assertEqual(sender["role"], "worker")
+        self.assertEqual(sender["producer"], "worker")
         self.assertEqual(sender["connection"]["name"], "unused")
         self.assertEqual(len(channels["senders"]), 1)
         self.assertEqual(channels["receivers"][0]["pkts_pending"], 0)
         router["channels"] = channels
-        self.assertEqual(stall_score(router), 0.0)
         self.assertEqual(router["rings"][0]["occupied_count"], 0)
         self.assertEqual(router["rings"][0]["occupancy_source"], "stream")
 
-    def test_backpressure_scores_one(self):
+    def test_backpressure_fills_sender(self):
         regions = [
             region("sender.0.ring", count=14),
             region("sender.0.free_slots", value=stream(0)),
@@ -92,7 +93,8 @@ class CreditsTest(unittest.TestCase):
         router = synthetic_router(regions)
         router["channels"] = decode_channels(router)
         self.assertEqual(router["channels"]["senders"][0]["occupied"], 14)
-        self.assertEqual(stall_score(router), 1.0)
+        self.assertEqual(router["channels"]["receivers"][0]["pkts_pending"], 8)
+        self.assertEqual(router["channels"]["downstream"][0]["free_slots"], 0)
 
     def test_disabled_stream_is_ignored(self):
         router = synthetic_router(IDLE_REGIONS)
@@ -108,12 +110,12 @@ class CreditsTest(unittest.TestCase):
         router["channels"] = decode_channels(router)
         self.assertIsNone(router["channels"]["senders"][0]["occupied"])
         self.assertTrue(router["channels"]["senders"][0]["torn"])
-        self.assertIsNone(stall_score(router))
 
     def test_counter_backed_vc_keeps_raw_counters(self):
         instance = {
             "worker_sender_channel": 0,
             "sender_channels_per_vc": [1, 0, 0, 0],
+            "sender_producers": ["worker"],
             "receiver_channels_per_vc": [1, 0],
             "credit_plan": {
                 "vc0_uses_counters": True,
@@ -146,15 +148,39 @@ class CreditsTest(unittest.TestCase):
         self.assertEqual(sender["occupied"], -2)
         self.assertIn("occupancy -2", router["warnings"][0])
         router["channels"] = {"senders": [sender], "receivers": [], "downstream": []}
-        self.assertIsNone(stall_score(router))
+        self.assertEqual(router["channels"]["senders"][0]["status"], "inconsistent")
 
-    def test_links_copy_router_stall_score(self):
+    def test_producer_intent_passes_through_by_flat_index(self):
+        instance = {
+            "worker_sender_channel": 0,
+            "sender_channels_per_vc": [2, 0, 0, 0],
+            "sender_producers": ["worker", "N"],
+            "receiver_channels_per_vc": [1, 0],
+            "credit_plan": {
+                "vc0_uses_counters": False,
+                "vc1_uses_counters": False,
+                "vc2_uses_counters": False,
+            },
+        }
+        regions = [
+            region("sender.0.ring", count=14),
+            region("sender.0.free_slots", value=stream(14)),
+            region("sender.1.ring", count=4),
+            region("sender.1.free_slots", value=stream(4)),
+        ]
+        router = synthetic_router(regions, instance=instance)
+        senders = decode_channels(router)["senders"]
+        self.assertEqual(
+            [(sender["index"], sender["producer"]) for sender in senders],
+            [(0, "worker"), (1, "N")],
+        )
+
+    def test_links_copy_router_status(self):
         decoded = {
             "routers": [
                 {
                     "id": {"mesh_id": 0, "chip_id": 0, "eth_chan": 1},
                     "capture": {"status": "ok"},
-                    "stall_score": 0.5,
                 }
             ],
             "topology": {
@@ -171,9 +197,7 @@ class CreditsTest(unittest.TestCase):
             },
         }
         annotate_links(decoded)
-        self.assertEqual(decoded["topology"]["links"][0]["stall_score"], 0.5)
         self.assertEqual(decoded["topology"]["links"][0]["status"], "ok")
-        self.assertIsNone(decoded["topology"]["links"][1]["stall_score"])
         self.assertEqual(decoded["topology"]["links"][1]["status"], "not_captured")
 
     def test_fixture_decode_is_idle(self):
@@ -185,8 +209,7 @@ class CreditsTest(unittest.TestCase):
             self.assertEqual(router["channels"]["senders"][0]["occupied"], 0)
             self.assertEqual(router["channels"]["receivers"][0]["pkts_pending"], 0)
             self.assertEqual(router["channels"]["downstream"][0]["free_slots"], 4)
-            self.assertEqual(router["stall_score"], 0.0)
-            self.assertEqual(decoded["topology"]["links"][0]["stall_score"], 0.0)
+            self.assertEqual(decoded["topology"]["links"][0]["status"], "ok")
             self.assertEqual(router["rings"][0]["occupancy_status"], "ok")
             self.assertIn("ConnectionState", decoded["enums"])
 

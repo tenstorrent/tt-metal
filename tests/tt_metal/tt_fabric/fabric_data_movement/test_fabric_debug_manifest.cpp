@@ -303,6 +303,22 @@ void check_manifest_matches_live_fabric(FabricConfig expected_config) {
                 EXPECT_EQ(instance.at("downstream_edm_mask_vc0"), published->downstream_edm_mask_vc0);
                 EXPECT_EQ(instance.at("downstream_edm_mask_vc1"), published->downstream_edm_mask_vc1);
 
+                nlohmann::json expected_producers = nlohmann::json::array();
+                for (const auto& producer : published->sender_producers) {
+                    expected_producers.push_back(
+                        producer.has_value() ? nlohmann::json(*producer) : nlohmann::json(nullptr));
+                }
+                EXPECT_EQ(instance.at("sender_producers"), expected_producers);
+                for (const auto& producer : instance.at("sender_producers")) {
+                    ASSERT_TRUE(producer.is_null() || producer.is_string());
+                    if (producer.is_string()) {
+                        EXPECT_TRUE(
+                            producer == "worker" || producer == "E" || producer == "W" || producer == "N" ||
+                            producer == "S" || producer == "Z")
+                            << producer;
+                    }
+                }
+
                 const auto& assignment = manifest.at("stream_assignment").at(std::to_string(*mesh_id));
                 size_t enabled_sender_rings = 0;
                 for (const auto& region : layout.at("regions")) {
