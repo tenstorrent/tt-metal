@@ -477,8 +477,14 @@ workspace copy. If you see the larger value:
 sed -i 's/(6 \* 1024 + 3072)/(6 * 1024 + 2560)/' tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h
 ```
 
-No rebuild is needed for the revert: the prebuilt host library already expects the stock bases
-(`bh/fresh_build_rebuild_memmap.log`). The July note recorded in `bh/fresh_build.md` is that the bump
+Whether the revert needs a rebuild depends on when the tree's host library was built. A library built
+before the bump already expects the stock bases and nothing has to be relinked; a library built while the
+bump was in place has the shifted bases compiled in, and reverting the header alone leaves the same
+mismatch in the other direction, which looks like a device that stops answering the profiler sync and
+then `Read 0xffffffff over PCIe: the board should be reset`. Compare the header's commit date with
+`build/lib/libtt_metal.so`; if the library is older than the revert, run `cmake --build build` and then
+`cmake --build build --target install` (the install step is what refreshes `build/lib/`), and reset the
+card once with `tt-smi -r` if a run already hung on it. The July note recorded in `bh/fresh_build.md` is that the bump
 does not change compute-kernel cycle counts. The calibration checkout `tt-metal` does not need the
 patch: its kernels and firmware predate the firmware growth on main.
 
