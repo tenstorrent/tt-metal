@@ -174,10 +174,18 @@ def main() -> int:
         k_out = to_meta_frame(k) if args.frame == "meta" else k
         k_out = k_out.to(torch.bfloat16).contiguous()
         v_out = v.to(torch.bfloat16).contiguous()
+        layer_path = kv_dir / f"layer_{layer_idx}.safetensors"
         save_file(
             {f"key_cache_layer_{layer_idx}": k_out, f"value_cache_layer_{layer_idx}": v_out},
-            str(kv_dir / f"layer_{layer_idx}.safetensors"),
+            str(layer_path),
         )
+        # save_file creates 0600, ignoring the umask that gave metadata.json 0664 next to it. A
+        # trace written to the shared /mnt/models store is then readable only by whoever generated
+        # it, and CI runs as a different user: the KV-accuracy stage failed on a golden that was
+        # present and correct. Worth the explicit chmod because of how it fails -- safetensors
+        # reports any failed open as "No such file or directory", so the symptom names a missing
+        # file and sends you looking for a share that was never the problem.
+        layer_path.chmod(0o644)
         key_shape, value_shape = list(k_out.shape), list(v_out.shape)
         print(f"[save] layer {layer_idx}", flush=True)
 

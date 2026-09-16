@@ -31,6 +31,7 @@ Run (eight-chip loudbox):
 from __future__ import annotations
 
 import gc
+import getpass
 import os
 import subprocess
 import sys
@@ -633,6 +634,13 @@ def test_real_checkpoint_kv_pcc_vs_golden(mesh_device, device_params, reset_seed
     trace_dir = Path(os.environ.get("PREFILL_TRACE_DIR") or Llama31PrefillAdapter.prefill_trace_default)
     if not (trace_dir / "metadata.json").exists():
         pytest.skip(f"no golden trace at {trace_dir}; generate with scripts/generate_golden_kv_cache.py")
+    # Present but unreadable is a failure, not a skip, and it needs saying out loud: a trace on the
+    # shared store belongs to whoever generated it, `save_file` writes 0600, and CI runs as another
+    # user. Left to safetensors this surfaces as "No such file or directory" naming a file that is
+    # sitting right there, which reads as a missing golden or a wrong mount.
+    layer_0 = trace_dir / "kv_cache" / "layer_0.safetensors"
+    if layer_0.exists() and not os.access(layer_0, os.R_OK):
+        raise AssertionError(f"golden at {trace_dir} is not readable by {getpass.getuser()}; chmod -R a+rX it")
 
     metadata = json.loads((trace_dir / "metadata.json").read_text())
     # The two fields a consumer must not guess. A golden in the HF frame would fail on K and pass on
