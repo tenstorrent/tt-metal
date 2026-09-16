@@ -1,0 +1,7554 @@
+{
+ "meta": {
+  "leg": "before",
+  "tree": "/localdev/wransom/tt-metal-emu-before",
+  "git": "1ffe1303ac4 [Test Only] Optimizing data movement tests by opening a single device (#56191)",
+  "iters": 5,
+  "grid": [
+   2,
+   1
+  ],
+  "simulator": "/localdev/wransom/tt-umd-simulators/build/emu-quasar-2x3/",
+  "freq_line": "ARCH: quasar, CHIP_FREQ[MHz]: 0, Max Compute Cores: 2"
+ },
+ "cases": {
+  "k3x3_s1": {
+   "spec": {
+    "in_h": 8,
+    "in_w": 8,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     1,
+     1
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "2xHEIGHT (32 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 2048,
+      "kernel_cycles": 547303,
+      "kernel_start": 495770,
+      "kernel_end": 1043073,
+      "fw_cycles": 550154,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 501787,
+        "end": 1042277,
+        "cycles": 540490
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 501427,
+        "end": 1042749,
+        "cycles": 541322
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 497350,
+        "end": 1040177,
+        "cycles": 542827
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 495998,
+        "end": 1040141,
+        "cycles": 544143
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 497894,
+        "end": 1040394,
+        "cycles": 542500
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 495770,
+        "end": 495796,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 502069,
+        "end": 1042537,
+        "cycles": 540468
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 501687,
+        "end": 1043073,
+        "cycles": 541386
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 497238,
+        "end": 1040487,
+        "cycles": 543249
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 497298,
+        "end": 1040441,
+        "cycles": 543143
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 497854,
+        "end": 1040704,
+        "cycles": 542850
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 496470,
+        "end": 496496,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 13.237168312072754
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 4096,
+       "kernel_cycles": 546543,
+       "kernel_start": 1469114,
+       "kernel_end": 2015657,
+       "fw_cycles": 549576,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 1474727,
+         "end": 2015173,
+         "cycles": 540446
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 1474177,
+         "end": 2015657,
+         "cycles": 541480
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 1471206,
+         "end": 2013085,
+         "cycles": 541879
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 1469310,
+         "end": 2013049,
+         "cycles": 543739
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 1470706,
+         "end": 2013289,
+         "cycles": 542583
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 1469114,
+         "end": 1469140,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 1475095,
+         "end": 2014721,
+         "cycles": 539626
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 1474629,
+         "end": 2015265,
+         "cycles": 540636
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 1472258,
+         "end": 2012705,
+         "cycles": 540447
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 1469518,
+         "end": 2012669,
+         "cycles": 543151
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 1471482,
+         "end": 2012917,
+         "cycles": 541435
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 1469138,
+         "end": 1469164,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.312673330307007
+    },
+    {
+     "programs": [
+      {
+       "run_id": 6144,
+       "kernel_cycles": 547751,
+       "kernel_start": 2236630,
+       "kernel_end": 2784381,
+       "fw_cycles": 550696,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 2242211,
+         "end": 2783817,
+         "cycles": 541606
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 2241639,
+         "end": 2784381,
+         "cycles": 542742
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 2238018,
+         "end": 2781799,
+         "cycles": 543781
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 2236630,
+         "end": 2781765,
+         "cycles": 545135
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 2238302,
+         "end": 2782016,
+         "cycles": 543714
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 2236714,
+         "end": 2236740,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 2242709,
+         "end": 2783541,
+         "cycles": 540832
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 2242175,
+         "end": 2784021,
+         "cycles": 541846
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 2238274,
+         "end": 2781493,
+         "cycles": 543219
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 2238474,
+         "end": 2781469,
+         "cycles": 542995
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 2238742,
+         "end": 2781710,
+         "cycles": 542968
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 2236714,
+         "end": 2236740,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.361248016357422
+    },
+    {
+     "programs": [
+      {
+       "run_id": 8192,
+       "kernel_cycles": 548209,
+       "kernel_start": 3004234,
+       "kernel_end": 3552443,
+       "fw_cycles": 550868,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 3010241,
+         "end": 3551989,
+         "cycles": 541748
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 3009811,
+         "end": 3552443,
+         "cycles": 542632
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 3005590,
+         "end": 3549897,
+         "cycles": 544307
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 3004702,
+         "end": 3549873,
+         "cycles": 545171
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 3006142,
+         "end": 3550114,
+         "cycles": 543972
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 3004234,
+         "end": 3004260,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 3010617,
+         "end": 3551637,
+         "cycles": 541020
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 3010281,
+         "end": 3552083,
+         "cycles": 541802
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 3006414,
+         "end": 3549577,
+         "cycles": 543163
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 3005318,
+         "end": 3549553,
+         "cycles": 544235
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 3006598,
+         "end": 3549781,
+         "cycles": 543183
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 3004506,
+         "end": 3004533,
+         "cycles": 27
+        }
+       }
+      }
+     ],
+     "wall_s": 6.378852844238281
+    },
+    {
+     "programs": [
+      {
+       "run_id": 10240,
+       "kernel_cycles": 547269,
+       "kernel_start": 3772854,
+       "kernel_end": 4320123,
+       "fw_cycles": 550258,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 3778391,
+         "end": 4318565,
+         "cycles": 540174
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 3777919,
+         "end": 4319083,
+         "cycles": 541164
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 3774502,
+         "end": 4316517,
+         "cycles": 542015
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 3773222,
+         "end": 4316493,
+         "cycles": 543271
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 3775734,
+         "end": 4316756,
+         "cycles": 541022
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 3772854,
+         "end": 3772880,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 3778643,
+         "end": 4319589,
+         "cycles": 540946
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 3778163,
+         "end": 4320123,
+         "cycles": 541960
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 3774194,
+         "end": 4317565,
+         "cycles": 543371
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 3773262,
+         "end": 4317541,
+         "cycles": 544279
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 3774834,
+         "end": 4317782,
+         "cycles": 542948
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 3772886,
+         "end": 3772912,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.318685531616211
+    },
+    {
+     "programs": [
+      {
+       "run_id": 12288,
+       "kernel_cycles": 547255,
+       "kernel_start": 4541578,
+       "kernel_end": 5088833,
+       "fw_cycles": 549984,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 4547373,
+         "end": 5086721,
+         "cycles": 539348
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 4547001,
+         "end": 5087165,
+         "cycles": 540164
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 4542950,
+         "end": 5084637,
+         "cycles": 541687
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 4541946,
+         "end": 5084613,
+         "cycles": 542667
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 4543714,
+         "end": 5084841,
+         "cycles": 541127
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 4541578,
+         "end": 4541604,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 4547757,
+         "end": 5088321,
+         "cycles": 540564
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 4547093,
+         "end": 5088833,
+         "cycles": 541740
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 4543622,
+         "end": 5086265,
+         "cycles": 542643
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 4542202,
+         "end": 5086241,
+         "cycles": 544039
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 4544086,
+         "end": 5086490,
+         "cycles": 542404
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 4542366,
+         "end": 4542392,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.449404239654541
+    }
+   ],
+   "note": "2 cores on sim and emu"
+  },
+  "k5x5_s2": {
+   "spec": {
+    "kernel": [
+     5,
+     5
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     2,
+     2
+    ]
+   },
+   "core_desc": "2xHEIGHT (64 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 14336,
+      "kernel_cycles": 496607,
+      "kernel_start": 5676142,
+      "kernel_end": 6172749,
+      "fw_cycles": 499606,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 5681745,
+        "end": 6169949,
+        "cycles": 488204
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 5681261,
+        "end": 6170781,
+        "cycles": 489520
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 5677994,
+        "end": 6168169,
+        "cycles": 490175
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 5676198,
+        "end": 6168133,
+        "cycles": 491935
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 5677763,
+        "end": 6168408,
+        "cycles": 490645
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 5676142,
+        "end": 5676168,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 5682385,
+        "end": 6171921,
+        "cycles": 489536
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 5682167,
+        "end": 6172749,
+        "cycles": 490582
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 5677782,
+        "end": 6170173,
+        "cycles": 492391
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 5676954,
+        "end": 6170137,
+        "cycles": 493183
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 5678843,
+        "end": 6170400,
+        "cycles": 491557
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 5676562,
+        "end": 5676588,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 10.624815225601196
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 16384,
+       "kernel_cycles": 495443,
+       "kernel_start": 6586878,
+       "kernel_end": 7082321,
+       "fw_cycles": 498550,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 6592355,
+         "end": 7081743,
+         "cycles": 489388
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 6591799,
+         "end": 7082301,
+         "cycles": 490502
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 6587918,
+         "end": 7079609,
+         "cycles": 491691
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 6587070,
+         "end": 7079573,
+         "cycles": 492503
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 6589519,
+         "end": 7079827,
+         "cycles": 490308
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 6586878,
+         "end": 6586904,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 6592693,
+         "end": 7081555,
+         "cycles": 488862
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 6592181,
+         "end": 7082321,
+         "cycles": 490140
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 6589258,
+         "end": 7079625,
+         "cycles": 490367
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 6587286,
+         "end": 7079589,
+         "cycles": 492303
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 6589010,
+         "end": 7079850,
+         "cycles": 490840
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 6586886,
+         "end": 6586912,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.040476560592651
+    },
+    {
+     "programs": [
+      {
+       "run_id": 18432,
+       "kernel_cycles": 496223,
+       "kernel_start": 7305610,
+       "kernel_end": 7801833,
+       "fw_cycles": 499190,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 7311357,
+         "end": 7800665,
+         "cycles": 489308
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 7310615,
+         "end": 7801261,
+         "cycles": 490646
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 7307006,
+         "end": 7798666,
+         "cycles": 491660
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 7306718,
+         "end": 7798629,
+         "cycles": 491911
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 7307699,
+         "end": 7798857,
+         "cycles": 491158
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 7305610,
+         "end": 7305636,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 7311585,
+         "end": 7801261,
+         "cycles": 489676
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 7311245,
+         "end": 7801833,
+         "cycles": 490588
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 7307022,
+         "end": 7799230,
+         "cycles": 492208
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 7306438,
+         "end": 7799193,
+         "cycles": 492755
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 7307618,
+         "end": 7799435,
+         "cycles": 491817
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 7305646,
+         "end": 7305672,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 5.984396696090698
+    },
+    {
+     "programs": [
+      {
+       "run_id": 20480,
+       "kernel_cycles": 496495,
+       "kernel_start": 8088118,
+       "kernel_end": 8584613,
+       "fw_cycles": 499170,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 8094183,
+         "end": 8583457,
+         "cycles": 489274
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 8093749,
+         "end": 8584033,
+         "cycles": 490284
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 8089866,
+         "end": 8581353,
+         "cycles": 491487
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 8088402,
+         "end": 8581317,
+         "cycles": 492915
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 8090755,
+         "end": 8581592,
+         "cycles": 490837
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 8088118,
+         "end": 8088144,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 8094533,
+         "end": 8584037,
+         "cycles": 489504
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 8094353,
+         "end": 8584613,
+         "cycles": 490260
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 8089886,
+         "end": 8582030,
+         "cycles": 492144
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 8089122,
+         "end": 8581993,
+         "cycles": 492871
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 8090947,
+         "end": 8582235,
+         "cycles": 491288
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 8089146,
+         "end": 8089172,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.022156715393066
+    },
+    {
+     "programs": [
+      {
+       "run_id": 22528,
+       "kernel_cycles": 495387,
+       "kernel_start": 8805042,
+       "kernel_end": 9300429,
+       "fw_cycles": 498074,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 8810959,
+         "end": 9299621,
+         "cycles": 488662
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 8810445,
+         "end": 9300429,
+         "cycles": 489984
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 8806498,
+         "end": 9297805,
+         "cycles": 491307
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 8805330,
+         "end": 9297769,
+         "cycles": 492439
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 8807315,
+         "end": 9298044,
+         "cycles": 490729
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 8805042,
+         "end": 8805068,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 8811267,
+         "end": 9299021,
+         "cycles": 487754
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 8810923,
+         "end": 9299801,
+         "cycles": 488878
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 8806790,
+         "end": 9297218,
+         "cycles": 490428
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 8805630,
+         "end": 9297169,
+         "cycles": 491539
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 8808883,
+         "end": 9297431,
+         "cycles": 488548
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 8805538,
+         "end": 8805564,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 5.884118318557739
+    },
+    {
+     "programs": [
+      {
+       "run_id": 24576,
+       "kernel_cycles": 495711,
+       "kernel_start": 9522870,
+       "kernel_end": 10018581,
+       "fw_cycles": 498310,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 9528929,
+         "end": 10017161,
+         "cycles": 488232
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 9528369,
+         "end": 10017933,
+         "cycles": 489564
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 9525274,
+         "end": 10015362,
+         "cycles": 490088
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 9523478,
+         "end": 10015325,
+         "cycles": 491847
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 9524894,
+         "end": 10015567,
+         "cycles": 490673
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 9522870,
+         "end": 9522896,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 9529445,
+         "end": 10017797,
+         "cycles": 488352
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 9529225,
+         "end": 10018581,
+         "cycles": 489356
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 9525818,
+         "end": 10015994,
+         "cycles": 490176
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 9524926,
+         "end": 10015945,
+         "cycles": 491019
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 9525419,
+         "end": 10016199,
+         "cycles": 490780
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 9523758,
+         "end": 9523784,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 5.864751815795898
+    }
+   ],
+   "note": "sim 4 cores x 32 sticks; emu 2 cores x 64 sticks"
+  },
+  "k7x7_s2_large": {
+   "spec": {
+    "kernel": [
+     7,
+     7
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     3,
+     3
+    ],
+    "cores": 1
+   },
+   "core_desc": "1xHEIGHT (128 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 26624,
+      "kernel_cycles": 1745755,
+      "kernel_start": 10604150,
+      "kernel_end": 12349905,
+      "fw_cycles": 1748886,
+      "n_rows": 26,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 10610057,
+        "end": 12349109,
+        "cycles": 1739052
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 10609511,
+        "end": 12349905,
+        "cycles": 1740394
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 10606226,
+        "end": 12347355,
+        "cycles": 1741129
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 10604150,
+        "end": 12347304,
+        "cycles": 1743154
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 10605651,
+        "end": 12347564,
+        "cycles": 1741913
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 10604962,
+        "end": 10604988,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 22.718270301818848
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 28672,
+       "kernel_cycles": 1746947,
+       "kernel_start": 12764494,
+       "kernel_end": 14511441,
+       "fw_cycles": 1749714,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 12770611,
+         "end": 14510595,
+         "cycles": 1739984
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 12770163,
+         "end": 14511441,
+         "cycles": 1741278
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 12765770,
+         "end": 14508806,
+         "cycles": 1743036
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 12765174,
+         "end": 14508752,
+         "cycles": 1743578
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 12767323,
+         "end": 14508989,
+         "cycles": 1741666
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 12764494,
+         "end": 12764520,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 18.22757863998413
+    },
+    {
+     "programs": [
+      {
+       "run_id": 30720,
+       "kernel_cycles": 1747040,
+       "kernel_start": 14733277,
+       "kernel_end": 16480317,
+       "fw_cycles": 1750044,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 14739123,
+         "end": 16479483,
+         "cycles": 1740360
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 14738543,
+         "end": 16480317,
+         "cycles": 1741774
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 14734450,
+         "end": 16477726,
+         "cycles": 1743276
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 14733277,
+         "end": 16477672,
+         "cycles": 1744395
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 14735323,
+         "end": 16477923,
+         "cycles": 1742600
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 14733526,
+         "end": 14733552,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 22.226337909698486
+    },
+    {
+     "programs": [
+      {
+       "run_id": 32768,
+       "kernel_cycles": 1746779,
+       "kernel_start": 16701606,
+       "kernel_end": 18448385,
+       "fw_cycles": 1749380,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 16707951,
+         "end": 18447529,
+         "cycles": 1739578
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 16707603,
+         "end": 18448385,
+         "cycles": 1740782
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 16703106,
+         "end": 18445818,
+         "cycles": 1742712
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 16702481,
+         "end": 18445764,
+         "cycles": 1743283
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 16704327,
+         "end": 18446036,
+         "cycles": 1741709
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 16701606,
+         "end": 16701632,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 18.29711389541626
+    },
+    {
+     "programs": [
+      {
+       "run_id": 34816,
+       "kernel_cycles": 1747295,
+       "kernel_start": 18669918,
+       "kernel_end": 20417213,
+       "fw_cycles": 1749984,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 18676385,
+         "end": 20416367,
+         "cycles": 1739982
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 18676231,
+         "end": 20417213,
+         "cycles": 1740982
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 18671846,
+         "end": 20414570,
+         "cycles": 1742724
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 18670278,
+         "end": 20414516,
+         "cycles": 1744238
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 18672058,
+         "end": 20414771,
+         "cycles": 1742713
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 18669918,
+         "end": 18669944,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 17.947065591812134
+    },
+    {
+     "programs": [
+      {
+       "run_id": 36864,
+       "kernel_cycles": 1745809,
+       "kernel_start": 20638874,
+       "kernel_end": 22384683,
+       "fw_cycles": 1748674,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 20644909,
+         "end": 22383853,
+         "cycles": 1738944
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 20644431,
+         "end": 22384683,
+         "cycles": 1740252
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 20641402,
+         "end": 22382106,
+         "cycles": 1740704
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 20640366,
+         "end": 22382052,
+         "cycles": 1741686
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 20640950,
+         "end": 22382324,
+         "cycles": 1741374
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 20638874,
+         "end": 20638900,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 17.833388328552246
+    }
+   ],
+   "note": "identical"
+  },
+  "k8x8_s2_large": {
+   "spec": {
+    "kernel": [
+     8,
+     8
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     3,
+     3
+    ],
+    "cores": 1
+   },
+   "core_desc": "1xHEIGHT (128 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 38912,
+      "kernel_cycles": 2229277,
+      "kernel_start": 22969918,
+      "kernel_end": 25199195,
+      "fw_cycles": 2232100,
+      "n_rows": 26,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 22975787,
+        "end": 25198421,
+        "cycles": 2222634
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 22975405,
+        "end": 25199195,
+        "cycles": 2223790
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 22971602,
+        "end": 25196669,
+        "cycles": 2225067
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 22970234,
+        "end": 25196628,
+        "cycles": 2226394
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 22971946,
+        "end": 25196901,
+        "cycles": 2224955
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 22969918,
+        "end": 22969949,
+        "cycles": 31
+       }
+      }
+     }
+    ],
+    "wall_s": 27.057146549224854
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 40960,
+       "kernel_cycles": 2230041,
+       "kernel_start": 25613970,
+       "kernel_end": 27844011,
+       "fw_cycles": 2232854,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 25619815,
+         "end": 27843229,
+         "cycles": 2223414
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 25619361,
+         "end": 27844011,
+         "cycles": 2224650
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 25615997,
+         "end": 27841492,
+         "cycles": 2225495
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 25614206,
+         "end": 27841440,
+         "cycles": 2227234
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 25616874,
+         "end": 27841677,
+         "cycles": 2224803
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 25613970,
+         "end": 25613996,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 23.445067644119263
+    },
+    {
+     "programs": [
+      {
+       "run_id": 43008,
+       "kernel_cycles": 2230243,
+       "kernel_start": 28066454,
+       "kernel_end": 30296697,
+       "fw_cycles": 2233122,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 28072427,
+         "end": 30295949,
+         "cycles": 2223522
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 28072089,
+         "end": 30296697,
+         "cycles": 2224608
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 28067746,
+         "end": 30294220,
+         "cycles": 2226474
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 28066454,
+         "end": 30294156,
+         "cycles": 2227702
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 28069518,
+         "end": 30294417,
+         "cycles": 2224899
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 28066822,
+         "end": 28066848,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 23.39823317527771
+    },
+    {
+     "programs": [
+      {
+       "run_id": 45056,
+       "kernel_cycles": 2231059,
+       "kernel_start": 30518994,
+       "kernel_end": 32750053,
+       "fw_cycles": 2233596,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 30525111,
+         "end": 32749331,
+         "cycles": 2224220
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 30524707,
+         "end": 32750053,
+         "cycles": 2225346
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 30520849,
+         "end": 32747564,
+         "cycles": 2226715
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 30519448,
+         "end": 32747512,
+         "cycles": 2228064
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 30523730,
+         "end": 32747763,
+         "cycles": 2224033
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 30518994,
+         "end": 30519020,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 22.87072443962097
+    },
+    {
+     "programs": [
+      {
+       "run_id": 47104,
+       "kernel_cycles": 2230205,
+       "kernel_start": 32972326,
+       "kernel_end": 35202531,
+       "fw_cycles": 2232800,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 32978419,
+         "end": 35201791,
+         "cycles": 2223372
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 32977941,
+         "end": 35202531,
+         "cycles": 2224590
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 32973794,
+         "end": 35200024,
+         "cycles": 2226230
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 32973838,
+         "end": 35199972,
+         "cycles": 2226134
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 32975026,
+         "end": 35200209,
+         "cycles": 2225183
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 32972326,
+         "end": 32972352,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 23.755593061447144
+    },
+    {
+     "programs": [
+      {
+       "run_id": 49152,
+       "kernel_cycles": 2229915,
+       "kernel_start": 35424334,
+       "kernel_end": 37654249,
+       "fw_cycles": 2232522,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 35430411,
+         "end": 37653497,
+         "cycles": 2223086
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 35429893,
+         "end": 37654249,
+         "cycles": 2224356
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 35426094,
+         "end": 37651768,
+         "cycles": 2225674
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 35424674,
+         "end": 37651704,
+         "cycles": 2227030
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 35427114,
+         "end": 37651965,
+         "cycles": 2224851
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 35424334,
+         "end": 35424360,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 23.401833057403564
+    }
+   ],
+   "note": "identical"
+  },
+  "k9x9_s2_3chunks": {
+   "spec": {
+    "kernel": [
+     9,
+     9
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     4,
+     4
+    ],
+    "cores": 1
+   },
+   "core_desc": "1xHEIGHT (128 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 51200,
+      "kernel_cycles": 2863135,
+      "kernel_start": 38248418,
+      "kernel_end": 41111553,
+      "fw_cycles": 2866254,
+      "n_rows": 26,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 38254307,
+        "end": 41074715,
+        "cycles": 2820408
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 38253851,
+        "end": 41111553,
+        "cycles": 2857702
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 38249378,
+        "end": 41108915,
+        "cycles": 2859537
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 38249890,
+        "end": 41108883,
+        "cycles": 2858993
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 38250090,
+        "end": 41109131,
+        "cycles": 2859041
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 38248418,
+        "end": 38248444,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 33.02207660675049
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 53248,
+       "kernel_cycles": 2865955,
+       "kernel_start": 41528454,
+       "kernel_end": 44394409,
+       "fw_cycles": 2868690,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 41534655,
+         "end": 44357551,
+         "cycles": 2822896
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 41534241,
+         "end": 44394409,
+         "cycles": 2860168
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 41530258,
+         "end": 44391747,
+         "cycles": 2861489
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 41528770,
+         "end": 44391715,
+         "cycles": 2862945
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 41530674,
+         "end": 44391983,
+         "cycles": 2861309
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 41528454,
+         "end": 41528480,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 29.731657028198242
+    },
+    {
+     "programs": [
+      {
+       "run_id": 55296,
+       "kernel_cycles": 2864859,
+       "kernel_start": 44619158,
+       "kernel_end": 47484017,
+       "fw_cycles": 2867728,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 44625271,
+         "end": 47447247,
+         "cycles": 2821976
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 44624835,
+         "end": 47484017,
+         "cycles": 2859182
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 44620426,
+         "end": 47481379,
+         "cycles": 2860953
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 44619302,
+         "end": 47481361,
+         "cycles": 2862059
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 44621022,
+         "end": 47481597,
+         "cycles": 2860575
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 44619158,
+         "end": 44619184,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 28.067577838897705
+    },
+    {
+     "programs": [
+      {
+       "run_id": 57344,
+       "kernel_cycles": 2864325,
+       "kernel_start": 47708446,
+       "kernel_end": 50572771,
+       "fw_cycles": 2867048,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 47714671,
+         "end": 50535977,
+         "cycles": 2821306
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 47714241,
+         "end": 50572771,
+         "cycles": 2858530
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 47710322,
+         "end": 50570171,
+         "cycles": 2859849
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 47709862,
+         "end": 50570153,
+         "cycles": 2860291
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 47710370,
+         "end": 50570373,
+         "cycles": 2860003
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 47708446,
+         "end": 47708472,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 29.075564861297607
+    },
+    {
+     "programs": [
+      {
+       "run_id": 59392,
+       "kernel_cycles": 2864179,
+       "kernel_start": 50797198,
+       "kernel_end": 53661377,
+       "fw_cycles": 2866822,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 50803439,
+         "end": 53624577,
+         "cycles": 2821138
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 50802921,
+         "end": 53661377,
+         "cycles": 2858456
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 50798778,
+         "end": 53658739,
+         "cycles": 2859961
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 50797522,
+         "end": 53658721,
+         "cycles": 2861199
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 50799626,
+         "end": 53658955,
+         "cycles": 2859329
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 50797198,
+         "end": 50797224,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 28.582452297210693
+    },
+    {
+     "programs": [
+      {
+       "run_id": 61440,
+       "kernel_cycles": 2864977,
+       "kernel_start": 53885730,
+       "kernel_end": 56750707,
+       "fw_cycles": 2867646,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 53892071,
+         "end": 56713943,
+         "cycles": 2821872
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 53891721,
+         "end": 56750707,
+         "cycles": 2858986
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 53887662,
+         "end": 56748083,
+         "cycles": 2860421
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 53886518,
+         "end": 56748053,
+         "cycles": 2861535
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 53887710,
+         "end": 56748307,
+         "cycles": 2860597
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 53885730,
+         "end": 53885756,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 29.170330286026
+    }
+   ],
+   "note": "identical"
+  },
+  "batch2": {
+   "spec": {
+    "batch": 2,
+    "in_h": 8,
+    "in_w": 8,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "2xHEIGHT (64 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 63488,
+      "kernel_cycles": 282507,
+      "kernel_start": 57334558,
+      "kernel_end": 57617065,
+      "fw_cycles": 285830,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 57340027,
+        "end": 57616439,
+        "cycles": 276412
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 57339683,
+        "end": 57617065,
+        "cycles": 277382
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 57335566,
+        "end": 57614477,
+        "cycles": 278911
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 57336890,
+        "end": 57614441,
+        "cycles": 277551
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 57335950,
+        "end": 57614716,
+        "cycles": 278766
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 57334706,
+        "end": 57334732,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 57340023,
+        "end": 57615915,
+        "cycles": 275892
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 57339549,
+        "end": 57616377,
+        "cycles": 276828
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 57335577,
+        "end": 57613825,
+        "cycles": 278248
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 57334598,
+        "end": 57613789,
+        "cycles": 279191
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 57336086,
+        "end": 57614042,
+        "cycles": 277956
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 57334558,
+        "end": 57334584,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 6.232619524002075
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 65536,
+       "kernel_cycles": 283155,
+       "kernel_start": 58031974,
+       "kernel_end": 58315129,
+       "fw_cycles": 286106,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 58037747,
+         "end": 58313771,
+         "cycles": 276024
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 58037271,
+         "end": 58314387,
+         "cycles": 277116
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 58033482,
+         "end": 58311743,
+         "cycles": 278261
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 58032098,
+         "end": 58311697,
+         "cycles": 279599
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 58033930,
+         "end": 58311966,
+         "cycles": 278036
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 58031974,
+         "end": 58032000,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 58037969,
+         "end": 58314567,
+         "cycles": 276598
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 58037537,
+         "end": 58315129,
+         "cycles": 277592
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 58033446,
+         "end": 58312533,
+         "cycles": 279087
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 58032590,
+         "end": 58312509,
+         "cycles": 279919
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 58034150,
+         "end": 58312750,
+         "cycles": 278600
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 58032534,
+         "end": 58032560,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.740130662918091
+    },
+    {
+     "programs": [
+      {
+       "run_id": 67584,
+       "kernel_cycles": 283749,
+       "kernel_start": 58534878,
+       "kernel_end": 58818627,
+       "fw_cycles": 286382,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 58540913,
+         "end": 58817727,
+         "cycles": 276814
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 58540515,
+         "end": 58818257,
+         "cycles": 277742
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 58536506,
+         "end": 58815653,
+         "cycles": 279147
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 58535982,
+         "end": 58815629,
+         "cycles": 279647
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 58537026,
+         "end": 58815892,
+         "cycles": 278866
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 58534878,
+         "end": 58534904,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 58541123,
+         "end": 58818083,
+         "cycles": 276960
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 58540783,
+         "end": 58818627,
+         "cycles": 277844
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 58536730,
+         "end": 58816037,
+         "cycles": 279307
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 58535610,
+         "end": 58816013,
+         "cycles": 280403
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 58537546,
+         "end": 58816254,
+         "cycles": 278708
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 58535290,
+         "end": 58535316,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.6839358806610107
+    },
+    {
+     "programs": [
+      {
+       "run_id": 69632,
+       "kernel_cycles": 283205,
+       "kernel_start": 59040074,
+       "kernel_end": 59323279,
+       "fw_cycles": 286420,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 59045351,
+         "end": 59321447,
+         "cycles": 276096
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 59044923,
+         "end": 59322009,
+         "cycles": 277086
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 59040998,
+         "end": 59319345,
+         "cycles": 278347
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 59040534,
+         "end": 59319321,
+         "cycles": 278787
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 59042174,
+         "end": 59319570,
+         "cycles": 277396
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 59040074,
+         "end": 59040100,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 59045739,
+         "end": 59322819,
+         "cycles": 277080
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 59045317,
+         "end": 59323279,
+         "cycles": 277962
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 59041226,
+         "end": 59320699,
+         "cycles": 279473
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 59040430,
+         "end": 59320665,
+         "cycles": 280235
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 59042022,
+         "end": 59320916,
+         "cycles": 278894
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 59040190,
+         "end": 59040216,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.737933874130249
+    },
+    {
+     "programs": [
+      {
+       "run_id": 71680,
+       "kernel_cycles": 283423,
+       "kernel_start": 59544390,
+       "kernel_end": 59827813,
+       "fw_cycles": 285982,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 59550415,
+         "end": 59827255,
+         "cycles": 276840
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 59549851,
+         "end": 59827813,
+         "cycles": 277962
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 59547186,
+         "end": 59825153,
+         "cycles": 277967
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 59544986,
+         "end": 59825129,
+         "cycles": 280143
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 59546762,
+         "end": 59825392,
+         "cycles": 278630
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 59544390,
+         "end": 59544416,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 59550841,
+         "end": 59827143,
+         "cycles": 276302
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 59550601,
+         "end": 59827653,
+         "cycles": 277052
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 59546526,
+         "end": 59825085,
+         "cycles": 278559
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 59545450,
+         "end": 59825061,
+         "cycles": 279611
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 59547390,
+         "end": 59825302,
+         "cycles": 277912
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 59544822,
+         "end": 59544848,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.903218984603882
+    },
+    {
+     "programs": [
+      {
+       "run_id": 73728,
+       "kernel_cycles": 283215,
+       "kernel_start": 60048950,
+       "kernel_end": 60332165,
+       "fw_cycles": 286074,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 60054719,
+         "end": 60331607,
+         "cycles": 276888
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 60054149,
+         "end": 60332165,
+         "cycles": 278016
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 60050670,
+         "end": 60329513,
+         "cycles": 278843
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 60049982,
+         "end": 60329489,
+         "cycles": 279507
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 60050994,
+         "end": 60329752,
+         "cycles": 278758
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 60049630,
+         "end": 60049656,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 60054893,
+         "end": 60330907,
+         "cycles": 276014
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 60054449,
+         "end": 60331411,
+         "cycles": 276962
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 60050506,
+         "end": 60328827,
+         "cycles": 278321
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 60049798,
+         "end": 60328793,
+         "cycles": 278995
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 60051114,
+         "end": 60329031,
+         "cycles": 277917
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 60048950,
+         "end": 60048976,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.681565284729004
+    }
+   ],
+   "note": "sim 4 cores x 32 sticks; emu 2 cores x 64 sticks"
+  },
+  "tall_32x4": {
+   "spec": {
+    "in_h": 32,
+    "in_w": 4,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "2xHEIGHT (64 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 75776,
+      "kernel_cycles": 283877,
+      "kernel_start": 60918298,
+      "kernel_end": 61202175,
+      "fw_cycles": 286454,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 60924335,
+        "end": 61201175,
+        "cycles": 276840
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 60923801,
+        "end": 61201721,
+        "cycles": 277920
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 60920202,
+        "end": 61199113,
+        "cycles": 278911
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 60918650,
+        "end": 61199089,
+        "cycles": 280439
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 60920346,
+        "end": 61199330,
+        "cycles": 278984
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 60918298,
+        "end": 60918324,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 60924647,
+        "end": 61201595,
+        "cycles": 276948
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 60924253,
+        "end": 61202175,
+        "cycles": 277922
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 60920110,
+        "end": 61199503,
+        "cycles": 279393
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 60918986,
+        "end": 61199469,
+        "cycles": 280483
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 60920794,
+        "end": 61199720,
+        "cycles": 278926
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 60918694,
+        "end": 60918720,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 5.166121959686279
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 77824,
+       "kernel_cycles": 284051,
+       "kernel_start": 61616706,
+       "kernel_end": 61900757,
+       "fw_cycles": 286702,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 61622629,
+         "end": 61899643,
+         "cycles": 277014
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 61622203,
+         "end": 61900151,
+         "cycles": 277948
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 61618250,
+         "end": 61897593,
+         "cycles": 279343
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 61617150,
+         "end": 61897569,
+         "cycles": 280419
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 61618818,
+         "end": 61897797,
+         "cycles": 278979
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 61616706,
+         "end": 61616732,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 61622969,
+         "end": 61900231,
+         "cycles": 277262
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 61622435,
+         "end": 61900757,
+         "cycles": 278322
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 61618670,
+         "end": 61898129,
+         "cycles": 279459
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 61617398,
+         "end": 61898105,
+         "cycles": 280707
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 61619362,
+         "end": 61898354,
+         "cycles": 278992
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 61617826,
+         "end": 61617852,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.3545689582824707
+    },
+    {
+     "programs": [
+      {
+       "run_id": 79872,
+       "kernel_cycles": 283227,
+       "kernel_start": 62123094,
+       "kernel_end": 62406321,
+       "fw_cycles": 286244,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 62128681,
+         "end": 62405447,
+         "cycles": 276766
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 62128323,
+         "end": 62406011,
+         "cycles": 277688
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 62124390,
+         "end": 62403413,
+         "cycles": 279023
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 62123570,
+         "end": 62403389,
+         "cycles": 279819
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 62124762,
+         "end": 62403630,
+         "cycles": 278868
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 62123298,
+         "end": 62123324,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 62129131,
+         "end": 62405815,
+         "cycles": 276684
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 62128695,
+         "end": 62406321,
+         "cycles": 277626
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 62124654,
+         "end": 62403709,
+         "cycles": 279055
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 62123598,
+         "end": 62403685,
+         "cycles": 280087
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 62125314,
+         "end": 62403926,
+         "cycles": 278612
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 62123094,
+         "end": 62123120,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.7603542804718018
+    },
+    {
+     "programs": [
+      {
+       "run_id": 81920,
+       "kernel_cycles": 283727,
+       "kernel_start": 62629710,
+       "kernel_end": 62913437,
+       "fw_cycles": 286734,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 62635285,
+         "end": 62912019,
+         "cycles": 276734
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 62634819,
+         "end": 62912545,
+         "cycles": 277726
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 62630858,
+         "end": 62909949,
+         "cycles": 279091
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 62629874,
+         "end": 62909925,
+         "cycles": 280051
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 62632114,
+         "end": 62910166,
+         "cycles": 278052
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 62629710,
+         "end": 62629736,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 62635661,
+         "end": 62912919,
+         "cycles": 277258
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 62635259,
+         "end": 62913437,
+         "cycles": 278178
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 62631374,
+         "end": 62910921,
+         "cycles": 279547
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 62630142,
+         "end": 62910897,
+         "cycles": 280755
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 62631838,
+         "end": 62911138,
+         "cycles": 279300
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 62629814,
+         "end": 62629840,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.76106858253479
+    },
+    {
+     "programs": [
+      {
+       "run_id": 83968,
+       "kernel_cycles": 283769,
+       "kernel_start": 63136310,
+       "kernel_end": 63420079,
+       "fw_cycles": 286618,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 63142207,
+         "end": 63419615,
+         "cycles": 277408
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 63142041,
+         "end": 63420079,
+         "cycles": 278038
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 63138186,
+         "end": 63417473,
+         "cycles": 279287
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 63136686,
+         "end": 63417449,
+         "cycles": 280763
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 63138194,
+         "end": 63417690,
+         "cycles": 279496
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 63136310,
+         "end": 63136336,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 63142561,
+         "end": 63419255,
+         "cycles": 276694
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 63142221,
+         "end": 63419791,
+         "cycles": 277570
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 63137926,
+         "end": 63417186,
+         "cycles": 279260
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 63137046,
+         "end": 63417149,
+         "cycles": 280103
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 63138554,
+         "end": 63417412,
+         "cycles": 278858
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 63138258,
+         "end": 63138284,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.756897449493408
+    },
+    {
+     "programs": [
+      {
+       "run_id": 86016,
+       "kernel_cycles": 284437,
+       "kernel_start": 63642390,
+       "kernel_end": 63926827,
+       "fw_cycles": 287210,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 63648207,
+         "end": 63925251,
+         "cycles": 277044
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 63647653,
+         "end": 63925785,
+         "cycles": 278132
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 63643698,
+         "end": 63923193,
+         "cycles": 279495
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 63642574,
+         "end": 63923169,
+         "cycles": 280595
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 63644258,
+         "end": 63923410,
+         "cycles": 279152
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 63642390,
+         "end": 63642416,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 63648899,
+         "end": 63926291,
+         "cycles": 277392
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 63648567,
+         "end": 63926827,
+         "cycles": 278260
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 63644886,
+         "end": 63924249,
+         "cycles": 279363
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 63643102,
+         "end": 63924225,
+         "cycles": 281123
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 63644630,
+         "end": 63924466,
+         "cycles": 279836
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 63643234,
+         "end": 63643260,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.9476726055145264
+    }
+   ],
+   "note": "sim 4 cores x 32 sticks; emu 2 cores x 64 sticks"
+  },
+  "wide_4x32": {
+   "spec": {
+    "in_h": 4,
+    "in_w": 32,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "2xHEIGHT (64 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 88064,
+      "kernel_cycles": 282911,
+      "kernel_start": 64510418,
+      "kernel_end": 64793329,
+      "fw_cycles": 285956,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 64516019,
+        "end": 64792151,
+        "cycles": 276132
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 64515441,
+        "end": 64792669,
+        "cycles": 277228
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 64512490,
+        "end": 64790077,
+        "cycles": 277587
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 64510418,
+        "end": 64790041,
+        "cycles": 279623
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 64512295,
+        "end": 64790295,
+        "cycles": 278000
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 64511282,
+        "end": 64511308,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 64516475,
+        "end": 64792873,
+        "cycles": 276398
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 64516029,
+        "end": 64793329,
+        "cycles": 277300
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 64513898,
+        "end": 64790665,
+        "cycles": 276767
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 64510814,
+        "end": 64790629,
+        "cycles": 279815
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 64513003,
+        "end": 64790904,
+        "cycles": 277901
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 64510438,
+        "end": 64510464,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 5.922302722930908
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 90112,
+       "kernel_cycles": 283819,
+       "kernel_start": 65205742,
+       "kernel_end": 65489561,
+       "fw_cycles": 286364,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 65211805,
+         "end": 65487681,
+         "cycles": 275876
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 65211373,
+         "end": 65488325,
+         "cycles": 276952
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 65207642,
+         "end": 65485729,
+         "cycles": 278087
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 65206394,
+         "end": 65485693,
+         "cycles": 279299
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 65208842,
+         "end": 65485947,
+         "cycles": 277105
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 65205742,
+         "end": 65205768,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 65212219,
+         "end": 65489079,
+         "cycles": 276860
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 65211867,
+         "end": 65489561,
+         "cycles": 277694
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 65207846,
+         "end": 65486941,
+         "cycles": 279095
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 65206762,
+         "end": 65486905,
+         "cycles": 280143
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 65208615,
+         "end": 65487145,
+         "cycles": 278530
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 65206086,
+         "end": 65206112,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.718695878982544
+    },
+    {
+     "programs": [
+      {
+       "run_id": 92160,
+       "kernel_cycles": 282709,
+       "kernel_start": 65710054,
+       "kernel_end": 65992763,
+       "fw_cycles": 285598,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 65715779,
+         "end": 65991893,
+         "cycles": 276114
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 65715353,
+         "end": 65992425,
+         "cycles": 277072
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 65711206,
+         "end": 65989813,
+         "cycles": 278607
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 65710054,
+         "end": 65989777,
+         "cycles": 279723
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 65712223,
+         "end": 65990031,
+         "cycles": 277808
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 65710886,
+         "end": 65710912,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 65716165,
+         "end": 65992119,
+         "cycles": 275954
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 65715809,
+         "end": 65992763,
+         "cycles": 276954
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 65711478,
+         "end": 65990193,
+         "cycles": 278715
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 65712366,
+         "end": 65990157,
+         "cycles": 277791
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 65712495,
+         "end": 65990411,
+         "cycles": 277916
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 65710194,
+         "end": 65710220,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.9199020862579346
+    },
+    {
+     "programs": [
+      {
+       "run_id": 94208,
+       "kernel_cycles": 282787,
+       "kernel_start": 66213138,
+       "kernel_end": 66495925,
+       "fw_cycles": 285654,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 66218875,
+         "end": 66495303,
+         "cycles": 276428
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 66218437,
+         "end": 66495925,
+         "cycles": 277488
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 66214442,
+         "end": 66493282,
+         "cycles": 278840
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 66213430,
+         "end": 66493233,
+         "cycles": 279803
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 66214803,
+         "end": 66493487,
+         "cycles": 278684
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 66213138,
+         "end": 66213164,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 66219283,
+         "end": 66495315,
+         "cycles": 276032
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 66218825,
+         "end": 66495867,
+         "cycles": 277042
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 66216210,
+         "end": 66493221,
+         "cycles": 277011
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 66213806,
+         "end": 66493185,
+         "cycles": 279379
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 66216298,
+         "end": 66493439,
+         "cycles": 277141
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 66213542,
+         "end": 66213568,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.7292325496673584
+    },
+    {
+     "programs": [
+      {
+       "run_id": 96256,
+       "kernel_cycles": 282923,
+       "kernel_start": 66716030,
+       "kernel_end": 66998953,
+       "fw_cycles": 285626,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 66722099,
+         "end": 66998397,
+         "cycles": 276298
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 66721639,
+         "end": 66998921,
+         "cycles": 277282
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 66717630,
+         "end": 66996310,
+         "cycles": 278680
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 66716934,
+         "end": 66996261,
+         "cycles": 279327
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 66717962,
+         "end": 66996536,
+         "cycles": 278574
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 66716030,
+         "end": 66716056,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 66722401,
+         "end": 66998341,
+         "cycles": 275940
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 66722099,
+         "end": 66998953,
+         "cycles": 276854
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 66717654,
+         "end": 66996249,
+         "cycles": 278595
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 66717394,
+         "end": 66996225,
+         "cycles": 278831
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 66718583,
+         "end": 66996488,
+         "cycles": 277905
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 66716102,
+         "end": 66716128,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.6572377681732178
+    },
+    {
+     "programs": [
+      {
+       "run_id": 98304,
+       "kernel_cycles": 283075,
+       "kernel_start": 67219662,
+       "kernel_end": 67502737,
+       "fw_cycles": 285946,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 67225445,
+         "end": 67502235,
+         "cycles": 276790
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 67224925,
+         "end": 67502737,
+         "cycles": 277812
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 67220978,
+         "end": 67500174,
+         "cycles": 279196
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 67220094,
+         "end": 67500125,
+         "cycles": 280031
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 67221782,
+         "end": 67500379,
+         "cycles": 278597
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 67219662,
+         "end": 67219688,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 67225873,
+         "end": 67501507,
+         "cycles": 275634
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 67225431,
+         "end": 67502051,
+         "cycles": 276620
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 67221178,
+         "end": 67499410,
+         "cycles": 278232
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 67220062,
+         "end": 67499361,
+         "cycles": 279299
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 67221755,
+         "end": 67499636,
+         "cycles": 277881
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 67220746,
+         "end": 67220772,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.7091562747955322
+    }
+   ],
+   "note": "sim 4 cores x 32 sticks; emu 2 cores x 64 sticks"
+  },
+  "wide_c280_3blocks": {
+   "spec": {
+    "channels": 280,
+    "in_h": 8,
+    "in_w": 4,
+    "cores": 1,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "1xHEIGHT (32 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 100352,
+      "kernel_cycles": 642309,
+      "kernel_start": 68079578,
+      "kernel_end": 68721887,
+      "fw_cycles": 645182,
+      "n_rows": 26,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 68085483,
+        "end": 68677233,
+        "cycles": 591750
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 68085081,
+        "end": 68721887,
+        "cycles": 636806
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 68081498,
+        "end": 68712089,
+        "cycles": 630591
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 68080255,
+        "end": 68712065,
+        "cycles": 631810
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 68083290,
+        "end": 68668977,
+        "cycles": 585687
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 68079578,
+        "end": 68079604,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 11.847663402557373
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 102400,
+       "kernel_cycles": 641407,
+       "kernel_start": 69126666,
+       "kernel_end": 69768073,
+       "fw_cycles": 644132,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 69132667,
+         "end": 69723343,
+         "cycles": 590676
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 69132023,
+         "end": 69768073,
+         "cycles": 636050
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 69128298,
+         "end": 69758351,
+         "cycles": 630053
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 69127754,
+         "end": 69758333,
+         "cycles": 630579
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 69128470,
+         "end": 69715153,
+         "cycles": 586683
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 69126666,
+         "end": 69126692,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 5.582187652587891
+    },
+    {
+     "programs": [
+      {
+       "run_id": 104448,
+       "kernel_cycles": 641735,
+       "kernel_start": 69984014,
+       "kernel_end": 70625749,
+       "fw_cycles": 645430,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 69989165,
+         "end": 70580961,
+         "cycles": 591796
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 69988603,
+         "end": 70625749,
+         "cycles": 637146
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 69985006,
+         "end": 70616029,
+         "cycles": 631023
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 69984014,
+         "end": 70616001,
+         "cycles": 631987
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 69985326,
+         "end": 70572709,
+         "cycles": 587383
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 69984067,
+         "end": 69984093,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 7.021694660186768
+    },
+    {
+     "programs": [
+      {
+       "run_id": 106496,
+       "kernel_cycles": 641828,
+       "kernel_start": 70841359,
+       "kernel_end": 71483187,
+       "fw_cycles": 644838,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 70847195,
+         "end": 71438487,
+         "cycles": 591292
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 70846551,
+         "end": 71483187,
+         "cycles": 636636
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 70842542,
+         "end": 71473420,
+         "cycles": 630878
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 70841674,
+         "end": 71473405,
+         "cycles": 631731
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 70842890,
+         "end": 71430393,
+         "cycles": 587503
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 70841359,
+         "end": 70841385,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 9.347010612487793
+    },
+    {
+     "programs": [
+      {
+       "run_id": 108544,
+       "kernel_cycles": 642269,
+       "kernel_start": 71696086,
+       "kernel_end": 72338355,
+       "fw_cycles": 645022,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 71702057,
+         "end": 72293643,
+         "cycles": 591586
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 71701551,
+         "end": 72338355,
+         "cycles": 636804
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 71698414,
+         "end": 72328598,
+         "cycles": 630184
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 71696938,
+         "end": 72328573,
+         "cycles": 631635
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 71698054,
+         "end": 72285436,
+         "cycles": 587382
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 71696086,
+         "end": 71696112,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 7.155928611755371
+    },
+    {
+     "programs": [
+      {
+       "run_id": 110592,
+       "kernel_cycles": 641748,
+       "kernel_start": 72551203,
+       "kernel_end": 73192951,
+       "fw_cycles": 644458,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 72557245,
+         "end": 73148239,
+         "cycles": 590994
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 72556739,
+         "end": 73192951,
+         "cycles": 636212
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 72552906,
+         "end": 73183188,
+         "cycles": 630282
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 72551658,
+         "end": 73183173,
+         "cycles": 631515
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 72553162,
+         "end": 73140060,
+         "cycles": 586898
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 72551203,
+         "end": 72551229,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 7.915569305419922
+    }
+   ],
+   "note": "identical"
+  },
+  "avg_k3x3_s1": {
+   "spec": {
+    "pool": "avg",
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     1,
+     1
+    ],
+    "padding": [
+     0,
+     0
+    ],
+    "cores": 1
+   },
+   "core_desc": "1xHEIGHT (128 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.003689",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 112640,
+      "kernel_cycles": 1409187,
+      "kernel_start": 73763150,
+      "kernel_end": 75172337,
+      "fw_cycles": 1412054,
+      "n_rows": 26,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 73768923,
+        "end": 75171823,
+        "cycles": 1402900
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 73768341,
+        "end": 75172337,
+        "cycles": 1403996
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 73764486,
+        "end": 75169729,
+        "cycles": 1405243
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 73763874,
+        "end": 75169733,
+        "cycles": 1405859
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 73765518,
+        "end": 75170023,
+        "cycles": 1404505
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 73763150,
+        "end": 73763176,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 21.936123371124268
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 114688,
+       "kernel_cycles": 1408877,
+       "kernel_start": 75593814,
+       "kernel_end": 77002691,
+       "fw_cycles": 1412090,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 75599163,
+         "end": 77002181,
+         "cycles": 1403018
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 75598587,
+         "end": 77002691,
+         "cycles": 1404104
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 75595122,
+         "end": 77000029,
+         "cycles": 1404907
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 75593814,
+         "end": 77000033,
+         "cycles": 1406219
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 75595610,
+         "end": 77000311,
+         "cycles": 1404701
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 75594274,
+         "end": 75594300,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 13.487571477890015
+    },
+    {
+     "programs": [
+      {
+       "run_id": 116736,
+       "kernel_cycles": 1407527,
+       "kernel_start": 77213054,
+       "kernel_end": 78620581,
+       "fw_cycles": 1410524,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 77218941,
+         "end": 78620067,
+         "cycles": 1401126
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 77218605,
+         "end": 78620581,
+         "cycles": 1401976
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 77214466,
+         "end": 78617981,
+         "cycles": 1403515
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 77213054,
+         "end": 78617973,
+         "cycles": 1404919
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 77215126,
+         "end": 78618263,
+         "cycles": 1403137
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 77213490,
+         "end": 77213516,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 15.378119945526123
+    },
+    {
+     "programs": [
+      {
+       "run_id": 118784,
+       "kernel_cycles": 1409699,
+       "kernel_start": 78830222,
+       "kernel_end": 80239921,
+       "fw_cycles": 1412302,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 78836329,
+         "end": 80239407,
+         "cycles": 1403078
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 78835949,
+         "end": 80239921,
+         "cycles": 1403972
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 78832031,
+         "end": 80237305,
+         "cycles": 1405274
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 78831522,
+         "end": 80237309,
+         "cycles": 1405787
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 78832722,
+         "end": 80237599,
+         "cycles": 1404877
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 78830222,
+         "end": 78830248,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 14.524533748626709
+    },
+    {
+     "programs": [
+      {
+       "run_id": 120832,
+       "kernel_cycles": 1409791,
+       "kernel_start": 80450174,
+       "kernel_end": 81859965,
+       "fw_cycles": 1412600,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 80456059,
+         "end": 81859511,
+         "cycles": 1403452
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 80455679,
+         "end": 81859965,
+         "cycles": 1404286
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 80451602,
+         "end": 81857329,
+         "cycles": 1405727
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 80450334,
+         "end": 81857344,
+         "cycles": 1407010
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 80452382,
+         "end": 81857635,
+         "cycles": 1405253
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 80450174,
+         "end": 80450200,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 14.695701837539673
+    },
+    {
+     "programs": [
+      {
+       "run_id": 122880,
+       "kernel_cycles": 1410057,
+       "kernel_start": 82070802,
+       "kernel_end": 83480859,
+       "fw_cycles": 1412668,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 82076913,
+         "end": 83480315,
+         "cycles": 1403402
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 82076577,
+         "end": 83480859,
+         "cycles": 1404282
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 82072362,
+         "end": 83478185,
+         "cycles": 1405823
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 82071426,
+         "end": 83478200,
+         "cycles": 1406774
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 82072918,
+         "end": 83478499,
+         "cycles": 1405581
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 82070802,
+         "end": 82070828,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 13.2318856716156
+    }
+   ],
+   "note": "identical"
+  },
+  "avg_k7x7_s1_large": {
+   "spec": {
+    "pool": "avg",
+    "kernel": [
+     7,
+     7
+    ],
+    "stride": [
+     1,
+     1
+    ],
+    "padding": [
+     0,
+     0
+    ],
+    "cores": 1
+   },
+   "core_desc": "1xHEIGHT (128 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.002565",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 124928,
+      "kernel_cycles": 1096693,
+      "kernel_start": 84050370,
+      "kernel_end": 85147063,
+      "fw_cycles": 1099344,
+      "n_rows": 26,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 84056757,
+        "end": 85146341,
+        "cycles": 1089584
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 84056423,
+        "end": 85147063,
+        "cycles": 1090640
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 84051731,
+        "end": 85144485,
+        "cycles": 1092754
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 84050862,
+        "end": 85144483,
+        "cycles": 1093621
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 84052242,
+        "end": 85144768,
+        "cycles": 1092526
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 84050370,
+        "end": 84050396,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 15.44719648361206
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 126976,
+       "kernel_cycles": 1096797,
+       "kernel_start": 85542958,
+       "kernel_end": 86639755,
+       "fw_cycles": 1099570,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 85549251,
+         "end": 86638983,
+         "cycles": 1089732
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 85548695,
+         "end": 86639755,
+         "cycles": 1091060
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 85544180,
+         "end": 86637205,
+         "cycles": 1093025
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 85543854,
+         "end": 86637203,
+         "cycles": 1093349
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 85545970,
+         "end": 86637482,
+         "cycles": 1091512
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 85542958,
+         "end": 85542984,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 11.51462435722351
+    },
+    {
+     "programs": [
+      {
+       "run_id": 129024,
+       "kernel_cycles": 1096361,
+       "kernel_start": 86849978,
+       "kernel_end": 87946339,
+       "fw_cycles": 1098876,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 86856351,
+         "end": 87945555,
+         "cycles": 1089204
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 86855963,
+         "end": 87946339,
+         "cycles": 1090376
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 86851395,
+         "end": 87943741,
+         "cycles": 1092346
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 86851398,
+         "end": 87943752,
+         "cycles": 1092354
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 86852458,
+         "end": 87944040,
+         "cycles": 1091582
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 86849978,
+         "end": 86850004,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 11.467638969421387
+    },
+    {
+     "programs": [
+      {
+       "run_id": 131072,
+       "kernel_cycles": 1096045,
+       "kernel_start": 88156718,
+       "kernel_end": 89252763,
+       "fw_cycles": 1098786,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 88163059,
+         "end": 89252021,
+         "cycles": 1088962
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 88162721,
+         "end": 89252763,
+         "cycles": 1090042
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 88158059,
+         "end": 89250225,
+         "cycles": 1092166
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 88157246,
+         "end": 89250236,
+         "cycles": 1092990
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 88159402,
+         "end": 89250508,
+         "cycles": 1091106
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 88156718,
+         "end": 88156744,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 14.156875371932983
+    },
+    {
+     "programs": [
+      {
+       "run_id": 133120,
+       "kernel_cycles": 1096821,
+       "kernel_start": 89462614,
+       "kernel_end": 90559435,
+       "fw_cycles": 1099360,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 89469153,
+         "end": 90558685,
+         "cycles": 1089532
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 89468919,
+         "end": 90559435,
+         "cycles": 1090516
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 89464119,
+         "end": 90556873,
+         "cycles": 1092754
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 89463286,
+         "end": 90556884,
+         "cycles": 1093598
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 89464830,
+         "end": 90557156,
+         "cycles": 1092326
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 89462614,
+         "end": 89462640,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 10.173006772994995
+    },
+    {
+     "programs": [
+      {
+       "run_id": 135168,
+       "kernel_cycles": 1096335,
+       "kernel_start": 90769530,
+       "kernel_end": 91865865,
+       "fw_cycles": 1098882,
+       "n_rows": 26,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 90776015,
+         "end": 91865047,
+         "cycles": 1089032
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 90775527,
+         "end": 91865865,
+         "cycles": 1090338
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 90770951,
+         "end": 91863245,
+         "cycles": 1092294
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 90769930,
+         "end": 91863256,
+         "cycles": 1093326
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 90771646,
+         "end": 91863528,
+         "cycles": 1091882
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 90769530,
+         "end": 90769556,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 11.412249565124512
+    }
+   ],
+   "note": "identical"
+  },
+  "width_1x2_c128": {
+   "spec": {
+    "channels": 128,
+    "in_h": 8,
+    "in_w": 4,
+    "shard": "width",
+    "grid_yx": [
+     1,
+     2
+    ],
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "1x2xWIDTH",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 137216,
+      "kernel_cycles": 150435,
+      "kernel_start": 92444250,
+      "kernel_end": 92594685,
+      "fw_cycles": 153174,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 92450105,
+        "end": 92594099,
+        "cycles": 143994
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 92449747,
+        "end": 92594545,
+        "cycles": 144798
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 92445498,
+        "end": 92591929,
+        "cycles": 146431
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 92444466,
+        "end": 92591893,
+        "cycles": 147427
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 92446030,
+        "end": 92592146,
+        "cycles": 146116
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 92444250,
+        "end": 92444276,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 92450327,
+        "end": 92594147,
+        "cycles": 143820
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 92449931,
+        "end": 92594685,
+        "cycles": 144754
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 92446302,
+        "end": 92592141,
+        "cycles": 145839
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 92446042,
+        "end": 92592105,
+        "cycles": 146063
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 92446786,
+        "end": 92592358,
+        "cycles": 145572
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 92444622,
+        "end": 92444648,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 4.767194509506226
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 139264,
+       "kernel_cycles": 150049,
+       "kernel_start": 92997858,
+       "kernel_end": 93147907,
+       "fw_cycles": 153004,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 93003471,
+         "end": 93147171,
+         "cycles": 143700
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 93002917,
+         "end": 93147669,
+         "cycles": 144752
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 92998978,
+         "end": 93145081,
+         "cycles": 146103
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 92998818,
+         "end": 93145045,
+         "cycles": 146227
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 92999914,
+         "end": 93145320,
+         "cycles": 145406
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 92997858,
+         "end": 92997884,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 93003603,
+         "end": 93147343,
+         "cycles": 143740
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 93003133,
+         "end": 93147907,
+         "cycles": 144774
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 92999322,
+         "end": 93145281,
+         "cycles": 145959
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 92998206,
+         "end": 93145257,
+         "cycles": 147051
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 92999966,
+         "end": 93145498,
+         "cycles": 145532
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 92997878,
+         "end": 92997904,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3629355430603027
+    },
+    {
+     "programs": [
+      {
+       "run_id": 141312,
+       "kernel_cycles": 150123,
+       "kernel_start": 93368594,
+       "kernel_end": 93518717,
+       "fw_cycles": 153232,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 93374145,
+         "end": 93517023,
+         "cycles": 142878
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 93373681,
+         "end": 93517591,
+         "cycles": 143910
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 93369758,
+         "end": 93515015,
+         "cycles": 145257
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 93369178,
+         "end": 93514969,
+         "cycles": 145791
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 93370606,
+         "end": 93515232,
+         "cycles": 144626
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 93369054,
+         "end": 93369080,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 93374477,
+         "end": 93518251,
+         "cycles": 143774
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 93374081,
+         "end": 93518717,
+         "cycles": 144636
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 93371122,
+         "end": 93516145,
+         "cycles": 145023
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 93369518,
+         "end": 93516121,
+         "cycles": 146603
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 93370586,
+         "end": 93516349,
+         "cycles": 145763
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 93368594,
+         "end": 93368620,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3581151962280273
+    },
+    {
+     "programs": [
+      {
+       "run_id": 143360,
+       "kernel_cycles": 150337,
+       "kernel_start": 93737430,
+       "kernel_end": 93887767,
+       "fw_cycles": 153396,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 93743195,
+         "end": 93886735,
+         "cycles": 143540
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 93742857,
+         "end": 93887269,
+         "cycles": 144412
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 93738722,
+         "end": 93884645,
+         "cycles": 145923
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 93737430,
+         "end": 93884609,
+         "cycles": 147179
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 93740066,
+         "end": 93884870,
+         "cycles": 144804
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 93737654,
+         "end": 93737680,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 93743395,
+         "end": 93887307,
+         "cycles": 143912
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 93742919,
+         "end": 93887767,
+         "cycles": 144848
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 93739266,
+         "end": 93885141,
+         "cycles": 145875
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 93739030,
+         "end": 93885117,
+         "cycles": 146087
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 93739578,
+         "end": 93885380,
+         "cycles": 145802
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 93737866,
+         "end": 93737892,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.4040472507476807
+    },
+    {
+     "programs": [
+      {
+       "run_id": 145408,
+       "kernel_cycles": 150137,
+       "kernel_start": 94107438,
+       "kernel_end": 94257575,
+       "fw_cycles": 153364,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 94112847,
+         "end": 94257039,
+         "cycles": 144192
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 94112467,
+         "end": 94257575,
+         "cycles": 145108
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 94108622,
+         "end": 94254927,
+         "cycles": 146305
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 94107566,
+         "end": 94254893,
+         "cycles": 147327
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 94110506,
+         "end": 94255164,
+         "cycles": 144658
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 94107686,
+         "end": 94107712,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 94113411,
+         "end": 94256879,
+         "cycles": 143468
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 94113071,
+         "end": 94257471,
+         "cycles": 144400
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 94109450,
+         "end": 94254845,
+         "cycles": 145395
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 94111150,
+         "end": 94254821,
+         "cycles": 143671
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 94109298,
+         "end": 94255084,
+         "cycles": 145786
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 94107438,
+         "end": 94107464,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.4092681407928467
+    },
+    {
+     "programs": [
+      {
+       "run_id": 147456,
+       "kernel_cycles": 150641,
+       "kernel_start": 94476494,
+       "kernel_end": 94627135,
+       "fw_cycles": 153434,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 94482341,
+         "end": 94626255,
+         "cycles": 143914
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 94482005,
+         "end": 94626793,
+         "cycles": 144788
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 94477710,
+         "end": 94624211,
+         "cycles": 146501
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 94477493,
+         "end": 94624177,
+         "cycles": 146684
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 94479026,
+         "end": 94624448,
+         "cycles": 145422
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 94476494,
+         "end": 94476520,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 94482603,
+         "end": 94626603,
+         "cycles": 144000
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 94482267,
+         "end": 94627135,
+         "cycles": 144868
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 94477998,
+         "end": 94624515,
+         "cycles": 146517
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 94476910,
+         "end": 94624481,
+         "cycles": 147571
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 94478510,
+         "end": 94624732,
+         "cycles": 146222
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 94476766,
+         "end": 94476792,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3991663455963135
+    }
+   ],
+   "note": "identical"
+  },
+  "block_1x2_c128": {
+   "spec": {
+    "channels": 128,
+    "shard": "block",
+    "grid_yx": [
+     1,
+     2
+    ],
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "1x2xBLOCK",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 149504,
+      "kernel_cycles": 550065,
+      "kernel_start": 95209930,
+      "kernel_end": 95759995,
+      "fw_cycles": 552834,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 95215879,
+        "end": 95759495,
+        "cycles": 543616
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 95215331,
+        "end": 95759995,
+        "cycles": 544664
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 95211826,
+        "end": 95757385,
+        "cycles": 545559
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 95210370,
+        "end": 95757349,
+        "cycles": 546979
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 95211930,
+        "end": 95757602,
+        "cycles": 545672
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 95209930,
+        "end": 95209956,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 95216211,
+        "end": 95759339,
+        "cycles": 543128
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 95215695,
+        "end": 95759883,
+        "cycles": 544188
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 95211654,
+        "end": 95757293,
+        "cycles": 545639
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 95210738,
+        "end": 95757269,
+        "cycles": 546531
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 95212262,
+        "end": 95757522,
+        "cycles": 545260
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 95210214,
+        "end": 95210240,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 8.856500387191772
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 151552,
+       "kernel_cycles": 550251,
+       "kernel_start": 96183254,
+       "kernel_end": 96733505,
+       "fw_cycles": 552822,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 96189359,
+         "end": 96732787,
+         "cycles": 543428
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 96188885,
+         "end": 96733331,
+         "cycles": 544446
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 96185018,
+         "end": 96730733,
+         "cycles": 545715
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 96183886,
+         "end": 96730697,
+         "cycles": 546811
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 96185766,
+         "end": 96730950,
+         "cycles": 545184
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 96183254,
+         "end": 96183280,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 96189699,
+         "end": 96732919,
+         "cycles": 543220
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 96188943,
+         "end": 96733505,
+         "cycles": 544562
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 96187034,
+         "end": 96730865,
+         "cycles": 543831
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 96184522,
+         "end": 96730841,
+         "cycles": 546319
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 96186206,
+         "end": 96731090,
+         "cycles": 544884
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 96183754,
+         "end": 96183780,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.84982442855835
+    },
+    {
+     "programs": [
+      {
+       "run_id": 153600,
+       "kernel_cycles": 549857,
+       "kernel_start": 96953294,
+       "kernel_end": 97503151,
+       "fw_cycles": 552462,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 96959413,
+         "end": 97502199,
+         "cycles": 542786
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 96958957,
+         "end": 97502771,
+         "cycles": 543814
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 96954970,
+         "end": 97500177,
+         "cycles": 545207
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 96954814,
+         "end": 97500153,
+         "cycles": 545339
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 96956098,
+         "end": 97500394,
+         "cycles": 544296
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 96953294,
+         "end": 96953320,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 96959503,
+         "end": 97502611,
+         "cycles": 543108
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 96958909,
+         "end": 97503151,
+         "cycles": 544242
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 96954954,
+         "end": 97500485,
+         "cycles": 545531
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 96953994,
+         "end": 97500461,
+         "cycles": 546467
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 96955710,
+         "end": 97500702,
+         "cycles": 544992
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 96953438,
+         "end": 96953464,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.45347785949707
+    },
+    {
+     "programs": [
+      {
+       "run_id": 155648,
+       "kernel_cycles": 550035,
+       "kernel_start": 97746194,
+       "kernel_end": 98296229,
+       "fw_cycles": 552702,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 97752353,
+         "end": 98294971,
+         "cycles": 542618
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 97752019,
+         "end": 98295555,
+         "cycles": 543536
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 97747622,
+         "end": 98292901,
+         "cycles": 545279
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 97746710,
+         "end": 98292877,
+         "cycles": 546167
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 97749466,
+         "end": 98293140,
+         "cycles": 543674
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 97746194,
+         "end": 97746220,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 97752711,
+         "end": 98295717,
+         "cycles": 543006
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 97752073,
+         "end": 98296229,
+         "cycles": 544156
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 97748170,
+         "end": 98293669,
+         "cycles": 545499
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 97747514,
+         "end": 98293645,
+         "cycles": 546131
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 97748842,
+         "end": 98293882,
+         "cycles": 545040
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 97746646,
+         "end": 97746673,
+         "cycles": 27
+        }
+       }
+      }
+     ],
+     "wall_s": 5.185159683227539
+    },
+    {
+     "programs": [
+      {
+       "run_id": 157696,
+       "kernel_cycles": 549327,
+       "kernel_start": 98516246,
+       "kernel_end": 99065573,
+       "fw_cycles": 552350,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 98521815,
+         "end": 99064841,
+         "cycles": 543026
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 98521275,
+         "end": 99065325,
+         "cycles": 544050
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 98518626,
+         "end": 99062797,
+         "cycles": 544171
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 98516302,
+         "end": 99062773,
+         "cycles": 546471
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 98517818,
+         "end": 99063001,
+         "cycles": 545183
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 98516318,
+         "end": 98516344,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 98522255,
+         "end": 99065019,
+         "cycles": 542764
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 98521923,
+         "end": 99065573,
+         "cycles": 543650
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 98517546,
+         "end": 99062917,
+         "cycles": 545371
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 98516406,
+         "end": 99062893,
+         "cycles": 546487
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 98518318,
+         "end": 99063156,
+         "cycles": 544838
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 98516246,
+         "end": 98516272,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.34339714050293
+    },
+    {
+     "programs": [
+      {
+       "run_id": 159744,
+       "kernel_cycles": 549605,
+       "kernel_start": 99286322,
+       "kernel_end": 99835927,
+       "fw_cycles": 552864,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 99291719,
+         "end": 99835269,
+         "cycles": 543550
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 99291275,
+         "end": 99835927,
+         "cycles": 544652
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 99288558,
+         "end": 99833305,
+         "cycles": 544747
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 99286769,
+         "end": 99833281,
+         "cycles": 546512
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 99287610,
+         "end": 99833532,
+         "cycles": 545922
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 99286322,
+         "end": 99286348,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 99292097,
+         "end": 99834807,
+         "cycles": 542710
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 99291657,
+         "end": 99835409,
+         "cycles": 543752
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 99287830,
+         "end": 99832809,
+         "cycles": 544979
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 99286678,
+         "end": 99832785,
+         "cycles": 546107
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 99288302,
+         "end": 99833026,
+         "cycles": 544724
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 99286346,
+         "end": 99286372,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 6.899017333984375
+    }
+   ],
+   "note": "stand-in for block_2x2 (2-cluster grid)"
+  },
+  "k5x5_s2_2c32": {
+   "spec": {
+    "in_h": 8,
+    "in_w": 8,
+    "kernel": [
+     5,
+     5
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     2,
+     2
+    ],
+    "cores": 2
+   },
+   "core_desc": "2xHEIGHT (32 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 161792,
+      "kernel_cycles": 256911,
+      "kernel_start": 100415482,
+      "kernel_end": 100672393,
+      "fw_cycles": 260018,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 100421067,
+        "end": 100670855,
+        "cycles": 249788
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 100420669,
+        "end": 100671413,
+        "cycles": 250744
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 100417114,
+        "end": 100668771,
+        "cycles": 251657
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 100416202,
+        "end": 100668725,
+        "cycles": 252523
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 100417295,
+        "end": 100669008,
+        "cycles": 251713
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 100416594,
+        "end": 100416620,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 100421445,
+        "end": 100671895,
+        "cycles": 250450
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 100421091,
+        "end": 100672393,
+        "cycles": 251302
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 100417594,
+        "end": 100669737,
+        "cycles": 252143
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 100415678,
+        "end": 100669701,
+        "cycles": 254023
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 100417155,
+        "end": 100669955,
+        "cycles": 252800
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 100415482,
+        "end": 100415508,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 5.690660715103149
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 163840,
+       "kernel_cycles": 256391,
+       "kernel_start": 101077786,
+       "kernel_end": 101334177,
+       "fw_cycles": 259364,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 101083441,
+         "end": 101332991,
+         "cycles": 249550
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 101083005,
+         "end": 101333533,
+         "cycles": 250528
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 101078882,
+         "end": 101330865,
+         "cycles": 251983
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 101078362,
+         "end": 101330829,
+         "cycles": 252467
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 101079419,
+         "end": 101331069,
+         "cycles": 251650
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 101078642,
+         "end": 101078668,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 101083793,
+         "end": 101333669,
+         "cycles": 249876
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 101083353,
+         "end": 101334177,
+         "cycles": 250824
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 101080018,
+         "end": 101331541,
+         "cycles": 251523
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 101078358,
+         "end": 101331505,
+         "cycles": 253147
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 101079946,
+         "end": 101331745,
+         "cycles": 251799
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 101077786,
+         "end": 101077812,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.495907783508301
+    },
+    {
+     "programs": [
+      {
+       "run_id": 165888,
+       "kernel_cycles": 257139,
+       "kernel_start": 101553282,
+       "kernel_end": 101810421,
+       "fw_cycles": 259714,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 101559501,
+         "end": 101809071,
+         "cycles": 249570
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 101559165,
+         "end": 101809837,
+         "cycles": 250672
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 101554722,
+         "end": 101807141,
+         "cycles": 252419
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 101553750,
+         "end": 101807117,
+         "cycles": 253367
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 101556290,
+         "end": 101807380,
+         "cycles": 251090
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 101553282,
+         "end": 101553308,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 101559759,
+         "end": 101809883,
+         "cycles": 250124
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 101559537,
+         "end": 101810421,
+         "cycles": 250884
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 101555470,
+         "end": 101807758,
+         "cycles": 252288
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 101553998,
+         "end": 101807721,
+         "cycles": 253723
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 101555818,
+         "end": 101807984,
+         "cycles": 252166
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 101553742,
+         "end": 101553768,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.4578909873962402
+    },
+    {
+     "programs": [
+      {
+       "run_id": 167936,
+       "kernel_cycles": 256211,
+       "kernel_start": 102029222,
+       "kernel_end": 102285433,
+       "fw_cycles": 258872,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 102035371,
+         "end": 102284619,
+         "cycles": 249248
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 102035073,
+         "end": 102285249,
+         "cycles": 250176
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 102030926,
+         "end": 102282609,
+         "cycles": 251683
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 102029634,
+         "end": 102282585,
+         "cycles": 252951
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 102031275,
+         "end": 102282848,
+         "cycles": 251573
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 102029222,
+         "end": 102029248,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 102035431,
+         "end": 102284793,
+         "cycles": 249362
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 102035051,
+         "end": 102285433,
+         "cycles": 250382
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 102030782,
+         "end": 102282822,
+         "cycles": 252040
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 102030518,
+         "end": 102282777,
+         "cycles": 252259
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 102031579,
+         "end": 102283028,
+         "cycles": 251449
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 102031338,
+         "end": 102031364,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.396544933319092
+    },
+    {
+     "programs": [
+      {
+       "run_id": 169984,
+       "kernel_cycles": 256099,
+       "kernel_start": 102504810,
+       "kernel_end": 102760909,
+       "fw_cycles": 258936,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 102510671,
+         "end": 102760349,
+         "cycles": 249678
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 102510169,
+         "end": 102760909,
+         "cycles": 250740
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 102505994,
+         "end": 102758289,
+         "cycles": 252295
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 102505310,
+         "end": 102758265,
+         "cycles": 252955
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 102506771,
+         "end": 102758507,
+         "cycles": 251736
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 102504810,
+         "end": 102504836,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 102511017,
+         "end": 102759635,
+         "cycles": 248618
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 102510683,
+         "end": 102760361,
+         "cycles": 249678
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 102506830,
+         "end": 102757802,
+         "cycles": 250972
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 102505366,
+         "end": 102757765,
+         "cycles": 252399
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 102507951,
+         "end": 102758007,
+         "cycles": 250056
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 102506086,
+         "end": 102506112,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.4430928230285645
+    },
+    {
+     "programs": [
+      {
+       "run_id": 172032,
+       "kernel_cycles": 256583,
+       "kernel_start": 102980478,
+       "kernel_end": 103237061,
+       "fw_cycles": 259170,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 102986537,
+         "end": 103235873,
+         "cycles": 249336
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 102986137,
+         "end": 103236685,
+         "cycles": 250548
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 102981846,
+         "end": 103234025,
+         "cycles": 252179
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 102981006,
+         "end": 103234001,
+         "cycles": 252995
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 102982382,
+         "end": 103234264,
+         "cycles": 251882
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 102980478,
+         "end": 102980504,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 102986843,
+         "end": 103236495,
+         "cycles": 249652
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 102986697,
+         "end": 103237061,
+         "cycles": 250364
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 102982206,
+         "end": 103234466,
+         "cycles": 252260
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 102982574,
+         "end": 103234429,
+         "cycles": 251855
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 102982587,
+         "end": 103234671,
+         "cycles": 252084
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 102980894,
+         "end": 102980920,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 3.4487502574920654
+    }
+   ],
+   "note": "k5x5_s2 @ 32 sticks/core"
+  },
+  "batch2_4x8_2c32": {
+   "spec": {
+    "batch": 2,
+    "in_h": 4,
+    "in_w": 8,
+    "cores": 2,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "2xHEIGHT (32 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 174080,
+      "kernel_cycles": 150103,
+      "kernel_start": 103815954,
+      "kernel_end": 103966057,
+      "fw_cycles": 153016,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 103821689,
+        "end": 103965399,
+        "cycles": 143710
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 103821169,
+        "end": 103965903,
+        "cycles": 144734
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 103817230,
+        "end": 103963269,
+        "cycles": 146039
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 103816290,
+        "end": 103963233,
+        "cycles": 146943
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 103817798,
+        "end": 103963492,
+        "cycles": 145694
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 103815954,
+        "end": 103815980,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 103821947,
+        "end": 103965519,
+        "cycles": 143572
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 103821421,
+        "end": 103966057,
+        "cycles": 144636
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 103817478,
+        "end": 103963425,
+        "cycles": 145947
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 103816814,
+        "end": 103963389,
+        "cycles": 146575
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 103818186,
+        "end": 103963642,
+        "cycles": 145456
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 103816182,
+        "end": 103816208,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 4.553021192550659
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 176128,
+       "kernel_cycles": 150583,
+       "kernel_start": 104369702,
+       "kernel_end": 104520285,
+       "fw_cycles": 153242,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 104375591,
+         "end": 104518735,
+         "cycles": 143144
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 104375009,
+         "end": 104519339,
+         "cycles": 144330
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 104371274,
+         "end": 104516681,
+         "cycles": 145407
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 104370918,
+         "end": 104516645,
+         "cycles": 145727
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 104371810,
+         "end": 104516920,
+         "cycles": 145110
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 104369702,
+         "end": 104369728,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 104376099,
+         "end": 104519815,
+         "cycles": 143716
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 104375759,
+         "end": 104520285,
+         "cycles": 144526
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 104371530,
+         "end": 104517709,
+         "cycles": 146179
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 104370342,
+         "end": 104517673,
+         "cycles": 147331
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 104371966,
+         "end": 104517913,
+         "cycles": 145947
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 104369938,
+         "end": 104369964,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.409855842590332
+    },
+    {
+     "programs": [
+      {
+       "run_id": 178176,
+       "kernel_cycles": 150445,
+       "kernel_start": 104738642,
+       "kernel_end": 104889087,
+       "fw_cycles": 153094,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 104744627,
+         "end": 104888451,
+         "cycles": 143824
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 104744141,
+         "end": 104889087,
+         "cycles": 144946
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 104740062,
+         "end": 104886483,
+         "cycles": 146421
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 104738974,
+         "end": 104886449,
+         "cycles": 147475
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 104740686,
+         "end": 104886720,
+         "cycles": 146034
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 104738642,
+         "end": 104738668,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 104745009,
+         "end": 104888547,
+         "cycles": 143538
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 104744347,
+         "end": 104889077,
+         "cycles": 144730
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 104740734,
+         "end": 104886481,
+         "cycles": 145747
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 104739826,
+         "end": 104886457,
+         "cycles": 146631
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 104740970,
+         "end": 104886698,
+         "cycles": 145728
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 104738982,
+         "end": 104739008,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.4264681339263916
+    },
+    {
+     "programs": [
+      {
+       "run_id": 180224,
+       "kernel_cycles": 150313,
+       "kernel_start": 105108466,
+       "kernel_end": 105258779,
+       "fw_cycles": 152936,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 105114443,
+         "end": 105257883,
+         "cycles": 143440
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 105114111,
+         "end": 105258365,
+         "cycles": 144254
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 105110418,
+         "end": 105255853,
+         "cycles": 145435
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 105109810,
+         "end": 105255829,
+         "cycles": 146019
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 105110446,
+         "end": 105256057,
+         "cycles": 145611
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 105108466,
+         "end": 105108492,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 105115101,
+         "end": 105258307,
+         "cycles": 143206
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 105114885,
+         "end": 105258779,
+         "cycles": 143894
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 105110902,
+         "end": 105256117,
+         "cycles": 145215
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 105109990,
+         "end": 105256093,
+         "cycles": 146103
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 105111134,
+         "end": 105256334,
+         "cycles": 145200
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 105109150,
+         "end": 105109176,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3842294216156006
+    },
+    {
+     "programs": [
+      {
+       "run_id": 182272,
+       "kernel_cycles": 150205,
+       "kernel_start": 105476702,
+       "kernel_end": 105626907,
+       "fw_cycles": 153090,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 105482637,
+         "end": 105625847,
+         "cycles": 143210
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 105482297,
+         "end": 105626415,
+         "cycles": 144118
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 105478090,
+         "end": 105623763,
+         "cycles": 145673
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 105477086,
+         "end": 105623729,
+         "cycles": 146643
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 105478766,
+         "end": 105623980,
+         "cycles": 145214
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 105477130,
+         "end": 105477156,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 105482557,
+         "end": 105626443,
+         "cycles": 143886
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 105481929,
+         "end": 105626907,
+         "cycles": 144978
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 105478986,
+         "end": 105624265,
+         "cycles": 145279
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 105477874,
+         "end": 105624241,
+         "cycles": 146367
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 105479234,
+         "end": 105624469,
+         "cycles": 145235
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 105476702,
+         "end": 105476728,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3623225688934326
+    },
+    {
+     "programs": [
+      {
+       "run_id": 184320,
+       "kernel_cycles": 150191,
+       "kernel_start": 105845970,
+       "kernel_end": 105996161,
+       "fw_cycles": 153324,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 105851535,
+         "end": 105995051,
+         "cycles": 143516
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 105851067,
+         "end": 105995623,
+         "cycles": 144556
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 105846974,
+         "end": 105992989,
+         "cycles": 146015
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 105845970,
+         "end": 105992965,
+         "cycles": 146995
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 105847522,
+         "end": 105993216,
+         "cycles": 145694
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 105846110,
+         "end": 105846136,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 105851991,
+         "end": 105995511,
+         "cycles": 143520
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 105851477,
+         "end": 105996161,
+         "cycles": 144684
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 105847430,
+         "end": 105993545,
+         "cycles": 146115
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 105847494,
+         "end": 105993521,
+         "cycles": 146027
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 105848038,
+         "end": 105993784,
+         "cycles": 145746
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 105845994,
+         "end": 105846020,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3857054710388184
+    }
+   ],
+   "note": "batch2 @ 32 sticks/core"
+  },
+  "tall_16x4_2c32": {
+   "spec": {
+    "in_h": 16,
+    "in_w": 4,
+    "cores": 2,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "2xHEIGHT (32 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 186368,
+      "kernel_cycles": 150929,
+      "kernel_start": 106585510,
+      "kernel_end": 106736439,
+      "fw_cycles": 153656,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 106591479,
+        "end": 106735079,
+        "cycles": 143600
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 106590979,
+        "end": 106735513,
+        "cycles": 144534
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 106587266,
+        "end": 106732945,
+        "cycles": 145679
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 106586662,
+        "end": 106732921,
+        "cycles": 146259
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 106587502,
+        "end": 106733162,
+        "cycles": 145660
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 106585510,
+        "end": 106585536,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 106592337,
+        "end": 106735859,
+        "cycles": 143522
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 106591713,
+        "end": 106736439,
+        "cycles": 144726
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 106588342,
+        "end": 106733857,
+        "cycles": 145515
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 106587366,
+        "end": 106733833,
+        "cycles": 146467
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 106588522,
+        "end": 106734082,
+        "cycles": 145560
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 106586494,
+        "end": 106586520,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 3.076488494873047
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 188416,
+       "kernel_cycles": 149691,
+       "kernel_start": 107256110,
+       "kernel_end": 107405801,
+       "fw_cycles": 152994,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 107261729,
+         "end": 107405185,
+         "cycles": 143456
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 107261489,
+         "end": 107405723,
+         "cycles": 144234
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 107256998,
+         "end": 107403137,
+         "cycles": 146139
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 107256110,
+         "end": 107403113,
+         "cycles": 147003
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 107257578,
+         "end": 107403354,
+         "cycles": 145776
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 107256130,
+         "end": 107256157,
+         "cycles": 27
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 107261779,
+         "end": 107405295,
+         "cycles": 143516
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 107261277,
+         "end": 107405801,
+         "cycles": 144524
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 107257494,
+         "end": 107403249,
+         "cycles": 145755
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 107257406,
+         "end": 107403225,
+         "cycles": 145819
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 107257946,
+         "end": 107403466,
+         "cycles": 145520
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 107256402,
+         "end": 107256428,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.443850517272949
+    },
+    {
+     "programs": [
+      {
+       "run_id": 190464,
+       "kernel_cycles": 150151,
+       "kernel_start": 107625370,
+       "kernel_end": 107775521,
+       "fw_cycles": 153302,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 107631025,
+         "end": 107775021,
+         "cycles": 143996
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 107630625,
+         "end": 107775479,
+         "cycles": 144854
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 107626554,
+         "end": 107772901,
+         "cycles": 146347
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 107625370,
+         "end": 107772877,
+         "cycles": 147507
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 107626786,
+         "end": 107773118,
+         "cycles": 146332
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 107625950,
+         "end": 107625976,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 107631189,
+         "end": 107774995,
+         "cycles": 143806
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 107630679,
+         "end": 107775521,
+         "cycles": 144842
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 107626662,
+         "end": 107772945,
+         "cycles": 146283
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 107626085,
+         "end": 107772921,
+         "cycles": 146836
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 107627634,
+         "end": 107773184,
+         "cycles": 145550
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 107625638,
+         "end": 107625664,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.5927939414978027
+    },
+    {
+     "programs": [
+      {
+       "run_id": 192512,
+       "kernel_cycles": 150491,
+       "kernel_start": 107994254,
+       "kernel_end": 108144745,
+       "fw_cycles": 153146,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 108000237,
+         "end": 108144131,
+         "cycles": 143894
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 107999895,
+         "end": 108144695,
+         "cycles": 144800
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 107995614,
+         "end": 108142085,
+         "cycles": 146471
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 107994682,
+         "end": 108142061,
+         "cycles": 147379
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 107996242,
+         "end": 108142289,
+         "cycles": 146047
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 107994254,
+         "end": 107994280,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 108000517,
+         "end": 108144249,
+         "cycles": 143732
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 107999917,
+         "end": 108144745,
+         "cycles": 144828
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 107995950,
+         "end": 108142173,
+         "cycles": 146223
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 107995050,
+         "end": 108142149,
+         "cycles": 147099
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 107996546,
+         "end": 108142390,
+         "cycles": 145844
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 107996718,
+         "end": 107996744,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.376232624053955
+    },
+    {
+     "programs": [
+      {
+       "run_id": 194560,
+       "kernel_cycles": 150357,
+       "kernel_start": 108364002,
+       "kernel_end": 108514359,
+       "fw_cycles": 152994,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 108369977,
+         "end": 108513491,
+         "cycles": 143514
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 108369461,
+         "end": 108514029,
+         "cycles": 144568
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 108365898,
+         "end": 108511397,
+         "cycles": 145499
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 108364374,
+         "end": 108511373,
+         "cycles": 146999
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 108366510,
+         "end": 108511624,
+         "cycles": 145114
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 108364002,
+         "end": 108364030,
+         "cycles": 28
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 108370215,
+         "end": 108513871,
+         "cycles": 143656
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 108369605,
+         "end": 108514359,
+         "cycles": 144754
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 108365786,
+         "end": 108511787,
+         "cycles": 146001
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 108364914,
+         "end": 108511753,
+         "cycles": 146839
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 108367390,
+         "end": 108512004,
+         "cycles": 144614
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 108365050,
+         "end": 108365076,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.4039793014526367
+    },
+    {
+     "programs": [
+      {
+       "run_id": 196608,
+       "kernel_cycles": 150469,
+       "kernel_start": 108733338,
+       "kernel_end": 108883807,
+       "fw_cycles": 153070,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 108739333,
+         "end": 108883307,
+         "cycles": 143974
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 108738983,
+         "end": 108883807,
+         "cycles": 144824
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 108734738,
+         "end": 108881209,
+         "cycles": 146471
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 108733706,
+         "end": 108881185,
+         "cycles": 147479
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 108735410,
+         "end": 108881448,
+         "cycles": 146038
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 108733338,
+         "end": 108733364,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 108739665,
+         "end": 108882599,
+         "cycles": 142934
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 108739249,
+         "end": 108883113,
+         "cycles": 143864
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 108735074,
+         "end": 108880599,
+         "cycles": 145525
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 108733906,
+         "end": 108880565,
+         "cycles": 146659
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 108736778,
+         "end": 108880803,
+         "cycles": 144025
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 108733698,
+         "end": 108733724,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3552262783050537
+    }
+   ],
+   "note": "tall_32x4 @ 32 sticks/core"
+  },
+  "wide_4x16_2c32": {
+   "spec": {
+    "in_h": 4,
+    "in_w": 16,
+    "cores": 2,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ]
+   },
+   "core_desc": "2xHEIGHT (32 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 198656,
+      "kernel_cycles": 150091,
+      "kernel_start": 109460398,
+      "kernel_end": 109610489,
+      "fw_cycles": 152896,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 109466197,
+        "end": 109609623,
+        "cycles": 143426
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 109465773,
+        "end": 109610085,
+        "cycles": 144312
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 109462750,
+        "end": 109607437,
+        "cycles": 144687
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 109460838,
+        "end": 109607401,
+        "cycles": 146563
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 109462366,
+        "end": 109607663,
+        "cycles": 145297
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 109460398,
+        "end": 109460424,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 109466631,
+        "end": 109610057,
+        "cycles": 143426
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 109466181,
+        "end": 109610489,
+        "cycles": 144308
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 109462870,
+        "end": 109607853,
+        "cycles": 144983
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 109461366,
+        "end": 109607817,
+        "cycles": 146451
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 109463450,
+        "end": 109608071,
+        "cycles": 144621
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 109460890,
+        "end": 109460916,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 4.495059013366699
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 200704,
+       "kernel_cycles": 149731,
+       "kernel_start": 110013078,
+       "kernel_end": 110162809,
+       "fw_cycles": 152782,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 110018735,
+         "end": 110162123,
+         "cycles": 143388
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 110018289,
+         "end": 110162697,
+         "cycles": 144408
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 110014050,
+         "end": 110160077,
+         "cycles": 146027
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 110014102,
+         "end": 110160041,
+         "cycles": 145939
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 110014595,
+         "end": 110160302,
+         "cycles": 145707
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 110014038,
+         "end": 110014064,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 110019017,
+         "end": 110162247,
+         "cycles": 143230
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 110018629,
+         "end": 110162809,
+         "cycles": 144180
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 110015930,
+         "end": 110160210,
+         "cycles": 144280
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 110014030,
+         "end": 110160161,
+         "cycles": 146131
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 110014970,
+         "end": 110160401,
+         "cycles": 145431
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 110013078,
+         "end": 110013104,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3456716537475586
+    },
+    {
+     "programs": [
+      {
+       "run_id": 202752,
+       "kernel_cycles": 150487,
+       "kernel_start": 110381510,
+       "kernel_end": 110531997,
+       "fw_cycles": 153168,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 110387407,
+         "end": 110530605,
+         "cycles": 143198
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 110386963,
+         "end": 110531153,
+         "cycles": 144190
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 110382826,
+         "end": 110528533,
+         "cycles": 145707
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 110382706,
+         "end": 110528509,
+         "cycles": 145803
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 110384507,
+         "end": 110528751,
+         "cycles": 144244
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 110381510,
+         "end": 110381536,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 110387917,
+         "end": 110531569,
+         "cycles": 143652
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 110387431,
+         "end": 110531997,
+         "cycles": 144566
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 110383626,
+         "end": 110529422,
+         "cycles": 145796
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 110382310,
+         "end": 110529385,
+         "cycles": 147075
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 110383851,
+         "end": 110529627,
+         "cycles": 145776
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 110382390,
+         "end": 110382416,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.402735471725464
+    },
+    {
+     "programs": [
+      {
+       "run_id": 204800,
+       "kernel_cycles": 150207,
+       "kernel_start": 110749822,
+       "kernel_end": 110900029,
+       "fw_cycles": 152758,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 110755765,
+         "end": 110899313,
+         "cycles": 143548
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 110755293,
+         "end": 110899889,
+         "cycles": 144596
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 110751378,
+         "end": 110897197,
+         "cycles": 145819
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 110750254,
+         "end": 110897173,
+         "cycles": 146919
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 110752267,
+         "end": 110897436,
+         "cycles": 145169
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 110749822,
+         "end": 110749848,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 110756257,
+         "end": 110899577,
+         "cycles": 143320
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 110755825,
+         "end": 110900029,
+         "cycles": 144204
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 110751834,
+         "end": 110897442,
+         "cycles": 145608
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 110750650,
+         "end": 110897397,
+         "cycles": 146747
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 110752882,
+         "end": 110897648,
+         "cycles": 144766
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 110751178,
+         "end": 110751204,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.379960060119629
+    },
+    {
+     "programs": [
+      {
+       "run_id": 206848,
+       "kernel_cycles": 149907,
+       "kernel_start": 111117526,
+       "kernel_end": 111267433,
+       "fw_cycles": 152478,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 111123501,
+         "end": 111266771,
+         "cycles": 143270
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 111123065,
+         "end": 111267433,
+         "cycles": 144368
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 111119070,
+         "end": 111264774,
+         "cycles": 145704
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 111118102,
+         "end": 111264737,
+         "cycles": 146635
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 111119535,
+         "end": 111265000,
+         "cycles": 145465
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 111117526,
+         "end": 111117552,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 111123789,
+         "end": 111266835,
+         "cycles": 143046
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 111123281,
+         "end": 111267417,
+         "cycles": 144136
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 111120042,
+         "end": 111264842,
+         "cycles": 144800
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 111118210,
+         "end": 111264805,
+         "cycles": 146595
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 111120815,
+         "end": 111265068,
+         "cycles": 144253
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 111118374,
+         "end": 111118400,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.3690831661224365
+    },
+    {
+     "programs": [
+      {
+       "run_id": 208896,
+       "kernel_cycles": 150563,
+       "kernel_start": 111485018,
+       "kernel_end": 111635581,
+       "fw_cycles": 153268,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 111491003,
+         "end": 111634387,
+         "cycles": 143384
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 111490553,
+         "end": 111634853,
+         "cycles": 144300
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 111486358,
+         "end": 111632195,
+         "cycles": 145837
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 111486386,
+         "end": 111632161,
+         "cycles": 145775
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 111487278,
+         "end": 111632412,
+         "cycles": 145134
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 111485018,
+         "end": 111485044,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 111491315,
+         "end": 111635125,
+         "cycles": 143810
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 111490757,
+         "end": 111635581,
+         "cycles": 144824
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 111487922,
+         "end": 111632926,
+         "cycles": 145004
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 111485574,
+         "end": 111632889,
+         "cycles": 147315
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 111487406,
+         "end": 111633131,
+         "cycles": 145725
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 111485218,
+         "end": 111485244,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 2.5694923400878906
+    }
+   ],
+   "note": "wide_4x32 @ 32 sticks/core"
+  },
+  "stem_112x112_c64_2c": {
+   "spec": {
+    "in_h": 112,
+    "in_w": 112,
+    "kernel": [
+     3,
+     3
+    ],
+    "stride": [
+     2,
+     2
+    ],
+    "padding": [
+     1,
+     1
+    ],
+    "cores": 2
+   },
+   "core_desc": "2xHEIGHT (6272 sticks/core)",
+   "grid": [
+    2,
+    1
+   ],
+   "verdict": "PASS max_abs_diff=0.000000",
+   "warmup": {
+    "programs": [
+     {
+      "run_id": 210944,
+      "kernel_cycles": 26091887,
+      "kernel_start": 112457874,
+      "kernel_end": 138549761,
+      "fw_cycles": 26094648,
+      "n_rows": 52,
+      "riscs": {
+       "(0,1):QUASAR_DM2": {
+        "start": 112463965,
+        "end": 138502659,
+        "cycles": 26038694
+       },
+       "(0,1):QUASAR_DM3": {
+        "start": 112463449,
+        "end": 138503301,
+        "cycles": 26039852
+       },
+       "(0,1):QUASAR_NEO0_TRISC0": {
+        "start": 112459342,
+        "end": 138500705,
+        "cycles": 26041363
+       },
+       "(0,1):QUASAR_NEO0_TRISC1": {
+        "start": 112459062,
+        "end": 138500669,
+        "cycles": 26041607
+       },
+       "(0,1):QUASAR_NEO0_TRISC2": {
+        "start": 112460007,
+        "end": 138500923,
+        "cycles": 26040916
+       },
+       "(0,1):QUASAR_NEO0_TRISC3": {
+        "start": 112457874,
+        "end": 112457900,
+        "cycles": 26
+       },
+       "(1,1):QUASAR_DM2": {
+        "start": 112464119,
+        "end": 138549329,
+        "cycles": 26085210
+       },
+       "(1,1):QUASAR_DM3": {
+        "start": 112463645,
+        "end": 138549761,
+        "cycles": 26086116
+       },
+       "(1,1):QUASAR_NEO0_TRISC0": {
+        "start": 112459710,
+        "end": 138547150,
+        "cycles": 26087440
+       },
+       "(1,1):QUASAR_NEO0_TRISC1": {
+        "start": 112458898,
+        "end": 138547101,
+        "cycles": 26088203
+       },
+       "(1,1):QUASAR_NEO0_TRISC2": {
+        "start": 112460034,
+        "end": 138547355,
+        "cycles": 26087321
+       },
+       "(1,1):QUASAR_NEO0_TRISC3": {
+        "start": 112458010,
+        "end": 112458036,
+        "cycles": 26
+       }
+      }
+     }
+    ],
+    "wall_s": 278.61356377601624
+   },
+   "setup_programs": 0,
+   "iters": [
+    {
+     "programs": [
+      {
+       "run_id": 212992,
+       "kernel_cycles": 26079507,
+       "kernel_start": 140530502,
+       "kernel_end": 166610009,
+       "fw_cycles": 26082538,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 140536203,
+         "end": 166580039,
+         "cycles": 26043836
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 140535683,
+         "end": 166580565,
+         "cycles": 26044882
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 140531846,
+         "end": 166577938,
+         "cycles": 26046092
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 140530714,
+         "end": 166577889,
+         "cycles": 26047175
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 140532407,
+         "end": 166578152,
+         "cycles": 26045745
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 140530502,
+         "end": 140530528,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 140536673,
+         "end": 166609511,
+         "cycles": 26072838
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 140536181,
+         "end": 166610009,
+         "cycles": 26073828
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 140532494,
+         "end": 166607346,
+         "cycles": 26074852
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 140531322,
+         "end": 166607297,
+         "cycles": 26075975
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 140532683,
+         "end": 166607572,
+         "cycles": 26074889
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 140531150,
+         "end": 140531176,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 261.2682135105133
+    },
+    {
+     "programs": [
+      {
+       "run_id": 215040,
+       "kernel_cycles": 26077887,
+       "kernel_start": 166966390,
+       "kernel_end": 193044277,
+       "fw_cycles": 26081244,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 166971745,
+         "end": 193008227,
+         "cycles": 26036482
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 166971157,
+         "end": 193008705,
+         "cycles": 26037548
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 166967182,
+         "end": 193006126,
+         "cycles": 26038944
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 166967714,
+         "end": 193006077,
+         "cycles": 26038363
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 166968979,
+         "end": 193006331,
+         "cycles": 26037352
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 166966462,
+         "end": 166966488,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 166972045,
+         "end": 193043815,
+         "cycles": 26071770
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 166971493,
+         "end": 193044277,
+         "cycles": 26072784
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 166967726,
+         "end": 193041654,
+         "cycles": 26073928
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 166966390,
+         "end": 193041605,
+         "cycles": 26075215
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 166969671,
+         "end": 193041859,
+         "cycles": 26072188
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 166966490,
+         "end": 166966516,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 263.9666118621826
+    },
+    {
+     "programs": [
+      {
+       "run_id": 217088,
+       "kernel_cycles": 26055195,
+       "kernel_start": 193399442,
+       "kernel_end": 219454637,
+       "fw_cycles": 26057810,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 193405539,
+         "end": 219452865,
+         "cycles": 26047326
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 193404969,
+         "end": 219453433,
+         "cycles": 26048464
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 193400962,
+         "end": 219450826,
+         "cycles": 26049864
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 193399766,
+         "end": 219450777,
+         "cycles": 26051011
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 193401830,
+         "end": 219451031,
+         "cycles": 26049201
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 193399442,
+         "end": 193399468,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 193405913,
+         "end": 219453999,
+         "cycles": 26048086
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 193405315,
+         "end": 219454637,
+         "cycles": 26049322
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 193402290,
+         "end": 219452038,
+         "cycles": 26049748
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 193400818,
+         "end": 219451989,
+         "cycles": 26051171
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 193402179,
+         "end": 219452243,
+         "cycles": 26050064
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 193399862,
+         "end": 193399888,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 260.9676115512848
+    },
+    {
+     "programs": [
+      {
+       "run_id": 219136,
+       "kernel_cycles": 26072779,
+       "kernel_start": 219810562,
+       "kernel_end": 245883341,
+       "fw_cycles": 26075770,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 219816167,
+         "end": 245862403,
+         "cycles": 26046236
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 219815769,
+         "end": 245862937,
+         "cycles": 26047168
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 219813130,
+         "end": 245860290,
+         "cycles": 26047160
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 219810942,
+         "end": 245860241,
+         "cycles": 26049299
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 219812171,
+         "end": 245860516,
+         "cycles": 26048345
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 219810562,
+         "end": 219810588,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 219816637,
+         "end": 245882879,
+         "cycles": 26066242
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 219816169,
+         "end": 245883341,
+         "cycles": 26067172
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 219812022,
+         "end": 245880714,
+         "cycles": 26068692
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 219811374,
+         "end": 245880665,
+         "cycles": 26069291
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 219812898,
+         "end": 245880919,
+         "cycles": 26068021
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 219810674,
+         "end": 219810700,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 250.2008011341095
+    },
+    {
+     "programs": [
+      {
+       "run_id": 221184,
+       "kernel_cycles": 26079243,
+       "kernel_start": 246299018,
+       "kernel_end": 272378261,
+       "fw_cycles": 26081986,
+       "n_rows": 52,
+       "riscs": {
+        "(0,1):QUASAR_DM2": {
+         "start": 246305009,
+         "end": 272323401,
+         "cycles": 26018392
+        },
+        "(0,1):QUASAR_DM3": {
+         "start": 246304477,
+         "end": 272323921,
+         "cycles": 26019444
+        },
+        "(0,1):QUASAR_NEO0_TRISC0": {
+         "start": 246300550,
+         "end": 272321314,
+         "cycles": 26020764
+        },
+        "(0,1):QUASAR_NEO0_TRISC1": {
+         "start": 246299446,
+         "end": 272321265,
+         "cycles": 26021819
+        },
+        "(0,1):QUASAR_NEO0_TRISC2": {
+         "start": 246301851,
+         "end": 272321519,
+         "cycles": 26019668
+        },
+        "(0,1):QUASAR_NEO0_TRISC3": {
+         "start": 246299018,
+         "end": 246299044,
+         "cycles": 26
+        },
+        "(1,1):QUASAR_DM2": {
+         "start": 246305291,
+         "end": 272377821,
+         "cycles": 26072530
+        },
+        "(1,1):QUASAR_DM3": {
+         "start": 246304757,
+         "end": 272378261,
+         "cycles": 26073504
+        },
+        "(1,1):QUASAR_NEO0_TRISC0": {
+         "start": 246300762,
+         "end": 272375638,
+         "cycles": 26074876
+        },
+        "(1,1):QUASAR_NEO0_TRISC1": {
+         "start": 246299606,
+         "end": 272375589,
+         "cycles": 26075983
+        },
+        "(1,1):QUASAR_NEO0_TRISC2": {
+         "start": 246301435,
+         "end": 272375843,
+         "cycles": 26074408
+        },
+        "(1,1):QUASAR_NEO0_TRISC3": {
+         "start": 246299406,
+         "end": 246299432,
+         "cycles": 26
+        }
+       }
+      }
+     ],
+     "wall_s": 259.90394163131714
+    }
+   ],
+   "note": "resnet50 stem, 6272 sticks/core"
+  }
+ }
+}

@@ -1,0 +1,169 @@
+leg before     tree=/localdev/wransom/tt-metal-emu-before git='1ffe1303ac4 [Test Only] Optimizing data movement tests by opening a single device (#56191)' grid=[2, 1] iters=5
+leg after      tree=/localdev/wransom/tt-metal-emu git='19f3e3cb644 Quasar Pool: Use All 4 NEOs Per Cluster (num_threads=4) (#55001)' grid=[2, 1] iters=5
+leg after_t1   tree=/localdev/wransom/tt-metal-emu-after-t1 git='824f7f31dfe qpool perf A/B: force num_threads_per_cluster=1 (sim-table threads=1 baseline leg)' grid=[2, 1] iters=5
+leg after_nofill tree=/localdev/wransom/tt-metal-emu-after-nofill git='b5c0aeee0bc DIAGNOSTIC qpool perf leg: remove the whole-ring identity fill in the Quasar pool reader (perf attribution only)' grid=[2, 1] iters=5
+
+== pool2d program kernel cycles on the ZeBu emulator (median of iters; delta% NEGATIVE = right leg faster) ==
+case                   |     before      after   delta% speedup |   after_t1      after   delta% speedup |      after after_nofill   delta% speedup | sim T1->T4  cores (emu)
+k3x3_s1                |     547269     449573   -17.9%   1.22x |    1076175     449573   -58.2%   2.39x |     449573     309481   -31.2%   1.45x |      2.29x  2xHEIGHT (32 sticks/core)
+k5x5_s2                |     495711     415643   -16.2%   1.19x |     986661     415643   -57.9%   2.37x |     415643     277543   -33.2%   1.50x |      1.37x  2xHEIGHT (64 sticks/core)
+k7x7_s2_large          |    1746947    1070827   -38.7%   1.63x |    3455355    1070827   -69.0%   3.23x |    1070827     934457   -12.7%   1.15x |      2.95x  1xHEIGHT (128 sticks/core)
+k8x8_s2_large          |    2230205    1337765   -40.0%   1.67x |    4435478    1337765   -69.8%   3.32x |    1337765    1199603   -10.3%   1.12x |      3.11x  1xHEIGHT (128 sticks/core)
+k9x9_s2_3chunks        |    2864859    1653188   -42.3%   1.73x |    5620603    1653188   -70.6%   3.40x |    1653188    1508971    -8.7%   1.10x |      3.26x  1xHEIGHT (128 sticks/core)
+batch2                 |     283215     304177    +7.4%   0.93x |     560685     304177   -45.7%   1.84x |     304177     166695   -45.2%   1.82x |      1.18x  2xHEIGHT (64 sticks/core)
+tall_32x4              |     283769     305851    +7.8%   0.93x |     561137     305851   -45.5%   1.83x |     305851     166403   -45.6%   1.84x |      1.18x  2xHEIGHT (64 sticks/core)
+wide_4x32              |     282923     305169    +7.9%   0.93x |     561037     305169   -45.6%   1.84x |     305169     166056   -45.6%   1.84x |      1.18x  2xHEIGHT (64 sticks/core)
+wide_c280_3blocks      |     641748     541075   -15.7%   1.19x |    1184079     541075   -54.3%   2.19x |     541075     337511   -37.6%   1.60x |      2.06x  1xHEIGHT (32 sticks/core)
+avg_k3x3_s1            |    1409699     919814   -34.8%   1.53x |    2759273     919814   -66.7%   3.00x |     919814     780007   -15.2%   1.18x |      3.05x  1xHEIGHT (128 sticks/core)
+avg_k7x7_s1_large      |    1096361     597207   -45.5%   1.84x |    2153309     597207   -72.3%   3.61x |     597207     594515    -0.5%   1.00x |      3.65x  1xHEIGHT (128 sticks/core)
+width_1x2_c128         |     150137     232114   +54.6%   0.65x |     302733     232114   -23.3%   1.30x |     232114      94089   -59.5%   2.47x |      1.18x  1x2xWIDTH
+block_1x2_c128         |     549857     449006   -18.3%   1.22x |    1077001     449006   -58.3%   2.40x |     449006     311595   -30.6%   1.44x |      1.64x  1x2xBLOCK
+k5x5_s2_2c32           |     256391     287101   +12.0%   0.89x |     515581     287101   -44.3%   1.80x |     287101     149807   -47.8%   1.92x |      1.37x  2xHEIGHT (32 sticks/core)
+batch2_4x8_2c32        |     150313     231825   +54.2%   0.65x |     302853     231825   -23.5%   1.31x |     231825      93633   -59.6%   2.48x |      1.18x  2xHEIGHT (32 sticks/core)
+tall_16x4_2c32         |     150357     232390   +54.6%   0.65x |     302929     232390   -23.3%   1.30x |     232390      93949   -59.6%   2.47x |      1.18x  2xHEIGHT (32 sticks/core)
+wide_4x16_2c32         |     150207     231856   +54.4%   0.65x |     302627     231856   -23.4%   1.31x |     231856      94177   -59.4%   2.46x |      1.18x  2xHEIGHT (32 sticks/core)
+stem_112x112_c64_2c    |   26077887   14286724   -45.2%   1.83x |   50659841   14286724   -71.8%   3.55x |   14286724   14235085    -0.4%   1.00x |          -  2xHEIGHT (6272 sticks/core)
+  geomean speedup before -> after: 1.11x over 18 cases
+    on the 12 PR-table cases: emulator geomean 1.23x vs craq-sim geomean 2.00x
+  geomean speedup after_t1 -> after: 2.19x over 18 cases
+    on the 12 PR-table cases: emulator geomean 2.42x vs craq-sim geomean 2.00x
+  geomean speedup after -> after_nofill: 1.58x over 18 cases
+    on the 12 PR-table cases: emulator geomean 1.45x vs craq-sim geomean 2.00x
+
+== per-program fixed cost vs per-stick cost (3x3 s2 C=64, 2 cores; from the 32- and 64-stick/core twins) ==
+pair                               |    before fixed per-stick |     after fixed per-stick |  after_t1 fixed per-stick | after_nofill fixed per-stick
+batch2_4x8_2c32 / batch2           |           17411      4153 |          159473      2261 |           45021      8057 |           20571      2283
+tall_16x4_2c32 / tall_32x4         |           16945      4169 |          158929      2296 |           44721      8069 |           21495      2264
+wide_4x16_2c32 / wide_4x32         |           17491      4147 |          158543      2291 |           44217      8075 |           22298      2246
+
+== iteration spread (all measured iterations, cycles) ==
+k3x3_s1                before: [546543, 547255, 547269, 547751, 548209] | after: [448275, 448359, 449573, 450377, 451002] | after_t1: [1076007, 1076171, 1076175, 1076351, 1076367] | after_nofill: [309225, 309241, 309481, 309539, 311785]
+k5x5_s2                before: [495387, 495443, 495711, 496223, 496495] | after: [414665, 414941, 415643, 416047, 420121] | after_t1: [985809, 986349, 986661, 986829, 986833] | after_nofill: [276835, 276845, 277543, 277571, 278301]
+k7x7_s2_large          before: [1745809, 1746779, 1746947, 1747040, 1747295] | after: [1065706, 1069153, 1070827, 1073093, 1073572] | after_t1: [3454535, 3454967, 3455355, 3455451, 3456143] | after_nofill: [926917, 927536, 934457, 936825, 936980]
+k8x8_s2_large          before: [2229915, 2230041, 2230205, 2230243, 2231059] | after: [1334822, 1337737, 1337765, 1340937, 1344113] | after_t1: [4435022, 4435033, 4435478, 4435537, 4435553] | after_nofill: [1198863, 1199177, 1199603, 1199642, 1202481]
+k9x9_s2_3chunks        before: [2864179, 2864325, 2864859, 2864977, 2865955] | after: [1645175, 1653100, 1653188, 1654527, 1656943] | after_t1: [5619991, 5620219, 5620603, 5620727, 5620999] | after_nofill: [1501200, 1504709, 1508971, 1510518, 1511522]
+batch2                 before: [283155, 283205, 283215, 283423, 283749] | after: [303631, 303703, 304177, 304239, 305205] | after_t1: [560505, 560561, 560685, 560901, 561217] | after_nofill: [166137, 166197, 166695, 167011, 167023]
+tall_32x4              before: [283227, 283727, 283769, 284051, 284437] | after: [304283, 304557, 305851, 306207, 306669] | after_t1: [560801, 561033, 561137, 561269, 561341] | after_nofill: [165171, 165843, 166403, 166865, 171763]
+wide_4x32              before: [282709, 282787, 282923, 283075, 283819] | after: [303549, 304827, 305169, 305475, 330495] | after_t1: [560911, 560913, 561037, 561215, 561277] | after_nofill: [165469, 165669, 166056, 166201, 166508]
+wide_c280_3blocks      before: [641407, 641735, 641748, 641828, 642269] | after: [539863, 540947, 541075, 541603, 541625] | after_t1: [1183583, 1183774, 1184079, 1184383, 1184483] | after_nofill: [336859, 337256, 337511, 338091, 338119]
+avg_k3x3_s1            before: [1407527, 1408877, 1409699, 1409791, 1410057] | after: [917621, 919105, 919814, 921301, 926570] | after_t1: [2758869, 2759161, 2759273, 2759737, 2760149] | after_nofill: [777803, 779437, 780007, 782770, 787795]
+avg_k7x7_s1_large      before: [1096045, 1096335, 1096361, 1096797, 1096821] | after: [595477, 596981, 597207, 598551, 598686] | after_t1: [2152861, 2153249, 2153309, 2153469, 2153562] | after_nofill: [591511, 593671, 594515, 595663, 598315]
+width_1x2_c128         before: [150049, 150123, 150137, 150337, 150641] | after: [231639, 231780, 232114, 232743, 232807] | after_t1: [302213, 302389, 302733, 302853, 303333] | after_nofill: [93797, 94060, 94089, 94247, 94289]
+block_1x2_c128         before: [549327, 549605, 549857, 550035, 550251] | after: [448225, 448307, 449006, 449345, 449483] | after_t1: [1076625, 1076929, 1077001, 1077605, 1077605] | after_nofill: [309508, 311162, 311595, 311767, 312810]
+k5x5_s2_2c32           before: [256099, 256211, 256391, 256583, 257139] | after: [286197, 286463, 287101, 287166, 312513] | after_t1: [515129, 515409, 515581, 515709, 515761] | after_nofill: [148547, 149327, 149807, 149949, 150163]
+batch2_4x8_2c32        before: [150191, 150205, 150313, 150445, 150583] | after: [230575, 230880, 231825, 232001, 232013] | after_t1: [302401, 302729, 302853, 302921, 302969] | after_nofill: [93261, 93583, 93633, 93721, 93755]
+tall_16x4_2c32         before: [149691, 150151, 150357, 150469, 150491] | after: [231727, 232387, 232390, 233963, 234113] | after_t1: [302457, 302717, 302929, 303081, 303085] | after_nofill: [93549, 93949, 93949, 94183, 94591]
+wide_4x16_2c32         before: [149731, 149907, 150207, 150487, 150563] | after: [231830, 231845, 231856, 233179, 233859] | after_t1: [302283, 302579, 302627, 302667, 302965] | after_nofill: [92961, 93845, 94177, 94483, 94709]
+stem_112x112_c64_2c    before: [26055195, 26072779, 26077887, 26079243, 26079507] | after: [14279443, 14284295, 14286724, 14549741, 15108049] | after_t1: [50659607, 50659763, 50659841, 50660039, 50660677] | after_nofill: [14131241, 14136253, 14235085, 14443175, 14804117]
+
+== lane balance, last iteration (per-RISC kernel span, cycles; DM = reader lanes, TRISC = NEO compute) ==
+k3x3_s1                before    core(0,1): DM2=539348 DM3=540164 | NEO0=542667
+k3x3_s1                after     core(0,1): DM2=442274 DM3=441320 DM4=441762 DM5=441510 | NEO0=447593 NEO1=446605 NEO2=446338 NEO3=446781
+k3x3_s1                after_t1  core(0,1): DM2=1070808 | NEO0=1073737
+k3x3_s1                after_nofill core(0,1): DM2=299522 DM3=298658 DM4=298848 DM5=298390 | NEO0=304814 NEO1=303734 NEO2=304142 NEO3=303846
+k5x5_s2                before    core(0,1): DM2=488232 DM3=489564 | NEO0=491847
+k5x5_s2                after     core(0,1): DM2=407306 DM3=405154 DM4=405664 DM5=404378 | NEO0=412895 NEO1=410217 NEO2=411205 NEO3=409873
+k5x5_s2                after_t1  core(0,1): DM2=980750 | NEO0=983077
+k5x5_s2                after_nofill core(0,1): DM2=267112 DM3=265614 DM4=265298 DM5=265052 | NEO0=272766 NEO1=270534 NEO2=270146 NEO3=270238
+k7x7_s2_large          before    core(0,1): DM2=1738944 DM3=1740252 | NEO0=1741686
+k7x7_s2_large          after     core(0,1): DM2=1061914 DM3=1058832 DM4=1056946 DM5=1054808 | NEO0=1068226 NEO1=1063785 NEO2=1063021 NEO3=1060701
+k7x7_s2_large          after_t1  core(0,1): DM2=3450096 | NEO0=3452338
+k7x7_s2_large          after_nofill core(0,1): DM2=919244 DM3=915972 DM4=913814 DM5=912036 | NEO0=924250 NEO1=920702 NEO2=919674 NEO3=917574
+k8x8_s2_large          before    core(0,1): DM2=2223086 DM3=2224356 | NEO0=2227030
+k8x8_s2_large          after     core(0,1): DM2=1335930 DM3=1333268 DM4=1332304 DM5=1330048 | NEO0=1341498 NEO1=1338487 NEO2=1337823 NEO3=1335655
+k8x8_s2_large          after_t1  core(0,1): DM2=4430002 | NEO0=4432720
+k8x8_s2_large          after_nofill core(0,1): DM2=1191452 DM3=1186678 DM4=1184674 DM5=1183114 | NEO0=1196998 NEO1=1191366 NEO2=1189218 NEO3=1188416
+k9x9_s2_3chunks        before    core(0,1): DM2=2821872 DM3=2858986 | NEO0=2861535
+k9x9_s2_3chunks        after     core(0,1): DM2=1636452 DM3=1629300 DM4=1626054 DM5=1623928 | NEO0=1641477 NEO1=1633723 NEO2=1631017 NEO3=1628977
+k9x9_s2_3chunks        after_t1  core(0,1): DM2=5614704 | NEO0=5617213
+k9x9_s2_3chunks        after_nofill core(0,1): DM2=1502684 DM3=1495438 DM4=1492544 DM5=1489506 | NEO0=1507593 NEO1=1500154 NEO2=1497410 NEO3=1493866
+batch2                 before    core(0,1): DM2=276888 DM3=278016 | NEO0=279507
+batch2                 after     core(0,1): DM2=294890 DM3=293922 DM4=294150 DM5=293790 | NEO0=300609 NEO1=299389 NEO2=300017 NEO3=299417
+batch2                 after_t1  core(0,1): DM2=555358 | NEO0=557010
+batch2                 after_nofill core(0,1): DM2=157808 DM3=157328 DM4=156162 DM5=156780 | NEO0=163530 NEO1=162922 NEO2=161690 NEO3=161666
+tall_32x4              before    core(0,1): DM2=277044 DM3=278132 | NEO0=280595
+tall_32x4              after     core(0,1): DM2=297680 DM3=297156 DM4=296556 DM5=296322 | NEO0=303389 NEO1=302521 NEO2=302289 NEO3=301105
+tall_32x4              after_t1  core(0,1): DM2=555634 | NEO0=558357
+tall_32x4              after_nofill core(0,1): DM2=158492 DM3=157464 DM4=157834 DM5=157720 | NEO0=164118 NEO1=162738 NEO2=163373 NEO3=163106
+wide_4x32              before    core(0,1): DM2=276790 DM3=277812 | NEO0=280031
+wide_4x32              after     core(0,1): DM2=297280 DM3=297010 DM4=295714 DM5=296566 | NEO0=302685 NEO1=302265 NEO2=300677 NEO3=302117
+wide_4x32              after_t1  core(0,1): DM2=555316 | NEO0=558205
+wide_4x32              after_nofill core(0,1): DM2=156926 DM3=155758 DM4=156014 DM5=155826 | NEO0=161987 NEO1=159583 NEO2=160989 NEO3=160803
+wide_c280_3blocks      before    core(0,1): DM2=590994 DM3=636212 | NEO0=631515
+wide_c280_3blocks      after     core(0,1): DM2=530978 DM3=530654 DM4=529702 DM5=529420 | NEO0=529597 NEO1=529041 NEO2=528381 NEO3=528053
+wide_c280_3blocks      after_t1  core(0,1): DM2=1178412 | NEO0=1173281
+wide_c280_3blocks      after_nofill core(0,1): DM2=329406 DM3=327504 DM4=327824 DM5=327732 | NEO0=326277 NEO1=324588 NEO2=324744 NEO3=324510
+avg_k3x3_s1            before    core(0,1): DM2=1403402 DM3=1404282 | NEO0=1406774
+avg_k3x3_s1            after     core(0,1): DM2=910258 DM3=907948 DM4=908282 DM5=908008 | NEO0=914854 NEO1=912532 NEO2=913160 NEO3=912760
+avg_k3x3_s1            after_t1  core(0,1): DM2=2754562 | NEO0=2756160
+avg_k3x3_s1            after_nofill core(0,1): DM2=771948 DM3=769736 DM4=769688 DM5=769880 | NEO0=777306 NEO1=774897 NEO2=773686 NEO3=774473
+avg_k7x7_s1_large      before    core(0,1): DM2=1089032 DM3=1090338 | NEO0=1093326
+avg_k7x7_s1_large      after     core(0,1): DM2=589598 DM3=587048 DM4=586552 DM5=585246 | NEO0=595660 NEO1=592608 NEO2=592848 NEO3=590644
+avg_k7x7_s1_large      after_t1  core(0,1): DM2=2147990 | NEO0=2150620
+avg_k7x7_s1_large      after_nofill core(0,1): DM2=582398 DM3=580306 DM4=579202 DM5=577616 | NEO0=588716 NEO1=586344 NEO2=585384 NEO3=584116
+width_1x2_c128         before    core(0,1): DM2=143914 DM3=144788 | NEO0=146684
+width_1x2_c128         after     core(0,1): DM2=224006 DM3=222938 DM4=223438 DM5=223124 | NEO0=229763 NEO1=228385 NEO2=228897 NEO3=228413
+width_1x2_c128         after_t1  core(0,1): DM2=296686 | NEO0=299633
+width_1x2_c128         after_nofill core(0,1): DM2=85734 DM3=84548 DM4=84860 DM5=84684 | NEO0=90510 NEO1=89315 NEO2=89377 NEO3=89715
+block_1x2_c128         before    core(0,1): DM2=543550 DM3=544652 | NEO0=546512
+block_1x2_c128         after     core(0,1): DM2=440646 DM3=439326 DM4=439914 DM5=438890 | NEO0=446317 NEO1=443745 NEO2=445689 NEO3=444709
+block_1x2_c128         after_t1  core(0,1): DM2=1071090 | NEO0=1073701
+block_1x2_c128         after_nofill core(0,1): DM2=304146 DM3=304146 DM4=303796 DM5=303116 | NEO0=310102 NEO1=309898 NEO2=309510 NEO3=308702
+k5x5_s2_2c32           before    core(0,1): DM2=249336 DM3=250548 | NEO0=252995
+k5x5_s2_2c32           after     core(0,1): DM2=304324 DM3=300424 DM4=302900 DM5=302630 | NEO0=309829 NEO1=304989 NEO2=308337 NEO3=308169
+k5x5_s2_2c32           after_t1  core(0,1): DM2=509782 | NEO0=512657
+k5x5_s2_2c32           after_nofill core(0,1): DM2=140012 DM3=138938 DM4=138512 DM5=138476 | NEO0=144246 NEO1=142609 NEO2=141920 NEO3=142516
+batch2_4x8_2c32        before    core(0,1): DM2=143516 DM3=144556 | NEO0=146995
+batch2_4x8_2c32        after     core(0,1): DM2=222152 DM3=221754 DM4=222172 DM5=221958 | NEO0=227129 NEO1=226445 NEO2=227249 NEO3=226961
+batch2_4x8_2c32        after_t1  core(0,1): DM2=296516 | NEO0=299013
+batch2_4x8_2c32        after_nofill core(0,1): DM2=84718 DM3=83730 DM4=84044 DM5=84052 | NEO0=88846 NEO1=87797 NEO2=88390 NEO3=88369
+tall_16x4_2c32         before    core(0,1): DM2=143974 DM3=144824 | NEO0=147479
+tall_16x4_2c32         after     core(0,1): DM2=222614 DM3=221930 DM4=222208 DM5=222030 | NEO0=227749 NEO1=226645 NEO2=227609 NEO3=227305
+tall_16x4_2c32         after_t1  core(0,1): DM2=297056 | NEO0=299993
+tall_16x4_2c32         after_nofill core(0,1): DM2=84454 DM3=83594 DM4=84038 DM5=83864 | NEO0=89094 NEO1=87410 NEO2=88802 NEO3=87638
+wide_4x16_2c32         before    core(0,1): DM2=143384 DM3=144300 | NEO0=145837
+wide_4x16_2c32         after     core(0,1): DM2=225170 DM3=224654 DM4=224206 DM5=224090 | NEO0=231063 NEO1=230273 NEO2=229793 NEO3=229321
+wide_4x16_2c32         after_t1  core(0,1): DM2=297078 | NEO0=299133
+wide_4x16_2c32         after_nofill core(0,1): DM2=85592 DM3=84534 DM4=84964 DM5=84766 | NEO0=90607 NEO1=88447 NEO2=89855 NEO3=89835
+stem_112x112_c64_2c    before    core(0,1): DM2=26018392 DM3=26019444 | NEO0=26021819
+stem_112x112_c64_2c    after     core(0,1): DM2=14269908 DM3=14269066 DM4=14268268 DM5=14268044 | NEO0=14275295 NEO1=14274157 NEO2=14273845 NEO3=14273789
+stem_112x112_c64_2c    after_t1  core(0,1): DM2=50621192 | NEO0=50624145
+stem_112x112_c64_2c    after_nofill core(0,1): DM2=14123198 DM3=14122436 DM4=14121948 DM5=14121574 | NEO0=14128583 NEO1=14127439 NEO2=14127435 NEO3=14126911
+
+== verdicts / notes ==
+k3x3_s1                before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: 2 cores on sim and emu
+k5x5_s2                before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: sim 4 cores x 32 sticks; emu 2 cores x 64 sticks
+k7x7_s2_large          before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: MISMATCH max_abs_diff=0.281250
+                       note: identical
+k8x8_s2_large          before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: identical
+k9x9_s2_3chunks        before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: identical
+batch2                 before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: sim 4 cores x 32 sticks; emu 2 cores x 64 sticks
+tall_32x4              before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: sim 4 cores x 32 sticks; emu 2 cores x 64 sticks
+wide_4x32              before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: sim 4 cores x 32 sticks; emu 2 cores x 64 sticks
+wide_c280_3blocks      before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: identical
+avg_k3x3_s1            before: PASS max_abs_diff=0.003689 | after: PASS max_abs_diff=0.003689 | after_t1: PASS max_abs_diff=0.003689 | after_nofill: PASS max_abs_diff=0.003689
+                       note: identical
+avg_k7x7_s1_large      before: PASS max_abs_diff=0.002565 | after: PASS max_abs_diff=0.002565 | after_t1: PASS max_abs_diff=0.002565 | after_nofill: PASS max_abs_diff=0.002565
+                       note: identical
+width_1x2_c128         before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: identical
+block_1x2_c128         before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: stand-in for block_2x2 (2-cluster grid)
+k5x5_s2_2c32           before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: k5x5_s2 @ 32 sticks/core
+batch2_4x8_2c32        before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: batch2 @ 32 sticks/core
+tall_16x4_2c32         before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: tall_32x4 @ 32 sticks/core
+wide_4x16_2c32         before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: wide_4x32 @ 32 sticks/core
+stem_112x112_c64_2c    before: PASS max_abs_diff=0.000000 | after: PASS max_abs_diff=0.000000 | after_t1: PASS max_abs_diff=0.000000 | after_nofill: PASS max_abs_diff=0.000000
+                       note: resnet50 stem, 6272 sticks/core
