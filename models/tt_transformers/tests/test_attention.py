@@ -26,9 +26,15 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -91,11 +97,26 @@ def test_attention_inference(
         pcc = llama90b_hf_rope_pcc
     elif model_args.model_name == "Llama-3.3-70B-Instruct" and not use_hf_rope:
         pcc = llama33_70b_mllama_rope_pcc
-    model_args.n_layers = 1  # For the unit test, just run a single layer
+    model_args.n_layers = int(os.environ.get("TT_TEST_LAYER_NUM", "0")) + 1  # unit test: layers up to the tested one
 
     state_dict = model_args.load_state_dict()
 
-    reference_model = model_args.reference_attention(load_checkpoint=True)
+    reference_model = model_args.reference_attention(
+        load_checkpoint=True, layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0"))
+    )
+
+    # Hybrid-attention models: the tested layer decides the rope (decoder.py picks rot_mats_local for
+    # sliding_attention layers) and the HF reference must rotate with the same layer type (the reference is
+    # HF layer 0's module, so pin its rope_layer_type to the tested layer).
+    layer_num = int(os.environ.get("TT_TEST_LAYER_NUM", "0"))
+    layer_type = model_args.layer_types[layer_num] if getattr(model_args, "layer_types", None) else None
+    is_sliding_layer = layer_type == "sliding_attention"
+    if layer_type is not None and hasattr(reference_model, "rope_layer_type"):
+        reference_model.rope_layer_type = layer_type
+    rope_theta = (
+        model_args.rope_theta_local if (is_sliding_layer and model_args.rope_theta_local) else model_args.rope_theta
+    )
+    rope_scaling = getattr(model_args, "rope_scaling_local", None) if is_sliding_layer else model_args.rope_scaling
 
     seq_len = 1
 
@@ -111,8 +132,8 @@ def test_attention_inference(
         batch_size,
         model_args.head_dim,
         model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling,
+        rope_theta,
+        rope_scaling,
         model_args.use_qk_fused,
         prefetcher=prefetcher,
     )
@@ -153,7 +174,7 @@ def test_attention_inference(
         model_args,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0")),  # bring-up aid: pick a layer kind
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,

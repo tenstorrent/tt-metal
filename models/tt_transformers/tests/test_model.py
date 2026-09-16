@@ -62,9 +62,15 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -231,7 +237,10 @@ def test_model_inference(
         if model_name == "Mistral-7B":
             encoded_prompts = [[1619, 1117, 1032, 2137]] * model_args.max_batch_size
         else:
-            encoded_prompts = [[128000, 2028, 374, 264, 1296]] * model_args.max_batch_size
+            # Llama-3 ids; fold into the model's vocab for smaller vocabularies (e.g. OLMo-3: 100278)
+            encoded_prompts = [
+                [t % model_args.vocab_size for t in [128000, 2028, 374, 264, 1296]]
+            ] * model_args.max_batch_size
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
         tokenizer = model_args.tokenizer
