@@ -33,7 +33,7 @@ work can resume as-is.
 | Variable chunk sizes (one runtime serving several sizes) | merged |
 | Bounded sliding-window KV cache (circular window for the 18 sliding layers) | merged, opt-in (`GPT_OSS_BOUNDED_SLIDING_KV=1`) |
 | Per-layer KV-PCC validation vs a CPU golden; two galaxy CI accuracy stages and a smoke stage | merged |
-| GPT-OSS through the common prefill runner (producer/runner e2e), with its galaxy CI stage | merged, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
+| GPT-OSS through the common prefill runner (producer/runner e2e), with its galaxy CI stage | in review, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
 | Trace capture of the prefill chunk | planned, [#56661](https://github.com/tenstorrent/tt-metal/issues/56661) (stage one [#56660](https://github.com/tenstorrent/tt-metal/issues/56660), stage two [#56115](https://github.com/tenstorrent/tt-metal/issues/56115)) |
 | Bounded sliding cache as the default, KV migration of a bounded cache | planned, [#55646](https://github.com/tenstorrent/tt-metal/issues/55646) |
 | Hoisting shared prefill scaffolding into `common/prefill` | open, [#55647](https://github.com/tenstorrent/tt-metal/issues/55647) |
@@ -47,11 +47,12 @@ work can resume as-is.
 - **Topology**: `ttnn.Topology.Ring` by default (torus wraparound links, faster CCLs);
   `PREFILL_TOPOLOGY=linear` for pods without wraparound. The ring SDPA cache read needs ring
   connectivity along the SP axis, which the CI stages get from the `torus_xy` fabric profile.
-  The runner-path CI stage runs with `PREFILL_FABRIC_MODE=2d_torus_xy`; the runner manifest
-  (`tt/runners/manifests/gpt_oss_d_p.json`) defaults to `1d_ring`. Accepted values live in
-  `models/demos/common/prefill/runners/runner_utils.py`.
+  Under the common runner the GPT-OSS manifest (`tt/runners/manifests/gpt_oss_d_p.json`) sets
+  `PREFILL_FABRIC_MODE=1d_ring`; the runner-path CI stage in [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) exports `2d_torus_xy` instead.
+  Both provide that ring. Accepted values live in `models/demos/common/prefill/runners/runner_utils.py`.
 - **Precision**: activations bf16. MoE expert weights `bfloat4_b` by default or `bfloat8_b` with
-  `EXPERT_DTYPE=bf8`, which every validated configuration uses. KV cache `bfloat8_b`; the chunked
+  `EXPERT_DTYPE=bf8`, which the accuracy stages and every number quoted here use; the common-runner
+  path honours the same knob from [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) on. KV cache `bfloat8_b`; the chunked
   ring path requires it (`KV_CACHE_DTYPE=bf16` is accepted only by one-shot prefill). The checkpoint
   ships the experts MXFP4-quantized; `ModelArgs.load_state_dict` dequantizes them to bf16 on the
   host (`tests/unit/test_mxfp4_loader.py` pins that path).
@@ -100,8 +101,7 @@ ModelArgs(hf config + weights)                       tt/model_config.py
 `TtPrefillRuntimeConfig` holds the geometry: `num_layers`, `max_seq_len` (per-user cache length),
 `default_chunk_size` (8192) plus `additional_chunk_sizes`, `num_users` (cache slots),
 `cache_dtype`, `expert_weight_dtype`, `weight_cache_path`, the pipeline-rank fields the engine
-fills in, `use_trace` (read by the common runner; this runtime has no trace path), and
-`bounded_sliding_kv_cache`.
+fills in, and `bounded_sliding_kv_cache`. The runtime has no trace path.
 
 **1. Standalone harness** — `tests/galaxy_prefill_kv_pcc.py`, a plain `python3` script run under
 `mpirun`, not pytest. It loads real weights from the tilized TTNN cache and prefills the golden
@@ -136,8 +136,8 @@ host `on_layer_complete` callback (`set_layer_completion_sink`), not through D2H
 cache. The producer/runner e2e scenario `single_user_full_depth`
 (`models/demos/common/prefill/tests/test_producer_runner_e2e.py`, 11 × 5120-token chunks) runs
 GPT-OSS end to end and checks the producer's KV PCC over the first 5000 positions, which is all the
-golden holds. The runner-path CI stage below runs that scenario; its `cmd` block in the matrix is
-the reference launch command. General runner usage: `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`
+golden holds. The runner-path CI stage that lands with [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) runs that scenario; its `cmd` block in
+the matrix is the reference launch command. General runner usage: `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`
 and `models/demos/common/prefill/runners/RUN_COMMANDS.md`.
 
 ## The KV cache
@@ -162,7 +162,9 @@ sequence. With the flag on, full-attention and sliding layers move into separate
 `build_layer_map` gives each layer of this rank `(is_sliding, ordinal, n_type)`, so its slot is
 `user * n_type + ordinal`. A sliding slot holds `min(2 × largest chunk size, max_seq_len)` tokens
 (`sliding_capacity_tokens`): the chunk being written plus the previous one, which always contains the
-whole window and halo. `write_kv_chunk` writes each chunk at its position modulo that capacity, the
+whole window and halo. Two more rules apply with the flag on: every served chunk size must divide
+that capacity, so each chunk lands on a whole slab, and the 128-token window must fit the smallest
+chunk. `write_kv_chunk` writes each chunk at its position modulo that capacity, the
 ring SDPA reads the slot circularly (`circular_kv_cache=True`, an op-level feature of RingJointSDPA),
 and `bounded_blockcyclic_positions` is the readback inverse. At 128k context with 8k chunks the 18
 sliding layers shrink from full-length to two-chunk slots: **153 → 86 MiB of KV per user per chip**,
@@ -207,9 +209,9 @@ Unit tests: `pytest models/demos/gpt_oss_d_p/tests/unit` (the CPU-only ones run 
 
 Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests"):
 `(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k` and `... 5k@1k` run the harness with
-the PCC gate; `(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k` runs the smoke; and
-`(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix` runs the e2e scenario
-through the common runner. Op-level coverage for the sliding ring read lives in
+the PCC gate and `(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k` runs the smoke.
+`(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix`, the e2e scenario
+through the common runner, lands with [#56519](https://github.com/tenstorrent/tt-metal/pull/56519). Op-level coverage for the sliding ring read lives in
 `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (production and circular-cache accuracy,
 metadata-path rejection) and the header gtest
 `tests/ttnn/unit_tests/gtests/sdpa/test_sliding_window_work_plan.cpp`.
@@ -259,7 +261,7 @@ directory is `models/demos/gpt_oss/configs/gpt-oss-120b`, borrowed from the Worm
 | `HF_MODEL`, `PREFILL_HF_MODEL` | model config, adapter, golden script | directory with `config.json` (and weights, unless loading from the cache) |
 | `TT_CACHE_PATH`, `PREFILL_TTNN_CACHE` | model config, adapter | TTNN tilized weight cache root; the model layout is `tensor_cache_{dtype}_MeshShape([4, 8])` |
 | `GPT_OSS_WEIGHTS_FROM_CACHE=1` | harness, smoke, adapter | skip the safetensors load and take every weight from the tilized cache |
-| `EXPERT_DTYPE` (`bf4`, `bf8`) | harness, smoke, adapter | routed-expert weight dtype |
+| `EXPERT_DTYPE` (`bf4`, `bf8`) | harness, smoke; adapter from [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) | routed-expert weight dtype |
 | `KV_CACHE_DTYPE` (`bf8`, `bf16`) | harness | KV cache dtype; bf16 only with one-shot prefill |
 | `PREFILL_NUM_LAYERS` | harness, smoke, common runner | layers to build (bring-up on a subset) |
 | `PREFILL_CHUNKED`, `PREFILL_CHUNK_SIZE` | harness | chunked vs one-shot; chunk size (default 8192) |
