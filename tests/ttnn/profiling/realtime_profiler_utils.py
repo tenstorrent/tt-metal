@@ -49,6 +49,12 @@ def profile_realtime_program(
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
                     "duration_ns": (end_timestamp - start_timestamp) / frequency,
+                    # Endpoints as well as the span: the turnaround BETWEEN two programs is only
+                    # visible by differencing them, and a duration can never show it. Device ticks
+                    # scaled to ns, so they are comparable within a chip and meaningless across
+                    # chips -- check chip_id before subtracting.
+                    "start_ns": start_timestamp / frequency,
+                    "end_ns": end_timestamp / frequency,
                     "kernel_sources": tuple(str(source) for source in record.kernel_sources),
                 }
             )
