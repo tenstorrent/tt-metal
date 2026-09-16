@@ -3182,8 +3182,26 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         # adaptive width-1 baseline branch is NOT contract verification -- so
         # tt_adaptive_block_output is deliberately absent.
         "output_tokens_per_step": 1,
-        "supports_sample_on_device": False,  # the host accept walk owns it
-        "supports_async_decode": False,  # first adapter is synchronous
+        # On a SPEC step the fused posterior answers the verify, so the device
+        # sampler is unused -- but a batched draft-less step runs the plain
+        # baseline decode, and there it is what keeps the step cheap: the
+        # contract wants argmax_ids, so without it the model pulls
+        # [B, vocab] logits to host and argmaxes them there, every step.
+        "supports_sample_on_device": True,
+        # Off, and it cannot currently be turned on: upstream vLLM refuses
+        # async scheduling for any speculative_config whose method is not
+        # EAGLE/MTP/draft_model/dspark (config/vllm.py), and the contract
+        # requires method=custom_class -- the one name upstream accepts without
+        # a draft checkpoint. The BLOCK rail gets async because it declares no
+        # speculative_config at all, so that setting does not port here. The
+        # env var exists to test the gate, not to enable a working mode, and
+        # even with the gate lifted this is not a free flip: the runner's async
+        # branch is `async_decode_scheduling and is_decode` with no spec
+        # exclusion, and can_use_steady_decode_fast_path never checks spec
+        # mode, so an overlapping step could run this rail's propose
+        # (contract_commit + contract_replay) after the next verify was
+        # submitted.
+        "supports_async_decode": os.environ.get("GEMMA4_CONTRACT_ASYNC", "0") != "0",
         "supports_spec_decode": True,
         # NOT tt_adaptive_block_output: that key is the BLOCK rail's, and this
         # rail commits 1..1+K tokens through the runner's accept walk rather

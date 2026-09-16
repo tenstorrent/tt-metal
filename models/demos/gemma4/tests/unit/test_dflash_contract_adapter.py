@@ -85,6 +85,13 @@ def test_declares_the_contract_rail_not_the_block_rail():
     assert "tt_adaptive_block_output" not in caps
     assert set(caps["spec_requirements"]) == {"device_propose", "hidden_feed"}
     assert caps["spec_hidden_handoff"] == ("on_device",)
+    # A batched draft-less step decodes plain baseline and must answer with
+    # ids, so the device sampler has to be available; declaring it False makes
+    # the platform refuse sample_on_device_mode at config validation, and the
+    # step then argmaxes [B, vocab] logits on host every time.
+    assert caps["supports_sample_on_device"] is True
+    # Synchronous by default, per the scope the review set for a first adapter.
+    assert caps["supports_async_decode"] is False
 
 
 def test_the_plugin_admits_this_declaration():
