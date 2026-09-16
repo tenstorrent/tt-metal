@@ -397,9 +397,7 @@ def test_the_fixed_target_s_drafter_proposes_what_the_verify_will_choose(monkeyp
     positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
     counts = torch.tensor([1], dtype=torch.int32)
 
-    drafts = model.propose_draft_tokens(
-        3, committed, positions, counts, hidden=model._verify_hidden
-    ).draft_token_ids
+    drafts = model.propose_draft_tokens(3, committed, positions, counts, hidden=model._verify_hidden).draft_token_ids
 
     # Walk the rule by hand from the row's last committed token at position 5.
     token, position = 100, 5
@@ -423,9 +421,7 @@ def test_the_fixed_target_accepts_its_own_drafts_up_to_the_depth(monkeypatch):
     positions = torch.tensor([[5, 6, 7, 8]], dtype=torch.int32)
     counts = torch.tensor([1], dtype=torch.int32)
 
-    drafts = model.propose_draft_tokens(
-        3, committed, positions, counts, hidden=model._verify_hidden
-    ).draft_token_ids
+    drafts = model.propose_draft_tokens(3, committed, positions, counts, hidden=model._verify_hidden).draft_token_ids
     # The next verify's block: the row's last committed token, then the drafts.
     block = torch.cat([committed[:, :1], drafts], dim=1)
     verified = model._fixed_choice(block, positions)
