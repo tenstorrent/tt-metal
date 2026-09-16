@@ -255,18 +255,17 @@ def _num_banks(nodes) -> int:
 
 
 def plan_pipeline(operation: "L1Operation") -> List[PlannedBlock]:
-    pipeline = operation.math
     tile_count_x = (
         operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
     )
     tile_count_y = (
         operation.max_output_dimensions[0] // operation.tile_shape.total_row_dim()
     )
-    if pipeline.custom_op:
+    if operation.custom_op:
         # Custom index arrays drive bank iterations within a single block region.
         tile_count_x, tile_count_y = operation.block_tiles_x, operation.block_tiles_y
 
-    units = list(_node_units(pipeline.math_nodes, pipeline.pack_nodes))
+    units = list(_node_units(operation.math_nodes, operation.pack_nodes))
     result = []
     for region in block_regions(
         tile_count_x, tile_count_y, operation.block_tiles_x, operation.block_tiles_y
@@ -277,7 +276,7 @@ def plan_pipeline(operation: "L1Operation") -> List[PlannedBlock]:
             _plan_node(operation, planned, node, role, unit)
             for node, role, unit in units
         )
-        if pipeline.custom_op:
+        if operation.custom_op:
             bank = LoopPlan(bank_levels=(Level(BANK_VAR, _num_banks(nodes)),))
         planned = replace(planned, bank=bank, nodes=nodes)
         planned.check_dest_reads()

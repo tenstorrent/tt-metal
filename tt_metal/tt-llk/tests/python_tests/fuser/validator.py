@@ -17,7 +17,6 @@ construction. The dicts are:
 
 from typing import Annotated, ClassVar, Dict, List, Literal, Optional, Tuple, Union
 
-from fuser.compute_pipeline import ComputePipeline
 from fuser.fpu_node import FpuNode
 from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
@@ -821,7 +820,8 @@ class OperationSchemaBase(BaseModel):
         kwargs.update(self._arch_kwargs())
 
         return L1Operation(
-            math=ComputePipeline(math_ops, pack_nodes),
+            math_nodes=math_ops,
+            pack_nodes=pack_nodes,
             max_output_dimensions=max_out_dims,
             **kwargs,
         )

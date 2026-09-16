@@ -28,14 +28,13 @@ class GoldenExecutor:
         self.operation = operation
         self.config = config
         self.golden_type = golden_type
-        self.pipeline = operation.math
         self.pack_nodes = [
-            node for node in self.pipeline.pack_nodes if isinstance(node, PackNode)
+            node for node in operation.pack_nodes if isinstance(node, PackNode)
         ]
         self.output_format = self.pack_nodes[0].output.data_format
         self.buffers = {id(node.output): {} for node in self.pack_nodes}
         self.views = {}
-        for node in self.pipeline.math_nodes:
+        for node in operation.math_nodes:
             if not isinstance(node, FpuNode):
                 continue
             for slot, operand in (("a", node.src_a), ("b", node.src_b)):
@@ -50,7 +49,7 @@ class GoldenExecutor:
     def _output_layout(self, node: PackNode) -> OutputLayout:
         if node.packer.output_layout != OutputLayout.ROW_MAJOR:
             return node.packer.output_layout
-        for math_node in self.pipeline.math_nodes:
+        for math_node in self.operation.math_nodes:
             if (
                 isinstance(math_node, FpuNode)
                 and math_node.unpacker is not None
@@ -60,7 +59,7 @@ class GoldenExecutor:
         return OutputLayout.ROW_MAJOR
 
     def _dest_size(self, planned: PlannedBlock) -> int:
-        if not self.pipeline.custom_op:
+        if not self.operation.custom_op:
             return planned.region.block_tiles
         faces = 32 if self.operation.dest_sync == DestSync.Half else 64
         if self.config.dest_acc == DestAccumulation.Yes:
@@ -76,7 +75,7 @@ class GoldenExecutor:
             )
 
     def _run_math(self, planned: PlannedBlock, bank, state: GoldenState) -> None:
-        for node in self.pipeline.math_nodes:
+        for node in self.operation.math_nodes:
             self.config.sentinel.configure_golden(
                 self.config, self.operation, node, output_format=self.output_format
             )
@@ -97,7 +96,7 @@ class GoldenExecutor:
             self._run_node(math, bank, state)
 
     def _run_pack(self, planned: PlannedBlock, bank, state: GoldenState) -> None:
-        for node in self.pipeline.pack_nodes:
+        for node in self.operation.pack_nodes:
             if isinstance(node, SfpuNode):
                 self._run_node(planned.plan(node, "sfpu"), bank, state)
                 continue

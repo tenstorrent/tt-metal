@@ -288,7 +288,7 @@ class FuserConfigSchema(BaseModel):
             operation.needs_pack_sync = any(
                 (node.src_a is not None and node.src_a.is_output)
                 or (node.src_b is not None and node.src_b.is_output)
-                for node in operation.math.math_nodes
+                for node in operation.math_nodes
                 if hasattr(node, "unpacker") and node.unpacker is not None
             )
 

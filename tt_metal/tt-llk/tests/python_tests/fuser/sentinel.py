@@ -81,7 +81,7 @@ class FuserSentinel:
         """
         from .fpu_node import FpuNode
 
-        for node in operation.math.math_nodes:
+        for node in operation.math_nodes:
             if isinstance(node, FpuNode) and node.src_a is not None:
                 return node
         return None
@@ -96,7 +96,7 @@ class FuserSentinel:
         from .fpu_node import FpuNode
 
         previous = None
-        for node in operation.math.math_nodes:
+        for node in operation.math_nodes:
             if node is compute_node:
                 break
             if isinstance(node, FpuNode) and node.src_a is not None:
@@ -285,7 +285,7 @@ class FuserSentinel:
         if self._unpack_A_src is not None:
             return ""
 
-        output_format = operation.math._get_pack_nodes()[0].output.data_format
+        output_format = operation._get_pack_nodes()[0].output.data_format
         unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, _, _ = (
             self._infer_node_formats(config, compute_node, output_format, operation)
         )
@@ -332,7 +332,7 @@ class FuserSentinel:
         if compute_node.src_a is None:
             return ""
 
-        output_format = operation.math._get_pack_nodes()[0].output.data_format
+        output_format = operation._get_pack_nodes()[0].output.data_format
         new_A_src, new_A_dst, new_B_src, new_B_dst, _, _ = self._infer_node_formats(
             config, compute_node, output_format, operation
         )
@@ -408,7 +408,7 @@ class FuserSentinel:
         if self._math_format is not None:
             return ""
 
-        output_format = operation.math._get_pack_nodes()[0].output.data_format
+        output_format = operation._get_pack_nodes()[0].output.data_format
         compute_node = self._find_format_node(operation)
         if compute_node is not None:
             _, _, _, _, math_fmt, _ = self._infer_node_formats(
@@ -434,7 +434,7 @@ class FuserSentinel:
         if compute_node.src_a is None:
             return ""
 
-        output_format = operation.math._get_pack_nodes()[0].output.data_format
+        output_format = operation._get_pack_nodes()[0].output.data_format
         _, _, _, _, new_math, _ = self._infer_node_formats(
             config, compute_node, output_format, operation
         )

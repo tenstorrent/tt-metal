@@ -23,7 +23,7 @@ class UnpackKernelGenerator:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
-            for fused_compute in op.math.math_nodes:
+            for fused_compute in op.math_nodes:
                 if (
                     hasattr(fused_compute, "unpacker")
                     and fused_compute.unpacker is not None
@@ -63,7 +63,7 @@ class MathKernelGenerator:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
-            for unit in op.math.get_math_units():
+            for unit in op.get_math_units():
                 all_headers.update(unit.get_headers())
 
         # Generate include statements
@@ -119,7 +119,7 @@ class PackKernelGenerator:
         # Collect all unique headers from all operations
         all_headers = set()
         for op in self.config.pipeline:
-            for pack_node in op.math.pack_nodes:
+            for pack_node in op.pack_nodes:
                 all_headers.update(pack_node.get_headers())
 
         # Generate include statements
