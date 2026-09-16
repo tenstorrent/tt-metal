@@ -96,7 +96,7 @@ def _perf_unpack_tilize(
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(256),
+            LOOP_FACTOR(1024),
         ],
         variant_stimuli=StimuliConfig(
             None,

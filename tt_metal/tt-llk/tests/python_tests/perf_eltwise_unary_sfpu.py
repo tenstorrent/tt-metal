@@ -175,7 +175,7 @@ def _get_formats(mathop):
     mathop=PERF_SWEEP_OPS,
     dest_acc=lambda mathop, formats: _get_dest_acc_modes(mathop, formats),
     loop_factor=[
-        16,
+        256,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
         32,
@@ -304,7 +304,7 @@ def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensi
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),
-            LOOP_FACTOR(16),
+            LOOP_FACTOR(256),
             NUM_FACES(num_faces=faces_to_generate),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),

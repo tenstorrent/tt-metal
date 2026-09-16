@@ -15,7 +15,10 @@ from test_eltwise_unary_datacopy import (
 @parametrize(
     **DATACOPY_SWEEP,
     run_types=[ALL_PERF_RUN_TYPES],
-    loop_factor=[32],
+    # L1_CONGESTION has independently running unpack/pack threads. A 32-loop
+    # window exposed 3.9–4.8% arbitration-phase noise; 1024 loops reduced the
+    # observed four-run spread below 1% while preserving per-tile normalization.
+    loop_factor=[1024],
     is_perf=[True],
 )
 def test_perf_eltwise_unary_datacopy(

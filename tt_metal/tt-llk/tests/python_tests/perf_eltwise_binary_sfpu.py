@@ -62,7 +62,7 @@ def get_dest_accum_modes(formats):
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
-        16,
+        256,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
         32,
@@ -143,7 +143,7 @@ def test_perf_eltwise_binary_sfpu_float(
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
-        16,
+        256,
     ],
     iterations=[
         32,
@@ -223,7 +223,7 @@ def test_perf_eltwise_binary_sfpu_int(
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
-        16,
+        256,
     ],
     iterations=[
         32,

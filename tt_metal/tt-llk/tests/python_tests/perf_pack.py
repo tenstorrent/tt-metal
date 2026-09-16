@@ -12,7 +12,7 @@ from test_pack import test_pack as run_pack
 @parametrize(
     **{**PACK_SWEEP, "dest_index": [0]},
     run_types=[ALL_PERF_RUN_TYPES],
-    loop_factor=[32],
+    loop_factor=[256],
     is_perf=[True],
 )
 def test_perf_pack(

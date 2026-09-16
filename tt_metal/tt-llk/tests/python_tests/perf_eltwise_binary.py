@@ -58,7 +58,7 @@ def test_perf_eltwise_binary(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[MATH_FIDELITY(math_fidelity), MATH_OP(mathop=mathop)],
-        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(8)],
+        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(256)],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,

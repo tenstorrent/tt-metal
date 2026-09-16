@@ -67,7 +67,7 @@ def test_perf_reduce(
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
             REDUCE_POOL_TYPE(pool_type),
         ],
-        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
+        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(256)],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,
