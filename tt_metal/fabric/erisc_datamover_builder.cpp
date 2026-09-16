@@ -1077,18 +1077,26 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_info_.has_value() && vc0_trim_fast_path_info_->terminal_or_source_only;
     const bool base_enable_deadlock_avoidance = fabric_context.need_deadlock_avoidance_support(this->direction_);
+    const bool peer_enable_deadlock_avoidance =
+        remote_routing_direction.has_value() &&
+        fabric_context.need_deadlock_avoidance_support(
+            control_plane.routing_direction_to_eth_direction(remote_routing_direction.value()));
+    // First-level ACK is a bidirectional link protocol. Inter-mesh links may join different logical directions
+    // (for example NORTH to WEST), so both endpoints must enable it whenever either endpoint uses bubble flow.
+    const bool link_requires_first_level_ack_vc0 = base_enable_deadlock_avoidance || peer_enable_deadlock_avoidance;
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
-    const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
     // Preserve the existing explicit single-sender behavior, allow the same
     // fast path when trimming collapses a wider VC0 router to the worker-only
     // shape, and optionally enable a terminal-only speedy receiver when the
     // host has already proven that the exact peer on this link is the
     // matching worker-only source router.
-    const bool enable_speedy_vc0 = vc0_speedy_path_enabled(
-        actual_sender_channels_vc0,
-        base_enable_deadlock_avoidance,
-        vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
+    const bool enable_speedy_vc0 =
+        !link_requires_first_level_ack_vc0 && vc0_speedy_path_enabled(
+                                                  actual_sender_channels_vc0,
+                                                  base_enable_deadlock_avoidance,
+                                                  vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
+    const bool final_enable_first_level_ack_vc0 = link_requires_first_level_ack_vc0;
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
