@@ -35,9 +35,11 @@ def test_smaller_or_multiple_galaxies_are_rejected(shape, expect_error):
         MeshConfig(SimpleNamespace(shape=shape))
 
 
-@pytest.mark.parametrize("chunk_size", [0, -8192, 4096, 8193])
+# 4096 is legal now: at CP8 its 512-token slab needs a 2-hop sliding-window halo, which ring_joint
+# supports. 512 is not: a 64-token slab would need 16 hops around an 8-rank ring.
+@pytest.mark.parametrize("chunk_size", [0, -8192, 512, 8193])
 def test_invalid_chunk_geometry_fails_before_weight_loading(chunk_size, expect_error):
-    with expect_error(ValueError, "positive|whole CP-local tiles|sliding window"):
+    with expect_error(ValueError, "positive|whole CP-local tiles|halo hops"):
         create_tt_model(MeshConfig(SimpleNamespace(shape=(8, 4))), max_seq_len=32768, prefill_chunk_size=chunk_size)
 
 
