@@ -47,7 +47,7 @@ def test_checkpoint_trajectory_pcc(device, model_config, checkpoint_path, missin
         "status_feature": torch.randn(1, 8),
     }
 
-    torch.manual_seed(1234)  # pin DDIM noise (DD-5)
+    torch.manual_seed(1234)  # pin DDIM noise (README 3.5)
     with torch.no_grad():
         ref_out = ref_model(features)
 

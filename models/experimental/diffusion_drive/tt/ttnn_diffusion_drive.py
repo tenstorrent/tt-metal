@@ -403,7 +403,7 @@ class TtnnDiffusionDriveModel:
 
     @staticmethod
     def _dummy_features(batch_size: int = 1) -> Dict[str, torch.Tensor]:
-        """Production-resolution random features for trace capture (see DD-4 sizes)."""
+        """Production-resolution random features for trace capture (README 3.6)."""
         return {
             "camera_feature": torch.randn(batch_size, 3, 256, 1024),
             "lidar_feature": torch.randn(batch_size, 1, 256, 256),

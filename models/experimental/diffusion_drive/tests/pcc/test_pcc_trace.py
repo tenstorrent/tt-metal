@@ -20,7 +20,8 @@ PCC 1.0. So capture on A, replay on B, and check the result against eager B
 comparison is the control that proves the two inputs are far enough apart for
 that to mean anything.
 
-The noise stream is re-seeded before each forward (DD-5) so the DDIM draws match.
+The noise stream is re-seeded before each forward (README 3.5) so the DDIM draws
+match.
 Assets resolve through the shared ``checkpoint_path`` fixture; a missing one
 skips locally but fails under ``DD_REQUIRE_ASSETS=1`` (see conftest).
 """
@@ -46,7 +47,7 @@ _MIN_SEPARATION = 0.01
 
 
 def _features(scale: float = 1.0) -> dict:
-    """Production-resolution random features (DD-4 sizes)."""
+    """Production-resolution random features (README 3.6)."""
     return {
         "camera_feature": torch.randn(1, 3, 256, 1024) * scale,
         "lidar_feature": torch.randn(1, 1, 256, 256) * scale,
@@ -76,7 +77,7 @@ def test_backbone_trace_matches_eager(device, model_config, checkpoint_path, mis
     features_b = _features(scale=2.5)
 
     # Eager references for both, before any trace exists.
-    torch.manual_seed(1234)  # pin DDIM noise (DD-5)
+    torch.manual_seed(1234)  # pin DDIM noise (README 3.5)
     eager_a = ttnn_model(features_a)
     torch.manual_seed(1234)  # same noise stream
     eager_b = ttnn_model(features_b)

@@ -198,6 +198,26 @@ new full-model tests.
 
 ---
 
+### 3.6 LiDAR resolution is fixed at 256×256 by the key-val token count
+
+`DiffusionDriveModel._keyval_embedding` has a **fixed** 65 rows —
+`lidar_vert_anchors * lidar_horz_anchors + 1` = 8×8 BEV tokens plus one status
+token (`reference/model.py:898`).
+
+Those 64 BEV tokens come from flattening the deepest LiDAR feature map, and
+`_bev_downscale` is a 1×1 conv, so it preserves spatial dims: the token count *is*
+whatever layer4 emits. The LiDAR encoder divides by 32 overall (conv1+bn1+maxpool
+= /4, then four stages × /2), so only a 256×256 input yields 256/32 = 8 → 8×8 = 64
+tokens.
+
+Shrinking the input to speed a test up breaks it: 64×64 gives 2×2 = 4 tokens, and
+`keyval += self._keyval_embedding.weight[None, ...]` fails on the shape mismatch.
+
+Backbone-only PCC tests may use smaller inputs — they check encoder outputs and
+never reach the token count. **Full-model tests must use the production sizes**
+(camera 256×1024, LiDAR 256×256), which is also where the GPT-fusion
+pool/upsample ratios are integer (§3.4).
+
 ## 4. Bring-Up Stages
 
 ### Stage summary

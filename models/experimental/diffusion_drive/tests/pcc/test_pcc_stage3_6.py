@@ -44,7 +44,7 @@ def test_stage3_6_full_on_device_pcc(device, model_config) -> None:
         "status_feature": torch.zeros(1, 8),
     }
 
-    torch.manual_seed(1234)  # pin DDIM noise (DD-5)
+    torch.manual_seed(1234)  # pin DDIM noise (README 3.5)
     with torch.no_grad():
         ref_out = ref_model(features)
 
