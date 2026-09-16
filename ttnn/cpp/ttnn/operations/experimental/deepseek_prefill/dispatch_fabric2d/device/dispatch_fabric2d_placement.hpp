@@ -36,6 +36,17 @@ using MeshPlacement = std::map<ttnn::MeshCoordinate, StreamPlacements>;
 
 // Placement for every chip and every stream on the mesh. Decided for the whole mesh at once because a
 // sender's arguments name the worker serving the same stream on the downstream chip.
-MeshPlacement decide_placement(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links);
+//
+// `universe` is every core the op may occupy -- the caller's sub-device, or the first row of the
+// compute grid when there is none. A stream lands on the worker nearest its eth core, and that core
+// must be a MEMBER of the universe or the op refuses; only the collision walk searches the universe.
+// The cores no stream takes are the untilizer pool, and anything outside the universe belongs to
+// whatever else shares the chip.
+MeshPlacement decide_placement(
+    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, const tt::tt_metal::CoreRangeSet& universe);
+
+// The cores of the universe no stream took, in universe order: under a TILE input, the untilizer pool.
+std::vector<tt::tt_metal::CoreCoord> spare_cores(
+    const tt::tt_metal::CoreRangeSet& universe, const StreamPlacements& streams);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

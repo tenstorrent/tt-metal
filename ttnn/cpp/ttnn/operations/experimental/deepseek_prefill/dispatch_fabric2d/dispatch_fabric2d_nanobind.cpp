@@ -6,8 +6,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dispatch_fabric2d.hpp"
@@ -24,7 +27,12 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         is the all-rows table rather than this device's row, and there is no weights, padding_config or
         scales input.
 
-            input_tensor          the tokens, one per page, BFLOAT16 ROW_MAJOR.
+            input_tensor          the tokens, BFLOAT16, either ROW_MAJOR (one token per page) or TILE.
+                                  A TILE input is untilized on device into an op-private row-major
+                                  staging buffer by a pool of cores beside the stream cores, which
+                                  runs while the stream cores build their routing index; the transport
+                                  itself is unchanged. TILE needs emb_dim and seq_len_per_chip both
+                                  multiples of 32.
             indices_tensor        top-k expert ids per token, UINT16 ROW_MAJOR.
             expert_offsets        where each SOURCE chip's run starts inside each expert's region, for
                                   every source chip: offset_cumsum's all_global_dispatch_offsets. Must
@@ -33,6 +41,13 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             expert_dispatch_table global expert id -> chip in the dispatch group, -1 when the expert is
                                   not in this group.
             expert_token_counts   tokens per expert summed over every source chip.
+            fanout_reach        required when `fanout` is set, ignored otherwise:
+                                  reach[origin][direction][hop] as INT32, the tokens from `origin`
+                                  whose farthest destination that way is at least `hop` hops off, of
+                                  shape [.., extent, 2, >= extent/2 + 2] and REPLICATED along the
+                                  dispatch axis. Per-expert counts are marginals and cannot express
+                                  it, so without this a relay could not size a multicast chunk it
+                                  neither wrote nor receives.
             expert_region_offsets where each expert's region starts in the destination buffer. Together
                                   with expert_token_counts this closes the last source chip's run, which
                                   expert_offsets alone cannot: its rows are absolute buffer positions, so
@@ -59,9 +74,16 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             num_links             1 to 4, and the axis must actually have that many forwarding links.
             num_routed_experts    a multiple of 16, so a row of the offsets table is a whole number of
                                   64-byte lines: the reader reads row r to `control + r * W` words and a
-                                  DRAM read needs a 64-byte-aligned L1 destination.
-            all six inputs        ROW_MAJOR and interleaved DRAM; the output memory config must be
-                                  interleaved too.
+                                  DRAM read needs a 64-byte-aligned L1 destination. Separately,
+                                  cluster_axis extent x experts_per_chip must fit 16 bits, which is
+                                  what the reader packs a bucket index into.
+            subdevice_id          must contain the worker nearest each stream's eth core, and hold at
+                                  least 2 * num_links cores -- one more again for a TILE input, which
+                                  needs somewhere to put an untilizer.
+            input_tensor layout   ROW_MAJOR, or TILE with emb_dim and seq_len_per_chip both multiples
+                                  of 32. A ragged final stripe is refused rather than clipped.
+            all six inputs        interleaved DRAM, and every one but input_tensor ROW_MAJOR; the
+                                  output memory config must be interleaved too.
             dtypes                BFLOAT16 input, and metadata_len must be 3: the fp8-scaled layout
                                   appends per-block scales that do not fit the routing tail this op
                                   carries.
@@ -74,6 +96,11 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         pays an extra crossing each, against two DRAM transfers saved on the chip that would otherwise
         have landed the page and read it back. Both modes are retained so they can be measured against
         each other in one build.
+
+        subdevice_id: the sub-device whose Tensix cores the op may use, for both its stream cores and
+        a TILE input's untilizer pool. Omitted, the op takes the FIRST ROW of the compute grid -- which
+        is where the eth-nearest stream placement lands and what the model carves for dispatch, and
+        which is asserted rather than assumed.
 
         `cluster_axis` other than 0 is reachable but untested: it is only bounds-checked, and a
         different axis gives a structurally different schedule.
@@ -96,7 +123,8 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("num_links"),
         nb::arg("fanout") = false,
         nb::arg("topology"),
-        nb::arg("memory_config"));
+        nb::arg("memory_config"),
+        nb::arg("subdevice_id") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d::detail

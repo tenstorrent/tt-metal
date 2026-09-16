@@ -14,6 +14,9 @@ control tensors and the routing agree by construction -- which is what the reade
 relies on.
 """
 
+import re
+from contextlib import contextmanager
+
 import pytest
 import torch
 from loguru import logger
@@ -158,6 +161,12 @@ def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weigh
 # Production routes over all experts, so most picks resolve to -1 and the surviving ones concentrate on
 # a few chips -- a distribution this op had never been run against.
 @pytest.mark.parametrize("routing", [None, "hottest"], ids=lambda r: r or "in-group")
+# The model hands dispatch TILED activations. A TILE input is untilized on device into a staging
+# buffer by a pool of cores beside the stream cores, so the transport sees the identical bytes either
+# way and both layouts share this gate -- which is also what makes them A/B-able on the perf worker.
+@pytest.mark.parametrize(
+    "input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=lambda ly: "tile" if ly == ttnn.TILE_LAYOUT else "rm"
+)
 def test_dispatch_fabric2d(
     mesh_device,
     device_params,
@@ -168,6 +177,7 @@ def test_dispatch_fabric2d(
     emb_dim,
     fanout,
     routing,
+    input_layout,
 ):
     cfg = extract_mesh_config(mesh_device)
     sp_axis, H, G = cfg.sp_axis, cfg.dispatch_group_size, cfg.num_dispatch_groups
@@ -214,18 +224,20 @@ def test_dispatch_fabric2d(
         )
         offs[g], counts[g], region[g] = o[0].to(torch.int32), c[0].to(torch.int32), r[0].to(torch.int32)
 
-    def shard(t, dims, dtype):
+    def shard(t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(
             t,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=layout,
             device=mesh_device,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     x = torch.randn(H, G, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
-    tt_x = shard(x, (0, 1), ttnn.bfloat16)
+    # Same values in either layout, so one reference gates both runs -- which is what makes the TILE
+    # path's untilizer byte-exact rather than merely close.
+    tt_x = shard(x, (0, 1), ttnn.bfloat16, layout=input_layout)
     tt_idx = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
     # expert_offsets is the ALL-ROWS table: replicated along the dispatch axis, since a relaying chip
     # sizes a run it neither wrote nor receives.
@@ -315,6 +327,329 @@ def test_dispatch_fabric2d(
     # Without this the local phase could regress to writing nothing and the comparison would still pass.
     assert checked_local > 0, "no same-chip pages found; the local phase would go untested"
     assert bad == 0, f"{bad} device/tensor comparisons differ from the dispatch reference"
+
+
+class _Fixture:
+    """One small in-group routing draw, on device in both input layouts, plus its torch reference.
+
+    Shared by the tests below that care about how the op is CALLED rather than about the routing: the
+    matrix above is where the routing axes live.
+    """
+
+    # emb_dim 512 is 16 tiles wide, so the untilizer packs TWO column blocks per stripe. At 256 it is
+    # exactly one, and a block's L1 column offset -- the thing block_ct_dim exists to make legal --
+    # would never be anything but zero.
+    def __init__(self, mesh_device, H, G, seq_len_per_chip=128, emb_dim=512, num_routed_experts=256, topk=8, seed=11):
+        self.seq_len_per_chip, self.emb_dim, self.H, self.G = seq_len_per_chip, emb_dim, H, G
+        self.num_routed_experts, self.topk = num_routed_experts, topk
+        self.experts_per_chip = num_routed_experts // G // H
+        self.capacity = H * seq_len_per_chip * topk  # roomy: nothing is dropped
+        torch.manual_seed(seed)
+        self.table = _expert_dispatch_table(num_routed_experts, H, G)
+        experts_per_group = num_routed_experts // G
+        self.indices = torch.zeros(G, H, seq_len_per_chip, topk, dtype=torch.int64)
+        for g in range(G):
+            for h in range(H):
+                for t in range(seq_len_per_chip):
+                    self.indices[g, h, t] = g * experts_per_group + torch.randperm(experts_per_group)[:topk]
+
+        offs = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
+        counts = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
+        region = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
+        for g in range(G):
+            o, c, r, _ = get_gate_outputs(
+                self.indices[g],
+                H,
+                num_routed_experts,
+                self.experts_per_chip,
+                seq_len_per_chip,
+                topk,
+                expert_dispatch_table=self.table[g : g + 1],
+            )
+            offs[g], counts[g], region[g] = o[0].to(torch.int32), c[0].to(torch.int32), r[0].to(torch.int32)
+        self.offs = offs
+
+        def shard(t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+            return ttnn.from_torch(
+                t,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+                layout=layout,
+                device=mesh_device,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        self.x = torch.randn(H, G, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
+        self.tt_x = {
+            ttnn.ROW_MAJOR_LAYOUT: shard(self.x, (0, 1), ttnn.bfloat16),
+            ttnn.TILE_LAYOUT: shard(self.x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+        }
+        self.tt_idx = shard(self.indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
+        self.tt_offs = shard(offs, (None, 0), ttnn.int32)
+        self.tt_counts = shard(counts[:, 0:1, :], (None, 0), ttnn.int32)
+        self.tt_region = shard(region[:, 0:1, :], (None, 0), ttnn.int32)
+        self.tt_table = shard(self.table.unsqueeze(1), (None, 0), ttnn.int32)
+        self.tt_reach = shard(
+            _mc_reach(
+                self.indices, self.table, offs, self.capacity, G, H, seq_len_per_chip, topk
+            ).to(torch.int32),
+            (None, 0),
+            ttnn.int32,
+        )
+
+    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, fanout=False, subdevice_id=None):
+        return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
+            self.tt_x[layout],
+            self.tt_idx,
+            self.tt_offs,
+            self.tt_table,
+            self.tt_counts,
+            self.tt_region,
+            fanout_reach=self.tt_reach if fanout else None,
+            fanout=fanout,
+            experts_per_chip=self.experts_per_chip,
+            num_routed_experts=self.num_routed_experts,
+            num_experts_per_tok=self.topk,
+            metadata_len=3,
+            max_dispatch_buffer_token_size=self.capacity,
+            seq_len_per_chip=self.seq_len_per_chip,
+            cluster_axis=cluster_axis,
+            num_links=num_links,
+            topology=ttnn.Topology.Ring,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            subdevice_id=subdevice_id,
+        )
+
+    def check(self, payload, metadata, label):
+        """Every page any chip sourced, byte-exact against what `dispatch` would have placed."""
+        ref_payload, ref_meta, src_of = _reference_dispatch(
+            self.indices,
+            self.table,
+            self.offs,
+            self.x,
+            self.capacity,
+            self.G,
+            self.H,
+            self.seq_len_per_chip,
+            self.topk,
+            self.emb_dim,
+        )
+        got_payload = ttnn.get_device_tensors(payload)
+        got_meta = ttnn.get_device_tensors(metadata)
+        checked = 0
+        for dev in range(self.H * self.G):
+            r, g = dev // self.G, dev % self.G
+            pages = [p for p in range(self.capacity) if int(src_of[g, r, p]) >= 0]
+            if not pages:
+                continue
+            idx = torch.tensor(pages)
+            pay = ttnn.to_torch(got_payload[dev]).reshape(self.capacity, self.emb_dim)
+            met = ttnn.to_torch(got_meta[dev]).to(torch.int32).reshape(self.capacity, 3)
+            checked += len(pages)
+            assert torch.equal(pay[idx], ref_payload[g, r][idx]), f"{label}: device {dev} payload differs"
+            assert torch.equal(met[idx], ref_meta[g, r][idx]), f"{label}: device {dev} metadata differs"
+        assert checked > 0, f"{label}: no dispatched pages found; the reference or the routing is wrong"
+        logger.info(f"{label}: {checked} pages byte-exact")
+
+
+@contextmanager
+def _sub_device_manager(mesh_device, sub_devices):
+    """Register, load and tear down one sub-device manager over the given CoreRangeSets.
+
+    A manager's sub-devices have to be disjoint, so a test that wants overlapping carves needs two
+    managers and only one of them loaded at a time. Removal is not optional: leaving a manager
+    registered at device close has been observed to segfault the teardown.
+    """
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([cores]) for cores in sub_devices], 0)
+    mesh_device.load_sub_device_manager(manager)
+    try:
+        yield [ttnn.SubDeviceId(i) for i in range(len(sub_devices))]
+    finally:
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
+
+
+def _moe_grid_split(mesh_device):
+    """The model's carve: dispatch gets the first row of the Tensix grid, the shared expert the rest.
+
+    `tt_moe.py` splits rows [0, dispatch_sd_rows) against the remainder, with `dispatch_sd_rows`
+    currently 1, so the two ops run on disjoint cores and overlap on chip.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    dispatch = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))})
+    shared = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    return dispatch, shared
+
+
+def _leading_row_cores(width):
+    """The first `width` cores of row 0 -- a STRICT subset of what the op picks with no sub-device.
+
+    The op does not support this: a stream lands on the worker nearest its eth core and those are
+    spread along the whole row, so any partial carve leaves one of them outside. What it is good for
+    is showing that the sub-device reached the placement at all, which a carve identical to the
+    default cannot.
+    """
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, 0))})
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(600)
+def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links):
+    """A TILE input on the model's two-sub-device split: every core the op takes must be in row 0.
+
+    Byte-exactness is the same gate the matrix applies. What is new is confinement -- the four stream
+    cores AND the untilizer pool a TILE input needs all have to come out of the dispatch row, because
+    the shared expert holds the rest of the grid at the same time.
+
+    The negative case is what actually proves it. Handed the SHARED sub-device instead, the op must
+    refuse and name a core in row 0: that message is the placement telling us where it wanted to put a
+    stream, and it can only say y=0 if row 0 is where the streams go. Confinement of the pool then
+    follows by construction, since it is drawn from the cores of the same set no stream took.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
+    streams = 2 * num_links
+    dispatch_cores, shared_cores = _moe_grid_split(mesh_device)
+    n_cores = sum((r.end.x - r.start.x + 1) * (r.end.y - r.start.y + 1) for r in dispatch_cores.ranges())
+    pool = n_cores - streams
+    logger.info(f"dispatch sub-device: {n_cores} cores in row 0, {streams} streams, {pool} untilizers")
+    assert pool > 0, "no core left for an untilizer; the TILE path cannot run"
+
+    # More stripes than there are cores to take them, so a core takes several and the round-robin
+    # stride stops being indistinguishable from one. The default seq gives one stripe per core.
+    deep = _Fixture(
+        mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seq_len_per_chip=32 * (2 * pool + 1), seed=31
+    )
+
+    with _sub_device_manager(mesh_device, [dispatch_cores, shared_cores]) as (dispatch_sd, shared_sd):
+        for case, layout, fanout in [("unicast", ttnn.TILE_LAYOUT, False), ("multicast", ttnn.TILE_LAYOUT, True)]:
+            payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout, fanout=fanout, subdevice_id=dispatch_sd)
+            fx.check(payload, metadata, f"tile {case} on the dispatch sub-device")
+
+        payload, metadata = deep.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=dispatch_sd)
+        deep.check(payload, metadata, f"{deep.seq_len_per_chip // 32} stripes over {pool} untilizers")
+
+        with pytest.raises(RuntimeError) as refusal:
+            fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=shared_sd)
+        message = str(refusal.value)
+        assert "is outside the" in message, message
+        # The core it names is the one the eth-nearest placement wanted. CoreCoord formats as x-y, so
+        # a trailing -0 is row 0 -- which is the whole claim this test exists to make.
+        assert re.search(r"eth core is \d+-0,", message), message
+
+    # A carve identical to the default cannot show that the argument was used at all. This one is a
+    # strict subset of the same row, and the op refuses it -- naming a row-0 core it wanted and could
+    # not have -- which it could only do having read the sub-device. It also records the real
+    # constraint: the eth-nearest workers are spread along the row, so dispatch needs ALL of it.
+    with _sub_device_manager(mesh_device, [_leading_row_cores(streams + 2)]) as (narrow_sd,):
+        with pytest.raises(RuntimeError) as refusal:
+            fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=narrow_sd)
+        message = str(refusal.value)
+        assert f"outside the {streams + 2} cores" in message, message
+        assert re.search(r"eth core is \d+-0,", message), message
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
+# 16 and 64 tiles wide: two untilize column blocks per stripe, and eight.
+@pytest.mark.parametrize("emb_dim", [512, 2048], ids=lambda e: f"emb{e}")
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_relaunch(mesh_device, device_params, num_links, fanout, emb_dim):
+    """Both layouts and repeat launches against ONE device, which the matrix cannot reach.
+
+    Every case of the matrix gets a fresh `mesh_device` fixture, so it never exercises two things
+    that only go wrong when state survives a launch:
+
+    - The program cache. A TILE input and a ROW_MAJOR one build DIFFERENT programs -- one has an
+      untilizer pool and reads tokens out of a staging buffer, the other has neither -- so the layout
+      has to reach the cache key. If it did not, whichever ran second would silently get the first
+      one's program and read tokens from the wrong buffer. Alternating catches it in both directions.
+    - The untilize counter. The stream readers zero it at end of stream, so a second TILE launch
+      starts from whatever the first left. A leak there does NOT hang: the wait passes immediately
+      and the stream cores read the staging buffer the previous launch filled. That is invisible
+      unless the launches carry different values, which is why each one here has its own draw.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    plan = [
+        ("row-major", ttnn.ROW_MAJOR_LAYOUT),
+        ("tile", ttnn.TILE_LAYOUT),
+        ("tile again", ttnn.TILE_LAYOUT),
+        ("row-major again", ttnn.ROW_MAJOR_LAYOUT),
+    ]
+    for seed, (label, layout) in enumerate(plan):
+        fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=emb_dim, seed=20 + seed)
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout, fanout=fanout)
+        # Reading the outputs back is what synchronises the launches: this op deadlocks if a chip
+        # starts sending into a neighbour that is still retiring the previous one.
+        fx.check(payload, metadata, label)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(600)
+def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
+    """The TILE path's edge conditions are refused, rather than silently doing something else.
+
+    Each of these is a write that would land somewhere it should not. A stripe is a whole tile row, so
+    a sequence that is not a multiple of 32 would have its last stripe write past the end of a staging
+    buffer sized at exactly `seq_len_per_chip` pages; an emb_dim that is not a multiple of 32 leaves
+    the untilizer reading tile columns that are not there and packing rows at a stride the writer does
+    not use; and a sub-device with no core to spare has nowhere to put a pool at all.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    streams = 2 * num_links
+
+    # 100 tokens is three whole stripes and a ragged fourth; 500 columns is fifteen whole tile
+    # columns and a ragged sixteenth. Both are accepted as ROW_MAJOR, which is what makes the TILE
+    # refusal a property of the untilizer rather than of the op's shapes.
+    for label, kwargs in [("ragged sequence", {"seq_len_per_chip": 100}), ("ragged emb", {"emb_dim": 500})]:
+        ragged = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, **kwargs)
+        with pytest.raises(RuntimeError, match="multiple of 32"):
+            ragged.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT)
+        payload, metadata = ragged.run(cfg.sp_axis, num_links)
+        ragged.check(payload, metadata, f"row-major with a {label}")
+
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
+    with _sub_device_manager(mesh_device, [_leading_row_cores(streams)]) as (exact_sd,):
+        # Exactly enough cores for the streams, so the pool would have to come from somewhere else.
+        # Refused in validation, before the placement gets a chance to object to the carve itself.
+        with pytest.raises(RuntimeError, match="plus at least one untilizer"):
+            fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=exact_sd)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -511,8 +846,10 @@ def test_dispatch_fabric2d_region_bound_production_shape(seq_len_per_chip, num_l
             routed = int(offs[origin + 1, e]) - at if origin + 1 < extent else int(counts[e]) + int(region[e]) - at
             return min(routed, max(0, capacity - at))
 
-        # check_buckets' invariant at the real geometry: the prologue's own tally must equal what the
-        # table says, for every destination row including this chip's own.
+        # `size_buckets` sizes every bucket from `run_len` alone and never counts the picks, so this
+        # equality is an ASSUMPTION in the kernel rather than something it checks -- and the ASSERT
+        # that would notice is compiled out on this hardware. This is where it is actually enforced,
+        # at the real geometry, for every destination row including this chip's own.
         for my in range(extent):
             alloc = offs[my].clone()
             bucket = torch.zeros(extent, experts_per_chip, dtype=torch.int64)
@@ -719,13 +1056,16 @@ def _mc_dest_hops(indices, table, offs, capacity, G, extent, seq, topk):
     return dest_hops
 
 
-def _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk):
+def _mc_far_of(dest_hops):
     """far[g][origin][dir_idx] = farthest hop of each travelling token, in token order."""
-    dest_hops = _mc_dest_hops(indices, table, offs, capacity, G, extent, seq, topk)
     return [
         [[[max(hops) for hops in per_dir] for per_dir in per_origin] for per_origin in per_group]
         for per_group in dest_hops
     ]
+
+
+def _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk):
+    return _mc_far_of(_mc_dest_hops(indices, table, offs, capacity, G, extent, seq, topk))
 
 
 def _mc_reach(indices, table, offs, capacity, G, extent, seq, topk):
@@ -779,9 +1119,10 @@ def _mc_region_hop(hop):
     its farthest chip pays, one extra crossing per extra page, against two DRAM transfers saved on
     every page that would otherwise have landed in the terminal chip's region and been read back.
 
-    Delivering one hop ahead at EVERY hop is the variant that is expensive and was rejected: a page
-    that both delivers to the neighbour and forwards puts its payload on that link twice, about +32%
-    link pages, and low link load is the whole of multicast's advantage.
+    A relay delivers a hop-(j + 1) destination only when the page ENDS there: the delivery replaces
+    the forward rather than joining it. A page that both delivered to the neighbour and forwarded
+    would put its payload on that link twice, and low link load is the whole of multicast's
+    advantage.
 
     This has to track the kernel. It is the number both sides of a region derive independently, and
     a disagreement is a deadlock rather than wrong data.
@@ -803,7 +1144,7 @@ def _mc_fixture(extent, capacity_div, seed, cross_group, topk=4, G=2, seq=16):
     `cross_group` is the distribution production actually routes: picks drawn from all groups' experts,
     so most resolve to -1 and a token routinely has one destination or none in a direction. That is
     what makes far-hop classes of size 0 and 1 common and whole streams empty -- the degenerate shapes
-    the terminal rule newly depends on, and which an in-group draw never produces.
+    the terminal rule depends on, and which an in-group draw never produces.
     """
     num_routed_experts = extent * topk * G
     experts_per_chip = num_routed_experts // G // extent
@@ -846,7 +1187,7 @@ def _mc_fixture(extent, capacity_div, seed, cross_group, topk=4, G=2, seq=16):
                     if alloc[e] >= capacity:
                         dropped += 1
                     alloc[e] += 1
-    return reach, dest_hops, G, dropped
+    return reach, dest_hops, G, dropped, seq
 
 
 @pytest.mark.parametrize("extent", [4, 6, 8, 12], ids=lambda e: f"extent{e}")
@@ -855,12 +1196,8 @@ def _mc_fixture(extent, capacity_div, seed, cross_group, topk=4, G=2, seq=16):
 @pytest.mark.parametrize("cross_group", [False, True], ids=lambda c: "cross-group" if c else "in-group")
 def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity_div, cross_group):
     m = extent // 2
-    reach, dest_hops, G, _ = _mc_fixture(extent, capacity_div, seed=17, cross_group=cross_group)
-    far_lists = [
-        [[[max(hops) for hops in per_dir] for per_dir in per_origin] for per_origin in per_group]
-        for per_group in dest_hops
-    ]
-    seq = 16
+    reach, dest_hops, G, _, seq = _mc_fixture(extent, capacity_div, seed=17, cross_group=cross_group)
+    far_lists = _mc_far_of(dest_hops)
     # Monotone by construction; if this ever breaks the chunk lengths below go negative.
     for g in range(G):
         for o_ in range(extent):
@@ -961,7 +1298,7 @@ def test_dispatch_fabric2d_multicast_terminal_delivery(extent, num_links, capaci
     sizes both. Only then does equality mean the writer and reader cannot desynchronise.
     """
     m = extent // 2
-    reach, dest_hops, G, dropped = _mc_fixture(extent, capacity_div, seed=19, cross_group=cross_group, topk=8)
+    reach, dest_hops, G, dropped, seq = _mc_fixture(extent, capacity_div, seed=19, cross_group=cross_group, topk=8)
 
     copies = crossings_terminal = crossings_forwarding = extra_payloads = extra_packets = 0
     packets_terminal = packets_forwarding = 0

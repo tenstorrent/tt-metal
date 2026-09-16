@@ -12,6 +12,18 @@ galaxies the realized fabric topology is not even stable across resets.
 
 No PCC here: `test_prefill_dispatch_fabric2d.py` owns correctness, and a host-side comparison would
 sit between the two ops in the capture.
+
+Environment:
+    TT_DS_INPUT_LAYOUT        row_major (default) or tile, for BOTH ops. The model hands dispatch
+                              tiled activations and both ops untilize them on device, so tile is the
+                              like-for-like capture.
+    TT_DS_PROD_INPUT_LAYOUT   row_major or tile, production alone; defaults to TT_DS_INPUT_LAYOUT.
+    TT_DS_CAPTURED_LAYER      an integer: replay one captured MoE layer's real routing instead of the
+                              synthetic draw.
+    TT_DS_CAPTURED_PATH       where that capture lives; defaults to the golden prefill cache.
+
+These are read by this worker directly, so a harness that launches it has to pass them through its
+own `env=` parameter rather than prefixing them onto the command.
 """
 
 import os
@@ -126,14 +138,24 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
         )
 
     x = torch.randn(H, G, seq_len_per_chip, EMB_DIM, dtype=torch.bfloat16)
-    tt_x = shard(x, (0, 1), ttnn.bfloat16)
-    # The model hands production dispatch TILED activations, and the op untilizes them on its worker
-    # cores while sending; fabric2d takes row-major only. Feeding both the row-major tensor measures
-    # production on a path the model never runs, so the tiled copy is available on request. Same
-    # values either way, so the routing draw and the outputs are unchanged.
-    prod_layout = os.environ.get("TT_DS_PROD_INPUT_LAYOUT", "row_major")
-    assert prod_layout in ("row_major", "tile"), f"TT_DS_PROD_INPUT_LAYOUT: expected row_major or tile, got {prod_layout!r}"
-    tt_x_prod = shard(x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) if prod_layout == "tile" else tt_x
+    # The model hands dispatch TILED activations and both ops untilize them on device, so the
+    # measurement the model cares about is tile against tile. Row-major is kept selectable because it
+    # is a path each op still has and the layouts are otherwise only comparable one op at a time.
+    # Same values either way, so the routing draw and the outputs are unchanged.
+    #
+    # TT_DS_PROD_INPUT_LAYOUT is honoured even when TT_DS_INPUT_LAYOUT is set, so production can be
+    # measured on a different layout from the op under test.
+    both_layout = os.environ.get("TT_DS_INPUT_LAYOUT", "row_major")
+    prod_layout = os.environ.get("TT_DS_PROD_INPUT_LAYOUT", both_layout)
+    for name, value in (("TT_DS_INPUT_LAYOUT", both_layout), ("TT_DS_PROD_INPUT_LAYOUT", prod_layout)):
+        assert value in ("row_major", "tile"), f"{name}: expected row_major or tile, got {value!r}"
+
+    def activations(layout):
+        return shard(x, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT if layout == "tile" else ttnn.ROW_MAJOR_LAYOUT)
+
+    tt_x = activations(both_layout)
+    # One tensor when the two agree, so the A/B feeds the identical bytes rather than two copies.
+    tt_x_prod = tt_x if prod_layout == both_layout else activations(prod_layout)
     # Both ops take UINT16 indices, so the A/B feeds them the identical tensor.
     tt_idx_u16 = shard(indices.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
     tt_table = shard(table.unsqueeze(1), (None, 0), ttnn.int32)
@@ -158,7 +180,7 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
         f"capacity={max_dispatch_buffer_token_size} links={num_links} iters={ITERATIONS}"
     )
     logger.info(f"routing profile {routing}: picks landing in this dispatch group {100 * realized:.1f}%")
-    logger.info(f"production dispatch input layout: {prod_layout}")
+    logger.info(f"input layout: fabric2d {both_layout}, production {prod_layout}")
     # A drifting share is exactly how this measurement goes wrong without anyone noticing, in either
     # direction: too low reads as noise, too high overstates fan-out by roughly 3x.
     assert abs(realized - in_group_share) < 0.02, (

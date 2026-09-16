@@ -4,6 +4,8 @@
 
 #include "dispatch_fabric2d_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -13,17 +15,21 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
+void validate_dram_interleaved(const ttnn::Tensor& t, const char* name) {
+    TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
+    TT_FATAL(
+        t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "dispatch_fabric2d: {} must be interleaved; a sender addresses it by page index on another chip",
+        name);
+}
+
 void validate_dram_row_major(const ttnn::Tensor& t, const char* name) {
     TT_FATAL(
         t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "dispatch_fabric2d: {} must be ROW_MAJOR, got {}",
         name,
         t.layout());
-    TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
-    TT_FATAL(
-        t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "dispatch_fabric2d: {} must be interleaved; a sender addresses it by page index on another chip",
-        name);
+    validate_dram_interleaved(t, name);
 }
 
 // Page indices computed on one chip name pages on another, which only holds while every chip's copy of a
@@ -162,12 +168,43 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.num_routed_experts + 1);
 
     const auto& input = tensor_args.input_tensor;
-    validate_dram_row_major(input, "input_tensor");
+    validate_dram_interleaved(input, "input_tensor");
     TT_FATAL(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "dispatch_fabric2d: input must be BFLOAT16, got {}. The fp8-scaled path appends per-block scales "
         "to the metadata, which does not fit the routing tail this op carries",
         input.dtype());
+    TT_FATAL(
+        input.layout() == tt::tt_metal::Layout::ROW_MAJOR || input.layout() == tt::tt_metal::Layout::TILE,
+        "dispatch_fabric2d: input must be ROW_MAJOR or TILE, got {}",
+        input.layout());
+    if (input.layout() == tt::tt_metal::Layout::TILE) {
+        const uint32_t hidden = static_cast<uint32_t>(input.logical_shape()[-1]);
+        TT_FATAL(
+            hidden % tt::constants::TILE_WIDTH == 0,
+            "dispatch_fabric2d: a TILE input needs emb_dim ({}) to be a multiple of {}. The untilizer "
+            "reads whole tile columns and its row stride is the token page, so a partial tile column "
+            "would drop values and misalign every stripe after the first",
+            hidden,
+            tt::constants::TILE_WIDTH);
+        // Production `dispatch` tolerates a ragged final batch by untilizing 32 rows regardless and
+        // never referencing the padded ones. This op stages into a buffer of exactly seq_len_per_chip
+        // pages, so a ragged stripe would write past the end; rejected rather than silently clipped.
+        TT_FATAL(
+            args.seq_len_per_chip % tt::constants::TILE_HEIGHT == 0,
+            "dispatch_fabric2d: a TILE input needs seq_len_per_chip ({}) to be a multiple of {}",
+            args.seq_len_per_chip,
+            tt::constants::TILE_HEIGHT);
+    }
+
+    // Both the stream cores and, under TILE, the untilizer pool come out of this set.
+    TT_FATAL(
+        args.worker_core_range_set.num_cores() >= stream_count(args.num_links) +
+                                                     (input.layout() == tt::tt_metal::Layout::TILE ? 1u : 0u),
+        "dispatch_fabric2d: the op was given {} worker cores but needs {} streams{}",
+        args.worker_core_range_set.num_cores(),
+        stream_count(args.num_links),
+        input.layout() == tt::tt_metal::Layout::TILE ? " plus at least one untilizer" : "");
 
     const auto& indices = tensor_args.indices_tensor;
     validate_dram_row_major(indices, "indices_tensor");
@@ -267,7 +304,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t num_links,
     bool fanout,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config) {
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const CoreRangeSet& worker_core_range_set) {
     using namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d;
     using OperationType = DispatchFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -283,7 +321,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .num_links = num_links,
             .fanout = fanout,
             .topology = topology,
-            .output_mem_config = memory_config},
+            .output_mem_config = memory_config,
+            .worker_core_range_set = worker_core_range_set},
         DispatchFabric2dInputs{
             .input_tensor = input_tensor,
             .indices_tensor = indices_tensor,

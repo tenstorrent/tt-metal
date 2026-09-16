@@ -4,6 +4,8 @@
 
 #include "dispatch_fabric2d.hpp"
 
+#include <tt-metalium/sub_device.hpp>
+
 #include "device/dispatch_fabric2d_device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -27,7 +29,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t num_links,
     bool fanout,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config) {
+    const tt::tt_metal::MemoryConfig& memory_config,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     // Resolve the caller's topology against how this axis is actually wired, the way every other CCL
     // front end does, and store the resolved value. Passing Ring on an axis whose closing link is not
     // wired comes back as Linear, and this op has no Linear mode: it sends single hops around a ring.
@@ -39,6 +42,21 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         cluster_axis,
         usable,
         topology);
+
+    // Every core this op may occupy. The model runs dispatch on a sub-device that is one row of the
+    // compute grid while the shared expert holds the rest, so a TILE input's untilizer pool has to be
+    // drawn from the same row rather than from wherever there is space. With no sub-device the
+    // universe is that first row anyway, which is what the eth-nearest stream placement already picks
+    // -- decide_placement asserts it rather than assuming it.
+    auto* mesh_device = input_tensor.device();
+    tt::tt_metal::CoreRangeSet universe;
+    if (subdevice_id.has_value()) {
+        universe = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *subdevice_id);
+    } else {
+        const auto grid = mesh_device->compute_with_storage_grid_size();
+        universe = tt::tt_metal::CoreRangeSet(
+            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, 0}));
+    }
 
     return ttnn::prim::dispatch_fabric2d(
         input_tensor.device(),
@@ -59,7 +77,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         num_links,
         fanout,
         usable,
-        memory_config);
+        memory_config,
+        universe);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
