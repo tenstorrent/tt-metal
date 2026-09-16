@@ -339,7 +339,7 @@ jobs:
           # simply produce no matrix rows for that impl.
           #
           # Both lists include every wh_*/bh_* SKU in .github/sku_config.yaml except:
-          #   - Galaxy SKUs (wh_galaxy*, bh_galaxy*) -- a separate pipeline (galaxy-sanity.yaml).
+          #   - Galaxy SKUs (wh_galaxy*, bh_galaxy*) -- a separate pipeline (galaxy-tests.yaml).
           #   - bh_sc* -- exabox multihost SKUs, used by shield/scaleout, not sanity.
           #   - cpu_medium -- not a wh/bh hardware SKU.
           #   - *_prio SKUs -- merge_group-only aliases; sku_config.yaml itself says not to
@@ -543,7 +543,7 @@ jobs:
 
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
-  # workflow invokes (galaxy-sanity-impl is driven by galaxy-sanity.yaml and is
+  # workflow invokes (galaxy-sanity-impl is driven by galaxy-tests.yaml and is
   # not covered) into one run-level report. expected-jobs is the union of each
   # impl's matrix, so a leg whose runner died is reported as an infra failure
   # rather than silently dropped. A new impl must be added to `needs:` below or

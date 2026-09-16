@@ -295,13 +295,8 @@ safe-outputs:
       - blackhole-e2e-tests
 
       - galaxy-profiler-tests
-      - galaxy-multi-user-isolation-tests
-      - galaxy-unit-tests
-      - galaxy-integration-tests
+      - galaxy-tests
       - galaxy-stress-tests
-      - galaxy-e2e-tests
-      - galaxy-sanity
-      - galaxy-health
 
       - t3000-e2e-tests
       - t3000-integration-tests
@@ -458,10 +453,9 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 |---|---|---|
 | `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles eight independent suites — select them, do not take the default of all eight |
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
-| `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
-| `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
+| `galaxy-tests` | Galaxy (WH/BH) | Reachability, fabric, CCL, multi-device, large-mesh and multi-tenant isolation code paths |
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
-| `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
+| `galaxy-stress-tests` | Galaxy | Stability and long-run behaviour |
 | `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
@@ -494,10 +488,10 @@ validation.** You must supply at least:
 
 | Pipeline | Must supply |
 |---|---|
-| `galaxy-sanity` | `arch` |
 | `models-t1-e2e-tests`, `models-t1-unit-tests` | `model` |
 | `models-t2-e2e-tests`, `models-t2-unit-tests` | `model` |
 | `models-t3-e2e-tests`, `models-t3-unit-tests` | `model` |
+| `galaxy-tests` | `unit-model`, `integration-model` |
 | `t3000-integration-tests`, `t3000-unit-tests` | `model` |
 | `vllm-model-tests` | `model` |
 | `ttnn-run-sweeps` | `arch`, `log-level`, `runner-label`, `sweep_name` |
@@ -513,7 +507,7 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   set `all: false` *and* the specific platform. This is the single easiest way to
   accidentally run the full matrix.
 - `wormhole` / `blackhole` / `multichip` booleans select architecture on the `runtime-*`,
-  `galaxy-e2e-tests`, and `galaxy-health` pipelines.
+  and `galaxy-tests` pipelines.
 - `model` and `sku` are `choice` inputs on the `models-t*` and `vllm-model-tests`
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
