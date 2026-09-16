@@ -1045,6 +1045,12 @@ inline bool is_quasar_sim() {
            tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
 }
 
+// The qsr.s1 chiplet model (grendel_qsr1 ATT map): only the four corner Tensix tiles of its 8x4 grid are live.
+inline bool is_quasar_sparse_sim() {
+    const auto att_map = tt::tt_metal::MetalContext::instance().rtoptions().get_noc_att_map();
+    return is_quasar_sim() && att_map.has_value() && *att_map == "grendel_qsr1";
+}
+
 // Honour an explicit TT_METAL_DRAM_BACKED_CQ value, otherwise retain the DRAM-backed default required by the Quasar
 // simulator.
 inline bool is_quasar_cq_dram_backed() {
@@ -1181,6 +1187,11 @@ protected:
     }
 
     CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
+        if (Common::is_quasar_sparse_sim()) {
+            // The qsr.s1 model exposes only the four corner tiles of an 8x4 grid: a multi-tile rectangle
+            // contains stub tiles that never acknowledge, so keep the multicast destination a single tile.
+            return CoreRange{first_worker, first_worker};
+        }
         if (Common::is_quasar_sim()) {
             const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
             const CoreCoord last_worker = multi_core ? CoreCoord{worker_grid.x - 1, worker_grid.y - 1} : first_worker;
