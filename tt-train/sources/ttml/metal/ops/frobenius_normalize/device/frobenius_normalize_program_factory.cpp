@@ -201,7 +201,7 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         tiles_per_core_g1,
         tiles_per_core_g2,
         [&](const CoreWork& work) {
-            const auto& [logical_core, core_index, tiles_this_core, tiles_written] = work;
+            const auto& [logical_core, core_index, tiles_this_core, tiles_written, in_group_1] = work;
             auto reader_handle = (logical_core == origin_core) ? reader_origin : reader_kernel;
             SetRuntimeArgs(
                 program,
@@ -210,9 +210,8 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
                 {input_buffer->address(), tiles_this_core, tiles_written, reduction_sem_id, core_index, bcast_sem_id});
             SetRuntimeArgs(
                 program, writer_kernel, logical_core, {output_buffer->address(), tiles_this_core, tiles_written});
-            auto compute_handle = (logical_core == origin_core)
-                                      ? compute_origin
-                                      : (core_group_1.contains(logical_core) ? compute_g1 : compute_g2);
+            auto compute_handle =
+                (logical_core == origin_core) ? compute_origin : (in_group_1 ? compute_g1 : compute_g2);
             SetRuntimeArgs(program, compute_handle, logical_core, {std::bit_cast<uint32_t>(args.epsilon)});
         });
 

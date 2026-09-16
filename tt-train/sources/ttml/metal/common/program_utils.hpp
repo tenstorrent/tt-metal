@@ -118,13 +118,15 @@ struct CoreWork {
     uint32_t index;      // position in the walk: core == {index / num_cores_y, index % num_cores_y}
     uint32_t num_units;  // rows, blocks or tiles this core processes
     uint32_t start;      // units handed to the cores before it
+    bool in_group_1;     // which split_work_to_cores group the core is in; picks the per-group compute kernel
 };
 
 /**
  * Walk the cores that `tt::tt_metal::split_work_to_cores` handed work to, in the order tt-train
  * readers/writers assume (core i -> {i / num_cores_y, i % num_cores_y}), and call `fn(const CoreWork&)`
  * once per core. Ops that need the walk position (per-core seeds, reduction protocols) take it from
- * `CoreWork::index` rather than recomputing the walk.
+ * `CoreWork::index` rather than recomputing the walk; ops with one compute kernel per group pick it with
+ * `CoreWork::in_group_1` rather than testing the groups again.
  */
 template <typename Fn>
 inline void for_each_core_with_work(
@@ -138,15 +140,16 @@ inline void for_each_core_with_work(
     uint32_t num_units_written = 0U;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const bool in_group_1 = core_group_1.contains(core);
         uint32_t num_units = 0U;
-        if (core_group_1.contains(core)) {
+        if (in_group_1) {
             num_units = num_units_per_core_group_1;
         } else if (core_group_2.contains(core)) {
             num_units = num_units_per_core_group_2;
         } else {
             TT_FATAL(false, "Core {} is in neither work group", core.str());
         }
-        fn(CoreWork{core, i, num_units, num_units_written});
+        fn(CoreWork{core, i, num_units, num_units_written, in_group_1});
         num_units_written += num_units;
     }
 }

@@ -160,7 +160,7 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
         num_blocks_per_core_group_1,
         num_blocks_per_core_group_2,
         [&](const CoreWork& work) {
-            const auto& [core, core_index, num_blocks, start_block] = work;
+            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
             const uint32_t b_start = start_block / Ts;
             const uint32_t sb_start = start_block % Ts;
             const uint32_t dK_block_base_start = b_start * H * k_HtWt + sb_start * Th;
