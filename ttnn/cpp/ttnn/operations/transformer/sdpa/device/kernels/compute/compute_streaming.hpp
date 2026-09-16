@@ -893,6 +893,14 @@ struct RowMaskStamper {
             l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, e, neginf_idx);
         }
     }
+    // Fill columns [start, end) with neginf.
+    inline void neginf_range(uint32_t start, uint32_t end) const {
+        const uint32_t s = start < mask_cols ? start : mask_cols;
+        const uint32_t e = end < mask_cols ? end : mask_cols;
+        if (s < e) {
+            l1_acc_neginf_cols(mask_cb, out_cb, row_offset, s, e, neginf_idx);
+        }
+    }
     // Fill columns [start, mask_cols) with neginf (start <= 0 ⇒ whole row).
     inline void neginf_suffix(int32_t start) const {
         const uint32_t s =
@@ -988,6 +996,7 @@ static void apply_lightweight_mask_streaming(
     bool apply_sliding_window = false,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0,
+    uint32_t straddle_period = 0,
     const KVPadRotationContext& kv_pad_rotation = {}) {
     // This constrains the inner lightweight-mask path, not the kernel-level causal flag.
     // Chunked prefill re-enables this path when calling sdpa_inner_loop_step.
@@ -1067,16 +1076,22 @@ static void apply_lightweight_mask_streaming(
                         }
                     }
                 } else {
-                    // Chunked-prefill straddle: K coord jumps by straddle_jump at col >= straddle_col
-                    // (the K-chunk crosses a slab boundary). Evaluate per-col.
+                    // Chunked-prefill straddle: region boundaries split the chunk into runs over
+                    // which global K is contiguous, so each run stamps as a range like the fast path.
                     if (apply_causal) {
-                        for (uint32_t col = 0; col < mask_cols; col++) {
-                            int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
-                            if (col >= straddle_col) {
-                                k_pos += static_cast<int32_t>(straddle_jump);
+                        uint32_t rs = 0;
+                        uint32_t re = 0;
+                        for (uint32_t r = 0; straddle_run(r, mask_cols, straddle_col, straddle_period, rs, re); r++) {
+                            const int32_t k_base =
+                                straddled_k_tile(k_start_tile, rs, straddle_col, straddle_jump, straddle_period);
+                            const int32_t diag_col = q_pos - k_base;
+                            const uint32_t run_len = re - rs;
+                            if (diag_col < 0) {
+                                stamper.neginf_range(rs, re);
+                            } else if (static_cast<uint32_t>(diag_col) < run_len) {
+                                stamper.stamp_tile_at(static_cast<int32_t>(rs) + diag_col, primary_diag_idx);
+                                stamper.neginf_range(rs + static_cast<uint32_t>(diag_col) + 1, re);
                             }
-                            l1_acc_causal_col_mask(
-                                mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
                         }
                     }
                 }
@@ -1277,6 +1292,7 @@ static void sdpa_inner_loop_step(
     const bool apply_sliding_window = false,
     const uint32_t mask_straddle_col = 0,
     const uint32_t mask_straddle_jump = 0,
+    const uint32_t mask_straddle_period = 0,
     const KVPadRotationContext& kv_pad_rotation = {},
     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
@@ -1461,6 +1477,7 @@ static void sdpa_inner_loop_step(
                     apply_sliding_window,
                     mask_straddle_col,
                     mask_straddle_jump,
+                    mask_straddle_period,
                     kv_pad_rotation);
                 end_mask_l1_accumulate();
             }
@@ -2755,6 +2772,7 @@ void sdpa_ring_v2(
             // per row, applying the jump for columns >= straddle_col.
             uint32_t step_straddle_col = 0;
             uint32_t step_straddle_jump = 0;
+            uint32_t step_straddle_period = 0;
             if constexpr (chunked_enabled) {
                 if (kv_rank_stride_Nt > 0) {
                     const uint32_t local_start = source_k_chunk * Sk_chunk_t;
@@ -2762,6 +2780,7 @@ void sdpa_ring_v2(
                     if (local_start + Sk_chunk_t > slab_end_local) {
                         step_straddle_col = slab_end_local - local_start;
                         step_straddle_jump = chunk_size_t - kv_rank_stride_Nt;
+                        step_straddle_period = kv_rank_stride_Nt;
                     }
                 }
             }
@@ -2829,6 +2848,7 @@ void sdpa_ring_v2(
                 has_sliding_window,
                 step_straddle_col,
                 step_straddle_jump,
+                step_straddle_period,
                 step_kv_pad_rotation,
                 q_base_tiles);
 

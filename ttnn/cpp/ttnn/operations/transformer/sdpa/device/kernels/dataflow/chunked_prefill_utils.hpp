@@ -94,6 +94,42 @@ inline uint32_t chunked_kv_global_tile_for_local(uint32_t ring_id, uint32_t loca
     return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, q_local_padded_Nt);
 }
 
+// Global K tile of one column of a K chunk that crosses cache-region boundaries. Boundaries are
+// evenly spaced at straddle_col + n*straddle_period and each adds straddle_jump; period 0 means one.
+inline int32_t straddled_k_tile(
+    uint32_t k_start_tile, uint32_t col, uint32_t straddle_col, uint32_t straddle_jump, uint32_t straddle_period) {
+    int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
+    if (col >= straddle_col) {
+        const uint32_t crossings = straddle_period != 0 ? 1 + (col - straddle_col) / straddle_period : 1;
+        k_pos += static_cast<int32_t>(crossings * straddle_jump);
+    }
+    return k_pos;
+}
+
+// Column span [start, end) of run `r` in a K chunk of num_cols columns. A run is the stretch between
+// two region boundaries, over which global K is contiguous. Returns false once r is past the last run.
+inline bool straddle_run(
+    uint32_t r, uint32_t num_cols, uint32_t straddle_col, uint32_t straddle_period, uint32_t& start, uint32_t& end) {
+    if (straddle_col == 0) {
+        if (r != 0) {
+            return false;
+        }
+        start = 0;
+        end = num_cols;
+        return true;
+    }
+    const uint32_t period = straddle_period != 0 ? straddle_period : num_cols;
+    start = r == 0 ? 0 : straddle_col + (r - 1) * period;
+    if (start >= num_cols) {
+        return false;
+    }
+    end = r == 0 ? straddle_col : start + period;
+    if (end > num_cols) {
+        end = num_cols;
+    }
+    return true;
+}
+
 template <
     bool chunked_enabled,
     uint32_t kv_local_padded_Nt = 0,

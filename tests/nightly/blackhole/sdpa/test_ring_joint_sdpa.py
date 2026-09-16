@@ -6040,14 +6040,16 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_impl(model_name, qk_conf
     )
 
 
-
 @pytest.mark.parametrize(
     "fabric_config",
     [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
     ids=["torus_xy", "fabric_2d"],
 )
 @pytest.mark.parametrize("cache_chunks", [8], ids=["depth8"])
-def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks):
+# Against the 2-tile cache region: 1 tile stays inside it, 4 tiles cross one boundary, 8 tiles cross
+# three. The diagonal stamp takes a jump per boundary, so a K chunk may span any number of regions.
+@pytest.mark.parametrize("k_chunk", [32, 128, 256], ids=["k32", "k128", "k256"])
+def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks, k_chunk):
     """A TP-deduped KV cache: striped over every device while Q stays sharded over SP alone.
 
     kv_stripe_split = kv_shards / q_shards = tp, so tp ring shards share each Q rank. The cache is
@@ -6073,17 +6075,17 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks):
         assert tuple(mesh_device.shape) == (sp, tp), f"expected an (sp, tp) mesh, got {tuple(mesh_device.shape)}"
         assert sp * tp == ring_size
 
-        region = 64                      # cache rows per device per chunk -> the striped region
+        region = 64  # cache rows per device per chunk -> the striped region
         chunk_global = region * ring_size  # one chunk across the whole mesh
-        q_local = chunk_global // sp       # Q rows per device: tp regions
-        kv_local = cache_chunks * region   # cache rows per device, across every chunk
+        q_local = chunk_global // sp  # Q rows per device: tp regions
+        kv_local = cache_chunks * region  # cache rows per device, across every chunk
         logical_n = cache_chunks * chunk_global
         assert q_local < kv_local, f"striping needs the chunked path: q_local={q_local} kv_local={kv_local}"
 
         b, nhq, nhk, d_q, d_k, d_v = 1, 4, 1, 64, 64, 32
         torch.manual_seed(2026)
         kv_global = fa_rand(b, nhk, logical_n, d_k)
-        q_start = logical_n - chunk_global           # Q is the final chunk
+        q_start = logical_n - chunk_global  # Q is the final chunk
         q_global = fa_rand(b, nhq, chunk_global, d_q)
 
         # Block-cyclic cache: device r holds rows [c*C + r*R, +R) of chunk c, laid out chunk-major.
@@ -6123,7 +6125,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks):
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=runtime.sdpa_compute_grid,
             q_chunk_size=32,
-            k_chunk_size=32,
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
         tt_out, _ = ttnn.transformer.ring_mla(
@@ -6154,9 +6156,7 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks):
         # differ, so the ring accumulates in a different order -- close, not bit-equal (bf16 reassociation).
         for sp_rank in range(sp):
             for lane in range(1, tp):
-                lane_pass, lane_pcc = comp_pcc(
-                    shards[sp_rank * tp].float(), shards[sp_rank * tp + lane].float(), 0.999
-                )
+                lane_pass, lane_pcc = comp_pcc(shards[sp_rank * tp].float(), shards[sp_rank * tp + lane].float(), 0.999)
                 assert lane_pass, (
                     f"lane-mates diverge at sp_rank={sp_rank}, lane={lane}: PCC={lane_pcc}. Same Q slab and "
                     f"same gathered KV, so only ring accumulation order should differ"
@@ -6176,7 +6176,9 @@ def test_ring_mla_full_mesh_tp_striped_kv_accuracy(fabric_config, cache_chunks):
         output_pass, output_pcc = comp_pcc(reference, output, DEFAULT_PCC_THRESHOLD)
         logger.info(
             f"TP-striped ring_mla: mesh={tuple(mesh_device.shape)} sp={sp} tp={tp} split={tp} "
-            f"region={region} q_local={q_local} kv_local={kv_local} logical_n={logical_n} PCC={output_pcc}"
+            f"region={region} q_local={q_local} kv_local={kv_local} logical_n={logical_n} "
+            f"k_chunk={k_chunk} regions_per_kchunk={max(1, (k_chunk // 32) // max(1, region // 32))} "
+            f"PCC={output_pcc}"
         )
         assert output_pass, f"TP-striped ring_mla PCC {output_pcc} below {DEFAULT_PCC_THRESHOLD}"
     finally:
@@ -6199,7 +6201,9 @@ def test_ring_mla_full_mesh_tp_striped_kv_requires_inner_striping(fabric_config,
     This op harness opens the TRANSPOSE (sp_axis=1, so a (4,8) mesh), where consecutive ranks differ in SP
     and the Q rank would be r % sp instead. The op must refuse rather than mis-position every diagonal, so
     striped accuracy coverage belongs on the model path, which uses sp_axis=0."""
-    mesh_config = MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    mesh_config = (
+        MESH_CONFIG if MESH_CONFIG.is_galaxy else replace(MESH_CONFIG, tp_size=2, sp_size=MESH_CONFIG.num_devices // 2)
+    )
     if mesh_config.tp_size < 2 or mesh_config.sp_size < 2:
         pytest.skip(f"TP-striped KV needs a non-degenerate 2D mesh, got {mesh_config}")
 
@@ -6210,9 +6214,9 @@ def test_ring_mla_full_mesh_tp_striped_kv_requires_inner_striping(fabric_config,
         sp, tp = mesh_config.sp_size, mesh_config.tp_size
         assert sp * tp == ring_size, f"expected sp*tp == ring_size, got {sp}*{tp} != {ring_size}"
 
-        kv_local = 64                       # cache rows per device: the striped region
-        global_seq = kv_local * ring_size   # 2048 on an 8x4
-        q_local = kv_local * tp             # Q rows per device: tp regions
+        kv_local = 64  # cache rows per device: the striped region
+        global_seq = kv_local * ring_size  # 2048 on an 8x4
+        q_local = kv_local * tp  # Q rows per device: tp regions
         b, nhq, nhk, d_q, d_k, d_v = 1, 4, 1, 64, 64, 32
         torch.manual_seed(2026)
         q = fa_rand(b, nhq, global_seq, d_q)
@@ -6257,24 +6261,24 @@ def test_ring_mla_full_mesh_tp_striped_kv_requires_inner_striping(fabric_config,
         )
         with expect_error(RuntimeError, "requires Q's sequence dim sharded on mesh axis 0"):
             ttnn.transformer.ring_mla(
-            tt_q,
-            tt_kv,
-            persistent_output_buffer_kv=gathered_kv,
-            head_dim_v=d_v,
-            logical_n=global_seq,
-            program_config=program_config,
-            compute_kernel_config=runtime.compute_kernel_config,
-            dim=2,
-            multi_device_global_semaphore=runtime.ccl_semaphore_handles,
-            num_links=runtime.num_links,
-            cluster_axis=None,
-            mesh_device=mesh_device,
-            topology=Topology.Ring,
-            subdevice_id=runtime.worker_sub_device_id,
-            ccl_core_grid_offset=(runtime.ccl_column, 0),
-            use_column_major_ccl=True,
-            is_balanced=False,
-        )
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=gathered_kv,
+                head_dim_v=d_v,
+                logical_n=global_seq,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=None,
+                mesh_device=mesh_device,
+                topology=Topology.Ring,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                is_balanced=False,
+            )
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
