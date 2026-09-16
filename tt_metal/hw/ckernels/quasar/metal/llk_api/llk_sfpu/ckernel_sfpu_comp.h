@@ -98,14 +98,21 @@ struct zero_comp_traits {
  * gtez/ltez return their strict complement (ltz/gtz) predicate; the loop defaults those lanes' result
  * to 1 and writes 0 here (see @ref _zero_comp_writes_zero_).
  *
+ * For float formats the four sign-sensitive modes also reject NaN, so ltz/gtz/gtez/ltez(NaN) = 0 as on
+ * Wormhole/Blackhole (which compare |v| against the inf bit pattern for the same reason). NaN is any
+ * magnitude above +inf (0x7F800000), tested as an integer compare because SFPSETCC does not
+ * special-case NaN. eqz/nez need no NaN term: |NaN| != 0 already gives eqz 0 / nez 1. Integer formats
+ * skip the term entirely (a large sign-magnitude int would otherwise look like NaN).
+ *
  * @note Do NOT use @c abs(vInt) for the magnitude — that is two's-complement abs and leaves
  *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). Clearing the sign bit
  *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
  *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
+ * @tparam IS_FLOAT: true when @c v holds IEEE float bits (enables the NaN term), false for integer formats.
  */
-template <SfpuType COMP_MODE>
+template <SfpuType COMP_MODE, bool IS_FLOAT>
 inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v) {
     static_assert(
         COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero ||
@@ -121,14 +128,29 @@ inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v)
         return mag == 0;  // ±0
     } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
         return mag != 0;
-    } else if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-        return (v < 0) && (mag != 0);  // sign set and nonzero -> excludes -0.0
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-        return (v >= 0) && (mag != 0);  // sign clear and nonzero
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-        return (v < 0) && (mag != 0);   // strict-negative (ltz) lanes; loop defaults 1 and writes 0 here -> gtez
-    } else {                            // less_than_equal_zero
-        return (v >= 0) && (mag != 0);  // strict-positive (gtz) lanes; loop defaults 1 and writes 0 here -> ltez
+    } else if constexpr (!IS_FLOAT) {
+        // Integer formats: sign-magnitude, no NaN to reject.
+        if constexpr (COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero) {
+            return (v < 0) && (mag != 0);   // strict-negative (excludes -0); gtez defaults 1 and writes 0 here
+        } else {                            // greater_than_zero / less_than_equal_zero
+            return (v >= 0) && (mag != 0);  // strict-positive; ltez defaults 1 and writes 0 here
+        }
+    } else {
+        // Smallest magnitude above +inf: every IEEE NaN bit pattern has |v| >= this (sign cleared).
+        constexpr int32_t NAN_MIN_MAGNITUDE = 0x7F800001;
+        const sfpi::vInt mag_bits = sfpi::as<sfpi::vInt>(mag);
+
+        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            return (v < 0) && (mag != 0) && (mag_bits < NAN_MIN_MAGNITUDE);  // sign set, nonzero, not NaN
+        } else if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            return (v >= 0) && (mag != 0) && (mag_bits < NAN_MIN_MAGNITUDE);  // sign clear, nonzero, not NaN
+        } else if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+            // strict-negative (ltz) lanes or NaN; loop defaults 1 and writes 0 here -> gtez
+            return ((v < 0) && (mag != 0)) || (mag_bits >= NAN_MIN_MAGNITUDE);
+        } else {  // less_than_equal_zero
+            // strict-positive (gtz) lanes or NaN; loop defaults 1 and writes 0 here -> ltez
+            return ((v >= 0) && (mag != 0)) || (mag_bits >= NAN_MIN_MAGNITUDE);
+        }
     }
 }
 
@@ -202,7 +224,9 @@ inline void calculate_zero_comp() {
         sfpi::vInt bits = traits::load();
 
         typename traits::result_t result = writes_zero ? traits::one() : traits::zero();
-        v_if(_zero_comp_pred_<COMP_MODE>(bits)) { result = writes_zero ? traits::zero() : traits::one(); }
+        v_if((_zero_comp_pred_<COMP_MODE, traits::is_float>(bits))) {  // extra parens: comma inside a macro arg
+            result = writes_zero ? traits::zero() : traits::one();
+        }
         v_endif;
 
         traits::store(result);
