@@ -262,8 +262,9 @@ and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
 branch or tag. Both manual and scheduled runs default to `main`. A selection with no matching tests fails before the build starts. The
 Saturday schedule becomes active after the workflow is merged to the default branch.
 
-Gemma4 31B QB2 uses Tier 3. Its weekly command checks real-weight decoder outputs,
-trace updates, serving parameter handling, **10 of 198 GPQA Diamond questions**
+Gemma4 31B QB2 uses Tier 3. Its weekly command runs two real-weight decoder comparisons (full and sliding
+attention), seven client/adapter checks, five representative API checks,
+**10 of 198 GPQA Diamond questions**
 (seed 42, 32768 output tokens), and a fixed-length performance sweep. The subset
 and smaller output budget bound CI runtime; they do not reproduce the separately
 reported full-dataset benchmark. The command saves actual request counts, raw
@@ -275,8 +276,8 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The QB2 Tier 3 total is **57 minutes**: 12 for Llama3.1-8B
-   and 45 for Gemma4 31B, including setup, model tests, serving, and reporting.
+   the budget. The QB2 Tier 3 total is **30 minutes**: 12 for Llama3.1-8B
+   and 18 for Gemma4 31B, including setup, model tests, serving, and reporting.
    The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
    passed all 24 model tests and completed 54 of 56 serving requests before its
    timeout; the budget includes room for completion and runner variance.

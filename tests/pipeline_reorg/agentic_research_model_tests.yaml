@@ -101,7 +101,12 @@
     uv pip install 'pytest>=8,<9'
     popd
 
-    python -m pytest "$model_dir/tests" \
+    # Weekly smoke: both attention kinds beyond the sliding-window/page boundary,
+    # plus all inexpensive client and scheduler-input checks. Keep the full suite
+    # available for model changes and release validation.
+    python -m pytest "$model_dir/tests/test_benchmark.py" "$model_dir/tests/test_serving_inputs.py" \
+        "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-sliding]" \
+        "$model_dir/tests/test_decoder.py::test_prefill_and_live_decode_trace[1025-2-full]" \
         --timeout 600 --junitxml "$results/decoder.xml"
     uv venv --python 3.11 "$work/eval-env"
     UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" \
@@ -146,8 +151,13 @@
     curl -fsS http://127.0.0.1:8000/health
 
     pushd "$work/vllm-tt-plugin"
-    python -m pytest --confcutdir=. tests/tt/test_sampling_routes.py tests/tt/test_request_isolation.py \
-        tests/tt/test_host_only_params.py tests/tt/test_tt_penalties.py tests/tt/test_logprobs.py \
+    # Device sampling/page growth, isolation, host sampling, mixed penalties and logprobs.
+    python -m pytest --confcutdir=. \
+        'tests/tt/test_sampling_routes.py::test_seeded_page_growth_and_slot_reordering[20]' \
+        tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch \
+        tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids \
+        tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch \
+        'tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1]' \
         --tt-server-url http://127.0.0.1:8000 --tt-model-name google/gemma-4-31B-it \
         --tt-max-num-seqs 32 --junitxml "$results/api.xml"
     popd
@@ -165,8 +175,8 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      # Complete reserved-QB2 recipe: 20m08s; allow cold-cache/runner variance.
-      timeout: 45
+      # Target under 15 minutes; retain headroom for setup and runner variance.
+      timeout: 18
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
