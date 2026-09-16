@@ -1571,7 +1571,14 @@ void release_lock() {
     asm volatile("" ::: "memory");
 #else
     auto& lock_atomic = get_lock_atomic();
+#if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
+    // Release with an AMO, not a plain store: the acquire is an amoswap through the cached alias, and a
+    // plain cached store can sit in the releasing hart's data cache while the other harts' amoswaps keep
+    // observing the lock as taken.
+    lock_atomic.exchange(0);
+#else
     lock_atomic = 0;
+#endif
 #endif
 }
 
@@ -1583,7 +1590,11 @@ void initialize_lock() {
     asm volatile("" ::: "memory");
 #else
     auto& lock_atomic = get_lock_atomic();
+#if defined(ARCH_QUASAR) && !defined(ENV_LLK_INFRA)
+    lock_atomic.exchange(0);  // see release_lock()
+#else
     lock_atomic = 0;
+#endif
 #endif
 }
 
