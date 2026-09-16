@@ -233,21 +233,7 @@ UNTRACED_PERF_MARGIN = 0.05
 
 # GLM-5.2 per-chunk baseline medians (seconds), recentered to CI run 34492835936 /
 # job 102927415889.
-GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    (78, 11, 10): [
-        0.542,
-        0.541,
-        0.555,
-        0.551,
-        0.567,
-        0.565,
-        0.563,
-        0.567,
-        0.585,
-        0.590,
-        0.601,
-    ],
-}
+GLM_TRACED_BASELINE_CHUNK_TIMES_S = {}
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
@@ -783,11 +769,16 @@ def run_chunked_transformer(
     topology,
     routing_use_l1_small_for_semaphores=False,
     preload_isl=0,
-    tp_shard_kv=False,
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     trace_dir = _resolve_trace_dir(variant)
+    # KV dedup is DERIVED, not a test axis: the sparse (DSA) path stripes its KVPE + indexer-key caches
+    # across SP*TP and has no other layout (ttMLA derives the same thing from the config), while dense
+    # models keep TP-replicated caches. Deriving it from the SAME helper the model builds from is what
+    # keeps this test's cache allocation and readback un-rotation in step with the model -- a mismatch
+    # here reads back 1/tp of the tokens, or broadcasts the wrong way, rather than failing cleanly.
+    tp_shard_kv = resolve_has_indexer(config)
     if not trace_dir.exists():
         pytest.skip(f"golden trace not found: {trace_dir}")
     layout = variant.prefill_trace_layout
@@ -864,7 +855,6 @@ def run_chunked_transformer(
         weight_cache_path=effective_cache_path,
         is_chunked=True,
         slot_num=1,
-        tp_shard_kv=tp_shard_kv,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
     ttnn.synchronize_device(mesh_device)
@@ -1407,10 +1397,10 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     ],
     indirect=["mesh_device", "device_params"],
 )
-# KV dedup end-to-end through the full chunked transformer: tp_sharded must match the sp_only PCC, since
-# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather. The torus row
-# covers the snake RING route; the fabric2d row covers the open PATH, where no cycle closes.
-@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+# KV dedup end-to-end through the full chunked transformer. There is no longer a tp_shard_kv AXIS: the
+# sparse path has exactly one cache layout (SP*TP-striped) and run_chunked_transformer_updated derives it
+# from the config, so there is nothing for a test to select. The torus row covers the snake RING route;
+# the fabric2d row covers the open PATH, where no cycle closes.
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
@@ -1424,7 +1414,6 @@ def test_glm_prefill_transformer_chunked(
     n_chunks,
     preload_isl,
     num_links,
-    tp_shard_kv,
     use_trace,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
@@ -1441,7 +1430,6 @@ def test_glm_prefill_transformer_chunked(
         1,  # num_iters: accuracy, not timing
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
-        tp_shard_kv=tp_shard_kv,
         check_pcc=True,
         check_layer_pcc=not use_trace,  # per-layer PCC needs a host readback, impossible under capture
         use_trace=use_trace,
@@ -1468,7 +1456,6 @@ def run_chunked_transformer_updated(
     check_pcc=False,
     check_layer_pcc=False,
     use_trace=False,
-    tp_shard_kv=False,
     kv_pcc_threshold=None,
     seq_cache=None,
 ):
@@ -1614,6 +1601,7 @@ def run_chunked_transformer_updated(
     # max_seq_len / rope_scaling in place would leak into every later test of the same variant in the same
     # session. Deep-copy first, as test_prefill_block_loop.py does for the same reason.
     config = copy.deepcopy(config)
+    tp_shard_kv = resolve_has_indexer(config)
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = seq_cache
     # Keep rope_scaling CONSISTENT with the length we actually run. config_builder() is called with no
@@ -1702,7 +1690,6 @@ def run_chunked_transformer_updated(
         weight_cache_path=effective_cache_path,
         is_chunked=True,
         slot_num=1,
-        tp_shard_kv=tp_shard_kv,
         # Run the last layer kv-only: the populated KV cache is this runner's output, so the last layer's
         # Q/SDPA/output projection and FFN/MoE are dead work that would otherwise land inside the
         # measured per-chunk time. Set for BOTH modes, not just use_trace, so traced and untraced
@@ -2106,11 +2093,10 @@ def run_chunked_transformer_updated(
     perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
     timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
     if perf_table_lines:
-        # tp_shard_kv is a parametrize axis, so both legs run inside ONE CI job and share one
-        # PREFILL_SUMMARIES dir: without a discriminator they write the same perf/<name>.md and the second
-        # leg silently clobbers the first (and both tables carry an identical title, so the survivor is
-        # unattributable). Suffix only the tp_sharded leg, leaving the default path's filename byte-identical
-        # so the cross-run perf-trend history over these artifacts stays continuous.
+        # tp_shard_kv was a parametrize axis, so both legs ran inside ONE CI job sharing one
+        # PREFILL_SUMMARIES dir and needed a filename discriminator or the second silently clobbered the
+        # first. It is derived now, so a job runs exactly one layout and no suffix is needed -- and the
+        # dense path's filename stays byte-identical, keeping the cross-run perf-trend history continuous.
         kv_suffix = "_tpkv" if tp_shard_kv else ""
         kv_label = ", TP-sharded KV" if tp_shard_kv else ""
         emit_summary(
@@ -2656,7 +2642,6 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     indirect=["mesh_device", "device_params"],
 )
 # KV dedup on the perf path: same sp*tp cache striping the accuracy test asserts PCC for, measured here.
-@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.skipif(
@@ -2675,7 +2660,6 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     num_iters,
     num_links,
     preload_isl,
-    tp_shard_kv,
     use_trace,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
@@ -2702,7 +2686,6 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         baseline_chunk_times_s=baseline_chunk_times_s,
         perf_margin=resolved_perf_margin,
         preload_isl=preload_isl,
-        tp_shard_kv=tp_shard_kv,
         use_trace=use_trace,
     )
 
