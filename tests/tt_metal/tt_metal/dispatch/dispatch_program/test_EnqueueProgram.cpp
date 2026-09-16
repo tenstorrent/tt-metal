@@ -2142,6 +2142,204 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute)
 
 namespace stress_tests {
 
+// A DM-produced, Tensix-consumed dataflow buffer takes one of the 16 DM-visible tile counters on its
+// tensix, so that is the ceiling on Quasar rather than the 32 device slots Gen2 allows. It also
+// matches the length of the accessor ladder in random_program_2_0.cpp.
+constexpr uint32_t k_gen2_max_num_dfbs = 16;
+
+// Gen2 equivalent of the randomized program bodies below, which build their programs with
+// CreateKernel and so cannot run on Quasar. The random choice of which riscs get a kernel carries
+// over, with data movement and compute standing in for the Gen1 brisc/ncrisc/trisc split. A dataflow
+// buffer needs one producer and one consumer, so only the draws that take both a DM and a compute
+// kernel get buffers.
+Program make_gen2_random_program(
+    distributed::MeshDevice& mesh_device,
+    const CoreRangeSet& cr_set,
+    const uint32_t max_loop,
+    const uint32_t entry_size_step,
+    const uint32_t num_dfbs,
+    const uint32_t num_sems,
+    const bool use_max_rt_args,
+    const bool use_max_loop) {
+    using namespace tt::tt_metal::experimental;
+
+    struct KernelPlan {
+        KernelSpecName name;
+        bool is_compute = false;
+        bool binds_dfbs = false;
+        bool checks_sems = false;
+        std::vector<uint32_t> unique_rt_args;
+        std::vector<uint32_t> common_rt_args;
+    };
+    std::vector<KernelPlan> plans;
+    bool want_dm = use_max_loop || rand() % 2 == 0;
+    // The Gen1 body runs a kernel on both brisc and ncrisc; Gen2 assigns DM threads itself, so this
+    // is simply a second DM kernel.
+    const bool want_second_dm = use_max_loop || rand() % 2 == 0;
+    bool want_compute = use_max_loop || rand() % 2 == 0;
+    if (!want_dm && !want_second_dm && !want_compute) {
+        if (rand() % 2 == 0) {
+            want_dm = true;
+        } else {
+            want_compute = true;
+        }
+    }
+    if (want_dm) {
+        plans.push_back(KernelPlan{.name = KernelSpecName{"dm_0"}, .is_compute = false});
+    }
+    if (want_second_dm) {
+        plans.push_back(KernelPlan{.name = KernelSpecName{"dm_1"}, .is_compute = false});
+    }
+    if (want_compute) {
+        plans.push_back(KernelPlan{.name = KernelSpecName{"compute_0"}, .is_compute = true});
+    }
+
+    // One producer and one consumer per node, so the first DM kernel produces and the compute kernel
+    // consumes; any second DM kernel just checks its runtime args.
+    const bool has_dfbs = (want_dm || want_second_dm) && want_compute;
+    bool producer_assigned = false;
+    for (KernelPlan& plan : plans) {
+        if (!has_dfbs) {
+            break;
+        }
+        if (plan.is_compute) {
+            plan.binds_dfbs = true;
+        } else if (!producer_assigned) {
+            plan.binds_dfbs = true;
+            producer_assigned = true;
+        }
+    }
+    // Only the Gen1 data-movement flavor checked semaphores, and only one kernel may, since the
+    // check leaves the value non-zero for the next dispatch to reset.
+    for (KernelPlan& plan : plans) {
+        if (!plan.is_compute) {
+            plan.checks_sems = true;
+            break;
+        }
+    }
+
+    Group<DataflowBufferSpec> dataflow_buffers;
+    Group<KernelSpec::DFBBinding> producer_bindings;
+    Group<KernelSpec::DFBBinding> consumer_bindings;
+    for (uint32_t i = 0; has_dfbs && i < num_dfbs; i++) {
+        const DFBSpecName dfb_name{"dfb_" + std::to_string(i)};
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = dfb_name,
+            .entry_size = (i + 1) * entry_size_step,
+            .num_entries = 1,
+            // Required for any DFB bound to a compute kernel.
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        });
+        producer_bindings.push_back(KernelSpec::DFBBinding{
+            .dfb_spec_name = dfb_name,
+            .accessor_name = dfb_name.get(),
+            .endpoint_type = KernelSpec::DFBBinding::EndpointType::PRODUCER,
+        });
+        consumer_bindings.push_back(KernelSpec::DFBBinding{
+            .dfb_spec_name = dfb_name,
+            .accessor_name = dfb_name.get(),
+            .endpoint_type = KernelSpec::DFBBinding::EndpointType::CONSUMER,
+        });
+    }
+
+    Group<SemaphoreSpec> semaphores;
+    Group<KernelSpec::SemaphoreBinding> semaphore_bindings;
+    for (uint32_t i = 0; i < num_sems; i++) {
+        const SemaphoreSpecName sem_name{"sem_" + std::to_string(i)};
+        semaphores.push_back(SemaphoreSpec{
+            .unique_id = sem_name,
+            .target_nodes = cr_set,
+        });
+        semaphore_bindings.push_back(KernelSpec::SemaphoreBinding{
+            .semaphore_spec_name = sem_name,
+            .accessor_name = sem_name.get(),
+        });
+    }
+
+    Group<KernelSpec> kernels;
+    Group<KernelSpecName> work_unit_kernels;
+    for (KernelPlan& plan : plans) {
+        std::tie(plan.unique_rt_args, plan.common_rt_args) = create_runtime_args(use_max_rt_args);
+
+        const uint32_t outer_loop = use_max_loop ? max_loop : rand() % max_loop + 1;
+        const uint32_t middle_loop = use_max_loop ? max_loop : rand() % max_loop + 1;
+        const uint32_t inner_loop = use_max_loop ? max_loop : rand() % max_loop + 1;
+        const uint32_t kernel_num_dfbs = plan.binds_dfbs ? dataflow_buffers.size() : 0;
+        const uint32_t kernel_num_sems = plan.checks_sems ? num_sems : 0;
+
+        KernelSpec::CompilerOptions::Defines defines;
+        // NUM_DFBS would collide with the firmware's dfb::NUM_DFBS constant.
+        defines.emplace("NUM_TEST_DFBS", std::to_string(kernel_num_dfbs));
+        defines.emplace("NUM_TEST_SEMS", std::to_string(kernel_num_sems));
+
+        std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
+        if (plan.is_compute) {
+            hw_config = ComputeHardwareConfig{ComputeGen2Config{}};
+        } else {
+            // Implicit sync would take a transaction id per DFB out of a pool of 24, and nothing is
+            // ever pushed through these buffers for it to synchronize.
+            hw_config = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+        }
+
+        kernels.push_back(KernelSpec{
+            .unique_id = plan.name,
+            .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
+                                            "random_program_2_0.cpp"},
+            .num_threads = 1,
+            .compiler_options = {.defines = std::move(defines)},
+            .dfb_bindings = plan.binds_dfbs ? (plan.is_compute ? consumer_bindings : producer_bindings)
+                                            : Group<KernelSpec::DFBBinding>{},
+            .semaphore_bindings = plan.checks_sems ? semaphore_bindings : Group<KernelSpec::SemaphoreBinding>{},
+            .compile_time_args =
+                {{"outer_loop", outer_loop},
+                 {"middle_loop", middle_loop},
+                 {"inner_loop", inner_loop},
+                 {"num_unique_rt_args", static_cast<uint32_t>(plan.unique_rt_args.size())},
+                 {"num_common_rt_args", static_cast<uint32_t>(plan.common_rt_args.size())},
+                 {"entry_size_step", entry_size_step}},
+            .hw_config = hw_config,
+            .advanced_options =
+                KernelAdvancedOptions{
+                    .num_runtime_varargs = static_cast<uint32_t>(plan.unique_rt_args.size()),
+                    .num_common_runtime_varargs = static_cast<uint32_t>(plan.common_rt_args.size()),
+                },
+        });
+        work_unit_kernels.push_back(plan.name);
+    }
+
+    ProgramSpec spec{
+        .name = "random_program",
+        .kernels = kernels,
+        .dataflow_buffers = dataflow_buffers,
+        .semaphores = semaphores,
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit",
+            .kernels = work_unit_kernels,
+            .target_nodes = cr_set,
+        }},
+    };
+    Program program = MakeProgramFromSpec(mesh_device, spec);
+
+    ProgramRunArgs run_args;
+    for (const KernelPlan& plan : plans) {
+        if (plan.unique_rt_args.empty() && plan.common_rt_args.empty()) {
+            continue;
+        }
+        ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = plan.name};
+        for (const CoreRange& core_range : cr_set.ranges()) {
+            for (const CoreCoord& core_coord : core_range) {
+                kernel_run_args.advanced_options.runtime_varargs[core_coord] = plan.unique_rt_args;
+            }
+        }
+        kernel_run_args.advanced_options.common_runtime_varargs = plan.common_rt_args;
+        run_args.kernel_run_args.push_back(std::move(kernel_run_args));
+    }
+    if (!run_args.kernel_run_args.empty()) {
+        SetProgramRunArgs(program, run_args);
+    }
+    return program;
+}
+
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_WORKLOADS = 100;
     uint32_t MAX_LOOP = 100;
@@ -2424,10 +2622,17 @@ TEST_F(UnitMeshCQFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
 }
 
 TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
-    uint32_t NUM_WORKLOADS = 100;
-    uint32_t MAX_LOOP = 100;
+    auto device = this->devices_.at(0);
+    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    // Quasar only runs on the emulator, where the Gen1 counts would take days, dominated by the
+    // largest program's million-iteration spin loop. A dispatch there costs 2.6s to 5.4s depending on
+    // how loaded the emulator is, and a session is capped at 1800s with a third of that spent booting,
+    // so these counts keep the shape of the test and still fit a session at the slow end.
+    uint32_t NUM_WORKLOADS = is_quasar ? 50 : 100;
+    uint32_t MAX_LOOP = is_quasar ? 16 : 100;
     // Smaller page size for architectures with more CBs to ensure all test CBs fit in L1
     constexpr uint32_t l1_cb_test_budget = 1024 * 32;
+    const uint32_t max_buffers = is_quasar ? std::min(max_cbs_, k_gen2_max_num_dfbs) : max_cbs_;
     uint32_t page_size = l1_cb_test_budget / max_cbs_;
 
     // Make random
@@ -2435,8 +2640,6 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
-
-    auto device = this->devices_.at(0);
 
     CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -2449,6 +2652,27 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         workloads.push_back(distributed::MeshWorkload());
         distributed::MeshWorkload& workload = workloads.back();
 
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_WORKLOADS);
+        }
+
+        if (is_quasar) {
+            // The first program takes the maximum of everything, to be sure that case compiles and runs.
+            const bool use_max = i == 0;
+            workload.add_program(
+                this->device_range_,
+                make_gen2_random_program(
+                    *device,
+                    cr_set,
+                    MAX_LOOP,
+                    page_size,
+                    use_max ? max_buffers : rand() % max_buffers + 1,
+                    use_max ? NUM_SEMAPHORES : rand() % NUM_SEMAPHORES + 1,
+                    /*use_max_rt_args=*/use_max,
+                    /*use_max_loop=*/use_max));
+            continue;
+        }
+
         Program program;
         workload.add_program(this->device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(this->device_range_);
@@ -2459,10 +2683,6 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         // brisc
         uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
         bool USE_MAX_RT_ARGS;
-
-        if (i % 10 == 0) {
-            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_WORKLOADS);
-        }
 
         if (i == 0) {
             // Ensures that we get at least one compilation with the max amount to
@@ -2658,14 +2878,15 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
     }
 
     // This loops assumes already cached
-    uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
-                                    // iterations, need to come back to that
+    uint32_t NUM_ITERATIONS = is_quasar ? 3 : 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large
+                                                    // number of iterations, need to come back to that
+    const uint32_t log_interval = std::max<uint32_t>(NUM_ITERATIONS / 10, 1);
 
     log_info(tt::LogTest, "Running {} programs for {} iterations now.", workloads.size(), NUM_ITERATIONS);
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
         auto rng = std::default_random_engine{};
         std::shuffle(std::begin(workloads), std::end(workloads), rng);
-        if (i % 50 == 0) {
+        if (i % log_interval == 0) {
             log_info(
                 tt::LogTest, "Enqueuing {} programs for iter: {}/{} now.", workloads.size(), i + 1, NUM_ITERATIONS);
         }
