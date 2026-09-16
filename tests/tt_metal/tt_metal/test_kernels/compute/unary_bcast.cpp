@@ -9,6 +9,9 @@
 #ifndef BCAST_DIM
 #include "defines_generated.h"
 #endif
+#ifndef ACC_TO_DEST
+#define ACC_TO_DEST 0
+#endif
 #include "api/compute/bcast.h"
 #ifdef ARCH_QUASAR
 #include "api/dataflow/dataflow_buffer.h"
@@ -19,19 +22,19 @@
 
 void kernel_main() {
 #ifdef ARCH_QUASAR
-    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
-    constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
+    constexpr std::uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
+    constexpr std::uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
     DataflowBuffer dfb_src(dfb::src);
     DataflowBuffer dfb_dst(dfb::dst);
-    const uint32_t icb = dfb_src.get_id();
-    const uint32_t ocb = dfb_dst.get_id();
+    const std::uint32_t icb = dfb_src.get_id();
+    const std::uint32_t ocb = dfb_dst.get_id();
 
     compute_kernel_hw_startup(icb, ocb);
     unary_bcast_init<BCAST_DIM>(icb);
 
     // TODO (tt-metal #42792): revert to batched multi-tile broadcast once Quasar unpack<->pack semaphores land.
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+    for (std::uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        for (std::uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             dfb_src.wait_front(1);
             dfb_dst.reserve_back(1);
             tile_regs_acquire();
@@ -46,22 +49,31 @@ void kernel_main() {
         }
     }
 #else
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    std::uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    std::uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
+    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     unary_bcast_init<BCAST_DIM>(tt::CBIndex::c_0);
 
     // TODO (tt-metal #42792): revert to batched multi-tile broadcast once Quasar unpack<->pack semaphores land.
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+    for (std::uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        for (std::uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             cb0.wait_front(1);
             cb16.reserve_back(1);
             tile_regs_acquire();
+            if constexpr (ACC_TO_DEST) {
+                unary_bcast_init<BCAST_DIM>(tt::CBIndex::c_0);
+            }
             unary_bcast<BCAST_DIM>(tt::CBIndex::c_0, 0, tile_index);
+            if constexpr (ACC_TO_DEST) {
+                // Keep the seeded DST tile acquired so overwrite cannot masquerade as accumulation.
+                unary_bcast_init<BCAST_DIM, DST_ACCUM_MODE, true>(tt::CBIndex::c_0);
+                unary_bcast<BCAST_DIM, DST_ACCUM_MODE, true>(tt::CBIndex::c_0, 0, tile_index);
+            }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(tile_index, tt::CBIndex::c_16);

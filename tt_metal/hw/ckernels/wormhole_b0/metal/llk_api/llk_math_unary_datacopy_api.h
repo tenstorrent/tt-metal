@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_fast_tilize.h"
@@ -50,7 +51,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
         StateDiscard<std::uint32_t>(start_dst_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
+    for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
         LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
         _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
@@ -63,7 +64,8 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default>
+    PackMode pack_mode = PackMode::Default,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
@@ -79,7 +81,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(num_faces),
         StateVal<Operand<Exu::Fpu>::Format>(dst_format)));
 
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
+    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, acc_to_dest>(
         num_faces, dst_format);
 }
 

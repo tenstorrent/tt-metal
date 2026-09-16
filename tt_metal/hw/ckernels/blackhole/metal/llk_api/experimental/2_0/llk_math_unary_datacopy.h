@@ -25,11 +25,17 @@ template <
     bool is_fp32_dest_acc_en = false,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default>
+    PackMode pack_mode = PackMode::Default,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init() {
     constexpr std::uint8_t RegFmt = ckernel::infer_unpack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
-    llk_math_eltwise_unary_datacopy_init_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        DESC.shape.total_num_faces(), RegFmt);
+    llk_math_eltwise_unary_datacopy_init_impl<
+        type,
+        is_fp32_dest_acc_en,
+        src_b_bcast_type,
+        is_int_fpu_en,
+        pack_mode,
+        acc_to_dest>(DESC.shape.total_num_faces(), RegFmt);
 }
 
 template <
