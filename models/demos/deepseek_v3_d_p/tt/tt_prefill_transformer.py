@@ -215,6 +215,10 @@ class TtPrefillTransformer(LightweightModule):
         # With kv_only_last_layer, the last block is built kv_only=True (only attn_norm + the KV
         # branch of MLA).
         self.layers = []
+        # One llama4 query-scale cache for every layer: its contents depend only on the chunk offset
+        # and mesh/config geometry, all layer-invariant (see ttMLA._llama4_scale). Per-layer dicts held
+        # 36 byte-identical copies of each offset's tensor.
+        self._llama4_scale_cache: dict = {}
         for local_idx in range(num_layers):
             layer_idx = first_layer_idx + local_idx
             is_last = local_idx == num_layers - 1
@@ -251,6 +255,7 @@ class TtPrefillTransformer(LightweightModule):
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
+                llama4_scale_cache=self._llama4_scale_cache,
             )
             self.layers.append(layer)
 
@@ -487,9 +492,10 @@ class TtPrefillTransformer(LightweightModule):
             if reuse:
                 h, _, new_idx = ret
                 if mode == "full":
-                    # TP top-k all-gather results alias model-owned persistent scratch. Replacing the
-                    # Python reference is sufficient: explicitly deallocating the previous wrapper
-                    # would invalidate the same backing buffer that ``new_idx`` now references.
+                    # Keep the full layer's indices alive through every shared consumer. TP sequence
+                    # shards own their top-k allocation; reference replacement releases it when no
+                    # consumer holds it. Gathered outputs can alias persistent scratch, so do not
+                    # explicitly deallocate the old tensor (it may back new_idx as well).
                     indexer_indices = new_idx
             else:
                 h, _ = ret
@@ -504,8 +510,8 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
-        # Drop only the temporary wrapper. The TP gather buffer remains owned by TT_CCL and is released
-        # with the model; on TP=1 normal Python reference counting releases the non-persistent result.
+        # Drop the held reference. Python reference counting releases owned top-k allocations after
+        # their last consumer; any TP gather scratch remains owned by TT_CCL.
         indexer_indices = None
 
         # Non-last pipeline ranks stop here: the layer slice's output activation is

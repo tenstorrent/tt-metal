@@ -51,6 +51,19 @@ dimensions of a shape to multiples of 32 (tile alignment).
       padded = align_shape_to_tile([1, 384, 49, 96])
       # => [1, 384, 64, 96]
 
+Trace
+*****
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.begin_trace_capture
+   ttnn.end_trace_capture
+   ttnn.execute_trace
+   ttnn.release_trace
+
 Memory Config
 *************
 
@@ -289,6 +302,7 @@ Pointwise Binary
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
+   ttnn.clamped_silu_glu
    ttnn.div
    ttnn.div_no_nan
    ttnn.divide
