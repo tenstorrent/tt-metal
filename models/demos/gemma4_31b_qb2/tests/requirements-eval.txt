@@ -1,0 +1,4 @@
+lm-eval[r1_evals] @ git+https://github.com/tstescoTT/lm-evaluation-harness.git@321e3bb68cb750a58c76606ab57832533302be73
+datasets==3.1.0
+transformers==5.12.1
+httpx==0.28.1

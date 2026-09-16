@@ -1,6 +1,14 @@
 version: 1
 description: Centralized trace region sizes (bytes) for models CI.
 sizes:
+  gemma4-31b-qb2:
+    skus:
+      p300x2:
+        trace_region_size: 536870912
+  gemma4-31b-qb2-decoder:
+    skus:
+      p300x2:
+        trace_region_size: 32000000
   llama3.1-8b-qb2:
     skus:
       p300x2:

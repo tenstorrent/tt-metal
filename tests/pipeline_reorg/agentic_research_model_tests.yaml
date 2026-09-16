@@ -13,8 +13,7 @@
     export LLAMA_MODEL_PATH
     LLAMA_MODEL_PATH=$(python -c 'from models.demos.llama31_8b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
 
-    # Switch back to main once vllm-tt-plugin#116 has merged.
-    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-yieldthought/llama31-qb2-serving}" \
+    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-main}" \
         https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
     unset VLLM_TT_PLUGIN_REF
     pushd "$work/vllm-tt-plugin"
@@ -69,6 +68,103 @@
       # Run 34480800119 reached 54/56 requests at 10 minutes after 24 passing tests.
       # Allow the remaining requests, scoring/reporting, and ~15% runner variance.
       timeout: 12
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+  budget_type: agentic_research
+
+- name: Gemma4 31B QB2 decoder, GPQA subset and serving
+  cmd: |
+    set -euo pipefail
+
+    cd "${TT_METAL_HOME:?Set TT_METAL_HOME to the tt-metal checkout}"
+    model_dir=models/demos/gemma4_31b_qb2
+    mkdir -p generated/test_logs generated/test_reports/gemma4_31b_qb2
+    work=$(mktemp -d "$PWD/generated/gemma4_31b_qb2.XXXXXX")
+    results="$PWD/generated/test_reports/gemma4_31b_qb2"
+    export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}" MESH_DEVICE=P300x2
+    export EXTRA_MODELS_DIR="$PWD/models/demos" TT_METAL_CACHE="$work/tt-cache"
+    # tt-metal#56613: large mmap-backed weights can hang the pinned DMA path.
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    unset HF_MODEL
+    export HF_MODEL
+    HF_MODEL=$(python -c 'from models.demos.gemma4_31b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
+
+    git clone --depth 1 --branch "${VLLM_TT_PLUGIN_REF:-main}" \
+        https://github.com/tenstorrent/vllm-tt-plugin.git "$work/vllm-tt-plugin"
+    git -C "$work/vllm-tt-plugin" rev-parse HEAD > "$results/plugin-revision.txt"
+    unset VLLM_TT_PLUGIN_REF
+    pushd "$work/vllm-tt-plugin"
+    source docs/install-vllm-tt.sh
+    uv pip install 'pytest>=8,<9'
+    popd
+
+    python -m pytest "$model_dir/tests" \
+        --timeout 600 --junitxml "$results/decoder.xml"
+    uv venv --python 3.11 "$work/eval-env"
+    UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" \
+        -r "$model_dir/tests/requirements-eval.txt"
+    HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" \
+        --prepare-only --output-dir "$results"
+
+    tt_config=$(python - <<'PY'
+    import json
+    from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+    print(json.dumps({"tt": {
+        "sample_on_device_mode": "all",
+        "trace_region_size": resolve_trace_region_size("gemma4-31b-qb2", "bh_quietbox_2"),
+        "l1_small_size": 16384,
+    }}))
+    PY
+    )
+    setsid python -u -m vllm.entrypoints.openai.api_server \
+        --model "$HF_MODEL" --served-model-name google/gemma-4-31B-it \
+        --hf-overrides '{"architectures":["TTGemma4QB2ForCausalLM"]}' \
+        --host 127.0.0.1 --port 8000 --block-size 128 --max-num-seqs 32 \
+        --max-model-len 262144 --max-num-batched-tokens 262144 --max-logprobs -1 \
+        --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
+        --reasoning-parser gemma4 --default-chat-template-kwargs '{"enable_thinking":true}' \
+        --additional-config "$tt_config" > generated/test_logs/gemma4_31b_qb2_server.log 2>&1 &
+    server_pid=$!
+    cleanup() {
+        kill -- -"$server_pid" 2>/dev/null || true
+        for attempt in {1..30}; do
+            if ! kill -0 -- -"$server_pid" 2>/dev/null; then break; fi
+            sleep 1
+        done
+        kill -KILL -- -"$server_pid" 2>/dev/null || true
+        wait "$server_pid" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+    for attempt in {1..180}; do
+        if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then break; fi
+        kill -0 "$server_pid"
+        sleep 4
+    done
+    curl -fsS http://127.0.0.1:8000/health
+
+    pushd "$work/vllm-tt-plugin"
+    python -m pytest tests/tt/test_sampling_routes.py tests/tt/test_request_isolation.py \
+        tests/tt/test_host_only_params.py tests/tt/test_tt_penalties.py tests/tt/test_logprobs.py \
+        --tt-server-url http://127.0.0.1:8000 --tt-model-name google/gemma-4-31B-it \
+        --tt-max-num-seqs 32 --junitxml "$results/api.xml"
+    popd
+
+    # Accuracy is ONLY the first 10/198 Diamond rows, one seed, at 32K output tokens.
+    # This bounds weekly runtime; use the separate full-set run for published quality.
+    status=0
+    HF_HUB_OFFLINE=0 "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" \
+        --output-dir "$results" || status=$?
+    if [ -f "$results/summary.json" ]; then
+        CI=true python -m models.demos.gemma4_31b_qb2.tests.report "$results/summary.json"
+    fi
+    exit "$status"
+  model: gemma4-31b-qb2
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      # Provisional until the complete command has been timed on QB2.
+      timeout: 90
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
