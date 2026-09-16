@@ -15,11 +15,13 @@ void kernel_main() {
 
     uint32_t l1_src_address = base_l1_src_address;
     uint32_t pcie_dst_address = base_pcie_dst_address;
+
+    noc_async_write_one_packet_set_state(pcie_core_noc_encoding | pcie_dst_address, L1_ALIGNMENT);
     for (uint32_t i = 0; i < num_16b_writes; i++) {
-        uint64_t dst_noc_addr = pcie_core_noc_encoding | pcie_dst_address;
-        noc_async_write_pcie(l1_src_address, dst_noc_addr, L1_ALIGNMENT);
+        noc_async_write_one_packet_with_state(l1_src_address, pcie_dst_address);
         l1_src_address += L1_ALIGNMENT;
         pcie_dst_address += L1_ALIGNMENT;
     }
     noc_async_write_barrier();
+    noc_async_write_clear_pcie_state();
 }
