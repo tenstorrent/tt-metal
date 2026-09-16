@@ -26,8 +26,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    uint32_t num_bytes_per_tile = TILE_WIDTH * element_size;
-
     constexpr auto dst_args = TensorAccessorArgs<0>();
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
