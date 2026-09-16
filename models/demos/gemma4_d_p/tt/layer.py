@@ -5,6 +5,7 @@
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.mlp import MLP
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.substate import substate
@@ -109,7 +110,12 @@ class Gemma4DecoderLayer:
             packed_sliding_rope=packed_sliding_rope,
         )
 
-        attn_output = self.post_attention_layernorm.forward(attn_output)
+        # The normed sublayer output is written by the norm and read by the very next
+        # add, touching no matmul, CCL or SDPA in between -- the one shape of chain L1
+        # pays for. The add itself must land in DRAM: its result is the next residual,
+        # and it feeds a norm whose output goes straight into the qkv projection.
+        act_mc = prefill_short_lived_memcfg()
+        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc)
         hidden_states = ttnn.add(residual, attn_output)
         residual.deallocate(True)
         attn_output.deallocate(True)
@@ -125,7 +131,7 @@ class Gemma4DecoderLayer:
         # post_feedforward_layernorm -> residual add, scaled by the learned layer scalar.
         # The scalar rides on the add as an output activation: on its own it is a full
         # read and write of the 1024x5376 hidden state for one SFPU multiply per tile.
-        normed = self.post_feedforward_layernorm.forward(hidden_states)
+        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=act_mc)
         hidden_states = ttnn.add(
             residual,
             normed,
