@@ -556,12 +556,7 @@ class TestConfig:
             [
                 "-Isfpi/include",
                 # Relative to tests/ (compile cwd), not pytest's cwd.
-                *[
-                    f"-I{p}"
-                    for p in TestConfig.llk_tree_include_roots(
-                        Path("..") / TestConfig.ARCH_LLK_ROOT
-                    )
-                ],
+                *[f"-I{p}" for p in TestConfig.configured_llk_include_roots()],
                 "-I../common",
                 "-I../tools/include",
                 "-I../../hw/inc",
@@ -719,6 +714,14 @@ class TestConfig:
             root / "common" / "inc",
             root / "common" / "inc" / "sfpu",
         ]
+
+    @staticmethod
+    def configured_llk_include_roots() -> List[Path]:
+        arch_root = Path("..") / TestConfig.ARCH_LLK_ROOT
+        roots = TestConfig.llk_tree_include_roots(arch_root)
+        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR and is_4row_arch():
+            roots.insert(0, arch_root / "llk_lib" / "4row_quasar")
+        return roots
 
     @staticmethod
     def add_include_dirs(*dirs, prepend: bool = True) -> None:

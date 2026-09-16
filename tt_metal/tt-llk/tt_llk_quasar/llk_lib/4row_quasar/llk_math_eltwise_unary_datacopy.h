@@ -11,6 +11,8 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+static_assert(ELTWISE_MATH_ROWS == 4, "4row_quasar overrides require ELTWISE_MATH_ROWS == 4");
+
 /**
  * @brief Sets up mop config for eltwise unary datacopy operations.
  *
@@ -25,14 +27,13 @@ using namespace ckernel::math;
 template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
 inline void _llk_math_eltwise_unary_datacopy_mop_config_(const std::uint32_t num_rows_inner_loop, const std::uint32_t num_dvalids_outer_loop)
 {
-    // Divide number of rows by how many rows are output per fpu instruction
-    // Each FPU instruction moves 8 rows at a time
+    // Divide number of rows by how many rows are output per fpu instruction.
+    // The MOV width must match the ELTWISE_MATH_ROWS-based stride and inner-loop divisor.
     const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(ELTWISE_MATH_ROWS);
-    const std::uint32_t mov_rows_instn = p_mov_src_to_dest::MOV_8_ROWS;
 
     const std::uint32_t MOP_OUTER_LOOP = num_dvalids_outer_loop;
 
-    const auto datacopy_func = [mov_rows_instn](std::uint8_t addr_mod)
+    const auto datacopy_func = [](std::uint8_t addr_mod)
     {
         if constexpr (IS_32b_DEST_EN)
         {
@@ -40,11 +41,11 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(const std::uint32_t num
         }
         else if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
         {
-            return TT_OP_MOVA2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, mov_rows_instn, 0 /*dst*/);
+            return TT_OP_MOVA2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, p_mov_src_to_dest::MOV_4_ROWS, 0 /*dst*/);
         }
         else
         {
-            return TT_OP_MOVB2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, mov_rows_instn, 0 /*bcast_datum0*/, 0 /*dst*/);
+            return TT_OP_MOVB2D(0 /*dest_32b_lo*/, 0 /*src*/, addr_mod, p_mov_src_to_dest::MOV_4_ROWS, 0 /*bcast_datum0*/, 0 /*dst*/);
         }
     };
 
