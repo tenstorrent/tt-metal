@@ -16,6 +16,7 @@
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -664,16 +665,11 @@ bool Device::initialize(
             std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_, shm_tracking_disabled, shm_verbose);
         log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
 
-        // Register ShmTrackingProcessor globally once (when first device with SHM is created).
-        // Verbose flag is captured here from this device's MetalContext for the same reason as
-        // SharedMemoryStatsProvider above.
-        static bool shm_processor_registered = false;
-        if (!shm_processor_registered) {
-            tt::tt_metal::GraphTracker::instance().push_processor(
-                std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose));
-            log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
-            shm_processor_registered = true;
-        }
+        // Turn on buffer tracking for the process. Verbose flag is read here from this device's
+        // MetalContext for the same reason as SharedMemoryStatsProvider above. Safe to call from
+        // every device and from several at once: the tracker behind it is a function-local
+        // static, so it is constructed exactly once.
+        tt::tt_metal::enable_shm_buffer_tracking(shm_verbose);
     }
 
     this->initialized_ = true;
@@ -1115,35 +1111,117 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
-// Program tracking for accurate CB memory reporting
-void Device::register_program(detail::ProgramImpl* program) {
-    std::lock_guard<std::mutex> lock(active_programs_mutex_);
-    active_programs_.insert(program);
-}
+uint64_t Device::get_total_cb_allocated() const { return total_cb_resident_.load(std::memory_order_relaxed); }
 
-void Device::unregister_program(detail::ProgramImpl* program) {
-    std::lock_guard<std::mutex> lock(active_programs_mutex_);
-    active_programs_.erase(program);
-}
-
-uint64_t Device::get_total_cb_allocated() const {
-    std::lock_guard<std::mutex> lock(active_programs_mutex_);
-
-    // Merge identical core ranges before expanding their address unions to individual cores.
-    // Nonidentical overlapping ranges are still merged per core, preserving physical address reuse.
-    std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_range;
-    for (const auto* program : active_programs_) {
-        program->merge_cb_l1_regions_by_core_range(regions_per_range);
+void Device::record_dispatched_program_cbs(const detail::ProgramImpl& program) {
+    // Pure telemetry: when SHM tracking is off this must cost nothing on the dispatch path.
+    if (shm_stats_provider_ == nullptr) {
+        return;
     }
-    const auto device_regions_per_core = detail::ProgramImpl::expand_cb_l1_regions_per_core(regions_per_range);
 
-    uint64_t total_physical = 0;
-    for (const auto& [core, regions] : device_regions_per_core) {
-        for (const auto& [start, end] : regions) {
-            total_physical += (end - start);
+    // Cached on the program, so this is a shared_ptr copy rather than a walk of its CBs.
+    std::shared_ptr<const std::map<CoreCoord, uint64_t>> footprint = program.cb_bytes_per_core();
+    if (footprint == nullptr) {
+        // The program has no circular buffers, so it covers no cores and dispatching it
+        // overwrites no CB config. Note this is not the same as having no *locally* allocated
+        // ones: a program whose CBs are all globally allocated does rewrite the CB config on
+        // the cores it covers, and reports a footprint of zero bytes on them.
+        return;
+    }
+
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(cb_residency_mutex_);
+        // Already the resident footprint, and nothing has been applied since -- anything else
+        // that touches the residency clears last_cb_footprint_ -- so nothing can have moved.
+        // Re-dispatching the same program is the steady state, so this is the common case, and
+        // skipping it is what keeps per-core work off the enqueue path.
+        if (last_cb_footprint_ == footprint) {
+            return;
         }
+        changed = apply_cb_residency_locked(*footprint);
+        last_cb_footprint_ = std::move(footprint);
     }
-    return total_physical;
+
+    if (changed) {
+        publish_cb_residency();
+    }
+}
+
+void Device::apply_cb_residency(const std::map<CoreCoord, uint64_t>& per_core) {
+    if (shm_stats_provider_ == nullptr) {
+        return;
+    }
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(cb_residency_mutex_);
+        changed = apply_cb_residency_locked(per_core);
+        // The residency is no longer described by a program footprint, so a later dispatch of
+        // the program that was resident before must not take the fast path above.
+        last_cb_footprint_.reset();
+    }
+
+    if (changed) {
+        publish_cb_residency();
+    }
+}
+
+uint64_t& Device::cb_residency_slot_locked(CoreCoord core) {
+    const auto x = static_cast<uint32_t>(core.x);
+    const auto y = static_cast<uint32_t>(core.y);
+    if (x >= cb_residency_width_ || y >= cb_residency_height_) {
+        // Grow to cover this core, preserving what is already recorded. The grid settles on
+        // the first dispatch, so this runs a handful of times at most.
+        const uint32_t width = std::max(cb_residency_width_, x + 1);
+        const uint32_t height = std::max(cb_residency_height_, y + 1);
+        std::vector<uint64_t> grown(static_cast<size_t>(width) * height, 0);
+        for (uint32_t row = 0; row < cb_residency_height_; row++) {
+            for (uint32_t col = 0; col < cb_residency_width_; col++) {
+                grown[static_cast<size_t>(row) * width + col] =
+                    cb_bytes_by_core_[static_cast<size_t>(row) * cb_residency_width_ + col];
+            }
+        }
+        cb_bytes_by_core_ = std::move(grown);
+        cb_residency_width_ = width;
+        cb_residency_height_ = height;
+    }
+    return cb_bytes_by_core_[static_cast<size_t>(y) * cb_residency_width_ + x];
+}
+
+bool Device::apply_cb_residency_locked(const std::map<CoreCoord, uint64_t>& per_core) {
+    // Maintain the total incrementally instead of re-summing the grid: this runs on the enqueue
+    // path, and a full re-sum made its cost scale with the number of cores the device has ever
+    // had circular buffers on rather than with the program being dispatched.
+    uint64_t total = total_cb_resident_.load(std::memory_order_relaxed);
+    for (const auto& [core, bytes] : per_core) {
+        uint64_t& slot = cb_residency_slot_locked(core);
+        total = total - slot + bytes;
+        slot = bytes;
+    }
+    return total != total_cb_resident_.exchange(total, std::memory_order_relaxed);
+}
+
+void Device::publish_cb_residency() {
+    // Callers publish only when the figure changed: steady state re-dispatches the same
+    // program, and publishing unconditionally cost a few percent of model warmup. Not a rate
+    // limit -- that drops the final update and leaves a stale figure once a workload goes idle.
+    // Called outside cb_residency_mutex_; the provider never takes it.
+    shm_stats_provider_->update_from_allocator(this, getpid());
+}
+
+void Device::accumulate_trace_cb_peak_per_core(
+    const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core) {
+    const std::shared_ptr<const std::map<CoreCoord, uint64_t>> footprint = program.cb_bytes_per_core();
+    if (footprint == nullptr) {
+        return;
+    }
+    for (const auto& [core, bytes] : *footprint) {
+        // Max, not assignment: the trace's programs reuse the same CB space, so per core the
+        // largest is what that core must hold. Assigning leaves whichever program was captured
+        // last, which under-reported a two-program trace by 3.5x.
+        uint64_t& peak = per_core[core];
+        peak = std::max(peak, bytes);
+    }
 }
 
 }  // namespace tt::tt_metal

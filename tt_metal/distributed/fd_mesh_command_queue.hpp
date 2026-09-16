@@ -56,6 +56,11 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
+    // Telemetry: re-apply a trace's captured per-core CB peaks to each local device it ran on.
+    // Replay rewrites the captured CB configs into L1 without a per-program host pass to hook,
+    // so the footprint is carried on the trace and applied here. Entries whose device ranges
+    // overlap are merged per device by taking the per-core maximum; see the definition.
+    void apply_trace_cb_residency(const MeshTraceDescriptor& descriptor);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
