@@ -2831,6 +2831,23 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
         return;
     }
+    // Compile-only built the ELFs but skipped read_binaries(); load them now instead of rebuilding.
+    if (disk_built_.contains(build_env.build_key())) {
+        if (defer_kernel_builds) {
+            return;  // still compile-only: nothing will consume the in-memory binaries
+        }
+        wait_for_pending_kernel_builds();  // the deferred builds may still be writing these ELFs
+        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                kernel->read_binaries(device, binary_root);
+                kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+            }
+        }
+        disk_built_.erase(build_env.build_key());
+        compiled_.insert(build_env.build_key());
+        return;
+    }
     // Clear the determined sub_device_ids when we compile the program for the first time
     // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
     if (compiled_.empty()) {
@@ -3003,7 +3020,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
 
-    compiled_.insert(build_env.build_key());
+    if (defer_kernel_builds) {
+        // Not dispatchable until read_binaries() runs, so keep it out of compiled_.
+        disk_built_.insert(build_env.build_key());
+    } else {
+        compiled_.insert(build_env.build_key());
+    }
 
     Inspector::program_compile_finished(this, device, build_env.build_key());
 }

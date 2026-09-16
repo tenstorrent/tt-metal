@@ -299,15 +299,16 @@ TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
         ~CompileOnlyGuard() { opts.set_compile_only(false); }
     } guard{rtoptions};
 
-    {
-        auto compile_only_program =
-            EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
-        auto compile_only_workload = MeshWorkload();
-        compile_only_workload.add_program(device_range, std::move(*compile_only_program));
+    // Outlives the compile-only pass: the normal pass below re-enqueues THIS workload.
+    auto compile_only_program =
+        EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
+    auto compile_only_workload = MeshWorkload();
+    compile_only_workload.add_program(device_range, std::move(*compile_only_program));
 
+    {
         rtoptions.set_compile_only(true);
         EnqueueMeshWorkload(cq, compile_only_workload, false /* blocking */);
-        // Join the deferred kernel builds before the workload (and its programs) go out of scope.
+        // Join the deferred kernel builds before anything can consume the compiled programs.
         WaitForPendingCompiles();
         rtoptions.set_compile_only(false);  // leave compile-only before any device read
     }
@@ -322,12 +323,9 @@ TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
             << "compile-only mode dispatched the workload (output changed from the sentinel)";
     }
 
-    // --- Normal pass with a fresh workload: dispatch must still work and produce the correct result. ---
-    auto run_program =
-        EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
-    auto run_workload = MeshWorkload();
-    run_workload.add_program(device_range, std::move(*run_program));
-    EnqueueMeshWorkload(cq, run_workload, false /* blocking */);
+    // --- Normal pass re-enqueuing the SAME workload: the pre-compiled programs must dispatch. ---
+    // Regression: compile-only marked them compiled without loading binaries -> "binary not found".
+    EnqueueMeshWorkload(cq, compile_only_workload, false /* blocking */);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);

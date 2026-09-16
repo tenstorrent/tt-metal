@@ -669,6 +669,9 @@ private:
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
+    // Build keys whose ELFs are on disk but not yet loaded into Kernel::binaries_ (compile-only
+    // skips read_binaries()). Kept out of compiled_ so a later real enqueue runs the load pass.
+    std::unordered_set<uint64_t> disk_built_;
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
 
