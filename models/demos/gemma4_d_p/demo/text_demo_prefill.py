@@ -152,12 +152,29 @@ def _ring_cache_rows(full, start, end, chunk, cp, num_heads):
     return full[:, ranks, local_rows, :].permute(1, 0, 2)
 
 
+def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.to(torch.float64).flatten()
+    b = b.to(torch.float64).flatten()
+    a = a - a.mean()
+    b = b - b.mean()
+    d = a.norm() * b.norm()
+    if d == 0:
+        return float("nan")
+    return float(torch.clamp((a @ b) / d, -1.0, 1.0))
+
+
+def rel_l2(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.to(torch.float64).flatten()
+    b = b.to(torch.float64).flatten()
+    n = b.norm()
+    return float("nan") if n == 0 else float((a - b).norm() / n)
+
+
 def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, chunk, cp):
     """With --kv-pcc, compare populated caches against the matching reference after all replays complete.
 
     Score each reference block separately.
     """
-    from models.demos.gemma4_d_p.demo.compare_traces import pcc, rel_l2
     from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
         GLOBAL_HEAD_DIM,
         GLOBAL_ROTARY_DIM,
@@ -482,6 +499,7 @@ def test_prefill_long_context_traced(
     if kv_ref_dir is not None:
         records = _measure_kv_pcc(model, mesh_device, kv_ref_dir, kv_streams, kv_metadata, tokens_all, chunk_size, cp)
         report_path = kv_run.finish(records)
+        logger.info("[kv_pcc] PASS: all K/V measurements are within baseline tolerances.")
         logger.info(f"[kv_pcc] JSON report: {report_path}")
         return
 
