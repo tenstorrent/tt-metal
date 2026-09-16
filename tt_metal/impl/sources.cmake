@@ -180,6 +180,7 @@ if(TT_METAL_USE_EMULE)
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fabric.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_kernel_defines.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_jit.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_program_model.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
