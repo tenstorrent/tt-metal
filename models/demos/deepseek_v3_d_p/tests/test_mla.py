@@ -134,6 +134,7 @@ def run_mla_inference(
             num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
             num_users=1,
             dtype=ttnn.bfloat8_b,
+            tp_axis=tp_axis,
         )
     else:
         rope_tensors = rope_setup.get_rope_tensors(seq_len)
