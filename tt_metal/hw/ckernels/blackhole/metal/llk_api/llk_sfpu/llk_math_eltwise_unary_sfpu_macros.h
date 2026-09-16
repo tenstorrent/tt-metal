@@ -30,6 +30,21 @@ inline __attribute__((always_inline)) void _sfpu_check_(
         "dst_index exceeds max dest tiles");
 }
 
+template <DstSync DST_SYNC, SfpuType SFPU_OP>
+inline __attribute__((always_inline)) void _sfpu_check_op_(
+    std::uint32_t dst_index, [[maybe_unused]] VectorMode vector_mode) {
+    static_assert(
+        sfpu_unary_sanitized(SFPU_OP),
+        "SFPU_UNARY_CALL_OP is for ops the sanitizer models; use SFPU_UNARY_CALL until the op is added to "
+        "sfpu_unary_sanitized().");
+    SAN_HOOK(execute<OperationSfpuUnary>(
+        StateVal<OperationSfpuUnary::SfpuOp>(to_underlying(SFPU_OP)),
+        StateDiscard<std::uint32_t>(dst_index),
+        StateDiscard<std::uint32_t>(to_underlying(vector_mode))));
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()), "dst_index exceeds max dest tiles");
+}
+
 }  // namespace ckernel
 
 // Strip the parentheses around the template-argument tuple passed to SFPU_UNARY_CALL.
@@ -49,6 +64,13 @@ inline __attribute__((always_inline)) void _sfpu_check_(
 #define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),                     \
      _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+
+// Op-aware variant of SFPU_UNARY_CALL: threads the SfpuType so the sanitizer can match this
+// execute against the init that programmed the SFPU. Only for ops in sfpu_unary_sanitized().
+#define SFPU_UNARY_CALL_OP(DST_SYNC, DST_ACCUM, OP, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_check_op_<DST_SYNC, ::SfpuType::OP>(DST_IDX, VECTOR_MODE),              \
+     _llk_math_eltwise_unary_sfpu_params_(                                                    \
+         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
  * SFPU init macros (3 total)

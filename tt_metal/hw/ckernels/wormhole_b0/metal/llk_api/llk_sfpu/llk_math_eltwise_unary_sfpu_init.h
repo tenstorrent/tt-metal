@@ -12,6 +12,10 @@
 
 namespace ckernel {
 
+// SFPU ops whose init/execute pairing the sanitizer models. Everything else stays behind
+// unsupported(), so an unmodelled op is a compile-time error rather than a silent gap.
+inline constexpr bool sfpu_unary_sanitized(SfpuType sfpu_op) { return sfpu_op == SfpuType::sqrt; }
+
 // Kernel-invariant SFPU init (SFPU config register + invariant ADDR_MOD_7). Retained for the standalone tt-llk
 // SFPU test harness, which bypasses the metal "full init" entry points and runs this itself. The metal compute
 // path no longer hoists this: each per-op init below is self-contained (#50381), running the invariant per-op
@@ -118,7 +122,11 @@ inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 // (asin/acos prime the endpoint-sqrt constants only in fp32 dest); it is ignored by the rest.
 template <SfpuType sfpu_op, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_init() {
-    SAN_HOOK(unsupported());
+    if constexpr (sfpu_unary_sanitized(sfpu_op)) {
+        SAN_HOOK(init<OperationSfpuUnary>(StateVal<OperationSfpuUnary::SfpuOp>(to_underlying(sfpu_op))));
+    } else {
+        SAN_HOOK(unsupported());
+    }
     // Per-op common SFPU init (config reg + invariant ADDR_MOD_7), formerly hoisted once-per-kernel via
     // llk_math_sfpu_init_once(). Consolidated back per-op (#50381) so each init is fully self-contained and
     // never depends on a separate once-init having run first. The co-located sfpu::<op>_init() below then
@@ -261,7 +269,11 @@ inline void llk_math_eltwise_unary_sfpu_init() {
 // interleaving destructively, which was the #50381 fp32 SDPA accuracy regression.
 template <SfpuType sfpu_op, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
-    SAN_HOOK(unsupported());
+    if constexpr (sfpu_unary_sanitized(sfpu_op)) {
+        SAN_HOOK(init<OperationSfpuUnary>(StateVal<OperationSfpuUnary::SfpuOp>(to_underlying(sfpu_op))));
+    } else {
+        SAN_HOOK(unsupported());
+    }
     _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
     init_func(std::forward<ARGS>(args)...);
 }
