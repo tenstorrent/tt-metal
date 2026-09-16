@@ -96,6 +96,7 @@
 | [Sentence-Bert (backbone: bert-base)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/sentence_bert)        | 8     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 433     | 550      |         |
 | [Sentence-Bert (backbone: bert-base) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/sentence_bert) | 16    | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 772     | 1100     |         |
 | [Sentence-Bert (backbone: bert-base)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/sentence_bert)       | 8     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 929     | 1100     |         |
+| [ModernBERT-base](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/modernbert)                                 | 8     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 365     |          |         |
 
 ## Model Demos
 

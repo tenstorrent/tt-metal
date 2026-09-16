@@ -201,7 +201,7 @@ scaleout:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 270
+    cpu_medium: 280
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
@@ -324,6 +324,9 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  ttnop:
+    wh_n150_civ2: 21600
+    bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
@@ -375,7 +378,7 @@ models:
     bh_quietbox_2: 42
   unit_tier1:
     wh_llmbox: 155
-    wh_n150: 118
+    wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65
     bh_p150: 20
