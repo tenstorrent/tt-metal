@@ -93,6 +93,7 @@ def build_and_serialize_kv_chunk_table(
     index_kv_cache=None,
     dflash_caches=None,
     dflash_spec=None,
+    dflash_first_layer=0,
     tp_axis=1,
     first_layer_idx=0,
     num_my_layers=None,
@@ -129,6 +130,11 @@ def build_and_serialize_kv_chunk_table(
     drafter's shapes carry everything else: layer count from ``shape[0] // num_users`` (user-major fold),
     ``num_kv_heads`` from ``shape[1] * tp`` (dim 1 is this chip's TP head slice), head_dim from
     ``shape[-1]``. Passing these turns even a DENSE model's table into a merged one.
+
+    ``dflash_first_layer``: where the drafter's layers sit on the table's GLOBAL layer axis (the
+    verifier's layer count, since the drafter runs after every verifier layer). Layer ids mean the same
+    thing in every config here — config 1 is widened the same way below — so the drafter's 6 layers are
+    published as ``dflash_first_layer ..  +5`` rather than as their own 0..5.
 
     ``first_layer_idx`` / ``num_my_layers`` / ``stage_layouts`` (pipeline-parallel only): this rank owns
     layers [first_layer_idx, first_layer_idx + num_my_layers); ``stage_layouts`` holds ONE all-gathered
@@ -173,6 +179,7 @@ def build_and_serialize_kv_chunk_table(
             path=path,
             stage_layouts=stage_layouts,
             index_layer_ids=index_layer_ids,
+            dflash_first_layer=dflash_first_layer,
         )
 
     # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
@@ -219,6 +226,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     chunk_size_global=None,
     stage_layouts=None,
     index_layer_ids=None,
+    dflash_first_layer=0,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
@@ -318,18 +326,19 @@ def _build_and_serialize_merged_kv_chunk_table(
         cfg = disagg.KvChunkAddressTableConfig()
         if cache is None:
             # Staged drafter config: no local tensor to size from. The drafter is not layer-partitioned,
-            # so its layer count is the drafter's own depth rather than a sum over stages, and its chunk
-            # size follows from head_dim (the cache is always bfp8/TILE -- allocate_dflash_kv_cache).
-            cfg.num_layers = dflash_staged["num_layers"]
+            # so its depth is the drafter's own rather than a sum over stages, and its chunk size follows
+            # from head_dim (the cache is always bfp8/TILE -- allocate_dflash_kv_cache). The axis is
+            # published from 0 so a global layer id indexes it directly; only the tail rows are filled.
+            cfg.num_layers = dflash_first_layer + dflash_staged["num_layers"]
             cfg.max_sequence_length = seq_len
             cfg.num_slots = num_users
             cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
             cfg.chunk_size_bytes = dflash_staged["chunk_size_bytes"]
             return cfg
         if stage_layout is None:
-            # Drafter cache: single-stage, so its layer count comes off the cache itself (the 6 draft
-            # layers, user-major shape[0] // num_users).
-            cfg.num_layers = _num_layers_from_cache(cache, num_users)
+            # Drafter cache: single-stage, so its depth comes off the cache itself (the 6 draft layers,
+            # user-major shape[0] // num_users), then offset onto the global axis as above.
+            cfg.num_layers = dflash_first_layer + _num_layers_from_cache(cache, num_users)
         else:
             # Match a layout to its cache by DRAM base, so a runtime returning its stages out of config
             # order is caught here instead of silently addressing one cache with the other's layout.
@@ -410,6 +419,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 # None on the single-stage path (addresses come from `cache`); the gathered layout of
                 # the owning rank under pipeline parallelism, where `cache` is None.
                 stage_layout=dflash_stage_of.get(name),
+                first_layer=dflash_first_layer,
             )
 
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)

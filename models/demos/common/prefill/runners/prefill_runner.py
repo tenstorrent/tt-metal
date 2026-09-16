@@ -651,6 +651,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(TT_FATAL on local_layers=0) and the reorder buffer would wait on records that never come. "
             f"Use a layer split that gives every rank a KV-writing layer, or run without migration."
         )
+    # A runtime may ack rows no layer of the split describes -- DFlash acks the drafter's context K/V
+    # as layers past the verifier's last, because those writes land after the forward returns. Widen
+    # the ack space here rather than at the two call sites: every rank must agree on the global count,
+    # since it is the modulus of the seq the master router reorders on.
+    if getattr(runtime, "layer_ack_layers", None) is not None:
+        num_ack_layers, ack_local_count = runtime.layer_ack_layers(num_ack_layers, ack_local_count)
     if use_d2h:
         d2h_service = ttnn.D2HStreamService(
             mesh_device,

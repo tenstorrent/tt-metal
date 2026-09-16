@@ -799,12 +799,13 @@ class TtPrefillRuntime:
                     actual_start,
                     slot_idx=slot_id,
                     actual_end=actual_end,
+                    d2h_service=d2h_service,
+                    metadata_msg=metadata_msg,
+                    on_layer_complete=on_layer_complete,
+                    # This rank is the KV tail, so its slice ends at the model's global layer count: the
+                    # draft layers ack as the layers just past it (see layer_ack_layers).
+                    layer_ack_base=self.config.first_layer_idx + self.config.num_layers,
                 )
-                # TODO: the drafter needs its own layer ack here. All num_layers acks fire inside
-                # model.forward above, but this write lands after it returns, so a migration worker
-                # acting on the last ack would copy drafter chunks this chunk has not written yet.
-                # Read-back (the producer's PCC gate) is unaffected -- it runs after the request --
-                # but live migration of the drafter caches is blocked until this is ordered.
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())
@@ -891,6 +892,18 @@ class TtPrefillRuntime:
         second cache too: see `kv_migration_stages`, which the engine prefers."""
         return int(kv_caches.kvpe.storage.buffer_address())
 
+    def layer_ack_layers(self, global_ack_layers: int, local_ack_layers: int) -> tuple[int, int]:
+        """``(global, local)`` layer-ack row counts for this rank, widening the counts the model's own
+        layers emit.
+
+        Under DFlash the drafter's context K/V are further caches the migration consumer must see filled, so
+        they ack as layers past the verifier's last one. Every rank must agree on the GLOBAL count — the
+        master router's reorder buffer keys on ``chunk * global + layer`` and demands a dense sequence — but
+        only the KV-tail rank writes those layers, so only its LOCAL count grows.
+        """
+        extra = self.drafter.config.num_hidden_layers if self.config.dflash_enabled else 0
+        return global_ack_layers + extra, local_ack_layers + (extra if self.config.is_last_rank else 0)
+
     def kv_migration_stages(self, kv_caches: MlaKvCaches, first_layer_idx=None, num_my_layers=None):
         """One `KvCacheStage` per merged-table config: KVPE first, then the sparse/DSA index-key cache
         when present. The engine all-gathers one layout per entry (on ALL ranks) and hands them to
@@ -929,8 +942,12 @@ class TtPrefillRuntime:
             # block-cyclic configs stay at layout indices [0, n_block_cyclic).
             draft_layers = self.drafter.config.num_hidden_layers
             if self._dflash_k_cache is not None:
-                stages.append(KvCacheStage(int(self._dflash_k_cache.buffer_address()), 0, draft_layers))
-                stages.append(KvCacheStage(int(self._dflash_v_cache.buffer_address()), 0, draft_layers))
+                # The drafter lives on the KV tail, whose slice ends at the model's global layer count, so
+                # this is where the verifier's layer axis ends and the draft layers continue it. One axis for
+                # both keeps a single (layer, position, slot) key meaningful across every config of the table.
+                draft_first = first_layer_idx + num_my_layers
+                stages.append(KvCacheStage(int(self._dflash_k_cache.buffer_address()), draft_first, draft_layers))
+                stages.append(KvCacheStage(int(self._dflash_v_cache.buffer_address()), draft_first, draft_layers))
             else:
                 stages.append(KvCacheStage(0, 0, 0))
                 stages.append(KvCacheStage(0, 0, 0))
@@ -1002,6 +1019,10 @@ class TtPrefillRuntime:
         #     into live migration needs that ordering fixed first.
         dflash_caches = None
         dflash_spec = None
+        # Where the draft layers sit on the merged table's layer axis. The drafter runs after the last
+        # verifier layer and lives on the KV tail, so on the owning rank this is exactly the model's
+        # global layer count -- the same number the drafter acks under (see layer_ack_layers).
+        dflash_first_layer = self.config.first_layer_idx + self.config.num_layers
         if self.config.dflash_enabled:
             if stage_layouts is None:
                 # Inline-gather path (single-rank / tests): this rank owns the drafter, so describe it
@@ -1025,6 +1046,9 @@ class TtPrefillRuntime:
                     )
                 *block_cyclic_layouts, k_layout, v_layout = stage_layouts
                 stage_layouts = block_cyclic_layouts
+                # Read it off the gather: THIS rank is generally not the one that owns the drafter, so its
+                # own layer slice says nothing about where the tail's draft layers begin.
+                dflash_first_layer = next(s["first_layer"] for s in k_layout if s["count"] > 0)
                 dcfg = self.drafter.config
                 dflash_spec = {
                     "num_kv_heads": dcfg.num_key_value_heads,
@@ -1061,6 +1085,7 @@ class TtPrefillRuntime:
             index_kv_cache=kv_caches.index,
             dflash_caches=dflash_caches,
             dflash_spec=dflash_spec,
+            dflash_first_layer=dflash_first_layer,
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layouts=stage_layouts,
