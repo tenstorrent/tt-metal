@@ -10,6 +10,10 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    generate_bfloat16_bits_in_range,
+    to_tt_tensor,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -214,30 +218,14 @@ def test_binary_fmod_bf16(
 # This inconsistency is persistent due to some fp precision loss in both Torch and TT.
 # Eg: torch.remainder of (3, 1.5) = 0.0 and of (3, 0.003) = 0.003
 # Eg: ttnn.remainder of (4, 0.004) = 0.004 and of (3, 0.003) = 0.0
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([6, 5, 320, 320])),
-        (torch.Size([2, 1, 384, 320])),
-        (torch.Size([3, 123, 115])),
-        (torch.Size([69, 178])),
-        (torch.Size([1024])),
-    ),
-)
+
+
 @pytest.mark.parametrize("scalar", [-0.002, -0.001, -0.0006, -0.0003, 0.0, 0.0005, 0.0007, 0.001, 0.002])
-def test_remainder_scalar(input_shapes, scalar, device):
+def test_remainder_scalar(scalar, device):
     torch.manual_seed(0)
 
-    torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
-    )(input_shapes)
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    torch_input_tensor = generate_bfloat16_bits_in_range(low=-100, high=100)
+    input_tensor = to_tt_tensor(torch_input_tensor, device)
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
     torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
