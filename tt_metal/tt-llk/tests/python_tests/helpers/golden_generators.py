@@ -4445,6 +4445,15 @@ class ReduceGolden:
     def padding_value(pool_type, data_format):
         if pool_type != ReducePool.Max:
             return 0
+        if data_format in {
+            DataFormat.Bfp8,
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
+        }:
+            # Keep zero fill for shared-exponent formats so masked infinities
+            # cannot change the exponent used by the valid reduction result.
+            return 0
         if data_format.is_integer():
             # The LLK harness decodes signed integer output as sign-magnitude.
             bits = int(data_format.byte_size * 8)

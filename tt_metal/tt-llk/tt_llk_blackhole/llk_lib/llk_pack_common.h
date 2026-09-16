@@ -186,7 +186,7 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * scalar reduce a single datum. Default tiled packing selects the row mask per face through
  * TILE_FACE_SET_MAPPING_0; Blackhole has one packer, so the packer selectors cannot select faces.
  *
- * @tparam reduce_type: Pool type; MAX fills masked datums with negative infinity, other types with zero.
+ * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @tparam geometry: Output face grid, independent of the height of each face.
@@ -199,10 +199,6 @@ template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::De
 inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
-    if constexpr (reduce_type == PoolType::MAX)
-    {
-        pack_edge_offset.f.mode = 1;
-    }
 
     // PCK_EDGE_OFFSET_SEC0 masks every datum in the row with the selected fill value.
     pack_edge_offset.f.mask             = 0x0;
@@ -265,6 +261,14 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC1_mask_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+
+    if constexpr (reduce_type == PoolType::MAX)
+    {
+        // Masked infinities can overwrite the shared BFP exponent and zero the valid result.
+        const std::uint32_t output_format =
+            (cfg_read(THCON_SEC0_REG1_Out_data_format_ADDR32) & THCON_SEC0_REG1_Out_data_format_MASK) >> THCON_SEC0_REG1_Out_data_format_SHAMT;
+        cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(output_format));
+    }
 
     if constexpr (pack_mode == PackMode::Default)
     {
