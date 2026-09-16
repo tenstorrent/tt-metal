@@ -43,6 +43,9 @@ on:
   # variables, which are readable from any branch:
   #   LLK_GATE_PILOT_PERF_RUN_ID      the current side
   #   LLK_GATE_PILOT_BASELINE_RUN_ID  the baseline side
+  #   LLK_GATE_PILOT_ARCH             which architecture to compare
+  # The arch must match the runs: the gate downloads perf-data-<arch>-*, so a
+  # mismatch finds no artifacts rather than silently comparing the wrong chip.
   push:
     branches:
       - "**"
@@ -104,8 +107,8 @@ jobs:
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       # Empty on the label path, so the gate takes its normal warehouse route.
-      arch: ${{ inputs.arch || 'wormhole' }}
-      run_types: ${{ inputs.run_types || 'L1_TO_L1' }}
+      arch: ${{ inputs.arch || vars.LLK_GATE_PILOT_ARCH || 'wormhole' }}
+      run_types: ${{ inputs.run_types || vars.LLK_GATE_PILOT_RUN_TYPES || 'L1_TO_L1' }}
       perf_run_id: ${{ inputs.perf_run_id || vars.LLK_GATE_PILOT_PERF_RUN_ID || '' }}
       baseline_run_id: >-
         ${{ inputs.baseline_run_id || vars.LLK_GATE_PILOT_BASELINE_RUN_ID || '' }}
