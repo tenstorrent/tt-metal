@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device performance tests for DeepSeekv3/KimiK2.7/GLM5.2 MoE dispatch and combine operations.
+Device performance tests for DeepSeekv3/KimiK2.6/GLM5.2 MoE dispatch and combine operations.
 
 Runs test_prefill_dispatch_combine.py::test_ttnn_dispatch_combine[perf_captured_<model>_chunk]
 (<model> in {dsv3, kimi26, glm52}) on the existing LB 8x1 proxy migrated to Fabric2D TorusY. It replays the hottest
