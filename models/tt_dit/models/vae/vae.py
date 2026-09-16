@@ -438,6 +438,7 @@ class VaeAttention(Module):
     sdpa_chunk_size_map: Mapping[tuple[bool, int], tuple[int, int]] = MappingProxyType(
         {
             (False, 1024): (64, 64),
+            (True, 1024): (64, 64),
         }
     )
     default_sdpa_chunk_size: tuple[int, int] = (128, 128)

@@ -68,29 +68,29 @@ _DEFAULT_SEQUENCE_LENGTHS = (1024, 1536, 3072)
 #   The gains are sublinear but had not flattened out.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (2, 4): {
-        "cfg": (2, 0),
-        "sp": (1, 0),
-        "tp": (4, 1),
-        "encoder_tp": (4, 1),
-        "encoder_sp": None,
+        "cfg": (2, 1),
+        "sp": (2, 1),
+        "tp": (2, 0),
+        "encoder_tp": (2, 0),
+        "encoder_sp": (2, 1),
         "vae_tp_axis": None,
-        "vae_h_axis": 1,
-        "vae_w_axis": None,
+        "vae_h_axis": 0,
+        "vae_w_axis": 1,
         "num_links": 1,
     },
 }
 
 _PRESETS_BH: dict[tuple[int, ...], dict] = {
     (2, 2): {
-        "cfg": (1, 0),
-        "sp": (1, 0),
-        "tp": (2, 1),
-        "encoder_tp": (2, 1),
+        "cfg": (2, 1),
+        "sp": (1, 1),
+        "tp": (2, 0),
+        "encoder_tp": (2, 0),
         "encoder_sp": None,
         "vae_tp_axis": None,
-        "vae_h_axis": 1,
+        "vae_h_axis": 0,
         "vae_w_axis": None,
-        "num_links": 1,
+        "num_links": 2,
     },
 }
 
