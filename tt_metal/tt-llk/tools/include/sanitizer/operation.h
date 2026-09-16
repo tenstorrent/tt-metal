@@ -411,6 +411,32 @@ struct OperationFpuEltwiseBinary : Operation<Exu::Fpu, Hoistable::Yes>
         NumFacesCDim>;
 };
 
+// ---------------------------
+// OPERATION - SFPU SQRT
+// ---------------------------
+
+struct OperationSfpuSqrt : Operation<Exu::Sfpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationSfpuSqrt, T>;
+
+    // sqrt_init() programs vConstIntPrgm0/1/2 from APPROXIMATION_MODE and skips them entirely under
+    // legacy_compat; calculate_sqrt() branches on both. Its other template parameters are execute-only.
+    struct ApproxMode : Field<bool>
+    {
+    };
+
+    struct LegacyCompat : Field<bool>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationSfpuSqrt,
+        /* Fields */
+        ApproxMode,
+        LegacyCompat>;
+};
+
 // ----------------------------------------
 // OPERATION - FPU ELTWISE UNARY DATACOPY
 // ----------------------------------------
@@ -535,7 +561,7 @@ using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBina
 
 using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuEltwiseBinary, OperationFpuFastTilizeWh>;
 
-using SfpuOperations = OperationList<>;
+using SfpuOperations = OperationList<OperationSfpuSqrt>;
 
 using PackOperations = OperationList<OperationPack, OperationPackUntilize, OperationPackFastTilizeWh>;
 

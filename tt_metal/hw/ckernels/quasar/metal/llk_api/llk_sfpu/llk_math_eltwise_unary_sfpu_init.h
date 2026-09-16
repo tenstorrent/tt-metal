@@ -5,18 +5,21 @@
 #pragma once
 
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "sanitizer/api.h"
 
 namespace ckernel {
 
 // sfpu_op template parameter is unused, but kept for backwards compatibility
 template <SfpuType sfpu_op /*maybe_unused*/>
 inline void llk_math_eltwise_unary_sfpu_init() {
+    SAN_HOOK(unsupported());
     _llk_math_eltwise_sfpu_init_();
 }
 
 // sfpu_op template parameter is unused, but kept for backwards compatibility
 template <SfpuType sfpu_op, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
+    SAN_HOOK(unsupported());
     _llk_math_eltwise_sfpu_init_();
     init_func(std::forward<ARGS>(args)...);
 }

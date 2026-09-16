@@ -9,6 +9,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_ternary_sfpu_init.h"
 #include "llk_math_eltwise_ternary_sfpu_params.h"
+#include "sfpu_san.h"
 #include "sanitizer/api.h"
 
 /*
@@ -21,14 +22,16 @@
 
 namespace ckernel {
 
-template <DstSync DST_SYNC>
+template <DstSync DST_SYNC, SfpuType SFPU_OP>
 inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     std::uint32_t dst_index_in0,
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_in2,
     std::uint32_t dst_index_out,
     [[maybe_unused]] VectorMode vector_mode) {
-    SAN_HOOK(unsupported());
+    if constexpr (!sfpu_operation<SFPU_OP>::modelled) {
+        SAN_HOOK(unsupported());
+    }
     LLK_ASSERT(
         (dst_index_in0 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_in0 exceeds max dest tiles");
@@ -55,7 +58,8 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
  * not side effects.
  */
 #define SFPU_TERNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),         \
+    (::ckernel::_sfpu_ternary_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>(                                  \
+         DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),                                                          \
      _llk_math_eltwise_ternary_sfpu_params_(                                                                        \
          ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                                          \
          DST_IN0,                                                                                                   \
@@ -66,10 +70,11 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
          ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                                                 \
-    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...)                          \
-    (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE), \
-     _llk_math_eltwise_ternary_sfpu_params_(                                                                \
+#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                        \
+    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_ternary_check_<DST_SYNC, ::ckernel::sfpu::FN##_san_tag::op>( \
+         DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),                         \
+     _llk_math_eltwise_ternary_sfpu_params_(                                       \
          ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
