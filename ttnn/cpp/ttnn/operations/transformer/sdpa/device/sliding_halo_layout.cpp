@@ -8,9 +8,25 @@
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 bool ChunkedSlidingHaloLayout::uses_neighbor_halo() const { return ring_size > 1 && halo_tile_rows > 0; }
 
-uint32_t ChunkedSlidingHaloLayout::send_tail_start_tile(uint32_t source_device) const {
+uint32_t ChunkedSlidingHaloLayout::hop_count() const {
+    return chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows);
+}
+
+uint32_t ChunkedSlidingHaloLayout::remote_hop_count() const {
+    return chunked_sliding_halo_remote_hop_count(halo_tile_rows, q_local_tile_rows, ring_size);
+}
+
+uint32_t ChunkedSlidingHaloLayout::hop_rows(uint32_t hop) const {
+    return chunked_sliding_halo_hop_rows(halo_tile_rows, q_local_tile_rows, hop);
+}
+
+uint32_t ChunkedSlidingHaloLayout::hop_dest_row(uint32_t hop) const {
+    return chunked_sliding_halo_hop_dest_row(halo_tile_rows, q_local_tile_rows, hop);
+}
+
+uint32_t ChunkedSlidingHaloLayout::send_tail_start_tile(uint32_t source_device, uint32_t hop) const {
     return chunked_sliding_halo_source_start_tile(
-        source_device, q_local_tile_rows, ring_size, logical_k_tile_rows, halo_tile_rows, circular_kv_slab_count);
+        source_device, q_local_tile_rows, ring_size, logical_k_tile_rows, halo_tile_rows, circular_kv_slab_count, hop);
 }
 
 ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(

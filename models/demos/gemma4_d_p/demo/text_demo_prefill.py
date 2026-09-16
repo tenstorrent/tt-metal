@@ -17,6 +17,7 @@ import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
+from models.demos.gemma4_d_p.tt.model import sliding_halo_hop_count
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 
 try:
@@ -30,8 +31,7 @@ except ModuleNotFoundError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_DTYPE = ttnn.bfloat16
-GEMMA4_SLIDING_WINDOW_TOKENS = 1024
-PREFILL_CHUNK_SIZES = (4096, 8192, 16384, 32768)
+PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
@@ -194,11 +194,11 @@ def test_prefill_long_context_traced(
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
+    halo_hops = sliding_halo_hop_count(chunk_size, cp)
+    if halo_hops > cp:
         pytest.skip(
-            f"chunk={chunk_size} gives a {chunk_size // cp}-token Q slab at CP={cp}, under the "
-            f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
-            f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp} (its halo is single-hop)"
+            f"chunk={chunk_size} gives a {chunk_size // cp}-token Q slab at CP={cp}, so the "
+            f"sliding window needs {halo_hops} halo hops around a {cp}-device ring"
         )
     if context_len % chunk_size != 0:
         pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
@@ -388,11 +388,11 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
+    halo_hops = sliding_halo_hop_count(chunk_size, cp)
+    if halo_hops > cp:
         pytest.skip(
-            f"chunk {chunk_size} / CP {cp} = {chunk_size // cp} tokens per rank, below the "
-            f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
-            f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp}"
+            f"chunk {chunk_size} / CP {cp} = {chunk_size // cp} tokens per rank needs {halo_hops} "
+            f"sliding-window halo hops, more than the {cp}-device ring"
         )
     assert context_len % chunk_size == 0, "context_len must be a whole number of chunks"
     n_chunks = context_len // chunk_size
