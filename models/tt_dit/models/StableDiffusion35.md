@@ -20,10 +20,11 @@ The model consists of two different text encoders together with their tokenizers
 
 Current performance and target performance for two systems are detailed below. Performance is measured in seconds per image, where the image size is 1024x1024px.
 
-| System    | CFG | SP | TP | Current Performance | Target Performance |
-|-----------|-----|----|----|---------------------|--------------------|
-| QuietBox  | 2   | 2  | 2  | 12.2s               | 14.4s              |
-| Galaxy    | 2   | 4  | 4  | 5.6s               | 3.6s               |
+| System                     | CFG | SP | TP | Current Performance | Target Performance |
+|----------------------------|-----|----|----|---------------------|--------------------|
+| QuietBox                   | 2   | 2  | 2  | 12.2s               | 14.4s              |
+| Galaxy                     | 2   | 4  | 4  | 5.6s                | 3.6s               |
+| QuietBox (Blackhole, 4-chip) | 1   | 2  | 2  | 7.1s                | -                  |
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -47,11 +48,39 @@ pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "2x4cfg1sp0tp1 a
 pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k "4x8cfg1sp0tp1 and yes_traced"
 ```
 
+### Blackhole (4-chip QuietBox, 2x2 mesh)
+
+The 4-chip Blackhole path runs on a 2x2 mesh with parallel config `((1, 0), (2, 0), (2, 1))` (cfg=1, sp=2, tp=2; encoder/VAE on the reshaped 1x4 submesh, T5 auto-disabled). `SD35_QUANT=bf8` enables the optimized bf8 weight/activation path (~7.1s); omit it for the bf16 baseline.
+
+```bash
+# NOTE: on this setup TT_DIT_CACHE_DIR caused a hang during on-device weight distribution,
+# so we run with it unset (weights load directly from the HF/torch state dict).
+unset TT_DIT_CACHE_DIR
+
+export SD35_QUANT=bf8              # optimized ~7.1s path (omit for bf16 baseline)
+NO_PROMPT=1 pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py \
+  -k "2x2cfg0sp0tp1 and yes_traced"
+```
+
+Performance (1024x1024, CFG on, bf8) scales as ~0.23s/step + ~0.7s fixed overhead (text encode + VAE decode):
+
+| Denoising steps | Total time |
+|-----------------|------------|
+| 10              | 3.1s       |
+| 20              | 5.3s       |
+| 28 (default)    | 7.1s       |
+
+To change the step count, edit `num_inference_steps` (the last field) in the parametrize at `models/tt_dit/tests/models/sd35/test_pipeline_sd35.py:30`:
+
+```python
+("large", 1024, 1024, 3.5, 28),   # change 28 -> 10 / 20 / etc.
+```
+
 
 ## Scalability
 
 SD3.5-Large has been implemented to support execution on 8-chip (LoudBox and QuietBox) as well as 32-chip (Galaxy) systems.
-The model has only been tested on Wormhole. Blackhole support is coming soon.
+On Wormhole it runs the 8-chip and 32-chip `cfg=2` configs above. On Blackhole it runs on a 4-chip QuietBox (2x2 mesh, `cfg=1`); see the Blackhole run section above.
 
 The DiT model can be parallelized on 3 axes:
 1. `cfg` (classifier-free guidance) - execute conditional and unconditional steps in parallel
