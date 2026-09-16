@@ -507,6 +507,10 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
         pytest.skip(f"MoE model too large for TP={tp}")
     if hf_config_check.hidden_size > 4096 and tp < 2:
         pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
+    # Same capacity gate test_full_model carries: hidden_size alone misses 12B at
+    # 1x1 and 31B at 1x2, which clear the check above and then die in the
+    # allocator partway through loading a decoder layer's MLP.
+    skip_if_weights_exceed_dram(mesh_device, args=hf_config_check, model_path=model_path)
 
     # ── HF reference: prefill, then one decode step ──────────────────────
     logger.info(f"Loading HF reference from {model_path}...")
