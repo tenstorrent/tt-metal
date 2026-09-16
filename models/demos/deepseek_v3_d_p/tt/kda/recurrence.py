@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_topology import ChronologicalTopology
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
@@ -24,7 +25,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDARecurrenceProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology
 
 
 def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
@@ -442,7 +442,7 @@ def _partition_prefix(
     *,
     groups_per_head: int,
     sequence_parallel_axis: int,
-    topology: OffsetTopology,
+    topology: ChronologicalTopology,
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     a, b = ttnn.experimental.kda.reduce_affine_transforms(
@@ -468,7 +468,7 @@ def _scan_sp_grouped_chunks(
     *,
     summary_group_chunks: int,
     sequence_parallel_axis: int,
-    topology: OffsetTopology,
+    topology: ChronologicalTopology,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
     grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
@@ -504,7 +504,7 @@ def _scan_split_sp_grouped_chunks(
     *,
     summary_group_chunks: int,
     sequence_parallel_axis: int,
-    topology: OffsetTopology,
+    topology: ChronologicalTopology,
     wrap_indicator: ttnn.Tensor,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
@@ -678,7 +678,7 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-        topology: OffsetTopology,
+        topology: ChronologicalTopology,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run SP recurrence from the layer's normalized chronological topology."""
         prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
@@ -702,7 +702,7 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-        topology: OffsetTopology,
+        topology: ChronologicalTopology,
         wrap_indicator: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run SP recurrence from the layer's normalized chronological topology."""

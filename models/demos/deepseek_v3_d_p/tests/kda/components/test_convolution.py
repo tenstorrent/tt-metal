@@ -10,9 +10,9 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_topology import _chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CHUNK_SIZE
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry, exchange_split_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.offset import _offset_topology
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
 
 pytestmark = [
@@ -81,7 +81,7 @@ def test_exchange_convolution_carry_preserves_causal_carries(
     qkv_tt = _to_device(qkv, mesh_device, tuple(qkv_dims))
     state_tt = _to_device(external, mesh_device, tuple(state_dims))
     actual_start = KDA_CHUNK_SIZE if split else 0
-    topology = _offset_topology(actual_start, sp_size, local_sequence)
+    topology = _chronological_topology(actual_start, sp_size, local_sequence)
     indicator = None
     if split:
         indicator_host = torch.zeros(sp_size, 1, 1)
