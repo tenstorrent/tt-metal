@@ -28,10 +28,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
-    if (op.activation == RoutedExpertActivation::SituGlu) {
+    if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {
         TT_FATAL(
             t.x.device()->arch() == tt::ARCH::BLACKHOLE,
-            "unified_routed_expert_ffn: SiTU-GLU is implemented for Blackhole only, got arch {}",
+            "unified_routed_expert_ffn: SiTU-GLU and clamped SiLU-GLU are implemented for Blackhole only, got arch {}",
             t.x.device()->arch());
     }
     // x layout/dtype depends on x_is_row_major:
@@ -313,13 +313,11 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                     t.gate_biases[e].dtype() == t.gate_biases[0].dtype(),
                 "all gate/up/down biases must share one dtype");
         }
-        // Bias fusion lives in the kernel's shared binary-activation phase and is
-        // activation-agnostic, so every fused binary activation supports it. Only the SiLU
-        // path has no bias branch.
+        // ClampedSiluGlu is excluded because DeepSeek-V4's experts are bias-free, not
+        // because the kernel lacks a bias branch.
         TT_FATAL(
             op.activation == RoutedExpertActivation::SwiGluOai || op.activation == RoutedExpertActivation::SituGlu,
-            "unified_routed_expert_moe: expert biases require a fused binary activation "
-            "(SwiGluOai or SituGlu); the SiLU path has no bias branch.");
+            "unified_routed_expert_moe: expert biases are enabled only for SwiGluOai and SituGlu.");
     }
 }
 

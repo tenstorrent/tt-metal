@@ -21,12 +21,14 @@ class KimiK27Config:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
-    # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
-    # token count on the 7168x2048 routed-expert shape (1.02-1.81x across 0-5120 tokens),
-    # so there is no crossover to place a threshold at. A bound this far above any
-    # per-expert region leaves the composite an empty band, which TtRoutedExpert reads as
-    # 'fused owns the layer' and drops the composite dispatch entirely.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 2**31 - 1
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross twice on the
+    # 7168x2048 routed-expert shape: the composite's cost is flat inside an M chunk while the
+    # fused op's rises with the count, so the composite wins 320-512, loses 576-768 where the
+    # tail per_core_M rounds 18 tile-rows up to 32, and wins outright from 896. 768 is the
+    # aggregate-optimal cut over that sawtooth (+0.13% against a per-count oracle, worst cell
+    # +21% at 512), not a single crossing -- there is none.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 768
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration

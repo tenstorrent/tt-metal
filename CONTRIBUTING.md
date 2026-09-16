@@ -166,6 +166,9 @@ Exceptions are rare and must be justified. When in doubt, split the PR.
 
 ### Code reviews
 
+For changes to the Metalium host API, follow the
+[API review policy and validation guide](scripts/validate_api/README.md).
+
 - A PR must be opened for any code change with the following criteria:
   - Be approved, by a maintaining team member and any codeowners whose modules
     are relevant for the PR.

@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <string_view>
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -258,6 +259,38 @@ bool can_use_output_bank_owned_schedule(
                geometry.num_input_pages, num_links, workers_per_direction, num_dram_banks);
 }
 
+CoreRangeSet resolve_available_worker_cores(
+    MeshDevice* mesh_device, const HighBwAllGatherParams& operation_attributes) {
+    TT_FATAL(
+        mesh_device->get_active_sub_device_manager_id() == operation_attributes.subdevice_manager_id,
+        "high_bw_all_gather active subdevice manager changed from {} to {} during operation dispatch",
+        operation_attributes.subdevice_manager_id,
+        mesh_device->get_active_sub_device_manager_id());
+    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto subdevice_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    TT_FATAL(
+        subdevice_cores.contains(operation_attributes.resolved_worker_core_grid),
+        "high_bw_all_gather resolved worker grid {} must be fully contained in TENSIX subdevice {} cores {}",
+        operation_attributes.resolved_worker_core_grid,
+        subdevice_id,
+        subdevice_cores);
+    return operation_attributes.resolved_worker_core_grid;
+}
+
+void validate_semaphore_core_coverage(
+    const tt::tt_metal::GlobalSemaphore& semaphore,
+    const CoreRangeSet& required_cores,
+    std::string_view semaphore_name) {
+    const auto semaphore_attributes = semaphore.attribute_values();
+    const auto& semaphore_cores = std::get<0>(semaphore_attributes);
+    TT_FATAL(
+        semaphore_cores.contains(required_cores),
+        "high_bw_all_gather {} cores {} must cover all selected reader/writer cores {}",
+        semaphore_name,
+        semaphore_cores,
+        required_cores);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -282,28 +315,31 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
-    }
+    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto available_cores = resolve_available_worker_cores(mesh_device, operation_attributes);
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Keep the startup-readiness and relay/completion semaphores in L1_SMALL when the device reserves it.
     const bool has_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
     auto sem_buffer_type = has_l1_small ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
+    const bool uses_external_semaphores = operation_attributes.ready_semaphore.has_value();
+    if (!uses_external_semaphores && sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
         log_warning(
             tt::LogOp,
             "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
             "allocations. Configure an L1_SMALL region to mitigate this.");
     }
-    auto ready_sem = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto data_valid_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
+    auto ready_sem = uses_external_semaphores ? *operation_attributes.ready_semaphore
+                                              : ttnn::global_semaphore::create_global_semaphore(
+                                                    mesh_device, available_cores, 0, sem_buffer_type);
+    auto data_valid_sem = uses_external_semaphores ? *operation_attributes.data_valid_semaphore
+                                                   : ttnn::global_semaphore::create_global_semaphore(
+                                                         mesh_device, available_cores, 0, sem_buffer_type);
+    if (!uses_external_semaphores) {
+        log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
+        log_debug(tt::LogOp, "All devices are ready, starting program execution");
+    }
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program =
@@ -345,8 +381,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology =
-        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
+    const auto topology = linearized_mesh_ring
+                              ? (operation_attributes.linearized_mesh_open_path ? tt::tt_fabric::Topology::Linear
+                                                                                : tt::tt_fabric::Topology::Ring)
+                              : operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
@@ -372,13 +410,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .mesh_rows = linearized_mesh_ring ? operation_attributes.mesh_rows : mesh_shape[0],
         .mesh_cols = linearized_mesh_ring ? operation_attributes.mesh_cols : mesh_shape[1],
         .ring_size = num_devices,
-        .num_links = operation_attributes.num_links,
-        .topology = topology,
-        .fabric_config = operation_attributes.fabric_config,
-        .axis_topology = operation_attributes.axis_topology,
         .route_plan_hash = operation_attributes.neighbor_route_plan_hash};
-    const auto mesh_ring_position =
-        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan);
+    const auto mesh_ring_position = ttnn::operations::ccl::common::get_mesh_ring_position(
+        input_tensor, sender_device_coord, mesh_ring_plan, topology);
     const uint32_t device_idx = mesh_ring_position.transport_rank;
     auto fwd_coord = mesh_ring_position.forward_coord;
     auto bwd_coord = mesh_ring_position.backward_coord;
@@ -494,12 +528,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     // A restricted sub-core grid may not fit the preferred count. Snap to a measured worker tier rather than
     // walking through unqualified intermediate counts; bank ownership is re-evaluated with the selected tier.
-    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_worker_cores =
-        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_worker_cores = available_worker_cores.intersection(operation_attributes.sub_core_grid.value());
-    }
+    const auto available_worker_cores = resolve_available_worker_cores(mesh_device, operation_attributes);
     const uint32_t preferred_workers_per_dir = workers_per_dir;
     const bool preferred_schedule_is_bank_owned = can_use_bank_owned(preferred_workers_per_dir);
     const auto worker_count_fits = [&](uint32_t count) {
@@ -593,6 +622,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     }
     const CoreRangeSet worker_core_range(worker_core_set);
     const CoreRangeSet mux_core_range(mux_core_set);
+    if (operation_attributes.ready_semaphore.has_value()) {
+        validate_semaphore_core_coverage(ready_sem, worker_core_range, "ready_semaphore");
+        validate_semaphore_core_coverage(data_valid_sem, worker_core_range, "data_valid_semaphore");
+    }
 
     // Fabric mux config
     constexpr uint8_t num_buffers_per_channel = 2;  // hardcoded since no observable impact on performance
@@ -1084,6 +1117,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     shared_variables_t shared_variables{
         .worker_cores = worker_cores,
+        .worker_core_range = worker_core_range,
         .reader_kernel_id = reader_kernel_id,
         .writer_kernel_id = writer_kernel_id,
         .ready_sem = ready_sem,
@@ -1123,6 +1157,21 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+        if (operation_attributes.ready_semaphore.has_value()) {
+            const bool pair_changed =
+                shared_vars.ready_sem.address() != operation_attributes.ready_semaphore->address() ||
+                shared_vars.data_valid_sem.address() != operation_attributes.data_valid_semaphore->address();
+            if (pair_changed) {
+                validate_semaphore_core_coverage(
+                    *operation_attributes.ready_semaphore, shared_vars.worker_core_range, "ready_semaphore");
+                validate_semaphore_core_coverage(
+                    *operation_attributes.data_valid_semaphore, shared_vars.worker_core_range, "data_valid_semaphore");
+                // Retain the current caller-owned handles for the lifetime of the cached workload and patch
+                // addresses below. External semaphore addresses are deliberately absent from the program hash.
+                shared_vars.ready_sem = *operation_attributes.ready_semaphore;
+                shared_vars.data_valid_sem = *operation_attributes.data_valid_semaphore;
+            }
+        }
         const uint32_t ready_addr = shared_vars.ready_sem.address();
         const uint32_t data_valid_addr = shared_vars.data_valid_sem.address();
 
