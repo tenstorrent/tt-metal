@@ -124,9 +124,13 @@ constexpr noc_att::Window LOCAL_WINDOW = TILE_WINDOW;
 constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector*/ 0, /*local_address*/ 0);
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
 
+// DRAM window selector per logical DRAM channel: boot rows 96..99 are the Mimir
+// d2d0 ingress nodes of channels 0..3 in that order, so channel N is selector N.
+constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {0, 1, 2, 3};
+
 // The declarative map: everything the shared resolver needs, as data.
-// Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile, Local). No logical DRAM or dispatch
-// binding exists in the checked-in descriptor, so those identities resolve invalid until descriptor-owned rows exist.
+// Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile, Local). No dispatch binding exists in
+// the checked-in descriptor yet, so dispatch identities resolve invalid until descriptor-owned rows exist.
 inline constexpr noc_att::MapData MAP{
     .windows = {{LOOPBACK_SCRATCH_WINDOW, WORKER_WINDOW, DRAM_WINDOW, TILE_WINDOW, LOCAL_WINDOW}},
     .local_window_class = noc_att::WindowClass::Local,  // boot-patched ep256 = self at selector 0
@@ -137,7 +141,7 @@ inline constexpr noc_att::MapData MAP{
     .worker_selectors = {ATT_WORKER_SELECTORS},
     .worker_endpoint_words = {ATT_WORKER_ENDPOINT_WORDS},
     .full_tile_endpoint_words = {ATT_FULL_TILE_ENDPOINT_WORDS},
-    .dram_selectors = {},
+    .dram_selectors = {ATT_LOGICAL_DRAM_SELECTORS},
     .dispatch_entries = {},
 };
 
