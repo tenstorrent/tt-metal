@@ -55,14 +55,20 @@ class Gemma4Precision:
     """Per-module dtype mapping. Construct via ``Gemma4Precision.load(...)``
     or directly with ``Gemma4Precision({...})``."""
 
-    def __init__(self, overrides=None):
+    def __init__(self, overrides=None, single_tile_dest_acc=True):
         self._overrides = dict(overrides) if overrides else {}
+        # Whether the m<=32 projections accumulate in fp32. Model-wide, not
+        # per-module or per-mesh, and deliberately not keyed on the weight
+        # dtype: 12B and E2B want opposite answers on the same all-bfp8
+        # weights. Measurements and rationale live with the decision, in
+        # ``single_tile_matmul_ckc``.
+        self.single_tile_dest_acc = bool(single_tile_dest_acc)
 
     def get(self, module_name, default=ttnn.bfloat16):
         return self._overrides.get(module_name, default)
 
     def __repr__(self):
-        return f"Gemma4Precision({self._overrides!r})"
+        return f"Gemma4Precision({self._overrides!r}, single_tile_dest_acc={self.single_tile_dest_acc})"
 
     @classmethod
     def load(cls, model_path, mesh_shape):
@@ -94,6 +100,14 @@ class Gemma4Precision:
         if not model_entry:
             return cls({})
 
+        # Model-wide (not per-mesh): read off the model entry, not the mesh
+        # sub-dict, because a mesh entry REPLACES "default" rather than merging.
+        dest_acc = model_entry.get("single_tile_dest_acc", True)
+        if not isinstance(dest_acc, bool):
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][single_tile_dest_acc]={dest_acc!r} — expected true/false"
+            )
+
         # Mesh-specific override wins over "default"
         raw = model_entry.get(mesh_key) or model_entry.get("default") or {}
         resolved = {}
@@ -106,4 +120,22 @@ class Gemma4Precision:
                     f"unknown dtype; expected one of {sorted(_DTYPE_BY_NAME)}"
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
-        return cls(resolved)
+        return cls(resolved, single_tile_dest_acc=dest_acc)
+
+
+_DEST_ACC_BY_MODEL = {}
+
+
+def default_single_tile_dest_acc():
+    """Per-process ``single_tile_dest_acc`` for callers without a model path.
+
+    Gemma4Model threads the resolved flag down explicitly, but the unit tests
+    build Gemma4Attention / SharedMLP straight from an HF config, so nothing
+    reaches them that way. They select the variant exactly as the rest of the
+    suite does -- HF_MODEL -- so fall back to that. An explicitly passed value
+    always wins over this.
+    """
+    key = os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH") or ""
+    if key not in _DEST_ACC_BY_MODEL:
+        _DEST_ACC_BY_MODEL[key] = Gemma4Precision.load(key, (1, 1)).single_tile_dest_acc if key else True
+    return _DEST_ACC_BY_MODEL[key]

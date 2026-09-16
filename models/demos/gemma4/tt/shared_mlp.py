@@ -77,7 +77,9 @@ class SharedMLP:
         dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         layer_idx=None,
+        single_tile_dest_acc=None,
     ):
+        self._single_tile_dest_acc = single_tile_dest_acc
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
@@ -249,7 +251,7 @@ class SharedMLP:
 
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(rows, k, n)
         if compute_kernel_config is None:
-            compute_kernel_config = single_tile_matmul_ckc(rows)
+            compute_kernel_config = single_tile_matmul_ckc(rows, self._single_tile_dest_acc)
         if out_memcfg is None and rows <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         if program_config is not None and hidden_states.is_sharded():
@@ -302,7 +304,7 @@ class SharedMLP:
             rows, int(hidden.shape[-1]), int(self.down_proj.shape[-1])
         )
         if compute_kernel_config is None:
-            compute_kernel_config = single_tile_matmul_ckc(rows)
+            compute_kernel_config = single_tile_matmul_ckc(rows, self._single_tile_dest_acc)
         if out_memcfg is None and rows <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         activation, owned = self._prepare_prefill_act(hidden, program_config)

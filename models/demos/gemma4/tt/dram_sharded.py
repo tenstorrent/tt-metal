@@ -158,7 +158,7 @@ def _prefill_hifi4_ckc():
 _SINGLE_TILE_FID_LOGGED = False
 
 
-def single_tile_matmul_ckc(m):
+def single_tile_matmul_ckc(m, dest_acc=None):
     """Fidelity/accumulation for the one-tile matmuls every tuned config declines.
 
     ``in_prefill_l1_matmul_band`` opens *above* one tile (``TILE_SIZE < m``), so
@@ -178,23 +178,57 @@ def single_tile_matmul_ckc(m):
       layers of QKV / O / gate-up / down projections this dominates the 12B
       full-model logit error, and it is the larger of the two terms.
 
-    Because the accumulator term is about the *sum*, not the operands, it pays
-    off regardless of how the weight is stored — BFP8_B weights gain as much as
-    bf16 ones (on a WH T3K at 1x4, all-bfp8: test_full_model 0.9591 -> 0.9803).
+    Both terms are worth taking, and the accumulator is the one that carries
+    12B. Do not drop ``_fp32`` here to make a small-model attention test pass --
+    it is load-bearing, and the cliff is not subtle. Measured on a real WH T3K,
+    real weights, ``test_full_model`` / ``test_full_model_decode`` (repeated,
+    bit-identical across runs):
+
+        12B 1x8 (gate 0.97)   hifi3_fp32 0.9736 / 0.9783   hifi3 0.8476 / 0.8806
+        12B 1x4 (gate 0.935)  hifi3_fp32 0.9837 / 0.9766   auto  0.8564
+
+    Removing dest-accumulation at *any* fidelity collapses 12B (hifi4 without it
+    scores 0.9004 / 0.9524 at 1x8). That is why ``_fp32`` stays on by default.
+
+    It is not free everywhere, though, and that is why this is per model rather
+    than global. Once dest-acc stopped being dtype-gated it reached the all-bfp8
+    attention projections, and E2B carries no dtype override, so every
+    projection there is bfp8. On E2B
+    ``test_attention_paged_decode_via_harness[full-1x1]`` every dest-acc variant
+    sits ~0.005 below every non-dest-acc one, independent of fidelity:
+
+        hifi2_fp32 0.9783   hifi3_fp32 0.9793   hifi4_fp32 0.9803
+        ttnn auto  0.9863   hifi3      0.9882   hifi4      0.9896
+
+    E2B is better off without it end-to-end too (test_full_model 0.9964 vs
+    0.9875), so it opts out via ``single_tile_dest_acc`` in
+    precision_overrides.json. No PCC threshold moved for this -- E4B's identical
+    test goes the other way (0.98523 -> 0.98812), so the metric is not
+    degrading in general.
 
     HiFi3 rather than HiFi4 is deliberate: HiFi4 *together with* fp32
     dest-accumulation trips Wormhole hardware bug #38306, which is what produced
     the garbage decode output behind the "do not re-enable" note on Linear
-    fidelity in compute_config.py. The pairing is also what the data picks — at
-    1x2, hifi3_fp32 scored 0.9920, hifi4_fp32 0.9813 and hifi2_fp32 0.9776.
+    fidelity in compute_config.py. HiFi3 also keeps the FPU at three passes
+    instead of four on matmuls that run four times per layer per token.
 
-    Override with ``GEMMA4_SINGLE_TILE_FIDELITY``: ``hifi2`` / ``hifi3`` /
-    ``hifi4``, each optionally suffixed ``_fp32`` to add fp32 dest-accumulation,
-    or ``auto`` (return None and let ttnn decide).
+    ``dest_acc`` carries the per-model decision (None = take the default).
+    Override everything with ``GEMMA4_SINGLE_TILE_FIDELITY``: ``hifi2`` /
+    ``hifi3`` / ``hifi4``, each optionally suffixed ``_fp32`` to add fp32
+    dest-accumulation, or ``auto`` (return None and let ttnn decide).
     """
     if int(m) > TILE_SIZE:
         return None
-    mode = os.environ.get("GEMMA4_SINGLE_TILE_FIDELITY", "hifi3_fp32").strip().lower()
+    # ``dest_acc=False`` keeps the fidelity raise and drops only the fp32
+    # accumulation, for the models measured to be hurt by it (see
+    # Gemma4Precision.single_tile_dest_acc). The env var still wins, so sweeps
+    # can force any arm regardless of the model's setting.
+    if dest_acc is None:
+        from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
+
+        dest_acc = default_single_tile_dest_acc()
+    default_mode = "hifi3_fp32" if dest_acc else "hifi3"
+    mode = os.environ.get("GEMMA4_SINGLE_TILE_FIDELITY", default_mode).strip().lower()
     global _SINGLE_TILE_FID_LOGGED
     if not _SINGLE_TILE_FID_LOGGED:
         logger.info(f"Gemma4 single-tile matmul fidelity={mode}")
@@ -325,7 +359,7 @@ def decode_progcfg(m, k, n, dtype=None):
     )
 
 
-def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
+def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE, dest_acc=None):
     """Tuned narrow-N decode config; wide shapes retain ttnn auto."""
     if k % TILE_SIZE or n % TILE_SIZE or m > TILE_SIZE:
         return None
@@ -353,11 +387,23 @@ def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
         fused_activation=None,
         mcast_in0=True,
     )
+    # HiFi2 is this config's own measured pairing and is kept -- raising it to
+    # HiFi3 costs 12B decode 0.9783 -> 0.9760 and an extra FPU pass. What it must
+    # NOT do is hardcode the accumulator: this config only fires at tp>1, so a
+    # fixed fp32_dest_acc_en overrode the per-model policy on exactly the meshes
+    # 1x1 could not catch. That cost E2B's via-harness 0.9884 -> 0.9802 at
+    # 1x2/1x8 while 1x1, where this config does not fire, was untouched.
+    if dest_acc is None:
+        from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
+
+        dest_acc = default_single_tile_dest_acc()
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=bool(dest_acc),
+        # Stays True regardless: it is part of this config's measured pairing,
+        # and tying it to dest_acc moved 12B decode 0.9783 -> 0.9772.
         packer_l1_acc=True,
     )
     return program_config, compute_kernel_config

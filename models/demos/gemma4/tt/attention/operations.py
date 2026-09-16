@@ -158,7 +158,7 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
             rows, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
         )
         if compute_kernel_config is None:
-            compute_kernel_config = single_tile_matmul_ckc(rows)
+            compute_kernel_config = single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
     activation, owned_activation = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
     output = linear_l1_safe(
         activation,
@@ -698,7 +698,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
         return out
 
     rows = matmul_rows(tensor)
-    compute_kernel_config = single_tile_matmul_ckc(rows)
+    compute_kernel_config = single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
     if should_prefill_long_2d(rows):
         out = prefill_linear_above_cutoff(tensor, weights.o_proj, out_memory_config=memory_config)
         tensor.deallocate(True)

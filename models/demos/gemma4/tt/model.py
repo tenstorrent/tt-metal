@@ -312,16 +312,20 @@ class Gemma4Model:
         # are then threaded explicitly through DecoderLayer / used directly
         # for embedding + lm_head, so each weight loads at the right precision
         # and lands in a cache file tagged with that dtype.
-        from models.demos.gemma4.tt.precision import Gemma4Precision
+        from models.demos.gemma4.tt.precision import Gemma4Precision, default_single_tile_dest_acc
 
         if precision is None:
-            precision = Gemma4Precision()
+            # A caller that did not resolve overrides still gets the variant's
+            # dest-accumulation policy; hardcoding True here would silently
+            # override it for the models that opt out.
+            precision = Gemma4Precision(single_tile_dest_acc=default_single_tile_dest_acc())
         shared_mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
         experts_dtype = precision.get("experts", dtype)
         router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
+        single_tile_dest_acc = precision.single_tile_dest_acc
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
@@ -481,6 +485,7 @@ class Gemma4Model:
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+                single_tile_dest_acc=single_tile_dest_acc,
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache

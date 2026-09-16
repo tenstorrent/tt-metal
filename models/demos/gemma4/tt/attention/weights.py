@@ -42,6 +42,8 @@ class AttentionWeights:
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
     qkv_decode_config: object = None
+    # Per-model fp32 dest-accumulation policy for the m<=32 projections.
+    single_tile_dest_acc: object = None
 
 
 def load_attention_weights(
@@ -51,6 +53,7 @@ def load_attention_weights(
     mesh_config: MeshConfig,
     weight_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
+    single_tile_dest_acc=None,
 ) -> AttentionWeights:
     """
     Load and fuse attention weights with tensor parallelism.
@@ -219,7 +222,9 @@ def load_attention_weights(
     )
 
     qkv_decode_config = (
-        None if isinstance(wqkv, DramShardedLinear) else decode_1d_matmul_config(mesh_device, hidden_size, qkv_n)
+        None
+        if isinstance(wqkv, DramShardedLinear)
+        else decode_1d_matmul_config(mesh_device, hidden_size, qkv_n, dest_acc=single_tile_dest_acc)
     )
 
     return AttentionWeights(
@@ -230,4 +235,5 @@ def load_attention_weights(
         is_global=is_global,
         kv_replicated=kv_replicated,
         qkv_decode_config=qkv_decode_config,
+        single_tile_dest_acc=single_tile_dest_acc,
     )

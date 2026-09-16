@@ -1,6 +1,6 @@
 {
   "_schema": {
-    "description": "Per-module dtype overrides keyed by model variant and mesh shape. Modules without an override use the model-wide default dtype (bfloat16). The model variant key is the basename of the model path; mesh shape is the worker grid (rows x cols, e.g. 1x2 / 1x8). Within a model, lookup tries the exact mesh-shape key first, then 'default'. Module keys: shared_mlp, attention, experts, router, lm_head, embedding. Allowed dtype values: bf16, bfp8, fp32. A mesh-shape entry REPLACES 'default' rather than merging into it, so it must list every module it wants overridden. 'embedding' cannot be bfp8: the embedding weight is stored ROW_MAJOR and BFLOAT8_B requires TILE.",
+    "description": "Per-module dtype overrides keyed by model variant and mesh shape. Modules without an override use the model-wide default dtype (bfloat16). The model variant key is the basename of the model path; mesh shape is the worker grid (rows x cols, e.g. 1x2 / 1x8). Within a model, lookup tries the exact mesh-shape key first, then 'default'. Module keys: shared_mlp, attention, experts, router, lm_head, embedding. Allowed dtype values: bf16, bfp8, fp32. Besides the module keys, a model entry may set 'single_tile_dest_acc' (bool, default true) -- whether the m<=32 projections accumulate in fp32 (single_tile_matmul_ckc). It sits on the model entry, not a mesh entry, because it is model-wide. A mesh-shape entry REPLACES 'default' rather than merging into it, so it must list every module it wants overridden. 'embedding' cannot be bfp8: the embedding weight is stored ROW_MAJOR and BFLOAT8_B requires TILE.",
     "example": {
       "gemma-4-31B-it": {
         "default": {"shared_mlp": "bfp8"},
@@ -10,6 +10,10 @@
   },
   "gemma-4-31B-it": {
     "default": {"shared_mlp": "bfp8", "attention": "bfp8", "lm_head": "bfp8"}
+  },
+  "gemma-4-E2B-it": {
+    "_comment_single_tile": "No dtype overrides -- E2B runs all-bfp8 on the code default. The one entry here turns the m<=32 fp32 dest-accumulation OFF, which is the opposite of every other variant. Measured on a real WH T3K, real weights: test_full_model at 1x1 is 0.9964 without it and 0.9875 with it, and test_attention_paged_decode_via_harness[full-1x1] is 0.9885 without and 0.9814 with (against a 0.986 gate pinned at its own measured value). 12B wants the opposite on the SAME all-bfp8 weights -- 1x8 full_model 0.9736 with, 0.8476 without -- so the weight dtype cannot decide this and it is set per model. Raised fidelity (HiFi3) is kept either way; only the accumulator is dropped.",
+    "single_tile_dest_acc": false
   },
   "gemma-4-12B-it": {
     "_comment_wh_bf16": "Measured on a real WH T3K; the figures live in the commit that set each entry. single_tile_matmul_ckc raises the m<=32 projections to HiFi3 + fp32 dest-acc for every weight dtype, so these overrides stack on top of that rather than enabling it. Per-module contribution was established by walking all 8 (shared_mlp, attention, lm_head) combinations at 1x8: attention dominates, shared_mlp is secondary and not needed once attention is bf16, and lm_head is indistinguishable from noise despite being the 262144-vocab projection and the largest single weight read per decode step -- do not promote lm_head expecting accuracy. 1x8 therefore takes attention only. 1x2 has only 2x12 GB and cannot also take attention in bf16 (it does not allocate), so it takes shared_mlp + lm_head. 1x4 stays all-bfp8 and still gains from the accumulator alone. 'embedding' can never be bfp8 -- it is stored ROW_MAJOR and BFLOAT8_B requires TILE.",
