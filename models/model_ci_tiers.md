@@ -275,8 +275,8 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The QB2 Tier 3 total is **102 minutes**: 12 for Llama3.1-8B
-   and 90 for Gemma4 31B, including setup, model tests, serving, and reporting.
+   the budget. The QB2 Tier 3 total is **57 minutes**: 12 for Llama3.1-8B
+   and 45 for Gemma4 31B, including setup, model tests, serving, and reporting.
    The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
    passed all 24 model tests and completed 54 of 56 serving requests before its
    timeout; the budget includes room for completion and runner variance.

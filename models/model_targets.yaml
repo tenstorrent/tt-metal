@@ -13,9 +13,10 @@ targets:
           - status: active
             perf: {}
             accuracy:
-              # Weekly CI: first 10/198 Diamond questions, 32K output budget.
-              gpqa: 80
-              gpqa_tolerance: 0
+              # First 10/198 Diamond questions, 32K output budget; minimum 80%.
+              # The validator uses symmetric bands: 100 +/- 20% gives that floor.
+              gpqa: 100
+              gpqa_tolerance: 0.2
             owner_id: U03HY7MK4BT
             team: models
   llama3.1-8b-qb2:

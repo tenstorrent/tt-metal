@@ -84,6 +84,8 @@
     results="$PWD/generated/test_reports/gemma4_31b_qb2"
     export HF_HOME="${HF_HOME:-/mnt/MLPerf/huggingface}" MESH_DEVICE=P300x2
     export EXTRA_MODELS_DIR="$PWD/models/demos" TT_METAL_CACHE="$work/tt-cache"
+    # CI mounts the shared model cache read-only; evaluator caches must be local.
+    export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
     # tt-metal#56613: large mmap-backed weights can hang the pinned DMA path.
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
     unset HF_MODEL
@@ -163,8 +165,8 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      # Provisional until the complete command has been timed on QB2.
-      timeout: 90
+      # Complete reserved-QB2 recipe: 20m08s; allow cold-cache/runner variance.
+      timeout: 45
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models

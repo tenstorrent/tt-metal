@@ -879,6 +879,7 @@ def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
 @pytest.mark.parametrize("metric", ["ifeval", "gpqa"])
 def test_task_accuracy_and_performance_from_the_same_run(tmp_path, metric):
     _vision_scaffold(tmp_path, "task-demo")
+    accuracy_target, tolerance = (100, 0.2) if metric == "gpqa" else (80, 0.05)
     target = {
         "version": 1,
         "targets": {
@@ -889,7 +890,7 @@ def test_task_accuracy_and_performance_from_the_same_run(tmp_path, metric):
                             {
                                 "batch_size": 1,
                                 "status": "active",
-                                "accuracy": {metric: 80, f"{metric}_tolerance": 0.05},
+                                "accuracy": {metric: accuracy_target, f"{metric}_tolerance": tolerance},
                                 "perf": {"decode_t/s/u": 120, "decode_t/s/u_tolerance": 0.15},
                             }
                         ]
@@ -900,7 +901,10 @@ def test_task_accuracy_and_performance_from_the_same_run(tmp_path, metric):
     }
     (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(target))
     path = tmp_path / "generated/benchmark_data/complete_run_task.json"
-    for accuracy, throughput, expected_code in [(80, 120, 0), (60, 120, 1), (80, 60, 1)]:
+    cases = [(80, 120, 0), (60, 120, 1), (80, 60, 1)]
+    if metric == "gpqa":
+        cases += [(90, 120, 0), (100, 120, 0), (79, 120, 1)]
+    for accuracy, throughput, expected_code in cases:
         _write_complete_run(
             path,
             model="task-demo",

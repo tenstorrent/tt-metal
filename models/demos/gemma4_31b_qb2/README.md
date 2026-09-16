@@ -49,3 +49,20 @@ The weekly Tier 3 QB2 entry in [`agentic_research_model_tests.yaml`](../../../te
 The scorer uses Gemma4 chat formatting with thinking enabled, temperature 1, top-p 0.95, top-k 20, and seed 42. It scores final answers from the same streamed responses that it times. Inputs, choice permutations, dataset and harness revisions, outputs, usage counts, and timings are saved with the result.
 
 Performance coverage uses 128- and 1,024-token inputs, 128-token outputs, and concurrency 1 and 32. Each shape has one warmup burst and two measured bursts, greedy sampling, and ignored EOS. Client TTFT includes queueing. Per-user decode throughput excludes the first token; aggregate throughput divides all generated tokens by elapsed burst time. These serving measurements differ from kernel-only or native-demo timings.
+
+## Measured serving
+
+Measured on 16 September 2026 with one QB2, the same checkpoint revision, the same plugin, and identical tokenized prompts. Both servers allow 32 requests. Each row uses one warmup burst and two measured bursts, with 128 output tokens and ignored EOS. Values are **this implementation / existing Gemma4 implementation**.
+
+| Input tokens | Concurrency | TTFT (ms) | Decode tokens/s/user | Aggregate output tokens/s |
+|---:|---:|---:|---:|---:|
+| 128 | 1 | 90.3 / 121.1 | 37.90 / 26.43 | 37.19 / 25.98 |
+| 128 | 32 | 1936.3 / 3452.9 | 35.88 / 18.81 | 746.98 / 400.75 |
+| 1024 | 1 | 180.2 / 301.8 | 29.76 / 25.61 | 28.78 / 24.33 |
+| 1024 | 32 | 4594.7 / 5294.4 | 26.25 / 10.66 | 433.89 / 230.92 |
+
+This compares each implementation’s serving configuration. The existing family implementation uses its default BF8 attention/MLP weights, BF16 KV, BF16 LM head, line fabric, and a 49,152-token context pool. This implementation uses the precision policy above, ring fabric, and 262,144-token context capacity. The comparison does not isolate precision from implementation changes. Both use asynchronous scheduling; the existing adapter uses `decode_only` device sampling and internal chunked prefill, while this adapter uses device sampling for prefill and decode.
+
+The selected experiment source scored **167/198 (84.34%) on full GPQA Diamond**, compared with the [recorded HF/vLLM reference of 83.33%](https://github.com/tenstorrent/tt-inference-server/issues/4176#issuecomment-4715337652). The reference checkpoint revision was not recorded. The maintained source subsequently scored **9/10 on the 10/198 CI subset**, with the weekly protocol above; this is a separate regression result.
+
+The complete reserved-QB2 recipe took **20m08s**, including installation, 15 model tests, 37 API tests, GPQA, performance and cleanup. Its CI allowance is 45 minutes. The [model PR](https://github.com/tenstorrent/tt-metal/pull/56765) and [companion plugin PR](https://github.com/tenstorrent/vllm-tt-plugin/pull/132) track validation and merge order.
