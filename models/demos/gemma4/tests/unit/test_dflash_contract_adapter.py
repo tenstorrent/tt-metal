@@ -44,6 +44,7 @@ def _model(script, active=True):
     m._spec_active = active
     m._spec_first_step = False
     m._spec_pending = None  # prefill already armed and bootstrapped
+    m._spec_width_set = False  # per-test: the width-selection test turns it on
     m._ct_posterior = None
     m._ct_drafts = None
     return m
@@ -64,6 +65,14 @@ def _bootstrap_step(m):
 
 def _counts(n):
     return torch.tensor([n], dtype=torch.int32)
+
+
+def _positions(rows, live=1, start=100):
+    """Committed positions as the runner builds them: padded rows carry -1."""
+    p = torch.full((rows, 6), -1, dtype=torch.int32)
+    for r in range(live):
+        p[r] = torch.arange(start, start + 6, dtype=torch.int32)
+    return p
 
 
 # ── declarations ────────────────────────────────────────────────────────────
@@ -222,7 +231,7 @@ def test_propose_returns_one_row_per_verified_row():
     m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
     committed = torch.zeros((4, 6), dtype=torch.int32)  # wire padded to 4 rows
     committed[0, 0] = 11
-    out = m.propose_draft_tokens(5, committed, None, torch.tensor([1, 1, 1, 1], dtype=torch.int32))
+    out = m.propose_draft_tokens(5, committed, _positions(4, live=1), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
     assert tuple(out.draft_token_ids.shape) == (4, 5)
     assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
     assert int(out.draft_token_ids[1:].sum()) == 0  # padding rows carry no draft
@@ -232,15 +241,196 @@ def test_verify_returns_one_row_per_block_row():
     m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
     committed = torch.zeros((4, 6), dtype=torch.int32)
     committed[0, 0] = 11
-    m.propose_draft_tokens(5, committed, None, torch.tensor([1, 1, 1, 1], dtype=torch.int32))
+    m.propose_draft_tokens(5, committed, _positions(4, live=1), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
     block = torch.zeros((4, 6), dtype=torch.int32)
     block[0] = torch.tensor([11, 21, 22, 23, 24, 25], dtype=torch.int32)
     out = m.decode_forward(
         tokens=block,
-        start_pos=torch.zeros((4, 6), dtype=torch.int32),
+        # One live row and three of the runner's padding rows: the block's row
+        # dimension is the wire bucket, not the number of requests.
+        start_pos=_positions(4, live=1),
         spec_mode="argmax_ids",
         num_valid_drafts=torch.tensor([5, 0, 0, 0], dtype=torch.int32),
         accepted_counts=torch.tensor([1, 1, 1, 1], dtype=torch.int32),
     )
     assert tuple(out.argmax_ids.shape) == (4, 6)
     assert out.argmax_ids[0].tolist() == [31, 32, 33, 34, 35, 36]
+
+
+def test_propose_selects_the_width_for_the_new_position():
+    """The block loop calls select_width every iteration because the position
+    moves; the contract rail must too, or a session stays on the width its
+    PROMPT selected and eventually replays a trace whose mask and page table
+    stop short of the live top."""
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    m._spec_width_set = True
+    seen = []
+    m._spec_decoder.select_width = lambda pos: (seen.append(pos), 4096)[1]
+    m._spec_decoder.start = 777
+    m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
+    assert seen == [777]
+
+
+# ── adaptive on the contract rail: solo speculates, batched does not ────────
+
+
+def test_a_batched_step_proposes_nothing_and_drops_the_session():
+    """The fused verify packs its candidate positions into ONE batch row, so it
+    cannot speculate for several requests. The contract's own "no drafts this
+    step" (a zero-width proposal) is how this rail gives up speculation, with
+    no scheduler reservation involved -- and the session goes too, because its
+    taps belong to one request's prompt."""
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    released = {}
+    m._spec_release_decoder = lambda *a, **k: released.setdefault("yes", True)
+    committed = torch.zeros((4, 6), dtype=torch.int32)
+    out = m.propose_draft_tokens(5, committed, _positions(4, live=3), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
+    assert tuple(out.draft_token_ids.shape) == (4, 0)  # zero width == no drafts
+    assert released == {"yes": True}
+    assert m._spec_decoder.replays == 0  # nothing drafted
+
+
+def test_a_padded_solo_step_still_speculates():
+    """The runner pads a decode batch to a wire bucket; counting rows instead
+    of live requests would hand the drafter's own request a plain decode and
+    give up speculation entirely."""
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    committed = torch.zeros((8, 6), dtype=torch.int32)
+    committed[0, 0] = 11
+    out = m.propose_draft_tokens(5, committed, _positions(8, live=1), torch.tensor([1] * 8, dtype=torch.int32))
+    assert tuple(out.draft_token_ids.shape) == (8, 5)
+    assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
+    assert m._spec_decoder.replays == 1
+
+
+def test_live_row_counting_uses_the_padding_sentinel():
+    from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM as C
+
+    assert C._contract_live_rows(_positions(8, live=1), 8) == 1
+    assert C._contract_live_rows(_positions(8, live=5), 8) == 5
+    assert C._contract_live_rows(_positions(4, live=4), 4) == 4
+    # unknown positions: assume batched rather than speculate wrongly
+    assert C._contract_live_rows(None, 4) == 4
+
+
+# ── batched steps: the block is not the batch ───────────────────────────────
+
+
+def _stub_plain_decode(monkeypatch, seen):
+    """Stand in for the baseline decode, recording what it was handed.
+
+    The real one reads its batch as ``tokens.reshape(-1).shape[0]`` and refuses
+    a batch wider than the token feedback width, so what this records IS the
+    thing that broke on device: a 32-row contract block arriving as 192 rows.
+    """
+    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        tokens = kwargs.get("tokens", args[0] if args else None)
+        pos = kwargs.get("start_pos", args[1] if len(args) > 1 else None)
+        seen["tokens"] = tokens
+        seen["start_pos"] = pos
+        seen["batch"] = int(tokens.reshape(-1).shape[0])
+        return "tt_out"
+
+    def read_decode_output(self, tt_out, async_read=False, *_, **__):
+        return torch.arange(500, 500 + seen["batch"], dtype=torch.int32)
+
+    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", decode_forward)
+    monkeypatch.setattr(Gemma4ForCausalLM, "read_decode_output", read_decode_output)
+
+
+def test_a_batched_step_decodes_the_committed_column_not_the_whole_block(monkeypatch):
+    seen = {}
+    _stub_plain_decode(monkeypatch, seen)
+    m = _model([], active=False)
+    rows = 32
+    block = torch.arange(rows * 6, dtype=torch.int32).reshape(rows, 6)
+    out = m.decode_forward(
+        tokens=block,
+        start_pos=_positions(rows, live=rows),
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.zeros(rows, dtype=torch.int32),
+        accepted_counts=torch.ones(rows, dtype=torch.int32),
+    )
+    # One row per request, NOT one per candidate column.
+    assert seen["batch"] == rows
+    assert seen["tokens"].reshape(-1).tolist() == block[:, 0].tolist()
+    assert seen["start_pos"].reshape(-1).tolist() == [100] * rows
+    # Column 0 carries each row's argmax; the draft columns stay unanswered.
+    assert tuple(out.argmax_ids.shape) == (rows, 6)
+    assert out.argmax_ids[:, 0].tolist() == list(range(500, 500 + rows))
+
+
+def test_a_batched_step_keeps_the_padding_sentinel_on_padded_rows(monkeypatch):
+    seen = {}
+    _stub_plain_decode(monkeypatch, seen)
+    m = _model([], active=False)
+    block = torch.arange(4 * 6, dtype=torch.int32).reshape(4, 6)
+    m.decode_forward(
+        tokens=block,
+        start_pos=_positions(4, live=2),
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.zeros(4, dtype=torch.int32),
+        accepted_counts=torch.ones(4, dtype=torch.int32),
+    )
+    # The baseline decode gets exactly what it gets on any other padded step.
+    assert seen["start_pos"].reshape(-1).tolist() == [100, 100, -1, -1]
+
+
+def test_a_straddle_step_reports_the_posterior_for_the_drafts_it_proposed(monkeypatch):
+    """A peer joined between our proposal and its verify.
+
+    The device has already evaluated THOSE drafts, so the kept posterior is the
+    honest answer for row 0. Answering column 0 alone would let the walk accept
+    draft 0 -- it may well be right -- and then read its bonus out of a column
+    nothing answered.
+    """
+    seen = {}
+    _stub_plain_decode(monkeypatch, seen)
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    committed = torch.zeros((1, 6), dtype=torch.int32)
+    committed[0, 0] = 11
+    m.propose_draft_tokens(5, committed, _positions(1, live=1), _counts(1))
+    block = torch.zeros((2, 6), dtype=torch.int32)
+    block[0] = torch.tensor([11, 21, 22, 23, 24, 25], dtype=torch.int32)
+    out = m.decode_forward(
+        tokens=block,
+        start_pos=_positions(2, live=2),
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.tensor([5, 0], dtype=torch.int32),
+        accepted_counts=torch.tensor([1, 1], dtype=torch.int32),
+    )
+    assert out.argmax_ids[0].tolist() == [31, 32, 33, 34, 35, 36]
+    assert int(out.argmax_ids[1, 0]) == 501
+    # The next proposal is the batched one that drops the session, so nothing
+    # here may leave a posterior behind for it to answer with.
+    assert m._ct_posterior is None and m._ct_drafts is None
+
+
+def test_a_straddle_step_ignores_a_posterior_for_other_drafts(monkeypatch):
+    seen = {}
+    _stub_plain_decode(monkeypatch, seen)
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    committed = torch.zeros((1, 6), dtype=torch.int32)
+    committed[0, 0] = 11
+    m.propose_draft_tokens(5, committed, _positions(1, live=1), _counts(1))
+    block = torch.zeros((2, 6), dtype=torch.int32)
+    block[0] = torch.tensor([11, 99, 98, 97, 96, 95], dtype=torch.int32)  # not ours
+    out = m.decode_forward(
+        tokens=block,
+        start_pos=_positions(2, live=2),
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.tensor([5, 0], dtype=torch.int32),
+        accepted_counts=torch.tensor([1, 1], dtype=torch.int32),
+    )
+    # Column 0 from the plain decode, and no posterior for tokens the device
+    # never evaluated.
+    assert int(out.argmax_ids[0, 0]) == 500
+    assert out.argmax_ids[0, 1:].tolist() != [32, 33, 34, 35, 36]
+
+
+def test_column_zero_narrowing_leaves_an_already_narrow_step_alone():
+    args, kwargs = CT._contract_col0((), {"tokens": torch.tensor([7, 8]), "start_pos": torch.tensor([1, 2])}, 2)
+    assert kwargs["tokens"].tolist() == [7, 8]
+    assert kwargs["start_pos"].tolist() == [1, 2]
