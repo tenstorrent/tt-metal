@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr auto tile_width = get_arg(args::tile_width);
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
     const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
     // Whether to apply Bessel's correction (divide by N-1 instead of N).
     constexpr bool correction = get_arg(args::correction) != 0;

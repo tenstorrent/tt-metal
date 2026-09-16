@@ -121,10 +121,6 @@ Tensor reduce(
     bool negate,
     bool fast_and_approximate_mode,
     const std::optional<tt::tt_metal::Layout>& output_layout) {
-    // Scalar ownership: exactly one ttnn::prim::reduce call below applies the user scalar. That call
-    // gets `scaler_mode`; every earlier step of a decomposed reduce gets ScalerMode::None with
-    // scaler == post_mul_scaler == 1.0f.
-    //
     // Only ttnn::sum / ttnn::mean expose output_layout and convert when the device path can't emit it.
     // Checked before the MIN branch, which would drop the request silently.
     TT_FATAL(
@@ -248,11 +244,7 @@ Tensor reduce(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 
-    // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
-    // W-then-H. Fast-mode Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
-    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to Int32 MAX/SUM/MIN.
-    // The accurate fp32 SFPU path likewise has no SFPU REDUCE_SCALAR, so it decomposes HW into
-    // W-then-H regardless of tile count; every op does so exactly (sum of sums, max of maxes, ...).
+    // These reductions have no SFPU REDUCE_SCALAR primitive, so HW must decompose into W-then-H.
     const bool use_two_step_hw_sfpu_reduce =
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
         ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
@@ -261,12 +253,10 @@ Tensor reduce(
          use_sfpu_fp32_reduce);
     const bool decomposes_hw = is_multicore_hw || use_two_step_hw_sfpu_reduce;
 
-    // A decomposed HW reduce applies the scalar on its H half, so the mode follows that dim.
-    // Int32 post-mul rounds through fp32 and is lossy for |result| > 2^24; mean applies its 1/N
-    // there rather than through the scaler CB.
-    const auto scaler_dim = decomposes_hw ? tt::tt_metal::ReduceOpDim::H : reduce_dim;
+    // A decomposed HW reduce applies the scalar on its H half, so derive the mode for H.
+    const auto scalar_reduce_dim = decomposes_hw ? tt::tt_metal::ReduceOpDim::H : reduce_dim;
     const auto scaler_mode =
-        ttnn::prim::derive_scaler_mode(reduce_math, prepared_input.dtype(), scaler_dim, use_sfpu_fp32_reduce);
+        ttnn::prim::derive_scaler_mode(reduce_math, prepared_input.dtype(), scalar_reduce_dim, use_sfpu_fp32_reduce);
     const bool use_post_mul = scaler_mode == ttnn::prim::ScalerMode::PostMul;
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
@@ -451,6 +441,7 @@ Tensor reduce(
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/1.0f,
+                /*scaler_mode=*/ttnn::prim::ScalerMode::None,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/false,
                 /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
@@ -461,8 +452,9 @@ Tensor reduce(
             // Scaler vs post-mul follows the partial dtype: SFPU ignores the scaler CB.
             const bool s2_use_sfpu = !tt::tt_metal::is_block_float(input_tensor.dtype()) && arch != tt::ARCH::QUASAR &&
                                      config.fp32_dest_acc_en;
-            const bool s2_post_mul =
-                ttnn::prim::requires_post_mul(tt::tt_metal::ReduceOpMath::SUM, partials.dtype(), scaler, s2_use_sfpu);
+            const auto s2_scaler_mode = ttnn::prim::derive_scaler_mode(
+                tt::tt_metal::ReduceOpMath::SUM, partials.dtype(), tt::tt_metal::ReduceOpDim::H, s2_use_sfpu);
+            const bool s2_post_mul = s2_scaler_mode == ttnn::prim::ScalerMode::PostMul;
             const float s2_scaler = s2_post_mul ? 1.0f : scaler;
             const float s2_mul = s2_post_mul ? scaler : 1.0f;
 
@@ -478,6 +470,7 @@ Tensor reduce(
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/s2_mul,
+                s2_scaler_mode,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
                 /*use_sfpu_reduce=*/s2_use_sfpu,
