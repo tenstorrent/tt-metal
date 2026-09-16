@@ -772,6 +772,124 @@ def _restore_layer_state(gdn, mesh_device, snap):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+def test_gdn_conv_fir_vs_native_masked(mesh_device, reset_seeds, ensure_gc, request):
+    """Do the MAC FIR and native ttnn.conv1d agree on a MASKED bucket?
+
+    WHY THIS EXISTS. forward_prefill picks native ttnn.conv1d only when the chunk is UNMASKED
+    (prefill_uses_native_conv1d -> _normalize_valid_len(...) is None); a masked bucket falls back to
+    the MAC FIR. MTP verify always masks (K+1 candidates padded to a 128-row bucket), so all 48 GDN
+    layers take the FIR on every verify -- and the FIR reads K shifted windows at offsets 1..K-1,
+    which are never tile-aligned, so each tap pays a whole-tensor untilize/tilize. MEASURED at
+    bucket 128 on T3K/27B: 3 x (untilize 29us + slice 6us + tilize 30us + addcmul 13us) plus the
+    x_padded prologue = ~312us of an 871us GDN layer, 36%, on every one of those 48 layers.
+
+    The stated reason for the fallback is the CARRY ("masked buckets keep the MAC FIR: valid_len
+    new_state differs") -- a masked bucket's register tail sits at valid_len, not T. That part is
+    recoverable: _shift_register_tail(qkv, valid_len) selects exactly the rows the FIR's one-hot
+    matmul selects. Swapping the conv on that basis alone was tried and REVERTED: the carry matched
+    but the model's greedy trajectory moved, so the OUTPUT differs too, somewhere the causality
+    argument (right-side padding, real positions see only real inputs) does not cover.
+
+    This test makes that difference observable instead of inferred. It runs both conv paths on the
+    same qkv and carry at verify's geometry and reports output PCC over the REAL rows plus the carry
+    PCC, separately -- so the next attempt can see which one moves and by how much.
+
+    It asserts only the weak, structural claim (both paths run and produce finite, same-shaped
+    output). The PCCs are logged, not gated: there is no prior WH number to regress against, and
+    inventing a threshold here would assert a conclusion this test exists to establish.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    # The SAME entry point forward_prefill uses (aliased there as _causal_conv1d_fir); it
+    # dispatches to the Wormhole ROW_MAJOR-taps fork, so this compares the shipping FIR.
+    from models.demos.blackhole.qwen36.tt.gdn.conv_fir_wh import causal_conv1d_fir_dispatch
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    nd = mesh_device.get_num_devices()
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), tt_ccl)
+    composer = tp_composer(mesh_device)
+
+    T, VL = 128, 4  # verify's bucket and its K+1 real candidates at the shipping K=3
+    C = gdn.qkv_dim_tp
+    qkv_t = torch.randn(1, T, C, dtype=torch.bfloat16)
+    qkv = lambda: ttnn.from_torch(  # noqa: E731 - fresh copy per path; the conv consumes its input
+        qkv_t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    logger.info(f"devices={nd} gdn layer={li} bucket T={T} valid_len={VL} qkv_dim_tp={C} K={gdn.K}")
+
+    fir_out, fir_state = causal_conv1d_fir_dispatch(
+        qkv(),
+        None,
+        None,
+        gdn.K,
+        mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        conv_state=None,
+        weight_taps=gdn.tw["conv_taps"],
+        bias_dev=None,
+        valid_len=VL,
+        model_args=args,
+    )
+    # Shipping signature: the native path takes its carry at T, the FIR at valid_len. That
+    # carry difference is KNOWN and is the documented reason for the fallback, so it is
+    # reported but not the question. The question is the OUTPUT on the real rows.
+    nat_out, nat_state = gdn._conv1d_prefill(qkv(), T, None)
+
+    # The conv output is 3-D [B,T,qkv_dim_tp]; tp_composer composes on dim 3 and TT_FATALs here.
+    # Both paths see identical inputs on every device, so ONE device's shard answers the question:
+    # stack the per-device results on dim 0 and take device 0's.
+    _dev0 = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[  # noqa: E731
+        0
+    ].float()
+    f_o = _dev0(fir_out)
+    n_o = _dev0(nat_out)
+    assert f_o.shape == n_o.shape, f"shape mismatch FIR {tuple(f_o.shape)} vs native {tuple(n_o.shape)}"
+    assert torch.isfinite(f_o).all() and torch.isfinite(n_o).all(), "non-finite conv output"
+
+    real_pcc = compute_pcc(f_o[:VL], n_o[:VL])
+    pad_pcc = compute_pcc(f_o[VL:], n_o[VL:])
+    st_pcc = compute_pcc(_dev0(fir_state), _dev0(nat_state))
+    logger.info(
+        f"FIR vs native conv @ masked bucket: REAL rows[0:{VL}] PCC={real_pcc:.6f}  "
+        f"PAD rows[{VL}:] PCC={pad_pcc:.6f}  carry PCC={st_pcc:.6f} (carry EXPECTED to differ: "
+        f"native reads the tail at T={T}, the FIR at valid_len={VL})"
+    )
+    # THE CARRY FIX, checked at the op level. The reverted attempt replaced the FIR's one-hot
+    # carry select with _shift_register_tail(qkv, valid_len). Both name the same rows by
+    # construction -- the one-hot picks x_padded[valid_len : valid_len+K-1], and x[i] sits at
+    # x_padded[(K-1)+i], so that is x[valid_len-(K-1) : valid_len], which is exactly what
+    # _shift_register_tail(valid_len) slices. "Names the same rows" is not "returns the same
+    # bytes", though: the one-hot is a matmul against a 0/1 selector (fp32 accumulate) while the
+    # tail is a ttnn.slice at an unaligned start. This measures the gap that argument hides.
+    tail = gdn._shift_register_tail(qkv(), VL, None, C)
+    tail = ttnn.to_layout(tail, ttnn.TILE_LAYOUT)
+    t_o, f_s = _dev0(tail), _dev0(fir_state)
+    tail_pcc = compute_pcc(t_o, f_s)
+    tail_max = float((t_o - f_s).abs().max())
+    logger.info(
+        f"carry fix: _shift_register_tail(valid_len={VL}) vs the FIR one-hot select -> "
+        f"PCC={tail_pcc:.8f} max|diff|={tail_max:.3e} "
+        f"({'BIT-IDENTICAL' if tail_max == 0.0 else 'equivalent but NOT bit-identical'})"
+    )
+
+    logger.info(
+        "REAL near 1.0 => the conv OUTPUT is equivalent under masking and the only thing a native "
+        "swap must fix is the carry (recoverable: _shift_register_tail(qkv, valid_len) picks exactly "
+        "the rows the FIR's one-hot matmul does). REAL below 1.0 => the output itself differs and a "
+        "carry fix alone is not enough -- which is what the reverted attempt assumed."
+    )
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc, request):
     """Localize the chunk-vs-recurrent divergence that speculative decoding runs into.
 
@@ -830,10 +948,18 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
     warm_x = torch.randn(1, 1, W, args.dim, dtype=torch.bfloat16)
     x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
 
+    # forward_prefill's input contract is CONDITIONAL (see its docstring): K-sharded [.., dim/tp]
+    # only when the fused in-proj AG-matmul path is live, replicated [.., dim] otherwise. That path
+    # is `self._fuse_ab and tpc.is_blackhole()`, i.e. Blackhole-only -- so on Wormhole this test used
+    # to hand a dim/tp=640 activation to a matmul wanting dim=5120 and TT_FATAL'd
+    # ("width=640 height=5120") before reaching a single assert. Pick the form the layer is in.
+    def _feed_prefill(t, S):
+        if gdn._fuse_agmm and S > 32:  # 32 = tile height; see forward_prefill's T>TILE gate
+            return shard_to_device(mesh_device, t, dim=-1)
+        return replicate_to_device(mesh_device, t)
+
     def _chunk_rows(valid_len=None, n=None):
-        out = gdn.forward_prefill(
-            shard_to_device(mesh_device, x, dim=-1), chunk_size=T, valid_len=valid_len, capture_state=True
-        )
+        out = gdn.forward_prefill(_feed_prefill(x, T), chunk_size=T, valid_len=valid_len, capture_state=True)
         rows = ttnn.to_torch(out, mesh_composer=composer)[0, 0].float()
         return rows[: n if n is not None else T]
 
@@ -857,7 +983,7 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
     # and conv_states for the decode path), then each path continues from that exact snapshot ----
     gdn.reset_state()
     gdn._stable_state = True  # carry the state in place, as the model does during serving
-    ttnn.deallocate(gdn.forward_prefill(shard_to_device(mesh_device, warm_x, dim=-1), chunk_size=W, capture_state=True))
+    ttnn.deallocate(gdn.forward_prefill(_feed_prefill(warm_x, W), chunk_size=W, capture_state=True))
     snap = _snapshot_layer_state(gdn, mesh_device)
 
     _restore_layer_state(gdn, mesh_device, snap)
@@ -892,7 +1018,21 @@ def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc,
 
     # Measured at ~0.99999 for all three; hold them near that rather than at a loose 0.99, since the
     # whole point is that a single layer is far more faithful than the 64-layer stack.
-    thr = get_pcc_threshold(request, default=0.9995)
+    # ARCH-CALIBRATED. 0.9995 was fitted on Blackhole, where the two kernels agree at ~0.99996.
+    # This test could not run on Wormhole at all until the input-contract fix above, so its first WH
+    # numbers are these: cold 0.999228, warm 0.999378, warm1 0.999461 -- one consistent precision
+    # level about an order of magnitude looser than Blackhole's, not a defect in any one regime:
+    #   * warm >= cold, so the carried recurrent/conv handoff is sound (a handoff defect inverts
+    #     that, which is exactly what the cold>0.99 / warm<0.99 branch above reports);
+    #   * warm1 -- the masked single-token bucket verify_forward actually runs -- is the FAITHFUL
+    #     one of the three;
+    #   * all three sit within 8e-4 of each other.
+    # Guard at 0.999 on Wormhole: tight enough to catch a real break (the diagnostic above cares
+    # about sub-0.99) while not asserting a Blackhole precision level the WH kernels never had.
+    # NOTE for the FIR-conv work: ~7e-4 per layer here compounds over 48 GDN layers, which is the
+    # scale that made a masked-bucket conv swap move the model's trajectory.
+    _default_thr = 0.9995 if is_blackhole() else 0.999
+    thr = get_pcc_threshold(request, default=_default_thr)
     assert cold_pcc > thr, f"cold-start chunk vs decode regressed (PCC={cold_pcc:.6f})"
     # The warm regimes are what speculative decoding depends on, and torch parity says they are
     # exact; a drop here would be a real carried recurrent/conv state defect.

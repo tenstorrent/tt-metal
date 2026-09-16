@@ -418,21 +418,31 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     # 3 groups x 4; elsewhere acceptance saturates and the narrower K=7 -> T=8 = 2 groups x 4 keeps
     # the drafter cheap. Other K values fall back to the legacy B=T pseudo-user verify, which reads
     # KV T times and rounds differently from plain decode at near ties, so they are avoided.
-    # WORMHOLE RE-TUNE. The K=11/7 policy above assumes the fused multi-pos verify SDPA, which is
-    # Blackhole-gated (TPAttention._SPEC_SDPA_L1_FIT: its cores-per-head split was fitted to BH's
-    # 110-core grid). Without it every candidate row re-scans the KV, and the drafter is replicated
-    # so a leg's cost does not shrink with the mesh -- so the draft chain's tail stops paying for
-    # itself much sooner. MEASURED on T3K/27B at ISL 128 (traced_128, QWEN36_SPEC_TIMING=1, plain
-    # decode 16.80 tok/s on the same build):
-    #     K=11  accept 5.25/11  6.25 tok/iter  340.8 ms  18.88 tok/s   <- BH default
-    #     K= 6  accept 4.00/6   5.00 tok/iter  251.7 ms  20.22 tok/s   <- used
-    #     K= 4  accept 3.17/4   4.17 tok/iter  213.7 ms  19.74 tok/s
-    # Acceptance is HIGH at every K (79% at depth 4), so this is a cost problem, not a drafter
-    # quality problem: re-tune once _SPEC_SDPA_L1_FIT covers a WH grid. ONLY ISL 128 was measured;
-    # the >4k arm keeps the same 1-below-BH shape rather than pretending to a second data point.
-    from models.demos.blackhole.qwen36.tt import tp_common as tpc
-
-    _k_short, _k_long = (11, 7) if tpc.is_blackhole() else (6, 6)
+    # WORMHOLE: was capped at (6, 6) because the K=11 -> T=12 split needs the fused multi-pos verify
+    # SDPA, and TPAttention._SPEC_SDPA_L1_FIT was Blackhole-only. That table now has a WH arm
+    # (_SPEC_SDPA_L1_FIT_WH: same Tg=4 splits, cores-per-head rescaled to the 64-core grid), so the
+    # cap is lifted and Wormhole takes the same policy as Blackhole. The old cap's own note said the
+    # loss at K=11 was "a cost problem, not a drafter quality problem" -- that reading was right.
+    #
+    # MEASURED on T3K/27B at ISL 128 (traced_128, this build, fused SDPA on). The whole K curve,
+    # so nobody has to sweep it again:
+    #     K= 6  accept 4.10/6   5.10 committed/iter  ttft 4.62s  47.49 tok/s   <- the old cap
+    #     K= 7  accept 4.10/7   5.10 committed/iter  ttft 4.73s  45.78 tok/s
+    #     K=11  accept 6.14/11  7.14 committed/iter  ttft 5.15s  54.46 tok/s   <- used, the peak
+    #     K=15  accept 6.14/15  7.14 committed/iter  ttft 5.66s  48.11 tok/s
+    #     K=19  accept 6.14/19  7.14 committed/iter  ttft 6.24s  41.89 tok/s
+    # +14.7% over the old cap: K=11 turns the extra depth into 40% more committed tokens per
+    # iteration (7 iterations instead of 10 for the same output).
+    #
+    # THE DRAFTER SATURATES AT 6.14 ACCEPTED. Read the accept column, not tok/s: it pins at 6.14
+    # from K=11 on, so every draft slot past 11 costs a drafter leg and commits nothing -- which is
+    # the whole of the decline at 15 and 19. Raising K further cannot help without a better drafter;
+    # _SPEC_SDPA_L1_FIT_WH carries T=16/20 entries that DO fit L1, and they are still the wrong
+    # policy. K=7 is a separate local dip (same acceptance as K=6 for a longer chain), which is why
+    # Blackhole's policy skips it too.
+    # TTFT costs +0.53s (more trace captures); see the TTFT note in the module docstring.
+    # ONLY ISL 128 was measured; the >4k arm keeps Blackhole's 7 rather than inventing a data point.
+    _k_short, _k_long = (11, 7)
     # QWEN36_SPEC_DRAFT_LEN, when set, overrides this (draft_len=None defers to the env in
     # SpeculativeDecoder, whose own library default stays 3).
     draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else (_k_short if T <= 4096 else _k_long)
@@ -458,16 +468,29 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     model.set_gdn_fused_decode(True)
 
     # Warmup (compile prefill/verify/decode/MTP programs; results discarded).
+    #
+    # The decoder is REUSED for the timed run below, and the KV cache is deliberately NOT freed in
+    # between. MEASURED TTFT split at ISL 128 (K=11): prefill+MTP-warm+seed 1.16s, verify-trace
+    # capture 3.02s, commit-trace capture 1.02s, draft-window capture 0.31s -- so trace capture is
+    # 79% of a 5.51s TTFT and the verify capture alone is 55%. SpeculativeDecoder guards that one
+    # behind self._vfy_captured, i.e. it is per-DECODER, so a fresh decoder per request pays it
+    # again every time. A serving loop holds one decoder across requests and pays it once; building
+    # a new one here made the demo report a cost production would not see.
+    #
+    # WHY THE KV CACHE MUST STAY ALLOCATED: a captured metal trace bakes buffer addresses, so
+    # free_kv_caches() + allocate_kv_caches() between the two runs would leave the verify trace
+    # pointing at freed memory -- silent corruption, not an error. Keeping it allocated is safe
+    # because generate() re-prefills from scratch: prefill re-zeroes the GDN recurrent + conv state
+    # at chunk_start==0 and rewrites KV for positions 0..T-1, and decode only ever reads positions
+    # it has written. Anything the warmup left beyond T is never read.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     signpost("compile_decode")
     profiler.start("compile_decode")
-    SpeculativeDecoder(model, page_table, draft_len=draft_len).generate(prompt_ids, min(6, max_generated_tokens))
+    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len)
+    dec.generate(prompt_ids, min(6, max_generated_tokens))
     profiler.end("compile_decode")
-    model.free_kv_caches()
 
     # Timed run. generate() records dec.prefill_time (TTFT) and dec.decode_time (spec loop) internally.
-    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
-    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len)
     signpost("inference_prefill")
     profiler.start("inference_prefill")
     generated = dec.generate(prompt_ids, max_generated_tokens)

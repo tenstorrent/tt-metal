@@ -31,6 +31,8 @@ staging tensor is built straight from python ints/floats via ttnn.Tensor, which 
 the from_torch + ReplicateTensorToMesh path it replaces (verified including tile padding).
 """
 
+import os
+
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -63,6 +65,15 @@ class Qwen36MTP:
         # unchanged -- see tp_common.greedy_pick. Needs an evenly fractured head; env escape hatch
         # Scoped to T3K (tpc.wh_t3k), the config it was measured and gated on.
         self.shard_argmax = tpc.wh_t3k(args) and args.vocab_size % self.num_devices == 0
+        # QWEN36_MTP_HIPREC_DRAFT=1: A/B harness for the drafter's LM-head precision. Turns OFF the
+        # bfp4 head AND the shard-argmax together, which lands on the original gathered-argmax path.
+        # BOTH must go: a bf16 head with shard_argmax on is an unsupported pairing that HANGS on the
+        # second generate() (_lm_head(gather=False) returns sharded logits the traced draft window
+        # never exercises). Slower by the 1.47 ms/leg vocab gather -- this is for measuring
+        # ACCEPTANCE, not speed.
+        self._hiprec_draft = os.environ.get("QWEN36_MTP_HIPREC_DRAFT", "0") == "1"
+        if self._hiprec_draft:
+            self.shard_argmax = False
         # Replicated offset constant for the combine. Built here so it predates any trace capture.
         self._argmax_offsets = (
             tpc.vocab_shard_offsets(mesh_device, self.num_devices, args.vocab_size // self.num_devices)
@@ -96,8 +107,20 @@ class Qwen36MTP:
         #   acceptance           4.00/6 -> 4.10/6      (UP, or level within 10-iteration sampling)
         #   spec lossless        unchanged -- same divergence point, same near-tie flip, 2.69/3
         # Costs ~89 MB/device for the second copy (the bf16 base/verify head stays).
+        # CROSS-VERIFIED across 8 prompts (QWEN36_MTP_HIPREC_DRAFT=1, K=11, ISL 128, T3K/27B).
+        # The note above was signed off on ONE prompt at 10 iterations, and acceptance turned out to
+        # vary 2.6x by prompt (2.08-5.38 /11), so the cheap head deserved checking where acceptance
+        # is WORST, not where it is best. Accepted drafts per prompt, bfp4 vs bf16+gathered-argmax:
+        #   condiment 5.38/5.38   hello 4.44/4.44   mayonnaise 2.08/1.88   yellow+blue 4.64/4.67
+        #   room-temp 2.79/2.79   joke  2.90/2.65   good-at    4.19/3.85   2+2        2.11/2.82
+        #   MEAN      3.57/3.56  -> -0.01, i.e. nil
+        # bf16 is WORSE on three of the eight, which is impossible if precision were helping -- the
+        # scatter is near-tie coin flips (and partly the argmax path, which the A/B also swaps).
+        # Cost side: bf16 averages 33.82 vs 36.58 tok/s, the vocab gather coming back for nothing.
+        # So bfp4 is free, and ~0.78 accepted-per-depth is the DRAFTER's ceiling, not a precision
+        # artefact -- raising acceptance needs a better MTP head, not a cheaper/dearer dtype.
         self._lm_head_bfp4 = None
-        if self.shard_argmax and "output.weight" in state_dict:
+        if self.shard_argmax and not self._hiprec_draft and "output.weight" in state_dict:
             self._lm_head_bfp4 = ttnn.as_tensor(
                 state_dict["output.weight"].T.contiguous(),  # [dim, vocab], as the parent builds it
                 dtype=ttnn.bfloat4_b,
