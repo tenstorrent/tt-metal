@@ -666,11 +666,15 @@ def test_dispatch_fabric2d_fanout_chunk_agreement(extent, num_links, capacity_di
 # --------------------------------------------------------------------------------------------------
 # Multicast (drop-off) chunk arithmetic, on host.
 #
-# A token crosses a cable once per DIRECTION, not once per expert or even once per destination chip:
-# the copy travels to the farthest destination that way and every chip en route that wants it keeps
-# one and passes it on. The relay already forwards hop by hop, so this costs a consume, not a new
-# transport -- but a chunk is now (origin, hop) and its length comes from a reach table, since
-# per-expert counts cannot express "how many tokens travel at least h hops this way".
+# One copy per (token, DIRECTION) crosses a cable rather than one per expert or per destination chip:
+# it travels the ring and every chip en route that wants it keeps a page and passes the rest on. A
+# chunk is therefore (origin, hop) and its length comes from a reach table, since per-expert counts
+# cannot express "how many tokens travel at least h hops this way".
+#
+# The chip one hop short of a page's farthest destination does not pass it on: it writes those last
+# pages into the next chip's output pages itself. So the mode is a consume at most hops but a send at
+# the terminal one, and a token with several pages on its farthest chip crosses that last cable once
+# per page -- see _mc_region_hop for what that buys and costs.
 # --------------------------------------------------------------------------------------------------
 
 
@@ -680,19 +684,22 @@ def _mc_direction(origin, dst, extent):
     return (1, d) if d <= extent - d else (-1, extent - d)
 
 
-def _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk):
-    """far[g][origin][dir_idx] = farthest hop of each travelling token, in token order.
+def _mc_dest_hops(indices, table, offs, capacity, G, extent, seq, topk):
+    """hops[g][origin][dir_idx] = the sorted hops of each travelling token's pages, in token order.
+
+    With multiplicity: two experts on one chip are one copy for the transport but two pages there, and
+    the terminal rule charges a cable crossing for each of them, so the repeat has to survive here.
 
     Post-drop: a token whose every surviving page lies elsewhere must not hold a hop open, or the
     origin sends fewer pages than the relay waits for. A token with no destination that way is not
     in the list at all.
     """
-    lists = [[[[] for _ in range(2)] for _ in range(extent)] for _ in range(G)]
+    dest_hops = [[[[] for _ in range(2)] for _ in range(extent)] for _ in range(G)]
     for g in range(G):
         for origin in range(extent):
             alloc = offs[g, origin].clone().to(torch.int64)
             for t in range(seq):
-                far = {1: 0, -1: 0}
+                hops = {1: [], -1: []}
                 for k in range(topk):
                     e = int(indices[g, origin, t, k])
                     row = int(table[g, e])
@@ -705,11 +712,20 @@ def _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk):
                     if row == origin:
                         continue
                     s, d = _mc_direction(origin, row, extent)
-                    far[s] = max(far[s], d)
+                    hops[s].append(d)
                 for s, di in ((1, 0), (-1, 1)):
-                    if far[s] > 0:
-                        lists[g][origin][di].append(far[s])
-    return lists
+                    if hops[s]:
+                        dest_hops[g][origin][di].append(sorted(hops[s]))
+    return dest_hops
+
+
+def _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk):
+    """far[g][origin][dir_idx] = farthest hop of each travelling token, in token order."""
+    dest_hops = _mc_dest_hops(indices, table, offs, capacity, G, extent, seq, topk)
+    return [
+        [[[max(hops) for hops in per_dir] for per_dir in per_origin] for per_origin in per_group]
+        for per_group in dest_hops
+    ]
 
 
 def _mc_reach(indices, table, offs, capacity, G, extent, seq, topk):
@@ -753,18 +769,24 @@ def _mc_chunk(reach_row, h, link, num_links, m):
 def _mc_region_hop(hop):
     """Reach index a region chunk is sized at, mirroring mc_region_hop in the reader.
 
-    A page only enters a forwarding region when it still has work beyond the chip about to hold it.
-    The origin writes its one-hop destinations straight into their output pages, so a chunk landing
-    one hop out carries the hop-2 population rather than the hop-1 one.
+    A page enters a forwarding region only when it still has a destination BEYOND the chip about to
+    hold it, because whoever holds a page whose farthest destination is the NEXT chip delivers it
+    itself -- token and metadata written straight into that chip's output pages. So a chunk landing
+    h hops out carries the hop-(h + 1) population, and the chunk at h = m is always empty.
 
-    Sizing at reach[hop + 1] instead, so every relay delivers one hop ahead, cuts DRAM transfers about
-    25% but raises link pages about 32%: a token that both delivers to the neighbour and forwards puts
-    its payload on that link twice, and low link load is the whole of multicast's advantage.
+    That is free on the link in the common case: the forward packet it removes and the delivery that
+    replaces it are the same one payload crossing the same cable. Only a token with several pages on
+    its farthest chip pays, one extra crossing per extra page, against two DRAM transfers saved on
+    every page that would otherwise have landed in the terminal chip's region and been read back.
+
+    Delivering one hop ahead at EVERY hop is the variant that is expensive and was rejected: a page
+    that both delivers to the neighbour and forwards puts its payload on that link twice, about +32%
+    link pages, and low link load is the whole of multicast's advantage.
 
     This has to track the kernel. It is the number both sides of a region derive independently, and
     a disagreement is a deadlock rather than wrong data.
     """
-    return max(hop, 2)
+    return hop + 1
 
 
 def _mc_link_of(rank, class_size, num_links):
@@ -775,24 +797,29 @@ def _mc_link_of(rank, class_size, num_links):
     return num_links - 1
 
 
-@pytest.mark.parametrize("extent", [4, 8], ids=lambda e: f"extent{e}")
-@pytest.mark.parametrize("num_links", [1, 2], ids=lambda n: f"{n}link")
-@pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
-def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity_div):
-    G, seq, topk = 2, 16, 4
+def _mc_fixture(extent, capacity_div, seed, cross_group, topk=4, G=2, seq=16):
+    """One routing draw and everything both multicast host tests derive from it.
+
+    `cross_group` is the distribution production actually routes: picks drawn from all groups' experts,
+    so most resolve to -1 and a token routinely has one destination or none in a direction. That is
+    what makes far-hop classes of size 0 and 1 common and whole streams empty -- the degenerate shapes
+    the terminal rule newly depends on, and which an in-group draw never produces.
+    """
     num_routed_experts = extent * topk * G
     experts_per_chip = num_routed_experts // G // extent
     capacity = max(1, extent * seq * topk // capacity_div)
-    m = extent // 2
 
-    torch.manual_seed(17)
+    torch.manual_seed(seed)
     table = _expert_dispatch_table(num_routed_experts, extent, G)
     epg = num_routed_experts // G
     indices = torch.zeros(G, extent, seq, topk, dtype=torch.int64)
     for g in range(G):
         for h in range(extent):
             for t in range(seq):
-                indices[g, h, t] = g * epg + torch.randperm(epg)[:topk]
+                if cross_group:
+                    indices[g, h, t] = torch.randperm(num_routed_experts)[:topk]
+                else:
+                    indices[g, h, t] = g * epg + torch.randperm(epg)[:topk]
 
     offs = torch.zeros(G, extent, num_routed_experts, dtype=torch.int64)
     for g in range(G):
@@ -802,7 +829,38 @@ def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity
         offs[g] = o[0].long()
 
     reach = _mc_reach(indices, table, offs, capacity, G, extent, seq, topk)
-    far_lists = _mc_far_lists(indices, table, offs, capacity, G, extent, seq, topk)
+    dest_hops = _mc_dest_hops(indices, table, offs, capacity, G, extent, seq, topk)
+
+    # Pages the capacity clamp removed, replaying the same rule _mc_dest_hops applies, so a test can
+    # refuse to pass on a draw that never exercised the post-drop path -- where a token whose pages
+    # all died must stop holding its hops open, and failing to is a deadlock.
+    dropped = 0
+    for g in range(G):
+        for origin in range(extent):
+            alloc = offs[g, origin].clone().to(torch.int64)
+            for t in range(seq):
+                for k in range(topk):
+                    e = int(indices[g, origin, t, k])
+                    if int(table[g, e]) == -1:
+                        continue
+                    if alloc[e] >= capacity:
+                        dropped += 1
+                    alloc[e] += 1
+    return reach, dest_hops, G, dropped
+
+
+@pytest.mark.parametrize("extent", [4, 6, 8, 12], ids=lambda e: f"extent{e}")
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4], ids=lambda n: f"{n}link")
+@pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
+@pytest.mark.parametrize("cross_group", [False, True], ids=lambda c: "cross-group" if c else "in-group")
+def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity_div, cross_group):
+    m = extent // 2
+    reach, dest_hops, G, _ = _mc_fixture(extent, capacity_div, seed=17, cross_group=cross_group)
+    far_lists = [
+        [[[max(hops) for hops in per_dir] for per_dir in per_origin] for per_origin in per_group]
+        for per_group in dest_hops
+    ]
+    seq = 16
     # Monotone by construction; if this ever breaks the chunk lengths below go negative.
     for g in range(G):
         for o_ in range(extent):
@@ -868,3 +926,142 @@ def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity
                     f"g={g} stream={stream} row={nbr}: region needs {at2} pages but the host bound is "
                     f"{bound} -- this stream would write into the next stream's region"
                 )
+
+
+# Destinations one multicast page can carry, mirroring FO_MAX_DESTS in the kernel interface, and the
+# packet headers a slot is given to send them with, mirroring headers_per_slot(fanout=true). The
+# staging walk below holds the kernel to both, because overrunning either writes packet headers over
+# the very delivery records those sends read their addresses from.
+_FO_MAX_DESTS = 8
+_HEADERS_PER_SLOT = 2 + 2 * _FO_MAX_DESTS
+
+
+@pytest.mark.parametrize("extent", [4, 6, 8, 12], ids=lambda e: f"extent{e}")
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4], ids=lambda n: f"{n}link")
+@pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
+@pytest.mark.parametrize("cross_group", [False, True], ids=lambda c: "cross-group" if c else "in-group")
+def test_dispatch_fabric2d_multicast_terminal_delivery(extent, num_links, capacity_div, cross_group):
+    """Follow every page hop by hop under the terminal rule: who delivers, who forwards, who reads.
+
+    Region agreement proves the two sides of a region derive the same NUMBER. That is necessary and
+    not sufficient once a relay may deliver one hop ahead instead of forwarding, because the number
+    also has to be what the chips actually produce page by page.
+
+    The rule, at the chip j hops from the origin holding a page whose farthest destination is F:
+      - destinations at hop j are written locally;
+      - if F == j + 1 the page ends next door, so its hop-(j + 1) destinations are written straight
+        into that chip's output pages and nothing is forwarded;
+      - if F >= j + 2 one page is forwarded and the next chip consumes its own destinations.
+    The origin is j = 0 with one difference: it always writes its hop-1 destinations directly whatever
+    F is. It is holding the token already, and that is what the unicast path does too.
+
+    Three derivations are kept apart on purpose, because agreement between two of them that share a
+    line of code is worth nothing: the producer walk fills each region, the consumer re-derives what
+    it forwards from the arriving page's own hop list the way the kernel does, and the reach table
+    sizes both. Only then does equality mean the writer and reader cannot desynchronise.
+    """
+    m = extent // 2
+    reach, dest_hops, G, dropped = _mc_fixture(extent, capacity_div, seed=19, cross_group=cross_group, topk=8)
+
+    copies = crossings_terminal = crossings_forwarding = extra_payloads = extra_packets = 0
+    packets_terminal = packets_forwarding = 0
+    for g in range(G):
+        for origin in range(extent):
+            for di in range(2):
+                reach_row = reach[g, origin, di]
+                seen = {}
+                # arrivals[link][j] = the pages that enter the region of the chip j hops out, as their
+                # own hop lists. j = 0 is the origin, which holds its page without a region.
+                arrivals = [[[] for _ in range(m + 2)] for _ in range(num_links)]
+                for hops in dest_hops[g][origin][di]:
+                    far = hops[-1]
+                    size = int(reach_row[far]) - int(reach_row[far + 1])
+                    rank = seen.get(far, 0)
+                    seen[far] = rank + 1
+                    link = _mc_link_of(rank, size, num_links)
+                    n_far = hops.count(far)
+                    n_one = hops.count(1)
+                    copies += 1
+
+                    # Producer: the origin holds the page, and it enters the region of every chip out
+                    # to the one before the farthest.
+                    for j in range(1, far):
+                        arrivals[link][j].append(hops)
+
+                    # Every destination, delivered exactly once, and by whom.
+                    delivered = [1] * n_one
+                    if far >= 2:
+                        delivered += [h for h in hops if 2 <= h < far]
+                        delivered += [far] * n_far
+                    assert (
+                        sorted(delivered) == hops
+                    ), f"g={g} origin={origin} dir={di} token hops {hops}: delivered {sorted(delivered)}"
+
+                    # What crosses a cable. A forward is ONE packet carrying the token and its tail
+                    # together; a delivery is two, the token and a 16-byte metadata packet. So the
+                    # terminal rule is free in payloads only when the farthest chip takes one page,
+                    # and never free in packets.
+                    crossings_terminal += n_one + (far - 1 + n_far if far >= 2 else 0)
+                    crossings_forwarding += n_one + (far if far >= 2 else 0)
+                    packets_terminal += 2 * n_one + (far - 1 + 2 * n_far if far >= 2 else 0)
+                    packets_forwarding += 2 * n_one + (far if far >= 2 else 0)
+                    if far >= 2:
+                        extra_payloads += n_far - 1
+                        extra_packets += 2 * n_far - 1
+
+                for link in range(num_links):
+                    for j in range(1, m + 1):
+                        # Consumer, re-derived per page exactly as mc_relay_phase does, against what
+                        # the chip beyond sizes its chunk at from the reach table alone.
+                        read = len(arrivals[link][j])
+                        forwarded = sum(1 for hops in arrivals[link][j] if hops[-1] > j + 1)
+                        assert read == _mc_chunk(reach_row, _mc_region_hop(j), link, num_links, m), (
+                            f"g={g} origin={origin} dir={di} link={link} hop={j}: {read} pages arrive but "
+                            f"every chip sizes that chunk at "
+                            f"{_mc_chunk(reach_row, _mc_region_hop(j), link, num_links, m)}"
+                        )
+                        assert forwarded == _mc_chunk(reach_row, _mc_region_hop(j + 1), link, num_links, m), (
+                            f"g={g} origin={origin} dir={di} link={link}: chip {j} forwards {forwarded} "
+                            f"pages but chip {j + 1} reads "
+                            f"{_mc_chunk(reach_row, _mc_region_hop(j + 1), link, num_links, m)}"
+                        )
+                        # The staging contract the sender relies on: local records first, remote after,
+                        # both out of one FO_MAX_DESTS list, and the header pool sized for the pair of
+                        # packets each remote record sends.
+                        for hops in arrivals[link][j]:
+                            local_count = hops.count(j)
+                            remote_count = hops.count(j + 1) if hops[-1] == j + 1 else 0
+                            assert local_count + remote_count <= _FO_MAX_DESTS
+                            assert 2 + 2 * remote_count <= _HEADERS_PER_SLOT
+                    # Nothing travels past half the ring, so no page reaches the last chunk.
+                    assert not arrivals[link][m], f"g={g} origin={origin} dir={di} link={link}: chunk m is not empty"
+                    # And the kernel reads fwd_len one index past that at j = m, which must stay off
+                    # the end of the reach row rather than indexing it.
+                    assert _mc_chunk(reach_row, _mc_region_hop(m + 1), link, num_links, m) == 0
+
+    # The terminal rule's whole cost, stated as an identity rather than a measurement: one extra
+    # payload for every page beyond the first on a token's farthest chip, and one extra packet for
+    # every terminal delivery because the metadata no longer rides inside the forward.
+    assert crossings_terminal == crossings_forwarding + extra_payloads, (
+        f"terminal delivery moved {crossings_terminal} payloads across cables against "
+        f"{crossings_forwarding} when forwarding to the farthest chip, not the "
+        f"{crossings_forwarding + extra_payloads} the accounting predicts"
+    )
+    assert packets_terminal == packets_forwarding + extra_packets, (
+        f"terminal delivery sent {packets_terminal} packets against {packets_forwarding}, not the "
+        f"{packets_forwarding + extra_packets} the accounting predicts"
+    )
+    # Without these the checks above pass on a draw that never reached the cases they are about, and
+    # nothing would say so. Each is claimed only where the draw can actually produce it: the clamp is
+    # what leaves a token a single page on its farthest chip, so the roomy configs are the ones that
+    # exercise the rule costing anything, and the tight ones are the ones that exercise the drop.
+    assert copies > 0, "no token travelled, so nothing above was exercised"
+    if capacity_div == 1:
+        assert extra_payloads > 0, "no token had two pages on its farthest chip, so the rule cost nothing here"
+    else:
+        assert dropped > 0, "the tight config dropped nothing, so the post-drop rule is still untested"
+    logger.info(
+        f"extent={extent} links={num_links}: {copies} travelling copies, link payloads "
+        f"{crossings_forwarding} -> {crossings_terminal} ({crossings_terminal / crossings_forwarding:.3f}x), "
+        f"packets {packets_forwarding} -> {packets_terminal} ({packets_terminal / packets_forwarding:.3f}x)"
+    )

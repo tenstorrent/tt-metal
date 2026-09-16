@@ -56,7 +56,8 @@ struct SenderCtArgs {
     uint32_t fwd_sem_noc_x;
     uint32_t fwd_sem_noc_y;
     uint32_t fwd_sem_addr;
-    // fanout: the reader's staged deliveries for each slot, which this RISC writes out locally.
+    // fanout: the reader's staged deliveries for each slot, which this RISC writes out -- the first
+    // `local_count` as NoC writes here, the `remote_count` after them as fabric packets next door.
     uint32_t mc_delivery_addr;
     uint32_t mc_meta_addr;
     uint32_t fanout;
