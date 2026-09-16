@@ -17,7 +17,7 @@ when the TT config asks for the test models, so both of these are required:
 ```bash
 vllm serve models/vllm_test_utils/spec_test \
     --tokenizer meta-llama/Llama-3.1-8B-Instruct \
-    --additional-config '{"register_test_models": true}' \
+    --additional-config '{"tt": {"register_test_models": true}}' \
     --speculative-config '{"method": "ngram", "num_speculative_tokens": 5,
                            "prompt_lookup_min": 2, "prompt_lookup_max": 4}' \
     --max-num-seqs 8 \
@@ -36,6 +36,36 @@ penalty, rather than answering it greedily without saying so.
 This needs a `vllm-tt-plugin` revision whose speculative execution path has
 landed. On a revision without it the launch is refused at configuration time,
 which is the intended behaviour there and not a fault of this model.
+
+## The prompt decides whether speculation runs at all
+
+`DummyNoOpModel.prefill_forward` returns zero logits, so the first sampled token
+is id 0 whatever the prompt says, and a draftless step of this model commits
+`last_committed + 1`. Its output is therefore the ascending run 0, 1, 2, 3, and
+so on, which repeats no n-gram. The n-gram proposer finds nothing in that output
+and drafts only what the prompt puts in reach, so the prompt has to be the same
+run, sent as explicit token ids:
+
+```bash
+curl http://localhost:8000/v1/completions -H 'Content-Type: application/json' -d "{
+  \"model\": \"models/vllm_test_utils/spec_test\",
+  \"prompt\": [$(seq -s, 0 399)],
+  \"max_tokens\": 200,
+  \"temperature\": 0
+}"
+```
+
+The generated stream re-enters that run at position 0 on its own, so from the
+second decode step onward every step is offered `num_speculative_tokens` drafts
+and commits all of them plus the bonus. Speculation stops once the output passes
+the end of the run, so the run has to be at least `max_tokens + 2` long.
+
+A natural-language prompt drafts nothing. The pair the output ends on never
+appears earlier in the sequence, so every step is a draftless step and the
+server commits one token per step. That exercises configuration admission, the
+KV cache, the engine's `take_draft_token_ids` handshake and the narrow path, and
+no part of acceptance. Driven on the host at `num_speculative_tokens=3` over ten
+decode steps, the run prompt commits 37 tokens and a text prompt commits 10.
 
 ## The two modes
 
@@ -80,4 +110,7 @@ alongside the `no_op_test` one:
 
 A request completing is not enough to prove speculation ran: an n-gram run
 completes whether or not it ever proposed a draft. The assertion has to be that
-drafts were proposed and a prefix longer than one token committed.
+drafts were proposed and a prefix longer than one token committed. The
+benchmark's own prompts cannot produce a draft against this model, whether they
+are random or sampled from a dataset, so an entry that measures the speculative
+loop rather than the draftless path has to send the ascending run above.
