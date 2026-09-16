@@ -49,7 +49,7 @@ def _chunk_tiles_target(cores_per_image: int) -> int:
 
 X_DEPTH = 2  # streaming x ring depth, in chunks
 X_RM_DEPTH = 2  # RM stick ring depth, in tile-rows
-MEMBERSHIP_DEPTH = 1  # membership (E) blocks buffered
+MEMBERSHIP_DEPTH = 2  # membership (E) blocks buffered
 OUT_BLOCK_TILES_TARGET = 8  # output tiles per writer barrier (examples/double_buffer: 4-8 in flight saturates)
 OUT_DEPTH_FACTOR = 2  # cb_out depth = OUT_DEPTH_FACTOR * out_block tiles (writer double-buffering)
 # Writer store synchronisation per out_block (Refinement 4). True: `noc_async_writes_flushed` — wait only until the
