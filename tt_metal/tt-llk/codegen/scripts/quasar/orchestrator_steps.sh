@@ -652,20 +652,21 @@ _perf_run() {
     # perf_data/ is gitignored build output. Wipe it before and after so a stale CSV can
     # never pass as this measurement; the find below handles both harness layouts.
     rm -rf "$llk/perf_data"
+    mkdir -p "$_L/perf"   # every perf artifact of the run lives under $LOG_DIR/perf/
     _PERF_CSV=""
     (
         export QSR_SIM_BACKEND; QSR_SIM_BACKEND="$(sg QSR_SIM_BACKEND)"
         [ -n "$build_root" ] && export TT_LLK_LOCAL_ARTIFACT_ROOT="$build_root"
         bash "$llk/.claude/scripts/run_test.sh" run --worktree "$llk" --arch "$arch" \
-            --test "$module" "${sel[@]}" --maxfail 0 --log-dir "$_L/perf_${label}"
+            --test "$module" "${sel[@]}" --maxfail 0 --log-dir "$_L/perf/${label}"
     ); rc=$?
     local csv
     csv="$(find "$llk/perf_data" -type f -name "${mod_stem}.post.csv" -printf '%T@ %p\n' 2>/dev/null \
             | sort -rn | head -1 | cut -d' ' -f2-)"
     if [ -n "$csv" ] && [ -s "$csv" ]; then
-        if _disk_guard cp "$csv" "$_L/perf_${label}.post.csv"; then
-            _PERF_CSV="$_L/perf_${label}.post.csv"
-            cp "${csv%.post.csv}.csv" "$_L/perf_${label}.raw.csv" 2>/dev/null || true
+        if _disk_guard cp "$csv" "$_L/perf/${label}.post.csv"; then
+            _PERF_CSV="$_L/perf/${label}.post.csv"
+            cp "${csv%.post.csv}.csv" "$_L/perf/${label}.raw.csv" 2>/dev/null || true
         fi
     fi
     rm -rf "$llk/perf_data"
@@ -719,7 +720,7 @@ PY
 # measure where the most room is left. Matches the CSV key columns against the collected
 # pytest ids by text, strictest column set first. Arg: <vs_baseline json>.
 _perf_reaim() {
-    local json="$1" collect="$_L/perf_baseline_collect.log" module arch tid
+    local json="$1" collect="$_L/perf/baseline_collect.log" module arch tid
     module="$(sg PERF_MODULE)"; arch="$(sg TARGET_ARCH)"
     [ -s "$collect" ] || { echo "  re-aim skipped: no collection log"; return 0; }
     tid="$(python - "$json" "$collect" "$module" "$arch" <<'PY'
@@ -788,16 +789,16 @@ _perf_set_best() {
 # Copy the kernel files in the tree to $_L/<prefix>_*. Arg: <prefix>.
 _perf_snapshot() {
     local prefix="$1" wt algo gen; wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"
-    [ -f "$wt/$algo" ] && { _disk_guard cp "$wt/$algo" "$_L/${prefix}_$(basename "$algo")" || return $?; }
-    [ "$algo" != "$gen" ] && [ -f "$wt/$gen" ] && { _disk_guard cp "$wt/$gen" "$_L/${prefix}_wrapper_$(basename "$gen")" || return $?; }
+    [ -f "$wt/$algo" ] && { _disk_guard cp "$wt/$algo" "$_L/perf/${prefix}_$(basename "$algo")" || return $?; }
+    [ "$algo" != "$gen" ] && [ -f "$wt/$gen" ] && { _disk_guard cp "$wt/$gen" "$_L/perf/${prefix}_wrapper_$(basename "$gen")" || return $?; }
     return 0
 }
 
 # Restore the kernel files in the tree from $_L/<prefix>_*. Arg: <prefix>.
 _perf_restore() {
     local prefix="$1" wt algo gen; wt="$(_wt)"; algo="$(_algo_file)"; gen="$(sg GENERATED_KERNEL)"
-    [ -f "$_L/${prefix}_$(basename "$algo")" ] && cp "$_L/${prefix}_$(basename "$algo")" "$wt/$algo"
-    [ "$algo" != "$gen" ] && [ -f "$_L/${prefix}_wrapper_$(basename "$gen")" ] && cp "$_L/${prefix}_wrapper_$(basename "$gen")" "$wt/$gen"
+    [ -f "$_L/perf/${prefix}_$(basename "$algo")" ] && cp "$_L/perf/${prefix}_$(basename "$algo")" "$wt/$algo"
+    [ "$algo" != "$gen" ] && [ -f "$_L/perf/${prefix}_wrapper_$(basename "$gen")" ] && cp "$_L/perf/${prefix}_wrapper_$(basename "$gen")" "$wt/$gen"
     return 0
 }
 
@@ -886,6 +887,7 @@ execute_step_perf_baseline() {
     fi
     local wt kn kt arch llk regress max; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; kt="$(sg KERNEL_TYPE)"; arch="$(sg TARGET_ARCH)"
     llk="$wt/tt_metal/tt-llk"
+    _disk_guard mkdir -p "$_L/perf" || return $?   # the collection log below is written here
     regress="$(sg PERF_REGRESS_PCT)"; [ -n "$regress" ] || { regress=2.0; ss PERF_REGRESS_PCT "$regress" --json; }
     max="$(sg PERF_MAX_ATTEMPTS)";   [ -n "$max" ]     || { max=3;       ss PERF_MAX_ATTEMPTS "$max" --json; }
 
@@ -900,7 +902,7 @@ execute_step_perf_baseline() {
             [ -e "$f" ] && cands+=("$(basename "$f")|")
         done
     fi
-    local module="" k="" count=0 cand m t collect="$_L/perf_baseline_collect.log"
+    local module="" k="" count=0 cand m t collect="$_L/perf/baseline_collect.log"
     for cand in "${cands[@]}"; do
         m="${cand%%|*}"; t="${cand#*|}"
         [ -f "$llk/tests/python_tests/${arch}/$m" ] || continue
@@ -931,7 +933,7 @@ execute_step_perf_baseline() {
         local why="run_test.sh exit ${rc}, csv=${_PERF_CSV:-missing}"
         [ "$rc" -eq 3 ] && why="simulator unavailable after retries (exit 3)"
         ss PERF_REASON "baseline perf run failed (${why})"
-        echo "perf_baseline: FAILED (${why}) — perf comparison disabled; log: $_L/perf_baseline/run.log"
+        echo "perf_baseline: FAILED (${why}) — perf comparison disabled; log: $_L/perf/baseline/run.log"
         return 0
     fi
     # SFPU work runs on the math thread, so MATH_ISOLATE is the kernel's own cost.
@@ -941,7 +943,7 @@ execute_step_perf_baseline() {
     ss PERF_BASELINE_CSV "$_PERF_CSV"
     ss PERF_REASON       ""
     ss PERF_ENABLED      true --json
-    rj message --message "Perf baseline captured: ${module} --k '${k}' (${count} variants, metric ${metric}) → perf_baseline.post.csv"
+    rj message --message "Perf baseline captured: ${module} --k '${k}' (${count} variants, metric ${metric}) → perf/baseline.post.csv"
     echo "PERF_BASELINE: module=${module} k='${k}' variants=${count} metric=${metric} regress_pct=${regress} test_id='${tid}' csv=${_PERF_CSV}"
 }
 
@@ -968,17 +970,17 @@ execute_step_perf_measure() {
     ss PERF_LAST_RC "$rc" --json
     if [ "$rc" -eq 3 ]; then
         # The simulator was unavailable; the kernel is not implicated.
-        echo "PERF label=${label} kind=${kind} status=env_error exit=3 action=retry log=$_L/perf_${label}/run.log"
+        echo "PERF label=${label} kind=${kind} status=env_error exit=3 action=retry log=$_L/perf/${label}/run.log"
         return 0
     fi
     if [ "$rc" -ne 0 ] || [ -z "$_PERF_CSV" ]; then
         ss PERF_LAST_VS_BEST run_failed; ss PERF_LAST_VS_BASELINE run_failed
-        echo "PERF label=${label} kind=${kind} status=run_failed exit=${rc} action=revert log=$_L/perf_${label}/run.log"
+        echo "PERF label=${label} kind=${kind} status=run_failed exit=${rc} action=revert log=$_L/perf/${label}/run.log"
         return 0
     fi
     local regress base best metric vb vbest action
     regress="$(sg PERF_REGRESS_PCT)"; base="$(sg PERF_BASELINE_CSV)"; best="$(sg PERF_BEST_CSV)"; metric="$(sg PERF_METRIC)"
-    vb="$(_perf_eval "$_PERF_CSV" "$base" "$_L/perf_${label}_vs_baseline.json" "$regress")"
+    vb="$(_perf_eval "$_PERF_CSV" "$base" "$_L/perf/${label}_vs_baseline.json" "$regress")"
     local vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
     IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
     local vbest_verdict="n/a" vbest_med="" vbest_worst="" vbest_cur="" vbest_base="" vbest_n="" _x
@@ -987,14 +989,14 @@ execute_step_perf_measure() {
         entry) action=keep ;;   # nothing to beat yet
         final)                  # the kept attempt, over all variants, vs the last confirmed full sweep
             if [ -n "$prev" ] && [ -s "$prev" ]; then
-                vprev="$(_perf_eval "$_PERF_CSV" "$prev" "$_L/perf_${label}_vs_prev.json" 0.5)"
+                vprev="$(_perf_eval "$_PERF_CSV" "$prev" "$_L/perf/${label}_vs_prev.json" 0.5)"
                 IFS='|' read -r vprev_verdict vprev_med vprev_worst _x _x _x _x _x _x vprev_key _x <<<"$vprev"
             fi
             case "$vprev_verdict" in improved|neutral|n/a) action=keep ;; *) action=revert ;; esac
             ;;
         *)
             if [ -n "$best" ] && [ -s "$best" ]; then
-                vbest="$(_perf_eval "$_PERF_CSV" "$best" "$_L/perf_${label}_vs_best.json" 0.5)"
+                vbest="$(_perf_eval "$_PERF_CSV" "$best" "$_L/perf/${label}_vs_best.json" 0.5)"
                 IFS='|' read -r vbest_verdict vbest_med vbest_worst vbest_cur vbest_base vbest_n _x _x _x _x _x <<<"$vbest"
             fi
             # neutral = no measured change on this variant: the optimizer decides (keep only if the
@@ -1016,34 +1018,34 @@ execute_step_perf_measure() {
 
 # ===========================================================================
 # Step 6 — make the kernel in the tree (measured as <label>) best-so-far: snapshot it
-# to $LOG_DIR/perf_best_*, record its standing vs the original. Prints next=.
+# to $LOG_DIR/perf/best_*, record its standing vs the original. Prints next=.
 # ===========================================================================
 execute_step_perf_keep() {
     local _L; _L="$(_LOG)"
     local label="${1:?label required}" wt algo gen csv
     if [ "$(sg PERF_ENABLED)" != "true" ]; then echo "PERF_KEEP: disabled next=done"; return 0; fi
-    csv="$_L/perf_${label}.post.csv"
+    csv="$_L/perf/${label}.post.csv"
     [ -s "$csv" ] || { echo "PERF_KEEP: no measurement for '${label}' — run execute_step_perf_measure ${label} first next=$(_perf_next)"; return 1; }
-    _perf_snapshot perf_best || return $?
+    _perf_snapshot best || return $?
     local full=false
     [ "$(sg PERF_LAST_LABEL)" = "$label" ] && [ "$(sg PERF_LAST_KIND)" = "full" ] && full=true
     local vb vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ
-    vb="$(_perf_set_best "$label" "$csv" "$_L/perf_${label}_vs_baseline.json" "$full")"
+    vb="$(_perf_set_best "$label" "$csv" "$_L/perf/${label}_vs_baseline.json" "$full")"
     IFS='|' read -r vb_verdict vb_med vb_worst vb_cur vb_base vb_n vb_imp vb_neu vb_reg vb_key vb_typ <<<"$vb"
     case "$label" in attempt*) ss PERF_KEPT "$(( $(sg PERF_KEPT) + 1 ))" --json ;; esac
     local tally=""
     if [ "$full" = "true" ]; then
         # A full sweep confirms this kernel: it is what a later final sweep is judged against
         # and what a rejected final falls back to.
-        _disk_guard cp "$csv" "$_L/perf_confirmed.post.csv" || return $?
-        cp "$_L/perf_${label}_vs_baseline.json" "$_L/perf_confirmed_vs_baseline.json"
-        _perf_snapshot perf_confirmed || return $?
-        ss PERF_FULL_CSV        "$_L/perf_confirmed.post.csv"
+        _disk_guard cp "$csv" "$_L/perf/confirmed.post.csv" || return $?
+        cp "$_L/perf/${label}_vs_baseline.json" "$_L/perf/confirmed_vs_baseline.json"
+        _perf_snapshot confirmed || return $?
+        ss PERF_FULL_CSV        "$_L/perf/confirmed.post.csv"
         ss PERF_CONFIRMED_LABEL "$label"
         tally="; ${vb_imp:-?} improved/${vb_neu:-?} neutral/${vb_reg:-?} regressed"
     fi
     rj message --message "Perf: kept ${label} as best — typical ${vb_typ:-?}, worst-variant ${vb_verdict} vs original (median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally} on $(sg PERF_METRIC))"
-    [ "$full" = "true" ] && _perf_reaim "$_L/perf_${label}_vs_baseline.json"
+    [ "$full" = "true" ] && _perf_reaim "$_L/perf/${label}_vs_baseline.json"
     echo "PERF_KEEP: best=${label} vs_baseline=${vb_verdict}(median ${vb_med:-?}%, worst ${vb_worst:-?}%${tally})${full:+ typical=${vb_typ:-?}}${vb_key:+ worst_variant=${vb_key}} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
 }
 
@@ -1062,9 +1064,9 @@ execute_step_perf_revert() {
     if [ "$label" = "final" ]; then
         local conf; conf="$(sg PERF_CONFIRMED_LABEL)"
         [ -n "$conf" ] || { echo "PERF_REVERT: no confirmed kernel to fall back to — nothing restored next=$(_perf_next)"; return 1; }
-        _perf_restore perf_confirmed
-        _perf_snapshot perf_best || return $?
-        _perf_set_best "$conf" "$(sg PERF_FULL_CSV)" "$_L/perf_confirmed_vs_baseline.json" true >/dev/null
+        _perf_restore confirmed
+        _perf_snapshot best || return $?
+        _perf_set_best "$conf" "$(sg PERF_FULL_CSV)" "$_L/perf/confirmed_vs_baseline.json" true >/dev/null
         local kept; kept="$(sg PERF_KEPT)"; [ "${kept:-0}" -gt 0 ] && ss PERF_KEPT "$((kept - 1))" --json
         rj message --message "Perf: final sweep regressed vs the confirmed kernel ($(sg PERF_LAST_VS_PREV)) — restored ${conf}"
         echo "PERF_REVERT: final sweep regressed vs confirmed kernel — restored ${conf} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
@@ -1080,7 +1082,7 @@ execute_step_perf_revert() {
     esac
     local best; best="$(sg PERF_BEST_LABEL)"
     [ -n "$best" ] || { echo "PERF_REVERT: no best snapshot recorded — nothing restored next=done"; return 1; }
-    _perf_restore perf_best
+    _perf_restore best
     rj message --message "Perf: reverted $(sg PERF_LAST_LABEL) — kept best=${best} ($(sg PERF_LAST_VS_BEST) vs best)"
     echo "PERF_REVERT: restored best=${best} attempts=$(sg PERF_ATTEMPTS)/$(sg PERF_MAX_ATTEMPTS) next=$(_perf_next)"
 }
@@ -1110,6 +1112,15 @@ execute_step_perf_finalize() {
     [ "${nreg:-0}" -gt 0 ] 2>/dev/null && note=" (${nreg} of $(sg PERF_BEST_VARIANTS) variants regressed: $(sg PERF_BEST_WORST_KEY))"
     ss PERF_VERDICT "$verdict"
     ss PERF_VERDICT_NOTE "$note"
+    # The loop is over: drop the working files. Kept for analysis: every <label>.post.csv,
+    # every *_vs_*.json, every <label>/ log dir, and confirmed_<kernel> (the exact kernel text
+    # that was measured, before the prettifier touched it).
+    local conf; conf="$(sg PERF_CONFIRMED_LABEL)"
+    if [ -n "$conf" ] && [ -s "$_L/perf/${conf}.post.csv" ]; then
+        [ "$(sg PERF_BEST_CSV)" = "$_L/perf/confirmed.post.csv" ] && ss PERF_BEST_CSV "$_L/perf/${conf}.post.csv"
+        ss PERF_FULL_CSV "$_L/perf/${conf}.post.csv"
+    fi
+    rm -f "$_L"/perf/*.raw.csv "$_L"/perf/best_* "$_L"/perf/confirmed.post.csv "$_L"/perf/confirmed_vs_baseline.json "$_L"/perf/baseline_collect.log
     rj metric --patch-json "$(_perf_json)" >/dev/null || true
     echo "PERF_FINAL: verdict=${verdict}${note} best=$(sg PERF_BEST_LABEL) typical=${typ} median=$(sg PERF_BEST_DELTA_MEDIAN_PCT)% worst=$(sg PERF_BEST_DELTA_WORST_PCT)% tally=$(sg PERF_BEST_VARIANTS_IMPROVED) improved/$(sg PERF_BEST_VARIANTS_NEUTRAL) neutral/$(sg PERF_BEST_VARIANTS_REGRESSED) regressed of $(sg PERF_BEST_VARIANTS) metric=$(sg PERF_METRIC) attempts=$(sg PERF_ATTEMPTS) kept=$(sg PERF_KEPT) rule=verdict-follows-median;all-attempts-used;re-aim-at-variants-slower-by-more-than-$(sg PERF_REGRESS_PCT)%"
 }
