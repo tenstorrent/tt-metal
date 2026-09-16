@@ -43,7 +43,7 @@ void kernel_main() {
 #endif
 #elif READ_ONE_PACKET
 #if PCIE_TRANSFER
-            noc_async_read_one_packet_pcie(noc_addr, read_ptr, page_size);
+            noc_async_read_pcie(noc_addr, read_ptr, page_size);
 #else
             noc_async_read_one_packet(noc_addr, read_ptr, page_size);
 #endif
