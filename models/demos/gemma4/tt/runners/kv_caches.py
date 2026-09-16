@@ -11,6 +11,7 @@ import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.attention.ring_prefill import init_packed_ring_kv_cache, init_ring_kv_cache
+from models.demos.gemma4.tt.runners.layer_selection import prefill_layer_ids
 
 
 @dataclass
@@ -23,6 +24,7 @@ class Gemma4KvCaches(KvCaches):
     max_seq_len: int
     sp: int
     tp: int
+    first_layer_idx: int = 0
 
     def __len__(self):
         return len(self.layers)
@@ -47,17 +49,19 @@ def allocate_ring_kv_caches(
     num_users: int,
     max_seq_len: int,
     num_layers: int | None = None,
+    first_layer_idx: int = 0,
     cache_dtype=ttnn.bfloat8_b,
 ) -> Gemma4KvCaches:
     """Allocate the sole compute+migration cache family for a CP prefill model."""
-    num_layers = num_layers or hf_config.num_hidden_layers
+    num_layers = hf_config.num_hidden_layers if num_layers is None else num_layers
     if num_users <= 0 or num_layers <= 0:
         raise ValueError(f"num_users and num_layers must be positive, got {num_users}, {num_layers}")
     if mesh_config.prefill.sp <= 1:
         raise ValueError("migration-ready Gemma 4 caches require context parallel prefill")
-    layer_types = tuple(hf_config.layer_types[:num_layers])
+    layer_ids = prefill_layer_ids(num_layers, first_layer_idx, len(hf_config.layer_types))
+    layer_types = tuple(hf_config.layer_types[i] for i in layer_ids)
     caches = []
-    for layer_idx, layer_type in enumerate(layer_types):
+    for layer_idx, layer_type in zip(layer_ids, layer_types):
         config = Gemma4AttentionConfig(hf_config, layer_idx)
         local_heads = 1 if layer_type == "full_attention" else config.num_key_value_heads // mesh_config.tp
         if layer_type == "full_attention":
@@ -89,4 +93,5 @@ def allocate_ring_kv_caches(
         max_seq_len=max_seq_len,
         sp=mesh_config.prefill.sp,
         tp=mesh_config.tp,
+        first_layer_idx=first_layer_idx,
     )

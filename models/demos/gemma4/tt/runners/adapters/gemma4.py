@@ -91,6 +91,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             num_users=params.num_users,
             max_seq_len=params.max_seq_len,
             num_layers=params.num_layers,
+            first_layer_idx=int(os.environ.get("PREFILL_GEMMA4_FIRST_LAYER", "0")),
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
@@ -106,7 +107,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
-            first_layer_idx=params.first_layer_idx,
+            first_layer_idx=int(os.environ.get("PREFILL_GEMMA4_FIRST_LAYER", "0")),
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             use_trace=params.use_trace,

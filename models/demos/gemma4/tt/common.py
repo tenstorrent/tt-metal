@@ -58,6 +58,7 @@ def create_tt_model(
     prefill_chunk_size=None,
     ring_kv_caches=None,
     prefill_weights_only: bool = False,
+    first_layer_idx: int = 0,
 ):
     """
     Create Gemma4 model, optionally omitting output weights for KV-only prefill.
@@ -78,7 +79,7 @@ def create_tt_model(
     hf_text_config = getattr(hf_config, "text_config", hf_config)
     model_args._hf_text_config = hf_text_config
 
-    if num_layers is not None:
+    if num_layers is not None and first_layer_idx == 0:
         model_args.num_hidden_layers = num_layers
 
     if mesh_config is None:
@@ -160,6 +161,7 @@ def create_tt_model(
         bounded_sliding_cache_slots=bounded_sliding_cache_slots,
         ring_kv_caches=ring_kv_caches,
         prefill_weights_only=prefill_weights_only,
+        first_layer_idx=first_layer_idx,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)

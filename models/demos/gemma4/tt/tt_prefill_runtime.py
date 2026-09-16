@@ -63,9 +63,7 @@ class TtPrefillRuntime:
         self._trace_request_id = 0
         self._trace_d2h_service = None
         self._trace_metadata_msg = None
-        if not (
-            config.is_first_rank and config.is_last_rank and config.first_layer_idx == 0 and config.mesh_shape == (8, 4)
-        ):
+        if not (config.is_first_rank and config.is_last_rank and config.mesh_shape == (8, 4)):
             raise NotImplementedError("Gemma 4 common prefill currently supports one CP8/TP4 rank")
         if config.max_seq_len % config.chunk_size:
             raise ValueError("max_seq_len must be divisible by chunk_size")
@@ -75,6 +73,8 @@ class TtPrefillRuntime:
     def _resolve_kv(self, kv_caches):
         if not isinstance(kv_caches, Gemma4KvCaches):
             raise TypeError(f"expected Gemma4KvCaches, got {type(kv_caches).__name__}")
+        if len(kv_caches) != self.config.num_layers or kv_caches.first_layer_idx != self.config.first_layer_idx:
+            raise ValueError("prefill runtime and KV caches must select the same model layers")
         return kv_caches
 
     def _build_model(self, kv_caches):
@@ -90,6 +90,7 @@ class TtPrefillRuntime:
             dtype=ttnn.bfloat16,
             state_dict=_cache_completion_state(self.model_path),
             num_layers=self.config.num_layers,
+            first_layer_idx=self.config.first_layer_idx,
             mesh_config=self.mesh_config,
             create_kv_cache=False,
             prefill_weights_only=True,  # This service produces KV without computing logits.

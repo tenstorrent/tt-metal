@@ -335,7 +335,18 @@ class Gemma4Model:
         ring_kv_caches=None,
         transformation_mats=None,  # Legacy parameter — ignored
         prefill_weights_only: bool = False,
+        first_layer_idx: int = 0,
     ):
+        from models.demos.gemma4.tt.runners.layer_selection import prefill_layer_ids
+
+        n_layers = hf_config.num_hidden_layers if num_layers is None else num_layers
+        self.layer_ids = prefill_layer_ids(n_layers, first_layer_idx, len(hf_config.layer_types))
+        if first_layer_idx and (
+            not prefill_weights_only
+            or getattr(hf_config, "num_kv_shared_layers", 0)
+            or getattr(hf_config, "hidden_size_per_layer_input", 0)
+        ):
+            raise NotImplementedError("a nonzero first layer requires KV-only prefill without KV sharing or PLI")
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         # KV-only service returns the decoder output without final norm or logits.
@@ -378,7 +389,6 @@ class Gemma4Model:
             "yes",
         )
         self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
-        n_layers = num_layers or hf_config.num_hidden_layers
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
         # any overrides loaded from precision_overrides.json; modules without
@@ -553,12 +563,12 @@ class Gemma4Model:
         self.layers = []
         if ring_kv_caches is not None and len(ring_kv_caches) != n_layers:
             raise ValueError(f"expected {n_layers} external ring caches, got {len(ring_kv_caches)}")
-        for i in range(n_layers):
+        for i, semantic_layer in enumerate(self.layer_ids):
             layer = Gemma4DecoderLayer(
                 mesh_device=mesh_device,
                 hf_config=hf_config,
                 state_dict=state_dict,
-                layer_idx=i,
+                layer_idx=semantic_layer,
                 ccl_manager=ccl_manager,
                 dtype=dtype,
                 shared_mlp_dtype=shared_mlp_dtype,
@@ -579,7 +589,7 @@ class Gemma4Model:
             if create_kv_cache and i not in self.kv_shared_layer_map and layer.self_attn.ring_kv_cache is None:
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
-                attn_cfg = Gemma4AttentionConfig(hf_config, i)
+                attn_cfg = Gemma4AttentionConfig(hf_config, semantic_layer)
                 # Bounded SlidingWindowSpec allocation for sliding layers: only enough
                 # physical blocks to cover one sliding-window-sized region per user,
                 # instead of one max_seq_len-sized region. Mirrors vLLM's hybrid
@@ -625,7 +635,7 @@ class Gemma4Model:
         # by speculative decoding (see tt/assistant/model.py + tt/spec_decode.py).
         self.last_kv_layer_by_type = {}
         for i in range(n_layers):
-            self.last_kv_layer_by_type[hf_config.layer_types[i]] = i
+            self.last_kv_layer_by_type[hf_config.layer_types[self.layer_ids[i]]] = i
 
         self.norm = None
         if not prefill_weights_only:
@@ -1073,7 +1083,7 @@ class Gemma4Model:
         # internal-cache decode path (rope_mats override paths keep their behavior).
         decode_rope_presliced = {}
         if is_decode and rope_mats is None and self.rope_caches_2d and position_idx is not None:
-            used_types = {self.hf_config.layer_types[i] for i in range(len(self.layers))}
+            used_types = {self.hf_config.layer_types[self.layer_ids[i]] for i in range(len(self.layers))}
             for lt in used_types:
                 if lt not in self.rope_caches_2d:
                     continue
@@ -1087,7 +1097,7 @@ class Gemma4Model:
         # the position tensor, so a replay picks up whatever positions the host staged.
         prefill_rope_presliced = {}
         if not is_decode and self._rope_prefill_positions is not None and self.rope_caches_2d:
-            for lt in {self.hf_config.layer_types[i] for i in range(len(self.layers))}:
+            for lt in {self.hf_config.layer_types[self.layer_ids[i]] for i in range(len(self.layers))}:
                 if lt not in self.rope_caches_2d:
                     continue
                 cos_2d, sin_2d = self.rope_caches_2d[lt]
@@ -1141,17 +1151,17 @@ class Gemma4Model:
             if rope_mats is not None:
                 if isinstance(rope_mats, dict):
                     # Dict mapping layer_type -> (cos, sin) — pre-sliced for trace decode
-                    layer_type = self.hf_config.layer_types[i]
+                    layer_type = self.hf_config.layer_types[self.layer_ids[i]]
                     layer_rope = rope_mats[layer_type]
                 else:
                     layer_rope = rope_mats  # Single (cos, sin) override (backward compat / tests)
             elif is_decode and decode_rope_presliced:
                 # Decode: use the per-layer-type cos/sin gathered once before the loop.
-                layer_rope = decode_rope_presliced[self.hf_config.layer_types[i]]
+                layer_rope = decode_rope_presliced[self.hf_config.layer_types[self.layer_ids[i]]]
                 rope_presliced = True
             elif is_decode:
                 # Decode fallback: return 2D caches for on-device embedding lookup
-                layer_rope = self._get_rope_mats(i, for_decode=True)
+                layer_rope = self._get_rope_mats(self.layer_ids[i], for_decode=True)
             else:
                 # Generator-level multi-chunk prefill: chunk N's tokens occupy
                 # absolute positions [chunk_start_idx, chunk_start_idx+seq_len);
@@ -1159,7 +1169,7 @@ class Gemma4Model:
                 # Device-tensor offsets stay inside the traced graph.
                 if isinstance(chunk_start_idx, ttnn.Tensor):
                     layer_rope = self._slice_prefill_rot_mats(
-                        self._get_rope_mats(i, start_pos=chunk_start_idx),
+                        self._get_rope_mats(self.layer_ids[i], start_pos=chunk_start_idx),
                         chunk_start_idx,
                         rope_seq_len,
                     )
@@ -1172,7 +1182,7 @@ class Gemma4Model:
                     cp = cp_degree(self.mesh_config)
                     if cp > 1:
                         rope_start_pos //= cp
-                    layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
+                    layer_rope = self._get_rope_mats(self.layer_ids[i], seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -1213,7 +1223,7 @@ class Gemma4Model:
 
             layer_packed = None
             if packed is not None:
-                lt = self.hf_config.layer_types[i]
+                lt = self.hf_config.layer_types[self.layer_ids[i]]
                 sliding = lt == "sliding_attention"
                 rope_packed = packed.get("rope_packed") or {}
                 layer_packed = {
@@ -1228,7 +1238,7 @@ class Gemma4Model:
 
             if (
                 not is_decode
-                and self.hf_config.layer_types[i] == "full_attention"
+                and self.hf_config.layer_types[self.layer_ids[i]] == "full_attention"
                 and packed_global_rope is None
                 and self._packed_global_rope_trans_mat is not None
             ):
@@ -1239,7 +1249,7 @@ class Gemma4Model:
 
             if (
                 not is_decode
-                and self.hf_config.layer_types[i] == "sliding_attention"
+                and self.hf_config.layer_types[self.layer_ids[i]] == "sliding_attention"
                 and packed_sliding_rope is None
                 and self._packed_global_rope_trans_mat is not None
             ):
@@ -1269,9 +1279,13 @@ class Gemma4Model:
                 packed=layer_packed,
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
-                packed_global_rope=(packed_global_rope if self.hf_config.layer_types[i] == "full_attention" else None),
+                packed_global_rope=(
+                    packed_global_rope if self.hf_config.layer_types[self.layer_ids[i]] == "full_attention" else None
+                ),
                 packed_sliding_rope=(
-                    packed_sliding_rope if self.hf_config.layer_types[i] == "sliding_attention" else None
+                    packed_sliding_rope
+                    if self.hf_config.layer_types[self.layer_ids[i]] == "sliding_attention"
+                    else None
                 ),
             )
 

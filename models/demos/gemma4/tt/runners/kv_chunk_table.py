@@ -81,7 +81,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
     tp = int(mesh_device.shape[tp_axis])
     if (sp, tp) != (8, 4) or kv_caches.sp != sp or kv_caches.tp != tp:
         raise ValueError(f"Gemma 4 migration currently requires CP8/TP4, got mesh={tuple(mesh_device.shape)}")
-    num_layers = len(kv_caches)
+    num_layers = kv_caches.first_layer_idx + len(kv_caches)
     configs = {
         name: _config(
             num_layers=num_layers,
@@ -138,7 +138,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
         for head in range(4):
             populate(
                 config_id=head,
-                semantic_layer=layer_idx,
+                semantic_layer=kv_caches.first_layer_idx + layer_idx,
                 tensor=cache.kv,
                 tp_column=head,
                 heads_per_device=1,
@@ -149,7 +149,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
         cache_k, cache_v = kv_caches[layer_idx]
         for head in range(16):
             common = dict(
-                semantic_layer=layer_idx,
+                semantic_layer=kv_caches.first_layer_idx + layer_idx,
                 tp_column=head // 4,
                 heads_per_device=4,
                 local_head=head % 4,

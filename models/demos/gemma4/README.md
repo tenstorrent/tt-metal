@@ -176,6 +176,21 @@ HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 \
 HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_single_layer
 ```
 
+### 31B prefill with a selected model-layer range
+
+The common CP8/TP4 prefill runner accepts `PREFILL_GEMMA4_FIRST_LAYER` (default `0`)
+alongside `PREFILL_NUM_LAYERS`. For example, `PREFILL_GEMMA4_FIRST_LAYER=57` and
+`PREFILL_NUM_LAYERS=3` execute model layers 57, 58, and 59, selecting their actual
+weights and attention types. Exported KV rows retain those model IDs and have
+extent 60; layer acknowledgements remain local ordinals 0, 1, and 2. A nonzero
+start requires KV-only prefill without KV sharing or per-layer inputs.
+
+The paired engine must map those acknowledgement ordinals to the same semantic
+layer IDs. The local [KVM 1P/1D guide](/data/hshah/tt-d-gen/kvm_docs/gemma4_kvm_1p1d.md)
+generates matching configs for full 60-layer prefill (default) or this three-layer
+tail, with decode fixed to layers 57–59. Host-only tests cover selection and table
+rows; this reduced deployment has not been validated on devices.
+
 ### 31B prefill KV migration loopback on Blackhole Galaxy
 
 This bring-up test exercises the common prefill runner's mixed global/sliding KV chunk
