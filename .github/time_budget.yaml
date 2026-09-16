@@ -86,6 +86,7 @@ ttnn:
     wh_llmbox_civ2: 40
     sim_wh_n150: 695  # +15 for trace allocation tracker simulator coverage
     sim_bh_p150: 680
+    sim_quasar_xl: 60  # tt-sim QSR only: "ttnn quasar group"
   unit:
     wh_llmbox: 50
     wh_galaxy: 125
