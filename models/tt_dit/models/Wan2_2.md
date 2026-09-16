@@ -184,6 +184,13 @@ The cliff between 0.06 and 0.07 is about *when* caching starts rather than how m
 high-noise expert starts caching at step 5, at 0.06 at step 10. Steps before ~10 change the trajectory
 strongly, so 0.06 is the recommended setting for 720p.
 
+For comparison, a vLLM-Omni style recipe (`Fn_compute_blocks=8`, threshold 0.12, warmup 4, no cached-step cap,
+3 consecutive) at 480p gives 1.22x with PCC 0.944 / 20.1 dB, i.e. the same speed as the default preset at lower
+fidelity: computing 8 of 40 blocks on every cached step costs 20% of a step, so it needs 10 cached steps per
+branch (starting at step 9) to match what F1 reaches with 8. Thresholds are not comparable across `Fn` values
+(the residual after 8 blocks is roughly twice as large, so 0.08 never caches with F8). TaylorSeer order 1 on
+top of it: 1.20x, PCC 0.934.
+
 The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
 bit-exact as well.
