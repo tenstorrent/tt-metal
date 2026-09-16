@@ -16,6 +16,7 @@ from loguru import logger
 
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
+from ..events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, LTXPipeline, latent_grid
 
 
@@ -86,15 +87,18 @@ class LTXOneStagePipeline(LTXPipeline):
         seed: int = 10,
         ge_gamma: float = 0.0,
         fps: int = 24,
+        on_event: PipelineEventCallback | None = None,
     ) -> str:
         """Run LTX-2.3 Pro AV generation and write an MP4. Guidance defaults match the
         reference ``LTX_2_3_PARAMS``; ``ge_gamma`` > 0 enables gradient-estimation sampling."""
         neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
+        on_event = on_event if on_event is not None else null_callback
 
         total_t0 = time.time()
         timings: list[tuple[str, float]] = []
 
         t0 = time.time()
+        on_event(SectionStart("encoder"))
         # Gemma is coresident-excluded with the DiT/VAE; load it only on a cache miss.
         cached = os.path.exists(self._device_embed_cache_path([prompt, neg]))
         if not cached:
@@ -104,11 +108,13 @@ class LTXOneStagePipeline(LTXPipeline):
         neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
+        on_event(SectionEnd("encoder"))
         logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
 
         self._prepare_transformer(0)
 
         t0 = time.time()
+        on_event(SectionStart("denoising"))
         video_latent, audio_latent = self.call_av(
             video_prompt_embeds=v_embeds,
             audio_prompt_embeds=a_embeds,
@@ -128,9 +134,11 @@ class LTXOneStagePipeline(LTXPipeline):
             stg_block=stg_block,
             seed=seed,
             ge_gamma=ge_gamma,
+            on_event=on_event,
         )
         denoise_time = time.time() - t0
         timings.append(("Denoise", denoise_time))
+        on_event(SectionEnd("denoising"))
         logger.info(f"Denoising: {denoise_time:.1f}s ({denoise_time / num_inference_steps:.1f}s/step)")
 
         t0 = time.time()
@@ -140,14 +148,18 @@ class LTXOneStagePipeline(LTXPipeline):
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
 
         t0 = time.time()
+        on_event(SectionStart("vae"))
         video_pixels = self.decode_latents(video_latent, latent_frames, latent_h, latent_w)
         t_vae = time.time() - t0
         timings.append(("VAE decode", t_vae))
+        on_event(SectionEnd("vae"))
         logger.info(f"VAE decode: {t_vae:.1f}s — {video_pixels.shape}")
 
         t0 = time.time()
+        on_event(SectionStart("audio_decode"))
         audio_obj = self.decode_audio(audio_latent, num_frames, fps=fps)
         timings.append(("Audio decode", time.time() - t0))
+        on_event(SectionEnd("audio_decode"))
         export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
 
         self.last_timings = list(timings)
