@@ -102,7 +102,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
         0.0f));
 
     // Step 5: Configure packer for scalar reduction
-    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<PoolType::SUM, ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
 
     // Step 6: Perform column reduction for each product tile, accumulating into dest[0]
     // First iteration (i=0) - no move needed
