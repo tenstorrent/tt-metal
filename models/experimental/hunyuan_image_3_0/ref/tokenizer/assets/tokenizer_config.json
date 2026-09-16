@@ -1,8 +1,0 @@
-{
-    "bos_token": "<|startoftext|>",
-    "clean_up_tokenization_spaces": true,
-    "eos_token": "<|endoftext|>",
-    "model_max_length": 1048576,
-    "pad_token": "<pad>",
-    "tokenizer_class": "PreTrainedTokenizerFast"
-}
