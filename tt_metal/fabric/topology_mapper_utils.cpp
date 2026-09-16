@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -826,8 +827,12 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
     const std::optional<PinningsByMesh>& pinnings) {
+    const auto gv_start = std::chrono::steady_clock::now();
     auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgd(
         mesh_graph_descriptor, physical_system_descriptor, pinnings);
+    const auto gv_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gv_start).count();
+    log_info(tt::LogFabric, "TIMING get_valid_groupings_for_mgd: {} ms", gv_ms);
     return build_physical_from_adjacency_guided_placement(
         physical_system_descriptor, physical_grouping_descriptor, {&mesh_graph_descriptor}, valid_groupings);
 }

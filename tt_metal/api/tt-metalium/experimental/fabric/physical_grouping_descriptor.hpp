@@ -89,9 +89,17 @@ struct GroupingInfo {
     // match (callers then assume row-major identity).
     std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 
-    // PGD node -> host partition index from the matched MGD host_topology at PGD<->MGD commit time. Empty for
-    // single-host meshes; enumerate then uses a soft same-host preference instead of a required partition.
+    // PGD node -> host partition index from the matched MGD host_topology at PGD<->MGD commit time. A declared
+    // host_topology of [1,1] is one partition, not an absent opinion, so it is populated here like any other and
+    // held to the same containment rule. Empty only when the descriptor declared no host topology at all;
+    // enumerate then uses a soft same-host preference instead of a required partition.
     std::map<LogicalChipId, uint32_t> mesh_node_to_host_group;
+
+    // PGD node -> index of the descriptor's own declared host holding that chip, filled in while the mesh is
+    // flattened. This is the descriptor's host level, not the machine's: it says which of the HOSTS groupings a
+    // chip of this variant belongs to, so a declared rank can be held against it before a match is chosen.
+    // Empty when the descriptor declares no hosts, or names chips no single declared host holds.
+    std::map<LogicalChipId, uint32_t> mesh_node_to_pgd_host_group;
 
     GroupingInfo();
     ~GroupingInfo();
@@ -154,9 +162,6 @@ struct PlacementSolveStats {
     std::size_t master_growth_rounds = 0;          ///< Column-generation rounds after the initial batch
     std::size_t master_sat_attempts = 0;           ///< Master SAT encode+solve attempts (tiers x rounds)
     bool candidate_lists_complete = false;
-    /// On failure: size of a maximal co-placeable subset of meshes (greedy, under the relaxed seam tier when
-    /// the policy allows it). 0 when the diagnosis did not run. The subset itself is logged.
-    std::size_t master_closest_meshes_placed = 0;
     std::size_t master_sat_vars = 0;     ///< Variables in the last master encoding
     std::size_t master_sat_clauses = 0;  ///< Clauses in the last master encoding
     std::chrono::microseconds master_enumeration_elapsed{};
@@ -401,6 +406,11 @@ private:
 
     // Internal helper to convert proto grouping to GroupingInfo
     GroupingInfo convert_grouping_to_info(const proto::Grouping& grouping) const;
+
+    // Fills mesh_node_to_pgd_host_group for one flattened mesh variant from the descriptor's flattened
+    // HOSTS groupings, by the chip slots each of them names.
+    void assign_pgd_host_groups(
+        GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const;
 
     // Helper to get ASIC count for a grouping name (from cache)
     uint32_t get_grouping_asic_count(const std::string& grouping_name) const;

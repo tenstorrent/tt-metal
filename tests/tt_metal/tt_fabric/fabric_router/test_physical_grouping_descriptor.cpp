@@ -55,6 +55,29 @@ static tt::tt_metal::PhysicalSystemDescriptor create_psd_from_mock_cluster() {
         *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 }
 
+// Splits a committed list into the PGD layouts and the MGD fallback.
+//
+// get_valid_groupings_for_mgd offers the MGD's own topology last, under the mesh descriptor's own name, after
+// any PGD groupings that committed. It is a fallback rather than a layout and carries no chip -> slot pinning,
+// so a test reading a committed list for where chips landed has to set it aside first.
+struct CommittedGroupings {
+    std::vector<GroupingInfo> pgd_layouts;     // In priority order, as the matcher committed them.
+    std::optional<GroupingInfo> mgd_fallback;  // The MGD's own topology, when it was offered at all.
+};
+
+static CommittedGroupings split_off_mgd_fallback(
+    const std::vector<GroupingInfo>& committed, const std::string& mgd_instance_name) {
+    CommittedGroupings split;
+    for (const auto& grouping : committed) {
+        if (grouping.name == mgd_instance_name) {
+            split.mgd_fallback = grouping;
+        } else {
+            split.pgd_layouts.push_back(grouping);
+        }
+    }
+    return split;
+}
+
 // Helper to check that a node's neighbors match expected (order-independent)
 static void expect_neighbors(
     const AdjacencyGraph<uint32_t>& graph, uint32_t node_id, const std::vector<uint32_t>& expected) {
@@ -2099,8 +2122,13 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_SingleGalaxy4
         }
     }
 
-    // A 4x8 (32-ASIC) mesh matches both the MESH and a torus variant of the 4x8_Mesh grouping → 2 matches.
-    ASSERT_EQ(total_groupings, 2u) << "Should have two valid grouping matches (mesh + torus variant)";
+    // A 4x8 (32-ASIC) mesh matches both the MESH and a torus variant of the 4x8_Mesh grouping → 2 matches,
+    // and the MGD's own topology is offered after them, so the committed list holds three entries.
+    ASSERT_EQ(total_groupings, 3u)
+        << "Should have two valid grouping matches (mesh + torus variant) plus the MGD fallback";
+    const auto committed = split_off_mgd_fallback(valid_groupings.at("MESH").at("M0"), "M0");
+    EXPECT_EQ(committed.pgd_layouts.size(), 2u) << "the mesh and its torus variant are the PGD matches";
+    EXPECT_TRUE(committed.mgd_fallback.has_value()) << "the MGD's own topology should be offered after them";
 
     // Check that we have matches for MESH instances
     ASSERT_EQ(valid_groupings.size(), 1u) << "Should have exactly one instance type (MESH)";
@@ -2571,9 +2599,16 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     EXPECT_TRUE(found_single_host_mesh) << "Expected 4x4_Mesh (single-host two-tray) grouping to match";
     EXPECT_TRUE(found_split_host) << "Expected 4x4_SplitHost grouping to be committed alongside 4x4_Mesh";
 
-    const auto& committed_groupings = valid_groupings.at("MESH").at("M0");
+    // The committed list ends with the MGD fallback, which carries no pinning, so only the PGD layouts are
+    // placed below: a placement keeps its grouping's pinning but not the grouping, leaving no way to tell
+    // an unpinned placement from a pinned one afterwards.
+    const auto committed = split_off_mgd_fallback(valid_groupings.at("MESH").at("M0"), "M0");
+    ASSERT_FALSE(committed.pgd_layouts.empty()) << "M0 should have at least one matching PGD grouping";
+    ASSERT_TRUE(committed.mgd_fallback.has_value())
+        << "the MGD's own topology should be offered alongside the PGD groupings that committed";
+
     // TODO(plan 3 §8(a)): rewrite onto solve_adjacency_guided_placement when find_all_in_psd is deleted.
-    const auto placements = pgd.find_all_in_psd(committed_groupings, psd);
+    const auto placements = pgd.find_all_in_psd(committed.pgd_layouts, psd);
     ASSERT_FALSE(placements.empty()) << "Should find at least one PSD placement for the 4x4 mesh";
 
     for (const auto& placement : placements) {
@@ -2733,21 +2768,29 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinn
 // The machine is test_16asic_4x4_four_hosts_by_quadrant; its header draws the grid and names the host of
 // every ASIC. A [2,2] partition is invariant under the rotations a wrapped mesh would add, so these hold
 // for RING/RING as they do here; the RING/RING path is exercised by PhysicalGroupingDescriptorTestsHostSplit further
-// down under Phase2AgreesWithPhase1OnASymmetricTorus, which also tests this rule on a 2x4, where the shape is not
+// down under AlignedSplitOnASymmetricTorusCommits, which also tests this rule on a 2x4, where the shape is not
 // square and no rotation can satisfy an axis by accident.
 
-// The 4x4 on a machine split into four hosts, one per quadrant, declaring [2,2]: four ranks of 4 chips
-// that line up with the quadrants exactly. The split-host case where the machine is divided on both axes
-// at once, so containment has to hold in both directions at the same time.
+// The 4x4 on the quadrant machine, handed a descriptor whose own host level disagrees with it: the PGD
+// claims eight hosts of 2 chips, each half a tray, where the machine has four hosts of 4. The MGD declares
+// [2,2], four ranks of 4 chips lining up with the quadrants exactly, so against the machine alone this is
+// the aligned case. Against the descriptor it is impossible: a rank is one process on one host, and a
+// 4-chip rank does not fit inside a 2-chip host, so no seating exists and nothing may be committed.
 //
-//   machine: four hosts, one per quadrant      MGD host_topology [2,2]
+//   machine: four hosts per quadrant    the PGD's eight half-tray hosts    MGD host_topology [2,2]
 //
-//     100 101 | 102 103    h0 h0 h1 h1           aa | bb     four ranks of 4 chips, each
-//     104 105 | 106 107    h0 h0 h1 h1           aa | bb     one sitting on one quadrant:
-//     --------+--------                          ---+---     the declared grid and the host
-//     108 109 | 110 111    h2 h2 h3 h3           cc | dd     grid are the same partition
-//     112 113 | 114 115    h2 h2 h3 h3           cc | dd
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_QuadrantSplitPsdMatchingQuadrantMgdCommits) {
+//     100 101 | 102 103   h0 h0 h1 h1        p p | q q                          aa | bb
+//     104 105 | 106 107   h0 h0 h1 h1        r r | s s                          aa | bb
+//     --------+--------                      ----+----                          ---+---
+//     108 109 | 110 111   h2 h2 h3 h3        t t | u u                          cc | dd
+//     112 113 | 114 115   h2 h2 h3 h3        v v | w w                          cc | dd
+//
+// The refusal is right but later than it should be. A descriptor claiming hosts its machine does not have
+// is wrong about the machine whatever workload arrives, so it belongs to the PGD<->PSD check that
+// get_valid_groupings_for_mgd still carries as a FIXME; what refuses it today is the MGD<->PGD host
+// constraint, which simply finds no seating. QuadrantSplitPsdFinerSplitInsideEachQuadrantCommits is this
+// machine with a host level that agrees with it, and is where the aligned split is checked.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_RanksCoarserThanTheDescriptorsOwnHostsCommitNothing) {
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_four_hosts_by_quadrant.textproto");
 
@@ -2830,53 +2873,15 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     const auto valid_groupings =
         pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
 
-    std::vector<GroupingInfo> committed;
     for (const auto& [preset, by_instance] : valid_groupings) {
         for (const auto& [instance, groupings] : by_instance) {
             for (const auto& grouping : groupings) {
-                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                    committed.push_back(grouping);
-                }
+                // The MGD's own topology is offered last under the mesh descriptor's name and carries no
+                // seating, so it is not a commit of the PGD's layout.
+                EXPECT_TRUE(grouping.name == "M0" || grouping.mesh_node_to_asic_position.empty())
+                    << "'" << grouping.name << "' was committed, seating a 4-chip rank on 2-chip hosts";
             }
         }
-    }
-
-    // host_topology [2,2] on a 4x4 declares four ranks, each a 2x2 block.
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {
-        {0, 1, 4, 5}, {2, 3, 6, 7}, {8, 9, 12, 13}, {10, 11, 14, 15}};
-
-    // Against the PSD's hosts this is the aligned case and the seating is correct, so check it first:
-    // whatever came back has each declared rank inside one quadrant of the machine.
-    for (std::size_t rank = 0; rank < declared_ranks.size() && !committed.empty(); ++rank) {
-        std::set<uint32_t> psd_hosts;
-        for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
-            // Quadrant of the ASIC: trays 1-2 are the top half, asic_locations 1-2 the left half.
-            psd_hosts.insert(((*position.first - 1) / 2) * 2 + (*position.second - 1) / 2);
-        }
-        EXPECT_EQ(psd_hosts.size(), 1u) << "declared rank " << rank << " was seated across " << psd_hosts.size()
-                                        << " hosts of the machine";
-    }
-
-    // TODO: and now the same question against the PGD's host level, which is the half of the contract
-    // that is not implemented. The PGD above declares eight 2-chip hosts where the MGD declares four
-    // 4-chip ranks, so every declared rank needs two PGD hosts -- the coarser-than-the-hosts violation
-    // that CoarserSplitThanThePhysicalHostsIsRejected rejects when the hosts come from the PSD. The only
-    // correct answer is a refusal, so this loop is guarded on a non-empty commit and will pass once the
-    // matcher consults the PGD hosts and declines. Today it commits and the loop fails, because the
-    // HOSTS grouping is parsed and then never consulted: the host split is taken from the MGD alone, in
-    // compose_mesh_node_to_host_group_from_mgd_match, and checked only against the PSD. Same root cause
-    // as the rotation gap -- there is no PGD host level in the matching -- so both go away together.
-    for (std::size_t rank = 0; rank < declared_ranks.size() && !committed.empty(); ++rank) {
-        std::set<uint32_t> pgd_hosts;
-        for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
-            // The PGD's halfrow holding this ASIC: one per tray half.
-            pgd_hosts.insert((*position.first - 1) * 2 + (*position.second - 1) / 2);
-        }
-        EXPECT_EQ(pgd_hosts.size(), 1u) << "declared rank " << rank << " was seated across " << pgd_hosts.size()
-                                        << " hosts of the PGD, which declares finer hosts than the MGD declares "
-                                           "ranks -- the grouping should not have been committed at all";
     }
 }
 
@@ -3037,28 +3042,17 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
 // ----- cases the PGD host level is needed for ---------------------------------------------------
 
-// FIXME: a PGD that declares hosts the machine does not have should be rejected, and nothing rejects
-// it. Every PGD in this file that is used with a PSD declares a host level aligned with that PSD's
-// hosts, because that is what a PGD is -- a description of the machine. This test hands the matcher one
-// that disagrees, and it is accepted.
+// A PGD whose declared hosts are hosts the machine has is used as declared. Only such hosts reach the
+// matcher: the ones the machine does not have are dropped as the host level is flattened, so this holds
+// that the dropping cannot widen into one that also turns away a PGD describing the machine correctly.
+// Same machine and MGD as the host-split tests, with a PGD drawing its hosts where the machine's are:
 //
-// The machine is cut by column and the PGD claims its hosts are the trays:
+//   machine: hosts cut by column       PGD claims the same two columns
 //
-//   machine: hosts cut by column       PGD declares hosts by row
-//
-//     100 101 | 102 103                  hhhh   <- claimed host 0, one tray
-//     104 105 | 106 107                  iiii   <- claimed host 1
-//      host0  |  host1                   each claimed host spans both real ones
-//
-// Neither claimed host is a subset of a real one, so no seating can satisfy both, and every answer the
-// matcher gives from here is built on a false picture of the machine.
-//
-// The check to add, at the enumerate stage: flatten each declared PGD host to the set of chips it holds,
-// and require that for at least one of the PGD's variants every flattened host lands inside a single PSD
-// host. One variant matching is enough -- a PGD legitimately offers several orientations and only needs
-// one that fits the machine it is given -- but if none does, the descriptor does not describe this
-// machine and should throw rather than be quietly used.
-TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PgdHostsThatContradictThePsdAreRejected) {
+//     100 101 | 102 103                  hh | ii     each claimed host is exactly
+//     104 105 | 106 107                  hh | ii     one real host
+//      host0  |  host1
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PgdHostsThatMatchThePsdAreAccepted) {
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
 
@@ -3081,19 +3075,19 @@ groupings {
   }
 }
 
-# Hosts by row, on a machine whose hosts are by column: each of these spans both real hosts.
+# Hosts by column, which is how this machine is actually cut: each claimed host is one real host.
 groupings { name: "2x4_hosts" preset_type: HOSTS
   instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
                { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [1, 4] } }
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
 groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
                { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
                { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [1, 4] } }
+  row_major_mesh { dims: [2, 2] } }
 )")};
 
     MeshGraphDescriptor mgd{std::string(R"(
@@ -3108,8 +3102,152 @@ mesh_descriptors {
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 )")};
 
-    EXPECT_ANY_THROW(pgd.get_valid_groupings_for_mgd(mgd, psd))
-        << "a PGD whose declared hosts fit no PSD host does not describe this machine";
+    ValidGroupingsMap valid_groupings;
+    ASSERT_NO_THROW(valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd))
+        << "a PGD whose declared hosts are the machine's own hosts describes this machine";
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    EXPECT_FALSE(committed.empty()) << "and its layout should still be committed";
+}
+
+// Declaring hosts is optional, and a PGD that declares none must be left alone -- but only by the check
+// that reads the PGD's host level. The MGD's own declared split is still held against the machine, and
+// the point of this test is which of the two answers.
+//
+// The PGD offers a 2x4 layout and says nothing about who owns the chips. The same PGD and the same two
+// MGDs are put to two machines:
+//
+//   PGD: a layout, no hosts     MGD [1,2]     MGD [2,1]
+//
+//     mmmm                        aa | bb       aaaa
+//     mmmm                        aa | bb       bbbb
+//
+//   machine A: one host          machine B: hosts cut by column
+//
+//     100 101 102 103              100 101 | 102 103
+//     104 105 106 107              104 105 | 106 107
+//          host0                    host0  |  host1
+//
+// On machine A both splits commit: the layouts are isomorphic, and with no host boundary anywhere there
+// is nothing either split could cross. That is the MGD<->PGD match going through untouched, and it is
+// the evidence that the absent PGD host level objects to nothing. On machine B the layout match is the
+// same but the PGD<->PSD half now has hosts to answer to, and [2,1] is refused there -- by the MGD's
+// split meeting the machine's hosts, and not by anything to do with the PGD's own hosts, which this
+// descriptor does not declare and so is never asked about.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PgdWithoutDeclaredHostsIsNotChecked) {
+    auto undivided_machine = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
+    auto machine_cut_by_column = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+)")};
+
+    // One split along the machine's own boundary and one across it.
+    for (const auto& [host_dims, seats_on_this_machine] :
+         std::vector<std::pair<std::string, bool>>{{"[ 1, 2 ]", true}, {"[ 2, 1 ]", false}}) {
+        MeshGraphDescriptor mgd{
+            std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: )") +
+            host_dims + R"( }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)"};
+
+        // Machine A, where no host boundary exists: the layout match goes through and the split has
+        // nothing to cross, so this commits whichever way the split runs.
+        ValidGroupingsMap on_undivided;
+        ASSERT_NO_THROW(
+            on_undivided = pgd.get_valid_groupings_for_mgd(
+                mgd, undivided_machine, /*pinnings=*/std::nullopt, /*require_placement=*/false))
+            << host_dims << ": a PGD that declares no hosts has nothing to contradict";
+
+        std::vector<GroupingInfo> committed_on_undivided;
+        for (const auto& [preset, by_instance] : on_undivided) {
+            for (const auto& [instance, groupings] : by_instance) {
+                for (const auto& grouping : groupings) {
+                    if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                        committed_on_undivided.push_back(grouping);
+                    }
+                }
+            }
+        }
+        EXPECT_FALSE(committed_on_undivided.empty())
+            << host_dims << ": the MGD<->PGD match should commit, since the absent PGD host level is the "
+            << "only thing that could have objected to this split";
+
+        // Machine B, same PGD and same MGD, with hosts. The PGD<->PSD half now has a boundary to answer
+        // to, and the split laid across it is refused there.
+        ValidGroupingsMap on_split;
+        ASSERT_NO_THROW(
+            on_split = pgd.get_valid_groupings_for_mgd(
+                mgd, machine_cut_by_column, /*pinnings=*/std::nullopt, /*require_placement=*/false))
+            << host_dims << ": the rejection should be a verdict, not a crash";
+
+        std::vector<GroupingInfo> committed_on_split;
+        for (const auto& [preset, by_instance] : on_split) {
+            for (const auto& [instance, groupings] : by_instance) {
+                for (const auto& grouping : groupings) {
+                    if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                        committed_on_split.push_back(grouping);
+                    }
+                }
+            }
+        }
+        EXPECT_EQ(!committed_on_split.empty(), seats_on_this_machine)
+            << host_dims << ": PGD<->PSD should " << (seats_on_this_machine ? "seat" : "refuse")
+            << " this split on a machine cut by column, and it committed " << committed_on_split.size()
+            << " grouping(s)";
+
+        // The same rule reaches the MGD fallback, the last-resort variant offered under the mesh
+        // descriptor's own name. It is the MGD's own topology, so it carries the declared split directly,
+        // and a split laid across the machine's boundary leaves it unplaceable and so unoffered. Were it
+        // exempt, refusing the PGD grouping would achieve nothing: the fallback would seat the same mesh
+        // with the same rank straddling the same two hosts.
+        bool fallback_offered_on_split = false;
+        for (const auto& [preset, by_instance] : on_split) {
+            for (const auto& [instance, groupings] : by_instance) {
+                for (const auto& grouping : groupings) {
+                    fallback_offered_on_split = fallback_offered_on_split || grouping.name == "M0";
+                }
+            }
+        }
+        EXPECT_EQ(fallback_offered_on_split, seats_on_this_machine)
+            << host_dims << ": the MGD fallback should be " << (seats_on_this_machine ? "offered" : "withheld")
+            << " on a machine cut by column";
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -5886,25 +6024,18 @@ groupings {
   row_major_mesh { dims: [1, 1] }
 }
 
-# The machine's host level: one host owning all 4 chips, wired the way the machine is.
-# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
-# connection block is that host's own topology -- spelled out link by link here, because
-# this machine is two disjoint pairs.
+# The machine's host level: one host owning all 3 chips, laid out the way the machine is,
+# a 1x3 line. One preset_type: HOSTS grouping is one host and what it holds is that
+# host's chips.
 groupings {
   name: "machine_host"
   preset_type: HOSTS
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
     { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
-    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
-    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
   ]
-  custom {
-    connections: [
-      { src_instance: 0 dst_instance: 1 },
-      { src_instance: 2 dst_instance: 3 }
-    ]
-  }
+  row_major_mesh { dims: [1, 3] }
 }
 )delimiter")};
     MeshGraphDescriptor mgd{std::string(R"delimiter(
@@ -6009,10 +6140,9 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
 // each caller writes both out next to the PGD that declares them. Takes the seating rather than the
 // grouping, so a matcher GroupingInfo and a placement result can both be checked with it.
 //
-// TODO: nothing in the matcher reads a PGD host level. The split is taken from the MGD alone, in
-// compose_mesh_node_to_host_group_from_mgd_match, and checked only against the PSD, so the HOSTS
-// groupings are parsed and then ignored. These checks are the target behaviour rather than a live
-// constraint: where one fails, it marks the missing MGD<->PGD host match rather than a regression.
+// The matcher now holds the MGD's declared split against the descriptor's own hosts before it picks a
+// match, in configure_mgd_pgd_host_alignment_constraints, so these are live constraints: a failure here
+// is a seating the matcher should not have returned.
 void expect_each_rank_inside_one_pgd_host(
     const std::map<LogicalChipId, tt::tt_metal::ASICPosition>& seating,
     const std::vector<std::vector<LogicalChipId>>& declared_ranks,
@@ -6041,6 +6171,34 @@ void expect_each_rank_inside_one_pgd_host(
 // it reports a footprint and nothing to check a host split against. Leaving it in would also not test
 // what these tests are about, since SAT joint placement currently seats it ahead of a placeable PGD
 // grouping (AdjacencyGuidedPlacement.PlaceableMgdFallbackDoesNotOutrankPgd, failing).
+// Runs the mapper over a placement the way TopologyMapper runs it for a split mesh: the machine's hosts,
+// and the rank the MGD declares for every fabric node.
+//
+// Rank bindings stay on. TopologyMapper sets disable_rank_bindings from generate_mapping_locally_, which is
+// one mesh declaring one host rank, so a mesh with a split never reaches the mapper with them off -- and the
+// mapper's host containment (each rank onto a single host, via set_same_rank_groups_constraint) lives inside
+// add_rank_binding_constraints. asic_id_to_mesh_rank is left empty, which marks every host UNSET and so
+// leaves which host holds which rank to the solver rather than pinning it here.
+utils::TopologyMappingResult map_placement_with_declared_ranks(
+    const utils::LogicalMultiMeshGraph& logical,
+    const utils::PhysicalMultiMeshGraph& physical,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const std::vector<std::vector<LogicalChipId>>& declared_ranks) {
+    utils::TopologyMappingConfig config;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        config.hostname_to_asics[descriptor.host_name].insert(asic_id);
+    }
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            fabric_node_id_to_mesh_rank[MeshId{0}][FabricNodeId(MeshId{0}, chip)] =
+                MeshHostRankId{static_cast<uint32_t>(rank)};
+        }
+    }
+    return utils::map_multi_mesh_to_physical(
+        logical, physical, config, /*asic_id_to_mesh_rank=*/{}, fabric_node_id_to_mesh_rank);
+}
+
 ValidGroupingsMap without_mgd_fallback(ValidGroupingsMap valid_groupings, const std::string& mgd_mesh_name) {
     for (auto& [preset, by_instance] : valid_groupings) {
         for (auto& [instance, groupings] : by_instance) {
@@ -6051,97 +6209,6 @@ ValidGroupingsMap without_mgd_fallback(ValidGroupingsMap valid_groupings, const 
 }
 
 // ----- Phase 1: get_valid_groupings_for_mgd ----------------------------------------------------
-
-// A mesh host rank is one process on one host, so it cannot own chips on two hosts. That makes the
-// contract between an MGD's host_topology and the PSD's hosts one-directional, and it is what every
-// test from here on is checking:
-//
-//   a physical host boundary may never cut through a declared mesh host rank,
-//   but a declared rank boundary may sit anywhere inside a physical host.
-//
-// This first case has neither: nothing is declared and nothing is split, so there is no contract to
-// check and the grouping commits.
-//
-//   machine: one host              MGD host_topology [1,1]
-//
-//     100 101 102 103                aaaa      one rank owning all 8 chips, and one
-//     104 105 106 107                aaaa      host to put it on
-//          host0
-TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostPsdSingleHostMgdCommits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
-
-    PhysicalGroupingDescriptor pgd{std::string(R"(
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
-  ]
-  row_major_mesh {
-    dims: [2, 4]
-  }
-}
-
-# The PGD's own host level, mirroring the machine: one host holding all 8 chips.
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-               { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-               { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [2, 4] } }
-)")};
-
-    MeshGraphDescriptor mgd{std::string(R"(
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 1, 1 ] }
-  channels { count: 2 policy: STRICT }
-}
-
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)")};
-
-    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-
-    // The committed groupings that came from the PGD. The MGD fallback is named after the MGD instance
-    // and carries no layout, so it is not evidence that the PGD matched.
-    std::vector<GroupingInfo> committed;
-    for (const auto& [preset, by_instance] : valid_groupings) {
-        for (const auto& [instance, groupings] : by_instance) {
-            for (const auto& grouping : groupings) {
-                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                    committed.push_back(grouping);
-                }
-            }
-        }
-    }
-
-    ASSERT_FALSE(committed.empty()) << "an undeclared split on an undivided machine has nothing to violate";
-    EXPECT_EQ(committed.front().mesh_node_to_asic_position.size(), 8u);
-
-    // The PGD's declared hosts, as the slots each one holds, and the rank that has to land inside one:
-    //
-    //   rank a = chips 0 1 2 3 4 5 6 7 -> slots (1,1) (1,2) (1,3) (1,4) (2,1) (2,2) (2,3) (2,4)
-    //   PGD host0 = all eight of those slots, so a is inside it
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}, {1, 3}, {1, 4}, {2, 1}, {2, 2}, {2, 3}, {2, 4}}};
-    expect_each_rank_inside_one_pgd_host(
-        committed.front().mesh_node_to_asic_position, {{0, 1, 2, 3, 4, 5, 6, 7}}, pgd_hosts);
-}
 
 // The declared split is finer than the machine: both ranks live on the one host. Legal -- ranks sharing a
 // host is ordinary, and no host boundary exists to cut either of them.
@@ -6224,100 +6291,68 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         {{1, 1}, {1, 2}, {1, 3}, {1, 4}, {2, 1}, {2, 2}, {2, 3}, {2, 4}}};
     const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
     expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-}
 
-// Declared split and physical split agree: two ranks of one column-half each, on a machine split by
-// column. Each rank lands wholly on one host.
-//
-//   machine: hosts cut by column     MGD host_topology [1,2]
-//
-//     100 101 | 102 103                aa | bb    the declared boundary and the
-//     104 105 | 106 107                aa | bb    physical one are the same line:
-//      host0  |  host1                            a is host0, b is host1
-TEST(PhysicalGroupingDescriptorTestsHostSplit, ColumnSplitPsdColumnSplitMgdCommits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+    // A seating names slots, the machine names hosts per ASIC, so the stages below need the lookup
+    // between them.
+    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::AsicID> asic_at_slot;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
+    }
 
-    PhysicalGroupingDescriptor pgd{std::string(R"(
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
-  ]
-  row_major_mesh {
-    dims: [2, 4]
-  }
-}
+    for (const char* solver : {"sat", "dfs"}) {
+        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
 
-# The PGD's own host level, mirroring the machine: two hosts, each one column-half.
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
-  row_major_mesh { dims: [2, 2] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [2, 2] } }
-)")};
-
-    MeshGraphDescriptor mgd{std::string(R"(
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 1, 2 ] }
-  channels { count: 2 policy: STRICT }
-}
-
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)")};
-
-    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-
-    std::vector<GroupingInfo> committed;
-    for (const auto& [preset, by_instance] : valid_groupings) {
-        for (const auto& [instance, groupings] : by_instance) {
-            for (const auto& grouping : groupings) {
-                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                    committed.push_back(grouping);
-                }
+        // Placement, on both backends. The split is encoded as constraints inside
+        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
+        // grouping the matcher accepted can still come back seated across a boundary if they do not.
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
             }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
+                                        << hosts.size() << " hosts";
+        }
+
+        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+        // placement it was handed.
+        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
+                                        << " hosts";
         }
     }
-    ASSERT_FALSE(committed.empty()) << "the declared split lies along the machine's own boundary";
 
-    // host_topology [1,2] on a 2x4 declares two ranks of one column-half each, by row-major chip id. Where
-    // those chips landed is read back from the seating rather than from what the matcher believed.
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
-    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-        std::set<uint32_t> hosts;
-        for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
-            // host0 holds asic_location 1-2, host1 holds 3-4.
-            hosts.insert((*position.second - 1) / 2);
-        }
-        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
+    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
+    // so the ranks below are those groups read off the committed seating, written out here rather than
+    // by launching them: nothing about the second pass needs more than one process. It is the only
+    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
+    // to come back out.
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
+            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
     }
 
-    // And against the PGD's own hosts, which here draw the same boundary as the machine's:
-    //
-    //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0
-    //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host1
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
-    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+    utils::PhysicalMultiMeshGraph phase2;
+    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
+    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 lost a split that phase 1 had committed and seated";
+    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
+        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // The same agreement on the other axis: two ranks of one row each, on a machine split by row. Kept so
@@ -6412,6 +6447,68 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
         {{1, 1}, {1, 2}, {1, 3}, {1, 4}}, {{2, 1}, {2, 2}, {2, 3}, {2, 4}}};
     expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+
+    // A seating names slots, the machine names hosts per ASIC, so the stages below need the lookup
+    // between them.
+    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::AsicID> asic_at_slot;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
+    }
+
+    for (const char* solver : {"sat", "dfs"}) {
+        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
+
+        // Placement, on both backends. The split is encoded as constraints inside
+        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
+        // grouping the matcher accepted can still come back seated across a boundary if they do not.
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
+                                        << hosts.size() << " hosts";
+        }
+
+        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+        // placement it was handed.
+        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
+                                        << " hosts";
+        }
+    }
+
+    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
+    // so the ranks below are those groups read off the committed seating, written out here rather than
+    // by launching them: nothing about the second pass needs more than one process. It is the only
+    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
+    // to come back out.
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
+            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
+    }
+
+    utils::PhysicalMultiMeshGraph phase2;
+    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
+    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 lost a split that phase 1 had committed and seated";
+    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
+        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // The wrong axis, checked in both places it has to hold. The machine is cut widthwise -- across the
@@ -6426,18 +6523,17 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 //
 // So each declared rank needs chips from both hosts, and on a 2x4 there is no way out of it: the grid
 // has no 90-degree automorphism, so the mesh cannot be turned to lay the ranks alongside the boundary
-// instead of across it. There is no seating, and both phases have to say so -- the matcher must refuse
-// to commit the grouping, and the rank-bound path must not come back with a pinned graph either. A
-// verdict that held in phase 1 and then quietly reversed in phase 2 is the failure mode this pair is
-// here to catch.
+// instead of across it. There is no seating, so the matcher must refuse to commit the grouping, and the
+// test ends there: with nothing committed there is no seating for the PGD-host rule to read, nothing for
+// placement to seat, and no declared split for phase 2 to be bound to.
 //
-// SquareMeshCommitsWhenTheDeclaredAxisAlreadyMatches is the aligned control, and the 2x2 case below is
+// AlignedSplitOnASymmetricTorusCommits is the aligned control, and the 2x2 case below is
 // the same pairing on a shape where the turn does exist -- where the refusal is therefore a bug.
 //
 // require_placement is false here, as it is in every case below whose expected answer is a rejection:
 // it makes the refusal come back as an empty result rather than a throw. What is under test is whether
 // the grouping survives the host constraint, not what an unplaceable mesh does to its caller.
-TEST(PhysicalGroupingDescriptorTestsHostSplit, LengthwiseSplitOnWidthwiseSplitHostsFailsEnumerateAndMapping) {
+TEST(PhysicalGroupingDescriptorTestsHostSplit, LengthwiseSplitOnWidthwiseSplitHostsIsRejected) {
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
 
@@ -6504,49 +6600,6 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     }
     EXPECT_TRUE(committed.empty()) << "enumerate seated a lengthwise split on a widthwise-split machine, got "
                                    << committed.size() << " grouping(s)";
-
-    // Guarded, because the verdict above is that nothing is committed: should anything ever be, it has
-    // to keep each declared rank inside one of the PGD's hosts as well as one of the machine's. There
-    // is no such seating here, which is the point -- the declared rows cross the declared columns:
-    //
-    //   rank a = chips 0 1 2 3 -> slots (1,1) (1,2) (1,3) (1,4), which is half of host0 and half of host1
-    //   rank b = chips 4 5 6 7 -> slots (2,1) (2,2) (2,3) (2,4), the other half of each
-    //   PGD host0 = (1,1) (1,2) (2,1) (2,2)   PGD host1 = (1,3) (1,4) (2,3) (2,4)
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 2, 3}, {4, 5, 6, 7}};
-    if (!committed.empty()) {
-        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-    }
-
-    // Phase 2: the same question against a rank-bound graph, one rank per host.
-    std::map<std::string, MeshHostRankId> rank_of_host;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
-    }
-    uint32_t next_rank = 0;
-    for (auto& [host_name, rank] : rank_of_host) {
-        rank = MeshHostRankId{next_rank++};
-    }
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
-    }
-
-    // What matters is that no seating comes back. How that is reported is the caller's business and is
-    // currently in flux: with require_placement=true in topology_mapper_utils.cpp the empty result
-    // aborts, and with it restored the graph is simply left unpinned. Either is a refusal; a pinned
-    // graph would not be, so that is what is asserted. Phase2DegradesToNoPinnings... covers which of
-    // the two it should be.
-    bool phase2_produced_a_seating = false;
-    try {
-        const auto physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd);
-        phase2_produced_a_seating = physical.mesh_pgd_pinnings_.contains(MeshId{0});
-    } catch (const std::exception&) {
-        phase2_produced_a_seating = false;
-    }
-    EXPECT_FALSE(phase2_produced_a_seating)
-        << "the rank-bound path pinned a mesh whose declared ranks cannot fit on one host each";
 }
 
 // FIXME: the same pairing on a 2x2, where the mesh is square and the turn the 2x4 lacked does exist --
@@ -6655,26 +6708,67 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {{{1, 1}, {2, 1}}, {{1, 2}, {2, 2}}};
     expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
 
-    // Phase 2: the rank-bound path reaches the same verdict and the pinnings arrive.
-    std::map<std::string, MeshHostRankId> rank_of_host;
+    // A seating names slots, the machine names hosts per ASIC, so the stages below need the lookup
+    // between them.
+    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::AsicID> asic_at_slot;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
-    }
-    uint32_t next_rank = 0;
-    for (auto& [host_name, rank] : rank_of_host) {
-        rank = MeshHostRankId{next_rank++};
-    }
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
     }
 
-    utils::PhysicalMultiMeshGraph physical;
-    ASSERT_NO_THROW(physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd))
-        << "the rank-bound path should map a mesh that phase 1 already seated";
-    ASSERT_TRUE(physical.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 should reach phase 1's verdict on the same machine";
-    EXPECT_EQ(physical.mesh_pgd_pinnings_.at(MeshId{0}).size(), 4u);
+    for (const char* solver : {"sat", "dfs"}) {
+        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
+
+        // Placement, on both backends. The split is encoded as constraints inside
+        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
+        // grouping the matcher accepted can still come back seated across a boundary if they do not.
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
+                                        << hosts.size() << " hosts";
+        }
+
+        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+        // placement it was handed.
+        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
+                                        << " hosts";
+        }
+    }
+
+    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
+    // so the ranks below are those groups read off the committed seating, written out here rather than
+    // by launching them: nothing about the second pass needs more than one process. It is the only
+    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
+    // to come back out.
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
+            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
+    }
+
+    utils::PhysicalMultiMeshGraph phase2;
+    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
+    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 lost a split that phase 1 had committed and seated";
+    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
+        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // Being finer than the machine does not rescue a split that runs the wrong way. The host grid is [2,1],
@@ -6754,46 +6848,6 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     EXPECT_TRUE(committed.empty()) << "three column ranks on a row-split machine each straddle the boundary, got "
                                    << committed.size() << " grouping(s)";
-
-    // Guarded on that verdict: the PGD draws the same two rows, so each declared column rank straddles
-    // them there too, and anything committed would have to violate one or the other:
-    //
-    //   rank a = chips 0 3 -> slots (1,1) (2,1)    one chip in each PGD host
-    //   rank b = chips 1 4 -> slots (1,2) (2,2)    likewise
-    //   rank c = chips 2 5 -> slots (1,3) (2,3)    likewise
-    //   PGD host0 = (1,1) (1,2) (1,3)   PGD host1 = (2,1) (2,2) (2,3)
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}, {1, 3}}, {{2, 1}, {2, 2}, {2, 3}}};
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 3}, {1, 4}, {2, 5}};
-    if (!committed.empty()) {
-        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-    }
-
-    // Phase 2: the same question on a rank-bound graph, one rank per host, must reach the same verdict. A
-    // split that enumerate refused must not become seatable just because the graph arrived pre-ranked.
-    std::map<std::string, MeshHostRankId> rank_of_host;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
-    }
-    uint32_t next_rank = 0;
-    for (auto& [host_name, rank] : rank_of_host) {
-        rank = MeshHostRankId{next_rank++};
-    }
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
-    }
-
-    // A refusal may arrive as an abort or as an unpinned graph depending on the require_placement toggle in
-    // topology_mapper_utils.cpp; both are refusals, and a pinned graph is what must never happen.
-    bool phase2_produced_a_seating = false;
-    try {
-        const auto physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd);
-        phase2_produced_a_seating = physical.mesh_pgd_pinnings_.contains(MeshId{0});
-    } catch (const std::exception&) {
-        phase2_produced_a_seating = false;
-    }
-    EXPECT_FALSE(phase2_produced_a_seating) << "the rank-bound path pinned a mesh enumerate had refused";
 }
 
 // The declared split need not be parallel to the physical one, only contained by it. The host grid is
@@ -6896,42 +6950,68 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         {{1, 1}, {1, 2}, {1, 3}, {1, 4}}, {{2, 1}, {2, 2}, {2, 3}, {2, 4}}};
     expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
 
-    // Mapping the mesh onto the machine: the seating the placement search returns has to honour the split
-    // too, not just the grouping the matcher committed.
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
-    ASSERT_EQ(placements.size(), 1u) << "the 2x4 mesh should be placed";
-    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-        std::set<uint32_t> hosts;
-        for (LogicalChipId chip : declared_ranks[rank]) {
-            hosts.insert(*placements.front().mesh_node_to_asic_position.at(chip).first - 1);
+    // A seating names slots, the machine names hosts per ASIC, so the stages below need the lookup
+    // between them.
+    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::AsicID> asic_at_slot;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
+    }
+
+    for (const char* solver : {"sat", "dfs"}) {
+        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
+
+        // Placement, on both backends. The split is encoded as constraints inside
+        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
+        // grouping the matcher accepted can still come back seated across a boundary if they do not.
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
+                                        << hosts.size() << " hosts";
         }
-        EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
-                                    << " hosts";
+
+        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+        // placement it was handed.
+        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
+                                        << " hosts";
+        }
     }
 
-    // Phase 2: the rank-bound graph has two ranks of 4 where the MGD declared four of 2, so the declared
-    // split is finer than the partitions phase 2 sees. Finer is legal, so the hints must still arrive --
-    // this is the accepting counterpart of the finer-slices divergence in
-    // SecondGetValidGroupingsOnRankSlicedPsdRejectsWhatTheFirstCommitted.
-    std::map<std::string, MeshHostRankId> rank_of_host;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
-    }
-    uint32_t next_rank = 0;
-    for (auto& [host_name, rank] : rank_of_host) {
-        rank = MeshHostRankId{next_rank++};
-    }
+    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
+    // so the ranks below are those groups read off the committed seating, written out here rather than
+    // by launching them: nothing about the second pass needs more than one process. It is the only
+    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
+    // to come back out.
+    // Here that is four ranks on two hosts: the binding is finer than the machine, which is legal.
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
+            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
     }
 
-    utils::PhysicalMultiMeshGraph physical;
-    ASSERT_NO_THROW(physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd))
-        << "the rank-bound path should map a mesh that phase 1 already seated";
-    ASSERT_TRUE(physical.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 should reach phase 1's verdict on the same machine";
-    EXPECT_EQ(physical.mesh_pgd_pinnings_.at(MeshId{0}).size(), 8u);
+    utils::PhysicalMultiMeshGraph phase2;
+    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
+    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 lost a split that phase 1 had committed and seated";
+    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
+        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // The refusing half of that pair, with the two grids exchanged: the machine is now cut on both axes into
@@ -7017,145 +7097,11 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     EXPECT_TRUE(committed.empty()) << "a 4-chip row rank cannot fit on a 2-chip host, got " << committed.size()
                                    << " grouping(s)";
-
-    // Guarded on that verdict: the PGD declares the same four quadrant hosts, so a declared 4-chip row
-    // rank cannot sit inside one of those either:
-    //
-    //   rank a = chips 0 1 2 3 -> slots (1,1) (1,2) (1,3) (1,4) = PGD host0 plus host1
-    //   rank b = chips 4 5 6 7 -> slots (2,1) (2,2) (2,3) (2,4) = PGD host2 plus host3
-    //   the PGD's hosts hold 2 chips each, so a 4-chip rank needs two of them
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}}, {{1, 3}, {1, 4}}, {{2, 1}, {2, 2}}, {{2, 3}, {2, 4}}};
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 2, 3}, {4, 5, 6, 7}};
-    if (!committed.empty()) {
-        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-    }
-
-    // Phase 2: same verdict on a rank-bound graph, one rank per host -- four 2-chip ranks here, so the
-    // declared 4-chip rank has even less room than it had in phase 1.
-    std::map<std::string, MeshHostRankId> rank_of_host;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
-    }
-    uint32_t next_rank = 0;
-    for (auto& [host_name, rank] : rank_of_host) {
-        rank = MeshHostRankId{next_rank++};
-    }
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
-    }
-
-    bool phase2_produced_a_seating = false;
-    try {
-        const auto physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd);
-        phase2_produced_a_seating = physical.mesh_pgd_pinnings_.contains(MeshId{0});
-    } catch (const std::exception&) {
-        phase2_produced_a_seating = false;
-    }
-    EXPECT_FALSE(phase2_produced_a_seating) << "the rank-bound path pinned a mesh enumerate had refused";
-}
-
-// Coarser than the machine: the MGD declares 2 ranks of 4 chips where the machine offers 4 hosts of 2.
-// Each declared rank spans two hosts, so it is rejected. This is the direction that must stay hard -- it
-// is one process being asked to own chips it cannot reach.
-//
-//   machine: one host per column     MGD host_topology [1,2]
-//
-//     100 | 101 | 102 | 103            aa | bb    rank a wants h0 and h1,
-//     104 | 105 | 106 | 107            aa | bb    rank b wants h2 and h3
-//      h0 | h1  | h2  | h3
-//
-// Note this is the same declared split that ColumnSplitPsdColumnSplitMgdCommits accepts, on the same
-// mesh and the same axis. Only the machine got finer, which is all it takes.
-TEST(PhysicalGroupingDescriptorTestsHostSplit, CoarserSplitThanThePhysicalHostsIsRejected) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_column.textproto");
-
-    PhysicalGroupingDescriptor pgd{std::string(R"(
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
-  ]
-  row_major_mesh {
-    dims: [2, 4]
-  }
-}
-
-# The PGD's own host level, mirroring the machine: four hosts of 2 chips, one per column.
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } } ]
-  row_major_mesh { dims: [2, 1] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
-  row_major_mesh { dims: [2, 1] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } } ]
-  row_major_mesh { dims: [2, 1] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [2, 1] } }
-)")};
-
-    MeshGraphDescriptor mgd{std::string(R"(
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 1, 2 ] }
-  channels { count: 2 policy: STRICT }
-}
-
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)")};
-
-    const auto valid_groupings =
-        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
-
-    std::vector<GroupingInfo> committed;
-    for (const auto& [preset, by_instance] : valid_groupings) {
-        for (const auto& [instance, groupings] : by_instance) {
-            for (const auto& grouping : groupings) {
-                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                    committed.push_back(grouping);
-                }
-            }
-        }
-    }
-
-    EXPECT_TRUE(committed.empty()) << "a 4-chip rank cannot fit on a 2-chip host, got " << committed.size()
-                                   << " grouping(s)";
-
-    // Guarded on that verdict: the PGD declares the same four column hosts, so a 4-chip declared rank
-    // has no single PGD host to sit in either:
-    //
-    //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0 plus host1
-    //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host2 plus host3
-    //   each PGD host is one column of 2 chips, and each declared rank wants two columns
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {2, 1}}, {{1, 2}, {2, 2}}, {{1, 3}, {2, 3}}, {{1, 4}, {2, 4}}};
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
-    if (!committed.empty()) {
-        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-    }
 }
 
 // A mesh that declares no split cannot be seated on a machine that has one. host_topology [1,1] is one
 // rank owning all 8 chips, so a 2-host seating would hand that rank chips it cannot reach -- the same
-// violation CoarserSplitThanThePhysicalHostsIsRejected covers, with one rank instead of two. A mesh that
+// violation CoarserSplitAcrossATwoAxisHostGridIsRejected covers, with one rank instead of two. A mesh that
 // genuinely needs both hosts, torus or not, has to say so in its host_topology.
 //
 //   machine: hosts cut by column     MGD host_topology [1,1]
@@ -7164,8 +7110,8 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 //     104 105 | 106 107                aaaa       chip, so it wants both hosts
 //      host0  |  host1
 //
-// SingleHostPsdSingleHostMgdCommits is the control: the same MGD on an undivided machine commits, so the
-// rejection here is about the host boundary and not about the mesh being too big to fit.
+// The mesh fits the machine twice over on chip count, so the rejection here is about the host boundary
+// and nothing else.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostMgdOnSplitPsdIsRejected) {
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
@@ -7232,462 +7178,6 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     EXPECT_TRUE(committed.empty()) << "one declared rank cannot own chips on two hosts, got " << committed.size()
                                    << " grouping(s)";
-
-    // Guarded on that verdict: the PGD declares the same two hosts, and the single declared rank owns
-    // every chip, so it cannot sit inside either of them:
-    //
-    //   rank a = chips 0 1 2 3 4 5 6 7 -> every slot, which is PGD host0 and host1 together
-    //   PGD host0 = (1,1) (1,2) (2,1) (2,2)   PGD host1 = (1,3) (1,4) (2,3) (2,4)
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
-    if (!committed.empty()) {
-        expect_each_rank_inside_one_pgd_host(
-            committed.front().mesh_node_to_asic_position, {{0, 1, 2, 3, 4, 5, 6, 7}}, pgd_hosts);
-    }
-}
-
-// ----- the constraint as the placement search sees it -------------------------------------------
-
-// The checks above read the verdict off the committed grouping. This one reads it off the seating the
-// placement search actually returns, on both backends: the host split is encoded as constraints inside
-// enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally or a mesh accepted
-// during matching can still come back seated across a host boundary.
-//
-//   machine: hosts cut by column     MGD host_topology [1,2]
-//
-//     100 101 | 102 103                aa | bb    the aligned case again, but the
-//     104 105 | 106 107                aa | bb    seating is read from the search
-//      host0  |  host1                            rather than from the matcher
-TEST(PhysicalGroupingDescriptorTestsHostSplit, SatAndDfsPlacementBothSeatEachDeclaredRankOnOneHost) {
-    for (const char* solver : {"sat", "dfs"}) {
-        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
-
-        auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-            "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
-
-        PhysicalGroupingDescriptor pgd{std::string(R"(
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
-  ]
-  row_major_mesh {
-    dims: [2, 4]
-  }
-}
-
-# The PGD's own host level, mirroring the machine: two hosts, each one column-half.
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
-  row_major_mesh { dims: [2, 2] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [2, 2] } }
-)")};
-
-        MeshGraphDescriptor mgd{std::string(R"(
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 1, 2 ] }
-  channels { count: 2 policy: STRICT }
-}
-
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)")};
-
-        const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-        const auto placements =
-            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
-        ASSERT_EQ(placements.size(), 1u) << solver << ": the 2x4 mesh should be placed";
-        EXPECT_EQ(placements.front().asics.size(), 8u) << solver;
-
-        const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
-        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-            std::set<uint32_t> hosts;
-            for (LogicalChipId chip : declared_ranks[rank]) {
-                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
-                hosts.insert((*position.second - 1) / 2);
-            }
-            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
-                                        << hosts.size() << " hosts";
-        }
-
-        // And the same of the PGD's own hosts, on the seating the search returned rather than the one
-        // the matcher committed:
-        //
-        //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0
-        //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host1
-        const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-            {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
-        expect_each_rank_inside_one_pgd_host(placements.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-    }
-}
-
-// The other half of the pair: when the declared split is on the wrong axis, whatever the search returns
-// must still respect it -- either nothing, or a seating that keeps each rank on one host. It must not
-// answer by throwing.
-//
-//   machine: hosts cut by column     MGD host_topology [2,1]
-//
-//     100 101 | 102 103                aaaa       no seating on this machine keeps
-//     104 105 | 106 107                bbbb       either rank on a single host, so
-//      host0  |  host1                            the honest answer is "nothing"
-//
-// FIXME: the answer it gives is the MGD fallback, which is not an answer to the question. The host
-// constraint rejects the only PGD grouping, so the fallback -- the mesh descriptor's own topology,
-// committed last by get_valid_groupings_for_mgd -- is all that is left, and the mesh places on it. That
-// grouping carries neither a chip -> slot pinning nor a mesh_node_to_host_group, so the placement claims
-// eight ASICs while saying nothing about which rank sits where, and the declared split it was supposed to
-// respect is not applied to it at all. The loop below can only skip such a placement, which is why this
-// test currently proves the weaker statement: no seating that violates the split is returned, because no
-// seating is returned. Holding the fallback to the MGD's own host_topology is what would close this.
-TEST(PhysicalGroupingDescriptorTestsHostSplit, SatAndDfsPlacementNeverSeatTheWrongAxisAcrossHosts) {
-    for (const char* solver : {"sat", "dfs"}) {
-        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
-
-        auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-            "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
-
-        PhysicalGroupingDescriptor pgd{std::string(R"(
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
-  ]
-  row_major_mesh {
-    dims: [2, 4]
-  }
-}
-
-# The PGD's own host level, mirroring the machine: two hosts, each one column-half. The declared
-# lengthwise ranks cross these as well, so neither host level admits this split.
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
-  row_major_mesh { dims: [2, 2] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [2, 2] } }
-)")};
-
-        MeshGraphDescriptor mgd{std::string(R"(
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 2, 1 ] }
-  channels { count: 2 policy: STRICT }
-}
-
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)")};
-
-        const auto valid_groupings =
-            pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
-
-        std::vector<GroupingInfo> committed;
-        for (const auto& [preset, by_instance] : valid_groupings) {
-            for (const auto& [instance, groupings] : by_instance) {
-                for (const auto& grouping : groupings) {
-                    if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                        committed.push_back(grouping);
-                    }
-                }
-            }
-        }
-        EXPECT_TRUE(committed.empty()) << solver;
-
-        std::vector<PsdPlacement> placements;
-        ASSERT_NO_THROW(placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd)) << solver;
-
-        const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 2, 3}, {4, 5, 6, 7}};
-        for (const auto& placement : placements) {
-            if (placement.mesh_node_to_asic_position.empty()) {
-                // The MGD fallback, per the FIXME above: a footprint with nothing to check.
-                continue;
-            }
-            for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-                std::set<uint32_t> hosts;
-                for (LogicalChipId chip : declared_ranks[rank]) {
-                    const auto& position = placement.mesh_node_to_asic_position.at(chip);
-                    hosts.insert((*position.second - 1) / 2);
-                }
-                EXPECT_EQ(hosts.size(), 1u)
-                    << solver << ": a row split cannot be seated on a column-split machine, rank " << rank
-                    << " landed on " << hosts.size() << " hosts";
-            }
-
-            // And of the PGD's hosts, which draw the same boundary. No seating satisfies this, which
-            // is what the test asserts the search must never return:
-            //
-            //   rank a = chips 0 1 2 3 -> slots (1,1) (1,2) (1,3) (1,4), half in each PGD host
-            //   rank b = chips 4 5 6 7 -> slots (2,1) (2,2) (2,3) (2,4), likewise
-            const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-                {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
-            expect_each_rank_inside_one_pgd_host(placement.mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-        }
-    }
-}
-
-// ----- the same rule on the square shape --------------------------------------------------------
-//
-// The quadrant-machine cases live with the other GetValidGroupingsForMGD tests further up, under
-// PhysicalGroupingDescriptorTests. What is left here is the column-split 4x4, which is where the
-// rotation question below is asked.
-
-// Control for the case below: on a square mesh, the split that happens to be declared along the machine's
-// own axis commits, exactly as it does on the 2x4. No turn is needed, so the orientation the match
-// happens to return is the right one and the rotation gap cannot be reached from here.
-//
-//   machine: 4x4, hosts cut by column   MGD host_topology [1,2]
-//
-//     100 101 | 102 103                   aa | bb
-//     104 105 | 106 107                   aa | bb     a is host0, b is host1,
-//     108 109 | 110 111                   aa | bb     as declared
-//     112 113 | 114 115                   aa | bb
-//      host0  |  host1
-TEST(PhysicalGroupingDescriptorTestsHostSplit, SquareMeshCommitsWhenTheDeclaredAxisAlreadyMatches) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_hosts_by_column.textproto");
-
-    PhysicalGroupingDescriptor pgd{std::string(R"(
-groupings {
-  name: "4x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-    { id: 1  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
-    { id: 8  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
-    { id: 9  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
-    { id: 10 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
-    { id: 11 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
-    { id: 12 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
-    { id: 13 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } },
-    { id: 14 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
-    { id: 15 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } }
-  ]
-  row_major_mesh {
-    dims: [4, 4]
-  }
-}
-
-# The PGD's own host level, mirroring the machine: two hosts of 8 chips, each two columns.
-groupings { name: "4x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-               { id: 4 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
-               { id: 5 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
-               { id: 6 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
-               { id: 7 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } } ]
-  row_major_mesh { dims: [4, 2] } }
-groupings { name: "4x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
-               { id: 4 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
-               { id: 5 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
-               { id: 6 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
-               { id: 7 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [4, 2] } }
-)")};
-
-    MeshGraphDescriptor mgd{std::string(R"(
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 1, 2 ] }
-  channels { count: 2 policy: STRICT }
-}
-
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)")};
-
-    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-
-    std::vector<GroupingInfo> committed;
-    for (const auto& [preset, by_instance] : valid_groupings) {
-        for (const auto& [instance, groupings] : by_instance) {
-            for (const auto& grouping : groupings) {
-                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                    committed.push_back(grouping);
-                }
-            }
-        }
-    }
-    ASSERT_FALSE(committed.empty());
-
-    // host_topology [1,2] on a 4x4 declares two ranks of one column-half each.
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {
-        {0, 1, 4, 5, 8, 9, 12, 13}, {2, 3, 6, 7, 10, 11, 14, 15}};
-    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
-        std::set<uint32_t> hosts;
-        for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
-            hosts.insert((*position.second - 1) / 2);
-        }
-        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
-    }
-
-    // And against the PGD's own two hosts, which draw the same two columns. On a square mesh this is
-    // the orientation the match returns anyway, so it holds without needing the turn:
-    //
-    //   rank a = chips 0 1 4 5 8 9 12 13 -> slots (1,1) (1,2) (2,1) (2,2) (3,1) (3,2) (4,1) (4,2) = host0
-    //   rank b = chips 2 3 6 7 10 11 14 15 -> slots (1,3) (1,4) (2,3) (2,4) (3,3) (3,4) (4,3) (4,4) = host1
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}, {2, 1}, {2, 2}, {3, 1}, {3, 2}, {4, 1}, {4, 2}},
-        {{1, 3}, {1, 4}, {2, 3}, {2, 4}, {3, 3}, {3, 4}, {4, 3}, {4, 4}}};
-    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-}
-
-// ----- Phase 2: asking the matcher a second time ------------------------------------------------
-
-// The two phases do not ask about the same machine. Phase 1 runs against the PSD's hosts; phase 2 runs
-// after rank binding, against a PSD whose host names are per-rank slices, which are finer. So the second
-// call can reject the very host split the first call accepted and placed -- the matcher is consistent, it
-// is being asked a different question.
-//
-// This is the disagreement itself, told apart from what either caller does about it. The declared split
-// is [1,2] both times; only the machine under it changes:
-//
-//   phase 1: the PSD's two hosts      phase 2: the same chips as four rank slices
-//
-//     100 101 | 102 103                  100 | 101 | 102 | 103
-//     104 105 | 106 107                  104 | 105 | 106 | 107
-//      host0  |  host1                    r0  | r1  | r2  | r3
-//
-//        aa   |   bb    accepted             aa | bb    rejected: rank a now needs r0 and r1
-//        aa   |   bb                         aa | bb
-TEST(PhysicalGroupingDescriptorTestsHostSplit, SecondGetValidGroupingsOnRankSlicedPsdRejectsWhatTheFirstCommitted) {
-    PhysicalGroupingDescriptor pgd{std::string(R"(
-groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
-  instances: [
-    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
-  ]
-  row_major_mesh {
-    dims: [2, 4]
-  }
-}
-
-# The PGD's own host level: the machine's two real hosts, each one column-half. A PGD describes the
-# system, so it knows these and not the per-rank slices phase 2 is handed.
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
-  row_major_mesh { dims: [2, 2] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [2, 2] } }
-)")};
-
-    MeshGraphDescriptor mgd{std::string(R"(
-mesh_descriptors {
-  name: "M0"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 1, 2 ] }
-  channels { count: 2 policy: STRICT }
-}
-
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-)")};
-
-    auto host_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
-    std::vector<GroupingInfo> on_hosts;
-    for (const auto& [preset, by_instance] :
-         pgd.get_valid_groupings_for_mgd(mgd, host_psd, /*pinnings=*/std::nullopt, /*require_placement=*/false)) {
-        for (const auto& [instance, groupings] : by_instance) {
-            for (const auto& grouping : groupings) {
-                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                    on_hosts.push_back(grouping);
-                }
-            }
-        }
-    }
-    EXPECT_FALSE(on_hosts.empty()) << "two declared ranks on two hosts: accepted";
-
-    // The PGD's hosts are the same two, so the accepted seating sits inside them as well:
-    //
-    //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0
-    //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host1
-    //
-    // It is only the PSD that changes below; the PGD's host level says the same thing across both
-    // calls, which is the property that would make the two phases agree once the matcher reads it.
-    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
-        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
-    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
-    if (!on_hosts.empty()) {
-        expect_each_rank_inside_one_pgd_host(on_hosts.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
-    }
-
-    auto rank_sliced_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_column.textproto");
-    std::vector<GroupingInfo> on_rank_slices;
-    for (const auto& [preset, by_instance] : pgd.get_valid_groupings_for_mgd(
-             mgd, rank_sliced_psd, /*pinnings=*/std::nullopt, /*require_placement=*/false)) {
-        for (const auto& [instance, groupings] : by_instance) {
-            for (const auto& grouping : groupings) {
-                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
-                    on_rank_slices.push_back(grouping);
-                }
-            }
-        }
-    }
-    EXPECT_TRUE(on_rank_slices.empty()) << "the same two ranks against four slices: each rank now spans two, so "
-                                           "rejected";
 }
 
 // The phase-2 happy path, taken on the most rotation-prone shape there is: a 4x4 RING/RING, symmetric on
@@ -7708,7 +7198,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 //     108 109 | 110 111     along either one are      aa | bb    lies along the boundary, and
 //     112 113 | 114 115     automorphisms as well     aa | bb    asking twice gives the same
 //      host0  |  host1      as the reflections                   orientation twice
-TEST(PhysicalGroupingDescriptorTestsHostSplit, Phase2AgreesWithPhase1OnASymmetricTorus) {
+TEST(PhysicalGroupingDescriptorTestsHostSplit, AlignedSplitOnASymmetricTorusCommits) {
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_torus_hosts_by_column.textproto");
 
@@ -7776,8 +7266,10 @@ mesh_descriptors {
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 )")};
 
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
     std::vector<GroupingInfo> phase1;
-    for (const auto& [preset, by_instance] : pgd.get_valid_groupings_for_mgd(mgd, psd)) {
+    for (const auto& [preset, by_instance] : valid_groupings) {
         for (const auto& [instance, groupings] : by_instance) {
             for (const auto& grouping : groupings) {
                 if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
@@ -7808,109 +7300,162 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         {{1, 3}, {1, 4}, {2, 3}, {2, 4}, {3, 3}, {3, 4}, {4, 3}, {4, 4}}};
     expect_each_rank_inside_one_pgd_host(phase1.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
 
-    std::map<std::string, MeshHostRankId> rank_of_host;
+    // A seating names slots, the machine names hosts per ASIC, so the stages below need the lookup
+    // between them.
+    std::map<std::pair<uint32_t, uint32_t>, tt::tt_metal::AsicID> asic_at_slot;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
-    }
-    uint32_t next_rank = 0;
-    for (auto& [host_name, rank] : rank_of_host) {
-        rank = MeshHostRankId{next_rank++};
-    }
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+        asic_at_slot.emplace(std::pair{*descriptor.tray_id, *descriptor.asic_location}, asic_id);
     }
 
-    utils::PhysicalMultiMeshGraph physical;
-    ASSERT_NO_THROW(physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
-    EXPECT_TRUE(physical.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 should reach the same verdict on the same machine";
+    for (const char* solver : {"sat", "dfs"}) {
+        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
+
+        // Placement, on both backends. The split is encoded as constraints inside
+        // enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally: a
+        // grouping the matcher accepted can still come back seated across a boundary if they do not.
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+        ASSERT_EQ(placements.size(), 1u) << solver << ": the mesh should be placed";
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+                hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
+                                        << hosts.size() << " hosts";
+        }
+
+        // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
+        // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
+        // placement it was handed.
+        const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
+        const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
+        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
+        const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+        ASSERT_TRUE(mapping.success) << solver << ": " << mapping.error_message;
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<std::string> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                hosts.insert(psd.get_host_name_for_asic(mapping.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip))));
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": the mapper put declared rank " << rank << " on " << hosts.size()
+                                        << " hosts";
+        }
+    }
+
+    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
+    // so the ranks below are those groups read off the committed seating, written out here rather than
+    // by launching them: nothing about the second pass needs more than one process. It is the only
+    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
+    // to come back out.
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [chip, position] : phase1.front().mesh_node_to_asic_position) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
+            MeshHostRankId{phase1.front().mesh_node_to_host_group.at(chip)};
+    }
+
+    utils::PhysicalMultiMeshGraph phase2;
+    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
+    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 lost a split that phase 1 had committed and seated";
+    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), phase1.front().mesh_node_to_asic_position)
+        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
-// FIXME: currently throws. Phase 2 owns no placement decision, so a grouping it cannot get is a missing
-// hint, not a broken system: it should leave the graph unpinned and carry on. get_valid_groupings_for_mgd
-// takes require_placement for exactly this, but the rank-bound caller in topology_mapper_utils.cpp is
-// passing true behind a FIXME while the gemma failure is being reproduced, so the empty result aborts the
-// run instead. This is what took down that run -- a split phase 1 had already accepted and placed became
-// fatal the second time it was looked at. Re-enabling require_placement=false there should fix this.
-//
-//   machine: four rank slices        MGD host_topology [1,2]
-//
-//     100 | 101 | 102 | 103            aa | bb    the rejection itself is correct and is
-//     104 | 105 | 106 | 107            aa | bb    SecondGetValidGroupings...'s subject; what
-//      r0 | r1  | r2  | r3                        is wrong is that it aborts instead of
-//                                                 leaving the graph unpinned
-TEST(PhysicalGroupingDescriptorTestsHostSplit, Phase2DegradesToNoPinningsWhenRankSlicesAreFinerThanHosts) {
-    auto rank_sliced_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_column.textproto");
+// A descriptor names a grouping once per place it sits, so one mesh flattens to a variant per place, and a
+// variant's nodes are ids into the descriptor's items: only the variant of the first place holds node 0, the
+// next starts at 4, and so on. The MGD<->PGD host check runs before a match is chosen, so everything it reads
+// about a chip has to come from the variant in hand. An absolute pairing such as "mesh chip 0 takes grouping
+// node 0" is a contradiction for every variant after the first -- the chip is required onto a node the variant
+// does not have, and no declared host of it can hold that node -- so the check refuses them and the mesh keeps
+// one of its places instead of all of them. The solve tolerates such a pairing, which is what let this hide.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, HostSplitIsHeldAgainstEveryPlaceAGroupingSits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
+# "QUAD" is named twice, once per quadrant of the host, so the mesh below sits in either of them.
 groupings {
-  name: "2x4_Mesh"
-  preset_type: MESH
+  name: "quadrant"
+  custom_type: "QUAD"
   instances: [
     { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
     { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
-    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+    { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } }
   ]
-  row_major_mesh {
-    dims: [2, 4]
-  }
+  row_major_mesh { dims: [2, 2] }
+}
+groupings {
+  name: "quadrant"
+  custom_type: "QUAD"
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh { dims: [2, 2] }
 }
 
-# The PGD's own host level: the machine's two real hosts, each one column-half. Deliberately not the
-# four rank slices this call is handed -- a PGD describes the system, and the divergence between the
-# two is the whole subject of this test.
+groupings {
+  name: "2x2_Mesh"
+  preset_type: MESH
+  instances: [ { id: 0 grouping_ref { custom_type: "QUAD" } } ]
+}
+
+# The PGD's own host level, mirroring the machine: one host holding all eight chips, so both quadrants are
+# inside it and the declared rank fits either of them. Without a host level here the check stays inert and
+# the absolute pairing goes unnoticed.
 groupings { name: "2x4_hosts" preset_type: HOSTS
   instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
                { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
-  row_major_mesh { dims: [2, 2] } }
-groupings { name: "2x4_hosts" preset_type: HOSTS
-  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
-               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
-               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
-               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
-  row_major_mesh { dims: [2, 2] } }
+               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 4] } }
 )")};
 
     MeshGraphDescriptor mgd{std::string(R"(
 mesh_descriptors {
   name: "M0"
   arch: WORMHOLE_B0
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
-  host_topology   { dims: [ 1, 2 ] }
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: STRICT }
 }
 
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 )")};
 
-    std::map<std::string, MeshHostRankId> rank_of_host;
-    for (const auto& [asic_id, descriptor] : rank_sliced_psd.get_asic_descriptors()) {
-        rank_of_host.emplace(rank_sliced_psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
-    }
-    uint32_t next_rank = 0;
-    for (auto& [host_name, rank] : rank_of_host) {
-        rank = MeshHostRankId{next_rank++};
-    }
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [asic_id, descriptor] : rank_sliced_psd.get_asic_descriptors()) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(rank_sliced_psd.get_host_name_for_asic(asic_id));
+    std::vector<std::set<std::pair<uint32_t, uint32_t>>> committed_seatings;
+    for (const auto& [preset, by_instance] : pgd.get_valid_groupings_for_mgd(mgd, psd)) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name == "M0" || grouping.mesh_node_to_asic_position.empty()) {
+                    continue;  // the MGD's own topology is the fallback and seats nothing.
+                }
+                std::set<std::pair<uint32_t, uint32_t>> slots;
+                for (const auto& [_, position] : grouping.mesh_node_to_asic_position) {
+                    slots.emplace(*position.first, *position.second);
+                }
+                committed_seatings.push_back(std::move(slots));
+            }
+        }
     }
 
-    utils::PhysicalMultiMeshGraph physical;
-    ASSERT_NO_THROW(
-        physical = utils::build_physical_multi_mesh_adjacency_graph(rank_sliced_psd, asic_id_to_mesh_rank, pgd, mgd))
-        << "a hint the matcher cannot produce must not abort the rank-bound path";
-    EXPECT_TRUE(physical.mesh_pgd_pinnings_.empty())
-        << "no grouping survived the finer slices, so there is nothing to pin with";
+    const std::set<std::pair<uint32_t, uint32_t>> first_quadrant = {{1, 1}, {1, 2}, {2, 1}, {2, 2}};
+    const std::set<std::pair<uint32_t, uint32_t>> second_quadrant = {{1, 3}, {1, 4}, {2, 3}, {2, 4}};
+    EXPECT_EQ(committed_seatings.size(), 2u) << "the mesh sits in either quadrant, so both are offered";
+    EXPECT_EQ(std::count(committed_seatings.begin(), committed_seatings.end(), first_quadrant), 1)
+        << "the quadrant whose variant holds node 0 is offered";
+    EXPECT_EQ(std::count(committed_seatings.begin(), committed_seatings.end(), second_quadrant), 1)
+        << "the quadrant whose variant starts at node 4 is offered too: the host check may not decide a "
+           "variant by a node id that only the first variant has";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
