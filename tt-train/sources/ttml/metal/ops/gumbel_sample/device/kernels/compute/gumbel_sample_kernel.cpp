@@ -18,17 +18,15 @@
 
 #include <cstdint>
 
-#include "api/compute/bcast.h"  // unary_bcast, for the [1, V] padding mask
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"  // pack_tile, tile_regs_*
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rand.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
-#include "api/compute/sfpu_binary_bcast.h"  // sfpu_sub_bcast_row, the default mask apply
+#include "api/compute/sfpu_binary_bcast.h"  // sfpu_sub_bcast_row, the mask apply
 #include "api/compute/tile_move_copy.h"
 #include "gumbel_sfpu.h"  // gumbel_score_tile, the fused noise/scale/add pass
 
@@ -45,36 +43,26 @@ constexpr bool do_logits_mask = get_compile_time_arg_val(2) != 0;
 // which vocab columns are padding does not depend on the token position. In TILE layout that single
 // logical row lives in row 0 of each tile with rows 1..31 zero-filled, so a plain tile-for-tile
 // subtract would mask ONLY token row 0 and leave every other row unmasked (it then argmaxes onto the
-// first padding column). The mask must therefore be broadcast down the token rows, and there are two
-// implementations of that broadcast-and-subtract, selected at program build (compile-time arg 4, set
-// from the host's TTML_GUMBEL_SAMPLE_LEGACY_MASK_BCAST switch -- see use_legacy_mask_bcast in
-// gumbel_sample_device_operation_types.hpp):
+// first padding column). The mask must therefore be broadcast down the token rows. That is done as
+// copy_tile + sfpu_sub_bcast_row: the mask tile lands in the operand slot VERBATIM via the plain A2D
+// copy (ELWADD-based under fp32 dest, safe on every arch -- and the only bridge from an L1 CB into
+// the DST slots the SFPU can address), and one SFPU pass both broadcasts its row 0 down the 32 token
+// rows and subtracts, entirely inside DST.
 //
-//  * DEFAULT -- copy_tile + sfpu_sub_bcast_row: the mask tile lands in the operand slot VERBATIM via
-//    the plain A2D copy (ELWADD-based under fp32 dest, safe on every arch), and one SFPU pass both
-//    broadcasts its row 0 down the 32 token rows and subtracts, entirely inside DST. Works on every
-//    arch, and the mask streams in the logits dtype exactly like the logits themselves.
-//
-//  * LEGACY -- unary_bcast<ROW> + sub_binary_tile: the pre-existing path, kept ONLY for A/B perf
-//    comparison: the broadcast happens as the tile is unpacked into DST, then a separate SFPU
-//    subtract. KNOWN BROKEN with a mask on WORMHOLE: with fp32_dest_acc_en (always on here) the
-//    16-bit ROW broadcast is a MOVB2D MOP, and WH silicon addresses the dest as 16-bit rows unless
-//    SrcA's ALU format is TF32 -- the mask lands in the wrong dest rows and the subtract reads
-//    zeros, silently un-masking every padded column (Blackhole auto-promotes SrcA under fp32
-//    accumulation and is unaffected; tt-llk's test_bcast.py skips this combination on WH as
-//    broken). That silicon limitation is the reason the DEFAULT path exists; A/B the legacy path on
-//    other archs only.
+// Deliberately NOT unary_bcast<ROW> (broadcasting as the tile is unpacked, then subtracting), even
+// though that looks like the natural fit: with fp32_dest_acc_en (always on here) the 16-bit ROW
+// broadcast is a MOVB2D MOP, and WORMHOLE silicon addresses the dest as 16-bit rows unless SrcA's
+// ALU format is TF32 -- the mask lands in the wrong dest rows and the subtract reads zeros, silently
+// un-masking every padded column (Blackhole auto-promotes SrcA under fp32 accumulation and is
+// unaffected; tt-llk's test_bcast.py skips this combination on WH as broken, and binary_ng falls
+// back to an SFPU broadcast for the same reason). The SFPU apply measured no slower than
+// unary_bcast on Blackhole and is the only one of the two that works on Wormhole.
 
 // temperature == 0 is greedy decoding: no noise, no scaling, just argmax over the (masked) logits.
 // It still runs through this kernel rather than a separate ttnn::argmax, so the greedy path gets the
 // same fusion win -- the score tiles stream straight into the writer's running argmax and the
 // [B, 1, tokens, V] untilized copy that ttnn::argmax would need never exists.
 constexpr bool do_gumbel_noise = get_compile_time_arg_val(3) != 0;
-
-// Selects the LEGACY mask apply (unary_bcast + sub_binary_tile) over the default
-// (copy_tile + sfpu_sub_bcast_row) -- see the mask note above. Compile-time: the two paths differ
-// in unpacker programming, so they are different kernel binaries (and the host hashes the flag).
-constexpr bool use_legacy_mask_bcast = get_compile_time_arg_val(4) != 0;
 
 // DST slots. fp32_dest_acc_en is on, so the noise keeps full FP32 precision through the two logs --
 // a bf16 round trip near U ~ 1 would quantize -log(-log(U)) catastrophically (bf16 has 8 mantissa
@@ -83,7 +71,7 @@ constexpr bool use_legacy_mask_bcast = get_compile_time_arg_val(4) != 0;
 // fp32 also halves DST: a half-sync acquire window holds FOUR fp32 tiles (identical on Wormhole and
 // Blackhole). What divides that window is whether each score needs an OPERAND tile beside it: the
 // noise path pairs every score with a logits tile (the mask, when present, reuses that slot once
-// the score is computed), and the greedy+mask path pairs every score with its broadcast mask tile
+// the score is computed), and the greedy+mask path pairs every score with its mask tile
 // -- two slots per tile, so a batch of two: scores in slots 0..1, operands in 2..3. Pure greedy
 // (no noise, no mask) copies the logits straight into the score slots and pairs them with nothing,
 // so all four slots hold scores: a batch of four.
@@ -189,39 +177,23 @@ void kernel_main() {
                 }
 
                 // ---- optional additive padding mask, broadcast down the token rows ----
-                // The logits operand slots are dead once the scores exist; the mask reuses them.
-                // Two implementations, selected at program build -- see the mask note at the top of
-                // this file.
+                // The logits operand slots are dead once the scores exist; the mask reuses them:
+                // the raw mask tile lands there with a plain copy (same A2D path the logits ride;
+                // the mask CB shares their format, so no reconfig), then one SFPU pass broadcasts
+                // its row 0 down all 32 rows AND subtracts, in place on the score tile. Rows 1..31
+                // of the copied mask tile are zero-fill the pass never reads. See the mask note at
+                // the top of this file for why this is NOT a unary_bcast. sfpu_sub_bcast_row_init
+                // is re-run per batch because rand_tile and gumbel_score_tile_init recycle SFPU
+                // state between batches; the row path records no replay rows, so rand's replayed
+                // row (see the rand note above) stays untouched.
                 if constexpr (do_logits_mask) {
-                    if constexpr (use_legacy_mask_bcast) {
-                        // LEGACY (A/B reference only; silicon-broken on WH -- see the mask note at
-                        // the top of this file): broadcast during the unpack, subtract separately.
-                        unary_bcast_init<BroadcastType::ROW>(cb_mask);
-                        for (uint32_t i = 0U; i < batch; ++i) {
-                            unary_bcast<BroadcastType::ROW>(cb_mask, k + i, operand_base + i);
-                        }
-                        unary_bcast_uninit<BroadcastType::ROW>(cb_mask);
-                        sub_binary_tile_init();
-                        for (uint32_t i = 0U; i < batch; ++i) {
-                            sub_binary_tile(score_base + i, operand_base + i, score_base + i);
-                        }
-                    } else {
-                        // DEFAULT: land the raw mask tile in the operand slot with a plain copy
-                        // (same A2D path the logits ride; the mask CB shares their format, so no
-                        // reconfig), then one SFPU pass broadcasts row 0 down all 32 rows AND
-                        // subtracts, in place on the score tile. Rows 1..31 of the copied mask tile
-                        // are zero-fill the pass never reads. sfpu_sub_bcast_row_init is re-run per
-                        // batch because rand_tile and gumbel_score_tile_init recycle SFPU state
-                        // between batches; the row path records no replay rows, so rand's replayed
-                        // row (see the rand note above) stays untouched.
-                        copy_tile_init(cb_mask);
-                        for (uint32_t i = 0U; i < batch; ++i) {
-                            copy_tile(cb_mask, k + i, operand_base + i);
-                        }
-                        sfpu_sub_bcast_row_init();
-                        for (uint32_t i = 0U; i < batch; ++i) {
-                            sfpu_sub_bcast_row(score_base + i, operand_base + i);
-                        }
+                    copy_tile_init(cb_mask);
+                    for (uint32_t i = 0U; i < batch; ++i) {
+                        copy_tile(cb_mask, k + i, operand_base + i);
+                    }
+                    sfpu_sub_bcast_row_init();
+                    for (uint32_t i = 0U; i < batch; ++i) {
+                        sfpu_sub_bcast_row(score_base + i, operand_base + i);
                     }
                 }
 

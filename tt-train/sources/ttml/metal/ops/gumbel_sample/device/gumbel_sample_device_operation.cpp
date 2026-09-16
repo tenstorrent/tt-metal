@@ -343,11 +343,6 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<GumbelSampleDeviceOperation>(
         position_aware,
         uses_gumbel_noise(args.temperature),
-        // The mask-apply mode (default SFPU broadcast-subtract vs the legacy unpack-time
-        // broadcast, kept for A/B perf comparison) selects a different compute-kernel binary, so
-        // it must key the cache. Process-constant, but hashing it costs nothing and keeps the key
-        // honest.
-        use_legacy_mask_bcast(),
         args.seed_axes,
         logits.dtype(),
         // The padded shape is deliberately NOT hashed alongside the logical one: check_tensor pins
