@@ -215,7 +215,9 @@ ttml_cyclic_sdpa_bw(
     uint32_t max_groups,
     uint32_t sequence_chunks,
     const std::vector<uint32_t>& row_chunks,
-    const std::vector<uint32_t>& col_chunks) {
+    const std::vector<uint32_t>& col_chunks,
+    bool grad_query_in_tile_transposed,
+    bool grad_query_out_tile_transposed) {
     using OperationType = ttml::metal::ops::cyclic_sdpa_bw::device::CyclicSDPABackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -226,7 +228,9 @@ ttml_cyclic_sdpa_bw(
         .max_groups = max_groups,
         .sequence_chunks = sequence_chunks,
         .row_chunks = row_chunks,
-        .col_chunks = col_chunks};
+        .col_chunks = col_chunks,
+        .grad_query_in_tile_transposed = grad_query_in_tile_transposed,
+        .grad_query_out_tile_transposed = grad_query_out_tile_transposed};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,
         .key = key,

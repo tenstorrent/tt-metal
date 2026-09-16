@@ -39,6 +39,7 @@ struct CyclicSDPABackwardParams {
     // from zero without reading it.
     bool accumulate_into_outputs{false};
 
+
     // Cap on the number of groups running side by side (0 = as many as fit).
     // The groups run the remaining slices in turn either way; the cap exists
     // so a test can force that loop at a size where every slice would fit.
@@ -60,6 +61,19 @@ struct CyclicSDPABackwardParams {
     uint32_t sequence_chunks{1U};
     std::vector<uint32_t> row_chunks{};
     std::vector<uint32_t> col_chunks{};
+
+    // dQ's DRAM layout at this launch's boundaries. Between cores the kernels
+    // carry dQ with every tile transposed within itself (the tile positions
+    // unchanged); where a row's dQ enters from or leaves to DRAM in the
+    // natural layout it is transposed on the way, once per row and streak.
+    // At small block heights that sets the pace of the snake's first core,
+    // where every row enters in a dense pass. A caller that keeps its dQ
+    // accumulator in the tile-transposed form across launches -- the ring
+    // does, over all but its last step -- says so here, and the kernels
+    // transpose nothing at that boundary. A zero accumulator is in both
+    // forms at once.
+    bool grad_query_in_tile_transposed{false};
+    bool grad_query_out_tile_transposed{false};
 };
 
 struct CyclicSDPABackwardInputs {

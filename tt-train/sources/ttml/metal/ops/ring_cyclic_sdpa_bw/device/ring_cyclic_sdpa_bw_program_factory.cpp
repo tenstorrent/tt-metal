@@ -63,7 +63,9 @@ cyclic::operation_attributes_t cyclic_attrs(const operation_attributes_t& args, 
         .accumulate_into_outputs = args.accumulate_into_outputs,
         .sequence_chunks = plan.sequence_chunks,
         .row_chunks = plan.row_chunks,
-        .col_chunks = plan.col_chunks};
+        .col_chunks = plan.col_chunks,
+        .grad_query_in_tile_transposed = args.grad_query_in_tile_transposed,
+        .grad_query_out_tile_transposed = args.grad_query_out_tile_transposed};
 }
 
 cyclic::tensor_args_t cyclic_tensors(const tensor_args_t& t, tensor_return_value_t& out) {

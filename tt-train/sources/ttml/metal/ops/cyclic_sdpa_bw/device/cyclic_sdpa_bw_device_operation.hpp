@@ -51,6 +51,8 @@ ttml_cyclic_sdpa_bw(
     uint32_t max_groups = 0U,
     uint32_t sequence_chunks = 1U,
     const std::vector<uint32_t>& row_chunks = {},
-    const std::vector<uint32_t>& col_chunks = {});
+    const std::vector<uint32_t>& col_chunks = {},
+    bool grad_query_in_tile_transposed = false,
+    bool grad_query_out_tile_transposed = false);
 
 }  // namespace ttnn::prim

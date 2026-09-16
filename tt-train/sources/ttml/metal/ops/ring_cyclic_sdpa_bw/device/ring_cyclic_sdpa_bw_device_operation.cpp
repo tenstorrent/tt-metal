@@ -103,7 +103,9 @@ ttml_ring_cyclic_sdpa_bw(
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value,
     ttml::metal::ops::RingLayout layout,
-    uint32_t zigzag_pair) {
+    uint32_t zigzag_pair,
+    bool grad_query_in_tile_transposed,
+    bool grad_query_out_tile_transposed) {
     using OperationType = ttml::metal::ops::ring_cyclic_sdpa_bw::RingCyclicSDPABackwardDeviceOperation;
 
     auto attrs = OperationType::operation_attributes_t{
@@ -116,7 +118,9 @@ ttml_ring_cyclic_sdpa_bw(
         .use_barrier = use_barrier,
         .accumulate_into_outputs = accumulate_into_outputs,
         .layout = layout,
-        .zigzag_pair = zigzag_pair};
+        .zigzag_pair = zigzag_pair,
+        .grad_query_in_tile_transposed = grad_query_in_tile_transposed,
+        .grad_query_out_tile_transposed = grad_query_out_tile_transposed};
     auto tensors = OperationType::tensor_args_t{
         .query = query,
         .key = key,

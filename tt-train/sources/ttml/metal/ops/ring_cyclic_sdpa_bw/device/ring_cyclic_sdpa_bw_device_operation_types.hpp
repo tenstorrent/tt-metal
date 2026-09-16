@@ -45,6 +45,12 @@ struct RingCyclicSDPABackwardParams {
     // step's Causal pairs are disjoint and run together. kAllPairs = all.
     static constexpr uint32_t kAllPairs = 0xFFFFFFFFU;
     uint32_t zigzag_pair{kAllPairs};
+
+    // dQ's DRAM layout at this step's boundaries; see the cyclic op. The
+    // ring keeps its dQ accumulator tile-transposed from the first step to
+    // the last, which converts it back on the way out.
+    bool grad_query_in_tile_transposed{false};
+    bool grad_query_out_tile_transposed{false};
 };
 
 struct RingCyclicSDPABackwardInputs {

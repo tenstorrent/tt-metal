@@ -389,7 +389,12 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
         // The cyclic op on the two-chunk tensors: the launch's mask picks the
         // pairs (Causal: both triangles; None: the blocks) and zigzag_pair
         // which of the blocks, accumulating in place.
-        const auto cyclic_launch = [&](AttentionMaskType mask, uint32_t pair, uint32_t step) {
+        // dQ stays in the kernels' tile-transposed form across the steps (a
+        // zero accumulator is in both forms), and only the very last launch
+        // converts it back on the way out; so the snake's head, where every
+        // row enters a dense pass, transposes nothing. See the cyclic op's
+        // attributes.
+        const auto cyclic_launch = [&](AttentionMaskType mask, uint32_t pair, uint32_t step, bool dq_out_transposed) {
             auto [gq, gk, gv] = ttml::metal::ring_cyclic_sdpa_bw(
                 query_tensor,
                 k_current,
@@ -409,7 +414,9 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
                 grad_K_accum,
                 grad_V_accum,
                 ttml::metal::ops::RingLayout::Zigzag,
-                pair);
+                pair,
+                /* grad_query_in_tile_transposed */ true,
+                dq_out_transposed);
             grad_Q_accum = gq;
             grad_K_accum = gk;
             grad_V_accum = gv;
@@ -436,11 +443,13 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
                 }
             } else {
                 if (step == 0) {
-                    cyclic_launch(AttentionMaskType::Causal, kAllPairs, step);
-                    cyclic_launch(AttentionMaskType::None, kAllPairs, step);
+                    // The causal launch covers every row, so it goes last and
+                    // is the one that writes dQ in its natural layout.
+                    cyclic_launch(AttentionMaskType::None, kAllPairs, step, /* dq_out_transposed */ true);
+                    cyclic_launch(AttentionMaskType::Causal, kAllPairs, step, /* dq_out_transposed */ false);
                 } else {
-                    cyclic_launch(AttentionMaskType::None, 0U, step);
-                    cyclic_launch(AttentionMaskType::None, 1U, step);
+                    cyclic_launch(AttentionMaskType::None, 0U, step, /* dq_out_transposed */ true);
+                    cyclic_launch(AttentionMaskType::None, 1U, step, /* dq_out_transposed */ true);
                 }
             }
 
@@ -741,7 +750,16 @@ autograd::TensorPtr ring_attention_sdpa(
                     /* accumulate_into_outputs */ true,
                     grad_Q_accum,
                     grad_K_accum,
-                    grad_V_accum);
+                    grad_V_accum,
+                    ttml::metal::ops::RingLayout::Contiguous,
+                    0xFFFFFFFFU,
+                    // dQ stays in the kernels' tile-transposed form across the
+                    // steps (a zero accumulator is in both forms), and the last
+                    // step, the diagonal one, converts it back on the way out;
+                    // so the snake's head, where every row enters a dense pass,
+                    // transposes nothing. See the cyclic op's attributes.
+                    /* grad_query_in_tile_transposed */ true,
+                    /* grad_query_out_tile_transposed */ step_idx != 0);
                 grad_Q_accum = gq;
                 grad_K_accum = gk;
                 grad_V_accum = gv;
