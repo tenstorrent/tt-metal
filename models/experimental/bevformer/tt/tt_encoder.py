@@ -126,7 +126,6 @@ class TTBEVFormerLayer:
         key=None,
         value=None,
         bev_pos=None,
-        level_start_index=None,
         prev_bev=None,
         shift=None,
         reference_points_cam=None,
@@ -143,7 +142,6 @@ class TTBEVFormerLayer:
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            level_start_index: Start index of each level [num_levels]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift information for temporal alignment
             reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
@@ -193,7 +191,6 @@ class TTBEVFormerLayer:
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
             rebatch_plan=rebatch_plan,
-            level_start_index=level_start_index,
             **kwargs,
         )
 
@@ -373,8 +370,8 @@ class TTBEVFormerEncoder:
         self.spatial_shapes = spatial_shapes
         self.bev_shape = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
 
-        # The grid itself is batch-independent: batch size only broadcasts the leading
-        # dimension. Keep the bs=1 grid and widen it per forward.
+        # The grid is fixed by bev_h, bev_w, and z_cfg; changing any of them requires
+        # a new encoder instance. Batch size only broadcasts the leading dimension.
         self._reference_points_3d = generate_reference_points(
             bev_h=bev_h,
             bev_w=bev_w,
@@ -420,7 +417,6 @@ class TTBEVFormerEncoder:
         key=None,
         value=None,
         bev_pos=None,
-        level_start_index=None,
         prev_bev=None,
         shift=None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
@@ -434,7 +430,6 @@ class TTBEVFormerEncoder:
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key (optional)
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            level_start_index: Start indices for each level [num_levels]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift for temporal alignment
             img_metas: Camera metadata for point sampling
@@ -539,7 +534,6 @@ class TTBEVFormerEncoder:
                 key=key,
                 value=value,
                 bev_pos=bev_pos,
-                level_start_index=level_start_index,
                 prev_bev=prev_bev,
                 shift=shift,
                 reference_points_cam=reference_points_cam,

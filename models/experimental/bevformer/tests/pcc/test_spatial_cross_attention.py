@@ -33,7 +33,7 @@ ENABLE_LOGGING = True
 # Default Test Configuration
 PRINT_DETAILED_COMPARISON_FLAG = False
 
-# Empirical threshold for gatther-scatter row-routing regressions that global PCC can dilute; not an accuracy tolerance.
+# Empirical threshold for gather-scatter row-routing regressions that global PCC can dilute; not an accuracy tolerance.
 MAX_REBATCH_ROW_REL_ERROR = 0.3
 
 # Module-scoped device: opens once per file instead of once per test case.
@@ -148,9 +148,6 @@ def test_spatial_cross_attention_forward(
         reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
     tt_bev_mask = ttnn.from_torch(bev_mask, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
 
     # --------------------------------------------------------------------------- #
     # Models Init                                                                 #
@@ -215,7 +212,6 @@ def test_spatial_cross_attention_forward(
         bev_mask=tt_bev_mask,
         key=tt_camera_features,
         value=tt_camera_features,
-        level_start_index=tt_level_start_index,
     )
 
     tt_model_output = ttnn.to_torch(tt_model_output, dtype=torch.float32)

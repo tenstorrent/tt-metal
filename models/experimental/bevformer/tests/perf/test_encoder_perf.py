@@ -119,9 +119,6 @@ def test_bevformer_encoder_perf(
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_level_start_index = ttnn.from_torch(
-        level_start_index, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-    )
 
     def op_fn():
         return tt_model(
@@ -129,7 +126,6 @@ def test_bevformer_encoder_perf(
             key=tt_camera_features,
             value=tt_camera_features,
             bev_pos=tt_bev_pos,
-            level_start_index=tt_level_start_index,
             prev_bev=None,
             img_metas=img_metas,
         )

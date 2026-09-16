@@ -245,7 +245,6 @@ class TTSpatialCrossAttention:
         residual=None,
         query_pos=None,
         key_padding_mask=None,
-        level_start_index=None,
         rebatch_plan=None,
         **kwargs,
     ):
@@ -261,7 +260,6 @@ class TTSpatialCrossAttention:
             residual: Residual connection input.
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
-            level_start_index: Start index of each level.
             rebatch_plan: Prebuilt :class:`SCARebatchPlan`. Shared by every encoder layer; built here if absent.
             **kwargs: Additional arguments.
 
@@ -349,7 +347,6 @@ class TTSpatialCrossAttention:
             key=key_reshaped,
             value=value_reshaped,
             reference_points=reference_points_batched,
-            level_start_index=level_start_index,
             **kwargs,
         )
 
