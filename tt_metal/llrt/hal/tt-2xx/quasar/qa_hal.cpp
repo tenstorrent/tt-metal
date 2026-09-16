@@ -294,8 +294,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
-        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
-        includes.reserve(13);
+        // Upper bound: 11 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(14);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");
@@ -307,6 +307,9 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
+        if (params.rtoptions.get_quasar_four_row()) {
+            includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib/4row_quasar");
+        }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
 
         switch (params.core_type) {
@@ -378,9 +381,7 @@ public:
         } else {
             defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
         }
-        // Build the 4-row FPU variant when TT_METAL_QUASAR_FOUR_ROW is set; default is 8-row.
-        const char* four_row = std::getenv("TT_METAL_QUASAR_FOUR_ROW");
-        if (four_row != nullptr && (std::string(four_row) == "1" || std::string(four_row) == "true")) {
+        if (params.rtoptions.get_quasar_four_row()) {
             defines.push_back("MATH_ROWS=4");
         }
         return defines;

@@ -71,6 +71,7 @@
 #include <tt-metalium/hal_types.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include "hostdevcommon/fabric_common.h"  // routing_l1_info_t — identity field layout
 #include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
@@ -1330,10 +1331,13 @@ static void build_worker_coord_maps(IDevice* device, std::string& worker_col_map
 // ---------------------------------------------------------------------------
 // get_extra_include_flags: Build -I flags for JIT compilation.
 // ---------------------------------------------------------------------------
-static std::string get_extra_include_flags() {
+static std::string get_extra_include_flags(bool quasar_four_row) {
 #ifdef TT_EMULE_PROJECT_SOURCE_DIR
     const std::string project_src = TT_EMULE_PROJECT_SOURCE_DIR;
     std::string extra_inc;
+    if (quasar_four_row) {
+        extra_inc += "-I\"" + project_src + "/tt_metal/tt-llk/tt_llk_quasar/llk_lib/4row_quasar\" ";
+    }
     extra_inc += "-I\"" + project_src + "/ttnn/cpp\"";
     // Resolves headers included with the repo-rooted `cpp/ttnn/...` prefix
     // (e.g. the SDPA dataflow helper chain pulled in by the sampling writer).
@@ -1343,6 +1347,7 @@ static std::string get_extra_include_flags() {
     extra_inc += " -I\"" + project_src + "/tt_metal/hostdevcommon/api\"";
     return extra_inc;
 #else
+    (void)quasar_four_row;
     return {};
 #endif
 }
@@ -1512,12 +1517,12 @@ static std::map<std::string, std::string> build_kernel_defines(
         }
     }
 
-    auto arch = MetalContext::instance().get_cluster().arch();
+    auto& metal_context = MetalContext::instance(impl.get_context_id());
+    auto arch = metal_context.get_cluster().arch();
     if (arch == ARCH::QUASAR) {
         defines["ARCH_QUASAR"] = "1";
-        // Build the 4-row FPU variant when TT_METAL_QUASAR_FOUR_ROW is set; default is 8-row.
-        const char* four_row = std::getenv("TT_METAL_QUASAR_FOUR_ROW");
-        if (four_row != nullptr && (std::string(four_row) == "1" || std::string(four_row) == "true")) {
+        const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
+        if (rtoptions.get_quasar_four_row()) {
             defines["MATH_ROWS"] = "4";
         }
     } else if (arch == ARCH::WORMHOLE_B0) {
@@ -4292,9 +4297,13 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     std::string worker_col_map_str, worker_row_map_str;
     build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
 
-    std::string extra_inc = get_extra_include_flags();
+    auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
+    const bool quasar_four_row =
+        metal_context.get_cluster().arch() == ARCH::QUASAR && rtoptions.get_quasar_four_row();
+    std::string extra_inc = get_extra_include_flags(quasar_four_row);
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = metal_context.hal();
     uint32_t tensix_pct_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t kernel_config_base =
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
