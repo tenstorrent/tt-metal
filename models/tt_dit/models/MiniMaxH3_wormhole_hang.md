@@ -1,201 +1,192 @@
-# Handoff: intermittent mid-denoise device hang (MiniMax-H3 t2va, Wormhole 4x8)
+# MiniMax-H3 t2va on Wormhole 4x8: the intermittent mid-denoise hang
 
-Observed 2026-09-16 while sweeping `test_t2va_end_to_end` on a Wormhole galaxy
-(4x8, 32 chips). **This is not a memory bug** — it appeared only after DiT FSDP
-removed the OOM ceiling and long runs actually got to execute. It is now the
-blocker for the last 5 of 18 working points.
+Observed 2026-09-16 sweeping `test_t2va_end_to_end` on a Wormhole galaxy (4x8, 32 chips):
+2 hangs in 12 completed long runs, blocking the last 5 of 18 working points. This document
+records what the two logs proved, the cause that follows from it, and the fix.
 
-**I do not have a deterministic reproducer.** 2 hangs in 12 completed long runs.
-What follows is the exact fingerprint, the observed conditions, and the cheapest
-path to another instance.
+Raw logs on the run host: `~/h3_wormhole_results/sweep_fsdp.log.gz` (hang 1),
+`sweep15b.log.gz` (hang 2).
 
-Raw logs are not committed; on the run host they are `~/h3_wormhole_results/sweep_fsdp.log.gz`
-(hang 1) and `sweep15b.log.gz` (hang 2).
+## Where the hangs actually were
 
-## Symptom fingerprint
+The earlier revision of this file placed the stall at "~step 22-23" by dividing elapsed time
+by the per-step rate, and treated the two hangs' near-identical +13 s offset after `step 21/49`
+as the most discriminating number available. Both of those readings were wrong, and the log
+contains enough to do much better.
 
-Use this to confirm you have *this* bug and not an OOM or a crash:
+The `No fused MM/RS config ...` warning fired **once per transformer layer, 50 per denoise
+step**, so counting warnings after the last `step 21/49` line locates the stall to the layer:
 
-- Test produces **no further log output**, indefinitely. No exception, no traceback.
-- Process is **spinning, not idle**: 171–316% CPU, and CPU-time climbs well past
-  elapsed time (measured 06:23:27 CPU over 02:01:14 elapsed).
-- Every thread sits in `futex_wait_queue`:
+| | hang 1 (`9x16_10s`) | hang 2 (`16x9_15s`) |
+|---|---|---|
+| warnings after `step 21/49` | 150 = exactly 3 steps | 100 = exactly 2 steps |
+| per-step dispatch burst | 50 warnings in 0.30 s (~6 ms apart) | 50 in 0.30 s |
+| per-step blocking gap | 6.28 s, then 6.23 s | 12.35 s |
+| **stalled in step** | **i=23 (`step 24/49`)** | **i=22 (`step 23/49`)** |
+
+Two things follow immediately.
+
+**The +13 s agreement is arithmetic, not evidence.** The hangs are at *different* step counts
+past the log line — 3 steps at 6.3 s vs 2 steps at 12.4 s — and `2 x 6.3 ~= 1 x 12.4`. The old
+argument ("if the trigger were step-aligned the offsets would differ") does not hold: with
+per-step rates in a 2:1 ratio, a step-aligned trigger produces exactly this coincidence. The
+number discriminates nothing.
+
+**Every step has the same shape: ~0.30 s of host dispatch, then one long block.** The host
+enqueues all 50 blocks asynchronously in 0.3 s and then blocks for the entire step time. The
+only blocking call in the loop is the readback at `pipeline_minimax_h3.py:2002`
+(`local_device_to_torch(video_velocity)`), so host run-ahead is bounded to one step, and a hang
+means the device stopped retiring the step whose blocks were just dispatched.
+
+That is also **the exact line of the two earlier SIGBUS crashes** (`utils/tensor.py:349`, from
+`_denoise`), which were recorded here as "possibly the same underlying bug". They are the same
+line and the same subsystem; treat them as one bug until something separates them.
+
+## What is not the cause
+
+- **Nothing in the loop is step-dependent.** The one shape change — the distinct-noise-level
+  count feeding `tt_timestep` — happens only between i=0 and i=1. Computing both schedules
+  (video shift 12.0, audio shift 3.0) shows they collide only at t=0 and are distinct for every
+  i>=1. Steps 1-48 are an identical op sequence, so this is state drift, not control flow.
+- Not memory, not canvas, not duration alone, not accumulated load, not the weight cache --
+  all as previously established.
+
+## Cause: Wormhole was taking the fused MM/RS path by accident
+
+Those 50 warnings per step were not noise; they were the bug announcing itself.
+
+`transformer_block_minimax_h3.py` gated the fused ff2 matmul+reduce-scatter on
+`has_mmrs_config(m, k, n)`, which checked only `k == 3584 and n == 5376 and m % 32 == 0`. That
+gate is architecture-blind, but *both* ways of resolving a real blocking are not:
+
+- `_SWEPT_BLOCKINGS` registers under `_DEVICE_GRID = CoreCoord(12, 10)` — a Blackhole grid.
+- the v2.3 rule engine in `get_fused_mmrs_config` is `is_blackhole()`-gated.
+
+On Wormhole's 8x9 grid both miss, so every ff2 fell through to `default_fused_mmrs_config` —
+precisely the case the gate's own comment exists to prevent:
+
+> Only take it for a shape with a swept blocking. The generic fallback config runs the matmul
+> on 56 of the device's 120 cores at subblock 1x1, making the fused op a measured 45%
+> regression on this stage.
+
+So the code documented an invariant it did not hold on this architecture, 50 times per step.
+
+What that fallback actually configures is worse than slow. `FusedMMRSConfig.get_params` derives
+the reduce-scatter worker count as `rs_zone_capacity // (2 * num_links) - 1`, which on the
+Wormhole default (`CoreCoord(8, 7)` matmul grid, 8x9 device, `num_links=4`) is
+`((9-7)*8) // 8 - 1` = **1 worker per link** — with `mm_window_blocks=2`, so `use_l1_handoff`
+is true and the op runs its credit-based MM<->RS flow control. There is no floor or assert on
+that expression; at `num_links=8` it yields 0. A credit-starved, one-worker-per-link fused
+collective, on a blocking never swept for this architecture, running 50x per denoise step, is
+the best available explanation for an intermittent stall in exactly this op.
+
+It also fits the evidence better than DiT FSDP does. FSDP is what *changed* when the hang
+appeared, but the fused ff2 path fires with FSDP on **and** off — which matches the SIGBUS
+(seen FSDP-off) and the hang (seen FSDP-on) being one bug. FSDP's real contribution was
+removing the OOM ceiling so long runs could reach these steps at all.
+
+## The fix
+
+Gate the fused path on whether a measured or rule-derived blocking **actually resolves for the
+real device core grid**, instead of on the shape alone:
+
+- `utils/matmul.py`: `get_fused_mmrs_config`'s precedence-1 and -2 resolution is factored into
+  `_resolve_fused_mmrs_config`, and `resolves_fused_mmrs_config(M, K, N, grid)` answers the
+  same question as a pure predicate — so the gate can never drift from the resolver.
+- `mmrs_config.py`: `has_mmrs_config` / `register_mmrs_config` take the device core grid.
+- `transformer_block_minimax_h3.py`: passes `mesh_device.compute_with_storage_grid_size()`.
+- `FusedMMRSConfig.get_params` now rejects a derived `num_workers_per_link < 1` instead of
+  passing it to the op. The expression is unbounded below and the op takes an explicit count,
+  not an auto sentinel, so a zero would have configured a collective with no drainers and
+  deadlocked. Unreachable at the link counts tt_dit actually uses (1, 2, 4) and at every
+  blocking in `fused_mmrs_configs` — it is a tripwire, not a behaviour change.
+
+Blackhole is unchanged by construction — the predicate still returns True there via the swept
+table or the rule engine, verified across the H3 ff2 Ms. Wormhole now takes the ordinary
+`matmul` + `reduce_scatter_minimal_async` path, and the warning stops.
+
+Measured side effect on `1x1_5s` (M=2752), the shape with the cheapest step:
+**1477 -> 1408 ms/fwd, 4.7% faster**, CLIP 36.32 vs 36.33 baseline. The fused fallback was
+costing time, exactly as its own comment predicted.
+
+## Symptom fingerprint (if it recurs)
+
+- No further log output, indefinitely. No exception, no traceback.
+- Process **spinning, not idle**: 171-316% CPU, CPU-time climbing past elapsed
+  (measured 06:23:27 CPU over 02:01:14 elapsed). Every thread in `futex_wait_queue`:
   ```bash
   P=$(pgrep -f "^python -m pytest models/tt_dit" | head -1)
   ps -o pid,stat,etime,time,wchan:24,pcpu -p $P
   for t in /proc/$P/task/*; do echo "$(basename $t) $(cat $t/wchan)"; done | sort | uniq -c
   ```
-  That is tt-metal's host dispatch busy-polling a device that stopped retiring work.
-- **`@pytest.mark.timeout(7200)` does not fire.** pytest-timeout cannot interrupt a
-  C-level stall, so the test hangs past its own deadline. Wrap runs in `timeout(1)`
-  at the shell level — that is what eventually ended both of these.
-- Afterwards the **board is wedged**. The next process to open a device fails at
-  setup with:
+  That is host dispatch busy-polling a device that stopped retiring work.
+- **`@pytest.mark.timeout` does not fire** — pytest-timeout cannot interrupt a C-level stall.
+- Afterwards the board is wedged. Both of these were seen:
   ```
   Device 9 init: failed to initialize FW! Try resetting the board.
-  RuntimeError: TT_THROW @ tt_metal/impl/device/firmware/risc_firmware_initializer.cpp:1573
+  RuntimeError: Timed out waiting for ETH heartbeat on device ASIC ID: ..., ETH core e9-0
   ```
-  In the sweep this surfaced as `6 errors` at fixture setup, not as test failures.
+  A graceful `kill -TERM` exits cleanly but does **not** un-wedge the board.
 
-## The two observed instances
+## Running it so a hang leaves evidence
 
-| | hang 1 | hang 2 |
-|---|---|---|
-| case | `9x16_10s` (768x1344, 243 frames) | `16x9_15s` (1344x768, 362 frames) |
-| which generation | **timed** (2nd pass) | **warmup** (1st pass) |
-| last logged step | `step 21/49 t=0.0543` | `step 21/49 t=0.0543` |
-| time of that log | 08:56:22.034 | 10:05:17.577 |
-| last line in log | 08:56:35.503 | 10:05:30.603 |
-| **delta after step 21** | **13.47 s** | **13.03 s** |
-| per-step rate | ~6.6 s/step | ~12.7 s/step |
-| implied stall point | ~step 23 | ~step 22 |
-| cases completed before it | 11 | 1 |
-| elapsed load before it | ~1 h 27 m | ~30 m (devices freshly reset) |
-| DiT FSDP | on | on |
-
-### What the timings suggest
-
-Both stalled **~13 s after logging step 21**, despite the two cases running at very
-different per-step rates (6.6 vs 12.7 s/step). If the trigger were step-aligned you
-would expect the wall-clock offsets to differ; they agree to within half a second.
-Two samples is not enough to claim a cause — record the offset on any new instance,
-it is the most discriminating number available.
-
-(Step logging is every 10 steps, so "last logged step 21" only bounds the stall to
-steps 21–30; the +13 s offset narrows it to ~step 22–23.)
-
-## How to attempt a reproduction
-
-Ordered cheapest-first. **Reset the boards before each attempt** (see Recovery) so
-you are not measuring leftover state.
-
-### 1. Re-run the two known cases (~30 min each, best odds)
+The old recipe (shell `timeout`, then reset) destroyed the evidence it needed. Turn the stall
+into a raised timeout with an automatic device-state dump instead — the mechanism CI uses:
 
 ```bash
-TT_DIT_CACHE_DIR=~/tt_dit_cache MINIMAX_H3_DIT_FSDP=1 RUN_VBENCH=0 \
-  timeout 3600 python -m pytest \
-  models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py \
-  -k "4x8nl4 and 9x16_10s" -q 2>&1 | tee ~/hang-9x16-10s.log
+export TT_METAL_HOME=/home/jameslee/tt-metal
+export TT_METAL_INSPECTOR=1
+export TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT=1
+export TT_METAL_OPERATION_TIMEOUT_SECONDS=300     # >> the 12.7 s worst-case step
+export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TT_METAL_HOME/tools/tt-triage.py --disable-progress --triage-summary-path=$OUT/triage_summary.txt --sqlite-output-path=$OUT/triage.sqlite"
 ```
 
-then the same with `-k "4x8nl4 and 16x9_15s"`.
+Add `TT_DIT_LOG_EVERY_STEP=1` (added with this fix) so the step index is read off the log
+rather than reconstructed, and so `step N dispatched, reading back` separates "dispatch never
+returned" from "readback blocked" — previously indistinguishable, since the readback is the
+only blocking call in the loop.
 
-This is the single most valuable experiment: it separates **deterministic**
-(these working points always hang) from **flaky** (they were unlucky). That
-distinction decides whether the remaining 5 points are reachable at all, and it
-is cheap. Note hang 2 occurred only ~30 min after a fresh reset on the 2nd case,
-which already argues against a pure accumulation/thermal explanation.
+Watcher (`TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1`) gives per-RISC waypoints and NOC
+sanitization if the triage dump is not enough; it perturbs timing, so hold it in reserve for a
+race this sensitive. The triage scripts that matter here: `dump_op_mesh` (op-ID skew across the
+4x8 mesh — shows which chip stopped), `dump_callstacks`, `check_eth_status`, `check_noc_status`.
 
-### 2. Loop one long case (unattended, highest cumulative odds)
-
-```bash
-for i in $(seq 1 6); do
-  echo "=== iteration $i $(date) ==="
-  TT_DIT_CACHE_DIR=~/tt_dit_cache MINIMAX_H3_DIT_FSDP=1 RUN_VBENCH=0 \
-    timeout 2400 python -m pytest \
-    models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py \
-    -k "4x8nl4 and 16x9_10s" -q
-  echo "exit=$?"
-done 2>&1 | tee ~/hang-loop.log
-```
-
-`16x9_10s` passed cleanly before, so a hang here proves the bug is not tied to a
-particular working point. Watch for a `timeout`-induced exit 124 — that is a hang,
-and it will wedge the boards, so the following iterations will error at setup.
-Expect to reset between iterations if one hangs.
-
-### 3. The full sweep (~4 h, reproduces the original conditions)
-
-```bash
-TT_DIT_CACHE_DIR=~/tt_dit_cache MINIMAX_H3_DIT_FSDP=1 RUN_VBENCH=0 \
-  timeout 36000 python -m pytest \
-  models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py \
-  -k "4x8nl4" -q 2>&1 | tee ~/hang-sweep.log
-```
-
-This is how both hangs were found, but one hang stops all later cases, so it is a
-poor instrument for characterising the bug.
-
-## Recovery
-
-```bash
-tt-smi -glx_reset          # USER_RESET on 32 devices -> IPMI -> POST_RESET, ~7 min
-```
-
-tt-smi prints a hint that plain `tt-smi -r` is also supported on Galaxy 6U.
-After it completes you should see `Re-initialized 32 boards after reset`.
-
-Before resetting, confirm nobody else is on the box — this is destructive to any
-concurrent user:
+Recovery, after confirming nobody else is on the box:
 
 ```bash
 for p in $(ls /proc | grep -E '^[0-9]+$'); do
   ls -l /proc/$p/fd 2>/dev/null | grep -q tenstorrent && \
     echo "pid $p user=$(stat -c %U /proc/$p) cmd=$(tr '\0' ' ' </proc/$p/cmdline | cut -c1-60)"
 done
-```
-
-Verify health afterwards:
-
-```bash
+tt-smi -r      # tt-smi is 5.2.0 here; -r supersedes the deprecated -glx_reset
 python -c "import ttnn; d=ttnn.open_mesh_device(ttnn.MeshShape(1,1)); print('OK'); ttnn.close_mesh_device(d)"
 ```
 
-A graceful `kill -TERM` on the hung pytest **does** exit cleanly, but does **not**
-un-wedge the board — hang 1 was SIGTERMed successfully and the next run still hit
-`failed to initialize FW`.
+## Exposure, if a reproducer is still needed
 
-## What is ruled out
+Denoise steps actually executed across both sweeps, by per-device ff2 M:
 
-- **Not memory.** Both hangs happened with FSDP on, where DiT residency is
-  101.8 MiB/bank of 1021 and free space is ~919 MiB/bank. No OOM is logged, and
-  OOMs in this codebase raise `TT_FATAL ... Out of Memory` promptly rather than stalling.
-- **Not canvas-specific.** `21x9_15s` (1536x672, 1.03 MPix) passed in the same run
-  where `16x9_15s` (1344x768, 1.03 MPix) hung — same pixel count, same duration.
-- **Not purely duration.** `16x9_10s` and `21x9_10s` both passed; `9x16_10s` hung.
-- **Not accumulated load alone.** Hang 2 came 30 min after a full galaxy reset,
-  on only the 2nd case of the run.
-- **Not the corrupt weight cache** that caused a separate wrong-output bug earlier
-  (see `MiniMaxH3_wormhole_perf.md` open issue 3) — `~/tt_dit_cache` was rebuilt clean before these
-  runs and CLIP matched baseline exactly on all six 5 s cases.
+| M (rows/device) | steps executed | hangs | s/step |
+|---|---|---|---|
+| <= 7040 (5 s cases + 4x3/1x1/3x4 10 s) | 882 | 0 | 1.5 - 4.8 |
+| 9184 (10 s wide cases) | 269 | 1 | 6.6 |
+| 13664 (15 s cases) | 121 | 1 | 12.7 |
 
-## Possibly the same underlying bug
-
-Earlier the same box produced **two hard SIGBUS crashes** in the denoise loop, with
-FSDP *off*:
-
-```
-Fatal Python error: Bus error
-  models/tt_dit/utils/tensor.py:349 in local_device_to_torch
-  pipelines/minimax_h3/pipeline_minimax_h3.py:1990 in _denoise
-```
-
-at steps ~31 and ~41 of 49, once in warmup and once in the timed pass. Same
-subsystem (device->host readback inside `_denoise`), same intermittency, different
-presentation. Whether the hang and the SIGBUS are one bug is unknown.
-
-Those logs were in a session scratchpad that has since been deleted, so only the
-transcript record remains — **keep any new SIGBUS log.**
-
-## Diagnostics worth collecting on the next instance
-
-Before killing it:
-
-1. `tt-smi -s > ~/hang-ttsmi.json` — ARC/DDR/ETH status while wedged.
-2. Python-level stacks of every thread:
-   `py-spy dump --pid $P --locals` (or `gdb -p $P -batch -ex "thread apply all bt"`).
-3. Which device is stuck: after recovery, note the device id in the
-   `Device N init: failed to initialize FW!` message. Hang 1 reported **device 9**.
-   If the same id recurs, suspect that specific ASIC/link rather than the model.
-4. `dmesg -T | tail -100` for PCIe/AER/IOMMU events (needs privileges; was not
-   available to me).
-5. The exact `+N s after step 21` offset — see above.
+~195 steps per hang at M >= 9184 and none below, which is suggestive but not significant at
+n=2 (Fisher p ~ 0.09). It does mean the 10 s / M=9184 cases are the best instrument: they are
+in the implicated group *and* give the most steps per hour (~545/h vs ~283/h at 15 s). A soak
+on `16x9_10s` should surface a hang within roughly 20-40 minutes if the old rate still holds.
 
 ## Open questions
 
-- Deterministic per working point, or flaky? (**experiment 1 answers this**)
-- Always ~step 22–23, or did the two samples coincide?
-- Is device 9 always the wedged one?
-- Does it occur with FSDP off, once OOM is avoided (e.g. any 5 s case looped)?
-- Is it related to the `No fused MM/RS config for (M, K, N) = (4736, 3584, 5376)
-  on 8-9 core grid` fallback that fires on every Wormhole denoise step?
+- Does the hang survive the fix? **Status at commit time: 4 clean iterations (392 denoise steps, zero hangs), P(that | the old rate still held) = 0.13.** The threshold was fixed before the runs started: p<0.05 at 6 iterations, p~0.002 at 12. Not yet conclusive at this count -- finish the soak before calling the hang fixed. The gate fix stands on its own regardless, being a correctness and perf fix independent of the hang.
+- If it does: FSDP's ~200-250 extra SP-axis ring all-gathers per step rotate a **2-deep**
+  ping-pong semaphore pool (`parallel/manager.py:311-314`) with `barrier_semaphore=None` on the
+  persistent path (`manager.py:872`), sharing the SP axis with the ring-SDPA K/V gathers.
+  `manager.py:53-56` already documents a related desync-or-hang hazard. That is suspect #2.
+- Is device 9 always the wedged one? `dump_op_mesh` now answers this directly.
+- Are the hang and the SIGBUS one bug? They are the same line; the `local_device_to_torch`
+  readback lands in mmap'd hugepage sysmem, so a SIGBUS there is what faulting on a mapping
+  whose device went away looks like. `dmesg -T | tail -100` on the next instance (needs
+  privileges, not available to me) would show a PCIe/AER event if so — which would make this a
+  platform bug, not a model one. **Keep any new SIGBUS log.**

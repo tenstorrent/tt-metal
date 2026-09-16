@@ -94,28 +94,27 @@ the **timed** pass. All six 15 s OOMed in warmup.
 
 ## Open issues
 
-1. **Intermittent mid-denoise device hang** — the current blocker, unrelated to memory.
-   - 9:16/10s hung in the timed pass; 16:9/15s hung in warmup. Both last logged
-     `step 21/49` (logging is every 10 steps, so the stall is in steps 21-30).
-   - Symptom: no log output, 171-316% CPU, all threads in `futex_wait_queue`
-     (host dispatch busy-polling a stalled device). `pytest-timeout` does not
-     interrupt it.
-   - Wedges the board: afterwards `Device N init: failed to initialize FW!`.
-     Recover with `tt-smi -glx_reset` (or `tt-smi -r`, ~7 min, re-inits all 32).
-   - Not canvas-specific: 21:9/15s passed at the same 1.03 MPix where 16:9/15s hung.
-   - Possibly the same underlying instability as two earlier `Fatal Python error:
-     Bus error` crashes in `local_device_to_torch` (`utils/tensor.py:349`) at
-     steps 31 and 41 of other runs.
-   - **Next step:** re-run just the two hung cases on freshly reset devices to see
-     whether they are deterministic or flaky.
-   - Full fingerprint, reproduction attempts, recovery procedure and diagnostics to
-     collect: see **`MiniMaxH3_wormhole_hang.md`**.
+1. **Intermittent mid-denoise device hang** — was the blocker, unrelated to memory.
+   Counting the per-layer `No fused MM/RS` warnings in the two hang logs located the
+   stalls exactly: hang 1 in step i=23, hang 2 in step i=22, both blocked in the
+   readback at `pipeline_minimax_h3.py:2002` — the same line as the earlier
+   `Fatal Python error: Bus error` crashes. The ~13 s offset the earlier writeup
+   leaned on turned out to be an arithmetic coincidence of the 2:1 per-step rates.
+   Prime suspect and now fixed: issue 2 below. Full forensics, the evidence-preserving
+   run recipe and the remaining open questions: see **`MiniMaxH3_wormhole_hang.md`**.
 
-2. **Wormhole matmul rule-engine gap** — every denoise step logs
-   `No fused MM/RS config for (M, K, N) = (4736, 3584, 5376) on 8-9 core grid ...
-   using default, which is likely slower than not fusing at all`
-   (and `(9184, ...)` at 10 s). All denoise numbers here include this unoptimized
-   path, so there is headroom.
+2. **Wormhole took the fused MM/RS path by accident** — *fixed*. `has_mmrs_config`
+   gated the fused ff2 matmul+reduce-scatter on `(k, n, m % 32)` alone, but both ways
+   of resolving a real blocking are Blackhole-only (`_SWEPT_BLOCKINGS` is keyed to a
+   12x10 grid, the v2.3 rule engine is `is_blackhole()`-gated). So every Wormhole ff2
+   landed on `default_fused_mmrs_config` — 56 of 72 cores at subblock 1x1, and a
+   derived reduce-scatter worker count of **1 per link** — which is the case the gate's
+   own comment exists to prevent. The gate now takes the device core grid and asks
+   `resolves_fused_mmrs_config` whether a measured or rule-derived blocking exists;
+   Wormhole falls back to the ordinary matmul + `reduce_scatter_minimal_async`.
+   Measured on `1x1_5s`: **1477 -> 1408 ms/fwd (4.7% faster)**, CLIP 36.32 vs 36.33.
+   **The tables above still include the unoptimized path**, so every denoise number
+   here is pessimistic by a few percent; re-sweep to restate them.
 
 3. **Cache key omits device params** — `cache.load_model` keys on parallel config,
    mesh shape, dtype and FSDP, but not `l1_small_size`/device params. A cache

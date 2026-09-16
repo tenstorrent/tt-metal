@@ -1942,6 +1942,10 @@ class MiniMaxH3Pipeline:
             transformer.traced_adaln_cache = adaln_cache
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
+        # Every-10 logging bounds a hang to a 10-step window, which is not enough to localize one.
+        # Opt in to per-step logging when hunting the intermittent device hang; off by default so
+        # ordinary runs keep their quiet logs.
+        _log_every_step = os.environ.get("TT_DIT_LOG_EVERY_STEP", "0") not in ("0", "", "false", "False")
         for i, t in enumerate(timesteps):
             t_step = time.time()
             # Per-row noise levels, reduced to the (distinct timesteps, per-row index) pair the
@@ -1997,6 +2001,13 @@ class MiniMaxH3Pipeline:
                     adaln_cache=adaln_cache,
                 )
 
+            # Host dispatch of the 50 blocks is asynchronous and takes ~0.3 s; the readback below is
+            # the only blocking point in the loop, so it absorbs the whole step's device time. That
+            # makes the two indistinguishable in a hang: log between them so a stalled run says
+            # which side it died on. See MiniMaxH3_wormhole_hang.md.
+            if _log_every_step:
+                logger.info(f"  step {i + 1}/{len(timesteps)} dispatched, reading back")
+
             # The model returns the *target* rows only, so reshape to the row width rather than to
             # `video_rows.shape`, which still counts the condition rows.
             v = local_device_to_torch(video_velocity).reshape(-1, video_rows.shape[-1]).float()
@@ -2015,8 +2026,8 @@ class MiniMaxH3Pipeline:
                 t_first = t_step
             else:
                 t_steady += t_step
-            if i % 10 == 0 or i == len(timesteps) - 1:
-                logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
+            if _log_every_step or i % 10 == 0 or i == len(timesteps) - 1:
+                logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f} ({t_step:.2f}s)")
 
         # This request is now warm: a later call with the same signature may trace.
         self._trace_signature = signature

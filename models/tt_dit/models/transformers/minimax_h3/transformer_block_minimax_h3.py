@@ -318,10 +318,18 @@ class MiniMaxH3TransformerBlock(Module):
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
-        if self.tp_factor > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and has_mmrs_config(*ff2_shape):
+        # The grid is what decides whether a swept blocking or a rule pick can be resolved at all,
+        # so it has to reach the gate: without it every tile-aligned M looked servable, and Wormhole
+        # took the fused path 50x per denoise step straight onto the warned fallback config.
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        if (
+            self.tp_factor > 1
+            and self.ccl_manager.topology == ttnn.Topology.Ring
+            and has_mmrs_config(*ff2_shape, core_grid)
+        ):
             # M is only known here (it tracks the packed sequence length), so the blocking is
             # registered at the point of use rather than at construction. Idempotent and cheap.
-            register_mmrs_config(*ff2_shape)
+            register_mmrs_config(*ff2_shape, core_grid)
             return self.ff.forward_fused_addcmul(
                 normed,
                 residual,

@@ -825,6 +825,20 @@ class FusedMMRSConfig(NamedTuple):
             rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
             num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
+        # The expression above is unbounded below: a shallow RS zone or a high link count drives it
+        # to zero or negative (e.g. an 8x7 matmul grid on an 8x9 device yields 1 at num_links=4 and
+        # 0 at 8). A collective configured with no drainers does not fail -- it deadlocks, which is
+        # the most expensive way to find out. Fail here instead, where the numbers are still legible.
+        if num_workers_per_link < 1:
+            msg = (
+                f"fused MM/RS would run {num_workers_per_link} reduce-scatter workers per link "
+                f"(matmul grid {self.compute_with_storage_grid_size}, device grid {core_grid}, "
+                f"num_links={num_links}): the reduce-scatter zone is too shallow for this many links. "
+                "Give the config an explicit num_workers_per_link, use a shorter matmul grid, or do "
+                "not fuse this shape."
+            )
+            raise ValueError(msg)
+
         # Order is important. Guaranteed for python 3.7+
         return {
             "reduce_scatter_core_grid_offset": ttnn.CoreCoord(0, self.compute_with_storage_grid_size.y),
@@ -918,26 +932,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
     with `sweep_mm_block_sizes.py` (use case ``mmrs``) and paste the winner into
     ``fused_mmrs_configs`` (or register it from a model table) to override the rules permanently.
     """
-    table = fused_mmrs_configs.get(device_core_grid, {})
-    config = table.get((M, K, N))
-
-    if config is None and is_blackhole() and M % 32 == 0:
-        from .mmrs_rules import pick_v23
-
-        v23 = pick_v23(M, K, N, full_grid=(device_core_grid.x, device_core_grid.y))
-        if v23 is not None:
-            m_blk, k_blk, n_blk = v23["blocks"]
-            sub_h, sub_w = v23["subblock"]
-            signature = (M, K, N, device_core_grid.x, device_core_grid.y)
-            if signature not in _logged_mmrs_rule_signatures:
-                logger.info(
-                    f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
-                    f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
-                    f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
-                    f"# paste into fused_mmrs_configs after sweeping to override"
-                )
-                _logged_mmrs_rule_signatures.add(signature)
-            config = FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
+    config = _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=True)
 
     if config is None:
         logger.warning(
@@ -947,6 +942,56 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
         )
         config = default_fused_mmrs_config
     return config.get_params(device_core_grid, num_links, M=M)
+
+
+def _resolve_fused_mmrs_config(M, K, N, device_core_grid, *, log):
+    """Precedences 1 and 2 of `get_fused_mmrs_config` -- a swept table entry, then the rule engine.
+
+    Returns None when only `default_fused_mmrs_config` would serve the shape. Factored out so that
+    `resolves_fused_mmrs_config` answers with the *same* precedence the resolver actually applies,
+    rather than a second copy of it that can drift.
+
+    `log` gates the rule-hit info line, so the predicate stays free of side effects.
+    """
+    config = fused_mmrs_configs.get(device_core_grid, {}).get((M, K, N))
+    if config is not None:
+        return config
+
+    if is_blackhole() and M % 32 == 0:
+        from .mmrs_rules import pick_v23
+
+        v23 = pick_v23(M, K, N, full_grid=(device_core_grid.x, device_core_grid.y))
+        if v23 is not None:
+            m_blk, k_blk, n_blk = v23["blocks"]
+            sub_h, sub_w = v23["subblock"]
+            if log:
+                signature = (M, K, N, device_core_grid.x, device_core_grid.y)
+                if signature not in _logged_mmrs_rule_signatures:
+                    logger.info(
+                        f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
+                        f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
+                        f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
+                        f"# paste into fused_mmrs_configs after sweeping to override"
+                    )
+                    _logged_mmrs_rule_signatures.add(signature)
+            return FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
+
+    return None
+
+
+def resolves_fused_mmrs_config(M, K, N, device_core_grid) -> bool:
+    """Whether a *measured or rule-derived* fused MM+RS blocking exists for this shape and grid.
+
+    False means `get_fused_mmrs_config` would fall back to `default_fused_mmrs_config`, which is
+    slower than not fusing at all -- so this, not the shape alone, is what a caller should gate the
+    fused path on. Pure: no logging, no table mutation.
+
+    Both resolution sources are architecture-dependent: the table is keyed by the device core grid,
+    and the rule engine is Blackhole-only. So the answer has to be computed from the *actual*
+    `device_core_grid` and can never be inferred from (M, K, N) alone -- doing so is how Wormhole
+    silently ran every ff2 on the warned default.
+    """
+    return _resolve_fused_mmrs_config(M, K, N, device_core_grid, log=False) is not None
 
 
 def register_matmul_configs(configs: dict) -> None:
