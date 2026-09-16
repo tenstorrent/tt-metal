@@ -19,6 +19,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include "emule_device_map.hpp"  // NOC_NODE_ID_BITS
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
