@@ -737,7 +737,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("mish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
         case UnaryOpType::RSQRT: {
-            return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
+            return {"rsqrt_tile_init();", fmt::format("rsqrt_tile<{1}>({0});", idst, param0_raw)};
         }
         case UnaryOpType::SQRT: {
             return {"sqrt_tile_init();", fmt::format("sqrt_tile<{1}>({0});", idst, param0_raw)};
@@ -750,7 +750,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
     UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
-        case UnaryOpType::RECIP: return {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
+        case UnaryOpType::RECIP: return {"recip_tile_init();", fmt::format("recip_tile({});", idst)};
         case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
         case UnaryOpType::GELU_TANH: return {"gelu_tanh_tile_init();", fmt::format("gelu_tanh_tile({});", idst)};
         case UnaryOpType::LOG: return {"log_tile_init();", fmt::format("log_tile({});", idst)};

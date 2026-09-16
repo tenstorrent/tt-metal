@@ -451,7 +451,7 @@ TEST_F(NormalizationSmoke, LayerNormResidualFused) {
 
 // LayerNormMultiCoreProgramFactory, Welford variant (compute/layernorm_welford.cpp;
 // reader is the standard reader_unary_interleaved_ln.cpp with the welford compile-time
-// arg). LayerNormDefaultProgramConfig fields verified: {legacy_reduction, legacy_rsqrt,
+// arg). LayerNormDefaultProgramConfig fields verified: {legacy_reduction,
 // use_welford}. Welford is LN-only (validate_on_program_cache_miss rejects RMSNORM) and
 // requires a reciprocal LUT tensor (TT_FATAL at layernorm_op_multi_core.cpp) --
 // built here over the full compute grid with width = full W, exactly as
@@ -477,7 +477,7 @@ TEST_F(NormalizationSmoke, LayerNormWelfordInterleaved) {
 // LayerNormShardedProgramFactory (compute/layernorm_sharded.cpp): single [32,64] L1
 // shard on core (0,0), WIDTH_SHARDED. Config field order verified:
 // {compute_with_storage_grid_size, subblock_w, block_h, block_w, inplace,
-//  legacy_reduction=false, legacy_rsqrt=false, use_welford=false}.
+//  legacy_reduction=false, use_welford=false}.
 // Validator (mcast-1d branch, M == block_h*tile_h): block_w == ceil(Kt/num_cores) == 2,
 // block_h == Mt == 1, block dims * tile dims == shard shape, bbox < grid size, and
 // sharded input requires a sharded output (inherited from the input's memory config).

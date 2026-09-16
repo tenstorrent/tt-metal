@@ -954,6 +954,5 @@ def _layernorm_sharded_config(max_seq_len, max_batch_size):
         inplace=False,
         use_welford=False,
         legacy_reduction=False,
-        legacy_rsqrt=False,
     )
     return program_config, sharded_mem

@@ -34,7 +34,7 @@ template <Dst Slot = Dst::D0>
 struct Recip;
 
 // ---- Rsqrt ----
-template <Approx fast = Approx::Exact, Legacy legacy = Legacy::Off, Dst Slot = Dst::D0>
+template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
 struct Rsqrt;
 
 // ---- Cbrt ----

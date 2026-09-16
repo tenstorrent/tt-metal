@@ -24,7 +24,6 @@ void kernel_main() {
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
     // has to reach the preprocessor as well as `if constexpr`.
 #ifdef FUSE_GAMMA
@@ -222,8 +221,8 @@ void kernel_main() {
         tile_regs_acquire();
         add_tiles(dfb_var, dfb_eps, 0, 0, dst0);
         tile_regs_wait();
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, dfb_stats_reduced);

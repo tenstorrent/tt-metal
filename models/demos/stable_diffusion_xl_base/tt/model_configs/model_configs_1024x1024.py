@@ -851,7 +851,6 @@ class ModelOptimisations1024x1024:
             block_w=4,
             inplace=False,
             legacy_reduction=True,
-            legacy_rsqrt=True,
         )
         self.layernorm_configs["1280_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid_x, 8),
@@ -860,7 +859,6 @@ class ModelOptimisations1024x1024:
             block_w=1280 // 32 // self.core_grid_x,
             inplace=False,
             legacy_reduction=True,
-            legacy_rsqrt=True,
         )
         # endregion
 

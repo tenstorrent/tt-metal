@@ -81,12 +81,12 @@ void kernel_main() {
         pack_reconfig_data_format(dfb_recip_sqrt_var_id);
 
         add_init(dfb_stats_reduced_id, dfb_eps_id);
-        rsqrt_tile_init<true>();
+        rsqrt_tile_init();
         tile_regs_acquire();
         tile_regs_wait();
         // stats_reduced tile 1 holds variance (after combine_welford_partials)
         add_tiles(dfb_stats_reduced_id, dfb_eps_id, 1, 0, 0);
-        rsqrt_tile<true>(0);
+        rsqrt_tile(0);
         pack_tile(0, dfb_recip_sqrt_var_id);
         tile_regs_commit();
         tile_regs_release();

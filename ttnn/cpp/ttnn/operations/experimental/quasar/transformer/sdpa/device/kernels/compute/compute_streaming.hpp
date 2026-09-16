@@ -767,8 +767,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 add_binary_tile(0, 1, 0);
             }
 #ifdef ARCH_BLACKHOLE
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));

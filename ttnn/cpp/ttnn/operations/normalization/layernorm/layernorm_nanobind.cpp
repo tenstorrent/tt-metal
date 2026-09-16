@@ -37,13 +37,11 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
 
     nb::class_<ttnn::prim::LayerNormDefaultProgramConfig>(mod, "LayerNormDefaultProgramConfig")
         .def(
-            nb::init<bool, bool, bool>(),
+            nb::init<bool, bool>(),
             nb::kw_only(),
             nb::arg("legacy_reduction").noconvert() = false,
-            nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
         .def_rw("legacy_reduction", &prim::LayerNormDefaultProgramConfig::legacy_reduction)
-        .def_rw("legacy_rsqrt", &prim::LayerNormDefaultProgramConfig::legacy_rsqrt)
         .def_rw("use_welford", &prim::LayerNormDefaultProgramConfig::use_welford)
         .def("__repr__", [](const ttnn::prim::LayerNormDefaultProgramConfig& config) {
             return fmt::format("{}", config);
@@ -51,7 +49,7 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
 
     nb::class_<ttnn::prim::LayerNormShardedMultiCoreProgramConfig>(mod, "LayerNormShardedMultiCoreProgramConfig")
         .def(
-            nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool, bool>(),
+            nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("subblock_w").noconvert(),
@@ -59,7 +57,6 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
             nb::arg("block_w").noconvert(),
             nb::arg("inplace").noconvert(),
             nb::arg("legacy_reduction").noconvert() = false,
-            nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
         .def_rw(
             "compute_with_storage_grid_size",
@@ -69,7 +66,6 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
         .def_rw("block_w", &prim::LayerNormShardedMultiCoreProgramConfig::block_w)
         .def_rw("inplace", &prim::LayerNormShardedMultiCoreProgramConfig::inplace)
         .def_rw("legacy_reduction", &prim::LayerNormShardedMultiCoreProgramConfig::legacy_reduction)
-        .def_rw("legacy_rsqrt", &prim::LayerNormShardedMultiCoreProgramConfig::legacy_rsqrt)
         .def_rw("use_welford", &prim::LayerNormShardedMultiCoreProgramConfig::use_welford)
         .def("__repr__", [](const ttnn::prim::LayerNormShardedMultiCoreProgramConfig& config) {
             return fmt::format("{}", config);
