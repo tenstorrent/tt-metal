@@ -276,7 +276,7 @@ void kernel_main() {
     // captured trace replays across cache slots.
     constexpr bool slot_from_metadata = get_compile_time_arg_val(35) == 1;
     // Slot 36: trace-safe KV-pad derivation. When set, the reader reads kv_actual_isl from the
-    // kv_actual_isl tensor[0] (common runtime arg 3 = its DRAM addr), derives logical_nt / q-mapping /
+    // kv_actual_isl tensor[0] (common runtime arg 4 = its DRAM addr), derives logical_nt / q-mapping /
     // ring masks on-device, and hands the compute-needed values to the compute kernel via
     // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(36) == 1;
@@ -299,6 +299,9 @@ void kernel_main() {
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(41));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(42);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(43);
+    // Slot 44: circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
+    // local slab addressing (sliding_window_work_plan.hpp) — must match host halo layout and compute.
+    constexpr uint32_t circular_kv_slab_count = get_compile_time_arg_val(44);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -308,8 +311,9 @@ void kernel_main() {
     // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    // Slots 40-43 are the rank-mapping descriptor, so tensor accessors start at slot 44.
-    constexpr auto q_args = TensorAccessorArgs<44>();
+    // Slots 40-43 are the rank-mapping descriptor and slot 44 the bounded sliding KV slab count, so
+    // the tensor accessors start at compile-arg slot 45.
+    constexpr auto q_args = TensorAccessorArgs<45>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -321,10 +325,10 @@ void kernel_main() {
     constexpr uint32_t post_tensor_args_offset = attention_sink_args.next_compile_time_args_offset();
     // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
     // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
-    // (unused) accessor offset (q_args' slot 44) so TensorAccessorArgs<> -- instantiated unconditionally
+    // (unused) accessor offset (q_args' slot 45) so TensorAccessorArgs<> -- instantiated unconditionally
     // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
     // The chain/CB compile args then start after the metadata accessor when present.
-    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 44;
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 45;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
     // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
     // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
@@ -470,13 +474,20 @@ void kernel_main() {
         if constexpr (slot_from_metadata) {
             const uint32_t slot_id =
                 trace_metadata::read_metadata_scalar_u32(meta_noc, meta_args, get_common_arg_val<uint32_t>(0), meta_l1);
-            kv_cache_batch_idx = slot_id * get_common_arg_val<uint32_t>(1) + get_common_arg_val<uint32_t>(2);
+            kv_cache_batch_idx = trace_metadata::bounded_cache_batch_idx(
+                slot_id,
+                get_common_arg_val<uint32_t>(1),
+                get_common_arg_val<uint32_t>(2),
+                get_common_arg_val<uint32_t>(3));
         }
         if constexpr (kv_pad_from_metadata) {
-            const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
-                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(3), meta_l1);
+            uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+                meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
+            kv_actual_isl =
+                trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
-            logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
+            logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
+                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
@@ -840,7 +851,8 @@ void kernel_main() {
                     tt::constants::TILE_HEIGHT,
                     kv_local_padded_Nt,
                     Sk_chunk_t,
-                    logical_nt);
+                    logical_nt,
+                    circular_kv_slab_count);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }

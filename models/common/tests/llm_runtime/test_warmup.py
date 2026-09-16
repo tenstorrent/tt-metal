@@ -125,7 +125,10 @@ def make_runtime_configs(
     model=None,
 ):
     mesh = Mesh()
-    sampling_config = sampling_config or SimpleNamespace(allow_force_argmax=allow_force_argmax)
+    sampling_config = sampling_config or SimpleNamespace(
+        allow_force_argmax=allow_force_argmax,
+        max_top_k=32,
+    )
     sampling_config.max_batch_size = lane_capacity
     model = model or SimpleNamespace(
         config=SimpleNamespace(max_batch_size=lane_capacity, mesh_device=mesh, num_devices=1),
@@ -342,6 +345,7 @@ def test_model_supported_prefill_lengths_are_validated_once(sequence_lengths, me
 def test_sampler_argmax_capability_is_resolved_once():
     class SamplingConfig:
         reads = 0
+        max_top_k = 32
 
         @property
         def allow_force_argmax(self):

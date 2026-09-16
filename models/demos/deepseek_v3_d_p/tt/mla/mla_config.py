@@ -26,6 +26,11 @@ import ttnn
 # Available core grid is 12x10, but due to di/dt and throttling problems, use 11x10 temporarily
 COMPUTE_GRID = (11, 10)
 
+# GLM-5.1/5.2 share the 64-head, q_lora_rank=2048 geometry. These tags keep
+# their 640-token configs separate from Kimi and DeepSeek variants sharing the same slot.
+_GLM_TAGS = {"num_heads": 64, "q_lora_rank": 2048, "chunked_only": True}
+_GLM_INDEXER_TAGS = {"num_heads": 64, "q_lora_rank": 2048}
+
 MLA_MATMUL_CONFIG = {
     # hidden_states @ q_a_proj_weight
     "q_a_proj": {
@@ -62,6 +67,23 @@ MLA_MATMUL_CONFIG = {
                     out_subblock_w=5,
                     per_core_M=2,
                     per_core_N=5,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat16,
+            },
+            {
+                **_GLM_TAGS,
+                "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=COMPUTE_GRID,
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=6,
+                    per_core_M=2,
+                    per_core_N=6,
                     transpose_mcast=False,
                     fuse_batch=False,
                     fused_activation=None,
@@ -148,6 +170,23 @@ MLA_MATMUL_CONFIG = {
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
+            {
+                **_GLM_TAGS,
+                "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=COMPUTE_GRID,
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=6,
+                    per_core_M=2,
+                    per_core_N=12,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat16,
+            },
         ],
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -217,6 +256,20 @@ MLA_MATMUL_CONFIG = {
                     per_core_N=16,
                 ),
                 "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat16,
+            },
+            {
+                **_GLM_TAGS,
+                "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+                    compute_with_storage_grid_size=COMPUTE_GRID,
+                    in0_block_w=6,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    per_core_M=5,
+                    per_core_N=16,
+                ),
+                "act_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
@@ -303,6 +356,23 @@ MLA_MATMUL_CONFIG = {
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
+            {
+                **_GLM_TAGS,
+                "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=COMPUTE_GRID,
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    per_core_M=2,
+                    per_core_N=2,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat16,
+            },
         ],
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -370,6 +440,20 @@ MLA_MATMUL_CONFIG = {
                     per_core_N=4,
                 ),
                 "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat8_b,
+            },
+            {
+                **_GLM_TAGS,
+                "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+                    compute_with_storage_grid_size=COMPUTE_GRID,
+                    in0_block_w=2,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    per_core_M=5,
+                    per_core_N=8,
+                ),
+                "act_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat8_b,
             },
@@ -450,6 +534,23 @@ MLA_MATMUL_CONFIG = {
                 "out_mem_config": ttnn.L1_MEMORY_CONFIG,
                 "out_dtype": ttnn.bfloat16,
             },
+            {
+                **_GLM_TAGS,
+                "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=COMPUTE_GRID,
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=6,
+                    per_core_M=2,
+                    per_core_N=18,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat16,
+            },
         ],
         4096: {
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -482,6 +583,130 @@ MLA_MATMUL_CONFIG = {
             "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
             "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
             "out_dtype": ttnn.bfloat16,
+        },
+    },
+    # GLM DSA indexer: Q is TP-sequence-sharded before projection (160 rows at SP8/TP4, chunk5120).
+    # The 640-row entries remain useful for larger chunks / smaller TP and the unchanged K/gate stems.
+    "indexer.wq_b": {
+        160: {
+            **_GLM_INDEXER_TAGS,
+            # M=5 tiles, N=128 tiles: multicast the whole M slab across 64 N-parallel cores.
+            # QB traced sweep: ~31 us vs ~60 us auto and ~48 us for the best tested 2D config.
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=16,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                per_core_M=5,
+                per_core_N=2,
+                fuse_batch=True,
+                mcast_in0=True,
+            ),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
+        640: {
+            **_GLM_INDEXER_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=6,
+                per_core_M=2,
+                per_core_N=12,
+                transpose_mcast=False,
+                fuse_batch=False,
+                fused_activation=None,
+            ),
+            "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
+    },
+    "indexer.wk": {
+        640: {
+            **_GLM_INDEXER_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=2,
+                per_core_N=1,
+                transpose_mcast=False,
+                fuse_batch=False,
+                fused_activation=None,
+            ),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
+    },
+    "indexer.weights_proj": {
+        640: {
+            **_GLM_INDEXER_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=2,
+                per_core_N=1,
+                transpose_mcast=False,
+                fuse_batch=False,
+                fused_activation=None,
+            ),
+            "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            # Main's TP all-reduce path feeds this directly to high_bw_all_gather, which requires DRAM.
+            "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
+    },
+    "indexer.k_hadamard": {
+        640: {
+            **_GLM_INDEXER_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=4,
+                out_subblock_h=2,
+                out_subblock_w=1,
+                per_core_M=2,
+                per_core_N=1,
+                transpose_mcast=False,
+                fuse_batch=False,
+                fused_activation=None,
+            ),
+        },
+    },
+    "indexer.q_hadamard": {
+        160: {
+            **_GLM_INDEXER_TAGS,
+            # Fuse 32 heads × 5 query tiles over 80 cores; broadcast the common H128 transform.
+            # QB traced sweep: ~9 us vs ~94 us auto for BF16 input / BFP8 output.
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=2,
+                out_subblock_h=2,
+                out_subblock_w=4,
+                per_core_M=2,
+                per_core_N=4,
+                fuse_batch=True,
+                mcast_in0=False,
+            ),
+        },
+        640: {
+            **_GLM_INDEXER_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=2,
+                out_subblock_h=2,
+                out_subblock_w=4,
+                per_core_M=8,
+                per_core_N=4,
+                fuse_batch=True,
+                mcast_in0=False,
+            ),
         },
     },
     # Kimi-K3 output gate: all-gathered hidden @ g_proj_weight, sigmoid fused. K = 7168 (K_t 224),

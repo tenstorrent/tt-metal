@@ -118,6 +118,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
                                      // covers this).
@@ -249,6 +250,7 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
+    TT_METAL_FW_SRC_BRISC,            // BRISC firmware variant to JIT-build instead of the in-tree one
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 
     // ========================================
@@ -319,6 +321,11 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
+    // TTNN may need these process-wide options while its Python module is being initialized, before a MetalContext
+    // (and therefore a RunTimeOptions instance) exists. It reads the same lazy snapshot through a native binding.
+    // Touch it here as well to guarantee that it is initialized no later than RunTimeOptions construction.
+    (void)get_trace_allocation_options();
+
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -367,9 +374,6 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
-    trace_allocation_tracking_enabled_ = false;
-    trace_allocation_diagnostics_enabled_ = false;
-    trace_allocation_skip_program_cache_enabled_ = false;
     InitializeFromEnvVars();
 
     // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
@@ -385,6 +389,32 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
+}
+
+const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
+    // Unlike ordinary RunTimeOptions fields, these options may be queried by TTNN before MetalContext creates a
+    // RunTimeOptions instance. Keep their parsing owned by RunTimeOptions, but cache all related values in one
+    // process-wide snapshot so TTNN and Metal cannot observe different settings.
+    static const TraceAllocationOptions options = [] {
+        const bool tracking_enabled = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
+        return TraceAllocationOptions{
+            .tracking_enabled = tracking_enabled,
+            .diagnostics_enabled = tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS")),
+            .skip_program_cache =
+                tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE")),
+        };
+    }();
+    return options;
+}
+
+bool RunTimeOptions::get_trace_allocation_tracking_enabled() { return get_trace_allocation_options().tracking_enabled; }
+
+bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
+    return get_trace_allocation_options().diagnostics_enabled;
+}
+
+bool RunTimeOptions::get_trace_allocation_skip_program_cache_enabled() {
+    return get_trace_allocation_options().skip_program_cache;
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -854,6 +884,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->simulator_direct_tensor_writes = is_env_enabled(value);
             break;
 
+        // TT_METAL_QUASAR_NOC_API_VERSION
+        // Set the NOC API version for Quasar.
+        // Default: 2 (use NOC API v2)
+        // Usage: export TT_METAL_QUASAR_NOC_API_VERSION=1
+        case EnvVarID::TT_METAL_QUASAR_NOC_API_VERSION:
+            this->quasar_noc_api_version = std::stoi(value);
+            TT_FATAL(
+                this->quasar_noc_api_version == 1 || this->quasar_noc_api_version == 2,
+                "Invalid NOC API version: {}",
+                this->quasar_noc_api_version);
+            break;
+
         // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
         // Controls Blackhole DRAM programmable cores in the HAL:
         //   =1 → force enable, =0 → force disable, unset → auto-detect (firmware + topology)
@@ -977,8 +1019,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
-                constexpr uint32_t L1_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
-                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_BITS;
+                // PROFILE_PERF_COUNTERS_L1_0 to L1_5: the six L1 mux groups, which share one set of counters.
+                constexpr uint32_t L1_GROUP_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9);
+                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_GROUP_BITS;
                 if (l1_selected && (l1_selected & (l1_selected - 1))) {
                     TT_THROW(
                         "Multiple L1 perf counter banks cannot be enabled simultaneously. "
@@ -1761,6 +1804,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
 
+        // TT_METAL_FW_SRC_BRISC
+        // Select a supported BRISC firmware variant instead of
+        // tt_metal/hw/firmware/src/tt-1xx/brisc.cc. A non-empty value also disables the precompiled firmware.
+        // Default: unset
+        // Usage: export TT_METAL_FW_SRC_BRISC=blaze
+        case EnvVarID::TT_METAL_FW_SRC_BRISC: {
+            if (value != nullptr && *value != '\0') {
+                const std::string variant = to_lower_copy(trim_copy(value));
+                TT_FATAL(
+                    variant == "blaze", "Unsupported TT_METAL_FW_SRC_BRISC value '{}'; supported values: blaze", value);
+                this->brisc_firmware_variant = BriscFirmwareVariant::Blaze;
+                this->set_disable_precompiled_fw(true);
+            }
+            break;
+        }
+
         // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
         // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.
         // Default: 50
@@ -1789,18 +1848,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
 
-        // Trace-allocation tracker settings are process-start options. Keep their
-        // cached values in RunTimeOptions so runtime hot paths never call getenv.
+        // These process-wide settings are parsed together by get_trace_allocation_options(). That snapshot may be
+        // initialized before this instance exists and is explicitly touched at the start of the constructor.
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
-            trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
-            break;
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
-            trace_allocation_diagnostics_enabled_ = trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
-        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
-            trace_allocation_skip_program_cache_enabled_ =
-                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.

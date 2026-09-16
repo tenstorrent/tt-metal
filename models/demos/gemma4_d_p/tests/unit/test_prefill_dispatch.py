@@ -1,0 +1,144 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Host checks for prefill ownership and migration acknowledgement ordering."""
+
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+import ttnn
+from models.demos.gemma4_d_p.tt.model import Gemma4Model
+
+
+@pytest.mark.parametrize("ack_mode", ["callback", "segmented_trace", "socket"])
+def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
+    events = []
+    hidden = SimpleNamespace(shape=(1, 1, 1024, 64))
+    model = object.__new__(Gemma4Model)
+    model.mesh_device = object()
+    model.hf_config = SimpleNamespace(layer_types=("sliding_attention", "full_attention"))
+    model.tt_kv_cache = [None, None]
+    model._rope_prefill_positions = None
+    model.rope_caches_2d = {}
+    model._prefill_metadata_external = True
+    model.prefill_metadata = object()
+    model._packed_global_rope_trans_mat = None
+    model._prefill_trace_mode = True
+    model._prefill_trace_controller = (
+        SimpleNamespace(layer_ack=lambda idx: events.append(("ack", idx))) if ack_mode == "segmented_trace" else None
+    )
+    model.mesh_config = SimpleNamespace(cp_degree=8)
+    model._get_rope_mats = lambda idx, **kwargs: (idx, idx)
+
+    def layer(idx):
+        def forward(x, **kwargs):
+            assert kwargs["prefill_metadata"] is model.prefill_metadata
+            assert kwargs["chunk_start_idx"] == 8192
+            assert kwargs["rope_mats"] == (idx, idx)
+            events.append(("write", idx))
+            return x
+
+        return forward
+
+    model.layers = [layer(0), layer(1)]
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda _: events.append(("sync", None)))
+    service, metadata = object(), object()
+
+    def socket_ack(actual_service, *, metadata):
+        assert actual_service is service
+        assert metadata is metadata_msg
+        events.append(("ack", len([e for e in events if e[0] == "write"]) - 1))
+
+    metadata_msg = metadata
+    monkeypatch.setattr(ttnn.experimental.deepseek_prefill, "outbound_socket_service_sync", socket_ack)
+    output = model(
+        hidden,
+        chunk_start_idx=8192,
+        on_layer_complete=lambda idx: events.append(("ack", idx)),
+        d2h_service=service if ack_mode == "socket" else None,
+        metadata_msg=metadata if ack_mode == "socket" else None,
+    )
+    assert output is hidden
+    expected = []
+    for idx in range(2):
+        expected.append(("write", idx))
+        if ack_mode == "callback":
+            expected.append(("sync", None))
+        expected.append(("ack", idx))
+    assert events == expected
+
+
+@pytest.mark.parametrize("is_global", [False, True])
+def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monkeypatch, is_global):
+    from models.demos.gemma4_d_p.config import MeshConfig
+    from models.demos.gemma4_d_p.tt import attention
+
+    tensor = SimpleNamespace(shape=(1, 1, 32768, 512))
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache, SlidingRingKVCache
+
+    cache = GlobalRingKVCache(tensor) if is_global else SlidingRingKVCache(tensor, tensor)
+    monkeypatch.setattr(attention, "load_attention_weights", lambda **_: SimpleNamespace(is_global=is_global))
+    allocate = Mock(side_effect=AssertionError("external caches must not allocate replacements or tail pools"))
+    monkeypatch.setattr(attention, "init_sliding_ring_kv_cache", allocate)
+    monkeypatch.setattr(attention, "init_global_ring_kv_cache", allocate)
+    monkeypatch.setattr(ttnn, "zeros", allocate)
+    result = attention.Gemma4Attention(
+        config=SimpleNamespace(is_sliding=not is_global, sliding_window_size=1024),
+        state_dict={},
+        ccl_manager=object(),
+        mesh_config=MeshConfig(SimpleNamespace(shape=(8, 4))),
+        layer_idx=0,
+        ring_kv_cache=cache,
+    )
+    assert result.ring_kv_cache is cache
+    allocate.assert_not_called()
+
+
+@pytest.mark.parametrize("is_global", [False, True])
+def test_projection_loads_only_required_weight(monkeypatch, is_global):
+    import torch
+
+    from models.demos.gemma4_d_p.tt.attention import weights
+
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda _: None)
+    loaded = []
+
+    def as_tensor(_host, **kwargs):
+        name = str(kwargs["cache_file_name"])
+        loaded.append(name)
+        return name
+
+    monkeypatch.setattr(ttnn, "as_tensor", as_tensor)
+    mesh_config = SimpleNamespace(
+        device=object(),
+        tp_degree=4,
+        cp_degree=8,
+        column_parallel=lambda: None,
+        row_parallel=lambda: None,
+    )
+    config = SimpleNamespace(
+        is_sliding=not is_global,
+        is_kv_tied=is_global,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        head_dim=512 if is_global else 256,
+        hidden_size=128,
+    )
+    projection_size = config.num_attention_heads * config.head_dim
+    state_dict = {
+        "q_proj.weight": torch.ones(projection_size, config.hidden_size),
+        "k_proj.weight": torch.ones(projection_size, config.hidden_size),
+        "o_proj.weight": torch.ones(config.hidden_size, projection_size),
+        "q_norm.weight": torch.ones(config.head_dim),
+        "k_norm.weight": torch.ones(config.head_dim),
+    }
+    if not is_global:
+        state_dict["v_proj.weight"] = torch.ones(projection_size, config.hidden_size)
+    result = weights.load_attention_weights(mesh_config, config, state_dict, tensor_cache_path="/tmp/weights")
+    assert (result.wqk is not None) == is_global
+    assert (result.wqkv is not None) != is_global
+    projection_names = [name for name in loaded if "/wqk" in name]
+    expected_name = "/tmp/weights/wqk_packed640_tp4_bf16" if is_global else "/tmp/weights/wqkv_decode_order_tp4_bf16"
+    assert projection_names == [expected_name]

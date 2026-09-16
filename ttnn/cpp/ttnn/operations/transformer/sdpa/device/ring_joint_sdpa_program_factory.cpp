@@ -5,6 +5,7 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/sliding_window_geometry.hpp"
+#include "kernels/sliding_window_work_plan.hpp"
 #include "sliding_halo_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
@@ -38,6 +39,12 @@ namespace {
 
 namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
+// Circular sliding KV slab count (0 = unbounded); validation already required whole slabs and >= 2.
+uint32_t derived_kv_slab_count(
+    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
+    return args.circular_kv_cache ? tensor_args.kv_slab_count() : 0;
+}
 
 // Host-side summary of which ring-loop iterations do useful SDPA work. Bits are indexed by ring_iter,
 // not ring_id; kernels still advance their sync/ring-id sequence on every iter before checking the mask.
@@ -134,8 +141,6 @@ ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
         .mesh_rows = ag.mesh_rows,
         .mesh_cols = ag.mesh_cols,
         .ring_size = ag.ring_size,
-        .num_links = ag.num_links,
-        .topology = ag.topology,
         .route_plan_hash = ag.route_plan_hash,
     };
 }
@@ -404,7 +409,7 @@ RingWritePlan build_ring_write_plan(
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
         const auto position = ttnn::operations::ccl::common::get_mesh_ring_position(
-            tensor_args.input_q, coord, mesh_ring_plan_from_attributes(ag));
+            tensor_args.input_q, coord, mesh_ring_plan_from_attributes(ag), ag.topology);
         plan.transport_rank = position.transport_rank;
         plan.tensor_rank = position.tensor_rank;
         plan.forward_coord = position.forward_coord;
@@ -477,9 +482,7 @@ RingJointRuntimeDerivation build_runtime_derivation(
     // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
     // non-chunked path.
     derivation.kernel_chunked = tensor_args.is_chunked() && !args.is_cross;
-    // The metadata path derives kv_actual_isl on-device for chunked prefill.
-    derivation.kv_pad_rotation_enabled =
-        args.has_kv_pad_rotation() || (tensor_args.has_metadata() && tensor_args.is_chunked());
+    derivation.kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
     TT_FATAL(
@@ -568,6 +571,19 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
     args[index] = value;
 }
 
+template <std::size_t N>
+void write_runtime_arg_block(
+    RuntimeArgsData& args, uint32_t index, const std::array<uint32_t, N>& values, const char* name) {
+    TT_FATAL(
+        index <= args.size() && N <= args.size() - index,
+        "Missing RingJoint runtime arg block {} at index {}; count={}; args.size()={}",
+        name,
+        index,
+        N,
+        args.size());
+    std::copy(values.begin(), values.end(), args.data() + index);
+}
+
 // Tile-rows of the latent KV the fused all-gather must move for this chunk: the first
 // ceil(logical_n / chunk_global) block-cyclic slabs (a contiguous per-device page prefix), so an
 // oversized (growing) KV cache only moves kv_actual-sized data. Returns nullopt when KV-pad rotation
@@ -575,12 +591,24 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
 // dispatch is bounded) and the cache-hit override path.
 std::optional<uint32_t> compute_gather_valid_Ht(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    if (!args.has_kv_pad_rotation() && !(tensor_args.has_metadata() && tensor_args.is_chunked())) {
+    if (!ttnn::prim::kv_pad_rotation_active(args, tensor_args)) {
         return std::nullopt;
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
     const uint32_t chunk_global = n_local_q * ring_size;
+    if (tensor_args.has_metadata()) {
+        // Metadata path: the all-gather reader recomputes this per dispatch from kv_actual_isl
+        // (ring_attention_all_gather_reader.cpp) and CLAMPS against the value baked here, so a
+        // create-time bound derived from host logical_n silently caps every later dispatch at the
+        // creating chunk's prefix. Under a captured trace that is permanent — the host patch that
+        // would otherwise grow it per dispatch never runs on replay — and later chunks attend a
+        // truncated history, which degrades with ring depth instead of failing outright.
+        //
+        // The device value is authoritative here, so bound to the full per-device K extent and let
+        // the on-device recompute do the narrowing.
+        return tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+    }
     const uint32_t valid_slabs = (static_cast<uint32_t>(args.logical_n) + chunk_global - 1) / chunk_global;
     return valid_slabs * (n_local_q / tt::constants::TILE_HEIGHT);
 }
@@ -604,7 +632,7 @@ void apply_ring_joint_scalar_runtime_args(
     const RingWorkMasks& ring_work_masks = runtime_plan.ring_work_plan.masks;
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
-    const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
+    const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
 
     // Gather inputs (K, plus V when it isn't the latent-V alias of K). Shared by the indexed-slot
     // and valid-pages patches below.
@@ -613,6 +641,12 @@ void apply_ring_joint_scalar_runtime_args(
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
+    const uint32_t tensor_descriptor_field_count =
+        tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
+    const uint32_t neighbor_reader_tensor_descriptor_field_count =
+        tensor_args.has_metadata() ? ag_rt::kNeighborReaderMetadataTensorDescriptorFieldCount
+                                   : ag_rt::kNeighborReaderTensorDescriptorFieldCount;
+
     // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
     // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
     // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
@@ -643,18 +677,18 @@ void apply_ring_joint_scalar_runtime_args(
             patch_reader_batch_base(
                 kNeighborHaloReaderKernelIndex,
                 ag_rt::kNeighborReaderRuntimeArgHeaderCount,
-                ag_rt::kNeighborReaderTensorDescriptorFieldCount,
+                neighbor_reader_tensor_descriptor_field_count,
                 ag_rt::kNeighborReaderInputBatchBaseFieldOffset);
         } else {
             patch_reader_batch_base(
                 kAllGatherReaderForwardKernelIndex,
                 ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
+                tensor_descriptor_field_count,
                 ag_rt::kInputBatchBaseFieldOffset);
             patch_reader_batch_base(
                 kAllGatherReaderBackwardKernelIndex,
                 ag_rt::kReaderRuntimeArgHeaderCount,
-                ag_rt::kTensorDescriptorFieldCount,
+                tensor_descriptor_field_count,
                 ag_rt::kInputBatchBaseFieldOffset);
         }
     }
@@ -692,22 +726,22 @@ void apply_ring_joint_scalar_runtime_args(
         patch_valid_pages(
             kAllGatherReaderForwardKernelIndex,
             ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherWriterForwardKernelIndex,
             ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherReaderBackwardKernelIndex,
             ag_rt::kReaderRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
         patch_valid_pages(
             kAllGatherWriterBackwardKernelIndex,
             ag_rt::kWriterRuntimeArgHeaderCount,
-            ag_rt::kTensorDescriptorFieldCount,
+            tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
     }
 
@@ -719,7 +753,8 @@ void apply_ring_joint_scalar_runtime_args(
             args.sliding_window_size.value(),
             tt::constants::TILE_HEIGHT,
             runtime_ring_size,
-            runtime_plan.logical_nt);
+            runtime_plan.logical_nt,
+            derived_kv_slab_count(args, tensor_args));
         TT_FATAL(runtime_chunked_sliding_layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
         // compact chunked sliding they also choose which cache-group tail the one-hop gather reads.
@@ -743,7 +778,7 @@ void apply_ring_joint_scalar_runtime_args(
                     reader_args.size() != 0 && writer_args.size() != 0, "Directional gather worker pair is incomplete");
                 for (uint32_t in = 0; in < num_ag_inputs; ++in) {
                     const uint32_t reader_base = ag_rt::kNeighborReaderRuntimeArgHeaderCount +
-                                                 in * ag_rt::kNeighborReaderTensorDescriptorFieldCount;
+                                                 in * neighbor_reader_tensor_descriptor_field_count;
                     const uint32_t writer_base = ag_rt::kNeighborWriterRuntimeArgHeaderCount +
                                                  in * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
                     const uint32_t writer_origin_idx = writer_base + ag_rt::kNeighborWriterInputOriginPageFieldOffset;
@@ -778,6 +813,44 @@ void apply_ring_joint_scalar_runtime_args(
         }
     }
 
+    // Resolve each kernel's argument grid once per dispatch. Keep these references local:
+    // descriptor application may change the backing storage before the next cache hit.
+    auto& compute_grid_args = GetRuntimeArgs(program, kComputeKernelIndex);
+    auto& reader_grid_args = GetRuntimeArgs(program, kReaderKernelIndex);
+    auto* writer_grid_args = patch_kv_pad_rotation ? &GetRuntimeArgs(program, kWriterKernelIndex) : nullptr;
+    const auto validate_grid = [&](const auto& grid_args) {
+        TT_FATAL(grid_args.size() >= layout.grid_size.x, "RingJoint runtime argument grid is missing columns");
+        for (uint32_t x = 0; x < layout.grid_size.x; ++x) {
+            TT_FATAL(grid_args[x].size() >= layout.grid_size.y, "RingJoint runtime argument grid is missing rows");
+        }
+    };
+    validate_grid(compute_grid_args);
+    validate_grid(reader_grid_args);
+    if (writer_grid_args != nullptr) {
+        validate_grid(*writer_grid_args);
+    }
+    // These fields occupy adjacent slots in the descriptor. Validate the layout once,
+    // then check and write each complete block on every core, including inactive receivers.
+    TT_FATAL(
+        layout.reader_active_ring_iter_mask == layout.reader_logical_nt + 1 &&
+            layout.writer_active_ring_iter_mask == layout.writer_logical_nt + 1 &&
+            layout.writer_single_valid_kv_chunk_mask == layout.writer_logical_nt + 2 &&
+            layout.compute_q_pre_wrap_start_tile == layout.compute_logical_nt + 1 &&
+            layout.compute_q_pre_wrap_tile_count == layout.compute_logical_nt + 2 &&
+            layout.compute_q_post_wrap_start_tile == layout.compute_logical_nt + 3 &&
+            layout.compute_q_valid_tile_count == layout.compute_logical_nt + 4 &&
+            layout.compute_active_ring_iter_mask == layout.compute_logical_nt + 5,
+        "RingJoint scalar runtime argument blocks must be contiguous");
+    const std::array reader_values = {runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask};
+    const std::array writer_values = {
+        runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
+    const std::array compute_values = {
+        runtime_plan.logical_nt,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
+        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
+        ring_work_masks.active_ring_iter_mask};
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
 
@@ -792,9 +865,9 @@ void apply_ring_joint_scalar_runtime_args(
         // logical_n. When logical_n grows across dispatches that reuse one cached program (chunked-prefill
         // accumulation), the create-miss mask is stale for later hits, deadlocking the mcast handshake
         // (RingJointSDPA hang, all-gather eth reads left undrained).
-        auto& compute_args = GetRuntimeArgs(program, kComputeKernelIndex, core);
+        auto& compute_args = compute_grid_args[core.x][core.y];
 
-        auto& reader_args = GetRuntimeArgs(program, kReaderKernelIndex, core);
+        auto& reader_args = reader_grid_args[core.x][core.y];
         if (patch_indexed_kv_cache) {
             write_runtime_arg(
                 reader_args, layout.reader_kv_cache_batch_idx, kv_cache_batch_idx, "reader.kv_cache_batch_idx");
@@ -803,52 +876,11 @@ void apply_ring_joint_scalar_runtime_args(
             continue;
         }
 
-        write_runtime_arg(reader_args, layout.reader_logical_nt, runtime_plan.logical_nt, "reader.logical_nt");
-        write_runtime_arg(
-            reader_args,
-            layout.reader_active_ring_iter_mask,
-            ring_work_masks.active_ring_iter_mask,
-            "reader.active_ring_iter_mask");
+        write_runtime_arg_block(reader_args, layout.reader_logical_nt, reader_values, "reader.scalars");
 
-        auto& writer_args = GetRuntimeArgs(program, kWriterKernelIndex, core);
-        write_runtime_arg(writer_args, layout.writer_logical_nt, runtime_plan.logical_nt, "writer.logical_nt");
-        write_runtime_arg(
-            writer_args,
-            layout.writer_active_ring_iter_mask,
-            ring_work_masks.active_ring_iter_mask,
-            "writer.active_ring_iter_mask");
-        write_runtime_arg(
-            writer_args,
-            layout.writer_single_valid_kv_chunk_mask,
-            ring_work_masks.single_valid_kv_chunk_mask,
-            "writer.single_valid_kv_chunk_mask");
-
-        write_runtime_arg(compute_args, layout.compute_logical_nt, runtime_plan.logical_nt, "compute.logical_nt");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_pre_wrap_start_tile,
-            runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
-            "compute.q_pre_wrap_start_tile");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_pre_wrap_tile_count,
-            runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
-            "compute.q_pre_wrap_tile_count");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_post_wrap_start_tile,
-            runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
-            "compute.q_post_wrap_start_tile");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_valid_tile_count,
-            runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
-            "compute.q_valid_tile_count");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_active_ring_iter_mask,
-            ring_work_masks.active_ring_iter_mask,
-            "compute.active_ring_iter_mask");
+        auto& writer_args = (*writer_grid_args)[core.x][core.y];
+        write_runtime_arg_block(writer_args, layout.writer_logical_nt, writer_values, "writer.scalars");
+        write_runtime_arg_block(compute_args, layout.compute_logical_nt, compute_values, "compute.scalars");
     }
 }
 
@@ -999,7 +1031,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
     // Metadata uses an on-device cache-slot value, but needs the same single-slot program structure.
     const bool slot_from_metadata = tensor_args.has_metadata();
-    const bool indexed_kv_cache = args.has_indexed_kv_cache() || slot_from_metadata;
+    const bool indexed_kv_cache = ttnn::prim::indexed_kv_cache_active(args, tensor_args);
     // Latent-V mode: V tensors are omitted; the reader reuses K's buffer and
     // reads only the first vDHt head-dim tiles.
     const uint32_t B = q_shape[0];
@@ -1014,10 +1046,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t global_padded_N = kv_local_padded_N * ring_size;
     const uint32_t sliding_window_size = args.sliding_window_size.value_or(0);
     const bool has_sliding_window = sliding_window_size > 0;
+    // Circular sliding KV cache slab count (0 = unbounded), derived from the cache/Q geometry
+    // (validated divisible with >= 2 slabs). Wraps the local-slab derivation in
+    // sliding_window_work_plan.hpp for the host halo layout, the reader, and the compute kernel.
+    const uint32_t circular_kv_slab_count = derived_kv_slab_count(args, tensor_args);
     const bool enable_kv_chains = !has_sliding_window;
     // The supported sliding specialization always uses a compact neighbor-halo buffer.
     const uint32_t padded_N = has_sliding_window ? global_padded_N : gathered_padded_N;
-    const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
+    const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
     // L / L_local resolved once in resolve_ring_joint_input_params (full vs per-device joint seq).
     const uint32_t L = joint_input_params.L;
     const uint32_t L_local = joint_input_params.L_local;
@@ -1045,8 +1081,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t logical_lt = tt::div_up(logical_l, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked();
-    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation() || kv_pad_from_metadata;
+    const bool kv_pad_from_metadata = tensor_args.kv_pad_from_metadata();
+    const bool kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t logical_nt = runtime_plan.logical_nt;
@@ -1076,7 +1112,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     ring_joint::ChunkedSlidingHaloLayout chunked_sliding_halo_layout;
     if (has_sliding_window) {
         chunked_sliding_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
-            q_local_padded_Nt, Sk_chunk_t, sliding_window_size, tt::constants::TILE_HEIGHT, ring_size, logical_nt);
+            q_local_padded_Nt,
+            Sk_chunk_t,
+            sliding_window_size,
+            tt::constants::TILE_HEIGHT,
+            ring_size,
+            logical_nt,
+            circular_kv_slab_count);
         TT_FATAL(
             kernel_chunked && chunked_sliding_halo_layout.uses_neighbor_halo(),
             "Sliding K/V requires neighbor-halo geometry; gathered rows={}, global rows={}",
@@ -1491,12 +1533,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
-        // Slots 40-43: transport-to-tensor rank mapping. Tensor accessors start at slot 44.
+        // Slots 40-43: transport-to-tensor rank mapping.
         logical_lt,
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
+        // Slot 44: circular sliding KV slab count (0 = unbounded). Feeds the reader's
+        // build_sliding_q_work_plan so local slab addressing wraps identically to the host halo
+        // layout and the compute kernel. Tensor accessors start at slot 45.
+        circular_kv_slab_count,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1734,11 +1780,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 53: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
         // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
         logical_lt,
-        // Slots 54-57: transport-to-tensor rank mapping. CB block starts at 58.
+        // Slots 54-57: transport-to-tensor rank mapping.
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
-        rank_mapping.mesh_cols};
+        rank_mapping.mesh_cols,
+        // Slot 58: circular sliding KV slab count (0 = unbounded). Feeds the compute-side
+        // build_sliding_q_work_plan so it stays in lockstep with the reader. CB block starts at 59.
+        circular_kv_slab_count};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -2627,11 +2676,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
     if (slot_from_metadata) {
+        // Bound as buffers so a cache hit with different metadata tensors follows them; the reader takes
+        // these as get_common_arg_val(0..4).
         reader_kernel.emplace_common_runtime_args(
-            {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
+            {tensor_args.slot_id->buffer(),
              args.kv_cache_num_layers,
              args.kv_cache_layer_idx,
-             tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+             std::min(
+                 tensor_args.input_k.logical_shape()[0],
+                 tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0]
+                                                 : tensor_args.input_k.logical_shape()[0]),
+             tensor_args.kv_actual_isl->buffer()});
     }
 
     KernelDescriptor writer_kernel{};
@@ -2643,8 +2698,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
     if (kv_pad_from_metadata) {
-        writer_kernel.emplace_common_runtime_args(
-            {tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+        writer_kernel.emplace_common_runtime_args({tensor_args.kv_actual_isl->buffer()});
     }
 
     KernelDescriptor compute_kernel{};
@@ -2852,11 +2906,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TT_FATAL(
             halo_transport_coord.has_value() && halo_destination_coord.has_value(),
             "Sliding attention requires a next-device route");
+        // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
+        // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
+        // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
+        // rest of the op reads and let them derive the start themselves; the value above then serves as
+        // the baked origin they shift away from.
         const RingAttentionNeighborHaloConfig neighbor_halo{
             .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(transport_rank),
             .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
+            .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
+            .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
+            .kv_cache_num_layers = args.kv_cache_num_layers,
+            .kv_cache_layer_idx = args.kv_cache_layer_idx,
+            .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
+            .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
+            .source_device = transport_rank,
         };
         log_debug(
             tt::LogOp,
@@ -2882,7 +2948,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             all_gather_fused_op_signaler.value(),
             args.ccl_core_grid_offset,
             args.all_gather_operation_attributes.core_allocation_strategy,
-            args.kv_cache_batch_idx,
+            args.cache_batch_idx(),
             compute_gather_valid_Ht(args, tensor_args),
             neighbor_halo);
     } else {
@@ -2892,9 +2958,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // kv_cache_batch_idx (scalar path) or a metadata tensor (trace-safe path, where the slot is read
         // on-device from metadata[0]). On the metadata path the host slot is absent, so pass a valid
         // placeholder (0) to turn on single-slot structure; the AG reader recomputes the real offset.
-        const bool ag_indexed = args.has_indexed_kv_cache() || tensor_args.has_metadata();
+        const bool ag_indexed = ttnn::prim::indexed_kv_cache_active(args, tensor_args);
         const std::optional<uint32_t> gather_slice_idx =
-            ag_indexed ? std::optional<uint32_t>(args.kv_cache_batch_idx.value_or(0)) : std::nullopt;
+            ag_indexed ? std::optional<uint32_t>(args.cache_batch_idx().value_or(0)) : std::nullopt;
         ring_attention_all_gather_async_multi_core_with_workers_helper(
             desc,
             all_gather_input_tensors,
