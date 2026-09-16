@@ -35,7 +35,14 @@ from ...utils.conv3d import (
     get_conv3d_config,
 )
 from ...utils.ltx import pad_hw_replicate, read_vae_per_channel_stats
-from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+from ...utils.tensor import (
+    depth_to_space_channels_last,
+    fast_device_to_host,
+    float_to_uint8,
+    prepare_depth_to_space_channels,
+    typed_tensor,
+    typed_tensor_2dshard,
+)
 from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
 from .diffvae_ltx import DiffVAEDecoder, DiffVAEOptions
@@ -118,7 +125,7 @@ class LTXCausalConv3d(Module):
         super().__init__()
 
         # When set, output channels are reordered at load to (p1,p2,p3,C); see
-        # _depth_to_space_channels_last.
+        # depth_to_space_channels_last.
         self.depth_to_space_stride = depth_to_space_stride
 
         if temporal_padding_mode not in ("repeat", "zeros"):
@@ -237,9 +244,9 @@ class LTXCausalConv3d(Module):
                     bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
 
             if self.depth_to_space_stride is not None:
-                weight = _prepare_depth_to_space_channels(weight, self.depth_to_space_stride)
+                weight = prepare_depth_to_space_channels(weight, self.depth_to_space_stride)
                 if bias is not None:
-                    bias = _prepare_depth_to_space_channels(bias, self.depth_to_space_stride)
+                    bias = prepare_depth_to_space_channels(bias, self.depth_to_space_stride)
                     state["bias"] = bias
 
             weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
@@ -427,21 +434,6 @@ class LTXCausalConv3d(Module):
         )
 
         return x_BTHWC
-
-
-def _prepare_depth_to_space_channels(t: torch.Tensor, stride: tuple[int, int, int]) -> torch.Tensor:
-    """Reorder the output-channel dim (dim 0) from (C,p1,p2,p3) grouping to (p1,p2,p3,C).
-
-    Out channels must be divisible by p1*p2*p3.
-    """
-    p1, p2, p3 = stride
-    out = t.shape[0]
-    assert out % (p1 * p2 * p3) == 0, f"out_channels {out} not divisible by {p1 * p2 * p3}"
-    C = out // (p1 * p2 * p3)
-    rest = t.shape[1:]
-    t = t.reshape(C, p1, p2, p3, *rest)
-    t = t.permute(1, 2, 3, 0, *range(4, t.ndim))
-    return t.reshape(out, *rest)
 
 
 def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
@@ -643,22 +635,13 @@ class LTXDepthToSpaceUpsample(Module):
         """Depth-to-space in BTHWC, channel order C,p1,p2,p3: (B,T,H,W,C*p1*p2*p3) -> (B,T*p1,H*p2,W*p3,C).
 
         For the residual path, whose input is not channel-reordered; conv output uses
-        _depth_to_space_channels_last.
+        depth_to_space_channels_last.
         """
         p1, p2, p3 = self.stride
         total_c = x.shape[-1]
         C = total_c // (p1 * p2 * p3)
         x = ttnn.reshape(x, (B, T, H, W, C, p1, p2, p3))
         x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
-        x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
-        return x
-
-    def _depth_to_space_channels_last(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
-        """Depth-to-space for conv output in channel order p1,p2,p3,C (keeps C as the last dim)."""
-        p1, p2, p3 = self.stride
-        C = x.shape[-1] // (p1 * p2 * p3)
-        x = ttnn.reshape(x, (B, T, H, W, p1, p2, p3, C))
-        x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))
         x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
         return x
 
@@ -687,7 +670,7 @@ class LTXDepthToSpaceUpsample(Module):
         x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
-        x = self._depth_to_space_channels_last(x_BTHWC, B, T, H, W)
+        x = depth_to_space_channels_last(x_BTHWC, self.stride)
 
         # Remove first frame if temporal upsampling (causal padding artifact)
         if p1 == 2:

@@ -31,6 +31,7 @@ from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
 from ...utils.ltx import read_vae_per_channel_stats
 from ...utils.memory_log import log_ccl_cache, log_dram
+from ...utils.tensor import depth_to_space_channels_last, prepare_depth_to_space_channels
 from ...utils.tracing import traced_function
 from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
 from .diffvae_ops import (
@@ -517,8 +518,8 @@ class LinearPixelShuffleUpsample(Module):
     """Channel-expanding Linear then a channels-last 3D pixel shuffle.
 
     The checkpoint packs the projection's output channels as ``(c p1 p2 p3)``. The rows are
-    reordered at load to ``(p1 p2 p3 c)`` (see ``channel_permutation``) so the shuffle keeps the
-    channel axis innermost.
+    reordered at load to ``(p1 p2 p3 c)`` (``prepare_depth_to_space_channels``, as the conv VAE's
+    upsampler does) so the shuffle keeps the channel axis innermost.
     """
 
     def __init__(
@@ -536,23 +537,14 @@ class LinearPixelShuffleUpsample(Module):
         self.out_channels = self.proj_out_channels // span
         self.proj = Linear(in_channels, self.proj_out_channels, bias=True, mesh_device=mesh_device)
 
-    def channel_permutation(self) -> torch.Tensor:
-        """Row order taking the checkpoint's ``(c p1 p2 p3)`` output channels to ``(p1 p2 p3 c)``.
-
-        Channels innermost is not cosmetic: with a stride factor of 2 innermost, ROW_MAJOR rounds
-        that extent up to a full 32-element face and the tensor occupies 16x its own size.
-        """
-        p1, p2, p3 = self.stride
-        index = torch.arange(self.proj_out_channels).reshape(self.out_channels, p1, p2, p3)
-        return index.permute(1, 2, 3, 0).reshape(-1)
-
     def _shuffle(self, projected: ttnn.Tensor, t: int, h: int, w: int, drop_leading_frame: bool) -> ttnn.Tensor:
         """Pixel-shuffle a ROW_MAJOR ``(t*h*w, proj_out_channels)`` projection into ``(t'*h*p2*w*p3, c)``
         in TILE. **Consumes** ``projected``; returns the tile tensor and the output frame count."""
         p1, p2, p3 = self.stride
         c = self.out_channels
         projected = consume(
-            projected, lambda v: ttnn.permute(ttnn.reshape(v, (t, h, w, p1, p2, p3, c)), (0, 3, 1, 4, 2, 5, 6))
+            projected,
+            lambda v: depth_to_space_channels_last(ttnn.reshape(v, (1, t, h, w, self.proj_out_channels)), self.stride),
         )
         out_t = t * p1
         rows = (h * p2) * (w * p3)
@@ -723,10 +715,9 @@ class DeterministicStages(Module):
             state["conv_in.bias"] = bias + weight @ mean
 
         for index, upsample in enumerate(self.upsamples):
-            order = upsample.channel_permutation()
             for leaf in ("weight", "bias"):
                 key = f"upsamples.{index}.proj.{leaf}"
-                state[key] = state[key][order]
+                state[key] = prepare_depth_to_space_channels(state[key], upsample.stride)
 
         return state
 
