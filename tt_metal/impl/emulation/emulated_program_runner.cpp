@@ -2607,7 +2607,7 @@ static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // payloads to the wrong chip. Per-worker keying also removes the cross-thread append race, since one
 // worker's connections are recorded by one thread in order.
 static std::unordered_map<uint64_t, std::vector<ConnRoute>> g_worker_conns;
-// Physical ring adjacency. Multi-rank seeding fills edges whose far endpoint is owned by another rank.
+// Collective edges must not be mixed across axes. Multi-rank seeding includes peer-owned edges.
 static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
 // orientation can't corrupt the src-keyed, direction-deduped table. See tt-emule docs/fabric-ccl-emulation.md.
@@ -2676,7 +2676,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // connection is per-hop, so for CCL that destination IS the adjacent chip and the two agree —
     // but a MeshSocket opens one connection straight to a peer that may be several hops away along
     // a line (1D requires only same row/column, not adjacency). Recording that distant chip as a
-    // ring neighbor inserts a phantom edge into the persistent g_ring_adj, whose degree then
+    // ring neighbor inserts a phantom edge into g_ring_adj, whose degree then
     // exceeds 2 and makes walk_ring TT_FATAL with "ambiguous ring continuation". Resolve the true
     // immediate neighbor from (src, dir) instead; when the destination really is adjacent this is
     // identity, so CCL topology is unchanged.
@@ -2690,6 +2690,9 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     }
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
     if (g_conn_route_dirty.exchange(false)) {
+        // A new collective must not inherit ring edges from an earlier operation's axis.
+        g_ring_adj.clear();
+        g_ring_adj_seeded = false;
         g_conn_route.clear();
         g_worker_conns.clear();
         g_worker_dir.clear();
@@ -2698,7 +2701,7 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
     // Record the connection-owner core's (the mux core, on the MUX path) direction, keyed by its LOGICAL
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
-    // Accumulate the undirected ring edge (persistent; unaffected by the per-op reset above).
+    // Peer-owned edges are needed even when this rank opens no connection to them.
     __emule_seed_global_ring_adj();  // multi-rank only; adds the edges this rank never opens
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
