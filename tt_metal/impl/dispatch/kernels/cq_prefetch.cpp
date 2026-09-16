@@ -1148,7 +1148,7 @@ public:
 #endif
     }
 
-    FORCE_INLINE uint32_t coord() const { return interleaved_addr_gen::get_noc_xy<is_dram>(bank_, noc_index); }
+    FORCE_INLINE uint32_t bank() const { return bank_; }
 
     template <bool folded>
     FORCE_INLINE uint32_t local_addr() const {
@@ -1194,7 +1194,8 @@ public:
     // address generation gets wrong rather than silently reading the wrong pages.
     template <bool folded, typename AddrGen>
     FORCE_INLINE bool matches(const AddrGen& addr_gen) const {
-        return get_noc_addr_helper(coord(), local_addr<folded>()) == addr_gen.get_noc_addr(page_id_);
+        return noc_address_backend::bank_address<is_dram>(bank_, local_addr<folded>(), noc_index) ==
+               addr_gen.get_noc_addr(page_id_);
     }
 #endif
 
@@ -1231,15 +1232,27 @@ FORCE_INLINE void assert_walker_matches(
 // there the count runs low, where noc_async_read would have counted per packet. Nothing depends on the difference:
 // v2 answers ncrisc_noc_reads_flushed() from the hardware's outstanding-transaction count, so the barrier waits on
 // the responses themselves rather than on noc_reads_num_issued.
-template <enum CQNocFlags flags>
-FORCE_INLINE void issue_page_read(uint32_t coord, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
+template <enum CQNocFlags flags, bool is_dram>
+FORCE_INLINE void issue_page_read(uint32_t bank, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
     // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done. Both
     // compile out of a release build.
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ, dst_addr, get_noc_addr_helper(coord, local_addr), page_size, -1, false, noc_index);
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, get_noc_addr_helper(coord, local_addr), dst_addr, page_size);
+        NocEventType::READ,
+        dst_addr,
+        noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index),
+        page_size,
+        -1,
+        false,
+        noc_index);
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(
+        noc_index, noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index), dst_addr, page_size);
+#if defined(NOC_ATT_ENABLED)
+    noc_read_with_state_bank<DM_DEDICATED_NOC, read_cmd_buf, flags, is_dram, CQ_NOC_SEND, CQ_NOC_WAIT>(
+        noc_index, bank, local_addr, dst_addr, 0);
+#else
     noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, flags, CQ_NOC_SEND, CQ_NOC_WAIT>(
-        noc_index, coord, local_addr, dst_addr, 0);
+        noc_index, interleaved_addr_gen::get_noc_xy<is_dram>(bank, noc_index), local_addr, dst_addr, 0);
+#endif
 }
 
 // Issues the reads that fill one scratch buffer with whole pages, advancing the walker past them and returning the
@@ -1272,12 +1285,12 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
         while (run_bytes <= amt_to_read) {
             const uint32_t local_addr = walker.template local_addr<true>();
             assert_walker_matches<true>(walker, addr_gen);
-            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
             walker.advance_within_row();
             scratch_read_addr += page_size;
             for (uint32_t left = run_pages - 1; left != 0; left--) {
                 assert_walker_matches<true>(walker, addr_gen);
-                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                issue_page_read<CQ_NOC_sNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
                 walker.advance_within_row();
                 scratch_read_addr += page_size;
             }
@@ -1293,14 +1306,14 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
         if (amt_to_read >= page_size) {
             const uint32_t local_addr = walker.template local_addr<true>();
             assert_walker_matches<true>(walker, addr_gen);
-            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
             walker.advance_within_row();
             scratch_read_addr += page_size;
             amt_to_read -= page_size;
             amt_read += page_size;
             while (amt_to_read >= page_size) {
                 assert_walker_matches<true>(walker, addr_gen);
-                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                issue_page_read<CQ_NOC_sNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
                 walker.advance_within_row();
                 scratch_read_addr += page_size;
                 amt_to_read -= page_size;
@@ -1315,12 +1328,13 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
     // noc_async_read.
     while (amt_to_read >= page_size) {
         assert_walker_matches<false>(walker, addr_gen);
-        const uint32_t coord = walker.coord();
+        const uint32_t bank = walker.bank();
         const uint32_t local_addr = walker.template local_addr<false>();
         if constexpr (single_read) {
-            issue_page_read<CQ_NOC_SNDl>(coord, local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(bank, local_addr, scratch_read_addr, page_size);
         } else {
-            noc_async_read(get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
+            noc_async_read(
+                noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index), scratch_read_addr, page_size);
         }
         walker.advance();
         scratch_read_addr += page_size;
