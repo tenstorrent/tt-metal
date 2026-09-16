@@ -7,8 +7,8 @@
 from tracy.perf_counter_multipass import (
     PERF_COUNTER_L1_GROUPS,
     PERF_COUNTER_MAX_GROUPS_PER_PASS,
-    merge_perf_counter_device_logs,
     arch_l1_groups,
+    merge_perf_counter_device_logs,
     perf_counter_groups_to_bitfield,
     schedule_perf_counter_passes,
 )
@@ -74,9 +74,23 @@ def test_merge_keeps_pass0_whole_and_appends_only_counter_rows(tmp_path):
     lines = merged.read_text().splitlines()
     assert lines[0] == CSV_HEADER.rstrip("\n")
     assert lines[1:3] == ["0,1,1,BRISC,4096,100,0,7", "0,1,1,BRISC, 9090 ,110,42,7"]
-    assert lines[3:] == ["0,1,1,BRISC,9090,115,43,7", "0,1,1,TRISC_0,9090,116,44,7"]
+    # appended rows keep their data but take pass 0's timestamp for the same core and run host id
+    assert lines[3:] == ["0,1,1,BRISC,9090,110,43,7", "0,1,1,TRISC_0,9090,110,44,7"]
     assert sum("4096" in line for line in lines) == 1
     assert sum(line.startswith("PCIe") for line in lines) == 1
+
+
+def test_merge_drops_counter_rows_with_no_pass0_anchor(tmp_path):
+    pass0 = tmp_path / "pass_0.csv"
+    pass1 = tmp_path / "pass_1.csv"
+    merged = tmp_path / "merged.csv"
+    pass0.write_text(CSV_HEADER + "0,1,1,BRISC,9090,110,42,7\n")
+    pass1.write_text(CSV_HEADER + "0,1,1,BRISC,9090,115,43,7\n0,2,2,BRISC,9090,116,44,9\n")
+
+    merge_perf_counter_device_logs([pass0, pass1], merged)
+
+    lines = merged.read_text().splitlines()
+    assert lines[1:] == ["0,1,1,BRISC,9090,110,42,7", "0,1,1,BRISC,9090,110,43,7"]
 
 
 def test_arch_l1_groups():
