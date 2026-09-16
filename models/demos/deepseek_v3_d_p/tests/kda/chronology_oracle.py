@@ -8,10 +8,9 @@ chronological order of those rows is rotated by ``S``. Exactly one chip -- the
 boundary chip -- can hold two causally non-adjacent pieces: the chronologically
 first rows and the chronologically last rows.
 
-This module is the single source of that ordering. Both order-sensitive KDA
-stages (convolution carry routing and recurrent affine-prefix composition) must
-derive their order from here rather than from physical rank, and must not
-re-derive it independently.
+This independent host oracle is test-only. Production derives chronology on the
+device through the shared native helper; tests retain this formulation to check
+causal ordering independently of device implementation.
 
 Ground truth for the placement is MLA's own position oracle,
 ``tt/mla/utils.py::rotated_chip_positions``, which mirrors the KV writer kernel.

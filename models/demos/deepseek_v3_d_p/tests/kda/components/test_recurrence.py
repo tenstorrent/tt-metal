@@ -17,8 +17,8 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_topology import ChronologicalTopology, _chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor, start_tensor
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -251,7 +251,7 @@ def _distributed_recurrence_case(
     torch.Tensor,
     torch.Tensor,
     int,
-    ChronologicalTopology,
+    DeviceChronology,
 ]:
     sp_axis = 1 - tensor_parallel_axis
     sequence, heads, dim = 128, 8, 32
@@ -284,19 +284,30 @@ def _distributed_recurrence_case(
         sequence_parallel_axis=sp_axis,
     )
     sp_size = tuple(mesh_device.shape)[sp_axis]
-    topology = _chronological_topology(0, sp_size, sequence // sp_size)
+    topology = DeviceChronology(
+        ttnn.experimental.kda.chronological_topology(
+            start_tensor(mesh_device, 0),
+            rank_tensor(mesh_device, sp_axis),
+            sp_size,
+            sequence // sp_size,
+            heads // tuple(mesh_device.shape)[tensor_parallel_axis],
+            dim,
+            dim,
+        ),
+        sp_size,
+    )
     return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, topology
 
 
 def _run_distributed_recurrence(
     executor: recurrence.KDARecurrence,
     inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
-    topology: ChronologicalTopology,
+    topology: DeviceChronology,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
         new_state, output = executor.sequence_parallel(
-            q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state, topology=topology
+            q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state, chronology=topology
         )
     return output, new_state
 
@@ -395,7 +406,12 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         recurrence._AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1))),
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
-        order=order,
+        chronology=DeviceChronology(
+            ttnn.experimental.kda.chronological_topology(
+                start_tensor(mesh_device, order[0] * 32), rank_tensor(mesh_device, 0), 2, 32, 1, 32, 32
+            ),
+            2,
+        ),
         compute_config=ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -422,8 +438,8 @@ def test_private_recurrence_routes_have_required_sp_metadata() -> None:
     assert "topology" not in inspect.signature(recurrence.KDARecurrence.__call__).parameters
     assert "topology" not in inspect.signature(recurrence._scan_local_grouped_chunks).parameters
     for function, parameter, expected_type in (
-        (recurrence.KDARecurrence.sequence_parallel, "topology", ChronologicalTopology),
-        (recurrence._scan_sp_grouped_chunks, "topology", ChronologicalTopology),
+        (recurrence.KDARecurrence.sequence_parallel, "chronology", DeviceChronology),
+        (recurrence._scan_sp_grouped_chunks, "chronology", DeviceChronology),
         (recurrence._scan_sp_grouped_chunks, "sequence_parallel_axis", int),
     ):
         assert inspect.signature(function).parameters[parameter].default is inspect.Parameter.empty

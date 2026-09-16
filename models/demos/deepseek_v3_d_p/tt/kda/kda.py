@@ -12,7 +12,6 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_topology import ChronologicalTopology, _chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
@@ -21,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor, start_tensor
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -46,37 +46,6 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
     return ttnn.TILE_SIZE * _largest_divisor_at_most(
         channels // ttnn.TILE_SIZE, configured_chunk_size // ttnn.TILE_SIZE
     )
-
-
-def _wrap_indicators(
-    device: ttnn.MeshDevice,
-    *,
-    sequence_parallel_axis: int,
-    sp_size: int,
-) -> tuple[ttnn.Tensor, ...]:
-    """One selector per candidate boundary chip, indexed by SP rank.
-
-    The candidates are just the SP ranks, so the content is fixed at
-    construction; only which selector a forward picks depends on the offset.
-    """
-    mesh_dims: list[int | None] = [None, None]
-    mesh_dims[sequence_parallel_axis] = 0
-    mesh_shape = tuple(device.shape)
-    selectors = []
-    for chip in range(sp_size):
-        indicator = torch.zeros(sp_size, 1, 1)
-        indicator[chip] = 1.0
-        selectors.append(
-            ttnn.from_torch(
-                indicator,
-                dtype=KDA_RECURRENT_STATE_DTYPE,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape),
-            )
-        )
-    return tuple(selectors)
 
 
 @dataclass(frozen=True)
@@ -192,13 +161,12 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self._wrap_indicators = (
-            _wrap_indicators(
-                self.device, sequence_parallel_axis=self.sequence_parallel_axis, sp_size=self.sequence_parallel_size
-            )
-            if self.sequence_parallel_size > 1
-            else ()
+        self._sp_rank = (
+            rank_tensor(self.device, self.sequence_parallel_axis) if self.sequence_parallel_size > 1 else None
         )
+
+        self._eager_start = start_tensor(self.device, 0) if self.sequence_parallel_size > 1 else None
+        self._eager_start_value = 0
 
     @property
     def _convolution_width(self) -> int:
@@ -229,10 +197,20 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
-        actual_start: int,
+        actual_start: int | ttnn.Tensor,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
-        if actual_start < 0 or actual_start % KDA_CHUNK_SIZE:
+        if not isinstance(actual_start, (int, ttnn.Tensor)):
+            raise TypeError("actual_start must be an integer or a device UINT32 scalar")
+        if isinstance(actual_start, ttnn.Tensor) and (
+            actual_start.dtype != ttnn.uint32
+            or actual_start.layout != ttnn.ROW_MAJOR_LAYOUT
+            or any(dimension != 1 for dimension in actual_start.shape)
+        ):
+            raise ValueError("device actual_start must be a UINT32 row-major scalar")
+        if isinstance(actual_start, int) and (
+            actual_start < 0 or actual_start >= 2**32 or actual_start % KDA_CHUNK_SIZE
+        ):
             raise ValueError(f"actual_start must be a non-negative multiple of {KDA_CHUNK_SIZE}, got {actual_start}")
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
@@ -260,28 +238,28 @@ class ttKDA:
     def _convolve_qkv(
         self,
         qkv: ttnn.Tensor,
-        convolution_state: ttnn.Tensor,
-        topology: ChronologicalTopology,
-        wrap_indicator: ttnn.Tensor | None = None,
+        incoming_layer_carry: ttnn.Tensor,
+        chronology: DeviceChronology | None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
-        convolution_state, new_state = exchange_convolution_carry(
-            qkv,
-            convolution_state,
-            sequence_parallel_axis=self.sequence_parallel_axis,
-            topology=topology,
-        )
+        if chronology is None:
+            batch, rows, width = qkv.shape
+            new_state = ttnn.slice(qkv, (0, rows - 3, 0), (batch, rows, width))
+            predecessor = None
+        else:
+            predecessor, new_state = exchange_convolution_carry(
+                qkv, sequence_parallel_axis=self.sequence_parallel_axis, chronology=chronology
+            )
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv,
-            convolution_state,
+            incoming_layer_carry,
             *self.weights.convolution_taps,
             config.q_dim,
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
-            wrap_row=topology.head_rows if topology.is_split else 0,
-            wrap_indicator=wrap_indicator,
+            chronology=chronology.controls if chronology is not None else None,
+            predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return q, k, v, new_state
@@ -412,7 +390,7 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
-        actual_start: int = 0,
+        actual_start: int | ttnn.Tensor = 0,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
 
@@ -420,7 +398,12 @@ class ttKDA:
         token. It selects the chronological SP segment order for MLA's
         block-cyclic layout; the default of zero is the natural order and is
         numerically identical to the pre-offset path. Every SP rank must observe
-        the same value.
+        the same value. For trace replay, pass a replicated UINT32 row-major
+        scalar tensor and update its contents at the same address. Its value must
+        be nonnegative and 32-aligned; no device-to-host validation is performed.
+        Integer starts reuse layer-owned metadata: warm the requested integer
+        before capture. Later integer calls update that shared buffer; use caller-
+        owned device metadata when traces need independent start lifetimes.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
@@ -428,30 +411,40 @@ class ttKDA:
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
         self._validate_forward(hidden_states, state, actual_start)
-        topology = _chronological_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
+        chronology = None
+        if self.sequence_parallel_size > 1:
+            if isinstance(actual_start, int):
+                if actual_start != self._eager_start_value:
+                    source = start_tensor(self.device, actual_start)
+                    ttnn.copy(source, self._eager_start)
+                    ttnn.deallocate(source)
+                    self._eager_start_value = actual_start
+                metadata = self._eager_start
+            else:
+                metadata = actual_start
+            chronology = DeviceChronology(
+                ttnn.experimental.kda.chronological_topology(
+                    metadata,
+                    self._sp_rank,
+                    self.sequence_parallel_size,
+                    hidden_states.shape[1],
+                    self.config.num_heads,
+                    self.config.head_k_dim,
+                    self.config.head_v_dim,
+                ),
+                self.sequence_parallel_size,
+            )
         projected = self._project_inputs(hidden_states)
         qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        wrap_indicator = self._wrap_indicators[topology.boundary_chip] if topology.is_split else None
-        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, topology, wrap_indicator)
+        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, chronology)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
         )
-        if topology.is_split:
-            new_recurrent, output = self.recurrence.split_sequence_parallel(
-                q=q,
-                k=k,
-                v=v,
-                gate=gate,
-                beta=beta,
-                initial_state=state.recurrent,
-                topology=topology,
-                wrap_indicator=wrap_indicator,
-            )
-        elif self.sequence_parallel_size > 1:
+        if chronology is not None:
             new_recurrent, output = self.recurrence.sequence_parallel(
                 q=q,
                 k=k,
@@ -459,7 +452,7 @@ class ttKDA:
                 gate=gate,
                 beta=beta,
                 initial_state=state.recurrent,
-                topology=topology,
+                chronology=chronology,
             )
         else:
             new_recurrent, output = self.recurrence(

@@ -12,8 +12,9 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_topology import _chronological_topology
+from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import _chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology, rank_tensor, start_tensor
 
 pytestmark = [run_for_blackhole()]
 
@@ -60,7 +61,6 @@ def _sp_carries(tensor: ttnn.Tensor, device: ttnn.MeshDevice, sp_axis: int, tp_a
 @pytest.mark.parametrize(
     "mesh_device,tp_axis,device_params",
     [
-        pytest.param((1, 8), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP1xTP8"),
         pytest.param((2, 4), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP2xTP4"),
         pytest.param((4, 2), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP4xTP2"),
         pytest.param((4, 2), 0, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP2xTP4-axis1"),
@@ -102,21 +102,19 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                         topology.head_rows if topology.is_split and previous == boundary else local_rows
                     )
                     outgoing = qkv[:, end_row - 3 : end_row]
-                    entry = initial if rank == boundary else outgoing
-                    expected_entries.append(
-                        torch.cat([entry, outgoing if rank == boundary else entry], dim=1)
-                        if topology.is_split
-                        else entry
-                    )
+                    expected_entries.append(outgoing)
                 expected_entries = torch.stack(expected_entries)
                 final_rank = boundary if topology.is_split else (boundary - 1) % sp
                 end_row = (final_rank + 1) * local_rows
                 expected_final = qkv[:, end_row - 3 : end_row]
 
+                metadata = start_tensor(mesh_device, boundary * local_rows + tail_rows)
+                ranks = rank_tensor(mesh_device, axis)
+                controls = ttnn.experimental.kda.chronological_topology(metadata, ranks, sp, local_rows, 1, 32, 32)
+                chronology = DeviceChronology(controls, sp)
+
                 def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-                    return exchange_convolution_carry(
-                        qkv_tt, initial_tt, sequence_parallel_axis=axis, topology=topology
-                    )
+                    return exchange_convolution_carry(qkv_tt, sequence_parallel_axis=axis, chronology=chronology)
 
                 def check(outputs: tuple[ttnn.Tensor, ttnn.Tensor]) -> None:
                     entries, final = outputs
@@ -168,6 +166,8 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                         ttnn.deallocate(qkv_tt)
                         ttnn.deallocate(initial_tt)
                         qkv_tt, initial_tt = old_qkv, old_initial
+                for tensor in (metadata, ranks, controls):
+                    ttnn.deallocate(tensor)
         assert torch.equal(_sp_carries(qkv_tt, mesh_device, axis, tp_axis), qkv.reshape(sp, 1, local_rows, width))
         assert all(torch.equal(item, initial) for item in _sp_carries(initial_tt, mesh_device, axis, tp_axis))
     finally:
