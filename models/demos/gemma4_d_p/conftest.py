@@ -11,5 +11,5 @@ def pytest_addoption(parser):
     )
     parser.addoption(
         "--kv-pcc-baseline",
-        help="Baseline JSON override; defaults to tests/kv_pcc_baselines/<configuration-hash>.json.",
+        help="Markdown baseline override; defaults to tests/kv_pcc_baselines/baseline.md.",
     )

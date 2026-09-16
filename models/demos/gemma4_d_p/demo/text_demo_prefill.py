@@ -500,7 +500,7 @@ def test_prefill_long_context_traced(
         records = _measure_kv_pcc(model, mesh_device, kv_ref_dir, kv_streams, kv_metadata, tokens_all, chunk_size, cp)
         report_path = kv_run.finish(records)
         logger.info("[kv_pcc] PASS: all K/V measurements are within baseline tolerances.")
-        logger.info(f"[kv_pcc] JSON report: {report_path}")
+        logger.info(f"[kv_pcc] Markdown report: {report_path}")
         return
 
     device_s = sum(per_chunk)
