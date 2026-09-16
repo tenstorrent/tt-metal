@@ -5,10 +5,11 @@
 
 ## Result
 
-The live guide includes the reviewed layout extension.
+The live guide includes the verified attention prototype results.
 
 Created files:
 
+- `status/attention-diagnostic.html`
 - `status/kv-migration-learning.html`
 - `status/kv-migration-learning-sources.md`
 - `status/kv-migration-learning-report.md`
@@ -35,7 +36,7 @@ It also includes sticky navigation, expandable detail, responsive styling, print
 
 The page links directly to the source manifest and review report.
 
-The top notice states that attention accuracy remains under investigation.
+The top notice separates passing prototype evidence from unaccepted production attention.
 
 The layout section maps TP8 source heads into TP2 destination shards.
 
@@ -62,6 +63,26 @@ Task 027 worst NL2 is 0.12608 for BF16 and 0.09887 for BF8_B. Task 028 residual 
 Task 029 stock FP32 passes its independent SOURCE-HF pre-O gate at every valid chip.
 
 Its minimum PCC is 0.99989028, and its maximum NL2 is 0.01513274.
+
+Task 030 passes one repeated-token continuation for both cache dtypes.
+
+Task 031 passes 12 exact boundary cases and all six historical Task 027 cases.
+
+All 1,760 per-chip scalar metrics are finite. Exact cache invariants pass on all 32 chips.
+
+The supported-FP32 candidate remains test-only. Production attention remains original and unaccepted.
+
+Task 032 raw characterization completed. The candidate still misses original synthetic hash limits.
+
+Worst cache-relative NL2 is about 9.3% at `[224,257)` for both cache dtypes.
+
+Task 033 stock causal control matches the explicit-local-mask path on the worst row.
+
+Both paths report PCC 0.9957571199646015 and NL2 0.0929282984724009 on chip 8, row 256.
+
+This parity rules out mask introduction for that row. It does not identify one underlying operation.
+
+The planned broader parity test covers ten intervals and two cache dtypes.
 
 Current main's `MigrationKvManagerClient` uses the vendored legacy migration layer.
 
@@ -106,7 +127,7 @@ PY
 Output:
 
 ```text
-details 21 21
+details 22 22
 missing []
 external_scripts False
 external_styles False
@@ -125,7 +146,7 @@ Numbered procedural steps above 20 words: 0
 HTML parse: PASS
 Internal link targets missing: []
 Inline SVG pairs: 3 3
-Expandable detail pairs: 21 21
+Expandable detail pairs: 22 22
 External script tags: False
 External stylesheet tags: False
 Manual term review: PASS
@@ -159,9 +180,9 @@ wc -l -c notes/kv-migration-learning.md status/kv-migration-learning.html notes/
 Output before final transfer:
 
 ```text
-613 30968 notes/kv-migration-learning.md
-461 50893 status/kv-migration-learning.html
-236 15022 notes/kv-migration-learning-sources.md
+698 35162 notes/kv-migration-learning.md
+517 56153 status/kv-migration-learning.html
+271 17891 notes/kv-migration-learning-sources.md
 ```
 
 The final Markdown and HTML sizes appear in the transfer evidence.
@@ -180,7 +201,13 @@ The pinned Llama decode entry has no `kv_migration_spec` hook.
 
 No verified two-slot decode stride or destination NoC address exists yet.
 
-Task 6 attention remains unaccepted despite passing post-O output.
+Task 6 attention remains unaccepted despite the passing test-only candidate.
+
+Production adoption, reuse, cache immutability, and validation tests remain pending.
+
+The old ring path still fails. Raw synthetic hash accuracy remains unresolved.
+
+Task 033 does not explain all raw hash failures. Production attention and Task 6 remain unaccepted.
 
 The Llama full model, runtime integration, native cross-endpoint movement, and semantic decode comparison remain pending.
 
@@ -201,6 +228,10 @@ The parent reviewer must perform the final visual review before linking the page
 - The head mapping follows the pinned TP2 cache shard mapper.
 - The address walk stops before the unimplemented two-slot destination stride.
 - The manifest includes direct pinned links for request planning, barriers, the PR client, and Blaze layout sources.
+- The evidence now includes verified Task 030 and Task 031 prototype results.
+- Historical ring failures remain separate from the passing test-only candidate.
+- Task 032 keeps unresolved raw synthetic hash accuracy visible.
+- Task 033 records the narrow stock-causal parity result without claiming a complete cause.
 
 ## Final hashes
 

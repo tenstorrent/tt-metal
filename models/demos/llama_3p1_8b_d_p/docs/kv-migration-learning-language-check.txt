@@ -5,7 +5,7 @@ Numbered procedural steps above 20 words: 0
 HTML parse: PASS
 Internal link targets missing: []
 Inline SVG pairs: 3 3
-Expandable detail pairs: 21 21
+Expandable detail pairs: 22 22
 Source manifest links: 2
 Review report links: 1
 External script tags: False
@@ -20,6 +20,10 @@ Manual term review: PASS
 - Native KVM and legacy migration client are distinct.
 - Source and destination slot numbers are example assignments.
 - The guide labels destination slot 1 placement as unimplemented.
+- Historical failures and test-only prototype passes are separate.
+- Passing real-weight gates and unresolved raw hash checks are separate.
+- Stock causal parity bounds one row without claiming a complete cause.
+- Task 6 and production attention remain unaccepted.
 - Current, proposed, tested, failed, and pending claims are labeled.
 
 Limitation: This scan is a heuristic. It is not formal ASD-STE100 certification.

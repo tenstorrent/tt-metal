@@ -7,7 +7,7 @@
 
 This guide explains one disaggregated Llama 3.1 8B request from input text to streamed output.
 
-> **Attention accuracy is under investigation.** Repeated-token pre-O heads currently fail, although post-O output passes.
+> **A test-only attention prototype passes real-weight stress gates.** Stock causal control matches one raw failure. Production attention remains unaccepted.
 
 It centers on the native `tt-d-gen` KV Manager, called native KVM in this guide.
 
@@ -16,6 +16,8 @@ The target uses five Blackhole Galaxies. One Galaxy runs prefill. Four Galaxies 
 The model is Llama 3.1 8B Instruct. The target deployment has two request slots and 2,048 total token positions.
 
 This page separates verified code, completed tests, proposed wiring, and required integration tests.
+
+The prototype evidence does not change production model code. It does not accept Task 6.
 
 Open the [sources and evidence manifest](kv-migration-learning-sources.md) or the [review report](kv-migration-learning-report.md).
 
@@ -434,6 +436,10 @@ The output projection can reduce visible error. Check both pre-O and post-O resu
 | Attention task 027 | Uncommitted repeated-token run | Post-O output passes | Pre-O heads fail: BF16 worst NL2 0.12608; BF8 worst NL2 0.09887 |
 | Attention task 028 | Uncommitted exact-input residual run | Reproduces a focused input condition | Pre-O residual remains NL2 0.10081 |
 | Attention task 029 | Uncommitted stock-FP32 isolation | Independent SOURCE-HF pre-O gate passes every valid chip | Production FP32 path is absent; ring and stock BF16 still show about 0.10 NL2 |
+| Attention task 030 | Test-only supported-FP32 prototype on `[1024,1537)` | PASS for one repeated-token continuation and both cache dtypes | One interval only; production attention is unchanged |
+| Attention task 031 | Test-only FP32 boundary stress | PASS for 12 exact boundary cases and all six original task 027 real-weight cases | Production adoption, reuse, immutability, and validation |
+| Attention task 032 | Raw cancellation-heavy synthetic hash characterization | Completed against the original limits | Candidate misses some source and exact-cache hash limits; diagnosis continues |
+| Attention task 033 | Stock standard FP32 causal control at `[224,257)` | Matches the explicit-local-mask path on the worst row | One shared row does not explain every raw hash failure |
 | Prefill reshuffle | 191 host cases for exact helper | Host token ordering for aligned starts and tails | H2D transport or device writes |
 | Layer-ready channel | Common runner source and host contracts | Required metadata and 32 layer notifications | Correct Llama device synchronization |
 | Native table import | KVM unit and source checks | Multi-config import, ID checks, read/write index construction | Correct Llama-specific table content |
@@ -444,9 +450,78 @@ The output projection can reduce visible error. Check both pre-O and post-O resu
 
 Published QKV, cache, RoPE, MLP, and RMSNorm results are through tt-metal revision `4cf42fb`.
 
-Attention tasks 026 through 029 are uncommitted Task 6 evidence. Task 6 remains unaccepted.
+Attention tasks 026 through 033 are uncommitted Task 6 evidence. Task 6 remains unaccepted.
 
-Attention accuracy remains under investigation. Post-O agreement does not clear the repeated-token pre-O failure.
+Tasks 027 and 028 record historical failures. The old ring path still fails.
+
+Tasks 030 and 031 validate a test-only candidate. They do not change production attention.
+
+### Verified test-only attention prototype
+
+The candidate gathers selected packed-cache values. It reorders them, applies an explicit mask, and uses supported stock FP32 SDPA.
+
+Attempt 030 passed one repeated-token continuation for BF16 and BF8_B caches. Its interval was `[1024,1537)`.
+
+It recorded `actual/verified = 0`. It closed cleanly at 11:11:21.
+
+Attempt 031 passed 12 exact boundary cases. It covered six intervals with two cache dtypes.
+
+The intervals were `[0,1)`, `[0,33)`, `[224,257)`, `[1024,1537)`, `[1056,2048)`, and `[2016,2048)`.
+
+It also passed all six original Task 027 repeated-token source-head and output-projection cases.
+
+| Cache dtype | Worst head PCC | Worst head NL2 | Minimum post-O PCC | Maximum post-O NL2 |
+|---|---:|---:|---:|---:|
+| BF16 | 0.9997846133 | 0.0209190180 | 0.9999621894 | 0.0104071685 |
+| BF8_B | 0.9996511653 | 0.0327059192 | 0.9999156025 | 0.0152525783 |
+
+The unchanged BF16 gates are PCC 0.999 and NL2 0.03. The BF8_B gates are PCC 0.995 and NL2 0.05.
+
+All 1,760 per-chip scalar metrics were finite.
+
+Exact cache gather, order, masks, and padded-zero checks passed on all 32 chips.
+
+Attempt 031 recorded `actual/verified = 0`. It closed cleanly at 11:29:34.830.
+
+No threshold was relaxed.
+
+Task 032 completed the raw synthetic hash characterization. The candidate still misses the original hash limits.
+
+BF16 source hashes pass 3 of 10 cases. BF8_B source hashes pass 3 of 10 cases.
+
+BF8_B exact-cache hashes pass 7 of 10 cases.
+
+The worst cache-relative NL2 is about 9.3% for interval `[224,257)` in both cache dtypes.
+
+These cancellation-heavy synthetic checks remain unresolved. Diagnosis continues.
+
+Task 033 compared the explicit local mask with stock standard FP32 causal attention.
+
+Both paths have the same worst result on chip 8, row 256.
+
+| Metric | Both paths |
+|---|---:|
+| PCC | 0.9957571199646015 |
+| NL2 | 0.0929282984724009 |
+| Expected RMS | 0.0024138343012115623 |
+| Error RMS | 0.0002243135144059073 |
+| Maximum absolute error | 0.000705384649336338 |
+
+This parity shows that the local mask did not introduce this row's error.
+
+The result bounds this row to arithmetic shared with stock causal FP32. It does not identify one underlying operation.
+
+It also does not explain every raw hash failure.
+
+Attempt 033 recorded `actual = 0` and `verified = 0`. One test passed.
+
+All 2,800 reported metric scalars were finite. The device closed cleanly at 11:46:34.296 UTC.
+
+A broader stock-causal parity test is planned for ten intervals and two cache dtypes.
+
+Its prechosen per-chip gates are PCC 0.9999 and NL2 1%.
+
+Production candidate work is authorized. Permanent validation, isolation, reuse, and real-weight tests are authorized and required.
 
 No active allocation is implied. This guide ran no device commands.
 
@@ -532,6 +607,14 @@ GQA reduces transfer payload because eight K/V heads serve 32 query heads.
 Block-aligned migration keeps the final prompt block on decode. This makes the first-token rule explicit.
 
 ## Limitations and subtle risks
+
+The supported-FP32 candidate remains test-only. Production adoption, reuse, cache immutability, and validation tests remain pending.
+
+Task 032 raw synthetic hash accuracy remains unresolved. Diagnosis continues.
+
+Task 033 explains one mask question only. It does not close the broader raw hash diagnosis.
+
+The old ring attention path still fails. Task 6 remains unaccepted.
 
 The current Llama runtime and table exporters are incomplete. Native cross-endpoint migration is therefore unproven.
 

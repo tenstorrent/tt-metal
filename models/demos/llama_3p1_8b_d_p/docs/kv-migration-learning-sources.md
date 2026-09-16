@@ -187,9 +187,44 @@ These results were published through tt-metal revision `4cf42fb`.
 - Task 029 minimum PCC is 0.99989028, and maximum NL2 is 0.01513274.
 - Ring versus exact remains about 0.10081 NL2. Stock BF16 remains about 0.10029 NL2.
 - The Task 029 BF16 error cosine is 0.9965. A production FP32 path is not implemented.
+- Task 030 supported-FP32 prototype passed one repeated-token continuation for both cache dtypes.
+- Task 030 used interval `[1024,1537)`, recorded `actual/verified = 0`, and closed cleanly at 11:11:21.
+- Task 031 passed 12 exact boundary cases across six intervals and two cache dtypes.
+- Task 031 also passed all six original Task 027 real-weight source-head and output-projection cases.
+- Task 031 BF16 worst head PCC and NL2 are 0.9997846133 and 0.0209190180.
+- Task 031 BF16 post-O minimum PCC and maximum NL2 are 0.9999621894 and 0.0104071685.
+- Task 031 BF8_B worst head PCC and NL2 are 0.9996511653 and 0.0327059192.
+- Task 031 BF8_B post-O minimum PCC and maximum NL2 are 0.9999156025 and 0.0152525783.
+- All 1,760 per-chip scalar metrics were finite.
+- Exact cache gather, order, masks, and padded-zero checks passed on all 32 chips.
+- Task 031 recorded `actual/verified = 0` and closed cleanly at 11:29:34.830.
+- The candidate uses selected packed-cache gather, reorder, explicit masking, and supported stock FP32 SDPA.
+- Production adoption, reuse, cache immutability, and validation tests remain pending.
+- Task 032 raw synthetic hash characterization completed against the original limits.
+- BF16 source hashes pass 3 of 10 cases. BF8_B source hashes pass 3 of 10 cases.
+- BF8_B exact-cache hashes pass 7 of 10 cases.
+- Worst cache-relative NL2 is about 9.3% at `[224,257)` for both cache dtypes.
+- Raw cancellation-heavy hash accuracy remains unresolved. Diagnosis continues.
+- Task 033 stock causal control recorded `actual = 0`, `verified = 0`, and one passing test.
+- All 2,800 Task 033 metric scalars were finite. The device closed cleanly at 11:46:34.296 UTC.
+- Explicit-local-mask and stock-standard-causal paths share the same worst chip 8, row 256.
+- Both paths have PCC 0.9957571199646015 and NL2 0.0929282984724009 on that row.
+- Both paths have expected RMS 0.0024138343012115623 and error RMS 0.0002243135144059073.
+- Both paths have maximum absolute error 0.000705384649336338.
+- This parity shows that the local mask did not introduce this row's error.
+- It does not identify one underlying operation or explain every raw hash failure.
+- A ten-interval, two-dtype stock-causal parity test is planned.
+- Its prechosen per-chip gates are PCC 0.9999 and NL2 1%.
+- Production candidate and permanent validation work are authorized. Task 6 remains unaccepted.
+- Permanent isolation, reuse, and real-weight tests are authorized and pending.
+- Evidence anchor: `evidence/task-6-attention/attempt-033-224-stock-causal-control/root-verification.txt`.
+- Original hash source failures remain documented characterization evidence.
+- The old ring path still fails.
+- The BF16 gates remain PCC 0.999 and NL2 0.03. The BF8_B gates remain PCC 0.995 and NL2 0.05.
+- No threshold was relaxed.
 - Task 6 remains unaccepted.
 
-Attention accuracy remains under investigation.
+The real-weight prototype gates pass. Stock causal parity bounds one failure, while raw hash diagnosis continues.
 
 ### Completed common runtime evidence
 

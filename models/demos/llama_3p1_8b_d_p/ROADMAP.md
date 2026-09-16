@@ -17,7 +17,9 @@ service.
 - `PREFILL_CHUNK_SIZE=1024`, `PREFILL_MAX_SEQ_LEN=2048`, and `PREFILL_NUM_LAYERS=32` are pinned.
 - A prefill transformer decoder layer processes a prompt chunk. It is distinct from the later
   autoregressive Blaze decode engine, which consumes the migrated cache one decode step at a time.
-- Every implementation stage ends in a logical commit and review boundary. Its commit includes
+- Every implementation stage ends in a logical commit and review boundary. The user accepted the
+  reviewer role and deferred detailed independent review until the implementation works. Hardware
+  tests, self-review, and repository hooks remain required. Each implementation commit includes
   working tests and a plain-language comment before each test method explaining the behavior and
   expected result. Publication follows the stage's checks and review.
 
@@ -60,8 +62,9 @@ and cannot be chosen after inspecting a failing result.
 
 ## Strict implementation and review sequence
 
-The order below is also the intended logical commit/PR order. A stage begins only after its
-predecessor's required checks and review are complete.
+The order below is also the intended logical commit/PR order. A stage begins after its predecessor's
+required checks pass, with the user-approved review arrangement above. Diagnostic comparisons may
+combine modules to locate an error; they do not close a failed module gate.
 
 ### 0. Environment and scaffold
 
@@ -105,7 +108,7 @@ skips.
 
 ### 2. RMSNorm
 
-**Input/setup.** Add `tt/rms_norm.py` and `tests/unit/test_rms_norm_vs_ref.py` (**planned**). Test a
+**Input/setup.** Use `tt/rms_norm.py` and `tests/unit/test_rms_norm_vs_ref.py` (**published**). Test a
 full 4,096-wide hidden state per chip with SP row placement and TP replication, including normal,
 zero, constant, tiny-magnitude, and real checkpoint gamma vectors. Exercise cached-program reuse
 and preserve the residual input unchanged.
@@ -125,7 +128,7 @@ the no-skip Galaxy gate.
 
 ### 3. Bias-free dense SiLU SwiGLU MLP
 
-**Input/setup.** Add `tt/mlp.py` and `tests/unit/test_mlp_vs_ref.py` (**planned**). Cover synthetic
+**Input/setup.** Use `tt/mlp.py` and `tests/unit/test_mlp_vs_ref.py` (**published**). Cover synthetic
 and real gate/up/down weights for 4,096→14,336→4,096, with TP8 column-parallel gate/up projections
 and the required down-projection reduction across TP.
 
@@ -140,15 +143,15 @@ shape/layout, collective participation, program reuse, and invalid geometry chec
 
 ### 4. Q/K/V projections and bounded packed-cache writes
 
-**Input/setup.** Add `tt/attention.py`, cache-writing support, and
-`tests/unit/test_qkv_cache_vs_ref.py` (**planned**). Exercise all 32 query heads and eight KV heads,
+**Input/setup.** Use `tt/qkv.py`, `tt/kv_cache.py`, `tests/unit/test_qkv_vs_ref.py`, and
+`tests/unit/test_kv_cache.py` (**published**). Exercise all 32 query heads and eight KV heads,
 TP8 ownership, multiple layers, both slots, tile-aligned nonzero starts, a full chunk, and a padded
 tail at the logical limit.
 
 **Independent reference and expected behavior.** Independent PyTorch linear projections plus the
 approved Llama3 rotary reference produce Q, K, and V. A separately constructed address/ownership
-oracle determines the packed cache destination. Only `[actual_start, actual_end)` may change; all
-other slots, layers, heads, and positions remain untouched.
+oracle determines the packed cache destination. Write valid K/V only to `[actual_start, actual_end)`. Zero the unused rows through the end of the
+last 32-token page. Preserve earlier history, later pages, and other slots and layers.
 
 **Bugs caught and pass criteria.** This catches Q/K/V weight permutation, head reshaping errors,
 wrong rotary frame, local/global start confusion, slot or layer cross-talk, and padded-tail writes.
@@ -170,12 +173,48 @@ wrong GQA head expansion, causal-mask offsets, SP ownership/collective errors, a
 cross-talk. Full outputs and attention-sensitive diagnostics across all chips, starts, heads, and
 slots must satisfy justified correlation and magnitude limits with no skipped hardware cases.
 
+**Current candidate (16 September 2026).** Gather the selected packed K/V plane across SP4, restore
+natural token order, and build an exact absolute-position causal mask on the device. Use supported
+stock SDPA with FP32 destination accumulation. Q and output remain BF16; cache storage is BF16 for
+diagnostics and BF8_B for migration. This replaces the earlier indexed ring attention candidate,
+which failed a real-token continuation check. The indexed ring FP32 guard remains intact.
+
+**Required production tests.**
+
+- Compare real checkpoint attention heads before O projection and outputs after O projection with
+  independent HF-frame float32 mathematics. Keep PCC >= 0.999 / normalized L2 <= 0.03 for BF16
+  cache and PCC >= 0.995 / normalized L2 <= 0.05 for BF8_B cache. These gates were selected before
+  the experiments. BF8_B storage and the projection chain add rounding; the looser BF8_B gate does
+  not permit coordinate or cache-address errors.
+- Check exact gathered token/head order, selected slot/layer, 0/-infinity masks, numeric 0/1 query
+  validity, and zero output on padded query rows. Test one-token, tile-crossing, SP-crossing,
+  continuation, and terminal boundaries on every chip.
+- Use a positive-value causal prefix-average fixture with pulses at page and SP boundaries.
+  Omitted and shifted pulses must fail the same independent oracle. Include zero-value and
+  future-tail poisoning cases so correlation cannot hide illegal reads.
+- Replay A, B, then A with changed input and cache addresses. Verify unchanged input/cache data,
+  refreshed runtime arguments, stable warmed program counts, and bounded persistent allocations.
+  Invalid calls must fail before cache changes; a subsequent valid call must work.
+- Compare the original ten synthetic intervals and both cache types with stock causal SDPA on the
+  same exact inputs. The preselected parity gate is PCC >= 0.9999 / normalized L2 <= 0.01 per chip.
+  This checks our gather/mask composition; it does not replace the independent real-weight oracle.
+- Keep the stock streaming exponential-mode regression separate. It must detect the previously
+  ignored `exp_approx_mode=False` flag and retain approximate-mode behavior.
+
+**Known numerical limitation.** The hash fixture still fails its original float-reference limits.
+At query position 256, both explicit-mask and stock causal FP32 attention have PCC 0.995757 and
+normalized L2 0.092928. Their outputs at the failing row are identical. BF8_B cache compression
+also causes large relative error in some synthetic cases before attention runs. Keep the original
+fixtures, limits, and measured failures in executable characterization tools. Do not label them as
+passing, silently relax their limits, or claim that one identified arithmetic operation explains all
+cases. Production attention remains unaccepted until the required checks above pass.
+
 ### 6. One prefill transformer decoder layer
 
 **Input/setup.** Add the decoder-layer composition and
 `tests/unit/test_decoder_layer_vs_ref.py` (**planned**), combining input RMSNorm, GQA, residual,
-post-attention RMSNorm, dense MLP, and the second residual. Use synthetic isolation cases and one
-real Llama layer, with cache checks for K and V.
+post-attention RMSNorm, dense MLP, and the second residual. Use synthetic isolation cases and real Llama layers 0 and 13, with cache checks for K and V.
+Share accepted attention resources across layers. Validate the request and cache before writing K/V.
 
 **Independent reference and expected behavior.** A standalone Hugging Face/PyTorch Llama decoder
 layer, fed identical rounded inputs and weights, supplies hidden-state and cache references.
@@ -183,7 +222,12 @@ layer, fed identical rounded inputs and weights, supplies hidden-state and cache
 **Bugs caught and pass criteria.** This detects wrong normalization order, missing or overwritten
 residuals, local/global layer indices, composition precision loss, and cache writes occurring at the
 wrong stage. Every-chip hidden output and K/V must meet their separately justified correlation and
-magnitude limits, while residual inputs and unrelated cache regions remain intact.
+magnitude limits, while residual inputs and unrelated cache regions remain intact. The selected
+layer-output gates are PCC >= 0.999 with normalized L2 <= 0.03 for BF16 cache or <= 0.05 for BF8_B.
+Keep the published independent KV gates: PCC >= 0.9999 / normalized L2 <= 0.01 for BF16 and
+PCC >= 0.999 / normalized L2 <= 0.02 for BF8_B. Use zero-branch and isolated-branch runs to prove
+that residual magnitude cannot hide missing attention or MLP output. Check all tensors and metrics
+for finiteness before aggregation. These limits are fixed before decoder implementation and testing.
 
 ### 7. Complete 32-layer prefill
 
@@ -238,7 +282,7 @@ verify every layer, head, config, and slot, then run actual migrated decode and 
 with the source-golden/reference decode. Two distinct slot traces are mandatory. Mock, loopback,
 cross-endpoint, and serving gates run in increasing scope; no required hardware skip counts as pass.
 
-## Recorded evidence at this snapshot
+## Recorded evidence at this snapshot (16 September 2026)
 
 - The native build matching source `904cc323141` was available, and all six scaffold tests passed.
 - Host RoPE: 11 tests were approved at commit `4bac36b20e5`.
@@ -247,8 +291,19 @@ cross-endpoint, and serving gates run in increasing scope; no required hardware 
   worst PCC was 0.9999936 and worst normalized L2 was 0.0031986.
 - Independent Task 2 review approved commit `68fe0cca2c9` as spec-compliant, with no critical or
   important findings.
-- There is no completed RMSNorm, MLP, full-model, runtime, migration, Blaze-handoff, or serving pass
-  in this snapshot.
+- RMSNorm is published at `1ff25da02ae`; MLP is published at `7b12bf9d576`. Their module hardware
+  tests and review passed.
+- QKV/cache writes are published at `4cf42fb0b9a`: all seven hardware tests passed, followed by
+  five covering checks after hooks. The user accepted the reviewer role; independent review was
+  deferred and is not claimed as complete.
+- Isolated attention output projection passed. The exponential-mode regression passed.
+- FP32 attention prototype: attempt 031 passed 12 exact boundary cases and all six original
+  repeated-token stress cases. Worst head PCC / normalized L2 was 0.999785 / 0.020919 for BF16 and
+  0.999651 / 0.032706 for BF8_B. These are prototype results.
+- Attempt 032 retained the failed synthetic limits. Attempt 033 reproduced the worst failing row
+  with stock causal attention. A completed diagnostic is not a numerical acceptance pass.
+- Production attention validation is in progress. Decoder-layer, full-model, runtime, migration,
+  Blaze-handoff, and serving gates have not run.
 
 The evidence filenames are stored outside Git under
 `/data/divanovic/llama31-8b-disagg/evidence`. References to those logs do not imply that the logs are

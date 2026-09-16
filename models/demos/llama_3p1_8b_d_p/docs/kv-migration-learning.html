@@ -33,14 +33,15 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <a class="nav-2" href="#debugging-checklist">Debugging checklist</a>
 <a class="nav-2" href="#questions-and-exercises">Questions and exercises</a>
 <a class="nav-2" href="#glossary">Glossary</a>
-<a class="nav-2" href="#language-and-review-method">Language and review method</a></aside><main><div class="scope"><strong>Attention accuracy is under investigation.</strong> Repeated-token pre-O heads fail. Full-model native migration across five Galaxies remains pending.</div><div class="toolbar"><button onclick="document.querySelectorAll('details').forEach(x=>x.open=true)">Expand details</button><button onclick="window.print()">Print guide</button></div><h1 id="llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</h1>
+<a class="nav-2" href="#language-and-review-method">Language and review method</a></aside><main><div class="scope"><strong>The test-only attention prototype passes real-weight stress gates.</strong> Stock causal control matches one raw failure. Production attention remains unaccepted. Full-model native migration across five Galaxies remains pending.</div><div class="toolbar"><button onclick="document.querySelectorAll('details').forEach(x=>x.open=true)">Expand details</button><button onclick="window.print()">Print guide</button></div><h1 id="llama-3-1-8b-prefill-and-native-kv-migration">Llama 3.1 8B prefill and native KV migration</h1>
 <h2 id="purpose">Purpose</h2>
 <p>This guide explains one disaggregated Llama 3.1 8B request from input text to streamed output.</p>
-<blockquote><strong>Attention accuracy is under investigation.</strong> Repeated-token pre-O heads currently fail, although post-O output passes.</blockquote>
+<blockquote><strong>A test-only attention prototype passes real-weight stress gates.</strong> Stock causal control matches one raw failure. Production attention remains unaccepted.</blockquote>
 <p>It centers on the native <code>tt-d-gen</code> KV Manager, called native KVM in this guide.</p>
 <p>The target uses five Blackhole Galaxies. One Galaxy runs prefill. Four Galaxies form one SC4 decode system.</p>
 <p>The model is Llama 3.1 8B Instruct. The target deployment has two request slots and 2,048 total token positions.</p>
 <p>This page separates verified code, completed tests, proposed wiring, and required integration tests.</p>
+<p>The prototype evidence does not change production model code. It does not accept Task 6.</p>
 <p>Open the <a href="kv-migration-learning-sources.md">sources and evidence manifest</a> or the <a href="kv-migration-learning-report.md">review report</a>.</p>
 <h2 id="read-the-status-labels-first">Read the status labels first</h2>
 <div class="table-wrap"><table>
@@ -318,6 +319,10 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <tr><td>Attention task 027</td><td>Uncommitted repeated-token run</td><td>Post-O output passes</td><td>Pre-O heads fail: BF16 worst NL2 0.12608; BF8 worst NL2 0.09887</td></tr>
 <tr><td>Attention task 028</td><td>Uncommitted exact-input residual run</td><td>Reproduces a focused input condition</td><td>Pre-O residual remains NL2 0.10081</td></tr>
 <tr><td>Attention task 029</td><td>Uncommitted stock-FP32 isolation</td><td>Independent SOURCE-HF pre-O gate passes every valid chip</td><td>Production FP32 path is absent; ring and stock BF16 still show about 0.10 NL2</td></tr>
+<tr><td>Attention task 030</td><td>Test-only supported-FP32 prototype on <code>[1024,1537)</code></td><td>PASS for one repeated-token continuation and both cache dtypes</td><td>One interval only; production attention is unchanged</td></tr>
+<tr><td>Attention task 031</td><td>Test-only FP32 boundary stress</td><td>PASS for 12 exact boundary cases and all six original task 027 real-weight cases</td><td>Production adoption, reuse, immutability, and validation</td></tr>
+<tr><td>Attention task 032</td><td>Raw cancellation-heavy synthetic hash characterization</td><td>Completed against the original limits</td><td>Candidate misses some source and exact-cache hash limits; diagnosis continues</td></tr>
+<tr><td>Attention task 033</td><td>Stock standard FP32 causal control at <code>[224,257)</code></td><td>Matches the explicit-local-mask path on the worst row</td><td>One shared row does not explain every raw hash failure</td></tr>
 <tr><td>Prefill reshuffle</td><td>191 host cases for exact helper</td><td>Host token ordering for aligned starts and tails</td><td>H2D transport or device writes</td></tr>
 <tr><td>Layer-ready channel</td><td>Common runner source and host contracts</td><td>Required metadata and 32 layer notifications</td><td>Correct Llama device synchronization</td></tr>
 <tr><td>Native table import</td><td>KVM unit and source checks</td><td>Multi-config import, ID checks, read/write index construction</td><td>Correct Llama-specific table content</td></tr>
@@ -327,11 +332,52 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <tr><td>Five-Galaxy request</td><td>Pending</td><td>Nothing yet</td><td>End-to-end correctness, latency, failure recovery</td></tr>
 </table></div>
 <p>Published QKV, cache, RoPE, MLP, and RMSNorm results are through tt-metal revision <code>4cf42fb</code>.</p>
-<p>Attention tasks 026 through 029 are uncommitted Task 6 evidence. Task 6 remains unaccepted.</p>
-<p>Attention accuracy remains under investigation. Post-O agreement does not clear the repeated-token pre-O failure.</p>
+<p>Attention tasks 026 through 033 are uncommitted Task 6 evidence. Task 6 remains unaccepted.</p>
+<p>Tasks 027 and 028 record historical failures. The old ring path still fails.</p>
+<p>Tasks 030 and 031 validate a test-only candidate. They do not change production attention.</p>
+<details><summary id="verified-test-only-attention-prototype">Verified test-only attention prototype</summary><div class="detail-body">
+<p>The candidate gathers selected packed-cache values. It reorders them, applies an explicit mask, and uses supported stock FP32 SDPA.</p>
+<p>Attempt 030 passed one repeated-token continuation for BF16 and BF8_B caches. Its interval was <code>[1024,1537)</code>.</p>
+<p>It recorded <code>actual/verified = 0</code>. It closed cleanly at 11:11:21.</p>
+<p>Attempt 031 passed 12 exact boundary cases. It covered six intervals with two cache dtypes.</p>
+<p>The intervals were <code>[0,1)</code>, <code>[0,33)</code>, <code>[224,257)</code>, <code>[1024,1537)</code>, <code>[1056,2048)</code>, and <code>[2016,2048)</code>.</p>
+<p>It also passed all six original Task 027 repeated-token source-head and output-projection cases.</p>
+<div class="table-wrap"><table>
+<tr><th>Cache dtype</th><th>Worst head PCC</th><th>Worst head NL2</th><th>Minimum post-O PCC</th><th>Maximum post-O NL2</th></tr>
+<tr><td>BF16</td><td>0.9997846133</td><td>0.0209190180</td><td>0.9999621894</td><td>0.0104071685</td></tr>
+<tr><td>BF8_B</td><td>0.9996511653</td><td>0.0327059192</td><td>0.9999156025</td><td>0.0152525783</td></tr>
+</table></div>
+<p>The unchanged BF16 gates are PCC 0.999 and NL2 0.03. The BF8_B gates are PCC 0.995 and NL2 0.05.</p>
+<p>All 1,760 per-chip scalar metrics were finite.</p>
+<p>Exact cache gather, order, masks, and padded-zero checks passed on all 32 chips.</p>
+<p>Attempt 031 recorded <code>actual/verified = 0</code>. It closed cleanly at 11:29:34.830.</p>
+<p>No threshold was relaxed.</p>
+<p>Task 032 completed the raw synthetic hash characterization. The candidate still misses the original hash limits.</p>
+<p>BF16 source hashes pass 3 of 10 cases. BF8_B source hashes pass 3 of 10 cases.</p>
+<p>BF8_B exact-cache hashes pass 7 of 10 cases.</p>
+<p>The worst cache-relative NL2 is about 9.3% for interval <code>[224,257)</code> in both cache dtypes.</p>
+<p>These cancellation-heavy synthetic checks remain unresolved. Diagnosis continues.</p>
+<p>Task 033 compared the explicit local mask with stock standard FP32 causal attention.</p>
+<p>Both paths have the same worst result on chip 8, row 256.</p>
+<div class="table-wrap"><table>
+<tr><th>Metric</th><th>Both paths</th></tr>
+<tr><td>PCC</td><td>0.9957571199646015</td></tr>
+<tr><td>NL2</td><td>0.0929282984724009</td></tr>
+<tr><td>Expected RMS</td><td>0.0024138343012115623</td></tr>
+<tr><td>Error RMS</td><td>0.0002243135144059073</td></tr>
+<tr><td>Maximum absolute error</td><td>0.000705384649336338</td></tr>
+</table></div>
+<p>This parity shows that the local mask did not introduce this row's error.</p>
+<p>The result bounds this row to arithmetic shared with stock causal FP32. It does not identify one underlying operation.</p>
+<p>It also does not explain every raw hash failure.</p>
+<p>Attempt 033 recorded <code>actual = 0</code> and <code>verified = 0</code>. One test passed.</p>
+<p>All 2,800 reported metric scalars were finite. The device closed cleanly at 11:46:34.296 UTC.</p>
+<p>A broader stock-causal parity test is planned for ten intervals and two cache dtypes.</p>
+<p>Its prechosen per-chip gates are PCC 0.9999 and NL2 1%.</p>
+<p>Production candidate work is authorized. Permanent validation, isolation, reuse, and real-weight tests are authorized and required.</p>
 <p>No active allocation is implied. This guide ran no device commands.</p>
 <p>Task 6 closure, decoder assembly, full model, runtime wiring, table publication, and migration remain pending.</p>
-<h2 id="required-test-plan-for-the-worked-example">Required test plan for the worked example</h2>
+</div></details><h2 id="required-test-plan-for-the-worked-example">Required test plan for the worked example</h2>
 <details><summary id="gate-1-device-free-request-plan">Gate 1: device-free request plan</summary><div class="detail-body">
 <ol>
 <li>Create a 1,033-token request with a fixed UUID.</li>
@@ -397,6 +443,10 @@ a{color:#8fdcff} code{background:#071923;border:1px solid #244858;border-radius:
 <p>GQA reduces transfer payload because eight K/V heads serve 32 query heads.</p>
 <p>Block-aligned migration keeps the final prompt block on decode. This makes the first-token rule explicit.</p>
 <h2 id="limitations-and-subtle-risks">Limitations and subtle risks</h2>
+<p>The supported-FP32 candidate remains test-only. Production adoption, reuse, cache immutability, and validation tests remain pending.</p>
+<p>Task 032 raw synthetic hash accuracy remains unresolved. Diagnosis continues.</p>
+<p>Task 033 explains one mask question only. It does not close the broader raw hash diagnosis.</p>
+<p>The old ring attention path still fails. Task 6 remains unaccepted.</p>
 <p>The current Llama runtime and table exporters are incomplete. Native cross-endpoint migration is therefore unproven.</p>
 <p>The current main serving client named <code>migration</code> uses the legacy migration layer. Its name does not imply native KVM.</p>
 <p>The native manager accepts layout tables as truth. A consistent wrong table can move bytes without an obvious transport error.</p>
