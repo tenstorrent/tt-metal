@@ -68,6 +68,9 @@ PERF_KT_DIMS = (1, 4)
 THROTTLE_LEVELS = (0, 5)
 DEST_HANDOFF_NUM_BLOCKS = 4
 
+# input:output:dest_acc:dest_sync:fidelity:throttle:blocks:c:r:k:in0_r:transpose:partial_pack
+# Exact union of pinned scan reports; broad rules would skip most of the sweep.
+
 
 def _dest_capacity(dest_sync, dest_acc) -> int:
     return DEST_SYNC_TILE_LIMITS[dest_sync] // (

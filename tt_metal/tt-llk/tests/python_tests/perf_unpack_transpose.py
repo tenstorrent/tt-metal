@@ -29,6 +29,7 @@ def test_perf_unpack_transpose(
     unpack_transpose_faces,
     unpack_transpose_within_face,
 ):
+
     # Int32 format restrictions
     if formats.input_format == DataFormat.Int32:
         # Unpacker: Int32 can ONLY unpack to Int32 (identity) in Dst register per ISA specification

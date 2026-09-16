@@ -43,6 +43,7 @@ def test_perf_eltwise_binary(
     math_fidelity,
     dest_acc,
 ):
+
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 

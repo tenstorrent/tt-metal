@@ -125,6 +125,7 @@ def test_perf_sfpu_binop_scalar(
     iterations,
     input_dimensions,
 ):
+
     _run(
         formats,
         mathop,

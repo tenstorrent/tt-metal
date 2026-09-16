@@ -29,6 +29,7 @@ def test_perf_eltwise_unary_datacopy(
     loop_factor,
     is_perf,
 ):
+
     _run_unary_datacopy_test(
         formats,
         dest_acc,
@@ -60,6 +61,7 @@ def test_perf_eltwise_unary_datacopy_sub_byte_bfp(
     loop_factor,
     is_perf,
 ):
+
     _run_unary_datacopy_test(
         formats,
         dest_acc,

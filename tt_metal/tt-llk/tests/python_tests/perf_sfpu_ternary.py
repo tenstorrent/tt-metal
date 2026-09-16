@@ -118,6 +118,7 @@ def test_perf_sfpu_addcmul(
     iterations,
     input_dimensions,
 ):
+
     _run(
         formats,
         MathOperation.SfpuAddcmul,
