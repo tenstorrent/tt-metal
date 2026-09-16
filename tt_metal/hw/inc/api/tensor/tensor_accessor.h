@@ -241,7 +241,7 @@ public:
     // Locality APIs
     FORCE_INLINE
     bool is_local_bank(uint32_t virtual_x, uint32_t virtual_y, uint8_t noc = noc_index) const {
-        return virtual_x == my_x[noc] && virtual_y == my_y[noc];
+        return noc_address_backend::is_local_coordinate(virtual_x, virtual_y, noc);
     }
 
     FORCE_INLINE

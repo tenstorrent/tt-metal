@@ -13,10 +13,13 @@
  * "noc_address_backend.h" wrapper, which sets the backend-neutral
  * noc_address_backend alias; never include or name this namespace directly.
  *
- * When ATT is enabled it is used for ALL addressing - no mixing. Identities
- * the active map does not bind (QSR1 logical DRAM and dispatch until
- * descriptor-owned rows exist) fail resolution and trip the ASSERT; system
- * memory has no ATT window on any map and is rejected at compile time.
+ * When ATT is enabled it is used for ALL addressing - no mixing. An identity
+ * the active map cannot resolve (an out-of-map coordinate, an unbound bank or
+ * dispatch key, a local address the window cannot carry) traps unconditionally
+ * instead of issuing an operand: ASSERT is a no-op outside checked builds, and
+ * an operand built from a failed resolution reaches SOME tile - on the
+ * emulator that is a silent hang. System memory has no ATT window on any map
+ * and is rejected at compile time.
  */
 
 #include <cstdint>
@@ -27,24 +30,33 @@
 
 namespace noc_address_backend_att {
 
+/// Unwrap a resolution result. ASSERT names the failure under the watcher;
+/// the trap makes it fatal in every build (one instruction on the hot path).
+FORCE_INLINE uint64_t resolved_or_trap(const std::optional<noc_att::NocAddress>& result) {
+    ASSERT(result.has_value());
+    if (!result.has_value()) {
+        __builtin_trap();
+    }
+    return *result;
+}
+
 /// This initiator's resolved map identity, from the my_x/my_y coordinates
 /// firmware latched out of NOC_NODE_ID. Cached after the first lookup: the
 /// inverse endpoint search is linear, and is_local sits on hot paths.
 FORCE_INLINE noc_att::ResolvedTile current_tile(uint8_t noc) {
     // Cached per NOC to mirror the my_x[noc]/my_y[noc] indexing (Quasar has
     // one NOC today; the array costs nothing and keeps the shape honest).
+    // A kernel's copy of this cache may hold what the previous kernel left in
+    // the slot: trust it only when it names this tile's latched coordinates.
     static noc_att::ResolvedTile cached[NUM_NOCS] = {};
-    if (!cached[noc].valid) {
+    if (!cached[noc].valid || cached[noc].noc_x != my_x[noc] || cached[noc].noc_y != my_y[noc]) {
         cached[noc] = noc_att::resolve_current(ACTIVE_ATT_MAP, my_x[noc], my_y[noc]);
     }
     return cached[noc];
 }
 
 FORCE_INLINE uint64_t worker_address(uint32_t x, uint32_t y, uint32_t local_address, uint8_t noc) {
-    const std::optional<noc_att::NocAddress> result =
-        noc_att::Address::worker(x, y, local_address).encode<ACTIVE_ATT_MAP>();
-    ASSERT(result.has_value());
-    return *result;
+    return resolved_or_trap(noc_att::Address::worker(x, y, local_address).encode<ACTIVE_ATT_MAP>());
 }
 
 FORCE_INLINE uint64_t self_address(uint32_t local_address, uint8_t noc) {
@@ -54,19 +66,27 @@ FORCE_INLINE uint64_t self_address(uint32_t local_address, uint8_t noc) {
 }
 
 FORCE_INLINE uint64_t packed_worker_address(uint32_t packed_xy, uint32_t local_address) {
-    // Host-generated bank tables pack (y << NOC_ADDR_NODE_ID_BITS) | x in the
-    // kernel-visible coordinate frame - and they carry BOTH worker (L1 bank)
-    // and DRAM tile coordinates through this one entry point. A packed
-    // coordinate is exactly an endpoint word, so resolve it the way
-    // resolve_current does: the worker table first, then the full-tile table
-    // (which covers the DRAM/perimeter tiles). On the aether map a DRAM tile
-    // resolves to the same remote-window selector Address::dram produces.
+    // Host-generated words (l1_bank_to_noc_xy, go-message and CQ coordinates)
+    // pack (y << NOC_ADDR_NODE_ID_BITS) | x in the descriptor frame; the inverse
+    // tables are in the NOC_NODE_ID frame, so resolve_host_coordinate applies the
+    // map's frame offset first. DRAM banks take the typed bank_address<true>
+    // path instead: a direct selector lookup, no inverse search, no dependence
+    // on the host's dram_bank_to_noc_xy table.
     const uint32_t x = packed_xy & ((1u << NOC_ADDR_NODE_ID_BITS) - 1);
     const uint32_t y = (packed_xy >> NOC_ADDR_NODE_ID_BITS) & ((1u << NOC_ADDR_NODE_ID_BITS) - 1);
-    const noc_att::ResolvedTile tile = noc_att::resolve_current(ACTIVE_ATT_MAP, x, y);
+    const noc_att::ResolvedTile tile = noc_att::resolve_host_coordinate(ACTIVE_ATT_MAP, x, y);
     ASSERT(tile.valid);
+    if (!tile.valid) {
+        // WindowClass::Invalid is one past the window array: never index it.
+        __builtin_trap();
+    }
     const noc_att::Window& window = noc_att::map_window(ACTIVE_ATT_MAP, tile.window);
     ASSERT(window.transfer_supported(local_address));
+    if (!window.transfer_supported(local_address)) {
+        // A local address past the window's slot would carry into the
+        // selector field and reach a different tile.
+        __builtin_trap();
+    }
     return window.make_address(tile.selector, local_address);
 }
 
@@ -81,31 +101,32 @@ FORCE_INLINE uint64_t multicast_descriptor(
 template <bool DRAM>
 FORCE_INLINE uint64_t bank_address(uint32_t bank_index, uint32_t local_address, uint8_t noc) {
     if constexpr (DRAM) {
-        const std::optional<noc_att::NocAddress> result =
-            noc_att::Address::dram(bank_index, local_address).encode<ACTIVE_ATT_MAP>();
-        ASSERT(result.has_value());
-        return *result;
+        // Typed: logical bank -> the map's DRAM selector. The host's
+        // dram_bank_to_noc_xy words are never consulted under ATT.
+        return resolved_or_trap(noc_att::Address::dram(bank_index, local_address).encode<ACTIVE_ATT_MAP>());
     } else {
         return packed_worker_address(l1_bank_to_noc_xy[noc][bank_index], local_address);
     }
 }
 
 FORCE_INLINE uint32_t extract_local_address(uint64_t address) {
-    const std::optional<noc_att::NocAddress> result = noc_att::extract_local_address<ACTIVE_ATT_MAP>(address);
-    ASSERT(result.has_value());
-    return static_cast<uint32_t>(*result);
+    return static_cast<uint32_t>(resolved_or_trap(noc_att::extract_local_address<ACTIVE_ATT_MAP>(address)));
 }
 
 FORCE_INLINE bool is_local(uint64_t address, uint8_t noc) {
     return noc_att::is_self_address<ACTIVE_ATT_MAP>(address, current_tile(noc));
 }
 
+/// Whether a kernel-visible (host frame) coordinate names this initiator: the
+/// map's frame offset is applied before comparing with the my_x/my_y firmware
+/// latched out of NOC_NODE_ID.
+FORCE_INLINE bool is_local_coordinate(uint32_t x, uint32_t y, uint8_t noc) {
+    return noc_att::host_coordinate_is_current(ACTIVE_ATT_MAP, x, y, my_x[noc], my_y[noc]);
+}
+
 // Dispatch go-message coordinates arrive as the raw uint8_t fields of go_msg_t.
 FORCE_INLINE uint64_t dispatch_address(uint8_t x, uint8_t y, uint32_t local_address) {
-    const std::optional<noc_att::NocAddress> result =
-        noc_att::Address::dispatch(x, y, local_address).encode<ACTIVE_ATT_MAP>();
-    ASSERT(result.has_value());
-    return *result;
+    return resolved_or_trap(noc_att::Address::dispatch(x, y, local_address).encode<ACTIVE_ATT_MAP>());
 }
 
 // No ATT map binds a system-memory (PCIe) window; the shared

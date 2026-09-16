@@ -66,6 +66,14 @@ FORCE_INLINE bool is_local(uint64_t address, uint8_t noc) {
     return x == my_x[noc] && y == my_y[noc];
 }
 
+// Whether a kernel-visible coordinate names this core. On XY backends the
+// kernel frame IS the NOC_NODE_ID frame, so this is the plain compare the call
+// sites used to spell inline (kept expression-identical: object code must not
+// change on Wormhole/Blackhole).
+FORCE_INLINE bool is_local_coordinate(uint32_t x, uint32_t y, uint8_t noc) {
+    return x == my_x[noc] && y == my_y[noc];
+}
+
 // Dispatch go-message coordinates arrive as the raw uint8_t fields of go_msg_t.
 FORCE_INLINE uint64_t dispatch_address(uint8_t x, uint8_t y, uint32_t local_address) {
     return NOC_XY_ADDR(NOC_X(x), NOC_Y(y), local_address);
