@@ -4,13 +4,11 @@
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 
 import pytest
 
-CONFIG_PATH = Path(__file__).parents[3] / "ttnn" / "ttnn" / "trace_allocation_config.py"
 ENV_NAMES = (
     "TT_METAL_TRACE_ALLOC_TRACKING",
     "TT_METAL_TRACE_ALLOC_TRACEBACKS",
@@ -18,24 +16,30 @@ ENV_NAMES = (
     "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE",
 )
 
+READ_CONFIG_SCRIPT = """
+import json
+from ttnn.tools.trace_allocation_tracker import (
+    TRACE_ALLOC_DIAGNOSTICS,
+    TRACE_ALLOC_REFERRER_DEPTH,
+    TRACE_ALLOC_TRACKING,
+)
+print(json.dumps({
+    'tracking': TRACE_ALLOC_TRACKING,
+    'diagnostics': TRACE_ALLOC_DIAGNOSTICS,
+    'depth': TRACE_ALLOC_REFERRER_DEPTH,
+}))
+"""
+
 
 def read_config(env_overrides):
     env = os.environ.copy()
     for name in ENV_NAMES:
         env.pop(name, None)
     env.update(env_overrides)
-    script = f"""
-import json
-import runpy
-config = runpy.run_path({str(CONFIG_PATH)!r})
-print(json.dumps({{
-    'tracking': config['TRACE_ALLOC_TRACKING'],
-    'diagnostics': config['TRACE_ALLOC_DIAGNOSTICS'],
-    'depth': config['TRACE_ALLOC_REFERRER_DEPTH'],
-}}))
-"""
-    result = subprocess.run([sys.executable, "-c", script], env=env, text=True, capture_output=True, check=True)
-    return json.loads(result.stdout)
+    result = subprocess.run(
+        [sys.executable, "-c", READ_CONFIG_SCRIPT], env=env, text=True, capture_output=True, check=True
+    )
+    return json.loads(result.stdout.splitlines()[-1])
 
 
 @pytest.mark.parametrize(
@@ -64,7 +68,7 @@ print(json.dumps({{
         ),
     ],
 )
-def test_trace_allocation_config_is_captured_at_startup(env, expected):
+def test_trace_allocation_tracker_config_is_captured_at_startup(env, expected):
     assert read_config(env) == expected
 
 
