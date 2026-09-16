@@ -29,7 +29,48 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
-### ROOT CAUSE FOUND: crossing the ANCHOR permanently kills the drafter
+### FIXED: the capture is only valid at chunk_start=0, and the loop replayed it everywhere
+
+The anchor cliff below is real, but re-anchoring was never the culprit. The TRACE was.
+`tests/unit/test_verify_traced_at_offset.py` compares replay against eager at two offsets:
+
+    chunk_start=0     logits pcc 1.0     argmax agree 1.0000   taps 1.0   / 1.0   / 1.0
+    chunk_start=128   logits pcc 0.843   argmax agree 0.0625   taps 0.979 / 0.938 / 0.880
+
+**One row in sixteen has the right argmax at the anchor.** `capture_verify_trace` hardcodes
+`chunk_start=0`, and its docstring's guarantee -- "ONE capture serves every valid_len below the
+bucket" -- is about valid_len. Nobody ever checked chunk_start, and it does not hold. `TtTarget`
+re-anchors every 128 tokens, so every verify after the first bucket replayed a trace that was not
+valid for it.
+
+That explains the whole picture at once. With acceptance 0 the only logit row reaching the output is
+row 0, which happens to survive -- so the text stays fluent English while rows 1..15 are wrong, so
+EVERY draft is rejected, and the taps are degraded exactly as `take_taps` warns ("reads as a
+plausible-looking tap ... and drafts pure garbage").
+
+THE FIX (`targets.py::_run`): use the trace only at `lo == 0`, eager elsewhere. Measured:
+
+    gen200 arm                 time     tok/s   acceptance after the anchor   non-ascii
+    traced (broken)           97.47 s    2.05            1.118                 37/728
+    fully eager               57.57 s    3.47            4.471                  0/810
+    trace restricted to 0     41.36 s    4.84            4.471                  0/810
+
+Strictly better than both: it keeps the trace where it is valid and drops it only where it is not.
+
+    demo spec_128   acceptance 1.138 -> 4.950, 87 steps -> 20, 3.86 -> 6.19 tok/s, 0.22x -> 0.35x
+
+`test_dflash_traced_throughput.py` is unchanged (7.000 / 22.17 tok/s): it never crosses an anchor,
+so it keeps the trace throughout.
+
+STILL TO DO, and it is now a well-defined task rather than a mystery: the demo runs eager past the
+first bucket, so its steps cost ~800 ms instead of ~300 ms and it is still only 0.35x production.
+Find what the capture bakes that depends on chunk_start and stage it. The staged path's only
+remaining Python-int use is `chunk_start_idx=chunk_start`, passed to `layer.forward` alongside the
+staged `chunk_start_idx_tensor` in `_forward_prefill_chunk_masked_tp`. Ruled out already:
+`needed_blocks` (tt/attention/tp.py) does not truncate, because `target_blocks` takes the max
+against the full page-table width.
+
+### The anchor cliff, as originally diagnosed (cause now known to be the trace)
 
 Everything else in §0 is downstream of this. `tests/reference/test_dflash_anchor_crossing.py` holds
 the prompt constant (the same five tokens) and varies only `max_new_tokens`, so the single

@@ -437,7 +437,30 @@ class TtTarget:
         # length == ANCHOR is a WHOLE bucket (prompt prefill), and gdn/tp.py::_normalize_valid_len
         # turns valid_len >= T into None -- masking skipped, different programs than the capture.
         # The trace serves partial buckets only; a full one falls back to eager.
-        if getattr(self, "_traced_verify", False) and length < self.ANCHOR:
+        # THE TRACE IS ONLY VALID AT THE chunk_start IT WAS CAPTURED AT, which is 0
+        # (capture_verify_trace hardcodes it). Measured in tests/unit/test_verify_traced_at_offset.py:
+        #
+        #     chunk_start=0     logits pcc 1.0     argmax agree 1.0000   taps 1.0 / 1.0 / 1.0
+        #     chunk_start=128   logits pcc 0.843   argmax agree 0.0625   taps 0.979 / 0.938 / 0.880
+        #
+        # One capture serves every valid_len below the bucket -- that property is real and tested --
+        # but NOT every chunk_start, which nothing ever checked. Replaying at the anchor gets 1 row
+        # in 16 right. With acceptance 0 the only row that reaches the output is row 0, which happens
+        # to survive, so the text still reads as fluent English while every draft is rejected and the
+        # taps are degraded enough to poison the drafter for the rest of the generation. That is the
+        # entire acceptance cliff at the anchor (tests/reference/test_dflash_anchor_crossing.py:
+        # traced 4.241 -> 1.118 across the boundary, eager 4.241 -> 4.471).
+        #
+        # Falling back to eager past the first bucket is a strict WIN, not a compromise: the eager
+        # step is slower but keeps acceptance, and acceptance dominates. Measured end to end on the
+        # 200-token arm, 2.05 tok/s traced against 3.47 tok/s eager.
+        #
+        # TODO: this gives up the trace for everything past the first ANCHOR tokens. The real fix is
+        # to find what the capture bakes that depends on chunk_start -- the staged path's only
+        # remaining int use is `chunk_start_idx=chunk_start` passed alongside the staged
+        # `chunk_start_idx_tensor` (tt/model.py, the layer.forward call in
+        # _forward_prefill_chunk_masked_tp) -- and stage it, so one capture serves every offset.
+        if getattr(self, "_traced_verify", False) and length < self.ANCHOR and lo == 0:
             # Trace replay instead of ~N eager dispatches. Same all-row logits, verified
             # bit-identical to the eager entry point in
             # tests/reference/test_dflash_target_trace_replay.py. One capture serves every

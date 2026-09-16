@@ -126,7 +126,12 @@ def test_acceptance_across_the_anchor(mesh_device, device_params, max_new_tokens
     # One eager generation, at THIS arm's budget, so every shape the measured run needs is compiled
     # before the trace is parked -- otherwise the first novel width hangs the process.
     dflash_generate(drafter, target, prompt, max_new_tokens=max_new_tokens)
-    target.enable_traced_verify()
+    # DFLASH_NO_TRACE=1 leaves the verify EAGER. Every post-crossing verify runs at
+    # chunk_start=ANCHOR while the trace was captured at chunk_start=0, so this separates "the
+    # replay is wrong at a non-zero chunk_start" from "re-anchoring is wrong however it is run".
+    traced = os.environ.get("DFLASH_NO_TRACE") != "1"
+    if traced:
+        target.enable_traced_verify()
 
     t0 = time.perf_counter()
     stats = dflash_generate(drafter, target, prompt, max_new_tokens=max_new_tokens, return_stats=True)
@@ -147,6 +152,7 @@ def test_acceptance_across_the_anchor(mesh_device, device_params, max_new_tokens
     logger.info(
         f">>>>> gen{max_new_tokens}: {n} tok in {dt:.2f}s = {n / dt:5.2f} tok/s, "
         f"acceptance {stats.mean_acceptance_length:.3f} over {len(rows)} steps, "
+        f"{'traced' if traced else 'EAGER'}, "
         f"{'CROSSES at step ' + str(crossed_at) if crossed_at is not None else 'no crossing'}"
     )
     logger.info("      step  start  accepted")
