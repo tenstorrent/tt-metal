@@ -150,19 +150,9 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
-    // Compile-only never dispatched, so device data is uninitialized: skip the read. Warn once,
-    // since an op that needs read-back values (data-dependent shape/arg) will compile wrong kernels.
-    if (MetalContext::instance().rtoptions().get_compile_only()) {
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            log_warning(
-                LogMetal,
-                "Compile-only mode: skipping device tensor read. Any op that depends on read-back "
-                "values for a data-dependent shape/argument will compile incorrect kernels.");
-        }
-        return;
-    }
+    TT_FATAL(
+        !MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions().get_compile_only(),
+        "Compile-only mode does not support reading device tensor data because dispatched results are unavailable.");
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
