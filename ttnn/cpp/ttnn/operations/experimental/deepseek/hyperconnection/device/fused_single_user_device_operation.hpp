@@ -34,9 +34,11 @@ struct FusedSingleUserDeviceOperation {
 
 namespace ttnn::prim {
 
-// Single-user decode implementation. The first eight cores consume width shards of
-// hidden_streams and produce collapsed, core 8 computes post, and core 9 computes comb
-// plus Sinkhorn. fused_w is broadcast from core 0 to all ten participating cores.
+// Single-user decode implementation. Collapse cores are hidden_streams' WIDTH_SHARDED
+// grid (historically eight cores on the first row; decode residuals use 64). Two extra
+// cores compute post and comb plus Sinkhorn. fused_w is broadcast from core 0.
+// ROW_MAJOR fused_w is a 1x32 row (no tilize). ROW_MAJOR hidden_streams is packed into
+// 4x32 compute tiles (H<=4).
 std::array<Tensor, 3> fused_hyperconnection_single_user(
     const Tensor& fused_w,
     const Tensor& pre_bias,

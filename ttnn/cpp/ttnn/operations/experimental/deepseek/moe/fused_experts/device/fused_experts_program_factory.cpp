@@ -172,12 +172,14 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
 
     // Token-row tile shape. Every CB whose tiles hold "one tile row of B tokens" -- cb_input,
     // cb_out, cb_mm, cb_act, cb_rscalar, cb_down_out, cb_acc, cb_wtmp -- and the DRAM output
-    // tensor use this tile. Weights (gate_up, down) and routing (indices/scores/bcast) stay at
-    // 32x32: they don't carry per-token rows and their kernel-side layout math is bound to
-    // 16x16 faces. Width must be 32 (kernels index tile columns as 32-wide); height can be any
-    // supported tiny value (1, 2, 4, 8, 16, 32). Bfp8_b at tiny heights is now valid tt-llk
-    // support, so cb_act / cb_out keep the Bfp8_b format their L1 budget was sized for.
-    const auto& input_tile = input_tensor.tensor_spec().tile();
+    // tensor use this tile. Weights (gate_up, down) and routing ids stay at 32x32: they don't
+    // carry per-token rows and their kernel-side layout math is bound to 16x16 faces. Scores may
+    // be TILE 32x32 or a ROW_MAJOR decode stick (indexed linearly). Width must be 32 (kernels
+    // index tile columns as 32-wide); height can be any supported tiny value (1, 2, 4, 8, 16,
+    // 32). ROW_MAJOR decode (B==1) is forced to 1x32 so the RM stick is loaded as packed 1x16
+    // faces without a tilize. Bfp8_b at tiny heights is now valid tt-llk support, so cb_act /
+    // cb_out keep the Bfp8_b format their L1 budget was sized for.
+    const auto input_tile = fused_experts_compute_tile(input_tensor);
     const uint32_t input_tile_h = input_tile.get_height();
     const uint32_t input_tile_hw = input_tile.get_tile_hw();
     // Tiny-tile face layout: face_r_dim = min(tile_h, 16), num_face_rows = 1 for tile_h <= 16
@@ -239,9 +241,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // DRAM page it comes from.
     const uint32_t routing_page_bytes = static_cast<uint32_t>(routing_buffer->page_size());
     const uint32_t routing_row_stride = static_cast<uint32_t>(routing_buffer->aligned_page_size());
-    // The score row lives in its own tile row of E/32 pages, read whole and then indexed in L1 (the
-    // kernel needs at most top_k scattered elements per token, but reading tiles keeps every NoC
-    // transfer page-aligned).
+    // The score row lives in its own pages (TILE: E/32 tiles of the padded tile-row; ROW_MAJOR
+    // decode: one stick of E bf16), read whole and then indexed in L1 (the kernel needs at most
+    // top_k scattered elements per token, but reading pages keeps every NoC transfer page-aligned).
     const uint32_t score_page_bytes = static_cast<uint32_t>(score_buffer->page_size());
     const uint32_t score_page_stride = static_cast<uint32_t>(score_buffer->aligned_page_size());
     const uint32_t score_pages = static_cast<uint32_t>(score_buffer->num_pages());
@@ -255,14 +257,30 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // bit patterns, hit-major then token row), broadcast to every core in one multicast.
     const uint32_t bcast_page_bytes = (num_weights + num_active * batch) * out_elem_bytes;
 
-    // Activation is TILE layout [1,1,B,H] with B <= 32 -> Kt == k_tiles tiles (one tile-row).
-    const uint32_t input_page_size = static_cast<uint32_t>(input_buffer->page_size());
-    const uint32_t input_num_pages = static_cast<uint32_t>(input_buffer->num_pages());
+    // Activation tiles: one 32-wide compute tile per K-slice. TILE tensors already page that
+    // way (page == tile). ROW_MAJOR decode is a stick of H bf16; each 32-wide chunk is a 1x32
+    // tile, so a source page may hold several compute tiles (the full stick, or a width shard).
+    const uint32_t input_df_tile_bytes = input_tile.get_tile_size(input_df);
+    const uint32_t src_page_bytes = static_cast<uint32_t>(input_buffer->page_size());
+    TT_FATAL(
+        src_page_bytes >= input_df_tile_bytes && src_page_bytes % input_df_tile_bytes == 0,
+        "fused_experts: input page size {} must be a multiple of the {}-byte compute tile",
+        src_page_bytes,
+        input_df_tile_bytes);
+    const uint32_t src_tiles_per_page = src_page_bytes / input_df_tile_bytes;
+    const uint32_t input_page_size = input_df_tile_bytes;
+    const uint32_t input_num_pages = k_tiles;
 
-    // Output is TILE [1, B, H] bf16 (the per-token routing-weighted sum of every active expert's
-    // down matmul): each core writes its 2 output tiles (its 64-column H slice) of the single tile
-    // row, which covers all B tokens.
-    const uint32_t out_tile_bytes = static_cast<uint32_t>(out_buffer->page_size());
+    // Output compute tiles match the input tile. TILE DRAM pages are one tile; ROW_MAJOR pages
+    // may pack several 1x32 faces (a shard stick or the full H row).
+    const uint32_t out_tile_bytes = input_tile.get_tile_size(out_df);
+    const uint32_t dst_page_bytes = static_cast<uint32_t>(out_buffer->page_size());
+    TT_FATAL(
+        dst_page_bytes >= out_tile_bytes && dst_page_bytes % out_tile_bytes == 0,
+        "fused_experts: output page size {} must be a multiple of the {}-byte compute tile",
+        dst_page_bytes,
+        out_tile_bytes);
+    const uint32_t dst_tiles_per_page = dst_page_bytes / out_tile_bytes;
 
     // The gathered activation is stored as Bfp8_b (not bf16) to keep the resident
     // [num_active, I] block -- the dominant L1 consumer -- within the L1 budget. The SwiGLU
@@ -769,6 +787,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         sem_reduce_id,
         cb_reduce,
+        tensor_args.routing_scores.layout() == Layout::ROW_MAJOR ? 1u : 0u,
     };
     TensorAccessorArgs(*routing_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*score_buffer).append_to(sender_ct_args);
@@ -843,6 +862,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         sem_reduce_id,
         cb_reduce,
+        src_tiles_per_page,
     };
     TensorAccessorArgs(*input_buffer).append_to(input_ct_args);
     TensorAccessorArgs(*gate_up0_buffer).append_to(input_ct_args);
@@ -1008,6 +1028,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_expert_groups,
         cb_reduce,
         sem_reduce_id,
+        dst_tiles_per_page,
     };
     TensorAccessorArgs(*out_buffer).append_to(writer_ct_args);
 

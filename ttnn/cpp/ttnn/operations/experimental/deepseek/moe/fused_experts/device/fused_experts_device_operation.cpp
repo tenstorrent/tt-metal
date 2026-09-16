@@ -23,9 +23,16 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
     const auto& x = tensor_args.input_tensor;
 
     TT_FATAL(x.storage_type() == StorageType::DEVICE, "fused_experts: input_tensor must be on device");
-    // The matmul consumes the activation as tiles, so the input must be TILE layout ([1,1,1,H] -> Kt tiles).
     TT_FATAL(
-        x.layout() == tt::tt_metal::Layout::TILE, "fused_experts: input_tensor must be TILE layout for the matmul");
+        x.layout() == tt::tt_metal::Layout::TILE || x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "fused_experts: input_tensor must be TILE or ROW_MAJOR, got {}",
+        x.layout());
+    if (x.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        TT_FATAL(
+            static_cast<uint32_t>(x.logical_shape()[-2]) == 1,
+            "fused_experts: ROW_MAJOR input is the decode 1x32 path and requires a single token row, got height {}",
+            x.logical_shape()[-2]);
+    }
 
     const uint32_t batch = static_cast<uint32_t>(x.logical_shape()[-2]);
     const uint32_t num_weights_arg = static_cast<uint32_t>(tensor_args.gate_up_weights.size());
@@ -36,12 +43,23 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(idx.storage_type() == StorageType::DEVICE, "fused_experts: routing_indices must be on device");
         TT_FATAL(scores.storage_type() == StorageType::DEVICE, "fused_experts: routing_scores must be on device");
 
-        // Both are consumed in their native tile layout -- the kernel walks 16x16 faces to reach a
-        // token's row -- which is what lets the router's topk output be passed through untouched.
+        // Ids stay TILE: topk / embedding emit them that way and the kernel walks 16x16 faces to
+        // reach a token's row. Scores may be TILE (prefill) or ROW_MAJOR decode (B == 1), where
+        // LinearDecode's stick is a linear [1, E] row and is indexed as e*2 rather than tilized.
         TT_FATAL(
             idx.layout() == tt::tt_metal::Layout::TILE,
             "fused_experts: routing_indices must be TILE layout (the topk index output, unmodified)");
-        TT_FATAL(scores.layout() == tt::tt_metal::Layout::TILE, "fused_experts: routing_scores must be TILE layout");
+        TT_FATAL(
+            scores.layout() == tt::tt_metal::Layout::TILE || scores.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "fused_experts: routing_scores must be TILE or ROW_MAJOR, got {}",
+            scores.layout());
+        if (scores.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+            TT_FATAL(
+                batch == 1,
+                "fused_experts: ROW_MAJOR routing_scores is the decode path and requires a single token row, got "
+                "height {}",
+                scores.logical_shape()[-2]);
+        }
         // UINT16 is what ttnn.topk emits. BFLOAT16 is accepted because ttnn.embedding only
         // gathers from a bfloat16 table, and that is how a table-driven router (the hash
         // router's frozen tid2eid) hands over its ids; every expert id below 256 is exactly
@@ -60,13 +78,14 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             scores.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "fused_experts: routing_scores must be BFLOAT16, got {}",
             scores.dtype());
-        // Unlike x_tok, the routing tensors are NOT sized to the input's tile: the leader kernel
+        // Unlike x_tok, routing ids are NOT sized to the input's tile: the leader kernel
         // (compute_expert_ids.cpp) reads them byte-wise via a hand-rolled tile_elem_offset that
         // bakes in face_r_dim == 16 and the (16x16 face, 4 faces per tile) 32x32 layout. A tiny
-        // routing tile would compute wrong byte offsets and read garbage silently, so require
+        // routing-id tile would compute wrong byte offsets and read garbage silently, so require
         // 32x32 explicitly. (Regenerating them at 32x32 costs nothing -- the tile carries at most
         // B*top_k <= 32*16 elements either way, and cb_routing is dominated by the O(E) selection
-        // scratch, not the routing tile itself.)
+        // scratch, not the routing tile itself.) TILE scores use the same 32x32 face walk;
+        // ROW_MAJOR decode scores are a linear stick and skip this check.
         TT_FATAL(
             idx.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
                 idx.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
@@ -76,15 +95,17 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             tt::constants::TILE_WIDTH,
             idx.tensor_spec().tile().get_height(),
             idx.tensor_spec().tile().get_width());
-        TT_FATAL(
-            scores.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
-                scores.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
-            "fused_experts: routing_scores must use the standard {}x{} tile (leader reads them "
-            "with a 16x16-face-baked offset function); got {}x{}",
-            tt::constants::TILE_HEIGHT,
-            tt::constants::TILE_WIDTH,
-            scores.tensor_spec().tile().get_height(),
-            scores.tensor_spec().tile().get_width());
+        if (scores.layout() == tt::tt_metal::Layout::TILE) {
+            TT_FATAL(
+                scores.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                    scores.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+                "fused_experts: TILE routing_scores must use the standard {}x{} tile (leader reads them "
+                "with a 16x16-face-baked offset function); got {}x{}",
+                tt::constants::TILE_HEIGHT,
+                tt::constants::TILE_WIDTH,
+                scores.tensor_spec().tile().get_height(),
+                scores.tensor_spec().tile().get_width());
+        }
         // Pages are read by page id, so both must be interleaved rather than sharded.
         TT_FATAL(
             !idx.memory_config().is_sharded() && !scores.memory_config().is_sharded(),
@@ -253,7 +274,7 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
     // single-token case; tokens spread over separate tile rows (e.g. an unfolded [1, B, 1, H]) would
     // multiply both the resident activation (k_tiles tiles) and the gathered activation block
     // (num_experts * i_tiles tiles, already the dominant L1 consumer) by B.
-    const auto& input_tile = x.tensor_spec().tile();
+    const auto input_tile = fused_experts_compute_tile(x);
     const uint32_t input_tile_h = input_tile.get_height();
     const uint32_t input_tile_w = input_tile.get_width();
     TT_FATAL(
@@ -335,8 +356,9 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
     // Input tile height is baked into every token-row-shaped CB's tile descriptor and into the
     // routing-scalar layout CT args, so tiny-tile programs must not alias a 32x32 program in the
     // cache. Fold the input tile's H and W explicitly (the default spec-only hash keys on tensor
-    // spec, but not on the tile shape field within it).
-    const auto& input_tile = tensor_args.input_tensor.tensor_spec().tile();
+    // spec, but not on the tile shape field within it). ROW_MAJOR scores switch the leader's
+    // score addressing (linear stick vs 32x32 faces), which is already in the scores tensor spec.
+    const auto input_tile = fused_experts_compute_tile(tensor_args.input_tensor);
     auto hash = tt::tt_metal::operation::hash_operation<FusedExpertsDeviceOperation>(
         attributes.num_experts,
         attributes.intermediate_size,
@@ -352,7 +374,8 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         tensor_args.down_weights.front(),
         weight_addresses,
         input_tile.get_height(),
-        input_tile.get_width());
+        input_tile.get_width(),
+        tensor_args.routing_scores.layout() == tt::tt_metal::Layout::ROW_MAJOR);
     return hash;
 }
 

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -14,6 +16,15 @@ struct MixStreamsParams {
     uint32_t num_streams;  // hc; the valid hc x hc region of the comb tile.
     MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Untilize dest and emit ROW_MAJOR. Set when streams or sublayer_out is ROW_MAJOR
+    // (decode: sublayer_out is RM while the residual streams are still TILE).
+    bool untilize_out = false;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("num_streams", "output_mem_config", "compute_kernel_config", "untilize_out");
+    auto attribute_values() const {
+        return std::forward_as_tuple(num_streams, output_mem_config, compute_kernel_config, untilize_out);
+    }
 };
 
 struct MixStreamsInputs {

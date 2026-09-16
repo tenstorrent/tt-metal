@@ -39,8 +39,11 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 // The RMSNorm + fn matmul that produces `fused_w` is NOT part of this op.
 //
 // Args:
-//   hidden_streams: residual-stream stack, [B, S, H, D].
+//   hidden_streams: residual-stream stack, [B, S, H, D]. TILE, or ROW_MAJOR for
+//            single-token decode (WIDTH_SHARDED; packed into 4x32 compute tiles, H<=4).
 //   fused_w: packed pre/post/comb projection output, [1, 1, T, (2+H)*H]  (T == B*S).
+//            TILE, or ROW_MAJOR for single-token decode (a dense 1x32 row, consumed as a
+//            1x32 compute tile without tilizing).
 //   pre_bias / post_bias: bias rows [1,1,1,H].
 //   comb_bias: bias row [1,1,1,H*H] (reshaped to [1,1,H,H] inside the Sinkhorn op).
 //   num_streams: number of parallel streams H (config.hc_mult).

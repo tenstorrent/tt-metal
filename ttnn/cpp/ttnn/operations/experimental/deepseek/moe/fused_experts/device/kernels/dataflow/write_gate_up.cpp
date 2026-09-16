@@ -42,7 +42,9 @@
 //   13: num_expert_groups (1 = 64-core path, 6 = 96-core path)
 //   14: cb_reduce
 //   15: sem_reduce
-//   16+: TensorAccessorArgs(output)
+//   16: dst_tiles_per_page (compute tiles packed into one output TensorAccessor page;
+//       TILE == 1, ROW_MAJOR stick/shard may hold several 1x32 faces)
+//   17+: TensorAccessorArgs(output)
 //
 // Runtime args:
 //   0: output base address
@@ -66,8 +68,9 @@ void kernel_main() {
     constexpr uint32_t num_expert_groups = get_compile_time_arg_val(13);
     constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(14);
     constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(15);
+    constexpr uint32_t dst_tiles_per_page = get_compile_time_arg_val(16);
 
-    constexpr auto out_args = TensorAccessorArgs<16>();
+    constexpr auto out_args = TensorAccessorArgs<17>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_index = get_arg_val<uint32_t>(1);
@@ -125,12 +128,14 @@ void kernel_main() {
         cb_down_out.wait_front(kLocalTiles);
         if (expert_group == 0) {
             for (uint32_t t = 0; t < kLocalTiles; ++t) {
+                const uint32_t global_tile = out_col_start + t;
                 noc.async_write(
                     cb_down_out,
                     out,
                     out_tile_bytes,
                     {.offset_bytes = t * out_tile_bytes},
-                    {.page_id = out_col_start + t});
+                    {.page_id = global_tile / dst_tiles_per_page,
+                     .offset_bytes = (global_tile % dst_tiles_per_page) * out_tile_bytes});
             }
             noc.async_write_barrier();
         } else {
@@ -173,8 +178,14 @@ void kernel_main() {
         // cb_down_out, so the writer drains it once into output pages idx*2 + {0, 1}.
         cb_down_out.wait_front(kOutTiles);
         for (uint32_t t = 0; t < kOutTiles; ++t) {
-            const uint32_t page = out_col_start + t;
-            noc.async_write(cb_down_out, out, out_tile_bytes, {.offset_bytes = t * out_tile_bytes}, {.page_id = page});
+            const uint32_t global_tile = out_col_start + t;
+            noc.async_write(
+                cb_down_out,
+                out,
+                out_tile_bytes,
+                {.offset_bytes = t * out_tile_bytes},
+                {.page_id = global_tile / dst_tiles_per_page,
+                 .offset_bytes = (global_tile % dst_tiles_per_page) * out_tile_bytes});
         }
         noc.async_write_barrier();
         cb_down_out.pop_front(kOutTiles);

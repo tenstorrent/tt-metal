@@ -34,9 +34,9 @@ std::tuple<Tensor, Tensor, Tensor> fused_hyperconnection(
     const uint32_t num_tokens = b * s;
 
     if (num_tokens == 1) {
-        // Single-user decode has a dedicated multi-core program: cores 0..7
-        // compute the width-sharded collapse, core 8 computes post, and core 9
-        // computes comb plus Sinkhorn.
+        // Single-user decode has a dedicated multi-core program: hidden's
+        // WIDTH_SHARDED grid computes the collapse; two extra cores compute post
+        // and comb plus Sinkhorn.
         Tensor comb_bias_mat = ttnn::reshape(comb_bias, ttnn::Shape({1, 1, hc, hc}));
         auto [post, comb, collapsed] = ttnn::prim::fused_hyperconnection_single_user(
             fused_w,

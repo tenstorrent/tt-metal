@@ -23,8 +23,13 @@ namespace ttnn::experimental::deepseek::mix_streams {
 //     new_streams = placement + mixed   reshaped back to [B, S, hc, D]
 //
 // where ``T == B*S``. This runs as a single device op (``ttnn::prim::mix_streams``):
-// post / comb / streams stay TILE 32x32; sublayer_out is ROW_MAJOR and is packed as
-// 1x32 faces into the placement matmul. Output is TILE, matching ``streams``.
+// post / comb stay TILE 32x32; sublayer_out is ROW_MAJOR and is packed as
+// 1x32 faces into the placement matmul. streams may be TILE 32x32 or ROW_MAJOR.
+// TILE streams produce TILE output unless sublayer_out is ROW_MAJOR, in which case
+// dest is untilized and the valid hc rows are written as ROW_MAJOR (decode: attention
+// and MoE emit RM while the residual is still TILE). ROW_MAJOR streams stay RM.
+// When D is divisible by 64 with a tile-aligned shard width (decode D=4096), the
+// default output is WIDTH_SHARDED L1 on 64 cores.
 //
 // The composite fallback below is kept for the shapes the kernel does not cover
 // (hc > 32, D not tile-aligned, non-bfloat16 inputs). In that path, when ``streams``
@@ -42,11 +47,13 @@ namespace ttnn::experimental::deepseek::mix_streams {
 //                 (consumed transposed -- mixed over the FIRST hc axis).
 //   sublayer_out: sublayer output for the current token, [B, S, 1, D].
 //   streams:      residual-stream stack, [B, S, hc, D].
-//   memory_config: optional output memory config (defaults to ``streams``'s).
+//   memory_config: optional output memory config (defaults to WIDTH_SHARDED L1 on
+//                 64 cores when D allows; otherwise ``streams``'s config).
 //   compute_kernel_config: optional matmul compute-kernel config (defaults to
 //                 HiFi4 / fp32 dest acc / packer-l1-acc, matching ``_HIFI4``).
 //
-// Returns: new residual-stream stack, [B, S, hc, D], TILE (same layout as ``streams``).
+// Returns: new residual-stream stack, [B, S, hc, D]. ROW_MAJOR when ``sublayer_out``
+// or ``streams`` is ROW_MAJOR, otherwise TILE. WIDTH_SHARDED on 64 cores when D allows.
 Tensor mix_streams(
     const Tensor& post,
     const Tensor& comb,

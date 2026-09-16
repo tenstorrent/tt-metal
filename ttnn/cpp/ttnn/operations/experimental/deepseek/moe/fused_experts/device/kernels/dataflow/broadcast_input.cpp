@@ -28,7 +28,7 @@
 //
 // Compile-time args:
 //   0: cb_input         (activation tiles; broadcast to all cores)
-//   1: input_page_size  (bytes per tile of input_tensor)
+//   1: input_page_size  (bytes per compute tile of input_tensor)
 //   2: input_num_pages  (Kt == H / 32)
 //   3: sem_input_id     (input-ready semaphore)
 //   4: sem_id           (expert-ids-ready / sequencing semaphore)
@@ -53,7 +53,11 @@
 //   23: experts_block (experts per block; the activation block held in L1 at once)
 //   24: gate_up_reserve_tiles (pages a gate_up slice reserves in cb_weights)
 //   25: down_reserve_tiles    (pages a down slice reserves in cb_weights)
-//   26+: TensorAccessorArgs(input_tensor), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   26-29: routing-scalar tile geometry
+//   30-35: cores_per_expert / shards / expert groups / reduce
+//   36: src_tiles_per_page (compute tiles packed into one TensorAccessor page;
+//       TILE == 1, ROW_MAJOR stick/shard may hold several 1x32 faces)
+//   37+: TensorAccessorArgs(input_tensor), TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
@@ -101,8 +105,9 @@ void kernel_main() {
     constexpr uint32_t num_expert_groups = get_compile_time_arg_val(33);
     constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(34);
     constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(35);
+    constexpr uint32_t src_tiles_per_page = get_compile_time_arg_val(36);
 
-    constexpr auto input_args = TensorAccessorArgs<36>();
+    constexpr auto input_args = TensorAccessorArgs<37>();
     constexpr auto gate_up_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
@@ -130,7 +135,14 @@ void kernel_main() {
     cb_input.reserve_back(input_num_pages);
     const uint32_t input_l1 = cb_input.get_write_ptr();
     for (uint32_t p = 0; p < input_num_pages; ++p) {
-        noc.async_read(input, cb_input, input_page_size, {.page_id = p}, {.offset_bytes = p * input_page_size});
+        const uint32_t src_page = p / src_tiles_per_page;
+        const uint32_t src_off = (p % src_tiles_per_page) * input_page_size;
+        noc.async_read(
+            input,
+            cb_input,
+            input_page_size,
+            {.page_id = src_page, .offset_bytes = src_off},
+            {.offset_bytes = p * input_page_size});
     }
     noc.async_read_barrier();
 

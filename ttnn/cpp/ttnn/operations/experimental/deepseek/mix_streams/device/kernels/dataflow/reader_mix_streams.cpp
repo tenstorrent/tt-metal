@@ -20,9 +20,10 @@ FORCE_INLINE uint32_t tile_face_index(uint32_t r, uint32_t c) {
 
 }  // namespace
 
-// TILE post / comb / streams (32x32 pages). ROW_MAJOR sublayer_out is read as 1x32
-// faces (32 bf16 cols) and scattered into row 0 of a 32x32 tile so the placement
-// matmul still sees a single-tile B.
+// TILE post / comb (32x32 pages). TILE streams are 32x32 pages; ROW_MAJOR streams are
+// hc rows of D, packed here into a 32x32 tile (rows 0..hc-1). ROW_MAJOR sublayer_out is
+// read as 1x32 faces (32 bf16 cols) and scattered into row 0 of a 32x32 tile so the
+// placement matmul still sees a single-tile B.
 void kernel_main() {
     const uint32_t post_addr = get_arg_val<uint32_t>(0);
     const uint32_t comb_addr = get_arg_val<uint32_t>(1);
@@ -42,8 +43,9 @@ void kernel_main() {
     constexpr uint32_t comb_post_cb_pages = get_compile_time_arg_val(8);
     constexpr uint32_t sub_elems_per_page = get_compile_time_arg_val(9);
     constexpr uint32_t sub_is_rm = get_compile_time_arg_val(10);
+    constexpr uint32_t streams_is_rm = get_compile_time_arg_val(11);
 
-    constexpr auto post_args = TensorAccessorArgs<11>();
+    constexpr auto post_args = TensorAccessorArgs<12>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
     constexpr auto sub_args = TensorAccessorArgs<comb_args.next_compile_time_args_offset()>();
     constexpr auto streams_args = TensorAccessorArgs<sub_args.next_compile_time_args_offset()>();
@@ -109,7 +111,30 @@ void kernel_main() {
         for (uint32_t page = tile; page < group_end; ++page) {
             streams_cb.reserve_back(one_tile);
             sub_cb.reserve_back(one_tile);
-            noc.async_read(streams, streams_cb, tile_size_bytes, {.page_id = page}, {.offset_bytes = 0});
+            if constexpr (streams_is_rm) {
+                noc.async_write_zeros(streams_cb, tile_size_bytes, {.offset_bytes = 0});
+                noc.write_zeros_l1_barrier();
+                const uint32_t n_idx = page % n_tiles;
+                const uint32_t col_offset = n_idx * tile_w * sizeof(uint16_t);
+                volatile tt_l1_ptr uint16_t* streams_dst =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(streams_cb.get_write_ptr());
+                for (uint32_t r = 0; r < hc; ++r) {
+                    noc.async_read(
+                        streams,
+                        comb_src_cb,
+                        face_bytes,
+                        {.page_id = t * hc + r, .offset_bytes = col_offset},
+                        {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    const volatile tt_l1_ptr uint16_t* row =
+                        reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(comb_src_cb.get_write_ptr());
+                    for (uint32_t c = 0; c < tile_w; ++c) {
+                        streams_dst[tile_face_index(r, c)] = row[c];
+                    }
+                }
+            } else {
+                noc.async_read(streams, streams_cb, tile_size_bytes, {.page_id = page}, {.offset_bytes = 0});
+            }
             if constexpr (sub_is_rm) {
                 const uint32_t n_idx = page % n_tiles;
                 const uint32_t col = n_idx * tile_w;

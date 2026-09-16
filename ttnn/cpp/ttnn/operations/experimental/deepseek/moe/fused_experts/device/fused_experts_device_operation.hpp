@@ -16,7 +16,21 @@
 
 #include "fused_experts_device_operation_types.hpp"
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tile.hpp>
+
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
+
+// Decode ROW_MAJOR [1,1,1,H] is physically a sequence of 1x32 faces (same packing as
+// rms_norm / matmul_decode). Compute uses that tile instead of tilize/untilize.
+inline bool fused_experts_rm_as_1x32(const Tensor& x) { return x.layout() == tt::tt_metal::Layout::ROW_MAJOR; }
+
+inline tt::tt_metal::Tile fused_experts_compute_tile(const Tensor& x) {
+    if (fused_experts_rm_as_1x32(x)) {
+        return tt::tt_metal::Tile({1, tt::constants::TILE_WIDTH});
+    }
+    return x.tensor_spec().tile();
+}
 
 // Fuses the per-expert routed-FFN loop
 //   gate_up = matmul(x, gate_up_w[e]); act = swiglu(gate_up);

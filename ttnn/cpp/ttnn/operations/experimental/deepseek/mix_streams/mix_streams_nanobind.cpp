@@ -25,8 +25,13 @@ void bind_mix_streams(nb::module_& mod) {
 
         where ``T == B*S``. Both terms are single-tile matmuls accumulated into the same
         destination register, so the step costs one dispatch instead of four. ``post``,
-        ``comb`` and ``streams`` are TILE 32x32; ``sublayer_out`` is ROW_MAJOR (packed as
-        1x32 faces). Output is TILE. It runs at HiFi4 with fp32 destination accumulation.
+        ``comb`` and TILE ``streams`` are 32x32; ``sublayer_out`` is ROW_MAJOR (packed as
+        1x32 faces). When ``sublayer_out`` or ``streams`` is ROW_MAJOR, dest is untilized
+        and the valid hc rows are written as ROW_MAJOR (decode: attention/MoE emit RM
+        while the residual is still TILE). TILE-only inputs keep TILE output.
+        When D is divisible by 64 with a tile-aligned shard width, the default output
+        is WIDTH_SHARDED L1 on 64 cores.
+        It runs at HiFi4 with fp32 destination accumulation.
         Shapes the kernel does not cover fall back to the equivalent op sequence.
 
         Args:
@@ -37,13 +42,16 @@ void bind_mix_streams(nb::module_& mod) {
             streams (ttnn.Tensor): residual-stream stack, [B, S, hc, D].
 
         Keyword Args:
-            memory_config (Optional[ttnn.MemoryConfig]): output memory config. Defaults to the
-                ``streams`` tensor's memory config.
+            memory_config (Optional[ttnn.MemoryConfig]): output memory config. Defaults to
+                WIDTH_SHARDED L1 on 64 cores when D allows; otherwise the ``streams``
+                tensor's memory config.
             compute_kernel_config (Optional[ttnn.DeviceComputeKernelConfig]): matmul compute
                 settings. Defaults to HiFi4 / fp32 dest acc / packer-l1-acc (``_HIFI4``).
 
         Returns:
-            ttnn.Tensor: new residual-stream stack, [B, S, hc, D] (TILE, matching ``streams``).
+            ttnn.Tensor: new residual-stream stack, [B, S, hc, D]. ROW_MAJOR when
+                ``sublayer_out`` or ``streams`` is ROW_MAJOR, otherwise TILE. WIDTH_SHARDED
+                on 64 cores when D allows.
         )doc",
         &ttnn::experimental::deepseek::mix_streams::mix_streams,
         nb::arg("post"),

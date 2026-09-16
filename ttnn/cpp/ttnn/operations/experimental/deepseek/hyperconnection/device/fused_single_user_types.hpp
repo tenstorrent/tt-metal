@@ -23,11 +23,12 @@ struct FusedSingleUserParams {
 };
 
 struct FusedSingleUserInputs {
-    const Tensor& fused_w;         // [1,1,1,(2+H)*H], WIDTH_SHARDED on core 0.
+    const Tensor& fused_w;         // [1,1,1,(2+H)*H], WIDTH_SHARDED on core 0. TILE or ROW_MAJOR (1x32).
     const Tensor& pre_bias;        // [1,1,1,H].
     const Tensor& post_bias;       // [1,1,1,H].
     const Tensor& comb_bias;       // [1,1,H,H].
-    const Tensor& hidden_streams;  // [1,1,H,D], WIDTH_SHARDED on cores 0..7.
+    const Tensor& hidden_streams;  // [1,1,H,D], WIDTH_SHARDED on hidden's shard grid.
+                                   // TILE 32x32, or ROW_MAJOR (decode, 4x32 compute tiles).
 };
 
 // Returns {post [1,1,H,1], comb [1,1,H,H], collapsed [1,1,1,D]}.

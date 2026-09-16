@@ -66,7 +66,8 @@ struct operation_attributes_t {
 // and per-token weights it publishes in cb_bcast -- so nothing has to scatter k values out to E
 // columns that would then be scanned straight back down to k.
 struct tensor_args_t {
-    // Activations, [1, 1, B, H] with B <= 32 token rows.
+    // Activations, [1, 1, B, H] with B <= 32 token rows. TILE, or ROW_MAJOR when B == 1
+    // (decode: loaded as 1x32 compute tiles, no tilize).
     const Tensor& input_tensor;
 
     // Selected expert ids, [1, 1, B, top_k] TILE, in their native tile layout: either UINT16 (the
@@ -74,9 +75,10 @@ struct tensor_args_t {
     // a frozen id table, which is the only dtype that op gathers; exact for E <= 256).
     Tensor routing_indices;
 
-    // Per-expert scores, [1, 1, B, E] TILE bfloat16 -- the UNBIASED router scores. The op gathers
-    // s[b, routing_indices[b, j]] from these, so it must be the score tensor the ids index into
-    // (the selection may have ranked by a bias-corrected copy of it).
+    // Per-expert scores, [1, 1, B, E] bfloat16 -- the UNBIASED router scores. TILE, or ROW_MAJOR
+    // when B == 1 (decode stick). The op gathers s[b, routing_indices[b, j]] from these, so it
+    // must be the score tensor the ids index into (the selection may have ranked by a
+    // bias-corrected copy of it).
     Tensor routing_scores;
 
     // One gate_up weight tensor per expert, each [H, 2I] (matmul-ready / transposed).

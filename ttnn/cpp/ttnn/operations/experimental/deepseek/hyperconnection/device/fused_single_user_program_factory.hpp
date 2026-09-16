@@ -22,7 +22,9 @@ struct FusedSingleUserSharedVariables {
     tt::tt_metal::KernelHandle post_writer_kernel_id = 0;
     tt::tt_metal::KernelHandle comb_writer_kernel_id = 0;
     tt::tt_metal::CBHandle hidden_cb = 0;
+    tt::tt_metal::CBHandle hidden_src_cb = 0;
     tt::tt_metal::CBHandle collapsed_output_cb = 0;
+    bool hidden_is_rm = false;
     std::vector<CoreCoord> collapse_cores;
     CoreCoord post_core;
     CoreCoord comb_core;

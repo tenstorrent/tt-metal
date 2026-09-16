@@ -31,8 +31,10 @@ void bind_fused_hyperconnection(nb::module_& mod) {
             collapsed  = sum_h pre[..,h] * hidden_streams[..,h,:]
 
         Args:
-            hidden_streams: Residual-stream stack, [B, S, H, D].
+            hidden_streams: Residual-stream stack, [B, S, H, D]. TILE, or ROW_MAJOR when
+                T == 1 (decode; packed into 4x32 compute tiles, H<=4).
             fused_w: Packed pre/post/comb projection output, [1, 1, T, (2+H)*H] (T == B*S).
+                TILE, or ROW_MAJOR when T == 1 (decode 1x32 row; consumed as a 1x32 tile).
             pre_bias: Bias row [1, 1, 1, H].
             post_bias: Bias row [1, 1, 1, H].
             comb_bias: Bias row [1, 1, 1, H*H].

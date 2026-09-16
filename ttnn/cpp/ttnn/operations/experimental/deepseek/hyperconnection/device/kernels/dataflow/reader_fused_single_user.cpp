@@ -8,6 +8,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
@@ -19,15 +20,24 @@ FORCE_INLINE uint32_t tile_face_index(uint32_t r, uint32_t c) {
     return face * 256u + (r & 15u) * 16u + (c & 15u);
 }
 
+// 4x32 tile: two 4x16 faces. face = (c >= 16); index = face*64 + r*16 + (c&15).
+FORCE_INLINE uint32_t tile_4x32_index(uint32_t r, uint32_t c) {
+    const uint32_t face = (c >= 16) ? 1u : 0u;
+    return face * 64u + r * 16u + (c & 15u);
+}
+
 }  // namespace
 
 // The same reader is compiled three times with a role:
-//   0: collapse cores [0,7]
-//   1: post core 8
-//   2: comb core 9
+//   0: collapse cores (hidden's WIDTH_SHARDED grid)
+//   1: post core
+//   2: comb core
 //
-// Core 0 owns the one-core width-sharded fused_w. It reads the tile once and
-// multicasts it into the identically-addressed CB on the other nine cores.
+// Core 0 owns the one-core width-sharded fused_w. It reads the page once and
+// broadcasts it into the identically-addressed CB on the other participating
+// cores (1D multicast on the historical 10-core row, otherwise unicast).
+// ROW_MAJOR fused_w is a dense 1x32 row (FUSED_W_1x32); TILE is one 32x32 tile.
+// ROW_MAJOR hidden_streams is packed into 4x32 compute tiles (HIDDEN_4x32).
 void kernel_main() {
     constexpr uint32_t role = get_compile_time_arg_val(0);
     constexpr uint32_t cb_fused_w = get_compile_time_arg_val(1);
@@ -54,8 +64,21 @@ void kernel_main() {
     constexpr uint32_t receiver_ready_sem_id = get_compile_time_arg_val(22);
     constexpr uint32_t sender_noc_x = get_compile_time_arg_val(23);
     constexpr uint32_t sender_noc_y = get_compile_time_arg_val(24);
+#ifdef FUSED_W_1x32
+    constexpr uint32_t cb_bias_src = get_compile_time_arg_val(25);
+#endif
+#ifdef HIDDEN_4x32
+#ifndef FUSED_W_1x32
+    constexpr uint32_t cb_bias_src = get_compile_time_arg_val(25);
+#endif
+    constexpr uint32_t shard_w = get_compile_time_arg_val(27);
+    constexpr uint32_t row_stride_elems = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_hidden_src = get_compile_time_arg_val(29);
+    constexpr uint32_t hidden_pages_per_core = get_compile_time_arg_val(30);
+    (void)shard_w;
+#endif
 
-    constexpr auto fused_w_args = TensorAccessorArgs<25>();
+    constexpr auto fused_w_args = TensorAccessorArgs<31>();
     constexpr auto pre_bias_args = TensorAccessorArgs<fused_w_args.next_compile_time_args_offset()>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto hidden_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
@@ -72,6 +95,7 @@ void kernel_main() {
     const auto pre_bias = TensorAccessor(pre_bias_args, pre_bias_addr);
     const auto post_bias = TensorAccessor(post_bias_args, post_bias_addr);
     const auto comb_bias = TensorAccessor(comb_bias_args, comb_bias_addr);
+    (void)hidden_addr;
 
     CircularBuffer cb_fw(cb_fused_w);
     Semaphore<> data_ready(ready_sem_id);
@@ -80,13 +104,35 @@ void kernel_main() {
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_size_bytes = cb_fw.get_tile_size();
-    const uint32_t tile_elems = tile_size_bytes / 2u;
 
     // Collapse cores can publish the local hidden shard before fused_w arrives.
     if constexpr (role == 0) {
+#ifdef HIDDEN_4x32
+        CircularBuffer cb_src(cb_hidden_src);
+        CircularBuffer cb_h(cb_hidden);
+        cb_src.reserve_back(hidden_pages_per_core);
+        cb_src.push_back(hidden_pages_per_core);
+        const auto* raw = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_src.get_read_ptr());
+        cb_h.reserve_back(hidden_tiles_per_core);
+        auto* dst_base = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_h.get_write_ptr());
+        const uint32_t tile_elems = cb_h.get_tile_size() / 2u;
+        for (uint32_t n = 0; n < hidden_tiles_per_core; ++n) {
+            auto* dst = dst_base + n * tile_elems;
+            for (uint32_t i = 0; i < tile_elems; ++i) {
+                dst[i] = 0;
+            }
+            for (uint32_t r = 0; r < num_streams; ++r) {
+                for (uint32_t c = 0; c < 32; ++c) {
+                    dst[tile_4x32_index(r, c)] = raw[r * row_stride_elems + n * 32u + c];
+                }
+            }
+        }
+        cb_h.push_back(hidden_tiles_per_core);
+#else
         CircularBuffer cb_h(cb_hidden);
         cb_h.reserve_back(hidden_tiles_per_core);
         cb_h.push_back(hidden_tiles_per_core);
+#endif
     }
 
     cb_fw.reserve_back(one_tile);
@@ -97,6 +143,25 @@ void kernel_main() {
 
         if constexpr (num_receivers > 0) {
             receiver_ready.down(num_receivers);
+#ifdef UNICAST_FUSED_W
+            for (uint32_t i = 0; i < num_receivers; ++i) {
+                const uint32_t dst_x = get_arg_val<uint32_t>(6 + 2 * i);
+                const uint32_t dst_y = get_arg_val<uint32_t>(7 + 2 * i);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(fw_l1_addr),
+                    UnicastEndpoint{},
+                    tile_size_bytes,
+                    {},
+                    {.noc_x = dst_x, .noc_y = dst_y, .addr = fw_l1_addr});
+            }
+            noc.async_writes_flushed();
+            data_ready.set(1);
+            for (uint32_t i = 0; i < num_receivers; ++i) {
+                const uint32_t dst_x = get_arg_val<uint32_t>(6 + 2 * i);
+                const uint32_t dst_y = get_arg_val<uint32_t>(7 + 2 * i);
+                data_ready.up(noc, dst_x, dst_y, 1);
+            }
+#else
             uint32_t dst_start_x = mcast_start_x;
             uint32_t dst_end_x = mcast_end_x;
             if (noc_index == 1) {
@@ -118,6 +183,7 @@ void kernel_main() {
             data_ready.set(1);
             data_ready.set_multicast(
                 noc, dst_start_x, mcast_start_y, dst_end_x, mcast_end_y, num_receivers, /*linked=*/false);
+#endif
         }
         cb_fw.push_back(one_tile);
     } else {
@@ -127,41 +193,133 @@ void kernel_main() {
     }
 
     const volatile tt_l1_ptr uint16_t* fw = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_fw.get_read_ptr());
+#ifdef FUSED_W_1x32
+    // 1x32 faces are two dense 1x16 faces, which is 32 contiguous RM elements.
+    auto fused_w_at = [&](uint32_t k) { return fw[k]; };
+#else
     auto fused_w_at = [&](uint32_t k) { return fw[tile_face_index(0, k & 31u)]; };
+#endif
 
     if constexpr (role == 0) {
         CircularBuffer cb_pw(cb_pre_w);
         CircularBuffer cb_pb(cb_pre_bias);
 
         cb_pb.reserve_back(one_tile);
+#if defined(FUSED_W_1x32) || defined(HIDDEN_4x32)
+        {
+            CircularBuffer cb_src(cb_bias_src);
+            cb_src.reserve_back(one_tile);
+            noc.async_read(pre_bias, cb_src, cb_src.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            const auto* bias32 = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_src.get_write_ptr());
+            auto* pb = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pb.get_write_ptr());
+            const uint32_t n = cb_pb.get_tile_size() / 2u;
+            for (uint32_t k = 0; k < n; ++k) {
+                pb[k] = 0;
+            }
+#ifdef HIDDEN_4x32
+            for (uint32_t r = 0; r < num_streams; ++r) {
+                const uint16_t val = bias32[tile_face_index(0, r)];
+                for (uint32_t c = 0; c < 32; ++c) {
+                    pb[tile_4x32_index(r, c)] = val;
+                }
+            }
+#else
+            for (uint32_t k = 0; k < 32; ++k) {
+                pb[k] = bias32[tile_face_index(0, k)];
+            }
+#endif
+            cb_src.push_back(one_tile);
+        }
+#else
         noc.async_read(pre_bias, cb_pb, cb_pb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+#endif
         cb_pb.push_back(one_tile);
 
         cb_pw.reserve_back(one_tile);
+#ifdef HIDDEN_4x32
+        auto* pw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pw.get_write_ptr());
+        const uint32_t n = cb_pw.get_tile_size() / 2u;
+        for (uint32_t k = 0; k < n; ++k) {
+            pw[k] = 0;
+        }
+        for (uint32_t r = 0; r < num_streams; ++r) {
+            const uint16_t val = fused_w_at(r);
+            for (uint32_t c = 0; c < 32; ++c) {
+                pw[tile_4x32_index(r, c)] = val;
+            }
+        }
+#elif defined(FUSED_W_1x32)
+        auto* pw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pw.get_write_ptr());
+        for (uint32_t k = 0; k < 32; ++k) {
+            pw[k] = 0;
+        }
+        for (uint32_t k = 0; k < num_streams; ++k) {
+            pw[k] = fused_w_at(k);
+        }
+#else
         noc.async_write_zeros(cb_pw, cb_pw.get_tile_size(), {.offset_bytes = 0});
         noc.write_zeros_l1_barrier();
         auto* pw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pw.get_write_ptr());
         for (uint32_t k = 0; k < num_streams; ++k) {
             pw[tile_face_index(0, k)] = fused_w_at(k);
         }
+#endif
         cb_pw.push_back(one_tile);
+
+#ifdef HIDDEN_4x32
+        CircularBuffer cb_sc(cb_scaler);
+        cb_sc.reserve_back(one_tile);
+        auto* scaler = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_sc.get_write_ptr());
+        const uint32_t scaler_n = cb_sc.get_tile_size() / 2u;
+        const uint16_t one = static_cast<uint16_t>(scaler_bits >> 16);
+        for (uint32_t i = 0; i < scaler_n; ++i) {
+            scaler[i] = one;
+        }
+        cb_sc.push_back(one_tile);
+#endif
     } else if constexpr (role == 1) {
         CircularBuffer cb_pw(cb_post_w);
         CircularBuffer cb_pb(cb_post_bias);
 
         cb_pb.reserve_back(one_tile);
+#ifdef FUSED_W_1x32
+        {
+            CircularBuffer cb_src(cb_bias_src);
+            cb_src.reserve_back(one_tile);
+            noc.async_read(post_bias, cb_src, cb_src.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            const auto* bias32 = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_src.get_write_ptr());
+            auto* pb = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pb.get_write_ptr());
+            for (uint32_t k = 0; k < 32; ++k) {
+                pb[k] = bias32[tile_face_index(0, k)];
+            }
+            cb_src.push_back(one_tile);
+        }
+#else
         noc.async_read(post_bias, cb_pb, cb_pb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+#endif
         cb_pb.push_back(one_tile);
 
         cb_pw.reserve_back(one_tile);
+#ifdef FUSED_W_1x32
+        auto* pw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pw.get_write_ptr());
+        for (uint32_t k = 0; k < 32; ++k) {
+            pw[k] = 0;
+        }
+        for (uint32_t k = 0; k < num_streams; ++k) {
+            pw[k] = fused_w_at(num_streams + k);
+        }
+#else
         noc.async_write_zeros(cb_pw, cb_pw.get_tile_size(), {.offset_bytes = 0});
         noc.write_zeros_l1_barrier();
         auto* pw = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_pw.get_write_ptr());
         for (uint32_t k = 0; k < num_streams; ++k) {
             pw[tile_face_index(0, k)] = fused_w_at(num_streams + k);
         }
+#endif
         cb_pw.push_back(one_tile);
     } else {
         CircularBuffer cb_cw(cb_comb_w);
@@ -170,9 +328,11 @@ void kernel_main() {
         CircularBuffer cb_mask_obj(cb_mask);
         CircularBuffer cb_eps_mask_obj(cb_eps_mask);
 
+        // Comb CBs stay 32x32 TILE even when fused_w is a 1x32 row.
+        const uint32_t comb_tile_elems = cb_scaler_obj.get_tile_size() / 2u;
         cb_scaler_obj.reserve_back(one_tile);
         auto* scaler = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_scaler_obj.get_write_ptr());
-        for (uint32_t i = 0; i < tile_elems; ++i) {
+        for (uint32_t i = 0; i < comb_tile_elems; ++i) {
             scaler[i] = 0;
         }
         const uint16_t one = static_cast<uint16_t>(scaler_bits >> 16);
@@ -186,7 +346,7 @@ void kernel_main() {
         auto make_mask = [&](CircularBuffer& cb, uint16_t value) {
             cb.reserve_back(one_tile);
             auto* mask = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr());
-            for (uint32_t i = 0; i < tile_elems; ++i) {
+            for (uint32_t i = 0; i < comb_tile_elems; ++i) {
                 mask[i] = 0;
             }
             for (uint32_t r = 0; r < num_streams; ++r) {

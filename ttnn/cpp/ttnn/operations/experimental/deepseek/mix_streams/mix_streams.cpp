@@ -239,12 +239,18 @@ Tensor mix_streams(
         sublayer = ttnn::to_layout(sublayer, Layout::TILE);
     }
 
+    const bool untilize_out = streams.layout() == Layout::ROW_MAJOR || sublayer_out.layout() == Layout::ROW_MAJOR;
+    Tensor streams_in = streams;
+    if (streams.layout() == Layout::ROW_MAJOR) {
+        streams_in = ttnn::to_layout(streams, Layout::TILE);
+    }
+
     auto out = ttnn::reshape(sublayer, ttnn::Shape({1, t, 1, d}));
     out = ttnn::repeat(out, ttnn::Shape({1, 1, hc, 1}));
     auto placement = ttnn::multiply(out, ttnn::reshape(post, ttnn::Shape({1, t, hc, 1})));
 
     auto comb_r = ttnn::reshape(comb, ttnn::Shape({1, t, hc, hc}));
-    auto streams_r = ttnn::reshape(streams, ttnn::Shape({1, t, hc, d}));
+    auto streams_r = ttnn::reshape(streams_in, ttnn::Shape({1, t, hc, d}));
     const auto streams_mem_config = streams.memory_config();
 
     Tensor mixed;
@@ -265,6 +271,9 @@ Tensor mix_streams(
     }
 
     auto result = ttnn::reshape(ttnn::add(placement, mixed), ttnn::Shape({b, s, hc, d}));
+    if (untilize_out && result.layout() != Layout::ROW_MAJOR) {
+        result = ttnn::to_layout(result, Layout::ROW_MAJOR);
+    }
     const MemoryConfig& dst_mem_config = memory_config.has_value() ? *memory_config : streams_mem_config;
     if (result.memory_config() != dst_mem_config) {
         result = ttnn::to_memory_config(result, dst_mem_config);

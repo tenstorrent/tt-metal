@@ -38,6 +38,23 @@ void fused_sigmoid_with_bias_and_scale(
     copy_init(cb_w);
     copy_tile(cb_w, 0, 0);
     mul_unary_tile(0, scale_bits);
+#if defined(FUSED_W_1x32) || defined(HIDDEN_4x32)
+    (void)cb_scratch;
+    // Tiny-tile fused_w / bias (1x32 or 4x32); add in dest instead of packing a 32x32 bcast.
+    copy_init(cb_bias);
+    copy_tile(cb_bias, 0, 1);
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 0);
+    sigmoid_tile_init();
+    sigmoid_tile(0);
+    if (add_eps) {
+        add_unary_tile(0, eps_bits);
+    } else if (post_mul_bits != 0) {
+        mul_unary_tile(0, post_mul_bits);
+    }
+    tile_regs_commit();
+    cb_pop_front(cb_w, 1);
+#else
     tile_regs_commit();
 
     cb_reserve_back(cb_scratch, 1);
@@ -61,6 +78,7 @@ void fused_sigmoid_with_bias_and_scale(
     }
     tile_regs_commit();
     cb_pop_front(cb_scratch, 1);
+#endif
 
     cb_reserve_back(cb_out, 1);
     tile_regs_wait();
@@ -256,6 +274,33 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_pre_w, cb_pre_bias, cb_pre);
         fused_sigmoid_with_bias_and_scale(cb_pre_w, cb_pre_bias, cb_scratch, cb_pre, pre_scale_bits, 0, true, eps_bits);
 
+#ifdef HIDDEN_4x32
+        // collapsed[c] = sum_r pre[r] * hidden[r,c]: 4x32 row-bcast pre × 4x32 hidden, then
+        // REDUCE_COL down to a 1x32 row. A 1x32 @ 4x32 matmul is the wrong K.
+        mul_init(cb_pre, cb_hidden);
+        cb_wait_front(cb_pre, 1);
+        cb_wait_front(cb_hidden, d_tiles);
+        cb_wait_front(cb_scaler, 1);
+        for (uint32_t n = 0; n < d_tiles; ++n) {
+            mul_init(cb_pre, cb_hidden);
+            tile_regs_acquire();
+            mul_tiles(cb_pre, cb_hidden, 0, n, 0);
+            tile_regs_commit();
+
+            cb_reserve_back(cb_scratch, 1);
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_scratch);
+            pack_tile(0, cb_scratch);
+            tile_regs_release();
+            cb_push_back(cb_scratch, 1);
+
+            reduce_to_cb<PoolType::SUM, ReduceDim::REDUCE_COL>(
+                cb_scratch, cb_scaler, cb_collapsed_out, /*eps_recip=*/false, eps_bits);
+            cb_pop_front(cb_scratch, 1);
+        }
+        cb_pop_front(cb_pre, 1);
+        cb_pop_front(cb_hidden, d_tiles);
+#else
         matmul_init(cb_pre, cb_hidden);
         cb_wait_front(cb_pre, 1);
         cb_wait_front(cb_hidden, d_tiles);
@@ -273,6 +318,7 @@ void kernel_main() {
         }
         cb_pop_front(cb_pre, 1);
         cb_pop_front(cb_hidden, d_tiles);
+#endif
     } else if constexpr (role == 1) {
         compute_kernel_hw_startup(cb_post_w, cb_post_bias, cb_post_out);
         fused_sigmoid_with_bias_and_scale(

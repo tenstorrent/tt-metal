@@ -77,6 +77,8 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
     constexpr uint32_t tile_buffering = 2;
     const uint32_t d = static_cast<uint32_t>(streams.logical_shape()[-1]);
     const bool sub_is_rm = sublayer_out.layout() == Layout::ROW_MAJOR;
+    const bool streams_is_rm = streams.layout() == Layout::ROW_MAJOR;
+    const bool untilize_out = operation_attributes.untilize_out || streams_is_rm || sub_is_rm;
     uint32_t sub_elems_per_page = d;
     if (sub_is_rm) {
         sub_elems_per_page =
@@ -115,13 +117,26 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
         tile_buffering,
         sub_elems_per_page,
         static_cast<uint32_t>(sub_is_rm),
+        static_cast<uint32_t>(streams_is_rm),
     };
     TensorAccessorArgs(post.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(comb.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(sublayer_out.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(streams.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {kCbOut};
+    uint32_t out_row_page_stride = 1;
+    uint32_t tiles_per_page = n_tiles;
+    if (untilize_out && output.shard_spec().has_value()) {
+        const uint32_t shard_w = output.shard_spec()->shape[1];
+        TT_FATAL(
+            shard_w >= constants::TILE_WIDTH && shard_w % constants::TILE_WIDTH == 0,
+            "mix_streams: ROW_MAJOR WIDTH_SHARDED output shard width {} must be a multiple of 32",
+            shard_w);
+        tiles_per_page = shard_w / constants::TILE_WIDTH;
+        out_row_page_stride = d / shard_w;
+    }
+    std::vector<uint32_t> writer_compile_time_args = {
+        kCbOut, hc, n_tiles, static_cast<uint32_t>(untilize_out), out_row_page_stride, tiles_per_page};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
@@ -131,6 +146,7 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
         kCbSub,
         kCbOut,
         n_tiles,
+        static_cast<uint32_t>(untilize_out),
     };
 
     const KernelHandle reader_kernel_id =
