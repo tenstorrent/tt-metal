@@ -14,6 +14,8 @@ tracers for the three pieces, and the CFG combination.
 from __future__ import annotations
 
 import math
+import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -182,7 +184,14 @@ class ExpertCacheRunner:
         self.spatial_in: ttnn.Tensor | None = None
         self.prompt_in: ttnn.Tensor | None = None
         self.prev_fn_in: ttnn.Tensor | None = None
+        # sum(|prev_fn_residual|) per branch, kept on the host (read back when the step computed).
+        self.prev_fn_norm: list[float | None] = [None] * self.NUM_BRANCHES
         self._buffer_key: tuple | None = None
+
+        # Optional per-piece timing (WAN_DBCACHE_PROFILE=1): synchronizes after every piece, so it
+        # perturbs the total slightly; use it to attribute time, not to benchmark.
+        self.profile_enabled = os.environ.get("WAN_DBCACHE_PROFILE", "0") == "1"
+        self.profile: dict[str, list[float]] = {}
 
     # ------------------------------------------------------------------ buffers
     def ensure_buffers(self, spatial_1BNI: ttnn.Tensor, prompt_1BLP: ttnn.Tensor) -> None:
@@ -233,22 +242,49 @@ class ExpertCacheRunner:
         return from_torch(torch.zeros(shape, dtype=torch.float32), device=self.mesh_device, dtype=dtype)
 
     # ------------------------------------------------------------------ diff readback
-    def relative_l1_diff(self, diff_sum: ttnn.Tensor, ref_sum: ttnn.Tensor) -> float:
-        """Reduce the per-device partial sums from ``cache_head`` to cache-dit's relative L1 diff."""
+    def read_sums(self, sums_1B12: ttnn.Tensor) -> tuple[float, float]:
+        """One mesh-wide readback of the packed head sums: (sum|fn - prev|, sum|fn|) over all shards."""
         if ttnn.using_distributed_env():
             msg = "DBCache residual-diff readback is not implemented for multi-host meshes"
             raise NotImplementedError(msg)
         composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        num = float(ttnn.to_torch(diff_sum, mesh_composer=composer).sum())
-        den = float(ttnn.to_torch(ref_sum, mesh_composer=composer).sum())
-        if den <= 0.0:
-            return float("inf")
-        return num / den
+        totals = ttnn.to_torch(sums_1B12, mesh_composer=composer).double().sum(dim=(0, 1, 2))
+        return float(totals[0]), float(totals[1])
+
+    def _prev_norm(self, branch: int) -> float:
+        """sum(|prev_fn_residual|) for ``branch``; computed on device once if it was never read back."""
+        norm = self.prev_fn_norm[branch]
+        if norm is None:
+            prev = self.prev_fn_residual[branch]
+            assert prev is not None
+            abs_prev = ttnn.abs(prev)
+            local = ttnn.sum(abs_prev, dim=[2, 3], keepdim=True)
+            ttnn.deallocate(abs_prev)
+            composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            norm = float(ttnn.to_torch(local, mesh_composer=composer).double().sum())
+            ttnn.deallocate(local)
+            self.prev_fn_norm[branch] = norm
+        return norm
+
+    def _tick(self, key: str, t0: float) -> float:
+        """Profiling helper: synchronize, record elapsed since ``t0`` under ``key``, return now."""
+        if not self.profile_enabled:
+            return t0
+        ttnn.synchronize_device(self.mesh_device)
+        now = time.perf_counter()
+        self.profile.setdefault(key, []).append(now - t0)
+        return now
+
+    def profile_summary(self) -> dict[str, float]:
+        """Mean milliseconds per recorded piece (empty unless WAN_DBCACHE_PROFILE=1)."""
+        return {k: 1e3 * sum(v) / len(v) for k, v in self.profile.items() if v}
 
     # ------------------------------------------------------------------ lifecycle
     def reset(self) -> None:
         """Start a new denoising run for this expert."""
         self.context.reset()
+        self.prev_fn_norm = [None] * self.NUM_BRANCHES
+        self.profile = {}
         for forecaster in self.forecasters:
             if forecaster is not None:
                 forecaster.reset()
@@ -291,12 +327,13 @@ class ExpertCacheRunner:
         spatial_1BNI = self.spatial_in
 
         for branch, branch_prompt_1BLP in enumerate(prompts_1BLP):
+            t0 = time.perf_counter() if self.profile_enabled else 0.0
             # Stage this branch's inputs in the shared slots (see `spatial_in` comment).
             ttnn.copy(branch_prompt_1BLP, self.prompt_in)
             prompt_1BLP = self.prompt_in
             ttnn.copy(self.prev_fn_residual[branch], self.prev_fn_in)
 
-            spatial_1BND, fn_residual, diff_sum, ref_sum, temb_11BD, timestep_proj_1BTD = self.head(
+            spatial_1BND, fn_residual, sums_1B12, temb_11BD, timestep_proj_1BTD = self.head(
                 spatial_1BNI,
                 prompt_1BLP,
                 rope_cos_1HND,
@@ -309,19 +346,26 @@ class ExpertCacheRunner:
                 traced=traced,
             )
 
+            t0 = self._tick("head", t0)
+
             decision = ctx.gate(branch)
             diff = None
+            cur_norm: float | None = None
             if decision == "dynamic":
-                diff = self.relative_l1_diff(diff_sum, ref_sum)
+                diff_sum, cur_norm = self.read_sums(sums_1B12)
+                prev_norm = self._prev_norm(branch)
+                diff = diff_sum / prev_norm if prev_norm > 0.0 else float("inf")
                 use_cache = ctx.decide(branch, diff)
             else:
                 use_cache = decision == "cache"
+            t0 = self._tick("decide", t0)
 
             forecaster = self.forecasters[branch]
             assert forecaster is not None
             if use_cache:
                 ctx.add_cached_step(branch)
                 spatial_1BND = forecaster.apply(spatial_1BND, ctx.current_step)
+                t0 = self._tick("apply_cache", t0)
             else:
                 spatial_1BND, bn_residual = self.body(
                     spatial_1BND,
@@ -334,8 +378,10 @@ class ExpertCacheRunner:
                     traced=traced,
                 )
                 ttnn.copy(fn_residual, self.prev_fn_residual[branch])
+                self.prev_fn_norm[branch] = cur_norm  # None if not read this step -> computed lazily
                 forecaster.update(bn_residual, ctx.current_step)
                 ctx.add_computed_step(branch)
+                t0 = self._tick("body", t0)
 
             logger.debug(
                 f"[{ctx.name}] step {ctx.current_step} branch {branch}: "
@@ -359,5 +405,6 @@ class ExpertCacheRunner:
                 ttnn.copy(velocity, self.velocity[branch])
                 velocity = self.velocity[branch]
             outputs.append(velocity)
+            self._tick("tail", t0)
 
         return outputs

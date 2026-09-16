@@ -265,10 +265,26 @@ def test_wan_dbcache_ab(
             f"run '{name}': denoising {results[name]['denoising_s']:.1f}s, "
             f"vae {results[name]['vae_s']:.1f}s, cached branch-steps {cached_steps}"
         )
+        offset = 0
+        cached_global: set[int] = set()
         for s in summary:
             logger.info(f"  [{s['name']}] {s['config']}: cached_steps={s['cached_steps']}")
             for branch, diffs in enumerate(s["residual_diffs"]):
                 logger.info(f"    branch {branch} diffs: " + ", ".join(f"{k}:{v:.3f}" for k, v in diffs.items()))
+            if s["profile_ms"]:
+                logger.info("    profile (ms, mean per branch-call): " + ", ".join(f"{k}={v:.1f}" for k, v in s["profile_ms"].items()))
+            # Steps where both branches cached, in global step numbering (experts run back to back).
+            branch_sets = [set(b) for b in s["cached_steps"]]
+            both = set.intersection(*branch_sets) if branch_sets else set()
+            cached_global |= {offset + st for st in both}
+            offset += s["executed_steps"]
+        if timer.step_times and cached_global:
+            cached_t = [t for i, t in enumerate(timer.step_times) if i in cached_global]
+            computed_t = [t for i, t in enumerate(timer.step_times) if i not in cached_global]
+            logger.info(
+                f"  step time: cached {np.mean(cached_t):.3f}s (n={len(cached_t)}), "
+                f"computed {np.mean(computed_t):.3f}s (n={len(computed_t)})"
+            )
 
         if int(ttnn.distributed_context_get_rank()) == 0:
             safe = name.replace(":", "_").replace("&", "_").replace("=", "")
