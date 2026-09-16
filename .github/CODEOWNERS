@@ -27,6 +27,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/ttnn-core.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn-ops.instructions.md @tenstorrent/metalium-developers-ops-leads
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
+.github/scripts/utils/cluster_recover.py @sott0n @changh95
 .github/scripts/utils/run-reset-isolation-test.sh @sott0n @changh95
 .github/time_budget.yaml @roseli-TT @tdowdallTT @dpopovTT
 .github/time_budgets/ @roseli-TT @tdowdallTT @dpopovTT

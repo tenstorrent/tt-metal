@@ -3,12 +3,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""SIGKILL stray host processes still holding a /dev/tenstorrent handle.
+"""Recover a Galaxy (6U) cluster on the runner host. Two subcommands:
 
-A leftover process from a previous CI run keeps the device's sysmem/TLB windows
-claimed, which a board reset does not release, so the next cluster open fails
-with "tt_tlb_alloc failed with error code -12". Run as root (via sudo) so other
-users' /proc/<pid>/fd (e.g. leftover privileged containers) is readable.
+free   SIGKILL stray processes still holding a /dev/tenstorrent handle. A
+       leftover process from a previous CI run keeps the device's sysmem/TLB
+       windows claimed, which a board reset does not release, so the next
+       cluster open fails with "tt_tlb_alloc failed with error code -12". Needs
+       root (via sudo) to read other users' /proc/<pid>/fd, e.g. a leftover
+       privileged container.
+
+reset  Reset the cluster with tt-smi. The per-board PCIe reset (-r) is invalid
+       on topology-6u runners and fails instantly, so this uses -glx_reset_auto
+       (matching the topology-6u branch of TT_SMI_RESET_COMMAND in
+       ttnn-run-sweeps.yaml).
 
 The sweeps runner does the same cleanup in-process; see ResetUtil._free_device in
 tests/sweep_framework/framework/tt_smi_util.py. This stays a standalone copy
@@ -18,7 +25,12 @@ must have no third-party dependencies.
 
 import os
 import signal
+import subprocess
 import sys
+
+# The host's tt-smi is a venv console script, not on PATH. Its shebang points at
+# the venv python, so the absolute path needs no activation.
+HOST_TT_SMI = "/opt/tt_metal_infra/provisioning/provisioning_env/bin/tt-smi"
 
 
 def self_and_ancestors():
@@ -78,7 +90,11 @@ def device_holder_pids():
     return holders
 
 
-def main():
+def reset_cluster():
+    return subprocess.call([HOST_TT_SMI, "-glx_reset_auto"])
+
+
+def free_devices():
     holders = device_holder_pids()
     if not holders:
         print("No stray processes are holding /dev/tenstorrent.")
@@ -97,5 +113,12 @@ def main():
     return 0
 
 
+def main(argv):
+    if len(argv) != 1 or argv[0] not in ("free", "reset"):
+        print(f"usage: {sys.argv[0]} free|reset", file=sys.stderr)
+        return 2
+    return free_devices() if argv[0] == "free" else reset_cluster()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
