@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -27,10 +27,6 @@ TIMEOUT = 120
 random.seed(0)
 
 
-# Parameters provided to the test vector generator are defined here.
-# They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
-# Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
-# Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
@@ -39,27 +35,18 @@ parameters = {
 }
 
 
-# Invalidate vector is called during the generation phase where each vector will be passed in.
-# If invalidated, the vector will still be stored but will be skipped.
-# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     input_layout = test_vector["input_spec"]["input_layout"]
     sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
     if input_layout == "ROW_MAJOR_LAYOUT":
         return True, "Input to eltwise binary must be tilized"
-    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
     if sharding_invalidated:
         return sharding_invalidated, output_str
 
     return False, None
 
 
-# This is the run instructions for the test, defined by the developer.
-# The run function must take the above-defined parameters as inputs.
-# The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_spec,
     input_a_dtype,
@@ -100,7 +87,7 @@ def run(
     )(input_shape)
 
     torch_input_tensor.requires_grad = True
-    golden_function = ttnn.get_golden_function(ttnn.rad2deg_bw)
+    golden_function = ttnn.get_golden_function(ttnn.deg2rad_bw)
     torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor)[0]
 
     grad_tensor = ttnn.from_torch(
@@ -119,10 +106,11 @@ def run(
         memory_config=sharded_config,
     )
 
-    reference_tensor = ttnn.multiply(grad_tensor, 57.29577951308232, memory_config=sharded_config)
+    scale = 0.017453292519943295
+    reference_tensor = ttnn.multiply(grad_tensor, scale, memory_config=sharded_config)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rad2deg_bw(grad_tensor, input_tensor, memory_config=sharded_config)[0]
+    output_tensor = ttnn.deg2rad_bw(grad_tensor, input_tensor, memory_config=sharded_config)[0]
     output_tensor_device = output_tensor
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
