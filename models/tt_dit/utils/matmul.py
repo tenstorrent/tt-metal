@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from typing import NamedTuple
 
 from loguru import logger
@@ -217,6 +218,11 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         config_tuple = config_tuple[:3]
 
     if config_tuple is None:
+        # Tuning hook: TT_DIT_MM_BLOCK="m,k,n" replaces the 8x8x8 fallback for every untuned shape, so a
+        # mesh without table entries can be swept without editing the tables.
+        env_block = os.environ.get("TT_DIT_MM_BLOCK")
+        if env_block:
+            default_block_size = tuple(int(v) for v in env_block.split(","))
         M_block_size, K_block_size, N_block_size = default_block_size if default_block_size is not None else (8, 8, 8)
 
         M_tiles = math.ceil(M / 32)
