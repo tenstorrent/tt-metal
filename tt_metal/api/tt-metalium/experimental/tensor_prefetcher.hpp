@@ -37,10 +37,13 @@ class GlobalCircularBuffer;
 // Reserved for future prefetcher-wide options.
 struct TensorPrefetcherConfig {};
 
-// Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
-// programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
-// When this returns false, StartTensorPrefetcher would TT_FATAL, so callers
-// (e.g. tests) can use this to skip rather than fail.
+// Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:
+//   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0), and
+//   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
+//     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
+//     that DRISC's NIUs in stream mode, so the two cannot coexist.
+// When this returns false, StartTensorPrefetcher TT_FATALs, so callers (e.g. tests) can
+// use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 
 // One prefetch work item: a weight tensor plus the number of K-blocks to split

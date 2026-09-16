@@ -97,10 +97,15 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     // There are 2 DRAM buffers per risc when debug dump is enabled.
     // The size of each buffer returned by get_profiler_dram_bank_size_per_risc_bytes is half to maintain the same
     // total profiler size.
-    if (debug_dump_enabled) {
-        return per_buffer_size * 2;
+    const uint32_t device_profiler_bytes = debug_dump_enabled ? per_buffer_size * 2 : per_buffer_size;
+    if (!rtoptions.get_streaming_profiler_enabled()) {
+        return device_profiler_bytes;
     }
-    return per_buffer_size;
+    // The streaming profiler's GDDR spool takes over the device profiler's DRAM slot (the two are mutually
+    // exclusive). The Blackhole HAL sizes that slot as this per-RISC value x 5 RISCs x 20 cores per DRAM channel,
+    // so it is handed the spool's per-RISC share; reserve_spool() checks the resulting slot at boot.
+    constexpr uint32_t kBlackholeRiscsPerDramChannel = 5 * 20;
+    return div_up(rtoptions.get_streaming_profiler_spool_mb() << 20, kBlackholeRiscsPerDramChannel);
 }
 
 ProfilerStateManager::ProfilerStateManager(MetalEnvImpl& env) : env_(env), do_sync_on_close(true) {}
