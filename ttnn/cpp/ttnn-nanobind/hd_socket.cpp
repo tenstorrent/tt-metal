@@ -353,14 +353,17 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = data_span.size() / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
-                while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read = 1;
-                    self.read(
-                        reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
-                        num_pages_to_read,
-                        notify_sender);
-                    bytes_read += num_pages_to_read * page_size;
-                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                {
+                    nb::gil_scoped_release release;
+                    while (remaining_bytes_to_read > 0) {
+                        uint32_t num_pages_to_read = 1;
+                        self.read(
+                            reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
+                            num_pages_to_read,
+                            notify_sender);
+                        bytes_read += num_pages_to_read * page_size;
+                        remaining_bytes_to_read -= num_pages_to_read * page_size;
+                    }
                 }
             },
             nb::arg("tensor"),
@@ -395,11 +398,14 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = nbytes / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
-                while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read = 1;
-                    self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
-                    bytes_read += num_pages_to_read * page_size;
-                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                {
+                    nb::gil_scoped_release release;
+                    while (remaining_bytes_to_read > 0) {
+                        uint32_t num_pages_to_read = 1;
+                        self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
+                        bytes_read += num_pages_to_read * page_size;
+                        remaining_bytes_to_read -= num_pages_to_read * page_size;
+                    }
                 }
             },
             nb::arg("tensor"),
