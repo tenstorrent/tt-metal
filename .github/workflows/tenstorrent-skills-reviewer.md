@@ -174,9 +174,11 @@ pre-agent-steps:
         --jq '[.[] | select(.state=="APPROVED") | .user.login]' 2>/dev/null \
         | jq -rs 'add // [] | unique | join(",")' 2>/dev/null || echo "")
 
-      # Spell the author the way CODEOWNERS does. tenstorrent/skills#6 made
-      # --exclude accept a bare login too, so this is belt and braces rather
-      # than load-bearing -- but it costs nothing and matches SKILL.md.
+      # Spell the author the way CODEOWNERS does. The following commit made
+      # --exclude accept a bare login too:
+      # https://github.com/tenstorrent/skills/commit/eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+      # This is belt and braces rather than load-bearing, but it costs
+      # nothing and matches SKILL.md.
       AUTHOR=$(jq -r '.author.login // empty' "$OUT/pr-meta.json")
       [ -n "$AUTHOR" ] && AUTHOR="@$AUTHOR"
       REQUESTED=$(jq -c '[.reviewRequests[]? | (.name // .login)]' "$OUT/pr-meta.json" 2>/dev/null || echo '[]')
