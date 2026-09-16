@@ -163,7 +163,7 @@ _TRACE_REGION_SIZE = 256 * 1024 * 1024
     ids=["bh_4x8sp1tp0nl2_ring", "bh_4x8sp1tp0nl2_traced_ring", "bh_4x8sp1tp0nl2_linear", "bh_2x4sp1tp0nl2_linear"],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("width, height", [(832, 480)], ids=["480p"])
+@pytest.mark.parametrize("width, height", [(832, 480), (1280, 720)], ids=["480p", "720p"])
 @pytest.mark.timeout(6 * 3600)  # first run converts the weight cache; then 3 full videos
 def test_wan_dbcache_ab(
     *,
