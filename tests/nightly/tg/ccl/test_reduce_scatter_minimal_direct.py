@@ -95,12 +95,17 @@ def test_reduce_scatter_minimal_direct(
 #
 # Both cluster axes are worth running: they are rings of different sizes (4 across, 8 down), a different
 # number of concurrent rings (8 vs 4), and different physical wiring for the closing link.
+#
+# One shape, not RS_DIRECT_SHAPES: the `mesh_device` fixture is function-scoped, so every case here
+# reopens the 32-device mesh and re-inits the fabric, and the Galaxy CCL leg this lands in already runs
+# ~3400s against a 3600s timeout. Scatter geometry (a non-innermost dim) is what the second shape buys,
+# and that is orthogonal to mesh shape and already covered by the single-ring cases above.
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis0", "axis1"])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("rs_input_shape, dim", RS_DIRECT_SHAPES, ids=RS_DIRECT_SHAPE_IDS)
+@pytest.mark.parametrize("rs_input_shape, dim", RS_DIRECT_SHAPES[:1], ids=RS_DIRECT_SHAPE_IDS[:1])
 @pytest.mark.parametrize("enable_trace, num_iters", RS_DIRECT_TRACE_CASES, ids=RS_DIRECT_TRACE_IDS)
 # "both" and "none" select whether the writer's start barrier -- where the hang parks -- is compiled in.
 # The "staging" helper path is covered on t3000/blackhole and is orthogonal to the mesh shape.
