@@ -105,12 +105,36 @@ struct ProgramRunArgs {
     //
     // CAUTION: MeshTensor is an RAII object. The user is responsible for ensuring that the MeshTensor
     //          object remains alive until the last Program execution that uses it has completed on the
-    //          device. Use extreme caution if you use UpdateProgramRunArgs with an incomplete set of
-    //          TensorArguments. A stale binding to a destroyed MeshTensor will produce undefined behavior.
+    //          device. A stale binding to a destroyed MeshTensor will produce undefined behavior.
+    //          Use extreme caution if you use UpdateProgramRunArgs with an incomplete set of TensorArguments.
     //
     // The argument's TensorSpec MUST match the TensorParameter's TensorSpec (shape, layout, data type).
     // (Any declared TensorParameter relaxations will modify the matching rules; see advanced_options.hpp.)
     Table<TensorParamName, TensorArgument> tensor_args;
+
+    ////////////////////////////////////////////////////////////////////////
+    // GlobalSemaphore arguments
+    ////////////////////////////////////////////////////////////////////////
+
+    // A GlobalSemaphoreArgument must be specified:
+    //  For EVERY GlobalSemaphoreParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  For any SUBSET of GlobalSemaphoreParameters, when calling UpdateProgramRunArgs. (For advanced users only.)
+    //
+    // CAUTION: GlobalSemaphore is an RAII object. The user is responsible for ensuring that the GlobalSemaphore
+    //          object remains alive until the last Program execution that uses it has completed on the
+    //          device. A stale binding to a destroyed GlobalSemaphore will produce undefined behavior.
+    //
+    using GlobalSemaphoreArgument = std::reference_wrapper<const GlobalSemaphore>;
+    Table<GlobalSemaphoreParamName, GlobalSemaphoreArgument> global_semaphore_args;
+
+    ////////////////////////////////////////////////////////////////////////
+    // PrefetcherPipe arguments
+    ////////////////////////////////////////////////////////////////////////
+
+    // PrefetcherPipeArguments work in a similar way to GlobalSemaphoreArguments.
+    // The properties of the supplied PrefetcherPipe object must match the declared PrefetcherPipeParameter.
+    using PrefetcherPipeArgument = std::reference_wrapper<const PrefetcherPipe>;
+    Table<PrefetcherPipeParamName, PrefetcherPipeArgument> prefetcher_pipe_args;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
