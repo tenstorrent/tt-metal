@@ -668,4 +668,21 @@ TEST_F(FabricExpress2DTorusXYFixture, TestMeshMulticastSourceInjectApis) {
     run_source_inject_test(this, SourceInjectCoverage::ExpressFanout);
 }
 
+class FabricExpress2DTorusXFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
+    }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+// Counterpart of the XY fixture for the express-capable subtorus MGDs, whose device_topology is
+// [LINE, RING]: only the short axis wraps, while dim 0 carries the express-link patterns. Multicast
+// never leaves a rank -- target_devices() rejects a branch as soon as one target chip is absent from
+// local_physical_ids -- so on the MGDs whose meshes span several hosts each rank independently
+// covers its own slice, and no inter-mesh branch is reachable.
+TEST_F(FabricExpress2DTorusXFixture, TestMeshMulticastSourceInjectApis) {
+    run_source_inject_test(this, SourceInjectCoverage::ExpressFanout);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
