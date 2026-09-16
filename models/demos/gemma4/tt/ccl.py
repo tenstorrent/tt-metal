@@ -113,10 +113,8 @@ def _physical_tile_padded_height(tensor) -> int:
     return ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
-def ccl_sync_split_enabled() -> bool:
-    """Use tunable sync reduce-scatter + all-gather for TP all-reduce."""
-    return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
-
+# Buffers per channel for the sync reduce-scatter half.
+_CCL_SYNC_RS_BUFFERS = 4
 
 _PREFILL_RS_TALL_HEIGHT = 2048
 
@@ -148,16 +146,6 @@ def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
     if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
         return 2
     return 1
-
-
-def ccl_sync_rs_buffers() -> int:
-    """Buffers per channel for the sync reduce-scatter half."""
-    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_BUFFERS", "4")))
-
-
-def ccl_l1_gather_enabled() -> bool:
-    """Allow decode all-reduce to gather into its consumer's L1 layout."""
-    return os.environ.get("GEMMA4_CCL_L1_GATHER", "1").lower() not in ("0", "false", "no")
 
 
 def default_ccl_topology(mesh_device=None, is_moe: bool = True):
@@ -210,9 +198,7 @@ def ccl_async_enabled(padded_height: int | None = None) -> bool:
     override = os.environ.get("GEMMA4_CCL_ASYNC")
     if override is not None:
         return override.lower() in ("1", "true", "yes")
-    if padded_height is not None and int(padded_height) >= _CCL_ASYNC_MIN_HEIGHT:
-        return os.environ.get("GEMMA4_CCL_ASYNC_PREFILL", "1").lower() not in ("0", "false", "no")
-    return False
+    return padded_height is not None and int(padded_height) >= _CCL_ASYNC_MIN_HEIGHT
 
 
 class CCLManager:
@@ -353,8 +339,6 @@ class CCLManager:
 
 def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
     """Width-sharded L1 gather layout for decode and short-prefill all-reduce."""
-    if not ccl_l1_gather_enabled():
-        return None
     try:
         shape = tensor.shape
         if len(shape) != 4:
@@ -443,35 +427,25 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
-    if ccl_sync_split_enabled():
-        scattered = ttnn.reduce_scatter(
-            tensor,
-            dim=3,
-            cluster_axis=tp_axis,
-            num_links=ccl_manager.num_links,
-            topology=topology,
-            memory_config=memory_config,
-            num_workers_per_link=ccl_sync_rs_workers(padded_height),
-            chunks_per_sync=ccl_sync_rs_chunks(padded_height),
-            num_buffers_per_channel=ccl_sync_rs_buffers(),
-        )
-        tensor.deallocate(True)
-        result = ttnn.all_gather(
-            scattered,
-            dim=3,
-            cluster_axis=tp_axis,
-            memory_config=gather_memory_config,
-        )
-        scattered.deallocate(True)
-        return result
-
-    # Fused fallback: omit deprecated num_links/topology.
-    result = ttnn.all_reduce(
+    scattered = ttnn.reduce_scatter(
         tensor,
+        dim=3,
         cluster_axis=tp_axis,
+        num_links=ccl_manager.num_links,
+        topology=topology,
         memory_config=memory_config,
+        num_workers_per_link=ccl_sync_rs_workers(padded_height),
+        chunks_per_sync=ccl_sync_rs_chunks(padded_height),
+        num_buffers_per_channel=_CCL_SYNC_RS_BUFFERS,
     )
     tensor.deallocate(True)
+    result = ttnn.all_gather(
+        scattered,
+        dim=3,
+        cluster_axis=tp_axis,
+        memory_config=gather_memory_config,
+    )
+    scattered.deallocate(True)
     return result
 
 

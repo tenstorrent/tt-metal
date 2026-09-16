@@ -19,24 +19,14 @@ from models.demos.gemma4.tests.test_factory import _mesh_key_from_node_name, get
 _TABLE = os.path.join(os.path.dirname(__file__), "..", "pcc_thresholds.json")
 _MESHES = ["1x2", "1x4", "1x8"]
 
-# Measured on a real T3K (clean base 9d83ad5c8c7, this branch). Repeated runs
-# agree to every decimal on five of the six, and survived a board reset; 1x4
-# prefill produced 0.9805 once against 0.9803 on three other runs, so treat
-# ~2e-4 as its run-to-run spread when comparing against these.
-# Only the branch column gates (see test_gate_passes_a_healthy_tree); base is
-# kept to show what the fix moved.
-# The branch column covers HiFi3 + fp32 dest-accumulation on the m<=32
-# projections, plus the bf16 weight promotions in precision_overrides.json
-# ("_comment_wh_bf16"). 1x8 takes attention only -- walking all 8 module
-# combinations showed lm_head bf16 is worth +2.4e-5 and shared_mlp's +0.0256 is
-# not needed once attention (+0.0394) is bf16, so 1x8 gives up 0.0008 of PCC for
-# 13.7% of decode. 1x2 took shared_mlp + lm_head; 1x4 stays all-bfp8 and still
-# gains 0.021, because the dest-accumulator width is a property of the sum
-# rather than of how the weight is stored.
-# 1x2 test_full_model measured 0.9912 on one run and 0.9920 on another with the
-# tree unchanged between them (1x2 decode was bit-identical on both), so treat
-# ~8e-4 as ITS run-to-run spread. Against a 0.99 gate that leaves little room --
-# compare a 1x2 red against both values before calling it a regression.
+# (base, branch) PCC per mesh, measured on a real T3K. Only the branch column
+# gates (see test_gate_passes_a_healthy_tree); base predates the m<=32 fp32
+# dest-accumulation fix and is kept purely to show what that fix moved.
+#
+# Run-to-run spread matters when reading a red: 1x4 prefill carries ~2e-4, and
+# 1x2 test_full_model carries ~8e-4 (observed twice on an unchanged tree, while
+# 1x2 decode was bit-identical both times). Against a 0.99 gate 1x2 has little
+# room, so compare a 1x2 red with these values before calling it a regression.
 _WH_MEASURED = {
     "test_full_model": {"1x2": (0.9550, 0.9920), "1x4": (0.9613, 0.9803), "1x8": (0.9514, 0.9888)},
     "test_full_model_decode": {"1x2": (0.9610, 0.9907), "1x4": (0.9737, 0.9848), "1x8": (0.9735, 0.9831)},

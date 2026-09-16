@@ -10,9 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
-from models.demos.gemma4.tt.dram_sharded import decode_in0_l1_enabled
 
 from .operations import (
     apply_allreduce,
@@ -36,54 +34,6 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
-
-
-def _wh_paged_update_user_cap():
-    """Users per ``paged_update_cache`` call on Wormhole. ``0`` = one call for the whole batch.
-
-    The op wants its update tensor HEIGHT_SHARDED one user per core and puts its
-    static CBs on those same cores, so a wide enough batch can run the two out of
-    L1. The loudbox branch hits exactly that at batch-32 -- compile fails with
-    "circular buffers ... clash with L1 buffers", 12384 B over -- and writes in
-    groups of 16 to stay under it.
-
-    That failure does NOT reproduce here: this branch issues one call for all 32
-    users and passes. So grouping is a perf question on this branch, not a
-    correctness one -- and measured, it is a pessimisation. 12B / T3K batch-32,
-    two reps per arm, within-arm spread <=0.2%:
-
-        cap 0 (one call, default) .. 55.40 / 55.51 -> 55.46 ms/tok
-        cap 16 (loudbox default) ... 57.45 / 57.38 -> 57.42  (+3.5%)
-        cap 8 ...................... 59.45 / 59.34 -> 59.40  (+7.1%)
-
-    Monotonic in group count, which extends the loudbox branch's own 16-vs-8
-    result (51.2 vs 53.05) to its limit: fewer groups is faster, and zero is
-    fastest. Kept behind the env because it is the fallback if a model's shard
-    shape ever does hit the L1 clash -- that failure is a loud compile error,
-    not silent corruption.
-    """
-    return max(0, int(os.environ.get("GEMMA4_WH_PAGED_UPDATE_USERS", "0")))
-
-
-def _wh_user_groups(cache_pos, page_table, batch, cap):
-    """Yield ``(start, end, cache_pos_slice, page_table_slice)`` per user group.
-
-    NOTE (perf): ``cache_pos`` and ``page_table`` are the same two device tensors
-    for every layer of a decode step, so these slices are re-cut once per layer --
-    ``2 * ceil(batch / cap)`` extra dispatches x num_layers per token. Hoisting
-    them to once per step belongs in the model's decode entry, where the tensors
-    are owned; doing it here would need a cross-layer memo whose entries can
-    outlive a trace capture. Left per-call deliberately.
-    """
-    pt_cols = page_table.shape[1]
-    for start in range(0, batch, cap):
-        end = min(start + cap, batch)
-        yield (
-            start,
-            end,
-            ttnn.slice(cache_pos, [start], [end]),
-            ttnn.slice(page_table, [start, 0], [end, pt_cols]),
-        )
 
 
 def _height_shard_memcfg(num_users, shard_shape, grid_x=8):
@@ -245,14 +195,9 @@ def decode_forward(
         k_cache, v_cache = kv_cache
         if not is_kv_shared:
             # After HF-style RoPE, tensors may be in DRAM. HEIGHT_SHARD for the
-            # cache update, except when Wormhole grouping is on and this batch
-            # exceeds the cap -- that path reshards each group itself, from DRAM
-            # (see _wh_paged_update_user_cap).
-            _wh_cap = _wh_paged_update_user_cap()
-            _grouped_kv_write = (not is_blackhole()) and _wh_cap > 0 and int(tt_k.shape[1]) > _wh_cap
-            if not _grouped_kv_write:
-                tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
-                tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
+            # cache update.
+            tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
+            tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
 
             if page_table is not None:
                 # Per-device kv-head count of the layer's input view. When the cache
@@ -312,35 +257,6 @@ def decode_forward(
                             **paged_modulo_kwargs,
                         )
                         for t in (kb, vb, pos_b, pt_b):
-                            t.deallocate(True)
-                    k_seq.deallocate(True)
-                    v_seq.deallocate(True)
-                elif _grouped_kv_write:
-                    # Wormhole, grouping enabled, batch above the cap: write
-                    # <=cap users per call so the update tensor's shard grid stays
-                    # inside what paged_update_cache's CBs leave free. K/V are
-                    # still DRAM-interleaved here (see _grouped_kv_write above),
-                    # which is also the cheapest place to slice a user range from.
-                    _shard_shape = list(q_sharded_mem.shard_spec.shape)
-                    k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
-                    v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
-                    nkv, hd = k_seq.shape[2], k_seq.shape[3]
-                    for start, end, pos_b, pt_b in _wh_user_groups(cache_pos, page_table, batch, _wh_cap):
-                        group_mem = _height_shard_memcfg(end - start, _shard_shape)
-                        for cache, seq in ((k_cache, k_seq), (v_cache, v_seq)):
-                            gb = ttnn.slice(seq, [0, start, 0, 0], [1, end, nkv, hd])
-                            gb = ttnn.to_memory_config(gb, group_mem)
-                            ttnn.experimental.paged_update_cache(
-                                cache,
-                                gb,
-                                update_idxs_tensor=pos_b,
-                                page_table=pt_b,
-                                block_size=eff_bs,
-                                num_kv_heads=num_local_kv_heads,
-                                **paged_modulo_kwargs,
-                            )
-                            gb.deallocate(True)
-                        for t in (pos_b, pt_b):
                             t.deallocate(True)
                     k_seq.deallocate(True)
                     v_seq.deallocate(True)
@@ -438,9 +354,7 @@ def decode_forward(
     tt_out = concat_heads(
         tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
     )
-    tt_out = apply_output_projection(
-        tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG if decode_in0_l1_enabled() else None
-    )
+    tt_out = apply_output_projection(tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     return tt_out
@@ -937,8 +851,6 @@ def packed_decode_forward(
     tt_sdpa = ttnn.transpose(tt_sdpa, 1, 2)
     tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_sdpa)
-    tt_out = apply_output_projection(
-        tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG if decode_in0_l1_enabled() else None
-    )
+    tt_out = apply_output_projection(tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
     return tt_out

@@ -1037,23 +1037,13 @@ class ChunkedPrefillPageTableGuardMixin:
 
             # Hoist the page-table host->device convert out of the chunk loop.
             # Every chunk passes the SAME full page table, so leaving it torch
-            # makes prepare_inputs_prefill re-run ttnn.from_torch once per chunk
-            # (32 times at 64k). Skipped under trace capture, where the tensor
-            # must be the one the trace writes into on replay.
-            #
-            # MEASURED NEUTRAL on 12B / T3K, so this is upstream parity, not a
-            # win: 32k warm TTFT 10264.8 (on) vs 10271.3 / 10266.1 (off), a
-            # 0.04% difference against a 0.3% noise floor. 4k is inert by
-            # construction -- it runs traced, and the hoist is skipped there.
-            # A small int32 page table simply does not cost anything next to a
-            # 10 s TTFT. Kept ON to match the reference branch and because the
-            # ttnn.Tensor pass-through it needs in prepare_inputs_prefill is the
-            # shape any future hoist wants; set 0 to restore per-chunk convert.
-            hoist_page_table = os.environ.get("GEMMA4_PREFILL_PT_HOIST", "1").lower() not in ("0", "false", "no")
+            # makes prepare_inputs_prefill re-run ttnn.from_torch once per chunk.
+            # NOT done under trace capture: there the tensor must be the one the
+            # trace writes into on replay.
             page_table_for_chunks = (
-                self.model[model_id]._page_table_torch_to_ttnn(page_table_user_padded)
-                if hoist_page_table and not kwargs.get("trace_enabled", False)
-                else page_table_user_padded
+                page_table_user_padded
+                if kwargs.get("trace_enabled", False)
+                else self.model[model_id]._page_table_torch_to_ttnn(page_table_user_padded)
             )
 
             # Inject an expanded last start when adjust moves it off the chunk grid.
@@ -1689,7 +1679,57 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             self.trace_inputs_decode[key] = inputs
             self.trace_output_decode[key] = outputs
 
+    def _set_prefill_sharded_logits(self, sampling_params):
+        """Scope the sharded last-token-logits opt-in to one prefill call.
+
+        The last-token PREFILL slice may stay TP-sharded only when this call will
+        device-sample; a host-sampling call (``sampling_params is None``, e.g. the
+        warmup pass) must gather the full vocab or it reads garbage. That is a
+        per-call fact, so it is published on the model for the duration of the call
+        rather than threaded through the shared tt_transformers signature.
+        """
+        for model in self.model:
+            model._prefill_allow_sharded_logits = bool(
+                sampling_params is not None
+                and getattr(model, "_supports_on_device_sampling", False)
+                and getattr(model, "sampling", None) is not None
+            )
+
     def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        model_id_warmup=None,
+        sampling_params=None,
+        start_pos: list[int] = None,
+        return_hidden_states=False,
+        warmup_prefill=True,
+        **kwargs,
+    ):
+        self._set_prefill_sharded_logits(sampling_params)
+        try:
+            return self._prefill_forward_text_gemma4(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                empty_slots=empty_slots,
+                enable_trace=enable_trace,
+                model_id_warmup=model_id_warmup,
+                sampling_params=sampling_params,
+                start_pos=start_pos,
+                return_hidden_states=return_hidden_states,
+                warmup_prefill=warmup_prefill,
+                **kwargs,
+            )
+        finally:
+            self._set_prefill_sharded_logits(None)
+
+    def _prefill_forward_text_gemma4(
         self,
         tokens: torch.Tensor,
         page_table=None,

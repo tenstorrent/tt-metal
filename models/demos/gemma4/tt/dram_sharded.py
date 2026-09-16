@@ -128,29 +128,12 @@ def prefill_max_cols_default(mesh_device=None):
 # This keeps per_core_M tiny AND avoids the memory blow-up of a chunk+concat
 # (which would need source chunks + a full-size destination simultaneously).
 _PREFILL_CUTOFF = 512 if is_blackhole() else 1024
-# The tuned o_proj path is shape-specific: it helps 31B but regresses 12B.
-_OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
 _PREFILL_M_CHUNK = prefill_grid_default()[1] * 8 * TILE_SIZE
 
 
 def in_prefill_l1_matmul_band(m: int) -> bool:
     return TILE_SIZE < int(m) <= _PREFILL_CUTOFF
-
-
-def prefill_matmul_lofi_enabled(m: int) -> bool:
-    """LoFi tall-prefill matmuls are opt-in after long-context regressions."""
-    enabled = os.environ.get("GEMMA4_PREFILL_MATMUL_LOFI", "0").lower() in ("1", "true", "yes")
-    return enabled and int(m) > _PREFILL_CUTOFF
-
-
-def prefill_lofi_ckc():
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
 
 
 def _prefill_hifi2_ckc():
@@ -268,8 +251,7 @@ def linear_l1_safe(x, weight, *, program_config=None, memory_config=None, comput
 
 
 def should_prefill_long_2d(m: int) -> bool:
-    enabled = os.environ.get("GEMMA4_PREFILL_LONG_2D", "1").lower() not in ("0", "false", "no")
-    return enabled and int(m) > _PREFILL_CUTOFF and int(m) % _PREFILL_CUTOFF == 0
+    return int(m) > _PREFILL_CUTOFF and int(m) % _PREFILL_CUTOFF == 0
 
 
 def weight_memcfg(k, n):
@@ -345,8 +327,6 @@ def decode_progcfg(m, k, n, dtype=None):
 
 def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
     """Tuned narrow-N decode config; wide shapes retain ttnn auto."""
-    if os.environ.get("GEMMA4_QKV_DECODE_PROGCFG", "1").lower() in ("0", "false", "no"):
-        return None
     if k % TILE_SIZE or n % TILE_SIZE or m > TILE_SIZE:
         return None
     grid = mesh_device.compute_with_storage_grid_size()
@@ -511,7 +491,7 @@ def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
     batch = m // _PREFILL_CUTOFF
     reshaped = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
     program_config = prefill_progcfg(_PREFILL_CUTOFF, n_in, n_out)
-    compute_kernel_config = prefill_lofi_ckc() if prefill_matmul_lofi_enabled(m) else _prefill_hifi2_ckc()
+    compute_kernel_config = _prefill_hifi2_ckc()
     output = linear_l1_safe(
         reshaped,
         weight,
@@ -662,18 +642,6 @@ def l1_block_sharded_memcfg(rows, cols, grid=None):
     )
 
 
-def interleaved_o_proj_prefill_config(m, k, n, grid=None):
-    """Shape-gated o_proj tuning; deliberately opt-in per safety follow-up."""
-    if not _OPROJ_TUNED or not in_prefill_l1_matmul_band(m):
-        return None, None, None
-    grid = grid or prefill_grid_default()
-    program_config = prefill_progcfg(m, k, n, grid_size=grid)
-    out_memcfg = l1_block_sharded_memcfg(m, n, grid=grid)
-    if not _out_shard_matches_program(out_memcfg, program_config):
-        return None, None, None
-    return program_config, out_memcfg, _prefill_hifi2_ckc()
-
-
 def wide_vocab_lm_head_ckc(weight):
     """Fidelity for an LM head too wide for the tuned 1D-mcast program config.
 
@@ -732,17 +700,11 @@ def lm_head_decode_config(mesh_device, m, k, n, weight=None):
     )
     if program_config is None:
         return None, None, None
-    mode = os.environ.get("GEMMA4_LM_HEAD_FIDELITY", "hifi3_destacc").lower()
-    if mode == "hifi4":
-        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
-    elif mode == "hifi4_destacc":
-        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, True
-    else:
-        fidelity, dest_acc = ttnn.MathFidelity.HiFi3, True
+    # HiFi4 together with fp32 dest-acc trips Wormhole hardware bug #38306.
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
         math_approx_mode=False,
-        fp32_dest_acc_en=dest_acc,
+        fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
     return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
@@ -878,30 +840,6 @@ class DramShardedLinear:
         for o in outs:
             o.deallocate(True)
         return _restore(out)
-
-
-def decode_in0_l1_enabled() -> bool:
-    """Un-shard decode matmul in0 into L1 rather than DRAM. Default ON."""
-    return os.environ.get("GEMMA4_DECODE_IN0_L1", "1").lower() not in ("0", "false", "no")
-
-
-def decode_out_l1_enabled() -> bool:
-    """Land the SharedMLP decode matmul *output* in L1 rather than DRAM. Default ON.
-
-    Counterpart to ``decode_in0_l1_enabled`` for the other side of the same
-    matmuls: ``SharedMLP._gate_up_linear`` / ``_down_proj_linear`` place their
-    output in L1 whenever the activation is a single tile row (decode). That
-    placement arrived ungated, so the only way to price it was to edit the
-    source; this knob makes it an A/B.
-
-    Priced and it is a wash. 31B / T3K long-context-4k, two reps per arm:
-    ON 53.87 / 53.79 (mean 53.83), OFF 53.54 / 53.69 (mean 53.62) ms/tok, and
-    TTFT flat at ~2005 ms either way. The 0.21 ms gap is the size of the
-    baseline's own rep-to-rep spread (53.92 / 53.74), so this is not where the
-    SharedMLP port's -1.5/-1.7% decode cost lives. Left ON; the knob stays so
-    the question does not get re-opened by reading the source.
-    """
-    return os.environ.get("GEMMA4_DECODE_OUT_L1", "1").lower() not in ("0", "false", "no")
 
 
 def width_shard_core_count(memcfg):

@@ -25,15 +25,11 @@ from models.demos.gemma4.tt.dram_sharded import (
     TILE_SIZE,
     DramShardedLinear,
     can_dram_shard,
-    decode_in0_l1_enabled,
-    decode_out_l1_enabled,
     interleaved_down_proj_prefill_config,
     interleaved_gate_up_prefill_config,
     linear_l1_safe,
     matmul_rows,
     prefill_linear_above_cutoff,
-    prefill_lofi_ckc,
-    prefill_matmul_lofi_enabled,
     prefill_progcfg_1d_for_width_sharded_in0,
     should_prefill_long_2d,
     single_tile_matmul_ckc,
@@ -222,7 +218,7 @@ class SharedMLP:
         if program_config is None:
             if hidden_states.is_sharded():
                 dest = ttnn.DRAM_MEMORY_CONFIG
-                if matmul_rows(hidden_states) <= TILE_SIZE and decode_in0_l1_enabled():
+                if matmul_rows(hidden_states) <= TILE_SIZE:
                     dest = ttnn.L1_MEMORY_CONFIG
                 return ttnn.sharded_to_interleaved(hidden_states, dest), True
             return hidden_states, False
@@ -238,7 +234,7 @@ class SharedMLP:
 
     def _gate_up_linear(self, hidden_states):
         rows = matmul_rows(hidden_states)
-        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE and decode_out_l1_enabled() else None
+        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE else None
         if isinstance(self.gate_up_proj, DramShardedLinear):
             return self.gate_up_proj(hidden_states, out_memory_config=decode_memory_config)
 
@@ -252,8 +248,6 @@ class SharedMLP:
             return output
 
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(rows, k, n)
-        if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(rows):
-            compute_kernel_config = prefill_lofi_ckc()
         if compute_kernel_config is None:
             compute_kernel_config = single_tile_matmul_ckc(rows)
         if out_memcfg is None and rows <= TILE_SIZE:
@@ -293,7 +287,7 @@ class SharedMLP:
 
     def _down_proj_linear(self, hidden):
         rows = matmul_rows(hidden)
-        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE and decode_out_l1_enabled() else None
+        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE else None
         if isinstance(self.down_proj, DramShardedLinear):
             return self.down_proj(hidden, out_memory_config=decode_memory_config)
 

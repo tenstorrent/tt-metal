@@ -523,8 +523,8 @@ def test_demo_text(
     bounded_sliding = lc["bounded_sliding"]
     # Turn on multi-chunk prefill-trace replay for unbounded runs whose
     # max_seq_len sits AT the trace ceiling (4k), which would otherwise prefill
-    # untraced. Measured -8.7% (12B) / -4.5% (31B) TTFT at long-context-4k. The
-    # batch-32 config's max_seq_len sits exactly AT that ceiling too.
+    # untraced, which costs real TTFT. The batch-32 config's max_seq_len sits
+    # exactly AT that ceiling too.
     maybe_auto_enable_chunked_prefill_trace(
         batch_size=batch_size,
         max_seq_len=max_seq_len,
@@ -683,12 +683,10 @@ def test_demo_text(
     # feeds the sampled id back itself, so out_tok is not needed as input) and a
     # decode trace.
     #
-    # Default ON. Measured on 12B / T3K, two reps per arm, Decode(wall):
-    #     long-context-4k  45.27 -> 34.82 ms/token   -23.1%
-    #     batch-32         77.80 -> 54.78 ms/token   -29.6%
-    # Generated text is byte-identical with it on, at batch-1, 4k and 32k, so
-    # the device-side feedback is sound. GEMMA4_DECODE_PIPELINE=0 restores the
-    # blocking read.
+    # Default ON. Safe because with on-device sampling the device already commits
+    # the sampled id into the next step's feedback buffer, so the host-side read is
+    # observational: generated text is byte-identical with it on.
+    # GEMMA4_DECODE_PIPELINE=0 restores the blocking read.
     pipeline_reads = (
         device_sampling_params is not None
         and enable_trace
@@ -809,9 +807,10 @@ def test_demo_text(
     # Wall-clock decode, valid for BOTH the blocking and the pipelined path.
     # The per-step sum above measures only what the host spends inside each
     # step; with GEMMA4_DECODE_PIPELINE=1 the host enqueues and returns before
-    # the device finishes, so device time escapes those timers entirely (12B
-    # 32k reported 3.38 ms/token against a 10% wall improvement). This brackets
-    # the whole loop, drain included, minus the compile iteration.
+    # the device finishes, so device time escapes those timers entirely and the
+    # per-step figure understates the cost badly. Do NOT compare pipelined and
+    # blocking arms on it. This brackets the whole loop, drain included, minus
+    # the compile iteration.
     _decode_wall = profiler.get_duration("inference_decode")
     try:
         _decode_wall -= profiler.get_duration("inference_decode_time_0")

@@ -23,13 +23,10 @@ from models.demos.gemma4.tt.dram_sharded import (
     TILE_SIZE,
     DramShardedLinear,
     in_prefill_l1_matmul_band,
-    interleaved_o_proj_prefill_config,
     interleaved_prefill_config,
     linear_l1_safe,
     matmul_rows,
     prefill_linear_above_cutoff,
-    prefill_lofi_ckc,
-    prefill_matmul_lofi_enabled,
     should_prefill_long_2d,
     single_tile_matmul_ckc,
 )
@@ -165,8 +162,6 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
         program_config, tuned_out_memcfg, compute_kernel_config = interleaved_prefill_config(
             rows, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
         )
-        if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(rows):
-            compute_kernel_config = prefill_lofi_ckc()
         if compute_kernel_config is None:
             compute_kernel_config = single_tile_matmul_ckc(rows)
     activation, owned_activation = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
@@ -708,23 +703,19 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
         return out
 
     rows = matmul_rows(tensor)
-    program_config, tuned_out_memcfg, compute_kernel_config = interleaved_o_proj_prefill_config(
-        rows, int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
-    )
-    if compute_kernel_config is None:
-        compute_kernel_config = single_tile_matmul_ckc(rows)
-    if program_config is None and should_prefill_long_2d(rows):
+    compute_kernel_config = single_tile_matmul_ckc(rows)
+    if should_prefill_long_2d(rows):
         out = prefill_linear_above_cutoff(tensor, weights.o_proj, out_memory_config=memory_config)
         tensor.deallocate(True)
         return out
-    if memory_config is None and tuned_out_memcfg is None and rows <= TILE_SIZE:
+    if memory_config is None and rows <= TILE_SIZE:
         memory_config = ttnn.L1_MEMORY_CONFIG
-    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor, program_config)
+    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor, None)
     out = linear_l1_safe(
         activation,
         weights.o_proj,
-        program_config=program_config,
-        memory_config=memory_config if memory_config is not None else tuned_out_memcfg,
+        program_config=None,
+        memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
     )
     if owned_activation is not None:
