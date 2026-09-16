@@ -22,6 +22,7 @@ from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio, export_video_audio_yuv
+from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages.
@@ -360,6 +361,7 @@ class LTXDistilledPipeline(LTXPipeline):
         image_cond_strength: float = 1.0,
         traced: bool = False,
         trace_key: str | None = None,
+        on_event: PipelineEventCallback = null_callback,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
@@ -553,6 +555,7 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.add_(state.tt_audio_lat, a_vel)
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
+            on_event(DenoiseStep(step=step_idx + 1, total=num_steps, sigma=sigma))
 
         v_final = LTXTransformerModel.device_to_host(
             state.tt_video_lat,
@@ -583,12 +586,15 @@ class LTXDistilledPipeline(LTXPipeline):
         width: int = 768,
         seed: int = 10,
         fps: int = 24,
+        on_event: PipelineEventCallback | None = None,
     ):
         """Run the distilled 2-stage AV pipeline.
 
         output_path given → encode an AV MP4 and return its path (str).
         output_path None  → return ``(frames, audio)`` for the caller to encode.
         """
+        on_event = on_event if on_event is not None else null_callback
+
         assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
 
@@ -598,6 +604,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # (label, seconds) rows counted toward the total; prepares and export excluded.
         timings: list[tuple[str, float]] = []
 
+        on_event(SectionStart("encoder"))
         t0 = time.time()
         # A served request encodes a prompt nothing has seen, so a cache hit would drop the encoder
         # out of the reported total and out of the traced path it belongs in. dynamic_load keeps the
@@ -611,6 +618,7 @@ class LTXDistilledPipeline(LTXPipeline):
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
         logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
+        on_event(SectionEnd("encoder"))
 
         s1_cond_latent = full_cond_latent = None
         cond_strength = 1.0
@@ -632,6 +640,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     logger.info(f"I2V: reusing cached conditioning latents for {img_path} (strength={cond_strength})")
                 else:
                     logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
+                    on_event(SectionStart("image_encode"))
                     t0 = time.time()
                     img_s1 = load_conditioning_image(img_path, s1_height, s1_width)
                     img_full = load_conditioning_image(img_path, height, width)
@@ -639,6 +648,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     full_cond_latent = cache[full_key] = self.encode_image(img_full)
                     timings.append(("Image encode", time.time() - t0))
                     logger.info(f"Image encode: {time.time() - t0:.1f}s")
+                    on_event(SectionEnd("image_encode"))
 
         t0 = time.time()
         self._prepare_transformer(0)
@@ -646,6 +656,7 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
 
         logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
+        on_event(SectionStart("denoising_s1"))
         t0 = time.time()
         s1_video, s1_audio = self._denoise_no_guidance(
             v_embeds,
@@ -659,25 +670,30 @@ class LTXDistilledPipeline(LTXPipeline):
             image_cond_strength=cond_strength,
             traced=self._traced,
             trace_key="s1",
+            on_event=on_event,
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
+        on_event(SectionEnd("denoising_s1"))
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
+        on_event(SectionStart("latent_upsample"))
         t0 = time.time()
         self._prepare_upsampler()
         upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")
+        on_event(SectionEnd("latent_upsample"))
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
+        on_event(SectionStart("denoising_s2"))
         t0 = time.time()
         s2_video, s2_audio = self._denoise_no_guidance(
             v_embeds,
@@ -693,10 +709,12 @@ class LTXDistilledPipeline(LTXPipeline):
             image_cond_strength=cond_strength,
             traced=self._traced,
             trace_key="s2",
+            on_event=on_event,
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
+        on_event(SectionEnd("denoising_s2"))
 
         t0 = time.time()
         self._prepare_vae()
@@ -708,17 +726,21 @@ class LTXDistilledPipeline(LTXPipeline):
         yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
+        on_event(SectionStart("vae"))
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
+        on_event(SectionEnd("vae"))
 
+        on_event(SectionStart("audio_decode"))
         t0 = time.time()
         audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
+        on_event(SectionEnd("audio_decode"))
 
         self.last_timings = list(timings)
         if output_path is None:
