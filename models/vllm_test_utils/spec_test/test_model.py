@@ -105,9 +105,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
         self.accept_depth = None if depth < 0 else depth
         self.target = os.environ.get("TT_SPEC_TARGET", TARGET_DEPTH)
         if self.target not in (TARGET_DEPTH, TARGET_FIXED):
-            raise ValueError(
-                f"TT_SPEC_TARGET must be {TARGET_DEPTH!r} or {TARGET_FIXED!r}, " f"got {self.target!r}"
-            )
+            raise ValueError(f"TT_SPEC_TARGET must be {TARGET_DEPTH!r} or {TARGET_FIXED!r}, " f"got {self.target!r}")
         # Set by every verify and checked by the drafter. None before the first
         # verify, which is also the state a propose arriving before any verify
         # would be caught by.
@@ -133,6 +131,24 @@ class DummySpecDecodeModel(DummyNoOpModel):
         """
         ids = tokens.to(torch.int64) * 31 + positions.to(torch.int64) * 7 + 11
         return (ids % self.vocab_size).to(torch.int32)
+
+    @classmethod
+    def get_max_tokens_all_users(cls, **kwargs):
+        """The KV budget this model declares, which sizes the block pool.
+
+        A real model computes this from its own device memory. This one has no
+        KV cache at all, so the number is free, and the plugin's default of
+        131072 tokens is large enough that no reachable number of requests can
+        exhaust it. That makes preemption unreachable, and a preemption test
+        that cannot reach its subject is worth nothing.
+
+        ``TT_SPEC_MAX_TOKENS_ALL_USERS`` is therefore how a launch asks for a
+        pool small enough to force one. ``--num-gpu-blocks-override`` cannot:
+        the plugin writes that field itself from this value, so an operator's
+        setting is replaced.
+        """
+        del kwargs  # nothing here scales with the device or the batch
+        return int(os.environ.get("TT_SPEC_MAX_TOKENS_ALL_USERS", "131072"))
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
@@ -339,9 +355,7 @@ class DummySpecDecodeModel(DummyNoOpModel):
         if positions is None and len(args) > 1:
             positions = args[1]
         rows = tokens.shape[0]
-        choice = self._fixed_choice(
-            tokens.reshape(rows, -1)[:, :1], positions.reshape(rows, -1)[:, :1]
-        )
+        choice = self._fixed_choice(tokens.reshape(rows, -1)[:, :1], positions.reshape(rows, -1)[:, :1])
         if kwargs.get("sampling_params") is not None:
             # Device sampling asks for ids rather than logits.
             return choice.reshape(rows).to(torch.int64)
