@@ -396,9 +396,12 @@ void kernel_main() {
     // Whether the next timestep's constant packet fields (Q, dO, L, D) were
     // already read from DRAM during this one's dQ wait; see the prefetch below.
     bool prefetched_next = false;
+    bool prefetched_dq_next = false;
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const bool prefetched = prefetched_next;
+        const bool prefetched_dq = prefetched_dq_next;
         prefetched_next = false;
+        prefetched_dq_next = false;
         DeviceZoneScopedN("RELAY-READER-STEP");
         const auto pair = sched.pair(my_core, t);
         const uint32_t i = pair.i;
@@ -630,6 +633,27 @@ void kernel_main() {
             cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
             cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);
             prefetched_next = true;
+            // The dQ seed too, where the row enters for the first time: the
+            // op's input accumulator, which nothing in flight writes. (A later
+            // streak start reloads a spill and must wait for it; that load
+            // stays where it was.) Into the seed slot the compute kernel
+            // released with t - 1, whose spill or forward this thread has
+            // completed. Issued after the hand-off above and left in flight --
+            // the next step's dQ path completes it -- so it holds up neither
+            // the writer nor this step's dQ send. Without it the snake's head,
+            // which loads every row's dQ in a dense pass, waited on the read
+            // in its dQ update and set the whole snake's pace.
+            // Dense passes only: there the head loads a row every timestep
+            // and paced the snake; in a causal launch the starts are spread
+            // over the cores and the early reads only got in the way of the
+            // packet traffic (the full grid at Bt = 1 lost 19% with them).
+            if (sched.dense() && !sched.is_later_streak_start(ni, t + 1u)) {
+                const uint32_t ngs = base_grad_query + nslot * stride_grad_query;
+                for (uint32_t k = 0; k < row_tiles; ++k) {
+                    noc_async_read_page(row_base + (ni - 1u) * row_tiles + k, grad_query, ngs + k * grad_bytes);
+                }
+                prefetched_dq_next = true;
+            }
         }
 
         // Now dQ, which is the one field that has to wait for arithmetic --
@@ -643,9 +667,12 @@ void kernel_main() {
             WAYPOINT("DQRD");
         } else {
             DeviceZoneScopedN("LOAD-DQ-DRAM");
-            for (uint32_t k = 0; k < row_tiles; ++k) {
-                noc_async_read_page(row_base + (i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
+            if (!prefetched_dq) {
+                for (uint32_t k = 0; k < row_tiles; ++k) {
+                    noc_async_read_page(row_base + (i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
+                }
             }
+            // Completes this read, or the one prefetched a timestep ago.
             noc_async_read_barrier();
         }
         cb_push_back(cb_grad_query_seed, row_tiles);

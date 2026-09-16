@@ -91,6 +91,16 @@
 #define RELEASE_TOKEN 0
 #endif
 
+// DQ_IN_TILE_TRANSPOSED / DQ_OUT_TILE_TRANSPOSED: dQ's DRAM layout at this
+// launch's boundaries is the packet's (every tile transposed within itself),
+// so the boundary transposes are skipped. See the op's attributes.
+#ifndef DQ_IN_TILE_TRANSPOSED
+#define DQ_IN_TILE_TRANSPOSED 0
+#endif
+#ifndef DQ_OUT_TILE_TRANSPOSED
+#define DQ_OUT_TILE_TRANSPOSED 0
+#endif
+
 // Where the softmax's 1/sqrt(d) lives: in the exponential and in the
 // statistic. The exponential computes exp(a x) / sqrt(d), with a folded
 // into its 1/ln 2 constant and ln sqrt(d) into its bias, and the writer
@@ -702,10 +712,12 @@ void kernel_main() {
         // (the op's dQ output) are transposed. The transposed form keeps
         // every tile in its place and transposes it within itself, so the
         // DRAM pages and the tile order are the same either way.
-        const bool seed_transposed =
-            sched.producer(my_core, t).internal || sched.is_later_streak_start(pair.i, t);
-        const bool emit_transposed =
-            sched.next_consumer(pair.i, t) != kNoCore || sched.has_later_active(pair.i, t);
+        // DQ_IN/OUT_TILE_TRANSPOSED: the caller keeps dQ in the packet's
+        // tile-transposed form in DRAM too, so the boundary needs no transpose.
+        const bool seed_transposed = (DQ_IN_TILE_TRANSPOSED != 0) || sched.producer(my_core, t).internal ||
+                                     sched.is_later_streak_start(pair.i, t);
+        const bool emit_transposed = (DQ_OUT_TILE_TRANSPOSED != 0) || sched.next_consumer(pair.i, t) != kNoCore ||
+                                     sched.has_later_active(pair.i, t);
 #else
         constexpr bool seed_transposed = false;
         constexpr bool emit_transposed = false;

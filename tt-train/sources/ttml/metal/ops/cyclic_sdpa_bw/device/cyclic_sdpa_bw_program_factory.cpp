@@ -285,6 +285,12 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     std::map<std::string, std::string> compute_defines = sync_defines;
     compute_defines["COLUMN_RESIDENT"] = "1";
     compute_defines["RELEASE_TOKEN"] = "1";
+    if (args.grad_query_in_tile_transposed) {
+        compute_defines["DQ_IN_TILE_TRANSPOSED"] = "1";
+    }
+    if (args.grad_query_out_tile_transposed) {
+        compute_defines["DQ_OUT_TILE_TRANSPOSED"] = "1";
+    }
     // The softmax scale lives in the exponential and in the writer's score
     // seed, -(L + ln sqrt(d)) sqrt(d) (see the compute kernel).
     {

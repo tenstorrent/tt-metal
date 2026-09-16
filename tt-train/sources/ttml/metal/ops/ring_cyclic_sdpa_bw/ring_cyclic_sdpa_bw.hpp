@@ -50,6 +50,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_cyclic_sdpa_bw(
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
     ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous,
-    uint32_t zigzag_pair = 0xFFFFFFFFU);
+    uint32_t zigzag_pair = 0xFFFFFFFFU,
+    bool grad_query_in_tile_transposed = false,
+    bool grad_query_out_tile_transposed = false);
 
 }  // namespace ttml::metal
