@@ -136,22 +136,58 @@ def get_multi_pass_configs(capture_perf_counters_groups):
     return groups_pass1, groups_pass2
 
 
+def _descendant_process_groups(root_pid):
+    """Process-group ids of root_pid and every descendant, from one `ps` snapshot.
+
+    `python -m tracy` starts its workload with os.setsid, so the captured test lives in a session of
+    its own: killing the profiler's group alone leaves that test (the process that actually hangs on
+    a dead device) holding the step's stdout. The snapshot has to be taken before anything is killed,
+    since orphans get re-parented to init and drop out of the tree.
+    """
+    groups = set()
+    try:
+        groups.add(os.getpgid(root_pid))
+    except ProcessLookupError:
+        pass
+    try:
+        table = subprocess.run(["ps", "-eo", "pid=,ppid=,pgid="], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return groups
+    children, pgid_of = {}, {}
+    for line in table.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        pid, ppid, pgid = (int(x) for x in parts)
+        children.setdefault(ppid, []).append(pid)
+        pgid_of[pid] = pgid
+    stack = [root_pid]
+    while stack:
+        pid = stack.pop()
+        if pid in pgid_of:
+            groups.add(pgid_of[pid])
+        stack.extend(children.get(pid, []))
+    return groups
+
+
 def _run_profiler_cmd(profiler_cmd):
     """Run `python -m tracy ...` in its own session and take the whole tree down with the caller.
 
     subprocess.run(shell=True) only reaps the `sh -c` wrapper: when the caller is interrupted
     (pytest-timeout raising inside the wait, SIGINT) the orphaned `python -m tracy` and the test it
-    captured keep the CI step's stdout open until the step budget kills it (81-86 s of dead time on
-    the Blackhole device-perf legs, 45 s on wh_n150 in the 2026-08-27 .. 09-11 failures).
+    captured keep the CI step's stdout open until the step budget kills it (10 min on the Blackhole
+    device-perf legs after a 600 s pytest-timeout, e.g. 2026-09-16 jobs 104841076912 and
+    104881661500; 45 s of post-processing on wh_n150 on 09-10).
     """
     proc = subprocess.Popen([profiler_cmd], shell=True, start_new_session=True)
     try:
         returncode = proc.wait()
     except BaseException:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        for pgid in _descendant_process_groups(proc.pid):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
         try:
             proc.wait(timeout=5)
         except Exception:
