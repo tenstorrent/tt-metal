@@ -38,15 +38,16 @@ class Qwen36SharedExpert:
 
         # shared_expert_gate.weight is [1, H] -> [1,1,H,1] for ttnn.linear, replicated.
         is_mesh = hasattr(mesh_device, "shape")
-        gate_w = mlp_state["shared_expert_gate.weight"].to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+        # The cast + transpose run as the as_tensor preprocess, i.e. on a tensor-cache miss only.
         self.gate_weight = ttnn.as_tensor(
-            gate_w,
+            mlp_state["shared_expert_gate.weight"],
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
             cache_file_name=(str(tensor_cache_path / "moe.shared_expert_gate.weight") if tensor_cache_path else None),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            preprocess=lambda t: t.to(torch.bfloat16).transpose(-2, -1).unsqueeze(0).unsqueeze(0),
         )
 
     def forward(self, x):
