@@ -150,7 +150,9 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},
                  // per_core_block_dim is always 1 (works for both tiled and row-major)
-                 {"per_core_block_dim", 1u}},
+                 {"per_core_block_dim", 1u},
+                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
             .hw_config =
                 ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format_input))},
         };
@@ -308,7 +310,10 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args =
-            {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)}, {"per_core_block_dim", 1u}},
+            {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)},
+             {"per_core_block_dim", 1u},
+             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
         .hw_config = ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format))},
     };
 

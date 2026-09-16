@@ -214,7 +214,9 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
                      .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},  // rows * total_chunks_per_row
-                 {"per_core_block_dim", 1u}},
+                 {"per_core_block_dim", 1u},
+                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
             .hw_config = ComputeHardwareConfig{ComputeGen1Config{
                 .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
