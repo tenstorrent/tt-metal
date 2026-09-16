@@ -10,6 +10,7 @@ from helpers.llk_params import (
     DestSync,
     GoldenType,
     ReduceDimension,
+    ReducePool,
     Tilize,
 )
 from helpers.tile_shape import TileShape
@@ -50,6 +51,14 @@ class L1Operation:
         for node in self.math_nodes:
             if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
                 return node.fpu.reduce_dim
+        return None
+
+    @property
+    def reduce_pool(self) -> Optional[ReducePool]:
+        for node in self.math_nodes:
+            if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
+                # Block-max variants have a fixed MAX operation instead of a reduce_pool member.
+                return getattr(node.fpu, "reduce_pool", ReducePool.Max)
         return None
 
     @property
