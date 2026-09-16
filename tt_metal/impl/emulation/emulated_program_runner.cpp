@@ -1167,7 +1167,14 @@ static std::function<void()> jit_compile_kernel(
 
     // 10. Clean up temp directory (wrapper.cpp etc.) — always safe since .so is
     // either in the disk cache dir or mmap'd into memory from the temp dir.
-    std::filesystem::remove_all(dir);
+    // TT_EMULE_KEEP_JIT_SRC keeps patched_kernel.cpp / wrapper.cpp for inspection: the
+    // documented first step when a kernel fails to JIT-compile. log_info, not fprintf —
+    // stderr from this path is not visible in a test run.
+    if (std::getenv("TT_EMULE_KEEP_JIT_SRC")) {
+        log_info(tt::LogMetal, "TT_EMULE_KEEP_JIT_SRC: kept JIT src dir {}", dir);
+    } else {
+        std::filesystem::remove_all(dir);
+    }
 
     // 11. Wrap in shared_ptr for lifetime management (dlclose on destruction).
     auto shared_handle = std::shared_ptr<void>(handle, [](void* h) { dlclose(h); });
