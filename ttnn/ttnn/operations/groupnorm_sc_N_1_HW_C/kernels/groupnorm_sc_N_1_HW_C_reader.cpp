@@ -7,8 +7,10 @@
 //   pass 1: for each column group cg: for each row chunk rc: load the chunk_rows x cols tile block of x
 //           (TILE input: DRAM tiles -> cb_x_pass1 [+ cb_x_pass2 credit when resident];
 //            RM input:   sticks -> cb_x_rm, compute tilizes), then generate E^T for cg -> cb_membership.
-//   pass 2: for each column group cg: generate E for cg -> cb_membership, gamma/beta row-0 tiles for cg,
-//           then (streaming regime only) re-stream the x chunks of cg into cb_x_pass2 / cb_x_rm.
+//   pass 2: for each column group cg: generate E for cg -> cb_membership and the gamma/beta row-0 tiles for cg in
+//           one batch (one NoC zero-fill barrier, DRAM reads in flight while the RISC writes the E lanes, one read
+//           barrier — Refinement 5), then (streaming regime only) re-stream the x chunks of cg into cb_x_pass2 /
+//           cb_x_rm.
 //
 // Constant tiles: the reduce scaler (once per kernel; a [full, partial] REDUCE_COL pair when HW % 32 != 0, so
 // the image's padded last tile-row never enters the statistics). Membership / affine-row pages are zeroed over
@@ -135,11 +137,9 @@ void kernel_main() {
     // E^T (pass 1, transposed = true) or E (pass 2) for column group cg: cols x Kg 0/1 tiles (Float32 or Float16_b
     // per e_elem_size), tile index T_local * Kg + kg. E_T[g', c] = 1 iff channel 32T + c belongs to group 32kg + g'.
     // Tiles tl >= valid_cols of a ragged last group stay zero (they are the K pad of the membership matmul).
-    auto fill_membership = [&](uint32_t cg, bool transposed) {
+    // The RISC part: the 0/1 lanes into the (already zeroed, reserved) membership pages.
+    auto write_membership_lanes = [&](uint32_t cg, bool transposed) {
         const uint32_t valid_cols = col_axis.valid(cg, cols);
-        cb_reserve_back(cb_membership, membership_tiles);
-        noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
-        noc.write_zeros_l1_barrier();
         const uint32_t base = get_write_ptr(cb_membership);
         for (uint32_t tl = 0; tl < valid_cols; ++tl) {
             const uint32_t T = col_begin + cg * cols + tl;
@@ -161,6 +161,12 @@ void kernel_main() {
                 }
             }
         }
+    };
+    auto fill_membership = [&](uint32_t cg, bool transposed) {
+        cb_reserve_back(cb_membership, membership_tiles);
+        noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
+        noc.write_zeros_l1_barrier();
+        write_membership_lanes(cg, transposed);
         cb_push_back(cb_membership, membership_tiles);
     };
 
@@ -250,17 +256,16 @@ void kernel_main() {
     // half cannot be read straight into face 1 (+32 B source vs +face_bytes destination). Read the whole
     // aligned run into face 0 rows 0..1, then move row 1 to face 1 row 0 with a few word stores and re-zero it.
     // Tiles tl >= valid_cols of a ragged last group stay zero and are never consumed (compute pad-pops them).
-    auto fill_affine_rows = [&](uint32_t cb_row, const auto& acc, uint32_t cg) {
-        constexpr uint32_t half_row_bytes = 16 * g_elem_size;
-        constexpr uint32_t face_bytes = 256 * g_elem_size;
+    //
+    // Split into "issue the reads" and "fix up after the read barrier" so fill_pass2_constants can overlap the DRAM
+    // latency of the gamma / beta reads with the RISC's membership-lane writes (Refinement 5: at the latency floor the
+    // reader's pass-2 constants gated the affine build, 1.4 us of zero-fill / read barriers in series).
+    constexpr uint32_t g_half_row_bytes = 16 * g_elem_size;
+    constexpr uint32_t g_face_bytes = 256 * g_elem_size;
+    auto issue_affine_reads = [&](uint32_t cb_row, const auto& acc, uint32_t cg) {
         const uint32_t g_tile_bytes = get_tile_size(cb_row);
         const uint32_t valid_cols = col_axis.valid(cg, cols);
-        CircularBuffer row_cb(cb_row);
-        cb_reserve_back(cb_row, cols);
-        noc.async_write_zeros(row_cb, cols * g_tile_bytes);
-        noc.write_zeros_l1_barrier();
-        const uint32_t l1_base = get_write_ptr(cb_row);
-        uint32_t l1 = l1_base;
+        uint32_t l1 = get_write_ptr(cb_row);
         for (uint32_t tl = 0; tl < valid_cols; ++tl) {
             const uint32_t T = col_begin + cg * cols + tl;
             if constexpr (g_is_tile && g_is_bfp) {
@@ -269,21 +274,27 @@ void kernel_main() {
                 noc_async_read(acc.get_noc_addr(T, 0), l1, g_tile_bytes);
             } else if constexpr (g_is_tile) {
                 // TILE affine: row 0 of faces 0 and 1 of page T are already at the right offsets.
-                noc_async_read(acc.get_noc_addr(T, 0), l1, half_row_bytes);
-                noc_async_read(acc.get_noc_addr(T, face_bytes), l1 + face_bytes, half_row_bytes);
+                noc_async_read(acc.get_noc_addr(T, 0), l1, g_half_row_bytes);
+                noc_async_read(acc.get_noc_addr(T, g_face_bytes), l1 + g_face_bytes, g_half_row_bytes);
             } else {
                 // RM affine: one aligned read of all 32 values into face 0 rows 0..1 (fixed up below).
-                noc_async_read(acc.get_noc_addr(0, T * 32 * g_elem_size), l1, 2 * half_row_bytes);
+                noc_async_read(acc.get_noc_addr(0, T * 32 * g_elem_size), l1, 2 * g_half_row_bytes);
             }
             l1 += g_tile_bytes;
         }
-        noc_async_read_barrier();
+    };
+    // After the read barrier: RM row-1 -> face-1 move, and the c_non_aligned pad-lane zeroing.
+    auto fixup_affine_rows = [&](uint32_t cb_row, uint32_t cg) {
+        const uint32_t g_tile_bytes = get_tile_size(cb_row);
+        const uint32_t valid_cols = col_axis.valid(cg, cols);
+        const uint32_t l1_base = get_write_ptr(cb_row);
         if constexpr (!g_is_tile) {
-            l1 = l1_base;
+            uint32_t l1 = l1_base;
             for (uint32_t tl = 0; tl < valid_cols; ++tl) {
-                volatile tt_l1_ptr uint32_t* row1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + half_row_bytes);
-                volatile tt_l1_ptr uint32_t* face1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + face_bytes);
-                for (uint32_t w = 0; w < half_row_bytes / 4; ++w) {
+                volatile tt_l1_ptr uint32_t* row1 =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + g_half_row_bytes);
+                volatile tt_l1_ptr uint32_t* face1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + g_face_bytes);
+                for (uint32_t w = 0; w < g_half_row_bytes / 4; ++w) {
                     face1[w] = row1[w];
                     row1[w] = 0u;
                 }
@@ -296,23 +307,62 @@ void kernel_main() {
         // 16-lane block, so garbage there destroys the valid neighbouring channels (seen as PCC 0.96 on
         // (1,1,64,50) bf8b). TILE affine pages are zero-padded by the tensor itself; bf8b pages are read whole.
         if constexpr (!g_is_bfp) {
-            constexpr uint32_t c_tail = C % 32;
             if (c_tail != 0) {
                 const uint32_t T_last = Ct - 1;
                 const uint32_t T_first = col_begin + cg * cols;
                 if (T_last >= T_first && T_last < T_first + valid_cols) {
                     const uint32_t tile_l1 = l1_base + (T_last - T_first) * g_tile_bytes;
                     for (uint32_t lane = c_tail; lane < 32; ++lane) {
-                        const uint32_t off = (lane < 16) ? lane * g_elem_size : face_bytes + (lane - 16) * g_elem_size;
-                        volatile tt_l1_ptr uint8_t* p = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile_l1 + off);
+                        const uint32_t off =
+                            (lane < 16) ? lane * g_elem_size : g_face_bytes + (lane - 16) * g_elem_size;
+                        volatile tt_l1_ptr uint8_t* q = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile_l1 + off);
                         for (uint32_t b = 0; b < g_elem_size; ++b) {
-                            p[b] = 0u;
+                            q[b] = 0u;
                         }
                     }
                 }
             }
         }
-        cb_push_back(cb_row, cols);
+    };
+
+    // Pass-2 constants of column group cg in ONE batch: reserve E / gamma rows / beta rows, zero them all over the NoC
+    // behind a single barrier, issue the gamma / beta DRAM reads, write the E lanes on the RISC while those reads are
+    // in flight, then one read barrier + the fix-ups. (Was: three serial zero-fill barriers and two read barriers.)
+    [[maybe_unused]] CircularBuffer gamma_row_cb(cb_gamma_row);
+    [[maybe_unused]] CircularBuffer beta_row_cb(cb_beta_row);
+    auto fill_pass2_constants = [&](uint32_t cg) {
+        cb_reserve_back(cb_membership, membership_tiles);
+        noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
+        if constexpr (has_gamma) {
+            cb_reserve_back(cb_gamma_row, cols);
+            noc.async_write_zeros(gamma_row_cb, cols * get_tile_size(cb_gamma_row));
+        }
+        if constexpr (has_beta) {
+            cb_reserve_back(cb_beta_row, cols);
+            noc.async_write_zeros(beta_row_cb, cols * get_tile_size(cb_beta_row));
+        }
+        noc.write_zeros_l1_barrier();  // zeros landed before any read data lands on the same pages
+        if constexpr (has_gamma) {
+            const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, g_page_bytes);
+            issue_affine_reads(cb_gamma_row, gamma_acc, cg);
+        }
+        if constexpr (has_beta) {
+            const auto beta_acc = TensorAccessor(beta_args, beta_addr, g_page_bytes);
+            issue_affine_reads(cb_beta_row, beta_acc, cg);
+        }
+        write_membership_lanes(cg, /*transposed=*/false);
+        cb_push_back(cb_membership, membership_tiles);
+        if constexpr (has_gamma || has_beta) {
+            noc_async_read_barrier();
+        }
+        if constexpr (has_gamma) {
+            fixup_affine_rows(cb_gamma_row, cg);
+            cb_push_back(cb_gamma_row, cols);
+        }
+        if constexpr (has_beta) {
+            fixup_affine_rows(cb_beta_row, cg);
+            cb_push_back(cb_beta_row, cols);
+        }
     };
 
     for (uint32_t img = 0; img < image_count; ++img) {
@@ -333,18 +383,10 @@ void kernel_main() {
         // ---------------- pass 2: apply ----------------
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
             {
-                DeviceZoneScopedN("r_memb2");
-                fill_membership(cg, /*transposed=*/false);
+                DeviceZoneScopedN("r_pass2_consts");
+                fill_pass2_constants(cg);
             }
-            DeviceZoneScopedN("r_affine");
-            if constexpr (has_gamma) {
-                const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, g_page_bytes);
-                fill_affine_rows(cb_gamma_row, gamma_acc, cg);
-            }
-            if constexpr (has_beta) {
-                const auto beta_acc = TensorAccessor(beta_args, beta_addr, g_page_bytes);
-                fill_affine_rows(cb_beta_row, beta_acc, cg);
-            }
+            DeviceZoneScopedN("r_load2");
             if constexpr (!resident) {
                 for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
                     load_x_chunk(n, cg, rc, /*pass2=*/true);
