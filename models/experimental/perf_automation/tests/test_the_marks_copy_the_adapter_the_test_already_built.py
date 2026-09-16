@@ -588,3 +588,69 @@ def test_the_pipeline_is_always_the_first_argument(monkeypatch):
 
     _mark(monkeypatch, two, {"batch": 1})
     assert seen.get("pipe_first") is True
+
+
+# ---------------------------------------------------------------- the eager call may sit behind a delegate
+
+
+_DELEGATING_SHAPE = """import os
+
+PERF_BATCH = 8
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+
+
+def _build_kwargs():
+    return {}
+
+
+def test_main_perf(device_params, device):
+    _run(device)
+
+
+def _run(device):
+    def _eager_forward():
+        pipe = build_pipeline(device, **_build_kwargs())
+        out = pipe.run()
+        return out
+
+    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if _PERF_TRACE and not _PROFILING:
+        pass
+    else:
+        _eager_forward()
+"""
+
+
+def test_a_call_with_arguments_is_followed_into_its_own_body():
+    """`test_main_perf` calls `_run(device)` -- one argument, so it cannot itself be the eager pass,
+    but the real one sits inside it. The old rule stopped at the test function's own body and never
+    saw this at all ("no bare call to an eager pass on the profiled path") -- reproduced on
+    nvidia_nemotron_3_5_lightning_30b_a3b_bf16 the moment the generator wrote the test this shape,
+    one call deeper than any file this had been checked against."""
+    out, why = inject_stage_marks(_DELEGATING_SHAPE)
+    assert "per-stage pass in _eager_forward()" in why, why
+    ast.parse(out)
+    line = next(i for i, l in enumerate(out.splitlines(), 1) if "mark_stages_in_scope" in l)
+    assert _fn_of(out, line) == "_eager_forward"
+
+
+def test_a_delegate_cycle_does_not_recurse_forever():
+    """Cycle protection: a helper the test reaches is only ever descended into once per name. Each
+    call here takes an argument, so none is itself the eager pass and every one must be followed --
+    without the visited-set, _a -> _b -> _a would recurse until Python's own stack gives up, hanging
+    the generator that calls this at every discovery step."""
+    src = """
+def test_main_perf():
+    _a(1)
+
+
+def _a(x):
+    _b(x)
+
+
+def _b(x):
+    _a(x)
+"""
+    out, why = inject_stage_marks(src)
+    assert out == src, why
+    assert "no bare call" in why, why

@@ -597,39 +597,48 @@ def reachable_bare_calls(text: str, env: dict | None = None) -> list:
     lines = text.splitlines()
     out = []
 
-    def walk(body, names):
+    # Every module-level function, by name, so a call the test function reaches can be FOLLOWED
+    # into its body -- some generated tests call `_eager_forward()` inline, others delegate through
+    # a helper first (`_run(device)`, itself containing the real bare call one level down). Nesting
+    # depth is the generator's choice, not a fact this can assume either way.
+    funcs = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    def walk(body, names, seen):
         _bind_names(body, env, names)
         for st in body:
             if isinstance(st, ast.If):
                 verdict = _eval(st.test, env, names)
                 if verdict is _UNKNOWN:
-                    walk(st.body, dict(names))
-                    walk(st.orelse, dict(names))
+                    walk(st.body, dict(names), seen)
+                    walk(st.orelse, dict(names), seen)
                 elif verdict:
-                    walk(st.body, dict(names))
+                    walk(st.body, dict(names), seen)
                 else:
-                    walk(st.orelse, dict(names))
+                    walk(st.orelse, dict(names), seen)
                 continue
             if isinstance(st, (ast.For, ast.While, ast.With, ast.Try)):
                 for sub in ("body", "orelse", "finalbody", "handlers"):
                     inner = getattr(st, sub, None) or []
                     for h in inner:
                         if isinstance(h, ast.ExceptHandler):
-                            walk(h.body, dict(names))
+                            walk(h.body, dict(names), seen)
                         elif isinstance(h, ast.stmt):
-                            walk([h], dict(names))
+                            walk([h], dict(names), seen)
                 continue
             if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue  # a definition is not a call
-            if (
-                isinstance(st, ast.Expr)
-                and isinstance(st.value, ast.Call)
-                and isinstance(st.value.func, ast.Name)
-                and not st.value.args
-                and not st.value.keywords
-            ):
-                line = lines[st.lineno - 1]
-                out.append((st.lineno, line[: len(line) - len(line.lstrip())], st.value.func.id))
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and isinstance(st.value.func, ast.Name):
+                if not st.value.args and not st.value.keywords:
+                    line = lines[st.lineno - 1]
+                    out.append((st.lineno, line[: len(line) - len(line.lstrip())], st.value.func.id))
+                    continue
+                # A call WITH arguments cannot itself be the eager pass -- that closure takes none
+                # -- but reaching a delegate is still reaching whatever is inside it. Followed once
+                # per name (a cycle would otherwise recurse forever), same-module only: a call into
+                # an imported helper has no body here to look inside.
+                target = funcs.get(st.value.func.id)
+                if target is not None and st.value.func.id not in seen:
+                    walk(target.body, dict(names), seen | {st.value.func.id})
 
     # MODULE SCOPE FIRST, and carried in. `_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"`
     # sits at module level while the branch that reads it is inside the test function -- binding each
@@ -637,13 +646,14 @@ def reachable_bare_calls(text: str, env: dict | None = None) -> list:
     # so both branches came back reachable and the marks went to the wrong one anyway.
     module_names: dict = {}
     _bind_names(tree.body, env, module_names)
-    # ONLY THE TEST FUNCTION. pytest enters through it, so that is where "the profiled path" starts;
-    # walking every module-level def also collected the bare calls inside helper functions, which are
-    # reached only if something calls them. `test_` is pytest's own contract -- the same one the node
-    # ids in the manifest are built from -- not a guess about this generator.
+    # ONLY THE TEST FUNCTION AT THE ROOT. pytest enters through it, so that is where "the profiled
+    # path" starts; walking every module-level def as a ROOT would collect bare calls inside helpers
+    # nothing calls at all. Reached-through delegates are still followed, by the walk above -- this
+    # restriction is only about where the search BEGINS. `test_` is pytest's own contract -- the same
+    # one the node ids in the manifest are built from -- not a guess about this generator.
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
-            walk(node.body, dict(module_names))
+            walk(node.body, dict(module_names), set())
     return out
 
 
