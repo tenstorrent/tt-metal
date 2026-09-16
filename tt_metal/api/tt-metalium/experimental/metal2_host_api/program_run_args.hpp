@@ -131,6 +131,10 @@ struct ProgramRunArgs {
     // object for its lifetime: re-supplying the same pipe is a no-op, supplying a different one is
     // rejected.
     //
+    // Parameters that share a kernel accessor (one KernelSpec::PrefetcherPipeBinding naming several
+    // pipes) resolve to one device slot; the pipes supplied for them must share ring and config
+    // addresses (come from one space) and are cross-checked here, when the objects exist.
+    //
     // CAUTION: PrefetcherPipe is an RAII object owning durable L1. The user is responsible for keeping
     //          it alive until the last Program execution that uses it has completed on the device.
     Table<PrefetcherPipeParamName, PrefetcherPipeArgument> prefetcher_pipe_args;

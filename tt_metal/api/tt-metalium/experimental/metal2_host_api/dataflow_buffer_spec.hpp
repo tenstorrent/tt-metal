@@ -145,12 +145,15 @@ struct DataflowBufferSpec {
     //    named pipe (all named pipes share ring_size and entry_size)
     //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
     //    pipes' receiver nodes, and those receiver sets are pairwise disjoint
-    //  - the PRODUCER kernel's num_threads is the pipe's receiver-side credit lane count
+    //  - every PRODUCER kernel binds exactly this pipe set under one accessor
+    //    (KernelSpec::prefetcher_pipe_bindings); it is the pipes' receiver kernel, and its
+    //    num_threads is the pipes' receiver-side credit lane count
     //
     // Naming more than one pipe makes a single DFB serve several 1:N pipes whose receiver sets
-    // tile the DFB's nodes (one relay for a whole grid fed by several senders). The pipes then
-    // supplied via ProgramRunArgs must share ring and config addresses (come from one space);
-    // that is checked at SetProgramRunArgs, when the objects exist.
+    // tile the DFB's nodes (one relay for a whole grid fed by several senders), mirroring the
+    // producer kernel's multi-pipe accessor. The pipes then supplied via ProgramRunArgs must
+    // share ring and config addresses (come from one space); that is checked at
+    // SetProgramRunArgs, when the objects exist.
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
 
     //////////////////////////////
