@@ -22,10 +22,15 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 6 | Codec decoder → waveform (1920x) | device | **done**, waveform PCC 0.995 |
 | 7 | Dual-track prompt + decode loop | host + device | **done**, end to end |
 | 8 | Sampling (`sampling.py`) | host | **done**, matches `transformers` |
+| 9 | Codec encoder, waveform → codes | device | **done**, latents PCC 0.9999 |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
 single position of the talker's prompt. Its width matches the talker's hidden size, so
 nothing projects between them.
+
+The codec encoder is the other half of block 6 and the last unported block. It turns a
+reference clip into codes, which is what the voice-clone prompt carries on its codec track.
+Assembling that prompt is the next piece of work; nothing routes through the encoder yet.
 
 ## Speed
 
@@ -92,7 +97,7 @@ work never materialises the talker.
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoints and, for the device tests, a card. 73 tests, 160 s warm.
+it needs only the checkpoints and, for the device tests, a card. 94 tests, 160 s warm.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
@@ -102,6 +107,7 @@ pytest models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py      # speaker
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py       # talker
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py  # code predictor
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py        # codec decoder
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py  # codec encoder
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_pipeline.py         # end to end
 ```
 
@@ -173,6 +179,36 @@ by name alone silently corrupts the next clip of a different length. Measured: 0
 to 0.104 on a second decode through the same instance. The fix keys the cache by length, and
 the test decodes 4, 8 then 4 frames through one object.
 
+`pcc/test_codec_encoder_pcc.py` measures two different things. The latents are floating
+point and gated like any other block: every convolution stage, every transformer layer and
+the final `downsample` hold 0.9997 or better on a 2 s clip. The codes are the output of a
+nearest-neighbour search over 2048 entries, repeated 16 times down a residual chain, so they
+either match or they do not, and they are scored per step with the reference's codes forced
+into the chain, for the same reason the code predictor is:
+
+| measurement | value |
+|---|---|
+| stages, conv stack through latents | 0.9997 to 0.9999998 |
+| codes, per step with the prefix forced | 369/400 |
+| codes, free running | 248/400 |
+| round trip against the clip, reference vs device | 0.96135 vs 0.96144 |
+
+Every one of the 31 disagreements is a near-tie: the device picked the reference's second or
+third nearest entry, at most 0.6% further away. The round-trip row is the one that says
+whether it matters. Re-decoding the device's codes lands as close to the original clip as
+re-decoding the reference's, which puts the difference inside what the codec itself loses at
+12.5 Hz.
+
+**The encoder runs in fp32**, alone among these blocks. bf16 puts the latents at 0.9984 and
+per-step agreement at 75%, because a rounding error at the end of a residual chain becomes a
+different code rather than a slightly different number. It costs 1.5 s on a 3 s clip and the
+block runs once per reference clip.
+
+One test there is a regression guard. `downsample` is the only convolution in the codec that
+replicates its padding rather than zeroing it, and `MimiModel` passes `pad_mode="replicate"`
+for that one call alone. Zero padding cost 0.009 of PCC on exactly the tensor the codes come
+from, and nothing else in the graph noticed.
+
 `pcc/test_pipeline.py` covers the dual-track prefill and the decode loop, and is the one file
 that needs the **CustomVoice** checkpoint. The two releases are complementary: Base carries
 `speaker_encoder` and an empty `spk_id`, CustomVoice carries the nine speakers and no speaker
@@ -189,12 +225,16 @@ input to every later step, so 13 of 14 steps match with a forced prefix while on
 of codes match when running free. The loop is therefore gated per step, not on sequence
 equality.
 
-## Performance
+## Performance work still open
 
-Not started, deliberately. The decode loop has no KV cache, so every step recomputes the
-whole prefix through all 28 talker layers and each new sequence length triggers a fresh
-compile. Measured 63 s for 1.12 s of audio, 56x slower than real time. A cache is the first
-thing to build, and it is what makes a full-length utterance practical at all.
+The KV cache and the traces are in (see Speed above). What is left, roughly in order of what
+it would buy:
+
+- Length bucketing for the codec decoder, so a new frame count stops paying its kernel build.
+- Warming the prefill at the shapes a server will see, so the first utterance is not the slow one.
+- `bfp8_b` weights, judged on token agreement rather than PCC: bf16 already sits at 0.995, so
+  PCC alone will not say whether the codes move.
+- No device-perf test exists yet, so nothing in CI catches a speed regression.
 
 ## CI
 

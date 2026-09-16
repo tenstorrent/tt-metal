@@ -893,6 +893,9 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
+    # The codec's other half. It runs in fp32 and its convolutions are long (a 2 s clip is
+    # 48000 samples at 64 channels), so it pays a larger cold kernel build than the rest.
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     # The cached, traced decode paths against the uncached graphs above them.
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
     # The pipeline tests need the CustomVoice checkpoint, a second 4.3 GB download on

@@ -40,6 +40,7 @@ CODEC_REPO = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
 CODEC_PINNED_REVISION = "7dd38ad4e9bad454aae9cd937d0cd577604fe229"
 CODEC_SUBFOLDER = "speech_tokenizer"
 CODEC_DECODER_PREFIX = "decoder."
+CODEC_ENCODER_PREFIX = "encoder."
 
 CONFIG_FILE = "config.json"
 GENERATION_CONFIG_FILE = "generation_config.json"
@@ -190,22 +191,50 @@ def codec_config(allow_download=True):
 
 
 def codec_decoder_config(allow_download=True):
-    """Just the decoder half, which is what this repository ports."""
+    """Just the decoder half: codes in, waveform out."""
     return codec_config(allow_download)["decoder_config"]
+
+
+def codec_encoder_config(allow_download=True):
+    """Just the encoder half: waveform in, codes out.
+
+    A plain `MimiConfig` block, which is why the encoder needs no vendored reference: the
+    upstream class is a `MimiModel` subclass that nulls the decode half, and `transformers`
+    ships the rest.
+    """
+    return codec_config(allow_download)["encoder_config"]
+
+
+def codec_valid_quantizers(allow_download=True):
+    """How many of the encoder's 32 codebooks the talker actually speaks: 16."""
+    return codec_config(allow_download)["encoder_valid_num_quantizers"]
+
+
+def _load_codec_half(prefix, dtype, allow_download):
+    path = os.path.join(codec_dir(allow_download), WEIGHTS_FILE)
+    state = {}
+    with safe_open(path, framework="pt") as f:
+        names = [key for key in f.keys() if key.startswith(prefix)]
+        if not names:
+            raise KeyError(f"no {prefix}* tensors in {path}")
+        for name in names:
+            tensor = f.get_tensor(name)
+            state[name[len(prefix) :]] = tensor if dtype is None else tensor.to(dtype)
+    return state
 
 
 def load_codec_decoder_state(dtype=torch.float32, allow_download=True):
     """The codec decoder's weights, keyed as `Qwen3TTSTokenizerV2Decoder` expects them."""
-    path = os.path.join(codec_dir(allow_download), WEIGHTS_FILE)
-    state = {}
-    with safe_open(path, framework="pt") as f:
-        names = [key for key in f.keys() if key.startswith(CODEC_DECODER_PREFIX)]
-        if not names:
-            raise KeyError(f"no {CODEC_DECODER_PREFIX}* tensors in {path}")
-        for name in names:
-            tensor = f.get_tensor(name)
-            state[name[len(CODEC_DECODER_PREFIX) :]] = tensor if dtype is None else tensor.to(dtype)
-    return state
+    return _load_codec_half(CODEC_DECODER_PREFIX, dtype, allow_download)
+
+
+def load_codec_encoder_state(dtype=torch.float32, allow_download=True):
+    """The codec encoder's weights, keyed as `MimiModel` expects them.
+
+    All 32 quantizers come across, not the 16 the talker uses, because the module owns
+    them all and loads strictly. 225 tensors.
+    """
+    return _load_codec_half(CODEC_ENCODER_PREFIX, dtype, allow_download)
 
 
 @functools.lru_cache(maxsize=None)

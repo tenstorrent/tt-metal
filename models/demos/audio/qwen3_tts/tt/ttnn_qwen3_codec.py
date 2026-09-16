@@ -51,6 +51,10 @@ from models.demos.audio.qwen3_tts import weights as checkpoint
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import MASK_FILL, _compute_config
 
 SNAKE_EPS = 1e-9
+# `EuclideanCodebook.epsilon`: the floor on a codebook's running count before it divides.
+# Every count in this checkpoint is at least 0.022, so it never binds; it is here because
+# the quotient is upstream's and the constant should say which one.
+CODEBOOK_EPS = 1e-5
 
 
 # ── host-side tables ────────────────────────────────────────────────────────
@@ -88,7 +92,7 @@ def codebooks(state, config):
         for index in range(count):
             base = f"{prefix}.vq.layers.{index}._codebook"
             usage = state[f"{base}.cluster_usage"].reshape(-1, 1)
-            tables.append(state[f"{base}.embedding_sum"] / usage.clamp(min=SNAKE_EPS))
+            tables.append(state[f"{base}.embedding_sum"] / usage.clamp(min=CODEBOOK_EPS))
     return tables
 
 
@@ -118,6 +122,113 @@ def quantizer_decode(codes, state, config):
     return (semantic + acoustic).unsqueeze(0)
 
 
+# ── shared with the encoder ─────────────────────────────────────────────────
+#
+# Both halves of the codec convolve the same way, so the padding arithmetic and the
+# length-keyed weight cache live here and `ttnn_qwen3_codec_encoder` imports them.
+
+
+def conv_parameters(state, name, dtype=ttnn.bfloat16, depthwise=False):
+    """Conv1d weight [out, in/groups, k] plus bias, left on host for conv1d to prepare."""
+    weight = state[f"{name}.weight"]
+    bias = state.get(f"{name}.bias")
+    return {
+        "weight": ttnn.from_torch(weight, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
+        "bias": None
+        if bias is None
+        else ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
+        "out_channels": weight.shape[0],
+        "in_channels": weight.shape[1] * (weight.shape[0] if depthwise else 1),
+        "kernel": weight.shape[2],
+        "groups": weight.shape[0] if depthwise else 1,
+    }
+
+
+def replicate_pad(x, left, right):
+    """[1, T, C] -> [1, left + T + right, C], repeating the edge frames.
+
+    `torch.nn.functional.pad(mode="replicate")`, built by hand: `ttnn.pad` fills with a
+    constant only. One convolution in the codec needs this, the encoder's `downsample`,
+    and zero padding there costs 0.009 of PCC on the tensor the codes come from.
+    """
+    if not left and not right:
+        return x
+    _, length, width = x.shape
+    parts = [ttnn.slice(x, [0, 0, 0], [1, 1, width])] * left
+    parts.append(x)
+    parts.extend([ttnn.slice(x, [0, length - 1, 0], [1, length, width])] * right)
+    return ttnn.concat(parts, dim=1)
+
+
+def causal_conv1d(
+    device,
+    x,
+    params,
+    prepared,
+    key,
+    compute_config,
+    conv_config,
+    stride=1,
+    dilation=1,
+    pad_mode="constant",
+    dtype=ttnn.bfloat16,
+):
+    """Upstream's causal convolution: pad left by the receptive field, then convolve.
+
+    `_get_extra_padding_for_conv1d` adds whatever the stride needs on the right so the
+    output length comes out as ceil. Both paddings are applied here explicitly, since
+    `ttnn.conv1d` takes a symmetric amount and this is deliberately asymmetric.
+
+    `pad_mode` follows the module's own: every convolution in this codec pads with zeros
+    except the encoder's `downsample`, which replicates.
+
+    `prepared` is the caller's weight cache, keyed by name *and padded length*: `ttnn.conv1d`
+    prepares the weight for the parallelisation it picks, and that depends on the input
+    length. A weight prepared at one length convolves to garbage at another without raising.
+    Measured on the decoder: one instance reused across 4 and 8 frames took the second from
+    0.995 to 0.104.
+    """
+    kernel = (params["kernel"] - 1) * dilation + 1
+    left = kernel - stride
+    length = x.shape[1]
+    frames = (length - kernel + left) / stride + 1
+    ideal = (math.ceil(frames) - 1) * stride + (kernel - left)
+    right = max(0, ideal - length)
+
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    if pad_mode == "replicate":
+        x = replicate_pad(x, left, right)
+    elif left or right:
+        x = ttnn.pad(x, [(0, 0), (left, right), (0, 0)], value=0.0)
+    padded = x.shape[1]
+
+    cache_key = (key, padded)
+    weight, bias = prepared.get(cache_key, (params["weight"], params["bias"]))
+    out, out_length, (weight, bias) = ttnn.conv1d(
+        input_tensor=ttnn.reshape(x, (1, padded, 1, params["in_channels"])),
+        weight_tensor=weight,
+        bias_tensor=bias,
+        device=device,
+        in_channels=params["in_channels"],
+        out_channels=params["out_channels"],
+        batch_size=1,
+        input_length=padded,
+        kernel_size=params["kernel"],
+        stride=stride,
+        padding=0,
+        dilation=dilation,
+        groups=params["groups"],
+        dtype=dtype,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+    )
+    prepared[cache_key] = (weight, bias)
+    out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.reshape(out, (1, out_length, params["out_channels"]))
+
+
 # ── parameters ──────────────────────────────────────────────────────────────
 
 
@@ -127,18 +238,7 @@ def preprocess_codec_parameters(device, config=None, state=None, dtype=ttnn.bflo
     state = checkpoint.load_codec_decoder_state() if state is None else state
 
     def conv(name, depthwise=False):
-        """Conv1d weight [out, in/groups, k] plus bias, left on host for conv1d to prepare."""
-        weight = state[f"{name}.weight"]
-        return {
-            "weight": ttnn.from_torch(weight, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
-            "bias": ttnn.from_torch(
-                state[f"{name}.bias"].reshape(1, 1, 1, -1), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT
-            ),
-            "out_channels": weight.shape[0],
-            "in_channels": weight.shape[1] * (weight.shape[0] if depthwise else 1),
-            "kernel": weight.shape[2],
-            "groups": weight.shape[0] if depthwise else 1,
-        }
+        return conv_parameters(state, name, dtype=dtype, depthwise=depthwise)
 
     def trans_conv(name):
         """ConvTranspose1d weight [in, out, k] -> conv_transpose2d's (C, O/G, 1, K)."""
@@ -259,53 +359,9 @@ class TtCodecDecoder:
     # ── primitives ──────────────────────────────────────────────────────────
 
     def _causal_conv(self, x, params, key, stride=1, dilation=1):
-        """Upstream's causal convolution: pad left by the receptive field, then convolve.
-
-        `_get_extra_padding_for_conv1d` adds whatever the stride needs on the right so the
-        output length comes out as ceil. Both paddings are applied here explicitly, since
-        `ttnn.conv1d` takes a symmetric amount and this is deliberately asymmetric.
-        """
-        kernel = (params["kernel"] - 1) * dilation + 1
-        left = kernel - stride
-        length = x.shape[1]
-        frames = (length - kernel + left) / stride + 1
-        ideal = (math.ceil(frames) - 1) * stride + (kernel - left)
-        right = max(0, ideal - length)
-
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        if left or right:
-            x = ttnn.pad(x, [(0, 0), (left, right), (0, 0)], value=0.0)
-        padded = x.shape[1]
-
-        # `ttnn.conv1d` prepares the weight for the parallelisation it picks, and that
-        # depends on the input length. A weight prepared at one length decodes to garbage
-        # at another without raising, so the length is part of the cache key. Measured: a
-        # single instance reused across 4 and 8 frames took the second from 0.995 to 0.104.
-        cache_key = (key, padded)
-        weight, bias = self._prepared.get(cache_key, (params["weight"], params["bias"]))
-        out, out_length, (weight, bias) = ttnn.conv1d(
-            input_tensor=ttnn.reshape(x, (1, padded, 1, params["in_channels"])),
-            weight_tensor=weight,
-            bias_tensor=bias,
-            device=self.device,
-            in_channels=params["in_channels"],
-            out_channels=params["out_channels"],
-            batch_size=1,
-            input_length=padded,
-            kernel_size=params["kernel"],
-            stride=stride,
-            padding=0,
-            dilation=dilation,
-            groups=params["groups"],
-            dtype=ttnn.bfloat16,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            return_output_dim=True,
-            return_weights_and_bias=True,
+        return causal_conv1d(
+            self.device, x, params, self._prepared, key, self.compute_config, self.conv_config, stride, dilation
         )
-        self._prepared[cache_key] = (weight, bias)
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.reshape(out, (1, out_length, params["out_channels"]))
 
     def _trans_conv(self, x, params, key, stride):
         """Transposed convolution, then upstream's right trim of `kernel - stride`."""
