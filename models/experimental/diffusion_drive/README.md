@@ -41,6 +41,14 @@ each step.
 
 Model checkpoint: `hustvl/DiffusionDrive` — 60 M parameters.
 
+**Scope: this is the trajectory-serving graph, not full upstream output-schema
+parity.** Upstream's `transfuser_model_v2` also returns a `bev_semantic_map` from an
+auxiliary BEV semantic head. That head is an auxiliary training output and plays no
+part in producing the ego trajectory or the scores, so it is constructed here
+(`reference/model.py:914`) but never evaluated or returned. Everything the planner
+output depends on is implemented and validated; a consumer expecting upstream's
+complete output dict would not find `bev_semantic_map`.
+
 ---
 
 ## 2. Architecture
@@ -101,7 +109,7 @@ glue (enumerated in the table below).
 | Perception TransformerDecoder ×3 | **TTNN** | 3.4 | SDPA + FFN + LN |
 | TrajectoryHead DDIM denoiser (incl. `grid_sample`) | **TTNN** | 3.5 | plan_anchor_encoder, time_mlp, grid-sample cross-attn, 2× MHA, FFN, norms, FiLM, task heads |
 | `_agent_head` MLPs | **TTNN** | 3.7 | `_mlp_states`, `_mlp_label` |
-| DDIM `scheduler.step`, `gen_sineembed`, norm/denorm, argmax/gather, embedding-add | host (glue) | — | scalar/indexing on ≤320-elt tensors; not kernel-worthy |
+| DDIM `scheduler.step`, `gen_sineembed`, norm/denorm, argmax/gather, embedding-add | host | — | scalar/indexing on ≤320-elt tensors; not kernel-worthy. **Not free**: the DDIM loop is host control flow, so each denoiser drop-in round-trips H2D/D2H per call (`tt/ttnn_trajectory.py`) and the coordinate/heading math runs in Torch |
 
 ---
 
@@ -234,12 +242,23 @@ pool/upsample ratios are integer (§3.4).
 | 3.6 | Backbone completion: ResNet stems ×2 + GPT cross-modal fusion ×4 on TTNN (`build_stage3_6`) | +grid/pool/upsample | — | `30cca82a69` |
 | 3.7 | Agent head MLPs on TTNN (`build_stage3_7`) — **every weight op now on TTNN** | — | — | `30cca82a69` |
 
-**Current total: 32 PCC tests** (a few skip without the real checkpoint/anchor
-assets).  After `build_stage3_7` every
+**Current total: 49 tests — 26 require a device, 23 are CPU-only.** Read the
+split before quoting the number: the 26 device-requiring cases are the TTNN
+evidence, while the CPU-only ones cover BN-folding arithmetic, the bridge wire
+protocol, agent exit-status handling, and reference-model sanity. A bare "49
+passed" should not be read as 49 TTNN executions. Some cases skip without the
+real checkpoint/anchor assets, and fail instead under `DD_REQUIRE_ASSETS=1`
+(section 7).  After `build_stage3_7` every
 weight-bearing op runs on TTNN; `test_pcc_stage3_6.py` validates the whole
 on-device model at production resolution (trajectory PCC 1.0 random / 0.9998
-real-checkpoint).  Remaining host code is non-weight scalar glue (enumerated in
-the §2 submodule table).
+real-checkpoint).
+
+No **learned** op (conv, linear, attention, norm) remains on host. What does remain
+is not merely scalar, though: the DDIM sampling loop is host control flow, so the
+denoiser drop-ins transfer activations H2D/D2H on every call, and the sine
+embeddings, scheduler step and coordinate/heading math run in Torch. Those
+transfers are the dominant per-forward cost the trace work targets (§5), not
+negligible glue. Enumerated in the §2 submodule table.
 
 ### TTNN ops on-device at Stage 3
 
@@ -380,7 +399,7 @@ it is absent. The full eval-asset env-var scheme is in
 source python_env/bin/activate
 export PYTHONPATH="${TT_METAL_HOME:-$(pwd)}"   # TT_METAL_HOME = your tt-metal checkout
 
-# Full suite (32 PCC + 3 sanity = 35 tests; some PCC tests skip without the checkpoint/anchor assets)
+# Full suite (49 tests: 26 device + 23 CPU-only; some skip without the checkpoint/anchor assets)
 python -m pytest models/experimental/diffusion_drive/tests/ -v
 
 # PCC tests only (require attached Wormhole device)
