@@ -232,6 +232,24 @@
   team: models
   budget_type: vllm
 
+- name: "Gemma4-12B"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
+  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
+  multimodal: false
+  skus:
+    wh_llmbox:
+      timeout: 60
+      tier: 2
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   coherence-test: true
