@@ -826,15 +826,28 @@ For example:
     l_reg[LRegs::LReg1] = x;         // this is necessary at the end of the function
                                      // to preserve the value in LReg1 (if desired)
 
-You may mark an lreg as used in code that the compiler cannot examine
-with the ``used`` function:
+Mark an LReg as occupied in a region the compiler cannot examine with
+``used()``.  Call it before a raw ``TTI_*`` / ``TT_*`` sequence so the
+compiler will not keep an SFPI value live in that LReg, and again after
+so it will not assume the LReg still holds an SFPI value:
 
 .. code-block:: c++
 
-    l_reg[LRegs::LReg0].used();
-    // your code here
+    vFloat x = dst_reg[0];
+    dst_reg[0] = x + 1.0f;
 
-The compiler will not keep a value live in  lreg0 across your code.
+    l_reg[LRegs::LReg0].used();   // LReg0 is not live going in
+    TTI_SFPLOAD(...);             // raw instruction writes LReg0
+    TT_SFPSTORE(...);
+    l_reg[LRegs::LReg0].used();   // LReg0 contents are unknown going out
+
+    vFloat y = dst_reg[1];
+    dst_reg[1] = y;
+
+Without ``used()``, mixing SFPI with those macros is undefined (see
+Mixing SFPI with ``TTI`` / ``TT`` below).  Prefer expressing the
+sequence in SFPI; if that is not possible, write the whole region in
+``TTI``/``TT``, or mark every occupied LReg as shown above.
 
 Miscellaneous
 =============
@@ -933,6 +946,33 @@ There is no ABI and none of the vector types can be passed on the stack.
 Therefore, all function calls must be inlined.  To ensure this use
 ``sfpi_inline``, which is defined to ``__attribute__((always_inline))`` on GCC.
 
+Return Inside ``v_if``
+----------------------
+
+Do not ``return`` inside a ``v_if``.  ``return`` is a C++ statement lowered to
+scalar, non-predicated control flow: it exits the whole function for every
+vector lane and skips the matching ``v_endif`` (unbalanced CC stack).  There
+is no per-lane early out.  Handle special cases with predicated assignment
+instead (``v_if (cond) { result = x; } v_endif;``) and let later stores
+overwrite.  A scalar ``if`` outside a vector-predicated block can still
+``return``.
+
+Mixing SFPI with ``TTI`` / ``TT``
+---------------------------------
+
+Do not mix SFPI vector code (``vFloat``, ``v_if``, ``dst_reg``) with raw
+``TTI_*`` / ``TT_*`` instruction macros in the same live region.  The
+compiler allocates LRegs and manages the CC stack; those macros write
+numbered LRegs and CC that the compiler cannot see.  The result is
+undefined: live SFPI values can be overwritten, the CC stack can become
+unbalanced, and the optimizer can reorder the instruction stream.
+
+When a sequence cannot be expressed in SFPI, implement that region
+entirely with ``TTI``/``TT``.  If SFPI and a raw sequence must appear in
+the same function, mark each occupied LReg with ``l_reg[n].used()`` so
+the compiler will not keep a value live across the raw sequence (see
+Assigning LRegs above).
+
 Register Spilling
 -----------------
 
@@ -956,6 +996,8 @@ Limitations
 -----------
 
   * Forgetting a ``v_endif`` results in mismatched {} error which can be confusing (however, catches the case where a ``v_endif`` is missing!)
+  * ``return`` inside a ``v_if`` is not a per-lane early out; it exits the whole function and skips ``v_endif``
+  * Mixing SFPI with raw ``TTI_*`` / ``TT_*`` macros in the same live region is undefined (compiler-allocated LRegs and CC vs numbered registers the compiler cannot see)
   * In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code
   * Keeping too many variables alive at once requires register spilling which is not implemented and causes a compiler abort
   * The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.
