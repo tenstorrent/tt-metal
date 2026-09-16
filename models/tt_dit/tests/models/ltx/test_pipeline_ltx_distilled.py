@@ -77,6 +77,7 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
 )
 def test_pipeline_distilled(
     mesh_device,
+    device_params,
     sp_axis,
     tp_axis,
     num_links,
@@ -107,7 +108,14 @@ def test_pipeline_distilled(
     width = int(os.environ.get("WIDTH", "1920"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
-    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    # Traced by default wherever the mesh param reserves a trace region: the served path is traced, and
+    # the traced flow (gen #2 pure replay) is what catches a corrupted replay. LTX_TRACED=0/1 overrides.
+    _traced_env = os.environ.get("LTX_TRACED")
+    traced = (
+        _traced_env in ("1", "true", "True")
+        if _traced_env is not None
+        else bool(device_params.get("trace_region_size"))
+    )
 
     # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
     # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
