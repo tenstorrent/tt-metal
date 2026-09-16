@@ -14,7 +14,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
-#include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -41,8 +41,7 @@ struct OneFromOneConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFromOneConfig& test_config) {
-    IDevice* device = mesh_device->impl().get_device(0);
+bool run_dm(distributed::MeshDevice& mesh_device, const OneFromOneConfig& test_config) {
     const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
 
     // (Logical) Core Coordinates and ranges
@@ -71,7 +70,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     const std::string requestor_kernel_path =
         "tests/tt_metal/tt_metal/data_movement/one_from_one/kernels/requestor_2_0.cpp";
 
-    CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
+    CoreCoord physical_subordinate_core = mesh_device.worker_core_from_logical_core(test_config.subordinate_core_coord);
 
     using namespace tt::tt_metal::experimental;
 
@@ -81,7 +80,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
         {"num_vc", (uint32_t)test_config.num_virtual_channels}};
 
     DataMovementHardwareConfig requestor_hw_config;
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         requestor_hw_config = DataMovementGen2Config{};
     } else {
         requestor_hw_config = DataMovementGen1Config{
@@ -111,7 +110,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
         }},
     };
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program = MakeProgramFromSpec(mesh_device, spec);
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel = requestor_spec.unique_id};
@@ -142,20 +141,20 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     vector<uint32_t> packed_golden = packed_input;
 
     // Launch program and record outputs
-    detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_address, packed_input);
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    slow_dispatch::WriteToL1(mesh_device, test_config.subordinate_core_coord, l1_base_address, packed_input);
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
     vector<uint32_t> packed_output;
-    detail::ReadFromDeviceL1(
-        device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
+    slow_dispatch::ReadFromL1(
+        mesh_device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
 
     // Results comparison
     bool is_equal = (packed_output == packed_golden);
@@ -172,7 +171,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 }
 
 void directed_ideal_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
@@ -203,12 +202,11 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
     NOC noc_id = NOC::RISCV_1_default) {
-    IDevice* device = mesh_device->impl().get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -216,7 +214,7 @@ void packet_sizes_test(
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_transaction_size_pages =
-        device->arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+        mesh_device.arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
@@ -244,7 +242,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
@@ -290,7 +288,7 @@ void virtual_channels_test(
 }
 
 void custom_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord,
     CoreCoord subordinate_core_coord,
@@ -329,16 +327,15 @@ void custom_test(
 /* ========== TEST CASES ========== */
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOnePacketSizes) {
-    auto mesh_device = get_mesh_device();
-    if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         // subordinate_core_coord {1, 0} requires at least 2 columns in the compute grid
-        if (mesh_device->impl().get_device(0)->compute_with_storage_grid_size().x < 2) {
+        if (this->device().compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Skipping: subordinate core {1, 0} requires >= 2 columns, but grid has "
-                         << mesh_device->impl().get_device(0)->compute_with_storage_grid_size().x
+                         << this->device().compute_with_storage_grid_size().x
                          << " column(s). Use emu-quasar-2x3 or larger.";
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_from_core::OneFromOneConfig test_config = {
             .test_id = 5,
             .master_core_coord = {0, 0},
@@ -347,26 +344,26 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOnePacketSizes) {
             .transaction_size_pages = 4,
             .page_size_bytes = bytes_per_page,
             .l1_data_format = DataFormat::Float16_b};
-        EXPECT_TRUE(run_dm(mesh_device, test_config));
+        EXPECT_TRUE(run_dm(this->device(), test_config));
         return;
     }
     uint32_t test_id = 5;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {1, 1};
-    unit_tests::dm::core_from_core::packet_sizes_test(mesh_device, test_id, master_core_coord, subordinate_core_coord);
+    unit_tests::dm::core_from_core::packet_sizes_test(
+        this->device(), test_id, master_core_coord, subordinate_core_coord);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
-    if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         // subordinate_core_coord {1, 0} requires at least 2 columns in the compute grid
-        if (mesh_device->impl().get_device(0)->compute_with_storage_grid_size().x < 2) {
+        if (this->device().compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Skipping: subordinate core {1, 0} requires >= 2 columns, but grid has "
-                         << mesh_device->impl().get_device(0)->compute_with_storage_grid_size().x
+                         << this->device().compute_with_storage_grid_size().x
                          << " column(s). Use emu-quasar-2x3 or larger.";
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_from_core::OneFromOneConfig test_config = {
             .test_id = 51,
             .master_core_coord = {0, 0},
@@ -375,14 +372,14 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneDirectedIdeal) {
             .transaction_size_pages = 1,
             .page_size_bytes = bytes_per_page,
             .l1_data_format = DataFormat::Float16_b};
-        EXPECT_TRUE(run_dm(mesh_device, test_config));
+        EXPECT_TRUE(run_dm(this->device(), test_config));
         return;
     }
     uint32_t test_id = 51;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_core_coord = {0, 1};
     unit_tests::dm::core_from_core::directed_ideal_test(
-        mesh_device, test_id, master_core_coord, subordinate_core_coord);
+        this->device(), test_id, master_core_coord, subordinate_core_coord);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneVirtualChannels) {
@@ -391,7 +388,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneVirtualChannels)
     uint32_t test_id = 152;
 
     unit_tests::dm::core_from_core::virtual_channels_test(
-        get_mesh_device(),
+        this->device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1)   // Subordinate Core
@@ -408,7 +405,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneCustom) {
     uint32_t num_virtual_channels = 4;
 
     unit_tests::dm::core_from_core::custom_test(
-        get_mesh_device(),
+        this->device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1),  // Subordinate Core
@@ -418,12 +415,10 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneCustom) {
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOnePacketSizes2_0) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-    if (device->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         // Quasar emulator (1x3 or 2x3): pick a subordinate that exists on the grid
         // and run a single small config. Full sweep is too large for emulator.
-        auto grid = device->compute_with_storage_grid_size();
+        auto grid = this->device().compute_with_storage_grid_size();
         CoreCoord subordinate;
         if (grid.x >= 2) {
             subordinate = {1, 0};
@@ -433,7 +428,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOnePacketSizes2_0) 
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_from_core::OneFromOneConfig test_config = {
             .test_id = 159,
             .master_core_coord = {0, 0},
@@ -443,18 +438,16 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOnePacketSizes2_0) 
             .page_size_bytes = bytes_per_page,
             .l1_data_format = DataFormat::Float16_b,
         };
-        EXPECT_TRUE(unit_tests::dm::core_from_core::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_from_core::run_dm(this->device(), test_config));
         return;
     }
     uint32_t test_id = 159;
-    unit_tests::dm::core_from_core::packet_sizes_test(mesh_device, test_id, CoreCoord(0, 0), CoreCoord(1, 1));
+    unit_tests::dm::core_from_core::packet_sizes_test(this->device(), test_id, CoreCoord(0, 0), CoreCoord(1, 1));
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneDirectedIdeal2_0) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-    if (device->arch() == ARCH::QUASAR) {
-        auto grid = device->compute_with_storage_grid_size();
+    if (this->device().arch() == ARCH::QUASAR) {
+        auto grid = this->device().compute_with_storage_grid_size();
         CoreCoord subordinate;
         if (grid.x >= 2) {
             subordinate = {1, 0};
@@ -464,7 +457,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneDirectedIdeal2_0
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-            unit_tests::dm::compute_physical_constraints(mesh_device);
+            unit_tests::dm::compute_physical_constraints(this->device());
         unit_tests::dm::core_from_core::OneFromOneConfig test_config = {
             .test_id = 161,
             .master_core_coord = {0, 0},
@@ -474,11 +467,11 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneFromOneDirectedIdeal2_0
             .page_size_bytes = bytes_per_page,
             .l1_data_format = DataFormat::Float16_b,
         };
-        EXPECT_TRUE(unit_tests::dm::core_from_core::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::core_from_core::run_dm(this->device(), test_config));
         return;
     }
     unit_tests::dm::core_from_core::directed_ideal_test(
-        mesh_device, 161, CoreCoord(0, 0), CoreCoord(0, 1), NOC::RISCV_1_default);
+        this->device(), 161, CoreCoord(0, 0), CoreCoord(0, 1), NOC::RISCV_1_default);
 }
 
 }  // namespace tt::tt_metal
