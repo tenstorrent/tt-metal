@@ -383,8 +383,8 @@ void kernel_main() {
                     ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
-                    ckl::ReservePolicy::PerOuter,
-                    ckl::PushPolicy::PerOuter,
+                    ckl::ReservePolicy::OneUpfront,
+                    ckl::PushPolicy::OneAtEnd,
                     ckl::DataFormatReconfig::Disabled,
                     ckl::TileAddressing::Direct,
                     ckl::DestAccumulation::WholeShape)>{});
@@ -515,8 +515,8 @@ void kernel_main() {
                     ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
-                    ckl::ReservePolicy::PerOuter,
-                    ckl::PushPolicy::PerOuter,
+                    ckl::ReservePolicy::OneUpfront,
+                    ckl::PushPolicy::OneAtEnd,
                     ckl::DataFormatReconfig::Disabled,
                     ckl::TileAddressing::Direct,
                     ckl::DestAccumulation::WholeShape)>{});
