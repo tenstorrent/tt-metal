@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
-    const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
     const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
     constexpr auto reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool is_std = get_arg(args::is_std) != 0;

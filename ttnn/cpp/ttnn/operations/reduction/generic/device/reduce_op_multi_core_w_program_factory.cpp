@@ -21,7 +21,8 @@ namespace ttnn::prim {
 namespace {
 
 // RM splits NC*H_logical row-wise so each core gets contiguous logical rows; the tile path keeps
-// the NC*Ht slicing.
+// the NC*Ht slicing. Mirrors the num_rows line in create_program_artifacts, for the override,
+// which has no locals to reuse.
 uint32_t reduce_w_num_rows(
     const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
     using namespace tt::tt_metal;
@@ -47,9 +48,7 @@ uint32_t reduce_w_num_rows(
 // The core-group split. create_program_artifacts and the cache-hit override both call this, so
 // they cannot disagree about how many core groups the split leaves. Note the grid-size CoreCoord
 // overload: a grid size is not an inclusive end coordinate, so a CoreRange built from it is wrong.
-auto reduce_w_split_work(
-    const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
-    const uint32_t num_rows = reduce_w_num_rows(attrs, a, output);
+auto reduce_w_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, uint32_t num_rows) {
     const bool split_row_wise = attrs.row_major_w_dense_path;
     return attrs.sub_core_grids.has_value()
                ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_rows, split_row_wise)
@@ -70,7 +69,8 @@ bool reduce_w_has_second_core_group(
     // Height sharding pins the workers to the shard grid, so there is only ever one group. Mirrors
     // the use_height_sharding override in create_program_artifacts.
     const bool use_height_sharding =
-        !attrs.row_major_w_dense_path && a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+        !attrs.row_major_w_dense_path && a.memory_config().is_l1() && output.memory_config().is_l1() &&
+        a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
         output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && a.shard_spec().has_value() &&
         output.shard_spec().has_value() && a.shard_spec()->grid == output.shard_spec()->grid &&
         a.shard_spec()->shape[0] == output.shard_spec()->shape[0] &&
@@ -79,7 +79,7 @@ bool reduce_w_has_second_core_group(
     if (use_height_sharding) {
         return false;
     }
-    return !std::get<3>(reduce_w_split_work(attrs, a, output)).ranges().empty();
+    return !std::get<3>(reduce_w_split_work(attrs, a, reduce_w_num_rows(attrs, a, output))).ranges().empty();
 }
 
 }  // namespace
@@ -154,13 +154,15 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_rows = reduce_w_num_rows(operation_attributes, a, output);
+    // RM splits NC*H_logical row-wise so each core gets contiguous logical rows; tile path
+    // keeps the existing NC*Ht slicing.
+    const uint32_t num_rows = rm_path ? (NC * plan.H_logical) : (NC * Ht);
     constexpr bool k_split_rows_row_wise = true;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_rows_per_core_group_1, num_rows_per_core_group_2;
     std::tie(num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-        reduce_w_split_work(operation_attributes, a, output);
+        reduce_w_split_work(operation_attributes, a, num_rows);
     TT_FATAL(num_cores > 0, "Reduce W requires at least one worker core");
 
     // Height-sharded: pin the worker set to the shard grid and give each core exactly the rows

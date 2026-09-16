@@ -66,7 +66,7 @@ FORCE_INLINE void reduce_block(
             compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
 #ifdef REDUCE_POST_MUL
             [](uint32_t dst_idx) {
-                const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+                const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
                 if (post_mul_scaler_bits == k_identity_scaler_bits) {
                     return;
                 }

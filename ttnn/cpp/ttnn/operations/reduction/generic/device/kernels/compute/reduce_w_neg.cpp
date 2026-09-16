@@ -29,7 +29,7 @@ void kernel_main() {
     const uint32_t NC = get_arg(args::NC);
 #ifdef REDUCE_POST_MUL
     // Packed fp32 user scalar applied via mul_unary_tile after the reduce+negate finishes.
-    const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
     const bool apply_post_mul = post_mul_scaler_bits != k_identity_scaler_bits;
 #endif
 
