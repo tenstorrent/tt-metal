@@ -135,7 +135,7 @@ The Gemma4 producer reads `PREFILL_HF_MODEL`/`HF_MODEL` for its tokenizer, `PREF
 | `--text` | Six Gutenberg books, IDs `135`, `2600`, `1184`, `996`, `1023`, `1399` | Repeat once per slot to use local UTF-8 files. |
 | `--text-cache` | `/tmp/gemma4_prefill_text` | Downloaded-text cache directory. |
 | `--timeout` | `1200` seconds | Connection and per-chunk acknowledgment timeout. `PREFILL_H2D_CONNECT_TIMEOUT` is not read by this producer. |
-| `--keep-serving` | Off | Omit the shutdown sentinel after requests finish. |
+| `--shutdown` | Off | Send the shutdown sentinel after requests finish. By default, the service stays running. |
 | `--results` | Unset | Optional JSON file for per-slot token counts and chunk timings. |
 
 ## Derived values and fixed Python settings

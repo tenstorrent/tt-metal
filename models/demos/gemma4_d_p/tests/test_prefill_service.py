@@ -51,6 +51,7 @@ def producer_process(log_path, *args):
                 sys.executable,
                 "-m",
                 "models.demos.gemma4_d_p.tt.runners.prefill_producer",
+                "--shutdown",
                 "--results",
                 str(log_path.with_suffix(".json")),
                 *args,

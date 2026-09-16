@@ -83,7 +83,7 @@ def main():
     parser.add_argument(
         "--timeout", type=float, default=1200, help="Connection and per-chunk completion timeout in seconds"
     )
-    parser.add_argument("--keep-serving", action="store_true", help="Leave the service running after validation")
+    parser.add_argument("--shutdown", action="store_true", help="Shut down the service after validation")
     parser.add_argument("--results", type=Path, help="Write per-slot token counts and chunk timings as JSON")
     args = parser.parse_args()
     if not 1 <= args.tokens <= Gemma4ServiceConfig.MAX_SEQ_LEN:
@@ -120,7 +120,7 @@ def main():
     if args.results:
         args.results.write_text(json.dumps(result, indent=2) + "\n")
     logger.info(f"PASS: {args.slots} slots, {len(chunks)} chunks, {sum(map(len, prompts))} tokens in {elapsed:.1f}s")
-    if not args.keep_serving:
+    if args.shutdown:
         service.forward_to_tensor_bytes(
             np.zeros((8, 1, Gemma4ServiceConfig.CHUNK_SIZE // 8), dtype="<u4"),
             metadata=struct.pack("<iii", -1, -1, -1),
