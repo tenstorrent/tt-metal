@@ -397,7 +397,17 @@ def main():
                 proc = subprocess.Popen([testCommand], shell=True, env=env, preexec_fn=os.setsid)
                 proc_holder["p"] = proc
                 logger.info("Test process started")
-                proc.communicate()
+                try:
+                    proc.communicate()
+                except BaseException:
+                    # The SIGINT/SIGTERM handler above cannot run when an exception propagates
+                    # through this wait; kill the workload's process group so nothing outlives the
+                    # wrapper.
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    raise
                 if options.check_exit_code and proc.returncode != 0:
                     logger.error(f"{testCommand} exited with a non-zero return code")
                     sys.exit(4)

@@ -4,6 +4,7 @@
 
 import os
 import shlex
+import signal
 import subprocess
 from pathlib import Path
 import pandas as pd
@@ -135,6 +136,31 @@ def get_multi_pass_configs(capture_perf_counters_groups):
     return groups_pass1, groups_pass2
 
 
+def _run_profiler_cmd(profiler_cmd):
+    """Run `python -m tracy ...` in its own session and take the whole tree down with the caller.
+
+    subprocess.run(shell=True) only reaps the `sh -c` wrapper: when the caller is interrupted
+    (pytest-timeout raising inside the wait, SIGINT) the orphaned `python -m tracy` and the test it
+    captured keep the CI step's stdout open until the step budget kills it (81-86 s of dead time on
+    the Blackhole device-perf legs, 45 s on wh_n150 in the 2026-08-27 .. 09-11 failures).
+    """
+    proc = subprocess.Popen([profiler_cmd], shell=True, start_new_session=True)
+    try:
+        returncode = proc.wait()
+    except BaseException:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        raise
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, profiler_cmd)
+
+
 def run_multi_pass(
     command,
     output_logs_subdir,
@@ -163,7 +189,7 @@ def run_multi_pass(
         is_command_binary_exe,
     )
     logger.info(f"L1 two-pass: running pass 1 (L1 bank 0) — {profiler_cmd}")
-    subprocess.run([profiler_cmd], shell=True, check=True)
+    _run_profiler_cmd(profiler_cmd)
 
     # Pass 2: L1_1 instead of L1_0
     pass2_subdir = f"{output_logs_subdir}_l1_pass2"
@@ -180,7 +206,7 @@ def run_multi_pass(
         is_command_binary_exe,
     )
     logger.info(f"L1 two-pass: running pass 2 (L1 bank 1) — {profiler_cmd_pass2}")
-    subprocess.run([profiler_cmd_pass2], shell=True, check=True)
+    _run_profiler_cmd(profiler_cmd_pass2)
 
     # Merge L1_1 columns from pass 2 into pass 1 CSV
     if python_post_process:
@@ -227,7 +253,7 @@ def run_device_profiler(
             is_command_binary_exe,
         )
         logger.info(profiler_cmd)
-        subprocess.run([profiler_cmd], shell=True, check=True)
+        _run_profiler_cmd(profiler_cmd)
 
 
 def get_samples_per_s(time_ns, num_samples):
