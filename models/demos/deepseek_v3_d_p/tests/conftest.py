@@ -399,7 +399,7 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -490,7 +490,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+            "tiktoken*",  # Kimi ships its BBPE tokenizer as tiktoken.model
         ]
 
         # Add custom model code files (needed for trust_remote_code=True)
@@ -617,7 +617,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
             if index_file.exists():
                 logger.info(f"Using existing model from {variant.env_var}: {model_path}")
                 # Keep the user path absolute but do NOT symlink-resolve it: resolve() would follow a
-                # dot-free symlink (e.g. Kimi-K2_6) back to a dotted real dir (Kimi-K2.6), and HF
+                # dot-free symlink (e.g. Kimi-K2_7-Code) back to a dotted real dir (Kimi-K2.7-Code), and HF
                 # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
                 # safetensors load works through the symlink either way; only the config import cares.
                 # This matches _resolve_config_only, which already loads config from the raw env path.
@@ -651,7 +651,8 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
 
 
 def _unwrap_multimodal_config(cfg):
-    """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
+    """Unwrap a Kimi multimodal wrapper config (K2.7-Code ships
+    ``KimiK25ForConditionalGeneration``) to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
     under `text_config`.

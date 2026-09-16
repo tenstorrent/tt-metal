@@ -22,7 +22,7 @@ class DeepSeekV4ProConfig:
     # shape the composite already wins from 256 and gives the band back only at 576, where its
     # tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over that
     # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128

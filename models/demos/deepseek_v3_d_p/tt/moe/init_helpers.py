@@ -987,7 +987,7 @@ def create_gate_weights(
 
 # HF key template for the MoE gate, per checkpoint family. ``{layer_idx}`` is substituted.
 #
-# DeepSeek-V3 and Kimi-K2.6/K2.7 nest the router under ``mlp.gate``. Kimi-K3 renames the MoE module
+# DeepSeek-V3 and Kimi-K2.7 nest the router under ``mlp.gate``. Kimi-K3 renames the MoE module
 # to ``block_sparse_moe`` AND lives under a ``language_model.`` prefix (it is a multimodal
 # checkpoint), so it needs its own template rather than a tweak to the default.
 GATE_KEY_PREFIX_DEEPSEEK = "model.layers.{layer_idx}.mlp.gate."

@@ -5448,7 +5448,7 @@ def test_ring_mla_perf_better_than_separate_v_ring_joint():
 
 
 # === TEST 6: CHUNKED-PREFILL ACCURACY ===
-# Chunked-prefill tests use a kimi-K2.6-style MLA config (16 Q heads, single KV head,
+# Chunked-prefill tests use a kimi-K2.7-style MLA config (16 Q heads, single KV head,
 # DeepSeek V3 dims) kept separate from the global MODEL_CONFIGS so the kimi parameters
 # don't leak into the non-chunked sweep/perf/determinism tests.
 CHUNKED_PREFILL_MODEL_CONFIGS = {
@@ -5478,7 +5478,7 @@ RING_MLA_CHUNKED_MODEL_CONFIGS = {
     name: replace(cfg, d_v=RING_MLA_CHUNKED_LATENT_D_V) for name, cfg in CHUNKED_PREFILL_MODEL_CONFIGS.items()
 }
 
-# Kimi-K3 MLA: K2.6's latent geometry (d_q = d_k = 576, latent d_v = 512, one MQA KV head), with
+# Kimi-K3 MLA: K2.7's latent geometry (d_q = d_k = 576, latent d_v = 512, one MQA KV head), with
 # nhq pinned to the production 96 / TP=4 = 24 -- no galaxy split, unlike CHUNKED_PREFILL_HEADS_PER_RING.
 KIMI_K3_HEADS_PER_DEVICE = 24
 RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"] = ModelConfig(

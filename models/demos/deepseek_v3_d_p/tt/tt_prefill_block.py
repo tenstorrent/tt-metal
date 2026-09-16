@@ -149,7 +149,7 @@ class TtPrefillBlock(LightweightModule):
             cache_path: Cache directory
             mesh_device: Mesh device reference
             config: Model config
-            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK26Config)
+            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK27Config)
             ... other args for sub-components
         """
         is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS

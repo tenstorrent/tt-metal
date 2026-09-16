@@ -56,7 +56,7 @@ class KimiK3Config:
     # tail per_core_M rounds 18 tile-rows up to 32, and wins outright from 896. 768 is the
     # aggregate-optimal cut over that sawtooth (+0.14% against a per-count oracle, worst cell
     # +23% at 512). Measured under SituGlu, the activation these experts actually run.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
