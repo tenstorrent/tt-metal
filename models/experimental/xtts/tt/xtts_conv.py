@@ -172,6 +172,7 @@ class TtConv1d(LightweightModule):
         if conv_config_overrides:
             for _k, _v in conv_config_overrides.items():
                 setattr(self.conv_config, _k, _v)
+
         # Fallback configs for shapes whose auto-sharded program's static circular buffers clash
         # with the L1 buffers the traced pipeline keeps alive around the vocoder. Tried in order
         # on a clash, each shrinking the program's L1 footprint further; the output is the same.
