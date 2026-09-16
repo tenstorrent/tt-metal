@@ -333,7 +333,7 @@ llk:
   weekly:
     sim_wh_n150_xl: 75
     sim_bh_p150_xl: 240
-    sim_quasar_xl: 180
+    sim_quasar_xl: 600
 
 models:
   # Agentic Research Model Tests: Saturday 07:00 UTC, independent of daily model tiers.
