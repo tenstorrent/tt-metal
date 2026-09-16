@@ -37,7 +37,7 @@ GEMMA4_SLIDING_WINDOW_TOKENS = 1024
 PREFILL_CHUNK_SIZES = (4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 KV_PCC_REFERENCE_DIR = pathlib.Path(
-    "/mnt/models/huggingface/gpu_traces/google--gemma-4-31B-it/hf-gemma4-31b-36db66e9-262144tok"
+    "/mnt/models/huggingface/gpu_traces/gemma4_d_p/google--gemma-4-31B-it/hf-gemma4-31b-36db66e9-262144tok"
 )
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
@@ -152,22 +152,18 @@ def _ring_cache_rows(full, start, end, chunk, cp, num_heads):
     return full[:, ranks, local_rows, :].permute(1, 0, 2)
 
 
-def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+def _kv_accuracy(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
+    """Compute PCC and relative L2 from shared float64 inputs."""
     a = a.to(torch.float64).flatten()
     b = b.to(torch.float64).flatten()
-    a = a - a.mean()
-    b = b - b.mean()
-    d = a.norm() * b.norm()
-    if d == 0:
-        return float("nan")
-    return float(torch.clamp((a @ b) / d, -1.0, 1.0))
-
-
-def rel_l2(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.to(torch.float64).flatten()
-    b = b.to(torch.float64).flatten()
+    centered_a = a - a.mean()
+    centered_b = b - b.mean()
+    d = centered_a.norm() * centered_b.norm()
+    correlation = float("nan") if d == 0 else float(torch.clamp((centered_a @ centered_b) / d, -1.0, 1.0))
+    del centered_a, centered_b
     n = b.norm()
-    return float("nan") if n == 0 else float((a - b).norm() / n)
+    relative_error = float("nan") if n == 0 else float((a - b).norm() / n)
+    return correlation, relative_error
 
 
 def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, chunk, cp):
@@ -211,14 +207,23 @@ def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, c
             if packed
             else (("K", attn.ring_kv_cache.k), ("V", attn.ring_kv_cache.v))
         )
+        # Keep reference mappings for this layer only, releasing each after V.
+        # Both passes use the same file, which contains canonical K and V.
+        reference_blocks = {}
+        full = None
         for part, tensor in cache_parts:
-            # Read one tensor at a time to bound host memory for long contexts.
-            full = ttnn.to_torch(tensor, mesh_composer=composer).float()
+            # Sliding K/V have separate caches; global K/V share one packed cache.
+            if full is None:
+                full = ttnn.to_torch(tensor, mesh_composer=composer).float()
             scores = []
             for block_idx, block in enumerate(kv_streams[layer_idx]):
                 start, end = block["row_start"], min(block["row_end"], tokens.shape[-1])
                 path = ref_dir / block["path"]
-                golden = load_file(str(path))[f"kv_post_transform_layer_{layer_idx}"]
+                if part == "V":
+                    golden = reference_blocks.pop(block_idx)
+                else:
+                    golden = load_file(str(path))[f"kv_post_transform_layer_{layer_idx}"]
+                    reference_blocks[block_idx] = golden
                 assert golden.shape == (block["row_end"] - start, 2 * heads * dim), f"{path}: invalid KV shape"
                 golden = golden[: end - start]
                 golden_k = golden[:, : heads * dim].reshape(end - start, heads, dim)
@@ -235,7 +240,7 @@ def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, c
                     golden = golden_k.index_select(-1, sliding_kv_indices(dim))
                 else:
                     golden = golden_v
-                value, error = pcc(actual, golden), rel_l2(actual, golden)
+                value, error = _kv_accuracy(actual, golden)
                 records.append(
                     {
                         "layer": layer_idx,
@@ -253,7 +258,10 @@ def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, c
                 f"[kv_pcc] layer={layer_idx} {part} mean={sum(scores) / len(scores):.6f} "
                 f"min={min(scores):.6f} max={max(scores):.6f}"
             )
-            del full
+            if not packed:
+                full = None
+        # Release the global packed readback before loading the next layer.
+        full = None
     return records
 
 
