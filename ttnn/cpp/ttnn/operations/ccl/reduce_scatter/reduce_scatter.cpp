@@ -88,7 +88,27 @@ bool use_direct_reduce_scatter(
     // Size gate: physical per-device input bytes, so block-float dtypes are counted as they actually
     // land in DRAM rather than by logical element count.
     const auto* buffer = input_tensor.buffer();
-    return buffer != nullptr && static_cast<uint64_t>(buffer->size()) <= k_direct_rs_max_input_bytes;
+    const bool selected = buffer != nullptr && static_cast<uint64_t>(buffer->size()) <= k_direct_rs_max_input_bytes;
+    if (selected) {
+        // Scratch measurement branch: report every dispatch to the direct op and whether the multi-ring
+        // gate proposed in #56099 would keep it on the ring op.
+        uint32_t other_axis_devices = 0;
+        if (cluster_axis.has_value()) {
+            const auto mesh_shape = input_tensor.device()->shape();
+            if (mesh_shape.dims() == 2) {
+                other_axis_devices = mesh_shape[1 - cluster_axis.value()];
+            }
+        }
+        log_warning(
+            tt::LogOp,
+            "RS_DIRECT_REACH bytes={} dim={} cluster_axis={} other_axis_devices={} blocked_by_56099_gate={}",
+            buffer->size(),
+            dim,
+            cluster_axis.has_value() ? static_cast<int32_t>(cluster_axis.value()) : -1,
+            other_axis_devices,
+            other_axis_devices > 1);
+    }
+    return selected;
 }
 
 }  // namespace
