@@ -50,6 +50,8 @@ namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
 
+enum class BriscFirmwareVariant : uint8_t { Default, Blaze };
+
 inline std::string g_root_dir;
 inline std::once_flag g_root_once;
 
@@ -412,6 +414,9 @@ class RunTimeOptions {
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
 
+    // BRISC firmware variant selected by TT_METAL_FW_SRC_BRISC.
+    BriscFirmwareVariant brisc_firmware_variant = BriscFirmwareVariant::Default;
+
     // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
     // and full-dispatch passes on dispatch_s.
     uint32_t device_print_dispatch_stall_us = 50;
@@ -425,12 +430,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
-    // Process-start trace allocation tracker settings. These are static because
-    // environment variables are process-wide and the hot-path accessors do not
-    // belong to a particular MetalContext.
-    inline static bool trace_allocation_tracking_enabled_ = false;
-    inline static bool trace_allocation_diagnostics_enabled_ = false;
-    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
+    struct TraceAllocationOptions {
+        bool tracking_enabled = false;
+        bool diagnostics_enabled = false;
+        bool skip_program_cache = false;
+    };
+
+    static const TraceAllocationOptions& get_trace_allocation_options();
 
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
@@ -528,11 +534,9 @@ public:
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
 
-    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
-    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
-    static bool get_trace_allocation_skip_program_cache_enabled() {
-        return trace_allocation_skip_program_cache_enabled_;
-    }
+    static bool get_trace_allocation_tracking_enabled();
+    static bool get_trace_allocation_diagnostics_enabled();
+    static bool get_trace_allocation_skip_program_cache_enabled();
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
@@ -954,6 +958,7 @@ public:
 
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
+    BriscFirmwareVariant get_brisc_firmware_variant() const { return brisc_firmware_variant; }
 
     uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
     void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }
