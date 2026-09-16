@@ -95,6 +95,20 @@ struct IntermeshVCConfig {
         config.requires_vc1_mesh_pass_through = true;
         return config;
     }
+
+    // Per-router VC1 mode predicates. These are pure functions of this (system-global) config and
+    // the router's own inter/intra-mesh placement — evaluate per router, do not cache.
+    //
+    // VC1 is actively serviced (VC1 sender+receiver steps run) when:
+    //  - intra-mesh router with full-mesh VC1, or
+    //  - inter-mesh router with pass-through VC1
+    bool vc1_serviced_for(bool is_inter_mesh) const {
+        return (!is_inter_mesh && requires_vc1_full_mesh) || (is_inter_mesh && requires_vc1_mesh_pass_through);
+    }
+
+    // Inter-mesh full-mesh routers cross incoming VC0 link traffic over to the VC1 downstream
+    // interface array (their own VC1 steps are compiled out — see vc1_serviced_for).
+    bool vc0_crossover_to_vc1_for(bool is_inter_mesh) const { return is_inter_mesh && requires_vc1_full_mesh; }
 };
 
 /**

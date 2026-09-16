@@ -49,6 +49,7 @@
 
 #include "tt_metal/fabric/channel_trimming_export.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/channel_trimming_io.hpp"
 
 #include "fabric_fixture.hpp"
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
@@ -182,14 +183,13 @@ void verify_capture_roundtrip(const std::vector<EthCoreCaptureResult>& pre_expor
         return;
     }
 
-    // Run the real exporter (writes to {logs_dir}/generated/reports/channel_trimming_capture.yaml)
+    // Run the real exporter (writes {logs_dir}/generated/reports/channel_trimming_capture/rank_<N>.yaml)
     auto env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env());
     tt::tt_fabric::export_channel_trimming_capture(env.impl());
 
     // Determine the output path
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto yaml_path =
-        std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
+    auto yaml_path = tt::tt_fabric::get_channel_trimming_capture_path(rtoptions.get_logs_dir());
     ASSERT_TRUE(std::filesystem::exists(yaml_path)) << "Export YAML not found: " << yaml_path;
 
     // Import back
@@ -1313,8 +1313,7 @@ protected:
         // Export capture data (even if zero — that's a valid baseline)
         auto env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env());
         tt::tt_fabric::export_channel_trimming_capture(env.impl());
-        capture_yaml_path_ =
-            std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
+        capture_yaml_path_ = tt::tt_fabric::get_channel_trimming_capture_path(rtoptions.get_logs_dir());
 
         if (!std::filesystem::exists(capture_yaml_path_)) {
             should_skip_ = true;
