@@ -31,7 +31,11 @@ struct WorkerCandidate {
 };
 
 StreamPlacements decide_device_placement(
-    ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis, uint32_t num_links) {
+    ttnn::MeshDevice* mesh,
+    const ttnn::MeshCoordinate& coord,
+    uint32_t axis,
+    uint32_t num_links,
+    const std::vector<tt::tt_metal::CoreCoord>& universe) {
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
 
@@ -121,33 +125,74 @@ StreamPlacements decide_device_placement(
         return candidates.at(a).noc_hops < candidates.at(b).noc_hops;
     });
 
-    const uint32_t grid_width = mesh->compute_with_storage_grid_size().x;
     for (const StreamId stream : order) {
         const auto& candidate = candidates.at(stream);
-        tt::tt_metal::CoreCoord worker = candidate.worker;
-        for (uint32_t tried = 0; taken.contains(worker); tried++) {
+        const auto at = std::find(universe.begin(), universe.end(), candidate.worker);
+        // Asserted rather than assumed: with no sub-device the universe is the first row of the
+        // compute grid because that is where get_closest_worker_to_eth_core has always landed, and
+        // the whole point of bounding the universe is that the cores it does NOT hand this op belong
+        // to whatever else shares the chip.
+        TT_FATAL(
+            at != universe.end(),
+            "dispatch_fabric2d {}: the worker nearest stream {}'s eth core is {}, which is outside the "
+            "{} cores this op was given. Pass a subdevice_id whose cores include it, or run on a chip "
+            "whose eth-nearest workers are in the first row of the compute grid.",
+            self_node,
+            stream,
+            candidate.worker,
+            universe.size());
+        size_t pos = static_cast<size_t>(at - universe.begin());
+        for (size_t tried = 0; taken.contains(universe[pos]); tried++) {
             TT_FATAL(
-                tried < grid_width,
-                "dispatch_fabric2d {}: no free worker on row {} for stream {}",
+                tried < universe.size(),
+                "dispatch_fabric2d {}: every one of the {} cores this op was given is taken; stream {} "
+                "has nowhere to go",
                 self_node,
-                worker.y,
+                universe.size(),
                 stream);
-            worker.x = (worker.x + 1) % grid_width;
+            pos = (pos + 1) % universe.size();
         }
-        assign(stream, candidate, worker);
+        assign(stream, candidate, universe[pos]);
     }
     return placements;
 }
 
 }  // namespace
 
-MeshPlacement decide_placement(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links) {
+MeshPlacement decide_placement(
+    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, const tt::tt_metal::CoreRangeSet& universe) {
     TT_FATAL(mesh != nullptr, "dispatch_fabric2d: mesh device is null");
+    // One order for every chip, so a stream's core is decided the same way everywhere -- a sender's
+    // arguments name the worker serving the same stream on the downstream chip.
+    const std::vector<tt::tt_metal::CoreCoord> cores = corerange_to_cores(universe);
+    TT_FATAL(
+        cores.size() >= stream_count(num_links),
+        "dispatch_fabric2d: {} worker cores for {} streams",
+        cores.size(),
+        stream_count(num_links));
     MeshPlacement placement;
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
-        placement.emplace(coord, decide_device_placement(mesh, coord, axis, num_links));
+        placement.emplace(coord, decide_device_placement(mesh, coord, axis, num_links, cores));
     }
     return placement;
+}
+
+// The cores of the universe this op does NOT use for a stream, in universe order. Under a TILE input
+// they are the untilizer pool; there is nothing else on them, which is what lets the untilize CBs take
+// most of their L1.
+std::vector<tt::tt_metal::CoreCoord> spare_cores(
+    const tt::tt_metal::CoreRangeSet& universe, const StreamPlacements& streams) {
+    std::set<tt::tt_metal::CoreCoord> taken;
+    for (const auto& [stream, placement] : streams) {
+        taken.insert(placement.worker_logical);
+    }
+    std::vector<tt::tt_metal::CoreCoord> spare;
+    for (const auto& core : corerange_to_cores(universe)) {
+        if (!taken.contains(core)) {
+            spare.push_back(core);
+        }
+    }
+    return spare;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

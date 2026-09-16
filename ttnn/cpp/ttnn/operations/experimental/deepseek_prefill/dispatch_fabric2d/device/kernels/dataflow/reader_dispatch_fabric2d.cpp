@@ -37,6 +37,7 @@ struct Control {
     volatile tt_l1_ptr uint32_t* expert_slot;   // the same domain, packed as ES_* for the routing pass
     volatile tt_l1_ptr uint32_t* alloc;         // extent x experts_per_chip, the running allocator by slot
     volatile tt_l1_ptr uint32_t* chip_experts;  // extent x experts_per_chip, ascending global expert id
+    volatile tt_l1_ptr uint32_t* row_fill;      // extent, while the chip -> experts inverse is built
     volatile tt_l1_ptr uint32_t* bucket_fill;   // extent x experts_per_chip, the fill cursor
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip + 1, inclusive prefix sums
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
@@ -84,6 +85,7 @@ Control carve_control() {
     c.expert_slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbExpertSlot));
     c.alloc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbAlloc));
     c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbChipExperts));
+    c.row_fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRowFill));
     c.bucket_fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketFill));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketStart));
     c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbEntries));
@@ -164,10 +166,10 @@ uint32_t run_len(const Control& c, uint32_t origin_row, uint32_t e) {
     return routed < room ? routed : room;
 }
 
-// Words per entry in a bucket: the token's index on this chip, the page it lands on at the
-// destination, and which top-k slot it came from. The last two both travel to the destination -- the
-// page as an address, the slot as metadata field 2.
-constexpr uint32_t ENTRY_WORDS = 3;
+// The token's index on this chip, the page it lands on at the destination, and which top-k slot it
+// came from. The last two both travel to the destination -- the page as an address, the slot as
+// metadata field 2. Sized from the same expression the control block is reserved with.
+constexpr uint32_t ENTRY_WORDS = dspf2d::entry_words();
 
 // Which way round the ring a destination lies, and how far. A tie at exactly half the ring goes
 // clockwise, matching how the reach table was built -- pick the other way here and a chunk's length
@@ -199,17 +201,20 @@ void build_expert_slots(const Control& c) {
         c.chip_experts[i] = 0;
     }
     for (uint32_t r = 0; r < ct.extent; r++) {
-        c.bucket_fill[r] = 0;  // per-row fill counter; size_buckets re-initialises the whole block
+        c.row_fill[r] = 0;
     }
-    for (uint32_t e = 0; e < ct.num_routed_experts; e++) {
+    // Inclusive of the dispatch table's trailing sentinel column, so that a padded token's unguarded
+    // lookup resolves to "not in this group" here exactly as it did when the pass read the table
+    // itself. Writing that entry separately would be a line no routing draw can reach.
+    for (uint32_t e = 0; e <= ct.num_routed_experts; e++) {
         const int32_t row = c.table[e];
         if (row < 0) {
             c.expert_slot[e] = dspf2d::ES_NOT_HERE;
             continue;
         }
         const uint32_t r = (uint32_t)row;
-        const uint32_t j = c.bucket_fill[r];
-        c.bucket_fill[r] = j + 1u;
+        const uint32_t j = c.row_fill[r];
+        c.row_fill[r] = j + 1u;
         ASSERT(j < ct.experts_per_chip);
         const uint32_t slot = r * ct.experts_per_chip + j;
         c.chip_experts[slot] = e;
@@ -220,18 +225,15 @@ void build_expert_slots(const Control& c) {
             } else {
                 uint32_t hop = 0;
                 const uint32_t d = mc_dir_of(ct.my_row, r, &hop);
-                w |= (d << dspf2d::ES_DIR_SHIFT) | ((hop & dspf2d::FO_HOP_MASK) << dspf2d::FO_HOP_SHIFT);
+                w |= (d ? dspf2d::ES_DIR_BIT : 0u) | ((hop & dspf2d::FO_HOP_MASK) << dspf2d::FO_HOP_SHIFT);
             }
         }
         c.expert_slot[e] = w;
     }
-    // A padded token's expert id indexes the dispatch table's trailing sentinel column, which resolves
-    // to "not in this group". This table is indexed by the same id, so it has to answer the same way.
-    c.expert_slot[ct.num_routed_experts] = dspf2d::ES_NOT_HERE;
     for (uint32_t r = 0; r < ct.extent; r++) {
         // The whole protocol sizes a relayed chunk group as experts_per_chip terms, so a chip hosting a
         // different number would desynchronise the writer and the reader of a forwarding region.
-        ASSERT(c.bucket_fill[r] == ct.experts_per_chip);
+        ASSERT(c.row_fill[r] == ct.experts_per_chip);
     }
 }
 
@@ -240,11 +242,10 @@ void build_expert_slots(const Control& c) {
 // The lengths come straight out of the offsets table rather than from a counting pass over the picks:
 // this chip owes expert e exactly run_len tokens, because that table was derived from the same
 // routing. Every chunk length in the protocol is already run_len, so taking the buckets from it makes
-// the two agree by construction instead of by an ASSERT this hardware compiles out -- and the counting
-// pass it replaces was half the prologue.
+// the two agree by construction instead of by an ASSERT this hardware compiles out.
 //
-// bucket_start is an INCLUSIVE prefix sum: a bucket's end is the next one's start, which is what
-// bounds the fill and what gives the phases their run lengths.
+// bucket_start is an exclusive prefix sum with a closing total: bucket b runs from bucket_start[b] to
+// bucket_start[b + 1], which is what bounds the fill and what gives the phases their run lengths.
 void size_buckets(const Control& c) {
     const uint32_t n_slots = ct.extent * ct.experts_per_chip;
     const uint32_t local_first = ct.my_row * ct.experts_per_chip;
@@ -272,7 +273,7 @@ void size_buckets(const Control& c) {
 //
 // Under fan-out that is one entry per (token, direction) carrying the packed destinations and their
 // farthest hop, plus a bucket entry for each destination on THIS chip. The two layouts have separate
-// blocks, so building one no longer overwrites the other and both come out of this pass.
+// blocks, so one pass fills both.
 void build_routing_index(const Control& c) {
     const uint32_t cap = ct.max_dispatch_buf_tokens;
     const uint32_t mc_stride = dspf2d::fo_entry_words(ct.topk);
@@ -345,8 +346,43 @@ void build_routing_index(const Control& c) {
     // with the production allocator, which is the reason to build the index before moving a byte. A
     // divergence would otherwise surface as wrong pages or, once chunk lengths are computed from these
     // same numbers, as a deadlock.
+    //
+    // The tail of a bucket the replay left short is neutralised rather than merely asserted about.
+    // The phases take their run length from the bucket, not from the fill, so an entry the pass never
+    // wrote would be read out of a control region nothing zeroes -- and its `page` word becomes a
+    // fabric write to an arbitrary DRAM address on another chip. This costs one load per bucket when
+    // the tables agree, which they do, and turns that into a duplicate write of token 0 to page 0.
     for (uint32_t b = 0; b < ct.extent * ct.experts_per_chip; b++) {
         ASSERT(c.bucket_fill[b] == c.bucket_start[b + 1u]);
+        for (uint32_t at = c.bucket_fill[b]; at < c.bucket_start[b + 1u]; at++) {
+            volatile tt_l1_ptr uint32_t* ent = c.entries + at * ENTRY_WORDS;
+            ent[0] = 0;
+            ent[1] = 0;
+            ent[2] = 0;
+        }
+    }
+}
+
+// Under a TILE input the tokens are not where the input tensor is: the untilizer pool is writing them
+// into a staging buffer, which is what `in_acc` addresses. Nothing may be read out of it until every
+// stripe has landed.
+//
+// Placed immediately before the first phase that reads a token rather than before the prologue,
+// which is the whole reason the staging design pays: the pool's DRAM traffic and this RISC's scalar
+// index build are different resources and overlap for free. If this zone is not ~0 the pool is the
+// critical path and needs more cores, not the prologue.
+void wait_for_untilize() {
+    if constexpr (ct.untilize_stripes > 0) {
+        DeviceZoneScopedN("dspf2d_wait_untilize");
+        volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.untilize_sem_addr);
+        while (true) {
+            // Another core on this chip owns the counter, so a cached line would never show its
+            // increments.
+            invalidate_l1_cache();
+            if (*landed >= ct.untilize_stripes) {
+                return;
+            }
+        }
     }
 }
 
@@ -1032,6 +1068,7 @@ void kernel_main() {
 
     Ring ring;
     if (ct.fanout) {
+        wait_for_untilize();  // the local phase is the first thing that reads a token here
         {
             DeviceZoneScopedN("dspf2d_mc_local");
             local_phase(c, ring, in_acc, out_acc, meta_acc);
@@ -1063,6 +1100,7 @@ void kernel_main() {
             chunk_starts(c, ct.in_chunks_base, c.in_start);
             chunk_starts(c, ct.out_chunks_base, c.out_start);
         }
+        wait_for_untilize();  // the own phase is the first thing that reads a token here
         {
             DeviceZoneScopedN("dspf2d_own");
             own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region);
@@ -1088,5 +1126,10 @@ void kernel_main() {
 
         noc_async_atomic_barrier();
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
+        if constexpr (ct.untilize_stripes > 0) {
+            // Safe here and only here: the wait above this launch's first token read proved all
+            // untilize_stripes increments had arrived, so no writer is still bumping this counter.
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.untilize_sem_addr), 0);
+        }
     }
 }

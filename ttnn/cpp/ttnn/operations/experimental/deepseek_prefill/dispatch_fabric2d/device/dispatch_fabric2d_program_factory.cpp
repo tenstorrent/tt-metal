@@ -8,6 +8,7 @@
 #include <memory>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -19,6 +20,7 @@
 
 #include "dispatch_fabric2d_assignments.hpp"
 #include "dispatch_fabric2d_placement.hpp"
+#include "dispatch_fabric2d_untilize.hpp"
 #include "kernels/dataflow/dispatch_fabric2d_reader_ct_args.hpp"
 #include "kernels/dataflow/dispatch_fabric2d_sender_ct_args.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -39,8 +41,15 @@ uint32_t ring_extent_of(const DispatchFabric2dParams& args) {
     return static_cast<uint32_t>(args.device->shape()[static_cast<int32_t>(args.axis)]);
 }
 
-uint32_t token_size_bytes(const DispatchFabric2dInputs& t) {
-    return static_cast<uint32_t>(t.input_tensor.buffer()->aligned_page_size());
+// One token, in the ring, in a fabric packet, in staging, and in a forwarding page. Taken from the
+// output payload buffer because that is the one tensor whose page IS a token in both input layouts --
+// a TILE input is paged by tile, not by token.
+uint32_t token_size_bytes(const ttnn::Tensor& out_payload) {
+    return static_cast<uint32_t>(out_payload.buffer()->aligned_page_size());
+}
+
+bool input_is_tiled(const DispatchFabric2dInputs& t) {
+    return t.input_tensor.layout() == tt::tt_metal::Layout::TILE;
 }
 
 std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis) {
@@ -75,7 +84,12 @@ dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uin
 }
 
 L1Layout compute_l1_layout(
-    ttnn::MeshDevice* mesh, uint32_t token_bytes, uint32_t control_bytes, uint32_t sem_floor, bool fanout) {
+    ttnn::MeshDevice* mesh,
+    uint32_t token_bytes,
+    uint32_t control_bytes,
+    uint32_t seq_len_per_chip,
+    uint32_t sem_floor,
+    bool fanout) {
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
@@ -101,40 +115,44 @@ L1Layout compute_l1_layout(
     TT_FATAL(
         end <= sem_floor,
         "dispatch_fabric2d: L1 layout needs {} B (ends at 0x{:x}) but the global-semaphore region starts at "
-        "0x{:x}. Reduce seq_len_per_chip ({}) or the token page ({} B).",
+        "0x{:x}. Reduce seq_len_per_chip ({}), whose routing index is {} B of it, or the token page ({} B).",
         end - base,
         end,
         sem_floor,
-        0,
+        seq_len_per_chip,
+        control_bytes,
         token_bytes);
     return l;
 }
 
-// The reader/sender ring handshake is two monotonic single-writer counters, plus one counter the upstream
-// chip's sender bumps as it fills this stream's forwarding region.
+// Four counters: the reader/sender ring handshake is two monotonic single-writer ones, `fwd_arrived`
+// is bumped by the upstream chip's sender as it fills this stream's forwarding region, and
+// `untilized` is bumped by this chip's untilizer writers as they land stripes in staging.
 //
 // GlobalSemaphores rather than the op's own L1 region so they sit at an address uniform across the mesh:
 // `fwd_arrived` is bumped by the upstream chip, which has to know where it lives.
 //
 // Nothing zeroes them between launches -- they outlive the cached workload -- so the kernels reset all
-// three at end of stream.
+// four at end of stream, `untilized` only where there is a pool to have bumped it.
 struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
+    // Stripes the untilizer pool has landed in staging. Allocated whatever the input layout, so the
+    // reader's argument list does not depend on it -- the row-major path never reads it.
+    tt::tt_metal::GlobalSemaphore untilized;
 
     uint32_t lowest_address() const {
-        return static_cast<uint32_t>(std::min({filled.address(), freed.address(), fwd_arrived.address()}));
+        return static_cast<uint32_t>(
+            std::min({filled.address(), freed.address(), fwd_arrived.address(), untilized.address()}));
     }
 };
 
-RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh) {
-    const auto grid = mesh->compute_with_storage_grid_size();
-    const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
-    RingSemaphores sems{
-        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1),
-        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1),
-        ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1)};
+RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, const CoreRangeSet& universe) {
+    const auto make = [&] {
+        return ttnn::global_semaphore::create_global_semaphore(mesh, universe, 0, tt::tt_metal::BufferType::L1);
+    };
+    RingSemaphores sems{make(), make(), make(), make()};
     tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
     return sems;
 }
@@ -153,7 +171,7 @@ ForwardingBuffer allocate_forwarding_buffer(
     // Fan-out puts at most one page per token per direction through a region rather than one per
     // (token, expert) pair per destination, so its bound is a different expression, not a scaling of
     // the other. Loose by a whole chunk under the terminal rule, since the last of a stream's m chunks
-    // is now identically empty -- deliberately not tightened: this bound is the only thing standing
+    // is identically empty -- deliberately not tightened: this bound is the only thing standing
     // between a stream and its neighbour's slice of a shared tensor, and the kernel's own check of it
     // is an ASSERT that is compiled out on this hardware.
     fwd.pages_per_stream =
@@ -191,27 +209,51 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
     auto* mesh = args.device;
     const uint32_t extent = ring_extent_of(args);
-    const uint32_t token_bytes = token_size_bytes(tensor_args);
+    const uint32_t token_bytes = token_size_bytes(tensor_return_value[0]);
     const uint32_t meta_bytes = static_cast<uint32_t>(tensor_return_value[1].buffer()->aligned_page_size());
     TT_FATAL(
         meta_bytes >= dspf2d::METADATA_WIRE_BYTES,
         "dispatch_fabric2d: metadata page is {} B but the last hop writes {} B into it",
         meta_bytes,
         dspf2d::METADATA_WIRE_BYTES);
+    const bool tiled = input_is_tiled(tensor_args);
+    if (!tiled) {
+        // The row-major path reads tokens straight out of the input, so the two pages have to be the
+        // same size; they are both one row of the same emb_dim in the same dtype.
+        TT_FATAL(
+            tensor_args.input_tensor.buffer()->aligned_page_size() == token_bytes,
+            "dispatch_fabric2d: a ROW_MAJOR input pages a token at {} B but the output pages it at {} B",
+            tensor_args.input_tensor.buffer()->aligned_page_size(),
+            token_bytes);
+    }
 
     validate_chunk_agreement(extent, args.num_links);
-    const auto placement = decide_placement(mesh, args.axis, args.num_links);
-    const auto sems = allocate_ring_semaphores(mesh);
+    const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
+    const auto sems = allocate_ring_semaphores(mesh, args.worker_core_range_set);
     const auto fwd = allocate_forwarding_buffer(mesh, args, token_bytes, extent);
+    // Only under TILE. The row-major path allocates nothing and runs the program it always has.
+    const OwnedScratch staging =
+        tiled ? allocate_staging_buffer(mesh, args.seq_len_per_chip, token_bytes) : OwnedScratch{};
+    const auto untilize = plan_untilize(
+        tensor_args.input_tensor,
+        tensor_return_value[0],
+        args.seq_len_per_chip,
+        token_bytes,
+        static_cast<uint32_t>(sems.untilized.address()),
+        staging.buffer);
     const L1Layout l1 = compute_l1_layout(
         mesh,
         token_bytes,
         dspf2d::control_region_bytes(control_geometry(args, extent)),
+        args.seq_len_per_chip,
         sems.lowest_address(),
         args.fanout);
 
     tt::tt_metal::Buffer* dram[dspf2d::ReaderRtArg::kCount] = {};
-    dram[dspf2d::ReaderRtArg::kInputAddr] = tensor_args.input_tensor.buffer();
+    // Under TILE the tokens reach the stream cores through staging, and the accessor arguments are
+    // chained off this same table -- so pointing it at staging is the whole of what the transport
+    // needs to know about the input layout.
+    dram[dspf2d::ReaderRtArg::kInputAddr] = tiled ? staging.buffer : tensor_args.input_tensor.buffer();
     dram[dspf2d::ReaderRtArg::kIndicesAddr] = tensor_args.indices_tensor.buffer();
     dram[dspf2d::ReaderRtArg::kExpertOffsetsAddr] = tensor_args.expert_offsets_tensor.buffer();
     dram[dspf2d::ReaderRtArg::kDispatchTableAddr] = tensor_args.expert_dispatch_table_tensor.buffer();
@@ -234,7 +276,15 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     workload.semaphores.push_back(sems.filled);
     workload.semaphores.push_back(sems.freed);
     workload.semaphores.push_back(sems.fwd_arrived);
+    workload.semaphores.push_back(sems.untilized);
     workload.buffers.push_back({fwd.owner, fwd.buffer});
+    if (tiled) {
+        workload.buffers.push_back({staging.owner, staging.buffer});
+    }
+
+    // Stripes the stream readers wait for before their first token read; zero is the row-major path,
+    // where the wait compiles out and there is no pool.
+    const uint32_t untilize_stripes = untilize.has_value() ? untilize->num_stripes : 0u;
 
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
         const uint32_t row = static_cast<uint32_t>(coord[static_cast<int32_t>(args.axis)]);
@@ -254,6 +304,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             plan.ring_filled_addr = static_cast<uint32_t>(sems.filled.address());
             plan.ring_freed_addr = static_cast<uint32_t>(sems.freed.address());
             plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
+            plan.untilize_sem_addr = static_cast<uint32_t>(sems.untilized.address());
+            plan.untilize_stripes = untilize_stripes;
 
             tt::tt_metal::KernelDescriptor snd;
             snd.kernel_source =
@@ -348,6 +400,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             tt::tt_metal::KernelDescriptor::RTArgList snd_rt_list;
             snd_rt_list.append(snd_rt);
             desc.kernels[snd_id].emplace_runtime_args(self.worker_logical, snd_rt_list);
+        }
+        if (untilize.has_value()) {
+            add_untilizer_pool(desc, placement.at(coord), args.worker_core_range_set, *untilize);
         }
         workload.programs.push_back({ttnn::MeshCoordinateRange(coord, coord), std::move(desc)});
     }

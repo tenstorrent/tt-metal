@@ -49,6 +49,10 @@ struct KernelPlan {
     uint32_t ring_filled_addr = 0;
     uint32_t ring_freed_addr = 0;
     uint32_t fwd_arrived_addr = 0;
+    // Stripes the untilizer pool owes this core before it may read a token, and the counter it
+    // reports them on. Zero stripes means the input was already row-major and there is no pool.
+    uint32_t untilize_sem_addr = 0;
+    uint32_t untilize_stripes = 0;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
@@ -134,22 +138,33 @@ constexpr uint32_t FO_PAGE_MASK = (1u << FO_PAGE_BITS) - 1u;
 constexpr uint32_t FO_HOP_MASK = (1u << FO_HOP_BITS) - 1u;
 static_assert(FO_PAGE_BITS + FO_HOP_BITS + FO_SLOT_BITS <= 32);
 
-// Everything the routing pass needs to know about one global expert id, in ONE word, so the per-pick
-// inner loop is a single indexed load rather than a dispatch-table lookup followed by a linear search
-// over the destination chip's experts.
+// ES = expert slot: everything the routing pass needs to know about one global expert id, in ONE
+// word, so the per-pick inner loop is a single indexed load rather than a dispatch-table lookup
+// followed by a linear search over the destination chip's experts.
 //
 // The hop field is stored ALREADY SHIFTED to where a packed destination wants it, so building that
-// word is a mask and two ors. Bits 18 and 19 are the gap that keeps the slot field clear of it.
-constexpr uint32_t ES_SLOT_BITS = 16;                              // bucket index, extent * experts_per_chip of them
+// word is a mask and two ors. Every field is derived from ES_SLOT_BITS and the FO_ layout rather than
+// spelled as a number, and the asserts below are what hold them apart: an overlap here does not
+// corrupt a page, it routes the token to another chip.
+constexpr uint32_t ES_SLOT_BITS = 16;  // bucket index, extent * experts_per_chip of them
 constexpr uint32_t ES_SLOT_MASK = (1u << ES_SLOT_BITS) - 1u;
-constexpr uint32_t ES_LOCAL_BIT = 1u << 16;                        // the expert lives on this chip
-constexpr uint32_t ES_DIR_SHIFT = 17;                              // 0 clockwise, 1 counter-clockwise
-constexpr uint32_t ES_HOP_FIELD = FO_HOP_MASK << FO_HOP_SHIFT;     // hops away, in FanoutMetadata position
+constexpr uint32_t ES_LOCAL_BIT = 1u << ES_SLOT_BITS;           // the expert lives on this chip
+constexpr uint32_t ES_DIR_SHIFT = ES_SLOT_BITS + 1u;            // 0 clockwise, 1 counter-clockwise
+constexpr uint32_t ES_DIR_BIT = 1u << ES_DIR_SHIFT;
+constexpr uint32_t ES_HOP_FIELD = FO_HOP_MASK << FO_HOP_SHIFT;  // hops away, in FanoutMetadata position
 // An expert of another dispatch group. Distinguishable from any live word because the fields above
 // leave the top bits clear.
 constexpr uint32_t ES_NOT_HERE = 0xFFFFFFFFu;
-static_assert(ES_SLOT_BITS <= 16 && (1u << ES_DIR_SHIFT) < (1u << FO_HOP_SHIFT));
-static_assert((ES_SLOT_MASK & ES_HOP_FIELD) == 0 && (ES_LOCAL_BIT & ES_HOP_FIELD) == 0);
+static_assert((ES_SLOT_MASK & (ES_LOCAL_BIT | ES_DIR_BIT)) == 0);
+static_assert(((ES_SLOT_MASK | ES_LOCAL_BIT | ES_DIR_BIT) & ES_HOP_FIELD) == 0);
+static_assert(ES_DIR_BIT < ES_HOP_FIELD);
+// Every live word leaves the top bits clear, which is what makes the sentinel unreachable.
+static_assert((ES_SLOT_MASK | ES_LOCAL_BIT | ES_DIR_BIT | ES_HOP_FIELD) != ES_NOT_HERE);
+
+// Words per bucket entry: the token's index on this chip, the page it lands on at the destination,
+// and which top-k slot it came from. Sized here rather than in the kernel because the block list
+// below reserves the space from it.
+constexpr uint32_t entry_words() { return 3u; }
 
 // One multicast entry: the token, how many destinations it carries, the farthest of them, then the
 // packed destinations. A token reaches at most one page per top-k pick, so topk bounds the list.
@@ -254,10 +269,10 @@ constexpr uint64_t CMD_FINAL_WRITE = 1;  // this hop is the last: write payload 
 constexpr uint64_t CMD_FORWARD = 2;      // push one page further along the stream
 constexpr uint64_t CMD_FORWARD_END = 3;  // as CMD_FORWARD, and the last page of its chunk
 // Fan-out only: nothing is left past the chip across the cable, so no PAGE is forwarded. The slot's
-// staged deliveries still go out, and up to 2 * FO_MAX_DESTS of them are fabric packets aimed at that
-// chip's output pages -- so this is not a silent slot, and the counts in the tail rather than this
-// command say what it sends. The slot still has to travel the ring in order, since handing it back
-// would reorder the sender's view of it.
+// staged deliveries still go out, up to FO_MAX_DESTS of them aimed at that chip's output pages and
+// two fabric packets each -- so this is not a silent slot, and the counts in the tail rather than
+// this command say what it sends. The slot still has to travel the ring in order, since handing it
+// back would reorder the sender's view of it.
 constexpr uint64_t CMD_NO_FORWARD = 4;
 
 // One (origin chip, destination chip) term of a stream's forwarding region, narrowed to the share the two
@@ -313,6 +328,7 @@ enum ControlBlock : uint32_t {
     kCbExpertSlot,
     kCbAlloc,
     kCbChipExperts,
+    kCbRowFill,
     kCbBucketFill,
     kCbBucketStart,
     kCbEntries,
@@ -369,13 +385,18 @@ constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t bl
         // have an allocator, and the slot is what the per-pick lookup already yields.
         case kCbAlloc: return 4u * g.extent * g.experts_per_chip;
         case kCbChipExperts: return 4u * g.extent * g.experts_per_chip;
+        // One counter per chip on the axis while the inverse is being built. Its own block rather
+        // than a corner of another one: the blocks below are indexed by bucket slot, and a buffer
+        // carrying two index domains is how a later edit corrupts the region silently.
+        case kCbRowFill: return 4u * g.extent;
         case kCbBucketFill: return 4u * g.extent * g.experts_per_chip;
-        // Inclusive prefix sums: a bucket's end is the next bucket's start, which is what bounds the
-        // fill, so there is one more of these than there are buckets.
+        // Exclusive prefix sums with a closing total: bucket b's entries run from bucket_start[b] to
+        // bucket_start[b + 1], so there is one more of these than there are buckets and the next
+        // bucket's start is what bounds the fill.
         case kCbBucketStart: return 4u * (g.extent * g.experts_per_chip + 1u);
-        // (token, page, top-k slot) per surviving pick. Under fan-out only this chip's OWN
-        // destinations go through a bucket, but the worst case is the same: every pick local.
-        case kCbEntries: return 4u * g.seq_len * 3u * g.topk;
+        // One entry per surviving pick. Under fan-out only this chip's OWN destinations go through a
+        // bucket, but the worst case is the same: every pick local.
+        case kCbEntries: return 4u * g.seq_len * entry_words() * g.topk;
         case kCbMcEntries: return g.fanout ? 4u * 2u * g.seq_len * fo_entry_words(g.topk) : 0u;
         case kCbMcCount: return 4u * 2u;
         case kCbReach: return g.extent * 2u * mc_reach_row_bytes(g.extent);

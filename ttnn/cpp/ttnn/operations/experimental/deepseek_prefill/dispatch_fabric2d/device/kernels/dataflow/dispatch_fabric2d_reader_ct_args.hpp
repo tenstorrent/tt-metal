@@ -66,6 +66,8 @@ struct ReaderCtArgs {
         kFanout,
         kMcDeliveryAddr,
         kMcMetaAddr,
+        kUntilizeSemAddr,
+        kUntilizeStripes,
         // Blocks appended after the scalars, in this order. Kept as base indices so a later field can be
         // added without renumbering anything the kernel already reads.
         kRingChipIdsBase,
@@ -112,6 +114,10 @@ struct ReaderCtArgs {
     // fanout: where this reader stages deliveries for its sender to write out.
     uint32_t mc_delivery_addr;
     uint32_t mc_meta_addr;
+    // A TILE input reaches this reader through a staging buffer the untilizer pool fills. Zero
+    // stripes is the row-major path: the input accessor already points at the tokens.
+    uint32_t untilize_sem_addr;
+    uint32_t untilize_stripes;
     uint32_t ring_chip_ids_base;
     uint32_t assignment_base;
     uint32_t in_chunks_base;
@@ -159,6 +165,8 @@ struct ReaderCtArgs {
         fanout(args.fanout ? 1u : 0u),
         mc_delivery_addr(l1.mc_delivery),
         mc_meta_addr(l1.mc_meta),
+        untilize_sem_addr(plan.untilize_sem_addr),
+        untilize_stripes(plan.untilize_stripes),
         ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
         in_chunks_base(assignment_base + own_count * ASSIGNMENT_WORDS),
@@ -203,6 +211,8 @@ struct ReaderCtArgs {
         w[kFanout] = fanout;
         w[kMcDeliveryAddr] = mc_delivery_addr;
         w[kMcMetaAddr] = mc_meta_addr;
+        w[kUntilizeSemAddr] = untilize_sem_addr;
+        w[kUntilizeStripes] = untilize_stripes;
         w[kRingChipIdsBase] = ring_chip_ids_base;
         w[kAssignmentBase] = assignment_base;
         w[kInChunksBase] = in_chunks_base;
@@ -260,6 +270,8 @@ struct ReaderCtArgs {
         fanout(get_compile_time_arg_val(kFanout)),
         mc_delivery_addr(get_compile_time_arg_val(kMcDeliveryAddr)),
         mc_meta_addr(get_compile_time_arg_val(kMcMetaAddr)),
+        untilize_sem_addr(get_compile_time_arg_val(kUntilizeSemAddr)),
+        untilize_stripes(get_compile_time_arg_val(kUntilizeStripes)),
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
         in_chunks_base(get_compile_time_arg_val(kInChunksBase)),

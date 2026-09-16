@@ -8,6 +8,7 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_DISPATCH_FABRIC2D_SRCS
     device/dispatch_fabric2d_assignments.cpp
     device/dispatch_fabric2d_placement.cpp
     device/dispatch_fabric2d_program_factory.cpp
+    device/dispatch_fabric2d_untilize.cpp
     dispatch_fabric2d.cpp
 )
 
