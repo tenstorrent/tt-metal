@@ -120,7 +120,20 @@ RUNNER_SCRIPTS = [
 ]
 
 
-def force_non_sol(sha):
+PYTEST_INI = "tt_metal/tt-llk/tests/python_tests/pytest.ini"
+
+
+def patch_maxschedchunk(body, value):
+    """Set xdist's scheduling chunk, which decides each worker's test sequence."""
+    import re
+
+    new, n = re.subn(r"--maxschedchunk=\d+", f"--maxschedchunk={value}", body)
+    if not n:
+        raise RuntimeError("no --maxschedchunk in pytest.ini to patch")
+    return new
+
+
+def force_non_sol(sha, maxschedchunk=None):
     """A commit on top of `sha` whose perf runners measure with SoL off.
 
     Speed of light cannot be turned off from a dispatch on older commits: before
@@ -137,6 +150,30 @@ def force_non_sol(sha):
     subprocess.run(["git", "read-tree", sha], env=env, check=True, capture_output=True)
 
     how = {}
+    if maxschedchunk is not None:
+        body = git("show", f"{sha}:{PYTEST_INI}")
+        patched = patch_maxschedchunk(body, maxschedchunk)
+        r = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            input=patched,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        mode = git("ls-tree", sha, "--", PYTEST_INI).split()[0]
+        subprocess.run(
+            [
+                "git",
+                "update-index",
+                "--cacheinfo",
+                f"{mode},{r.stdout.strip()},{PYTEST_INI}",
+            ],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+        how[PYTEST_INI] = f"maxschedchunk={maxschedchunk}"
+
     for path in RUNNER_SCRIPTS:
         try:
             body = git("show", f"{sha}:{path}")
@@ -196,7 +233,15 @@ def force_non_sol(sha):
     return commit, how
 
 
-def push_branch(sha, index):
+def variant_key(sha, args):
+    """Cache key. A variant must not overwrite the plain measurement of a commit."""
+    key = short(sha)
+    if getattr(args, "maxschedchunk", None) is not None:
+        key += f"+chunk{args.maxschedchunk}"
+    return key
+
+
+def push_branch(sha, index, maxschedchunk=None):
     """One branch per run, because the workflow cancels its own concurrency group.
 
     llk-perf.yaml sets `group: <workflow>-<arch>-<github.ref>` with
@@ -204,8 +249,9 @@ def push_branch(sha, index):
     therefore share a group, and the second kills the first. Different branch,
     different group, and the two runs proceed in parallel.
     """
-    branch = f"{BRANCH_PREFIX}{short(sha)}-r{index}"
-    head, _ = force_non_sol(sha)
+    suffix = "" if maxschedchunk is None else f"-c{maxschedchunk}"
+    branch = f"{BRANCH_PREFIX}{short(sha)}{suffix}-r{index}"
+    head, _ = force_non_sol(sha, maxschedchunk)
     git("push", "--force", f"git@github.com:{REPO}.git", f"{head}:refs/heads/{branch}")
     return branch
 
@@ -229,13 +275,13 @@ def runs_on(branch):
     return json.loads(out or "[]")
 
 
-def start_runs(sha, count):
+def start_runs(sha, count, args_ns=None):
     """Dispatch one run per branch and return their ids."""
     inputs = dispatch_inputs(sha)
     print(f"  dispatch inputs: {inputs}")
     ids = []
     for i in range(1, count + 1):
-        branch = push_branch(sha, i)
+        branch = push_branch(sha, i, getattr(args_ns, "maxschedchunk", None))
         before = {r["databaseId"] for r in runs_on(branch)}
         args = ["gh", "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", branch]
         for k, v in inputs.items():
@@ -419,7 +465,7 @@ def compare_module(ref, work_dir="."):
 
 
 def measure(sha, args, state):
-    key = short(sha)
+    key = variant_key(sha, args)
     if key in state and not args.refresh:
         print(f"{key}: cached -> {state[key]['fires']} fires")
         return state[key]
@@ -433,7 +479,7 @@ def measure(sha, args, state):
     if run_ids:
         print(f"  reusing run ids: {run_ids}")
     else:
-        run_ids = start_runs(sha, args.runs)
+        run_ids = start_runs(sha, args.runs, args)
     wait_for(run_ids)
 
     bad = [r for r in run_ids if run_conclusion(r) != "success"]
@@ -442,7 +488,7 @@ def measure(sha, args, state):
             f"run(s) {bad} did not succeed; a measurement needs two clean runs"
         )
 
-    work = pathlib.Path(args.work_dir) / key
+    work = pathlib.Path(args.work_dir) / key.replace("+", "_")
     sides = []
     for i, rid in enumerate(run_ids[: args.runs]):
         side = work / f"run{i}"
@@ -584,6 +630,14 @@ def main(argv=None):
         help="which run types drive the search: 'core' (L1_TO_L1 plus the three "
         "isolate modes, all clean at the good endpoint), 'total' (adds "
         "L1_CONGESTION, which fires everywhere), or a comma-separated list",
+    )
+    ap.add_argument(
+        "--maxschedchunk",
+        type=int,
+        help="also patch pytest.ini to this xdist scheduling chunk. #53642 raised "
+        "it from 10 to 2000, which rewrote every test's predecessors on its core; "
+        "restoring 10 tests whether the instability is scheduling order or the "
+        "per-worker core mapping that landed in the same commit",
     )
     ap.add_argument("--refresh", action="store_true", help="re-measure cached commits")
     a = ap.parse_args(argv)
