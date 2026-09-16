@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <type_traits>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -107,4 +108,59 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
             .math_approx_mode = false,
             .compile_args = compile_time_args,
             .defines = defines});
+}
+
+// One core's share of the work, as handed out by for_each_core_with_work.
+struct CoreWork {
+    tt::tt_metal::CoreCoord core;
+    uint32_t index;      // position in the walk: core == {index / num_cores_y, index % num_cores_y}
+    uint32_t num_units;  // rows, blocks or tiles this core processes
+    uint32_t start;      // units handed to the cores before it
+};
+
+/**
+ * Walk the cores that `tt::tt_metal::split_work_to_cores` handed work to, in the order tt-train
+ * readers/writers assume (core i -> {i / num_cores_y, i % num_cores_y}), and call `fn(const CoreWork&)`
+ * once per core. Ops that need the walk position (per-core seeds, reduction protocols) take it from
+ * `CoreWork::index` rather than recomputing the walk.
+ */
+template <typename Fn>
+inline void for_each_core_with_work(
+    uint32_t num_cores,
+    uint32_t num_cores_y,
+    const tt::tt_metal::CoreRangeSet& core_group_1,
+    const tt::tt_metal::CoreRangeSet& core_group_2,
+    uint32_t num_units_per_core_group_1,
+    uint32_t num_units_per_core_group_2,
+    Fn&& fn) {
+    uint32_t num_units_written = 0U;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_units = 0U;
+        if (core_group_1.contains(core)) {
+            num_units = num_units_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_units = num_units_per_core_group_2;
+        } else {
+            TT_FATAL(false, "Core {} is in neither work group", core.str());
+        }
+        fn(CoreWork{core, i, num_units, num_units_written});
+        num_units_written += num_units;
+    }
+}
+
+/**
+ * The same core walk without the work lookup, for override_runtime_arguments where only buffer addresses
+ * change and every core keeps the work it was given in create(). `fn` takes `(core)` or `(core, index)`.
+ */
+template <typename Fn>
+inline void for_each_core(uint32_t num_cores, uint32_t num_cores_y, Fn&& fn) {
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const tt::tt_metal::CoreCoord core{i / num_cores_y, i % num_cores_y};
+        if constexpr (std::is_invocable_v<Fn&, const tt::tt_metal::CoreCoord&, uint32_t>) {
+            fn(core, i);
+        } else {
+            fn(core);
+        }
+    }
 }
