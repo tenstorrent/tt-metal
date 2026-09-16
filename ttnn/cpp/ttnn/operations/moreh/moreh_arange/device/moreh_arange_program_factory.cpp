@@ -73,6 +73,12 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
     writer_desc.runtime_args.reserve(num_cores);
 
     // Runtime args per core
+    // A ROW_MAJOR output is exactly W elements long (no tile padding in the last dim), so
+    // the last chunk a core writes must be clamped to the logical width: a fixed
+    // TILE_WIDTH-wide chunk would otherwise write past the end of the output buffer into
+    // whatever tensor is allocated next in DRAM. The width of that last chunk is computed
+    // here and handed to the kernel as a runtime argument.
+    const uint32_t last_chunk_width = ((W - 1) % tt::constants::TILE_WIDTH) + 1;
     uint32_t core_h = grid.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
@@ -85,6 +91,12 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
+        // Only the very last chunk of the very last core can be partial: every core's
+        // chunk range is a contiguous tile span, and tile_offset counts whole tiles.
+        const bool writes_last_chunk = (tile_offset + num_tiles_per_core) == Wt;
+        const uint32_t last_chunk_bytes =
+            (writes_last_chunk ? last_chunk_width : tt::constants::TILE_WIDTH) * output.element_size();
+
         writer_desc.emplace_runtime_args(
             core,
             {output.buffer(),
@@ -92,7 +104,8 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
              num_tiles_per_core,
              std::bit_cast<uint32_t>(start),
              std::bit_cast<uint32_t>(step),
-             output.element_size()});
+             output.element_size(),
+             last_chunk_bytes});
 
         tile_offset += num_tiles_per_core;
     }
