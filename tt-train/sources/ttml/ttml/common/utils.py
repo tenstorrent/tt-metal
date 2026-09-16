@@ -211,10 +211,19 @@ def get_loss_over_devices(loss):
     return loss_numpy.mean()
 
 
-def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
+def build_logits_mask(
+    vocab_size: int, padded_vocab_size: int, dtype: ttnn.DataType = ttnn.DataType.BFLOAT16
+) -> ttml.autograd.Tensor:
+    """Subtractive vocab-padding mask ``[1, 1, 1, padded_vocab_size]``: 0 = real token, 1e4 = padding.
+
+    ``dtype`` should match the LOGITS dtype the mask will be subtracted from: the fused sampler stages
+    mask tiles into a circular buffer whose data format is derived from the logits, so a mismatched
+    mask is typecast on EVERY sample call -- one extra op per generated token. Pass the dtype of the
+    actual logits (``logits.get_value().dtype`` after the first forward pass) instead of assuming bfloat16.
+    """
     logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
     logits_mask[:, :, :, vocab_size:] = 1e4
-    return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)  # [1,1,1,T], bfloat16
+    return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, dtype)
 
 
 def build_causal_mask(T: int, device: bool = False):
