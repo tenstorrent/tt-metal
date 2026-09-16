@@ -112,6 +112,16 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "diametrically opposite chip across both directions",
         args.axis,
         extent);
+    // The reader resolves a pick through a per-expert word that packs the bucket index into its low
+    // 16 bits alongside the hop and the direction. A wider group would overwrite the fields above it
+    // and route tokens to the wrong chip.
+    TT_FATAL(
+        extent * args.experts_per_chip <= dspf2d::ES_SLOT_MASK,
+        "dispatch_fabric2d: this dispatch group has {} x {} experts, but the reader packs a bucket "
+        "index into {} bits",
+        extent,
+        args.experts_per_chip,
+        dspf2d::ES_SLOT_BITS);
     TT_FATAL(
         ttnn::ccl::is_axis_wrap_wired(*args.device, args.axis),
         "dispatch_fabric2d: axis {} has no closing link, so it is not a ring. This op sends single hops "
