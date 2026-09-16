@@ -77,7 +77,26 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
         result = result * (val * result + two);
     }
 
+    // An exact power of two has an exact power-of-two reciprocal, but the
+    // mantissa Newton converges to 2.0 from below, so for a power-of-two
+    // input `result` lands ~1 ULP under 2.0 and exexp(result) reads 0
+    // instead of 1. For most inputs the final round to bf16 hides the
+    // undershoot; at orig_exp = 126 it costs the whole binade: new_exp
+    // becomes 0, the result denormalizes, and recip(2^126) returns 0
+    // instead of the exactly-representable 2^-126. A power-of-two input is
+    // exactly val == -0.5 after the setsgn/setexp normalization above; snap
+    // its reciprocal mantissa to the exact 2.0. Guarded to finite normal
+    // inputs so the zero/inf/NaN paths keep their existing behavior.
     sfpi::vInt orig_exp = exexp(in);
+    v_if (orig_exp >= -126 && orig_exp <= 127)
+    {
+        v_if (val == -0.5F)
+        {
+            result = 2.0F;
+        }
+        v_endif;
+    }
+    v_endif;
     sfpi::vInt new_exp  = exexp(result);
 
     // "Subtract" exponents, and re-bias.
