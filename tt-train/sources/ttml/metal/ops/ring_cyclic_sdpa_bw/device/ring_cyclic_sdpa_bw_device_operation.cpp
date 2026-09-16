@@ -16,13 +16,34 @@ RingCyclicSDPABackwardDeviceOperation::select_program_factory(
     return RingCyclicSDPABackwardProgramFactory{};
 }
 
+namespace {
+// The cyclic kernels read one Float32 tile per 32 query rows and take the
+// statistic from its column 0, so a (B, H, S, 1) tensor serves as it is --
+// the tiled layout is the same -- and so does the (B, H, S, 32) padded one
+// the two-pass kernels want.
+void validate_statistic_tensor(const ttnn::Tensor& statistic, const ttnn::Tensor& query) {
+    TT_FATAL(
+        statistic.dtype() == ttnn::DataType::FLOAT32, "Statistics must be FLOAT32, got {}", statistic.dtype());
+    TT_FATAL(statistic.layout() == ttnn::Layout::TILE, "Statistics must be TILE layout, got {}", statistic.layout());
+    const auto [batch, heads, seq_len, dim] = query.logical_shape().to_array_4D();
+    const auto [sb, sh, ss, sw] = statistic.logical_shape().to_array_4D();
+    TT_FATAL(
+        sb == batch && sh == heads && ss == seq_len && (sw == 1U || sw == tt::constants::TILE_WIDTH),
+        "Statistic shape {} must be ({}, {}, {}, 1 or 32): one value per query row in column 0 of a tile",
+        statistic.logical_shape(),
+        batch,
+        heads,
+        seq_len);
+}
+}  // namespace
+
 void RingCyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     ops::validate_ring_attributes(args, tensor_args.query);
     ops::validate_ring_qkv(tensor_args.query, tensor_args.key, tensor_args.value);
     ops::validate_output_like_tensor(tensor_args.grad_output, "grad_output", tensor_args.query, tensor_args.value);
-    ops::validate_intermediates_tensor(tensor_args.log_sum_exp, tensor_args.query);
-    ops::validate_intermediates_tensor(tensor_args.row_scalar, tensor_args.query);
+    validate_statistic_tensor(tensor_args.log_sum_exp, tensor_args.query);
+    validate_statistic_tensor(tensor_args.row_scalar, tensor_args.query);
 }
 
 void RingCyclicSDPABackwardDeviceOperation::validate_on_program_cache_hit(
