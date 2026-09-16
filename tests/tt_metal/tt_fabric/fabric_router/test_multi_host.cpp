@@ -1451,9 +1451,13 @@ TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
     const auto fabric_config =
         my_rank % 2 == 0 ? tt::tt_fabric::FabricConfig::FABRIC_2D : tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
 
+    // Use a torus-capable dual-galaxy graph so BOTH configs (FABRIC_2D and FABRIC_2D_TORUS_Y) are
+    // individually valid and map cleanly; the only failure is then the cross-rank FabricConfig
+    // mismatch, which must throw consistently on every rank. (The experimental MESH graph cannot
+    // apply TORUS_Y and does not fit the mock physical topology, so ranks died at different points.)
     const std::filesystem::path dual_bh_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto";
     EXPECT_ANY_THROW({
         auto control_plane = make_control_plane(
             dual_bh_galaxy_mesh_graph_desc_path.string(),
