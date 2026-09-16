@@ -29,6 +29,34 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
+### PARITY FIXED: reset() was reallocating the drafter's KV history under a parked trace
+
+`TtDFlashDrafter.reset()` frees and reallocates all `2 * n_layers` history buffers on EVERY
+generation. `_alloc_ctx_buffers`'s own docstring says it allocates them "once ... so the address a
+capture records stays valid for every replay" -- but reset() calls it per generation, and from the
+second generation onward those allocations happen with the verify trace PARKED, which Metal warns
+leaves buffers that "may be corrupted once a trace is executed".
+
+`DFLASH_STABLE_CTX=1` keeps the buffers and only rewinds `_ctx_len`. Safe because rows past the live
+length are masked out rather than trusted (see `_alloc_ctx_buffers` / `_fixed_masks`). Measured on
+the demo's previously-BROKEN parity (reference prompt, DFLASH_TRACED_WARM=1):
+
+    without    2.99 tok/s   acceptance 1.021   97 steps   0.17x production
+    with      17.00 tok/s   acceptance 4.950   20 steps   0.95x production
+
+5.7x, and it is a REPAIR rather than a workaround: the generation that was broken now performs like
+a good one, instead of dodging onto a good parity with DFLASH_TRACED_WARM=0.
+
+EVERYTHING FITS. Period 2 comes from the alternating allocate/free pattern across generations; the
+K/V asymmetry (L0.k pcc 0.94 against L0.v pcc 0.03) comes from two separately-placed buffers landing
+differently against the trace region; `_ctx_len` stayed identical (0/7/14/21) because the bookkeeping
+was never wrong, only the contents; and `ctx_capacity` alone measured no better (1.031) because
+fixed capacity pins the buffers WITHIN a generation while reset() discards them BETWEEN generations.
+
+Requires `ctx_capacity` (the knob only applies on the fixed-capacity path). The growing-history
+default reallocates the history every STEP, so it has the same hazard on a larger scale and cannot
+be fixed this way -- fixed capacity plus stable reset is the combination that works.
+
 ### PARITY LOCALISED: it is the DRAFTER, not the target
 
 Two probes, each comparing a component against ITSELF across three traced generations with

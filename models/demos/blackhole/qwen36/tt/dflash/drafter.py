@@ -36,6 +36,8 @@ Two further departures from the target, both deliberate:
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -212,7 +214,31 @@ class TtDFlashDrafter:
         ttnn.synchronize_device(self.device)
 
     def reset(self) -> None:
-        """Drop the drafter's KV history and start a new sequence."""
+        """Drop the drafter's KV history and start a new sequence.
+
+        DFLASH_STABLE_CTX=1 (fixed-capacity only): rewind ``_ctx_len`` and KEEP the buffers instead
+        of freeing and reallocating all 2*n_layers of them.
+
+        WHY IT MATTERS. :meth:`_alloc_ctx_buffers` exists to allocate this history "once ... so the
+        address a capture records stays valid for every replay", but calling it from here undoes
+        exactly that: every generation frees the buffers and takes new ones, and from the second
+        generation onward those allocations happen with the verify trace PARKED, which Metal warns
+        leaves buffers that "may be corrupted once a trace is executed".
+
+        That is the measured shape of the parity bug. Acceptance alternates with traced-generation
+        index (demo: 17.54 / 2.99 / 17.74 tok/s), the target is bit-exact across generations, and
+        the drafter's committed KV history first diverges at the SECOND commit of generation 2 --
+        `_ctx_len` identical (0/7/14/21) but contents wrong, V far worse than K (L0.v pcc 0.03
+        against L0.k pcc 0.94), which is what two separately-placed buffers landing differently
+        against a parked trace looks like. See tests/unit/test_drafter_generation_parity.py.
+
+        Not zeroing the kept buffers is deliberate and safe: rows past ``_ctx_len`` are masked out
+        rather than trusted (see :meth:`_alloc_ctx_buffers` and ``_fixed_masks``), so stale content
+        beyond the live length cannot reach attention.
+        """
+        if self._cap is not None and os.environ.get("DFLASH_STABLE_CTX") == "1" and self._ctx_k[0] is not None:
+            self._ctx_len = 0
+            return
         for store in (self._ctx_k, self._ctx_v):
             for i, t in enumerate(store):
                 if t is not None:

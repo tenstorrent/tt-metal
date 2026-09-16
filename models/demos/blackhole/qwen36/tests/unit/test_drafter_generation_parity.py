@@ -285,3 +285,129 @@ def test_drafter_reproduces_itself_on_the_real_tap_path(mesh_device, device_para
         "despite identical prompts, identical blocks and provably identical taps -- the drafter is "
         "the component that alternates"
     )
+
+
+@pytest.mark.timeout(0)
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_which_kv_commit_diverges(mesh_device, device_params, reset_seeds, ensure_gc):
+    """Compare the drafter's KV HISTORY after every commit, not just the forward's output.
+
+    The two tests above localise the parity bug to the drafter and show it does NOT start at step 0:
+    steps 0 and 1 reproduce exactly, and divergence begins once the history has accumulated across
+    two or three commits. That points at the KV commit itself rather than at the drafter's inputs or
+    its reset, so this reads ``_ctx_k`` / ``_ctx_v`` directly after each step and reports the FIRST
+    layer and step whose committed history stops matching generation 1.
+
+    Reading the history rather than the output is the point: a wrong commit shows up here one step
+    BEFORE it can show up in a forward, because the bad rows are not attended until the next step.
+    That one step of separation is the difference between "the drafter is wrong" and "this write is
+    wrong".
+    """
+    del device_params
+    if os.environ.get("DFLASH_RUN_TARGET") != "1":
+        pytest.skip("set DFLASH_RUN_TARGET=1 to run the full 27B")
+
+    path = resolve_drafter_path()
+    cfg = DFlashDrafterConfig.from_pretrained(path)
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=NUM_BLOCKS * PAGED_BLOCK_SIZE)
+    kv_shape = [NUM_BLOCKS, model.args.n_local_kv_heads, PAGED_BLOCK_SIZE, model.args.head_dim]
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
+    page_table = torch.arange(NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
+    target = TtTarget(model, cfg.target_layer_ids, page_table, device_taps=True)
+    drafter = TtDFlashDrafter(mesh_device, cfg, load_drafter_state_dict(path))
+
+    tg = torch.Generator().manual_seed(23)
+    prompt = torch.randint(1000, 2000, (1, PROMPT_LEN), generator=tg, dtype=torch.long)
+    blocks = [torch.randint(1000, 2000, (1, BLOCK), generator=tg, dtype=torch.long) for _ in STEPS]
+    # A handful of layers is enough to locate the first bad commit and keeps the readback cheap.
+    probe_layers = [0, 1, 2, cfg.num_hidden_layers // 2, cfg.num_hidden_layers - 1]
+
+    def _mk(rows, gen):
+        t = torch.randn(1, 1, rows, cfg.hidden_size, generator=gen, dtype=torch.float32) * 0.05
+        return ttnn.from_torch(
+            t.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)) if drafter.multi else {}),
+        )
+
+    def _hist_snapshot():
+        """The committed K/V history per probed layer, on host."""
+        composer = dict(mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)) if drafter.multi else {}
+        out = {}
+        for li in probe_layers:
+            for name, store in (("k", drafter._ctx_k), ("v", drafter._ctx_v)):
+                t = store[li]
+                out[(li, name)] = None if t is None else ttnn.to_torch(t, **composer)[:1].float()
+        return out, drafter._ctx_len
+
+    def run_generation():
+        gen = torch.Generator().manual_seed(101)
+        drafter.reset()
+        target.reset()
+        target.forward(prompt, 0, all_logits=False)
+        snaps, start, t_start = [], 0, PROMPT_LEN
+        for (new_ctx, q_len), blk in zip(STEPS, blocks):
+            kv_source = _mk(new_ctx, gen) if new_ctx else None
+            noise = _mk(q_len, gen)
+            start += new_ctx
+            hidden = drafter.forward(kv_source, noise, start)
+            ttnn.deallocate(hidden)
+            ttnn.deallocate(noise)
+            if kv_source is not None:
+                ttnn.deallocate(kv_source)
+            snaps.append(_hist_snapshot())
+            target.forward(blk, t_start)
+            t_start += blk.shape[1]
+        return snaps
+
+    run_generation()
+    target.enable_traced_verify()
+    gens = [run_generation() for _ in range(N_GENS)]
+
+    ref, first_bad = gens[0], None
+    logger.info("=" * 78)
+    for gi in range(1, N_GENS):
+        for si, ((h_r, len_r), (h_g, len_g)) in enumerate(zip(ref, gens[gi])):
+            bad = []
+            if len_r != len_g:
+                bad.append(f"_ctx_len {len_r} vs {len_g}")
+            for key, a in h_r.items():
+                b = h_g[key]
+                if a is None or b is None:
+                    if (a is None) != (b is None):
+                        bad.append(f"L{key[0]}.{key[1]} presence")
+                    continue
+                if a.shape != b.shape:
+                    bad.append(f"L{key[0]}.{key[1]} shape {tuple(a.shape)} vs {tuple(b.shape)}")
+                elif not torch.equal(a, b):
+                    ok, pcc = comp_pcc(a, b, 0.999)
+                    if not ok:
+                        bad.append(f"L{key[0]}.{key[1]} pcc {pcc:.4f}")
+            logger.info(
+                f"gen{gi + 1} vs gen1  step {si}  ctx_len {len_g}  "
+                + ("history IDENTICAL" if not bad else "DIVERGES: " + ", ".join(bad[:6]))
+            )
+            if bad and first_bad is None:
+                first_bad = (gi + 1, si, bad)
+        logger.info("-" * 78)
+
+    if first_bad:
+        g, s, what = first_bad
+        logger.info(f"FIRST BAD COMMIT: generation {g}, step {s} -- {', '.join(what[:6])}")
+        print(f"\n>>> first bad KV commit: gen{g} step {s}: {', '.join(what[:4])}\n")
+    else:
+        print("\n>>> drafter KV history identical across all generations\n")
+
+    assert first_bad is None, (
+        f"the drafter's committed KV history diverges at generation {first_bad[0]} step {first_bad[1]} "
+        f"({', '.join(first_bad[2][:4])}) despite identical inputs -- the commit is the defect"
+    )
