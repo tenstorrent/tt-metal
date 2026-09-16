@@ -1,0 +1,100 @@
+# PROVENANCE: every wall of the 2026-09-12 campaign (p100a, fw 19.9.0, tt-metal 72620d5 kernels; R1e rows on the fresh build f3fbc8984f0) priced by ttsim/perf/roofline_sdpa.py of branch mvlahovic/sdpa_revamp; measured = zones-off device wall (mean of invocations 1 and 2) or DEVICE KERNEL DURATION median for decode; model/refit_r2_fit.py
+kind,label,regime,block,set,measured_cycles,model_cycles,err_pct,steps_wall_core,flags
+prefill,causal q128 k128 (anchor),causal,T2.1,fit,2562642,2563224,0.02,165.0,
+prefill,causal q128 k256,causal,T2.1,pred,2596634.5,2640809,1.7,85.0,
+prefill,causal q128 k512,causal,T2.1,pred,2729800.5,2795980,2.42,45.0,
+prefill,causal q64 k128,causal,T2.1,pred,4932323,5123547,3.88,330.0,
+prefill,causal q256 k128,causal,T2.1,fit,1826179.5,1750772,-4.13,102.0,
+prefill,causal q512 k128,causal,T2.1,fit,2445391,2470484,1.03,72.0,
+prefill,causal q512 k512,causal,T2.1,fit,1834463.5,1822484,-0.65,18.0,
+prefill,non-causal q128 k128,noncausal,T2.1,fit,2884626,2944835,2.09,320.0,
+prefill,non-causal q128 k256,noncausal,T2.1,fit,3009305,3023740,0.48,160.0,
+prefill,non-causal q128 k512,noncausal,T2.1,fit,3206662.5,3201216,-0.17,80.0,
+prefill,non-causal q64 k128,noncausal,T2.1,fit,5609143.5,5592577,-0.3,608.0,
+prefill,non-causal q256 k128,noncausal,T2.1,fit,2644797.5,2669140,0.92,160.0,
+prefill,non-causal q512 k128,noncausal,T2.1,fit,3098890,3093332,-0.18,96.0,
+prefill,non-causal q512 k512,noncausal,T2.1,fit,2248111,2247764,-0.02,24.0,
+prefill,causal bf16 K/V,causal,T2.3,fit,4419128,4419927,0.02,165.0,off_calibration_dtype
+prefill,causal all bf16,causal,T2.3,pred,4456116,4419927,-0.81,165.0,off_calibration_dtype
+prefill,causal nkv32,causal,T2.3,pred,2563786,2563224,-0.02,165.0,
+prefill,causal nkv1,causal,T2.3,pred,2565033,2563224,-0.07,165.0,
+prefill,causal 64 cores,causal,T2.3,fit,2962746,2962983,0.01,264.0,
+prefill,causal S1024,causal,T2.3,pred,258568,282208,9.14,18.0,
+prefill,causal S16384,causal,T2.3,pred,38629694,38035345,-1.54,2451.0,
+prefill,windowed S8192 W1024,windowed,T2.3,fit,1411340,1303219,-7.66,90.0,regime_windowed;stream_residual_fit
+prefill,chunked start4096 Sq2048,chunked,T2.3,fit,2026025,2045340,0.95,162.0,regime_chunked;stream_residual_fit
+prefill,MLA nh16 S2048,mla,T2.3,fit,9574958,9600447,0.27,85.0,stream_residual_fit
+prefill,cross 2048/8192,cross,T2.3,pred,1649702,1711700,3.76,192.0,regime_cross
+prefill,masked S8192 d0.25,masked,T2.3,pred,7717703,7748948,0.4,640.0,regime_masked;wall_only_fit
+prefill,causal S2048,causal,R1a,pred,754364,794273,5.29,51.0,
+prefill,causal S8192,causal,R1a,pred,10094706,10089024,-0.06,650.0,
+prefill,non-causal S2048,noncausal,R1a,pred,733819,738384,0.62,80.0,
+prefill,non-causal S8192,noncausal,R1a,pred,10875202,11182254,2.82,1216.0,
+prefill,cross 1024/8192,cross,R1a,pred,1107792,1142100,3.1,128.0,regime_cross
+prefill,cross 4096/16384,cross,R1a,pred,5462958,5698900,4.32,640.0,regime_cross
+prefill,windowed S4096 W1024,windowed,R1a,fit,759909,783091,3.05,54.0,regime_windowed;stream_residual_fit
+prefill,windowed S8192 W2048,windowed,R1a,fit,2486860,2459057,-1.12,170.0,regime_windowed;stream_residual_fit
+prefill,windowed S8192 W4096,windowed,R1a,fit,4345654,4554015,4.79,315.0,regime_windowed;stream_residual_fit
+prefill,masked S4096 d0.25,masked,R1a,fit,1945668,1939412,-0.32,160.0,regime_masked;wall_only_fit
+prefill,masked S8192 d0.5,masked,R1a,fit,7725170,7748948,0.31,640.0,regime_masked;wall_only_fit
+prefill,chunked start2048 Sq2048,chunked,R1a,fit,1241686,1238450,-0.26,98.0,regime_chunked;stream_residual_fit
+prefill,chunked start4096 Sq1024,chunked,R1a,fit,686071,667938,-2.64,73.0,regime_chunked;stream_residual_fit
+prefill,chunked start8192 Sq2048,chunked,R1a,fit,3593322,3659120,1.83,290.0,regime_chunked;stream_residual_fit
+prefill,MLA nh16 S1024,mla,R1a,fit,2640221,3051533,15.58,27.0,stream_residual_fit
+prefill,MLA nh16 S4096,mla,R1a,fit,37137796,37263964,0.34,330.0,stream_residual_fit
+prefill,MLA nh32 S2048,mla,R1a,fit,19315356,19197994,-0.61,170.0,stream_residual_fit
+prefill,sparse T8192 TOPK1024,sparse,R1a,fit,8603386,8603761,0.0,152,regime_sparse;wall_only_fit
+prefill,sparse T8192 TOPK2048,sparse,R1a,fit,16081570,16127532,0.29,304,regime_sparse;wall_only_fit
+prefill,sparse T16384 TOPK2048,sparse,R1a,fit,16172522,16127532,-0.28,304,regime_sparse;wall_only_fit
+prefill,sparse T32768 TOPK2048,sparse,R1a,holdout,16155094,16127532,-0.17,304,regime_sparse;wall_only_fit
+prefill,joint N4096 L333 d128,joint,R1a,fit,8578988,8577400,-0.02,81.0,regime_joint;wall_only_fit
+prefill,joint N4096 L333 d64,joint,R1a,fit,4532419,4532536,0.0,81.0,regime_joint;wall_only_fit
+prefill,production S1024 q64 g64,production,T2.4,fit,468469,468466,-0.0,68.0,off_calibration_chunk;off_calibration_fidelity;off_calibration_exp_mode;legacy_path_production_family
+prefill,production S2048 q256 g64,production,T2.4,pred,1072058,1056718,-1.43,18.0,off_calibration_fidelity;off_calibration_exp_mode;legacy_path_production_family
+prefill,production S4096 q256 g64,production,T2.4,fit,3983028,3983024,-0.0,68.0,off_calibration_fidelity;off_calibration_exp_mode;legacy_path_production_family
+prefill,production S8192 q256 g64,production,T2.4,pred,15392503,15453100,0.39,264.0,off_calibration_fidelity;off_calibration_exp_mode;legacy_path_production_family
+prefill,production S4096 q256 g110,production,T2.4,pred,3019747,2987992,-1.05,51.0,off_calibration_fidelity;off_calibration_exp_mode;legacy_path_production_family
+prefill,anchor repeat start,causal,R1d,repeat,2559756,2563224,0.14,165.0,
+prefill,anchor repeat mid,causal,R1d,repeat,2561014,2563224,0.09,165.0,
+prefill,anchor repeat end,causal,R1d,repeat,2563848,2563224,-0.02,165.0,
+prefill,production S4096 g64 repeat,production,R1d,repeat,3982135,3983024,0.02,68.0,off_calibration_fidelity;off_calibration_exp_mode;legacy_path_production_family
+prefill,hold-out causal S2048 q64 k64,causal,R1c,holdout,1286729,1283062,-0.28,165.0,off_calibration_chunk
+prefill,hold-out causal all bf16,causal,R1c,holdout,4458372,4419927,-0.86,165.0,off_calibration_dtype
+prefill,hold-out causal batch 2 nh16,causal,R1c,holdout,2562633,2563224,0.02,165.0,
+prefill,causal head_dim 64,causal,R1c,fit,1416986,1416976,-0.0,165.0,
+prefill,hold-out causal HiFi4,causal,R1c,holdout,2842621,2563224,-9.83,165.0,off_calibration_fidelity
+prefill,hold-out causal LoFi,causal,R1c,holdout,2529248,2563224,1.34,165.0,off_calibration_fidelity
+prefill,hold-out causal MHA nh16,causal,R1c,holdout,1401709,1539094,9.8,99.0,
+prefill,hold-out causal S512 q64 k64,causal,R1c,holdout,132298,142554,7.75,18.0,off_calibration_chunk
+prefill,non-causal head_dim 64,noncausal,R1c,fit,2309290,2309204,-0.0,320.0,
+prefill,hold-out causal S2048 head_dim 64,causal,R1g,holdout,462832,439978,-4.94,51.0,
+prefill,hold-out non-causal S2048 head_dim 64,noncausal,R1g,holdout,585244,579476,-0.99,80.0,
+prefill,hold-out causal q256 k128 head_dim 64,causal,R1g,holdout,1499473,1405441,-6.27,102.0,
+prefill,hold-out non-causal q128 k256 head_dim 64,noncausal,R1g,holdout,1751182,1773032,1.25,160.0,
+prefill,fresh build joint d128,joint,R1e,fresh,8708672,8577400,-1.51,81.0,regime_joint;wall_only_fit
+prefill,fresh build sparse T8192 TOPK2048,sparse,R1e,fresh,16119196,16127532,0.05,304,regime_sparse;wall_only_fit
+decode,paged b32 g64 pos128,decode,T2.8,fit,99630,99599,-0.03,,decode_family;k_chunk_auto
+decode,paged b32 g64 pos512,decode,T2.8,fit,219780,220366,0.27,,decode_family;k_chunk_auto
+decode,paged b32 g64 pos1024,decode,T2.8,fit,383400,381389,-0.52,,decode_family;k_chunk_auto
+decode,paged b32 g64 pos2048,decode,T2.8,fit,706185,703434,-0.39,,decode_family;k_chunk_auto
+decode,paged b32 g64 pos4096,decode,T2.8,fit,1357425,1347524,-0.73,,decode_family;k_chunk_auto
+decode,paged b32 g64 pos8192,decode,T2.8,fit,2652480,2635704,-0.63,,decode_family;k_chunk_auto
+decode,paged b8 g64 pos1024,decode,T2.8,fit,106380,106873,0.46,,decode_family;k_chunk_auto
+decode,paged b16 g64 pos1024,decode,T2.8,fit,200880,198378,-1.25,,decode_family;k_chunk_auto
+decode,paged b32 g64 bf16 pos1024,decode,T2.8,fit,681885,701066,2.81,,decode_family;k_chunk_auto
+decode,paged b32 g110 pos1024,decode,T2.8,fit,347220,346522,-0.2,,decode_family;k_chunk_auto
+decode,paged b32 g110 pos4096,decode,T2.8,fit,1217565,1220282,0.22,,decode_family;k_chunk_auto
+decode,paged b32 g110 pos8192,decode,R1b,pred,2375055,2385296,0.43,,decode_family;k_chunk_auto
+decode,non-paged b32 bfp8 cache1024,decode,R1b,fit,309285,300001,-3.0,,decode_family
+decode,non-paged b32 bfp8 cache4096,decode,R1b,fit,1184220,1143641,-3.43,,decode_family
+decode,non-paged b8 bf16 cache1024,decode,R1b,fit,142560,148333,4.05,,decode_family
+decode,non-paged b8 bf16 cache4096,decode,R1b,fit,536355,545340,1.68,,decode_family
+decode,MLA decode non-paged b8 nh16 cache1024,decode,R1b,fit,110835,111523,0.62,,decode_family
+decode,MLA decode non-paged b8 nh16 cache4096,decode,R1b,fit,328725,322556,-1.88,,decode_family
+decode,MLA decode non-paged b8 nh16 cache8192,decode,R1b,fit,603720,603933,0.04,,decode_family
+decode,MLA decode paged b4 nh128 pos1024,decode,R1b,fit,123930,115168,-7.07,,decode_family
+decode,MLA decode paged b4 nh128 pos4096,decode,R1b,fit,244890,233874,-4.5,,decode_family
+decode,MLA decode paged b4 nh128 pos8192,decode,R1b,fit,398655,392149,-1.63,,decode_family
+decode,MLA decode paged b8 nh128 pos1024,decode,R1b,fit,144180,159683,10.75,,decode_family
+decode,MLA decode paged b8 nh128 pos4096,decode,R1b,fit,388665,397095,2.17,,decode_family
+decode,MLA decode paged b8 nh128 pos8192,decode,R1b,fit,717255,713645,-0.5,,decode_family

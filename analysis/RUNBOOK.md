@@ -2588,13 +2588,20 @@ source $PYENV && python -c "import ttnn; print(ttnn.__file__)"
 ```
 
 
-## 12. Provenance
+## 12. Provenance: the data folders and what each holds
 
 Commit equivalence: this branch was assembled from the calibration tree with the commit messages
 cleaned up, so its shas differ from the ones in the measurement PROVENANCE lines while the trees are byte
 identical. The calibration state cited as commit 72620d5332967 is commit aae92de5471 here, and the same
 tree is still reachable as 72620d5332967 on branch mvlahovic/analyze_single_chip_sdpa.
-: the data folders and what each holds
+
+### Reference tables in this branch
+
+`analysis/reference_tables/` carries the reduced results of the campaign (148 KB, five files plus a
+README): every device wall with its configuration, the same walls priced by the model with signed
+error, the perf counter readings per configuration, the measured wall against the model's named
+terms, and the fitted floor constants. Diff a rerun against those instead of against prose. The raw
+captures behind them are 2.4 GB and stay out of git, as the inventory below says.
 
 Where the data came from. Every measurement inventoried below was produced on 2026-09-11 and
 2026-09-12, on one reserved Blackhole p100a at firmware bundle 19.9.0, and the published pages cite
@@ -2612,7 +2619,7 @@ wrote it. `bh/card_log.md` is the append-only index of every device run.
 | `handoff/revamp/data/bh_zones/` | 2.0 GB, 1230 files (963 CSVs) | every SDPA capture and its reductions. Raw `<tag>.csv` (PROVENANCE plus the device log) with `<tag>.log`, `<tag>_runs.csv`, `<tag>_cores.csv`, `<tag>_raw.csv`, `<tag>_counters.csv` and, where tracy ran with `-r`, `<tag>_ops_perf_results.csv`. Tag prefixes: `t01_` T0.1 anchor reproduction, `t02_` zone tax, `t21_` grid 1, `t22_` ablations, `t23_` DRAM law, `t23r_` regimes, `t24_` production, `t27_` fresh drift, `t28_` decode, `r1a_` to `r1g_` the R1 re-measurement. Derived: `decomp_<tag>.csv`, `decomp_summary.csv`, `report_tables.md`, `dram_rate_table.csv`, `ablation_deltas_q128k*.csv`, `decode_sweep_table.csv`, `r1_walls.csv`, `r1_tables.md`, `r1b_decode_table.csv`, `r1f_counters_table.csv`, `r1f_table.md`, `r1g_thread_split.{csv,md}`, `prod_parts_table.md`, `t02_zone_tax_summary.csv`. Also the block outputs `t21_campaign.out`, `t22.out`, `r1.out`, `r1_add.out`. The runners, campaign scripts and reducers that wrote all of it are no longer here: they are in git, in `analysis/campaigns/` on `mvlahovic/sdpa_topk_harness` |
 | `handoff/revamp/data/model_level/` | 399 MB | the four T2.5 tracy runs: `<run>_ops_perf_results.csv`, `<run>_profile_log_device.csv`, `<run>_PROVENANCE.txt`, `<run>.log`; `sdpa_ops_summary.csv` and `reduce_ops.py`; `positions_llama8b_decode.csv` (the decode sidecar); `tt_cache/` (the Llama weight cache); `validation/` with `run_validation.py` and the eight per-run validation outputs; `README.md` documenting the runs |
 | `handoff/revamp/data/topk/` | 780 MB, 89 entries | the T2.6 TopK campaign: per class group `cells_<TAG>.csv`, `results_<TAG>.csv`, `ops_perf_results_<TAG>.csv`, `profile_log_device_<TAG>.csv`, `run_<TAG>.log`, `PROVENANCE_<TAG>.txt`; the three `perf_counter_passes_*` directories with `pass_0.csv` to `pass_4.csv` each; the T2.9a indexer points `t29_indexer_*` plus `indexer_points.csv`; the fits `topk_fits.csv`, `topk_acceptance.csv`, `topk_model_acceptance.csv` |
-| `handoff/revamp/data/` (top level) | | `targets_table.csv` (the target walls the campaign had to reproduce), `model_components_grid1.csv`, `floor_verification_configs.csv` and `floor_verification_fits.json` (written by `model/floor_verification.py`), `refit_r2_walls.csv`, and the earlier task script sets `t15_scripts/` and `t42_scripts/` |
+| `handoff/revamp/data/` (top level) | 148 KB | in git as `analysis/reference_tables/` on `mvlahovic/sdpa_topk_harness`, so a rerun can be diffed against them without the workspace: `targets_table.csv` (the target walls the campaign had to reproduce), `model_components_grid1.csv`, `floor_verification_configs.csv` and `floor_verification_fits.json` (written by `model/floor_verification.py`), `refit_r2_walls.csv`, and the earlier task script sets `t15_scripts/` and `t42_scripts/` |
 | `handoff/revamp/bh/` | 752 KB | the Blackhole reports and the build record: `card_log.md` (230 rows), `zone_decomposition.md`, `campaign_r1.md`, `production_config.md`, `regimes.md`, `decode_sweep.md`, `drift_check.md`, `targets.md`, `sdpa_kernel_phase_map.md`, `fresh_build.md` with `fresh_build.log` and `fresh_build_rebuild_memmap.log`, and `zone_patch.diff` |
 | `handoff/revamp/topk/` | 348 KB | the TopK plan and driver: `sweep_plan.md`, `topk_campaign.py`, `topk_analyze.py`, `topk_model_acceptance.py`, `topk_campaign_results.md`, `indexer_points.md`, `generic_topk_kernel.md`, `router_topk_kernels.md` |
 | `handoff/revamp/model/` | 456 KB | the model notes and the offline fit scripts: `restructure_notes.md`, `refit_notes.md`, `refit_r2_notes.md`, `floor_verification.md` with `floor_verification.py`, `refit_r2_fit.py`, `refit_r2_floor_r1f.py`, `attr_plumbing_spec.md` and `topk_model_notes.md`, plus one further offline script that is internal and is not reproduced here |

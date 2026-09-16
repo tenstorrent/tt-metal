@@ -1,0 +1,972 @@
+{
+ "REFIT": {
+  "f0": 0.04894719810304404,
+  "bq": 3.2744232868995917,
+  "delta": 70.0,
+  "beta": 204.20284706964748,
+  "gamma": 0.0,
+  "alpha": 47.76028474302483,
+  "recip": 17.0,
+  "overlap": {
+   "causal": [
+    0.28300000000000003,
+    2.0
+   ],
+   "noncausal": [
+    0.35000000000000003,
+    2.0
+   ]
+  },
+  "init": 2900.0,
+  "sfpu_a6_gamma_free": {
+   "beta": 206.27369687234523,
+   "gamma": -10.863996538222835,
+   "alpha": 90.76426531386387
+  },
+  "sfpu_free_fit": {
+   "delta": 67.75830953432707,
+   "beta": 216.55260572772485,
+   "gamma": -0.8426956533313898,
+   "alpha": 46.63142776670463
+  },
+  "overlap_zoned_basis": {
+   "causal": [
+    0.241,
+    2.0
+   ],
+   "noncausal": [
+    0.2695,
+    2.0
+   ]
+  },
+  "overlap_free_p": {
+   "causal": [
+    0.28450000000000003,
+    1.9500000000000013
+   ],
+   "noncausal": [
+    0.3375,
+    2.3000000000000016
+   ]
+  },
+  "d_r_anchor": {
+   "causal": 0.03668862547861948,
+   "noncausal": 0.0576461409874805
+  },
+  "decode": {
+   "meas": {
+    "FPU": 47502.0703125,
+    "SFPU": 22276.0,
+    "MATH": 69778.0703125,
+    "wall": 383226.0
+   },
+   "model": {
+    "FPU": 38007,
+    "SFPU": 31925,
+    "union": 69932,
+    "wall": 381389
+   }
+  }
+ },
+ "overlap_fits": {
+  "zoned": {
+   "causal": {
+    "F4_rsat": 0.241,
+    "F4_err": {
+     "causal q128 k128": -0.6111612421369927,
+     "causal q128 k256": -0.5668817960762684,
+     "causal q128 k512": -0.6288676782892799,
+     "causal q64 k128": 0.056462670522905434,
+     "causal q256 k128": 0.9779116445120861,
+     "causal q512 k128": 1.9388589177232962,
+     "causal q512 k512": -1.3692196791103228
+    },
+    "F4_rms": 1.0477038323020678,
+    "F1_k": 2.315,
+    "F1_err": {
+     "causal q128 k128": -0.3123675525942837,
+     "causal q128 k256": 2.5933570981619525,
+     "causal q128 k512": 4.238586465748528,
+     "causal q64 k128": 0.056462670522905434,
+     "causal q256 k128": -4.909077063415879,
+     "causal q512 k128": -8.128935224056843,
+     "causal q512 k512": -2.70550904264637
+    },
+    "F1_rms": 4.179717735831984,
+    "F2_rsat": 0.3,
+    "F2_err": {
+     "causal q128 k128": 1.8545469855328456,
+     "causal q128 k256": 2.0672423007818352,
+     "causal q128 k512": 2.103560208246713,
+     "causal q64 k128": 0.056462670522905434,
+     "causal q256 k128": 1.0574903642684763,
+     "causal q512 k128": -0.25139324580311095,
+     "causal q512 k512": -3.7270899524336043
+    },
+    "F2_rms": 1.9717169016823854,
+    "F3_rsat": 0.249,
+    "F3_p": 1.750000000000001,
+    "F3_err": {
+     "causal q128 k128": -0.1478371929931055,
+     "causal q128 k256": -0.07191121163808711,
+     "causal q128 k512": -0.11542511514387455,
+     "causal q64 k128": 0.056462670522905434,
+     "causal q256 k128": 0.8884607974507519,
+     "causal q512 k128": 1.4861342219190332,
+     "causal q512 k512": -1.8565910055778345
+    },
+    "F3_rms": 0.9627657870143944,
+    "cur_err": {
+     "causal q128 k128": -4.566583323117202,
+     "causal q128 k256": -1.09996745713824,
+     "causal q128 k512": 0.8837410162506609,
+     "causal q64 k128": -2.810679173501651,
+     "causal q256 k128": -7.135648283372753,
+     "causal q512 k128": -9.259360605803924,
+     "causal q512 k512": -3.5718053636211056
+    },
+    "cur_rms": 5.073116202969216
+   },
+   "noncausal": {
+    "F4_rsat": 0.2695,
+    "F4_err": {
+     "non-causal q128 k128": 1.6377375661657867,
+     "non-causal q128 k256": 0.45338605409208643,
+     "non-causal q128 k512": 0.5101604843297247,
+     "non-causal q64 k128": 0.06595258972106333,
+     "non-causal q256 k128": 0.6194758059558936,
+     "non-causal q512 k128": 1.4154038332445884,
+     "non-causal q512 k512": -3.720635938673089
+    },
+    "F4_rms": 1.664014370946367,
+    "F1_k": 1.95,
+    "F1_err": {
+     "non-causal q128 k128": 0.3182511917909414,
+     "non-causal q128 k256": 2.700437180927273,
+     "non-causal q128 k512": 4.878933339579894,
+     "non-causal q64 k128": -0.6920401090418471,
+     "non-causal q256 k128": -5.023235970230977,
+     "non-causal q512 k128": -7.563996490403357,
+     "non-causal q512 k512": -3.491012113302827
+    },
+    "F1_rms": 4.247867749630923,
+    "F2_rsat": 0.365,
+    "F2_err": {
+     "non-causal q128 k128": 3.2683427828476663,
+     "non-causal q128 k256": 2.1790451120526466,
+     "non-causal q128 k512": 2.3048986469776045,
+     "non-causal q64 k128": 0.06595258972106333,
+     "non-causal q256 k128": -1.1976033520781248,
+     "non-causal q512 k128": -3.341531527050745,
+     "non-causal q512 k512": -6.887496430700423
+    },
+    "F2_rms": 3.3971606522753883,
+    "F3_rsat": 0.2565,
+    "F3_p": 2.5500000000000016,
+    "F3_err": {
+     "non-causal q128 k128": 0.7589693709828316,
+     "non-causal q128 k256": -0.47660869899169844,
+     "non-causal q128 k512": -0.4570624828735159,
+     "non-causal q64 k128": 0.06595258972106333,
+     "non-causal q256 k128": 0.9326136288435372,
+     "non-causal q512 k128": 2.3007327879072115,
+     "non-causal q512 k512": -2.7833550022578257
+    },
+    "F3_rms": 1.4602666501134898,
+    "cur_err": {
+     "non-causal q128 k128": -5.601830080296855,
+     "non-causal q128 k256": -2.373959148953486,
+     "non-causal q128 k512": 0.2654482956546911,
+     "non-causal q64 k128": -10.849142272464718,
+     "non-causal q256 k128": -8.058422586917347,
+     "non-causal q512 k128": -9.104851132493375,
+     "non-causal q512 k512": -4.658009289024056
+    },
+    "cur_rms": 6.8067621042408515
+   }
+  },
+  "unmodified": {
+   "causal": {
+    "F4_rsat": 0.28300000000000003,
+    "F4_err": {
+     "causal q128 k128": -0.20102188576475166,
+     "causal q128 k256": -0.12638280295839133,
+     "causal q128 k512": -0.17346447475349303,
+     "causal q64 k128": 0.056462670522905434,
+     "causal q256 k128": 0.7739855637423965,
+     "causal q512 k128": 1.5857454004297944,
+     "causal q512 k512": -1.8675956774195979
+    },
+    "F4_rms": 0.9776952571362021,
+    "F1_k": 1.9140000000000001,
+    "F1_err": {
+     "causal q128 k128": -0.7712565277434913,
+     "causal q128 k256": 2.89444795370859,
+     "causal q128 k512": 4.997702358567002,
+     "causal q64 k128": -1.2412962694039908,
+     "causal q256 k128": -3.6773537304591652,
+     "causal q512 k128": -6.038101156754372,
+     "causal q512 k512": 0.03158341919891061
+    },
+    "F1_rms": 3.494344500803425,
+    "F2_rsat": 0.375,
+    "F2_err": {
+     "causal q128 k128": 1.8437270233077951,
+     "causal q128 k256": 2.0625609031988734,
+     "causal q128 k512": 2.0999221288043435,
+     "causal q64 k128": 0.056462670522905434,
+     "causal q256 k128": -0.6223380445496529,
+     "causal q512 k128": -2.850519880924829,
+     "causal q512 k512": -3.368169615179739
+    },
+    "F2_rms": 2.1355388274874842,
+    "F3_rsat": 0.28450000000000003,
+    "F3_p": 1.9500000000000013,
+    "F3_err": {
+     "causal q128 k128": -0.08674580900159823,
+     "causal q128 k256": -0.0040480273362231145,
+     "causal q128 k512": -0.04641038959525279,
+     "causal q64 k128": 0.056462670522905434,
+     "causal q256 k128": 0.7625934801227752,
+     "causal q512 k128": 1.4971495240710286,
+     "causal q512 k512": -1.963212096298106
+    },
+    "F3_rms": 0.9776130133963098,
+    "cur_err": {
+     "causal q128 k128": -1.6739279473532265,
+     "causal q128 k256": 2.1091622103293517,
+     "causal q128 k512": 4.283520221608383,
+     "causal q64 k128": -2.810679173501651,
+     "causal q256 k128": -4.150634396900954,
+     "causal q512 k128": -6.278549079597551,
+     "causal q512 k512": -0.15314715320202676
+    },
+    "cur_rms": 3.5890798940254056
+   },
+   "noncausal": {
+    "F4_rsat": 0.35000000000000003,
+    "F4_err": {
+     "non-causal q128 k128": 1.4819844693847006,
+     "non-causal q128 k256": 0.22482934213627903,
+     "non-causal q128 k512": 0.27510496544567165,
+     "non-causal q64 k128": 0.06595258972106333,
+     "non-causal q256 k128": -0.9636715336410084,
+     "non-causal q512 k128": -0.5098489132448702,
+     "non-causal q512 k512": -1.6061301889653823
+    },
+    "F4_rms": 0.9331300330209402,
+    "F1_k": 1.564,
+    "F1_err": {
+     "non-causal q128 k128": 1.782674488793634,
+     "non-causal q128 k256": 5.104651313740605,
+     "non-causal q128 k512": 7.909842116658616,
+     "non-causal q64 k128": -6.5437437434914365,
+     "non-causal q256 k128": -1.9004252076360695,
+     "non-causal q512 k128": -3.562261203336825,
+     "non-causal q512 k512": 1.2725391938166686
+    },
+    "F1_rms": 4.668163522494472,
+    "F2_rsat": 0.452,
+    "F2_err": {
+     "non-causal q128 k128": 4.667268377956324,
+     "non-causal q128 k256": 3.605709524806855,
+     "non-causal q128 k512": 3.7988555782839217,
+     "non-causal q64 k128": 0.06595258972106333,
+     "non-causal q256 k128": -1.9494275827065422,
+     "non-causal q512 k128": -5.232041183309688,
+     "non-causal q512 k512": -1.6061301889653823
+    },
+    "F2_rms": 3.4428884419476167,
+    "F3_rsat": 0.3375,
+    "F3_p": 2.3000000000000016,
+    "F3_err": {
+     "non-causal q128 k128": 0.9176914355843335,
+     "non-causal q128 k256": -0.3741147990942051,
+     "non-causal q128 k512": -0.3491495690790325,
+     "non-causal q64 k128": 0.06595258972106333,
+     "non-causal q256 k128": -0.5519939742677726,
+     "non-causal q512 k128": 0.40341000223260703,
+     "non-causal q512 k512": -1.6061301889653823
+    },
+    "F3_rms": 0.7704790514404787,
+    "cur_err": {
+     "non-causal q128 k128": -0.8529730205167452,
+     "non-causal q128 k256": 2.838862089766425,
+     "non-causal q128 k512": 5.845443676844675,
+     "non-causal q64 k128": -10.849142272464718,
+     "non-causal q256 k128": -3.2542082462111654,
+     "non-causal q512 k128": -4.2502826936204,
+     "non-causal q512 k512": 0.7498140629278671
+    },
+    "cur_rms": 5.208191298057717
+   }
+  }
+ },
+ "walls": {
+  "causal q128 k128": {
+   "meas": 2562642.0,
+   "cur": 2563224,
+   "ref": 2563224,
+   "cur_union": 852327,
+   "ref_union": 876045,
+   "cur_floor": 882327,
+   "ref_floor": 878945,
+   "cur_fpu": 712193,
+   "ref_fpu": 724319,
+   "cur_sfpu": 309688,
+   "ref_sfpu": 305463,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 852327,
+    "fe_issue": 380159,
+    "reader_wait": 1067384,
+    "mask_bracket": 8755,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 74803,
+    "straggler": 176895
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 876045,
+    "fe_issue": 356441,
+    "reader_wait": 1067384,
+    "mask_bracket": 8755,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 74803,
+    "straggler": 176895
+   }
+  },
+  "causal q128 k256": {
+   "meas": 2596634.5,
+   "cur": 2640809,
+   "ref": 2640809,
+   "cur_union": 856493,
+   "ref_union": 787069,
+   "cur_floor": 886493,
+   "ref_floor": 789969,
+   "cur_fpu": 733775,
+   "ref_fpu": 693105,
+   "cur_sfpu": 271200,
+   "ref_sfpu": 241076,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 856493,
+    "fe_issue": 219005,
+    "reader_wait": 1337111,
+    "mask_bracket": 4510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 38535,
+    "straggler": 182256
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 787069,
+    "fe_issue": 288429,
+    "reader_wait": 1337111,
+    "mask_bracket": 4510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 38535,
+    "straggler": 182256
+   }
+  },
+  "causal q128 k512": {
+   "meas": 2729800.5,
+   "cur": 2795980,
+   "ref": 2795980,
+   "cur_union": 895407,
+   "ref_union": 742582,
+   "cur_floor": 925407,
+   "ref_floor": 745482,
+   "cur_fpu": 776938,
+   "ref_fpu": 677498,
+   "cur_sfpu": 261810,
+   "ref_sfpu": 208883,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 895407,
+    "fe_issue": 140471,
+    "reader_wait": 1541437,
+    "mask_bracket": 2388,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 20401,
+    "straggler": 192976
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 742582,
+    "fe_issue": 293296,
+    "reader_wait": 1541437,
+    "mask_bracket": 2388,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 20401,
+    "straggler": 192976
+   }
+  },
+  "causal q64 k128": {
+   "meas": 4932323.0,
+   "cur": 5123547,
+   "ref": 5123547,
+   "cur_union": 1127812,
+   "ref_union": 1024511,
+   "cur_floor": 1157812,
+   "ref_floor": 1027411,
+   "cur_fpu": 789578,
+   "ref_fpu": 714319,
+   "cur_sfpu": 373739,
+   "ref_sfpu": 310192,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1127812,
+    "fe_issue": 57980,
+    "reader_wait": 3450812,
+    "mask_bracket": 17510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 112742,
+    "straggler": 353790
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1024511,
+    "fe_issue": 161281,
+    "reader_wait": 3450812,
+    "mask_bracket": 17510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 112742,
+    "straggler": 353790
+   }
+  },
+  "causal q256 k128": {
+   "meas": 1826179.5,
+   "cur": 1750772,
+   "ref": 1750772,
+   "cur_union": 758635,
+   "ref_union": 859195,
+   "cur_floor": 788635,
+   "ref_floor": 862095,
+   "cur_fpu": 693910,
+   "ref_fpu": 746268,
+   "cur_sfpu": 286077,
+   "ref_sfpu": 310921,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 758635,
+    "fe_issue": 535254,
+    "reader_wait": 0,
+    "mask_bracket": 4510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 57526,
+    "straggler": 391947
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 859195,
+    "fe_issue": 434694,
+    "reader_wait": 0,
+    "mask_bracket": 4510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 57526,
+    "straggler": 391947
+   }
+  },
+  "causal q512 k128": {
+   "meas": 2445391.0,
+   "cur": 2470484,
+   "ref": 2470484,
+   "cur_union": 745913,
+   "ref_union": 897216,
+   "cur_floor": 775913,
+   "ref_floor": 900116,
+   "cur_fpu": 713623,
+   "ref_fpu": 790166,
+   "cur_sfpu": 285437,
+   "ref_sfpu": 327173,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 745913,
+    "fe_issue": 636822,
+    "reader_wait": 0,
+    "mask_bracket": 2388,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 50562,
+    "straggler": 1031899
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 897216,
+    "fe_issue": 485519,
+    "reader_wait": 0,
+    "mask_bracket": 2388,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 50562,
+    "straggler": 1031899
+   }
+  },
+  "causal q512 k512": {
+   "meas": 1834463.5,
+   "cur": 1822484,
+   "ref": 1822484,
+   "cur_union": 741758,
+   "ref_union": 755065,
+   "cur_floor": 771758,
+   "ref_floor": 757965,
+   "cur_fpu": 713623,
+   "ref_fpu": 737493,
+   "cur_sfpu": 248708,
+   "ref_sfpu": 223021,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 741758,
+    "fe_issue": 303672,
+    "reader_wait": 0,
+    "mask_bracket": 597,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 12641,
+    "straggler": 760917
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 755065,
+    "fe_issue": 290365,
+    "reader_wait": 0,
+    "mask_bracket": 597,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 12641,
+    "straggler": 760917
+   }
+  },
+  "non-causal q128 k128": {
+   "meas": 2884626.0,
+   "cur": 2944835,
+   "ref": 2944835,
+   "cur_union": 1573417,
+   "ref_union": 1627813,
+   "cur_floor": 1603417,
+   "ref_floor": 1630713,
+   "cur_fpu": 1381222,
+   "ref_fpu": 1404738,
+   "cur_sfpu": 600608,
+   "ref_sfpu": 591819,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1573417,
+    "fe_issue": 1014361,
+    "reader_wait": 87445,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 63451,
+    "straggler": 203261
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1627813,
+    "fe_issue": 959965,
+    "reader_wait": 87445,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 63451,
+    "straggler": 203261
+   }
+  },
+  "non-causal q128 k256": {
+   "meas": 3009305.0,
+   "cur": 3023740,
+   "ref": 3023740,
+   "cur_union": 1544580,
+   "ref_union": 1452999,
+   "cur_floor": 1574580,
+   "ref_floor": 1455899,
+   "cur_fpu": 1381222,
+   "ref_fpu": 1342311,
+   "cur_sfpu": 510495,
+   "ref_sfpu": 463045,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1544580,
+    "fe_issue": 510718,
+    "reader_wait": 725104,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 31725,
+    "straggler": 208713
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1452999,
+    "fe_issue": 602299,
+    "reader_wait": 725104,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 31725,
+    "straggler": 208713
+   }
+  },
+  "non-causal q128 k512": {
+   "meas": 3206662.5,
+   "cur": 3201216,
+   "ref": 3201216,
+   "cur_union": 1530163,
+   "ref_union": 1365593,
+   "cur_floor": 1560163,
+   "ref_floor": 1368493,
+   "cur_fpu": 1381222,
+   "ref_fpu": 1311098,
+   "cur_sfpu": 465440,
+   "ref_sfpu": 398658,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1530163,
+    "fe_issue": 258895,
+    "reader_wait": 1172420,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 15863,
+    "straggler": 220975
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1365593,
+    "fe_issue": 423465,
+    "reader_wait": 1172420,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 15863,
+    "straggler": 220975
+   }
+  },
+  "non-causal q64 k128": {
+   "meas": 5609143.5,
+   "cur": 5592577,
+   "ref": 5592577,
+   "cur_union": 1995192,
+   "ref_union": 2010784,
+   "cur_floor": 2025192,
+   "ref_floor": 2013684,
+   "cur_fpu": 1531302,
+   "ref_fpu": 1404738,
+   "cur_sfpu": 724828,
+   "ref_sfpu": 606046,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1995192,
+    "fe_issue": 896137,
+    "reader_wait": 2487715,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 98304,
+    "straggler": 112328
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 2010784,
+    "fe_issue": 880545,
+    "reader_wait": 2487715,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 98304,
+    "straggler": 112328
+   }
+  },
+  "non-causal q256 k128": {
+   "meas": 2644797.5,
+   "cur": 2669140,
+   "ref": 2669140,
+   "cur_union": 1392342,
+   "ref_union": 1528513,
+   "cur_floor": 1422342,
+   "ref_floor": 1531413,
+   "cur_fpu": 1306182,
+   "ref_fpu": 1404738,
+   "cur_sfpu": 538497,
+   "ref_sfpu": 584705,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1392342,
+    "fe_issue": 1043661,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 46024,
+    "straggler": 184213
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1528513,
+    "fe_issue": 907490,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 46024,
+    "straggler": 184213
+   }
+  },
+  "non-causal q512 k128": {
+   "meas": 3098890.0,
+   "cur": 3093332,
+   "ref": 3093332,
+   "cur_union": 1309257,
+   "ref_union": 1501911,
+   "cur_floor": 1339257,
+   "ref_floor": 1504811,
+   "cur_fpu": 1268662,
+   "ref_fpu": 1404738,
+   "cur_sfpu": 507442,
+   "ref_sfpu": 581149,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1309257,
+    "fe_issue": 1050858,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 37311,
+    "straggler": 693006
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1501911,
+    "fe_issue": 858204,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 37311,
+    "straggler": 693006
+   }
+  },
+  "non-causal q512 k512": {
+   "meas": 2248111.0,
+   "cur": 2247764,
+   "ref": 2247764,
+   "cur_union": 1304034,
+   "ref_union": 1311098,
+   "cur_floor": 1334034,
+   "ref_floor": 1313998,
+   "cur_fpu": 1268662,
+   "ref_fpu": 1311098,
+   "cur_sfpu": 442149,
+   "ref_sfpu": 395990,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1304034,
+    "fe_issue": 428109,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 9328,
+    "straggler": 503394
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1311098,
+    "fe_issue": 421045,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 9328,
+    "straggler": 503394
+   }
+  },
+  "cross 2k/8k nh16 q128 k128": {
+   "meas": 1649702.0,
+   "cur": 1711700,
+   "ref": 1711700,
+   "cur_union": 786709,
+   "ref_union": 813749,
+   "cur_floor": 816709,
+   "ref_floor": 816649,
+   "cur_fpu": 690612,
+   "ref_fpu": 702370,
+   "cur_sfpu": 300303,
+   "ref_sfpu": 295751,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 786709,
+    "fe_issue": 507180,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 31725,
+    "straggler": 383185
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 813749,
+    "fe_issue": 480140,
+    "reader_wait": 0,
+    "mask_bracket": 0,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 31725,
+    "straggler": 383185
+   }
+  },
+  "MLA nh16 S2048 q32 k128 HiFi4": {
+   "meas": 9574958.0,
+   "cur": 9574912,
+   "ref": 9574912,
+   "cur_union": 746109,
+   "ref_union": 748418,
+   "cur_floor": 776109,
+   "ref_floor": 751318,
+   "cur_fpu": 710074,
+   "ref_fpu": 707145,
+   "cur_sfpu": 36035,
+   "ref_sfpu": 41273,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 746109,
+    "fe_issue": 0,
+    "reader_wait": 8135762,
+    "mask_bracket": 4510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 24292,
+    "straggler": 661339
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 748418,
+    "fe_issue": 0,
+    "reader_wait": 8133453,
+    "mask_bracket": 4510,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 24292,
+    "straggler": 661339
+   }
+  },
+  "production S4096 q256 k256 g64 HiFi4 fp32": {
+   "meas": 3983028.0,
+   "cur": 3982991,
+   "ref": 4076086,
+   "cur_union": 2778259,
+   "ref_union": 2871354,
+   "cur_floor": 2808259,
+   "ref_floor": 2874254,
+   "cur_fpu": 2385314,
+   "ref_fpu": 2451292,
+   "cur_sfpu": 392945,
+   "ref_sfpu": 420062,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 2778259,
+    "fe_issue": 0,
+    "reader_wait": 0,
+    "mask_bracket": 3876,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 1148520,
+    "control": 49436,
+    "straggler": 0
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 2871354,
+    "fe_issue": 0,
+    "reader_wait": 0,
+    "mask_bracket": 3876,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 1148520,
+    "control": 49436,
+    "straggler": 0
+   }
+  },
+  "production settings, 110 cores (no counters)": {
+   "meas": 3019747,
+   "cur": 2987967,
+   "ref": 3057790,
+   "cur_union": 1616441,
+   "ref_union": 1670606,
+   "cur_floor": 1646441,
+   "ref_floor": 1673506,
+   "cur_fpu": 1387819,
+   "ref_fpu": 1426206,
+   "cur_sfpu": 228622,
+   "ref_sfpu": 244400,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 1616441,
+    "fe_issue": 0,
+    "reader_wait": 0,
+    "mask_bracket": 2255,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 668230,
+    "control": 28763,
+    "straggler": 669379
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 1670606,
+    "fe_issue": 0,
+    "reader_wait": 0,
+    "mask_bracket": 2255,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 668230,
+    "control": 28763,
+    "straggler": 685036
+   }
+  },
+  "A10 fp32 off, streaming kernel at HiFi4 (no counters)": {
+   "meas": 3025634,
+   "cur": 2530430,
+   "ref": 2507504,
+   "cur_union": 2474218,
+   "ref_union": 2451292,
+   "cur_floor": 2504218,
+   "ref_floor": 2454192,
+   "cur_fpu": 2385314,
+   "ref_fpu": 2451292,
+   "cur_sfpu": 392945,
+   "ref_sfpu": 420062,
+   "cur_comp": {
+    "init": 2900,
+    "compute_floor": 2474218,
+    "fe_issue": 0,
+    "reader_wait": 0,
+    "mask_bracket": 3876,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 49436,
+    "straggler": 0
+   },
+   "ref_comp": {
+    "init": 2900,
+    "compute_floor": 2451292,
+    "fe_issue": 0,
+    "reader_wait": 0,
+    "mask_bracket": 3876,
+    "sfpu_issue": 0,
+    "dest_roundtrip": 0,
+    "control": 49436,
+    "straggler": 0
+   }
+  }
+ }
+}
