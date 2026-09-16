@@ -685,6 +685,33 @@
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
+- name: Gemma-4-31B DFlash tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    export GEMMA4_DFLASH_SHARD_ARGMAX=1
+    # dflash_fused_decoder_demo.py auto-discovers the drafter snapshot / target weights
+    # dir under a HARDCODED ~/.cache/huggingface, not $HF_HOME -- resolve them explicitly
+    # against the MLPerf-mounted cache instead of relying on that mismatched default.
+    export GEMMA4_DFLASH_DRAFTER=$(ls -d "$HF_HOME"/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/*/ | head -1)
+    export MODEL_WEIGHTS_DIR=$(ls -d "$HF_HOME"/hub/models--google--gemma-4-31B-it/snapshots/*/ | head -1)
+    # Real end-to-end generation: prefill + drafter + fused-trace steady-state decode
+    # loop, checked for coherent, non-crashing output on the default (code-generation)
+    # prompt. Same coherence-only bar as the plain text_demo.py entries above. Numerical
+    # correctness for the drafter's context-KV build is covered separately, in
+    # models_unit_tests.yaml's "Gemma-4-31B unit tests" entry
+    # (test_dflash_drafter_pcc.py) -- not duplicated here.
+    pytest -s --timeout 900 models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8
+  model: gemma-4-31b
+  model_family: Gemma
+  skus:
+    wh_llmbox_perf:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
 - name: Gemma-4-12B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt

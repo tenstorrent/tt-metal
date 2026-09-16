@@ -536,6 +536,14 @@
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
+    # DFlash drafter context-KV PCC (tt/dflash_drafter.py's real DFlashDrafter, not the
+    # dead models/demos/gemma4/tt/dflash/ package) vs a torch reference computed from the
+    # checkpoint's own weights -- see the test's own docstring. Needs the REAL hub
+    # checkpoint (tied lm_head + real drafter weights), unlike the config-only HF_MODEL
+    # the rest of this entry uses above -- overridden inline for just this one call so it
+    # doesn't leak into anything else in this script.
+    HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it \
+      pytest -s --timeout 300 models/demos/gemma4/tests/dflash/test_dflash_drafter_pcc.py -k 1x8
   model: gemma-4-31b
   model_family: Gemma
   skus:
