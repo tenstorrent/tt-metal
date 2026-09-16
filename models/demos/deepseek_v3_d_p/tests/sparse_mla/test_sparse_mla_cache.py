@@ -509,70 +509,16 @@ def test_sparse_mla_overlap_region_recovers_after_exception(monkeypatch, expect_
     assert events == [("load", "manager"), *expected_branch_events, "clear", "reset"]
 
 
-def test_sparse_mla_overlap_gather_threads_external_resources(monkeypatch):
-    """The overlapped SP prefix gather passes the selected strip and both persistent semaphore handles."""
-    mla = object.__new__(ttMLA)
-    mla.sp_factor = 4
-    mla.sp_axis = 0
-    mla.ccl_num_links = 2
-    mla._sparse_kv_gather_buffer = "persistent_output"
-    geometry = MlaKvCacheGeometry(latent_dim=512, rope_dim=64)
-    storage = SimpleNamespace(
-        shape=(8, 1, 256, 576),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    gathered_storage = SimpleNamespace(
-        shape=(1, 1, 1024, 576),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    cache = MlaKvCache(MlaKvCacheFormat.BF16_RM, storage, geometry)
-    resources = SimpleNamespace(
-        gather_subdevice_id="gather_sd",
-        gather_core_grid="gather_grid",
-        ready_semaphore="ready",
-        data_valid_semaphore="valid",
-    )
-    captured = {}
-
-    def fake_gather(input_tensor, **kwargs):
-        captured["input"] = input_tensor
-        captured.update(kwargs)
-        return gathered_storage
-
-    monkeypatch.setattr(ttnn.experimental, "high_bw_all_gather", fake_gather)
-    result = mla._gather_kvpe_prefix(
-        cache,
-        cache_batch_idx=3,
-        populated_global=100,
-        block_cyclic_chunk_local=32,
-        overlap_resources=resources,
-    )
-
-    assert result.storage is gathered_storage
-    assert captured == {
-        "input": storage,
-        "dim": 2,
-        "output_tensor": "persistent_output",
-        "num_links": 2,
-        "cluster_axis": 0,
-        "input_batch_index": 3,
-        "gathered_dim_size": 128,
-        "subdevice_id": "gather_sd",
-        "sub_core_grids": "gather_grid",
-        "ready_semaphore": "ready",
-        "data_valid_semaphore": "valid",
-    }
-
-
 @pytest.mark.parametrize("fabric", [ttnn.FabricConfig.FABRIC_2D, ttnn.FabricConfig.FABRIC_2D_TORUS_XY])
 def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monkeypatch, fabric):
-    """TP-dedup keeps overlap enabled when one full-mesh gather can reconstruct the cache."""
+    """The overlapped prefix gather passes the selected strip and both persistent semaphore handles.
+
+    The sparse path has exactly one gather shape -- a single full-mesh (cluster_axis=None) snake over the
+    SPxTP-deduped cache -- so this is the only external-resource threading case there is.
+    """
     mla = object.__new__(ttMLA)
     mla.sp_axis = 0
     mla.tp_axis = 1
-    mla._kv_dedup = True
     monkeypatch.setattr(mla, "_declared_seq_shard_factor", lambda _: 4)
     monkeypatch.setattr(ttnn, "get_fabric_config", lambda: fabric)
     mla.sp_factor = 2
@@ -772,7 +718,8 @@ def _overlap_integration_cases():
             fabric2d(),
             "galaxy_80_40",
             40,
-            512,
+            # 8*4*TILE_SIZE: the smallest seq_len whose per-chip SPxTP cache stripe holds whole tiles.
+            1024,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="galaxy_80_40-fabric2d-8x4",
         ),
@@ -891,7 +838,12 @@ def test_glm52_sparse_mla_overlap_growing_prefix_cache_and_lifetime(
     config_only,
 ):
     """Two growing chunks retain both outputs and reuse every split-grid/format program hash."""
-    seq_len, chunk = 512, 256
+    # KV dedup stripes both caches over SPxTP, so the per-chip chunk stripe must hold whole tiles:
+    # chunk % (sp * tp * TILE_SIZE) == 0. That floor is 1024 on the 8x4 galaxy and 128/256 on the
+    # smaller meshes, so derive it instead of hardcoding one mesh's number.
+    sp, tp = int(mesh_device.shape[SP_AXIS]), int(mesh_device.shape[TP_AXIS])
+    chunk = max(256, sp * tp * ttnn.TILE_SIZE)
+    seq_len = 2 * chunk
     config = config_only
     config.max_seq_len = seq_len
     mesh_shape = list(mesh_device.shape)
