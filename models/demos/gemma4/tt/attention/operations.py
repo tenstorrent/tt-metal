@@ -94,11 +94,6 @@ def prefill_tensor_memcfg(numel: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig
     return ttnn.DRAM_MEMORY_CONFIG
 
 
-def prefill_tilize_memcfg(seq_len: int, hidden_size: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
-    """Memory config for the post-embed ``to_layout(TILE)`` activation."""
-    return prefill_tensor_memcfg(int(seq_len) * int(hidden_size), dtype_bytes=dtype_bytes)
-
-
 def prefill_matmul_in0_memcfg(rows: int, k: int) -> ttnn.MemoryConfig:
     """L1 interleaved when ``[rows, k]`` bf16 fits the prefill activation budget, else DRAM."""
     return prefill_tensor_memcfg(int(rows) * int(k))

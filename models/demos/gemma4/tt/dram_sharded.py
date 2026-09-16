@@ -610,38 +610,6 @@ def _program_grid(program_config):
     return (int(grid.x), int(grid.y)) if hasattr(grid, "x") else (int(grid[0]), int(grid[1]))
 
 
-def _out_shard_matches_program(out_memcfg, program_config):
-    if out_memcfg is None or not out_memcfg.is_sharded():
-        return True
-    spec = out_memcfg.shard_spec
-    if spec is None:
-        return False
-    box = spec.grid.bounding_box().grid_size()
-    grid_x, grid_y = _program_grid(program_config)
-    shard_h, shard_w = int(spec.shape[0]), int(spec.shape[1])
-    return (
-        int(box.x) <= grid_x
-        and int(box.y) <= grid_y
-        and shard_h == program_config.per_core_M * TILE_SIZE
-        and shard_w == program_config.per_core_N * TILE_SIZE
-    )
-
-
-def l1_block_sharded_memcfg(rows, cols, grid=None):
-    grid_x, grid_y = grid or prefill_grid_default()
-    row_tiles, col_tiles = math.ceil(rows / TILE_SIZE), math.ceil(cols / TILE_SIZE)
-    shard_rows = [value for value in range(1, grid_y + 1) if row_tiles % value == 0]
-    shard_cols = [value for value in range(1, grid_x + 1) if col_tiles % value == 0]
-    if not shard_rows or not shard_cols:
-        return ttnn.L1_MEMORY_CONFIG
-    return ttnn.create_sharded_memory_config(
-        shape=(rows, cols),
-        core_grid=ttnn.CoreGrid(x=max(shard_cols), y=max(shard_rows)),
-        strategy=ttnn.ShardStrategy.BLOCK,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-
 def wide_vocab_lm_head_ckc(weight):
     """Fidelity for an LM head too wide for the tuned 1D-mcast program config.
 

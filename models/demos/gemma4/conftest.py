@@ -28,6 +28,23 @@ def pytest_configure(config):
         "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
     )
 
+    # WH 256k metal: do not reserve the 192 MB trace region (device fixture).
+    # ``_device_params()`` is evaluated at collection, so this must run first.
+    # Tail-pool skip for 256k is also in ``Gemma4Attention`` (max_seq_len).
+    kw = str(getattr(config.option, "keyword", None) or "")
+    args = " ".join(str(a) for a in (getattr(config, "args", None) or ()))
+    if "long-context-256k" not in kw and "long-context-256k" not in args:
+        return
+    try:
+        from models.common.utility_functions import is_blackhole
+
+        if is_blackhole():
+            return
+    except Exception:
+        pass
+    os.environ.setdefault("GEMMA4_TRACE_REGION_SIZE", "0")
+    os.environ.setdefault("GEMMA4_TAIL_POOL_SLOTS", "0")
+
 
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
@@ -60,27 +77,6 @@ def pytest_addoption(parser):
             "rows — select those with ``-k long-context-*``."
         ),
     )
-
-
-def pytest_configure(config):
-    """WH 256k metal: do not reserve the 192 MB trace region (device fixture).
-
-    ``_device_params()`` is evaluated at collection, so this must run first.
-    Tail-pool skip for 256k is also in ``Gemma4Attention`` (max_seq_len).
-    """
-    kw = str(getattr(config.option, "keyword", None) or "")
-    args = " ".join(str(a) for a in (getattr(config, "args", None) or ()))
-    if "long-context-256k" not in kw and "long-context-256k" not in args:
-        return
-    try:
-        from models.common.utility_functions import is_blackhole
-
-        if is_blackhole():
-            return
-    except Exception:
-        pass
-    os.environ.setdefault("GEMMA4_TRACE_REGION_SIZE", "0")
-    os.environ.setdefault("GEMMA4_TAIL_POOL_SLOTS", "0")
 
 
 @pytest.fixture(scope="session")

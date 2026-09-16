@@ -50,29 +50,6 @@ def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enabl
     return 1 <= int(padded_height) <= _PREFILL_ISLAND_MAX_HEIGHT
 
 
-def maybe_interleave(tensor, memory_config=None):
-    if tensor is None or not tensor.is_sharded():
-        return tensor
-    dest = memory_config or ttnn.DRAM_MEMORY_CONFIG
-    out = ttnn.sharded_to_interleaved(tensor, dest)
-    tensor.deallocate(True)
-    return out
-
-
-def align_to_memcfg(tensor, memcfg):
-    if tensor is None or memcfg is None or not memcfg.is_sharded():
-        return tensor, False
-    if tensor.is_sharded() and tensor.memory_config() == memcfg:
-        return tensor, False
-    return ttnn.to_memory_config(tensor, memcfg), True
-
-
-def align_to_sharded(tensor, sharded_ref):
-    if tensor is None or sharded_ref is None or not sharded_ref.is_sharded():
-        return tensor, False
-    return align_to_memcfg(tensor, sharded_ref.memory_config())
-
-
 def activation_physical_height(shape) -> int:
     """Tile-padded N*C*H row count. Batched prefill is [B,1,S,H], so use B*S not S."""
     rows = 1
