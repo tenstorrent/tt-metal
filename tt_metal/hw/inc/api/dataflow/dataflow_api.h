@@ -798,8 +798,7 @@ inline void noc_async_read_set_pcie_state(uint64_t src_noc_addr, uint8_t noc = n
  * \a noc_async_read_one_packet_set_state functions also set MID when given a PCIe-routed address, so they
  * need this too. Nothing else clears MID, since the \a _with_state issuers never write it.
  *
- * Must come after \a noc_async_read_barrier. The register block may not be written while a read is still
- * outstanding, so this waits on the command buffer but that alone is not enough. This is a no-op on
+ * Waits for NOC_CMD_CTRL to be ready, nothing else; no preceding barrier is required. No-op on
  * architectures that do not encode PCIe routing in the NOC address.
  *
  * Return value: None
@@ -821,12 +820,10 @@ inline void noc_async_read_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd
 /**
  * Same as \a noc_async_read, but for a src_noc_addr routed through the PCIe core. This sets up PCIe
  * routing, issues the read, then tears the routing back down, so read_cmd_buf is left safe for ordinary
- * on-chip reads and the caller has nothing to clean up.
- *
- * The teardown must not touch the register block while the read is outstanding, so this barriers before
- * clearing and is therefore synchronous despite the name. For a run of consecutive PCIe reads, or to keep
- * the read asynchronous, use \a noc_async_read_set_pcie_state, \a noc_async_read_with_state and
- * \a noc_async_read_clear_pcie_state.
+ * on-chip reads and the caller has nothing to clean up. Asynchronous, like \a noc_async_read: call
+ * \a noc_async_read_barrier before reading dst_local_l1_addr. For a run of consecutive PCIe reads, use
+ * \a noc_async_read_set_pcie_state, \a noc_async_read_with_state and \a noc_async_read_clear_pcie_state
+ * instead to pay the setup/teardown cost once.
  *
  * Return value: None
  *
@@ -838,11 +835,6 @@ inline void noc_async_read_clear_pcie_state(uint8_t noc = noc_index, uint8_t cmd
  * | noc               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
  */
 // clang-format on
-// Defined further down, but needed by the bundled PCIe wrappers below, which barrier before clearing MID.
-// The qualifiers match the definitions.
-void noc_async_read_barrier(uint8_t noc);
-FORCE_INLINE void noc_async_write_barrier(uint8_t noc);
-
 inline void noc_async_read_pcie(
     uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
@@ -851,9 +843,6 @@ inline void noc_async_read_pcie(
     // busy, so the first burst can skip its own poll. Later bursts still poll.
     noc_async_read_with_state</*inc_num_issued=*/true, /*skip_cmdbuf_chk=*/true>(
         (uint32_t)src_noc_addr, dst_local_l1_addr, size, noc);
-    // The clear immediately follows the read, so wait for the read to land before touching the register
-    // block. This makes the call synchronous. Use the set/with/clear batch API to avoid that.
-    noc_async_read_barrier(noc);
     noc_async_read_clear_pcie_state(noc);
 #else
     noc_async_read(src_noc_addr, dst_local_l1_addr, size, noc);
@@ -1305,8 +1294,7 @@ inline void noc_async_write_set_pcie_state(
  * \a noc_async_write_one_packet_set_state functions also set MID when given a PCIe-routed address, so they
  * need this too. Nothing else clears MID, since the \a _with_state issuers never write it.
  *
- * Must come after \a noc_async_write_barrier. The register block may not be written while a write is still
- * outstanding, so this waits on the command buffer but that alone is not enough. This is a no-op on
+ * Waits for NOC_CMD_CTRL to be ready, nothing else; no preceding barrier is required. No-op on
  * architectures that do not encode PCIe routing in the NOC address.
  *
  * Return value: None
@@ -1328,12 +1316,10 @@ inline void noc_async_write_clear_pcie_state(uint8_t noc = noc_index, uint8_t cm
 /**
  * Same as \a noc_async_write, but for a dst_noc_addr routed through the PCIe core. This sets up PCIe
  * routing, issues the write, then tears the routing back down, so write_cmd_buf is left safe for ordinary
- * on-chip writes and the caller has nothing to clean up.
- *
- * The teardown must not touch the register block while the write is outstanding, so this barriers before
- * clearing and is therefore synchronous despite the name. For a run of consecutive PCIe writes, or to keep
- * the write asynchronous, use \a noc_async_write_set_pcie_state, \a noc_async_write_with_state and
- * \a noc_async_write_clear_pcie_state.
+ * on-chip writes and the caller has nothing to clean up. Asynchronous, like \a noc_async_write: call
+ * \a noc_async_write_barrier before reusing src_local_l1_addr. For a run of consecutive PCIe writes, use
+ * \a noc_async_write_set_pcie_state, \a noc_async_write_with_state and \a noc_async_write_clear_pcie_state
+ * instead to pay the setup/teardown cost once.
  *
  * Return value: None
  *
@@ -1353,9 +1339,6 @@ inline void noc_async_write_pcie(
     // busy, so the first burst can skip its own poll. Later bursts still poll.
     noc_async_write_with_state</*posted=*/false, /*update_counter=*/true, /*skip_cmdbuf_chk=*/true>(
         src_local_l1_addr, (uint32_t)dst_noc_addr, size, noc);
-    // The clear immediately follows the write, so wait for the write to land before touching the register
-    // block. This makes the call synchronous. Use the set/with/clear batch API to avoid that.
-    noc_async_write_barrier(noc);
     noc_async_write_clear_pcie_state(noc);
 #else
     noc_async_write(src_local_l1_addr, dst_noc_addr, size, noc);
