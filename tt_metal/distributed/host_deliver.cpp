@@ -3,13 +3,12 @@
 
 #include <tt-metalium/experimental/sockets/internal/host_deliver.hpp>
 
-#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <cstring>
 #include <ctime>
-#include <mutex>
 #include <sstream>
+#include <stdexcept>  // std::runtime_error -- the fatal aliasing failure, A2
 
 #include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 #include <tt-metalium/experimental/sockets/internal/host_region.hpp>
@@ -23,18 +22,13 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-// Locating the socket's own pinned ring so the peer can RMA straight into it.
 #include <cerrno>
 #include <cstddef>
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
-// HDSocketConnectorState -- carries the SECOND bytes_sent, the host-side one in the shm that
-// push_bytes() maintains and ~H2DSocket()'s barrier reads back. See commit_to_device().
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
-// receiver_socket_md -- its first field is bytes_sent, the word notify_receiver() writes.
 #include "tt_metal/hw/inc/hostdev/socket.h"
 
 namespace tt::tt_metal::experimental {
@@ -42,18 +36,10 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// THE INTERNAL SHIMS TAKE A BYTE SPAN, not a string_view -- tt::tt_metal::internal is the one
-// copy of these NOC wrappers (api/internal/cluster_noc_helpers.hpp, upstream), and this file
-// used to carry a duplicate of it under tt::tt_metal::distributed. Every payload below is
-// either a small POD or a slice of the caller's buffer, so the cast lives here once.
 ttsl::Span<const std::byte> byte_span(const void* p, std::size_t n) {
     return ttsl::Span<const std::byte>(static_cast<const std::byte*>(p), n);
 }
 
-// Deliverer::read_payload is declared std::vector<uint8_t> and noc_read returns
-// std::vector<std::byte>. Copied rather than reinterpreted, and rather than widening the
-// change into the Deliverer interface and every test that reads a payload back: both callers
-// are verification-only paths that never run under measurement.
 std::vector<uint8_t> to_u8(const std::vector<std::byte>& in) {
     std::vector<uint8_t> out(in.size());
     if (!in.empty()) {
@@ -68,159 +54,6 @@ uint64_t now_ns_local() {
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
 }
 
-// A HOST->DEVICE WRITE FALLS OFF A CLIFF BETWEEN 32 KiB AND 64 KiB, so the payload write is
-// chunked rather than issued whole. This is a property of the write primitive underneath
-// noc_write(), not of anything here, and it is measured twice by two independent programs:
-//
-//   bytes     mmio_bench --h2d "write ns"      t6_host_uva diag:l1-write (verbs 1c sweep)
-//   32768     6,525 ns      = 5.02 GB/s        7,231 ns min  = 4.53 GB/s
-//   65536     29,912 ns     = 2.19 GB/s        79,930 ns min = 0.82 GB/s
-//   1048576   3,307,132 ns  = 0.32 GB/s        3,302,615 ns min = 0.32 GB/s
-//
-// So 1 MiB whole costs 3.31 ms, and 1 MiB as 32 x 32 KiB costs ~32 x 6.5 us = 209 us.
-//
-// IT IS NOT THE DMA THRESHOLD, which is the first thing everyone reaches for and which the
-// comment here used to claim. Cluster::supports_dma_operations() (tt_cluster.cpp:824)
-// requires arch_ == WORMHOLE_B0, so on Blackhole it is FALSE AT EVERY SIZE and there is no
-// fast path to fall off -- every noc_write of every length goes through UMD's
-// write_to_device(). Whatever changes at 32 KiB is inside that call. Naming a wrong cause
-// in a comment is worse than naming none, because it sends the next reader to tt-metal's
-// DMA code, where nothing is wrong.
-//
-// 32768 is the largest size measured on the fast side of the knee, not a guess at where the
-// knee is. If a future UMD moves it, the constant is the one thing to re-measure -- run
-// `mmio_bench --h2d` and read the "write ns" column.
-constexpr uint32_t kMaxHostWriteDefault = 32768;
-
-// OVERRIDABLE AT RUNTIME, because the constant above was chosen from the wrong measurement.
-//
-// The table in host_deliver.hpp times ONE write of each size. 32768 is the largest size on
-// the fast side of that knee -- but the deliverer issues chunks BACK TO BACK, and those two
-// things turned out not to be the same. Measured on this tree: a lone 32 KiB write costs
-// 6.94 us (4230 MB/s), while 64 KiB as two 32 KiB chunks costs 25.5 us rather than the ~14
-// the single-write figure predicts, and 1 MiB as 32 chunks costs 3275 us rather than ~222.
-// The header's claim that chunking buys 15x at 1 MiB is an extrapolation from the
-// single-write rate; the chunked measurement matches the UNCHUNKED one.
-//
-// So the composition has never been swept; the chunk size is fixed at the measured default.
-uint32_t max_host_write() { return kMaxHostWriteDefault; }
-
-class DeviceDeliverer final : public Deliverer {
-public:
-    DeviceDeliverer(tt::tt_metal::IDevice* device, uint32_t grid_width, uint32_t cores, L1Layout layout) :
-        device_id_(static_cast<uint32_t>(device->id())), layout_(layout), cores_(cores) {
-        // Resolve logical -> TRANSLATED once. noc_write takes translated coords; doing the
-        // lookup per message would put it in the hot path, and getting it wrong writes to
-        // a real tile that is not the intended one.
-        virt_.reserve(cores);
-        for (uint32_t i = 0; i < cores; ++i) {
-            const CoreCoord logical{i % grid_width, i / grid_width};
-            virt_.push_back(device->virtual_core_from_logical_core(logical, tt::CoreType::WORKER));
-        }
-    }
-
-    std::string write_payload(uint32_t core, const uint8_t* src, uint32_t bytes, uint32_t dst_l1) override {
-        if (core >= cores_) {
-            return "deliver: core index out of range";
-        }
-        // The effective address, or the layout's fixed one when no store named it.
-        const uint32_t dst = (dst_l1 != 0) ? dst_l1 : layout_.payload_addr;
-        const auto& v = virt_[core];
-        // WC window, relaxed ordering. This is the bulk path and throughput is what
-        // matters; ordering against the doorbell is the doorbell's job, not this write's.
-        //
-        // CHUNKED AT kMaxHostWrite, because one big noc_write is slower than the same
-        // bytes in 32 KiB pieces. See the constant.
-        //
-        uint32_t off = 0;
-        while (off < bytes) {
-            const uint32_t chunk = std::min(bytes - off, max_host_write());
-            tt::tt_metal::internal::noc_write(
-                device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), dst + off,
-                byte_span(src + off, chunk));
-            off += chunk;
-        }
-        return {};
-    }
-
-    std::string ring_doorbell(uint32_t core, uint32_t value) override {
-        if (core >= cores_) {
-            return "doorbell: core index out of range";
-        }
-        const auto& v = virt_[core];
-        // STRICT ordering, UC window. This is what makes "doorbell visible implies payload
-        // landed" true. A relaxed write here can be combined ahead of the payload it
-        // advertises, and the kernel then wakes on a buffer still being filled -- a torn
-        // payload with nothing reporting an error.
-        tt::tt_metal::internal::noc_write_immediate(
-            device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr,
-            byte_span(&value, sizeof(value)));
-        return {};
-    }
-
-    std::string ring_completion(uint32_t core, uint32_t value) override {
-        if (core >= cores_) {
-            return "completion: core index out of range";
-        }
-        const auto& v = virt_[core];
-        // Same strict-ordering UC path as the signal. This word releases the kernel to
-        // reuse its control register, so it must not be reordered ahead of anything -- and
-        // unlike the signal it says nothing about payload, only that the request retired.
-        tt::tt_metal::internal::noc_write_immediate(
-            device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.completion_addr,
-            byte_span(&value, sizeof(value)));
-        return {};
-    }
-
-    uint32_t read_doorbell(uint32_t core) override {
-        if (core >= cores_) {
-            return 0;
-        }
-        const auto& v = virt_[core];
-        return tt::tt_metal::internal::noc_read_reg_u32(
-            device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr);
-    }
-
-    std::vector<uint8_t> read_payload(uint32_t core, uint32_t bytes, uint32_t src_l1) override {
-        if (core >= cores_) {
-            return {};
-        }
-        const auto& v = virt_[core];
-        // Non-posted PCIe read, 22.5 ns/byte. Verification only -- never on a data path.
-        return to_u8(tt::tt_metal::internal::noc_read(
-            device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y),
-            (src_l1 != 0) ? src_l1 : layout_.payload_addr, bytes));
-    }
-
-    uint32_t read_reg32(uint32_t core, uint64_t addr) override {
-        if (core >= cores_) {
-            return 0;
-        }
-        const auto& v = virt_[core];
-        return tt::tt_metal::internal::noc_read_reg_u32(
-            device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), addr);
-    }
-
-    std::string describe() const override {
-        std::ostringstream o;
-        o << "device " << device_id_ << " (noc_write payload chunked at " << max_host_write()
-          << " B + noc_write_immediate doorbell, no membar)";
-        return o.str();
-    }
-
-private:
-    uint32_t device_id_;
-    L1Layout layout_;
-    uint32_t cores_;
-    std::vector<CoreCoord> virt_;
-};
-
-// ONE H2DSocket PER T6 CORE. The set is built once, in the constructor, on ONE thread --
-// construction allocates a device config buffer and pins a host ring per core, and neither
-// is something to be doing while workers are running. After that the sockets are only ever
-// touched through write_payload(), and WHICH THREAD CALLS IT IS THE CALLER'S CONTRACT: this
-// class does not lock, because a lock here would hide exactly the ownership bug it exists
-// to make impossible. See the header.
 class H2DSocketDeliverer final : public Deliverer {
 public:
     H2DSocketDeliverer(
@@ -229,16 +62,16 @@ public:
         mesh_(std::move(mesh)), layout_(layout), cores_(cores), cfg_(cfg) {
         device_id_ = static_cast<uint32_t>(mesh_->get_devices()[0]->id());
         pre_acked_.assign(cores, 0);
-        const auto mode = cfg_.device_pull ? tt::tt_metal::distributed::H2DMode::DEVICE_PULL
-                                           : tt::tt_metal::distributed::H2DMode::HOST_PUSH;
+        // Unconditional: there is no config that selects HOST_PUSH, and no flag that sets one.
+        const auto mode = tt::tt_metal::distributed::H2DMode::DEVICE_PULL;
         sockets_.reserve(cores);
         virt_.reserve(cores);
         for (uint32_t i = 0; i < cores; ++i) {
             const CoreCoord logical{i % grid_width, i / grid_width};
-            // LOGICAL coords here, unlike DeviceDeliverer. H2DSocket does the
-            // logical->virtual translation itself (tt-metal h2d_socket.cpp:305); handing it
-            // a translated coord would translate twice and name a different tile. The
-            // virtual coords below are for the doorbell and the readback only.
+            // logical coords here, unlike DeviceDeliverer. H2DSocket does the
+            // logical->virtual translation itself; handing it a translated coord
+	    // would translate twice and name a different tile. The virtual coords
+	    // below are for the doorbell and the readback only.
             virt_.push_back(mesh_->get_devices()[0]->virtual_core_from_logical_core(
                 logical, tt::CoreType::WORKER));
             sockets_.push_back(std::make_unique<tt::tt_metal::distributed::H2DSocket>(
@@ -258,51 +91,23 @@ public:
                 std::cerr << "ring aliasing needs a region base and none was given, so there "
                              "is nothing to alias onto. Delivery keeps the RX-arena memcpy.\n";
             } else if (const std::string e = map_rings(); !e.empty()) {
-                // FATAL, NOT A FALLBACK -- corrected 2026-08-27.
-                //
-                // This used to announce and carry on with the memcpy path, on the reasoning
-                // that a working measurement beats none. That reasoning was wrong, and the
-                // comment sitting here said why in its own next sentence: "a run that
-                // silently fell back would be attributed to the aliasing it never used."
-                //
-                // It is worse than silent. run_point() captures the binary's stdout AND
-                // stderr into a shell variable and prints only its own PASS line, so a whole
-                // campaign would come back labelled aliased, be filed under the same CSV
-                // name as a real one, and there would be no column to tell them apart.
-                // Found by sizing the ring one page too large: every aliased run would have
-                // fallen back with nothing but a swallowed line to say so.
-                //
-                alias_error_ = "the rings could not be mapped: " + e;
-                std::cerr << alias_error_ << "\n";
+                throw std::runtime_error("h2d-alias: the rings could not be mapped: " + e);
             } else {
                 alias_on_ = true;
-                std::cerr << "H2D ring aliasing ON for " << cores_ << " cores; the peer must "
-                             "RMA into the ring and payload must equal fifo_size.\n";
+                std::cerr << "H2D ring aliasing ON for " << cores_ << " cores, fifo " << cfg_.fifo_size
+                          << " B; the peer must RMA into the ring, and "
+                             "fifo_size must be an exact multiple of the payload -- that "
+                             "multiple is the send window.\n";
             }
         }
     }
 
     ~H2DSocketDeliverer() override {
-        // BEFORE the sockets are destroyed. ~H2DSocket() unlinks the shm, and unmapping after
-        // that is a use of a name that no longer resolves; the mapping itself would survive,
-        // but tearing down in the wrong order is how this class would start leaking a mapping
-        // per run without anything failing.
         unmap_rings();
     }
 
-    // The socket is page-granular and set_page_size() is a STATEFUL operation both sides
-    // must perform in lockstep (tt-metal h2d_socket.cpp:685 and socket_api.h:246), so it
-    // cannot be re-set per message. Defaulting to the PCIe alignment buys the finest legal
-    // grain, which is what a variable-length sweep needs; a caller who knows its shard size
-    // should say so and waste fewer tail bytes.
-    //
-    // ASKED FOR, NOT PROBED, AND NOT HARD-CODED. An earlier version called set_page_size()
-    // in a loop from 4 B upward and caught the throw -- which works, and emits a TT_FATAL
-    // log line per rejected size per socket: 4 x 109 = 436 lines of "Page size must be
-    // PCIE-aligned" in front of a run that succeeded. A probe whose failures are logged by
-    // the callee is not a quiet probe. hal::get_pcie_alignment() is public API and is the
-    // same value h2d_socket.cpp:378 uses to validate, so this cannot disagree with it.
     uint32_t page_size_for() const {
+        // page size must be PCIe aligned using hal::get_pcie_alignment()
         if (cfg_.page_size != 0) {
             return cfg_.page_size;
         }
@@ -317,110 +122,79 @@ public:
             return "h2d-socket: payload is not a multiple of the socket page size";
         }
 
-        // THE DESTINATION HANDOFF, AND IT MUST PRECEDE THE ADVERTISEMENT.
-        //
         // On this path the host does not write the payload into L1 -- the receiver kernel
-        // does, after it sees the page. So the effective address has to reach the kernel
+        // does (H2D-Pull), after it sees the page. So the effective address has to reach the kernel
         // before the page does. Both writes go out on the strict-ordered UC path to the same
         // tile, and the socket's bytes_sent update is what releases the kernel, so writing
         // this first is the whole ordering argument. Reversed, the kernel would write this
-        // message's payload to the PREVIOUS message's address, with nothing reporting it.
+        // message's payload to the previous message's address, with nothing reporting it.
         //
-        // Refused rather than ignored when the layout has nowhere to put it: a store that
-        // silently landed at the kernel's compile-time address would look like the feature
-        // working. See kernels/t6_host_pull.cpp.
+        // Stores are not supported: the pull kernel signals signal_addr, wait_delivered()
+        // polls the socket's bytes_acked, and nothing advances either.
         if (dst_l1 != 0) {
-            if (layout_.dest_word_addr == 0) {
-                return "h2d-socket: this build has no receive-SCR word in its L1 layout, so a "
-                       "store cannot be handed to the receiver kernel";
-            }
-            // A STORE ON THE SOCKET PATH REQUIRES THE RING TO BE THE ARENA.
-            //
-            // The bytes have to already sit at `dst_l1` within the ring, because that offset
-            // is what the receive SCR names and what the core will read. Without aliasing the
-            // host would have to memcpy them there -- and H2DSocket::write() places at the
-            // ring's own write pointer, not at an offset we choose, so there is no call that
-            // does it. Refused rather than approximated.
-            if (!alias_on_) {
-                return "h2d-socket: a store needs the aliased ring, which could not be mapped. "
-                       "Unaliased, the payload is memcpy'd to the ring's write pointer and cannot "
-                       "be placed at the destination offset the "
-                       "receive SCR names.";
-            }
-            // THE RECEIVE INSTRUCTION. One 8-byte strict-ordered UC write carrying the offset
-            // and the length -- the opcode is implied by the register. It must precede
-            // anything that releases the core, which on this path it does: nothing else is
-            // written after it, and the core is polling this very word.
-            const uint64_t scr = rx_scr_encode(dst_l1, bytes);
-            const auto& v = virt_[core];
-            tt::tt_metal::internal::noc_write_immediate(
-                device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.dest_word_addr,
-                byte_span(&scr, sizeof(scr)));
-            // NOTHING ELSE TO DO. The bytes are already in the ring (the peer RMA'd them
-            // there), and the core finds them from the SCR rather than from bytes_sent. The
-            // socket's page bookkeeping is not in the addressing path at all here.
-            return {};
+            return "h2d-alias: store completion is not implemented";
         }
 
-        // ONE write() PER MESSAGE, not one per page: write() takes a page COUNT and issues a
-        // single memcpy (DEVICE_PULL) or one TLB write (HOST_PUSH) plus exactly one
-        // bytes_sent update, whatever the count. Looping per page here would multiply the
-        // doorbell by the page count and measure a bookkeeping artefact.
-        // SNAPSHOT BEFORE THE WRITE, so wait_delivered() has a reference point.
-        //
-        // Absolute arithmetic (expected * page_size) would be WRONG: push_bytes() and the
-        // device's socket_pop_pages() both add `fifo_size - fifo_curr_size` when a message
-        // wraps the ring, so bytes_acked does not advance by exactly one page per message.
-        // A delta does not care -- the wrap adjustment only ever ADDS.
-        //
-        // Safe because there is AT MOST ONE MESSAGE IN FLIGHT PER CORE: deliver_to_l1 calls
-        // write_payload -> ring_doorbell -> wait_delivered synchronously, and a core's socket
-        // is only ever touched by its owning thread. Pipeline this path and the delta stops
-        // being attributable and this has to become a real sequence number.
         pre_acked_[core] = sockets_[core]->bytes_acked_snapshot();
 
-        // === ALIASED PATH — the bytes are ALREADY here ==================================
-        //
-        // The peer RMA'd this payload straight into the ring, so there is nothing to copy;
-        // all that is owed is the notification tt-metal's write() would have sent after its
-        // memcpy. This is the entire point of the exercise: on this branch the payload
-        // crosses host RAM exactly once, written by the NIC, and is then read by the device.
-        //
-        // THE FIXED-OFFSET REQUIREMENT IS CHECKED, NOT TRUSTED. The peer writes to a fixed
-        // offset (the RX arena base), so the ring's write pointer must be back at 0 every
-        // time. h2d_socket.cpp:663-667 wraps write_ptr_ to 0 only when a message exactly
-        // fills the ring -- `write_ptr_ + num_bytes >= fifo_curr_size_` taking the equality
-        // case, leaving 0 + N - N = 0. A SHORT message advances the pointer without wrapping,
-        // and every subsequent RMA would then land at the wrong place while still reporting
-        // success. So a payload that is not exactly the ring size is refused by name here
-        // rather than silently corrupting the stream.
         if (alias_on_) {
             if (ring_[core] == nullptr) {
                 return "h2d-alias: ring for this core was never mapped";
             }
-            // ONLY WHEN THE SOCKET'S POINTER IS THE ADDRESSING MECHANISM. A store names its
-            // offset in the receive SCR and returns above, so it never reaches here; this
-            // guard belongs to the kOpSendUva path, where the device locates the bytes via
-            // read_ptr and the write pointer must therefore be back at 0.
-            if (bytes != cfg_.fifo_size) {
+
+            // The ring is now kNumAliasRingSlots * payload, and the pointer is SUPPOSED to sit at
+            // slot * payload between messages. What must still hold is that the ring is an
+            // exact multiple of the payload -- otherwise the wrap does not land on a slot
+            // boundary and h2d_socket.cpp:663-667 never sees the exact-fill case.
+            if (bytes == 0 || cfg_.fifo_size == 0 || (cfg_.fifo_size % bytes) != 0) {
                 std::ostringstream o;
-                o << "h2d-alias: payload " << bytes << " B must equal fifo_size "
-                  << cfg_.fifo_size << " B -- a short message leaves the ring's write pointer "
-                     "off zero and the peer's next RMA lands at the wrong offset. Size the "
-                     "socket to the run's payload.";
+                o << "h2d-alias: fifo_size " << cfg_.fifo_size << " B must be a non-zero exact "
+                  << "multiple of the payload " << bytes
+                  << " B -- the ring is the send window, "
+                     "and a partial slot leaves the write pointer off a slot boundary so the "
+                     "peer's next RMA lands somewhere the device will not read. Size the socket "
+                     "with kNumAliasRingSlots * payload.";
                 return o.str();
             }
-            // src is expected to BE the ring (the RX arena aliased onto it). Until the
-            // region-side aliasing lands, it will not be -- so this stays a check rather than
-            // an assumption, and names the mismatch instead of committing bytes that are
-            // somewhere else entirely.
-            if (src != ring_[core]) {
-                return "h2d-alias: the source is not this core's ring; the RX arena has not "
+
+            // source must be a slot of this core's ring. Was `src != ring_[core]`, which
+            // only admitted slot 0. The caller hands us region_.rx_slot(core, slot, length), so
+            // at depth > 1 this is legitimately ring + slot * payload.
+            if (src < ring_[core]) {
+                return "h2d-alias: the source is below this core's ring; the RX arena has not "
                        "been aliased onto it, so the payload is not where the device will look";
             }
+            const size_t slot_off = static_cast<size_t>(src - ring_[core]);
+            if ((slot_off % bytes) != 0 || slot_off + bytes > cfg_.fifo_size) {
+                std::ostringstream o;
+                o << "h2d-alias: the source is " << slot_off << " B into this core's ring, which "
+                  << "is not a " << bytes << " B slot boundary inside " << cfg_.fifo_size
+                  << " B -- the RX arena is not aliased onto the ring as expected";
+                return o.str();
+            }
+
+            // The peer RMA'd into slot (seq % depth). The device finds the payload through the
+            // socket's read pointer, which follows bytes_sent -- advanced one payload per
+            // delivery by commit_to_device(). Those two agree only if deliveries happen in
+            // slot order, which BankScanner::next_rx_slot_ enforces on the receive side.
+            //
+            // If that ordering is ever wrong -- a reordered RMA, a stolen job servicing out of
+            // turn, a depth mismatch between the three places that derive it -- the symptom
+            // without this check is the device reading a slot the pointer is not on: wrong
+            // payload bytes, no error anywhere. With it, it is one line naming both offsets.
+            const size_t expect_off = static_cast<size_t>(sent_[core] % cfg_.fifo_size);
+            if (slot_off != expect_off) {
+                std::ostringstream o;
+                o << "h2d-alias: OUT-OF-ORDER DELIVERY -- payload is at ring offset " << slot_off
+                  << " B but the socket's write pointer is at " << expect_off << " B (bytes_sent " << sent_[core]
+                  << ", fifo " << cfg_.fifo_size << ", payload " << bytes
+                  << "). The device would read the wrong slot. Deliveries must reach this "
+                     "function in ring order; see BankScanner::next_rx_slot_.";
+                return o.str();
+            }
+
             return commit_to_device(core, bytes);
         }
-        // === end aliased path ===========================================================
 
         try {
             sockets_[core]->write(const_cast<uint8_t*>(src), bytes / page_size_);
@@ -434,17 +208,9 @@ public:
         if (core >= cores_) {
             return "doorbell: core index out of range";
         }
-        // write() already advertised the payload by updating bytes_sent in the core's L1
-        // config buffer. When the kernel wakes on the socket that IS the doorbell and a
-        // second MMIO write is pure cost; when the kernel still needs an out-of-band length
-        // it is not. The flag decides, and the bench reports both.
-        if (cfg_.socket_is_the_doorbell) {
-            return {};
-        }
-        const auto& v = virt_[core];
-        tt::tt_metal::internal::noc_write_immediate(
-            device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr,
-            byte_span(&value, sizeof(value)));
+
+        // Nothing to write: the socket's own bytes_sent notification IS the doorbell here.
+        (void)value;
         return {};
     }
 
@@ -462,18 +228,8 @@ public:
         return {};
     }
 
-    uint32_t read_doorbell(uint32_t core) override {
-        if (core >= cores_) {
-            return 0;
-        }
-        const auto& v = virt_[core];
-        return tt::tt_metal::internal::noc_read_reg_u32(
-            device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr);
-    }
-
-    // VERIFICATION ONLY, AND IT MEANS NOTHING IN DEVICE_PULL. The payload is in pinned host
-    // RAM and stays there until a receiver kernel pulls it, so this reads an L1 that nothing
-    // has written. The bench refuses to claim a DEVICE_PULL pass on it.
+    // The payload is in pinned host RAM and stays there until a receiver kernel pulls it,
+    // so this reads an L1 that nothing has written. The bench refuses to claim a DEVICE_PULL pass on it.
     std::vector<uint8_t> read_payload(uint32_t core, uint32_t bytes, uint32_t src_l1) override {
         if (core >= cores_) {
             return {};
@@ -507,9 +263,8 @@ public:
         constexpr uint64_t kTimeoutNs = 5ull * 1000 * 1000 * 1000;
         const uint64_t t0 = now_ns_local();
         uint32_t spins = 0;
-        // POLL OUR OWN MEMORY, NOT THE DEVICE'S.
-        //
-        // The receiver posts bytes_acked into PINNED HOST RAM after its read barrier
+
+        // The receiver posts bytes_acked into pinned host memory after its read barrier
         // (socket_api.h socket_notify_sender), so this says exactly what the L1 doorbell
         // says -- the payload is in L1 -- with a local load instead of a non-posted PCIe
         // read. Polling device L1 costs ~1 us a sample and contends with the very payload
@@ -517,16 +272,9 @@ public:
         // other's memory and polls only its OWN, and the doorbell poll was the one place
         // this path broke it.
         //
-        // Unsigned delta, so the counter's own 32-bit wrap costs nothing to handle.
+        const uint32_t want = expected != 0 ? expected : page_size_;
         const uint32_t before = pre_acked_[core];
-        while (static_cast<uint32_t>(sockets_[core]->bytes_acked_snapshot() - before) < page_size_) {
-            // BACK OFF BETWEEN READS, BECAUSE THE READ IS NOT FREE AND NOT LOCAL.
-            //
-            // read_doorbell() is a non-posted PCIe read over the SAME link the
-            // receiver kernels are pulling payloads across. A tight poll from every worker
-            // thread contends with the transfers it is waiting for, inflating both the stage
-            // it is timing and its variance.
-	    //
+        while (static_cast<uint32_t>(sockets_[core]->bytes_acked_snapshot() - before) < want) {
             // The first read still happens immediately, so an already-delivered message costs
             // exactly one read. Only a genuine wait pays the backoff.
             for (uint32_t k = 0, n = 1u << (spins < 10 ? spins : 10); k < n; ++k) {
@@ -539,14 +287,14 @@ public:
             }
             if (now_ns_local() - t0 > kTimeoutNs) {
                 std::ostringstream o;
-                o << "h2d-socket: core " << core << " delivery stalled -- the receiver kernel is "
+                o << "h2d-socket: core " << core
+                  << " delivery stalled -- the receiver kernel is "
                      "not running, not draining, or was given the wrong socket config address ("
-                  << "bytes_acked " << sockets_[core]->bytes_acked_snapshot() << ", was " << before
-                  << ", needed +" << page_size_ << ")";
+                  << "bytes_acked " << sockets_[core]->bytes_acked_snapshot() << ", was " << before << ", needed +"
+                  << want << ", page_size " << page_size_ << ")";
                 return o.str();
             }
         }
-        (void)expected;
         return {};
     }
 
@@ -592,35 +340,15 @@ public:
     std::string describe() const override {
         std::ostringstream o;
         o << "device " << device_id_ << " (" << cores_ << " x H2DSocket "
-          << (cfg_.device_pull ? "DEVICE_PULL" : "HOST_PUSH") << ", fifo " << cfg_.fifo_size << " B, page "
-          << page_size_ << " B, doorbell " << (cfg_.socket_is_the_doorbell ? "socket" : "separate UC") << ")";
+          << "DEVICE_PULL, fifo " << cfg_.fifo_size << " B, page " << page_size_ << " B, doorbell socket)";
         return o.str();
     }
 
-    uint32_t page_size() const { return page_size_; }
-
-    // Maps each socket's own pinned host ring into THIS process a second time, so the ring's
-    // bytes can be reached by an address we control and registered with libfabric. The peer
-    // then RMAs its payload straight into the ring and the RX-arena memcpy stops existing.
-    //
-    // NOTHING IS SUBSTITUTED, ONLY ALIASED. The device pulls from a NOC address tt-metal
-    // derived when it pinned these pages (h2d_socket.cpp:108-117), so the pages must stay
-    // exactly the ones the socket allocated. A second mapping of the same shm object gives a
-    // second virtual address for the same physical pages; pointing the socket at different
-    // memory instead would leave the host writing one buffer while the device reads another,
-    // with nothing reporting it.
-    //
 
     // Returns "" on success; on failure the aliasing is left off and the caller keeps the
     // memcpy path, because a half-mapped set is worse than no mapping at all.
     std::string map_rings() {
-        // ORDERING, ENFORCED RATHER THAN COMMENTED. provision() pins the region
-        // (host_region.cpp, PinnedMemory::Create), and Transport::connect() registers it with
-        // fi_mr_reg. Both capture the PHYSICAL pages behind these addresses. MAP_FIXED after
-        // either one swaps different pages in while the pin and the MR go on naming the old
-        // ones -- so the NIC DMAs into memory that is no longer mapped here and the device
-        // pulls from pages nothing is writing. There is no error anywhere in that sequence;
-        // it surfaces as wrong payload bytes, if it surfaces at all. Hence a refusal.
+        // checks that physical pages are pinned for the MPI RMA window
         if (HostRegion::is_provisioned()) {
             return "h2d-alias: the region is already provisioned (and therefore pinned), so "
                    "overlaying the rings now would swap pages out from under the pin and the "
@@ -635,14 +363,13 @@ public:
             const auto d = sockets_[c]->populate_descriptor();
             // shm_size comes off the descriptor rather than fstat so that a layout change
             // upstream disagrees with us here rather than silently mapping a different span.
-            // THE OVERLAY TARGET: this core's RX arena, which is where the peer already
-            // writes. The region is sharded per core already, and there is one socket per
-            // core, so the correspondence is 1:1 and needs no new addressing scheme.
+            // this core's RX arena, which is where the peer already writes. The region is
+            // sharded per core already, and there is one socket per core, so the correspondence
+            // is 1:1 and needs no new addressing scheme.
             uint8_t* const slot = cfg_.alias_region_base + rx_arena_offset(c);
 
-            // BOUNDS, BECAUSE mmap ROUNDS THE LENGTH UP TO A PAGE. An arena slot is
-            // kArenaBytes and the next thing after it is the FOLLOWING core's TX arena, so a
-            // shm_size within a page of the slot size would overlay memory belonging to a
+            // An arena slot is kArenaBytes and the next thing after it is the following core's TX
+            // arena, so a shm_size within a page of the slot size would overlay memory belonging to a
             // different core -- and a Tensix pushing into a TX arena that has been silently
             // replaced is corruption with no error anywhere. Refused rather than clamped: a
             // clamp would map less than the ring and leave the tail landing off the end.
@@ -666,6 +393,7 @@ public:
             // exactly why this must run before the region is pinned and registered.
             void* p = ::mmap(slot, d.shm_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0);
             ::close(fd);  // the mapping holds its own reference; the fd is not needed after
+
             if (p == MAP_FAILED) {
                 unmap_rings();
                 return "h2d-alias: mmap(" + d.shm_name + ") failed: " + std::strerror(errno);
@@ -678,10 +406,10 @@ public:
             ring_[c] = static_cast<uint8_t*>(p) + d.data_offset;
             ring_bytes_[c] = d.shm_size;
             cfg_addr_[c] = d.config_buffer_address;
+
             // The connector state rides in the SAME shm we just mapped, at an offset the
             // descriptor publishes -- so aliasing the ring aliases this too, and commit_to_device()
             // can keep the host-side counter honest without reaching into H2DSocket's privates.
-            // Taken off the DESCRIPTOR rather than recomputed from fifo_size for the same reason
             // fifo_size is: the socket is the authority on the layout it actually built.
             connector_[c] = reinterpret_cast<tt::tt_metal::distributed::HDSocketConnectorState*>(
                 static_cast<uint8_t*>(p) + d.connector_state_offset);
@@ -749,7 +477,7 @@ public:
                       "bytes_sent moved within receiver_socket_md; this write targets the wrong word");
         sent_[core] += bytes;
 
-        // THERE ARE TWO bytes_sent, AND write() ADVANCES BOTH. This reimplemented only the
+        // 2 bytes_sent, and write() advances both. This reimplemented only the
         // device-side one for a long time, which is a bug that hides completely in the data path
         // and then costs a minute of teardown:
         //
@@ -758,16 +486,9 @@ public:
         //   notify_receiver() h2d_socket.cpp:680  pcie_writer(..., config_buffer + offsetof(...))
         //                                         -- DEVICE copy, in L1, what the kernel polls
         //
-        // The kernel only needs the device copy, so delivery was correct and measured 381 MB/s.
-        // But ~H2DSocket() calls barrier(), and barrier() reads back the HOST copy only. With it
-        // stranded at 0 while the device dutifully acked every page, the wait condition is
-        // `bytes_sent_ - bytes_acked != 0` on unsigned words -- 0 minus everything, which wraps
-        // and can never reach zero. Measured 2026-09-02 at 110 cores: 41 sockets x a 1 s timeout
-        // after a passing run, reporting "Bytes sent: 0, Bytes acknowledged: 86769664" (which is
-        // exactly --iters x page_size, i.e. the device had pulled all of it).
-        //
         // Host copy FIRST, device copy second: the device write is what releases the kernel, so
         // it stays the last store here, exactly as it was.
+        //
         if (connector_[core] != nullptr) {
             connector_[core]->bytes_sent = sent_[core];
         }
@@ -799,7 +520,6 @@ private:
     // Non-empty means the run was asked for aliasing and could not have it. Read by the
     // factory, which refuses to hand back a deliverer rather than let the run proceed on a
     // path the operator did not ask for.
-    std::string alias_error_;
     uint32_t ring_data_offset_ = 0;
     std::vector<uint8_t*> ring_;
     std::vector<size_t> ring_bytes_;
@@ -811,16 +531,6 @@ private:
 
 }  // namespace
 
-std::unique_ptr<Deliverer> make_device_deliverer(
-    tt::tt_metal::IDevice* device, uint32_t grid_width, uint32_t cores, L1Layout layout, std::string& error) {
-    error.clear();
-    if (device == nullptr) {
-        error = "no device";
-        return nullptr;
-    }
-    return std::make_unique<DeviceDeliverer>(device, grid_width, cores, layout);
-}
-
 std::unique_ptr<Deliverer> make_h2d_socket_deliverer(
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device, uint32_t grid_width, uint32_t cores,
     L1Layout layout, H2DSocketConfig cfg, std::string& error) {
@@ -828,22 +538,6 @@ std::unique_ptr<Deliverer> make_h2d_socket_deliverer(
     if (mesh_device == nullptr) {
         error = "no mesh device";
         return nullptr;
-    }
-    // A HOST_PUSH socket allocates a grid-wide sharded
-    // FIFO per socket, so `cores` of them need cores x fifo_size of L1 on every core. The
-    // allocator would fail somewhere inside the loop with a message about a buffer, not
-    // about this decision, so the arithmetic is done here where the cause is legible.
-    if (!cfg.device_pull) {
-        const uint64_t per_core = static_cast<uint64_t>(cores) * cfg.fifo_size;
-        constexpr uint64_t kUsableL1 = 1427ull << 10;  // 1.5 MiB less the allocator base
-        if (per_core > kUsableL1) {
-            std::ostringstream o;
-            o << "HOST_PUSH with one socket per core needs " << (per_core >> 20) << " MiB of L1 on EVERY core ("
-              << cores << " sockets x " << (cfg.fifo_size >> 10) << " KiB) against ~1,427 KiB usable. "
-              << "Use DEVICE_PULL, or lower --cores/--fifo.";
-            error = o.str();
-            return nullptr;
-        }
     }
 
     if (cfg.page_size != 0) {

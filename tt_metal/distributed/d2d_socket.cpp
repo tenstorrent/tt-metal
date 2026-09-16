@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/sockets/D2DSocket.hpp>
+#include <tt-metalium/experimental/sockets/d2d_socket.hpp>
 
 #include <algorithm>
 #include <sstream>
@@ -123,19 +123,13 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
 
     const L1Layout layout = s->l1_.l1_layout();
     std::string derr;
-    // Hoisted out of the branch below so the store guard can be given the ring it must bound
-    // against. 0 on the direct-write path, which has no ring.
-    uint32_t h2d_ring_bytes = 0;
-    if (cfg.h2d_socket) {
-        H2DSocketConfig scfg;
-        scfg.page_size = cfg.payload_bytes;
-        scfg.fifo_size = cfg.payload_bytes;
-        scfg.alias_region_base = HostRegion::reserved_base();
-        h2d_ring_bytes = scfg.fifo_size;
-        s->deliverer_ = make_h2d_socket_deliverer(s->mesh_device_, cfg.grid_width, cfg.cores, layout, scfg, derr);
-    } else {
-        s->deliverer_ = make_device_deliverer(device, cfg.grid_width, cfg.cores, layout, derr);
-    }
+    // Needed by the store guard, which must be given the ring it bounds against.
+    H2DSocketConfig scfg;
+    scfg.page_size = cfg.payload_bytes;
+    scfg.fifo_size = cfg.payload_bytes;
+    scfg.alias_region_base = HostRegion::reserved_base();
+    const uint32_t h2d_ring_bytes = scfg.fifo_size;
+    s->deliverer_ = make_h2d_socket_deliverer(s->mesh_device_, cfg.grid_width, cfg.cores, layout, scfg, derr);
     if (!s->deliverer_) {
         err = "H2D delivery unavailable: " + derr;
         return nullptr;
@@ -149,22 +143,6 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
                                                 s->clock_rate_detail_);
     }
 
-    // provision() REPORTS BY EXCEPTION; create() reports through `err`. A caller should not
-    // have to handle both, so the throw is converted here. It can fire on a first call --
-    // validate_shape() rejects a bad core count or grid, and the RLIMIT_MEMLOCK check rejects
-    // a pin this process cannot afford -- and both used to escape create() as an exception
-    // while every other failure returned nullptr.
-    //
-    // NOT AN ATTACH PATH, DELIBERATELY. The region is process-global by construction
-    // (host_region.cpp:32: the arena offsets stay compile-time constants because the Tensix
-    // kernel and the peer host compute the same ones), so provision() throws on a second call
-    // and names attached() as the alternative. Calling it here would be wrong: a second socket
-    // in this process cannot have its rings aliased -- map_rings() refuses once the region is
-    // pinned (host_deliver.cpp:623) and that refusal is FATAL by a 2026-08-27 correction,
-    // because an unaliased run would be filed as an aliased one. So the second socket is
-    // already refused above, at the deliverer, with a message that says why. Attaching here
-    // would route around that and hand back a socket that is quietly not the one asked for.
-    // One D2DSocket per process; recovery from a failed bring-up is a new process.
     HostRegion* region_p = nullptr;
     try {
         region_p = &HostRegion::provision(
@@ -218,27 +196,11 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
         }
     }
 
-    if (cfg.ladder_enabled) {
-        const uint32_t ladder_workers =
-            cfg.workers != 0 ? cfg.workers : std::max(1u, std::thread::hardware_concurrency());
-        const uint64_t recorded =
-            static_cast<uint64_t>(cfg.iters - cfg.warmup) * cfg.cores * cfg.payload_bytes;
-        s->ladder_.build(cfg.payload_bytes, recorded, ladder_workers);
-        s->ladder_.quiesced = cfg.ladder_quiesce;
-        s->ladder_.discarded_bytes = static_cast<uint64_t>(cfg.warmup) * cfg.cores * cfg.payload_bytes;
-    }
-
     SocketConfig sc;
-    sc.ladder = s->ladder_.enabled ? &s->ladder_ : nullptr;
-    sc.ladder_sync = (s->ladder_.enabled && s->ladder_.quiesced) ? &s->ladder_sync_ : nullptr;
-    // commented out b/c deadcode
-    // sc.payload_bytes = cfg.payload_bytes;
     sc.chip = cfg.chip;
     sc.cores = cfg.cores;
     sc.workers = cfg.workers;
     sc.pin = cfg.pin;
-    // commented out b/c deadcode
-    // sc.roundtrip = false;
     sc.send_window = cfg.send_window;
     sc.send_blocking = cfg.send_blocking;
     sc.ns_per_cycle = s->ns_per_cycle_;
@@ -246,17 +208,13 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     sc.warmup_msgs = static_cast<uint64_t>(cfg.warmup) * static_cast<uint64_t>(cfg.cores);
 
     s->inner_ = std::make_unique<D2H2H2DSocket>(
-        region, s->deliverer_.get(), HostTopology{cfg.host_ident, cfg.host_num, cfg.chips_per_host}, s->clock_,
-        sc, *s->primary_);
+        region, s->deliverer_.get(), HostTopology{cfg.host_ident, cfg.host_num, cfg.chips_per_host}, sc, *s->primary_);
 
     for (const auto& t : s->mesh_peers_) {
         s->inner_->add_peer(t.get());
     }
 
     {
-        // THE STORE FAULT DOMAIN. A store's offset arrives from another machine, so an
-        // executor that trusts it is an arbitrary-write primitive. L1Map supplies the L1
-        // bounds; the ring span is the socket's, so it is filled in here.
         D2H2H2DSocket::StoreGuard g = s->l1_.store_guard();
         g.ring_bytes = h2d_ring_bytes;
         s->inner_->set_store_guard(g);
@@ -287,23 +245,8 @@ std::vector<uint32_t> D2DSocket::sender_compile_args(
         iterations,
         opcode,
         flags,
-        // AWAIT THE DOORBELL. The kernel's control word is a single slot; without this it arms
-        // iteration i+1 before a host worker has read iteration i, and the duplicate filter
-        // drops the skipped message.
         await_completion ? 1u : 0u,
         l1_.completion_addr,
-        // ARGS 13 AND 14, AND THEY ARE NOT OPTIONAL. test_kernel.cpp declares both as
-        // unconditional function-scope constexpr (lines 166-167), so get_ct_arg<13>() is
-        // instantiated no matter what the probe is set to -- and get_ct_arg static_asserts its
-        // index against the size of THIS vector (compile_time_args.h:27). Stopping at 13 args
-        // made the D2D sender kernel fail its JIT compile, which a green host build cannot
-        // show: the assert fires on the device, at run time.
-        //
-        // verify_landing is 0 because it cannot be anything else here. The probe reads back
-        // into landing_addr, and D2DSocket's L1Map has no landing slot -- compute() ends at
-        // dest_word_addr. Arming it needs a new field there, which also moves control_bytes()
-        // from 280 to 352 and with it the fits() bound. A real gap against
-        // test_oneway_volume.cpp, which does carry --verify-landing.
         0u,  // verify_landing
         0u,  // landing_addr -- never read: the probe branch is if constexpr'd away
     };
@@ -332,9 +275,6 @@ uint64_t D2DSocket::store_faults() const { return inner_->store_faults(); }
 
 RunStats D2DSocket::collect() const {
     RunStats s = inner_->collect();
-    s.ladder = ladder_;
-    s.ladder.quiesce_clean = ladder_sync_.clean.load(std::memory_order_relaxed);
-    s.ladder.quiesce_degraded = ladder_sync_.degraded.load(std::memory_order_relaxed);
     return s;
 }
 

@@ -193,34 +193,6 @@ void validate_shape(uint32_t cores_in_use, HostTopology topology, HostRegion::Gr
 void publish_header(HostRegion& r, uint32_t cores_in_use, HostTopology topology, HostRegion::Grid grid,
                     uint32_t chip, uint64_t pinned_bytes, uint64_t io_base, uint32_t pcie_xy_enc);
 
-HostRegion& HostRegion::provision_unpinned(uint32_t cores_in_use, HostTopology topology, Grid grid) {
-    if (g_provisioned) {
-        throw std::runtime_error("HostRegion::provision_unpinned called after the region was provisioned");
-    }
-    validate_shape(cores_in_use, topology, grid);
-
-    uint8_t* const base = g_region;
-    const uint64_t want = pinned_bytes_for(cores_in_use);
-    (void)madvise(base, want, MADV_HUGEPAGE);
-    // Through the same helper as the pinned path, though nothing device-free can have an
-    // overlay: the two provisioning paths are kept from drifting on purpose, and a zeroing
-    // rule that holds in one and not the other is exactly the kind of divergence that makes
-    // a self-test stop being evidence about the real thing.
-    zero_around_aliases(base, want);
-
-    storage().base_ = base;
-    storage().pinned_bytes_ = want;
-    storage().cores_in_use_ = cores_in_use;
-    storage().chip_ = 0;
-    storage().topology_ = topology;
-    storage().grid_ = grid;
-    storage().device_ = DeviceView{};  // no device: io_base stays 0, and is_pinned() is false
-    storage().reset_banks_and_arenas();
-    publish_header(storage(), cores_in_use, topology, grid, 0, want, 0, 0);
-    g_provisioned = true;
-    return storage();
-}
-
 HostRegion& HostRegion::provision(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t chip,
@@ -228,7 +200,10 @@ HostRegion& HostRegion::provision(
     HostTopology topology,
     Grid grid) {
     if (g_provisioned) {
-        throw std::runtime_error("HostRegion::provision called twice in one process; use attached()");
+        // is_provisioned() answers "has it run?"; the region itself comes from the reference
+        // the first provision() returned.
+        throw std::runtime_error(
+            "HostRegion::provision called twice in one process; reuse the reference the first call returned");
     }
     validate_shape(cores_in_use, topology, grid);
 
@@ -354,13 +329,6 @@ void publish_header(HostRegion& r, uint32_t cores_in_use, HostTopology topology,
     h->device_io_base = io_base;
     h->pcie_xy_enc = pcie_xy_enc;
     __atomic_store_n(&h->magic, kRegionMagic, __ATOMIC_RELEASE);
-}
-
-HostRegion& HostRegion::attached() {
-    if (!g_provisioned) {
-        throw std::runtime_error("HostRegion::attached() before provision()");
-    }
-    return storage();
 }
 
 bool HostRegion::is_provisioned() { return g_provisioned; }

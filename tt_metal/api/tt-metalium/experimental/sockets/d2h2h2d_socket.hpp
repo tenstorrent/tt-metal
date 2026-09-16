@@ -58,12 +58,13 @@ enum : uint32_t {
 struct SocketConfig {
     // volume ladder, or null. Owned by the caller and must outlive the socket -- it is
     // handed straight to ScanConfig, which hands it to every worker.
-    const VolumeLadder* ladder = nullptr;
-    LadderSync* ladder_sync = nullptr;  // non-null only when quiescing
 
     // Payload. Needed only to size the receive-slot sweep: the number of
     // slots a message of this size leaves in an arena is what the scanner should look at, not
     // the maximum.
+    //
+    uint32_t payload_bytes = 0;
+
     uint32_t chip = 0;     // our own chip index, for the origin selector a notice carries
     uint32_t cores = 0;    // cores in use; bounds the stall dump and the local check
     uint32_t workers = 0;  // 0 => one per CPU, capped at cores
@@ -113,7 +114,7 @@ struct SocketConfig {
 //              (the TX and the RX delivery), so a producer watching the total sees its target
 //              met at double rate and never waits (measured 134/160, 149/160).
 //   delivered  bytes written into a Tensix L1.
-//   (home_done / replies REMOVED -- the round-trip barrier they served went with libfabric.
+//   (home_done / replies REMOVED -- the round-trip barrier they served is gone.
 //
 struct SocketCounters {
     std::atomic<uint64_t> routed_local{0};
@@ -190,12 +191,20 @@ public:
         // 0 disables the check, for a deliverer that has no ring: the direct-write path
         // addresses L1 itself and needs lo/hi alone.
         uint32_t ring_bytes = 0;
+        // THE RECEIVE SCR (Kimi #9). The pull kernel reads this word to learn where to write
+        // and how much, so a store that lands on it forges a pull order with a wire-supplied
+        // offset and length -- a second arbitrary-L1-write primitive, behind the guard that
+        // exists to stop the first. It was absent from the overlap clause entirely.
+        //
+        // Appended last rather than beside the other doorbell words because StoreGuard is
+        // aggregate-initialised positionally (test_oneway_volume.cpp, L1Map::store_guard());
+        // inserting it mid-struct would silently shift ring_bytes.
+        uint32_t dest_word_addr = 0;
     };
     void set_store_guard(const StoreGuard& g) { store_guard_ = g; }
     uint64_t store_faults() const { return store_faults_.load(std::memory_order_relaxed); }
 
-    D2H2H2DSocket(HostRegion& region, Deliverer* deliverer, HostTopology topo,
-                  ClockSync clock, SocketConfig cfg, Transport& transport);
+    D2H2H2DSocket(HostRegion& region, Deliverer* deliverer, HostTopology topo, SocketConfig cfg, Transport& transport);
     ~D2H2H2DSocket();
 
     D2H2H2DSocket(const D2H2H2DSocket&) = delete;
@@ -214,8 +223,6 @@ public:
         recording_.store(on, std::memory_order_relaxed);
         transport_.set_recording(on);
     }
-
-    Transport& transport() const { return transport_; }
 
     // Registered before open()
     void add_peer(Transport* t) { extra_peers_.push_back(t); }
@@ -263,12 +270,15 @@ private:
     void dump_transport(std::string& into) const;
 
     void return_credit(uint32_t origin_selector, uint64_t turnaround_ns);
+    // Posts the credit a REMOTELY-armed notice owes, deriving the origin selector from the job.
+    // Extracted 2026-09-14 so deliver_to_l1() can credit on EVERY exit rather than only on the
+    // success path -- see the CreditOnExit guard there.
+    void post_credit_for(const Job& job, uint64_t turnaround_ns);
 
     // ---- shared helpers --------------------------------------------------
     void fail(const std::string& what);
     void retire_tx(uint32_t core);
     static void add_sample(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns);
-    static void add_sample_with_size(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t amt);
     static void add_sample_with_payload(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t payload);
     static void add_sample_with_window(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns,
                                        uint64_t payload, uint64_t open_ns, uint64_t close_ns);
@@ -301,10 +311,15 @@ private:
         uint64_t t0 = 0;
         uint64_t deadline = 0;
         Transport* tp = nullptr;
-        // Which of the destination core's receive slots this sender owns. DERIVED from the
-        // source, not claimed -- so a slot has one lifetime source and needs no ticket, no
-        // tail pointer and no lap check.
-        // uint32_t rx_slot = 0;
+        // Which of the destination core's receive slots this message lands in. DERIVED from
+        // the sender's own message index (send_started_[core] % depth), not claimed with an
+        // atomic -- valid because two hosts means ONE sender per destination core, so nothing
+        // is contended. Claiming is only needed at three or more hosts.
+        //
+        // RESTORED 2026-09-14 for option B. The receiver dispatches slots in order
+        // (BankScanner::next_rx_slot_), which is what keeps the aliased ring's read pointer
+        // and this offset in agreement.
+        uint32_t rx_slot = 0;
     };
 
     struct CreditWatch {
@@ -318,7 +333,7 @@ private:
     std::vector<CreditWatch> credit_watch_;
 
     void sender_loop();
-    bool send_try_start(SendSlot& slot, uint32_t core, WorkerStats& ws, bool rec);
+    bool send_try_start(SendSlot& slot, uint32_t core, uint32_t depth, WorkerStats& ws, bool rec);
     bool send_poll(SendSlot& slot, WorkerStats& ws, bool rec);
 
     // Arms the RX notice for a slot the flush pass has just made remotely visible. Split out of
@@ -336,7 +351,6 @@ private:
     HostRegion& region_;
     Deliverer* deliverer_ = nullptr;
     HostTopology topo_{};
-    ClockSync clock_{};
     SocketConfig cfg_{};
     SocketCounters counters_;
     Transport& transport_;
@@ -345,7 +359,13 @@ private:
     std::vector<std::atomic<uint64_t>> delivered_per_core_;       // the value rdma_signal carries
     // Single delivery at a time per core.
     std::vector<std::mutex> deliver_m_;
-    std::vector<std::atomic<uint64_t>> notice_sent_;  // notices armed in the peer's bank
+    std::vector<std::atomic<uint64_t>> notice_sent_;
+    // MESSAGES DEQUEUED PER CORE, which is what consumes a receive slot. Distinct from
+    // notice_sent_, which counts notices POSTED and lags it: a message occupies its slot from
+    // the moment the payload is posted, not from when its notice goes out. Gating on
+    // notice_sent_ would let a second payload into a slot whose notice had not yet been sent.
+    // Written only by the sender thread; atomic so the stall dump can read it.
+    std::vector<std::atomic<uint64_t>> send_started_;  // notices armed in the peer's bank
     std::vector<std::atomic<uint64_t>> tx_retired_;   // the value rdma_completion carries
 
     // 0 idle, 1 credit-wait, 2 payload, 3 notice. Written by the sender thread, read by the
@@ -388,7 +408,7 @@ private:
     // sender_loop(): flushing only on an idle lap starves at high core counts, so a deadline
     // bounds credit latency by wall time instead of by whether this host happens to be idle.
     static constexpr std::chrono::microseconds kCreditFlushInterval{100};
-    std::chrono::steady_clock::time_point last_credit_flush_{};
+    std::chrono::steady_clock::time_point last_credit_flush_;
     std::atomic<uint64_t> credit_flushes_{0};
     // rx-side credit gate instrumentation. deliver_remote() only returns a credit
     // when the arriving ctrl word carries kFlagRemoteNotice.

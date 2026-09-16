@@ -48,13 +48,6 @@ BankScanner::BankScanner(HostRegion& region, ScanConfig cfg, ServiceFn service, 
         deques_.push_back(std::make_unique<Deque>());
     }
     stats_.resize(cfg_.workers);
-    // Every worker gets the shared config and the worker count BEFORE it can service
-    // anything, so ladder_note_message() never sees a half-initialised worker.
-    for (auto& w : stats_) {
-        w.ladder_cfg = cfg_.ladder;
-        w.ladder_sync = cfg_.ladder_sync;
-        w.ladder_workers = cfg_.workers;
-    }
     // kSeqNever, not 0: sequence 0 is a legitimate value a bank's FIRST message can
     // carry, and initialising to it would make that message look already-serviced.
     // ONE SEQUENCE PER (DIRECTION, CORE, SLOT). It was per (direction, core), which was
@@ -62,6 +55,11 @@ BankScanner::BankScanner(HostRegion& region, ScanConfig cfg, ServiceFn service, 
     // independent streams -- slot 2's sequence says nothing about slot 5's -- and sharing
     // one counter would drop a legitimate message as a duplicate whenever two slots
     // happened to carry the same sequence number.
+    next_rx_slot_.assign(cores, 0u);
+    rx_busy_ = std::vector<std::atomic<uint32_t>>(cores);
+    for (auto& b : rx_busy_) {
+        b.store(0u, std::memory_order_relaxed);
+    }
     for (auto& per_direction : last_seq_) {
         per_direction.assign(static_cast<size_t>(cores) * kRxNoticeSlots, kSeqNever);
     }
@@ -166,6 +164,13 @@ void BankScanner::run_job(uint32_t id, Job& job) {
         ws.hop[kHopStealWait].add(t_start - job.t_queued);
     }
     const uint64_t bytes = service_ ? service_(job, ws) : 0;
+    // RELEASED HERE, not at queue time and not by the owner specifically: a stolen job is
+    // serviced by a thief, and the core must stay claimed until the delivery this job carries
+    // has actually reached the device. Unconditional store rather than a compare: only one rx
+    // job per core exists, so this is the one that claimed it.
+    if (job.dir == Dir::Rx && job.core < rx_busy_.size()) {
+        rx_busy_[job.core].store(0u, std::memory_order_release);
+    }
     ws.found++;
     ws.bytes += bytes;
     serviced_.fetch_add(1, std::memory_order_relaxed);
@@ -200,25 +205,37 @@ void BankScanner::worker_loop(uint32_t id) {
 
         bool did_work = false;
 
-        // 1. scan my own shard, both directions
-        //
-        // TX and RX are scanned in the same pass over the same bank. Two passes would
+        // 1. scan my own shard, both TX & RX in the same pass over the same bank. Two passes would
         // double the cache traffic over the bank array for no benefit the line holding one is
         // already being pulled in when the other is read.
         if (has_shard) {
             const uint32_t dirs = cfg_.scan_rx ? 2u : 1u;
             for (uint32_t core = shard.first; core <= shard.last; ++core) {   // core
-                // THE RX SIDE IS A POOL NOW, so it is swept slot by slot. TX stays single:
-                // a core has one message outbound at a time whatever the topology, because
-                // its own depth is 1, so there is nothing to sweep there.
-                // ONE SLOT UNLESS THE POOL IS ARMED. Sweeping eight notice lines per core per
-                // lap when only slot 0 is ever written is pure added memory traffic in the
-                // hottest loop here -- and it would shift the very numbers measured.
-                const uint32_t slots = 1u;
+                // THE RX SIDE IS A POOL, swept slot by slot. TX stays single: a core has
+                // one message outbound at a time whatever the topology, so there is nothing
+                // to sweep there.
+                //
+                // This MUST equal kNumAliasRingSlots -- the value the aliased ring was sized with
+                // and the sender's window. Sweeping fewer than the sender uses loses messages
+                // outright: they arm a slot nobody reads. cfg_.rx_slots defaults to 1, so a
+                // caller that does not set it keeps the old behaviour exactly.
+                const uint32_t slots = cfg_.rx_slots ? cfg_.rx_slots : 1u;
                 for (uint32_t d = 0; d < dirs; ++d) {
                   const Dir dir = (d == 0) ? Dir::Tx : Dir::Rx;
                   const uint32_t slot_count = (dir == Dir::Rx) ? slots : 1u;
                   for (uint32_t slot = 0; slot < slot_count; ++slot) {
+                    // IN SLOT ORDER, ONE AT A TIME -- see next_rx_slot_ and rx_busy_ in the
+                    // header. An armed slot that is not the expected one is left alone, and no
+                    // new slot is taken while this core still has one in flight; the next lap
+                    // picks it up once its predecessor has reached the device.
+                    if (dir == Dir::Rx && slots > 1u) {
+                        if (slot != next_rx_slot_[core]) {
+                            continue;
+                        }
+                        if (rx_busy_[core].load(std::memory_order_acquire) != 0u) {
+                            continue;
+                        }
+                    }
                     const uint64_t ctrl = load_acquire(dir == Dir::Tx
                                                            ? region_.ctrl_tx(core)
                                                            : region_.rx_notice(core, slot));
@@ -240,8 +257,7 @@ void BankScanner::worker_loop(uint32_t id) {
                     }
 
                     const uint32_t seq = ctrl_sequence(ctrl);
-                    // ONE ARRAY, ONE STORE, AND ONLY THIS THREAD TOUCHES THIS ELEMENT. The
-                    // parallel `seen_` bitset this replaced was shared storage between
+                    // The parallel `seen_` bitset this replaced was shared storage between
                     // workers that owned disjoint cores, and losing one of its
                     // read-modify-writes re-serviced an already-delivered message. See
                     // kSeqNever in host_scan.hpp.
@@ -250,6 +266,12 @@ void BankScanner::worker_loop(uint32_t id) {
                         continue;
                     }
                     last_seq_[d][seq_idx] = seq;
+                    // accepted, so slot's turn is over. Advancing here rather than after
+                    // delivery is correct because the job is now queued in order; the deque
+                    // preserves that order and the device sees the payloads in ring order.
+                    if (dir == Dir::Rx && slots > 1u) {
+                        next_rx_slot_[core] = (slot + 1u) % slots;
+                    }
 
                     const uint64_t t_notice = now_ns();
 
@@ -261,17 +283,17 @@ void BankScanner::worker_loop(uint32_t id) {
                     job.sequence = seq;
                     job.t_notice = t_notice;
 
-                    // Snapshot the operands HERE, in the scan -- as close as possible to
+                    // Snapshot the operands here, in the scan -- as close as possible to
                     // the control word that vouched for them. A job that sits in a deque
                     // before being stolen could otherwise read operands the sender has
                     // already overwritten with its next message.
                     //
-                    // THE TWO DIRECTIONS CARRY OPERANDS DIFFERENTLY, and it is not an
-                    // inconsistency. A Tensix writes TX operands into real registers over
-                    // PCIe, where the bus orders them ahead of the trigger for free. A
-                    // remote host has no such guarantee, so an inbound notice packs its
-                    // operands into the same line as its control word and arrives as
-                    // one RMA -- the receiver cannot see the trigger without them.
+                    // the TX and RX carry operands differently. A t6 writes TX operands into
+		    // real registers over PCIe, where the bus orders them ahead of the trigger
+		    // for free. A remote host has no such guarantee, so an inbound notice
+		    // packs its operands into the same line as its control word and arrives as
+		    // one RMA -- the receiver cannot see the trigger without them.
+		    //
                     if (dir == Dir::Rx) {
                         // THIS SLOT'S notice line, not the core's. With a pool the operands
                         // live beside the control word that vouched for them, and reading
@@ -287,9 +309,9 @@ void BankScanner::worker_loop(uint32_t id) {
                         job.operand[2] = load_acquire(
                             reinterpret_cast<const volatile uint64_t*>(line + kNoticeOriginOffset));
                         job.operand_count = 3;
-                        // THE FOURTH WORD EXISTS ONLY FOR THE STORE FORMS, and the opcode in
-                        // word 0 is what says so. It arrived in the same indivisible transfer
-                        // as the control word, so there is nothing to order and nothing to
+                        // the 4th word exists exclusively for the store pseudo instruction, and the
+			// opcode in word 0 is what says so. It arrived in the same indivisible
+			// transfer as the control word, so there is nothing to order and nothing to
                         // wait for -- but reading it unconditionally would pick up whatever
                         // the previous message left in that word on a kOpSendUva notice, and
                         // a stale UVA is a store to a plausible wrong address.
@@ -299,7 +321,7 @@ void BankScanner::worker_loop(uint32_t id) {
                             job.operand_count = 4;
                         }
                     } else {
-                        // THE IMMEDIATE FORM HAS NO base/count -- those bits are its length --
+                        // the immediate pseudo instruction has no base/count -- those bits are its length --
                         // so its operand layout is fixed by the opcode instead: register 0 is
                         // the destination UVA, 2 the elapsed accumulator, 3 the origin core.
                         // Register 1 is not written by the kernel and is not read here.
@@ -372,6 +394,11 @@ void BankScanner::worker_loop(uint32_t id) {
                     //
                     // Queuing unconditionally is what creates stealable work: a pass that
                     // finds five armed banks leaves four for an idle worker to take.
+                    // CLAIM BEFORE QUEUING, so no lap can queue a second slot for this core
+                    // between the push and the service. Released in run_job() after service_().
+                    if (dir == Dir::Rx && slots > 1u) {
+                        rx_busy_[core].store(1u, std::memory_order_release);
+                    }
                     {
                         Deque& dq = *deques_[id];
                         std::lock_guard<std::mutex> g(dq.m);

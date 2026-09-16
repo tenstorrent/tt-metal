@@ -3,26 +3,22 @@
 
 // Cross-host clock synchronisation, run before the measurement starts.
 //
-// Cristian's algorithm over the bootstrap socket, taking the minimum-RTT sample:
+// Cristian's algorithm over the distributed context:
 //
-//     t0 = our clock;  send        -->
-//                                  <--  peer replies with t1 = its clock
-//     t2 = our clock
+//     t0 = our clock;  send  -->
+//                            <--  peer replies with t1 = its clock
+//     t2 = our clock;   rtt = t2 - t0;   offset = t1 - (t0 + rtt/2)
 //
-//     rtt    = t2 - t0
-//     offset = t1 - (t0 + rtt/2)
+// Only as good as the assumption that the path is symmetric, with error bounded by half the
+// RTT. The MINIMUM-RTT sample is kept rather than the mean -- least queueing is least abuse of
+// that assumption -- and uncertainty_ns is that half-RTT bound. It is reported alongside the
+// offset because a 3 us hop measured to +/- 12 us is not a measurement and the table has to say
+// so rather than print a confident number. A same_host sync skips all of this: the offset is
+// zero by construction, so estimating it would substitute measurement noise for a known value.
 //
-// The estimate is only as good as the assumption that the path is symmetric, and its
-// error is bounded by half the RTT. So the MINIMUM-RTT sample is kept rather than the
-// mean: the sample with the least queueing is the one where the symmetry assumption is
-// least abused. The bound is reported alongside the offset, because a one-way hop of
-// 3 us measured with a +/- 12 us bound is not a measurement and the table should say so
-// rather than print a confident number.
-//
-// This deliberately does NOT try to be PTP. Hardware timestamping would do far better,
-// but it needs NIC support this path cannot assume across both tcp and verbs.
-// What is here is honest about its own error, which is the property that matters for
-// deciding whether a cross-host hop number can be believed.
+// Deliberately NOT PTP -- hardware timestamping needs NIC support this path cannot assume
+// across both tcp and verbs. Being honest about its own error is what decides whether a
+// cross-host hop number can be believed.
 #pragma once
 
 #include <tt-metalium/distributed_context.hpp>
@@ -59,15 +55,11 @@ struct ClockSync {
     std::string describe() const;
 };
 
-// Both sides must call this at the same point in the sequence, and they must pass
-// opposite values of `initiator` -- one probes, the other answers. Deriving it from
-// is_server rather than from a separate flag is what keeps the two from both probing and
-// deadlocking.
-// The probe exchange runs over the distributed context, not over a socket: the OOB bootstrap
-// this used to borrow an fd from went with libfabric, and MPI has no fd to hand out.
-//
-// `peer` is the rank to sync against. `initiator` must be true on exactly one side of the pair
-// and false on the other -- both sides initiating deadlocks, neither produces no samples.
+// `peer` is the rank to sync against. `initiator` must be true on exactly ONE side of the
+// pair -- one probes, the other answers; both initiating deadlocks, neither initiating yields
+// no samples. Callers derive it from a rank comparison (self < peer). Both sides must call
+// this at the same point in their sequence. The exchange runs over the distributed context
+// rather than a socket: MPI has no fd to hand out.
 ClockSync sync_clocks(
     const tt::tt_metal::distributed::multihost::ContextPtr& ctx,
     tt::tt_metal::distributed::multihost::Rank peer,

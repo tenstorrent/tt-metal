@@ -3,11 +3,14 @@
 
 // The H2D leg: getting bytes out of a host RX arena and into a Tensix core's L1.
 //
-//   payload   noc_write()            Cluster::write_core, WC TLB window, Relaxed ordering.
-//                                    CHUNKED AT 32 KiB -- see kMaxHostWrite in the .cpp
+//   payload   noc_write()            Cluster::write_core -> UMD dma_write_to_device() when
+//                                    supports_dma_operations(chip, size) is true, else
+//                                    write_to_device(). CHUNKED AT 32 KiB -- see
+//                                    kMaxHostWrite in the .cpp.
 //
-//   doorbell  noc_write_immediate()  Cluster::write_core_immediate, UC window, STRICT
-//                                    ordering.
+//   doorbell  noc_write_immediate()  Cluster::write_core_immediate -> UMD
+//                                    write_to_device_reg(), the register path, plus
+//                                    wait_for_non_mmio_flush() on a remote chip.
 //
 #pragma once
 
@@ -69,11 +72,9 @@ public:
     virtual std::string ring_doorbell(uint32_t core, uint32_t value) = 0;    // rdma_signal
     virtual std::string ring_completion(uint32_t core, uint32_t value) = 0;  // rdma_completion
 
-    // Reads a core's doorbell back. Used by the round-trip mode to see the far core
-    // acknowledge, and to verify delivery happened at all.
-    virtual uint32_t read_doorbell(uint32_t core) = 0;
-
     // Returns an error string; empty on success, non-empty on timeout.
+    //
+    // `expected` is the message's byte count
     virtual std::string wait_delivered(uint32_t core, uint32_t expected) {
         (void)core;
         (void)expected;
@@ -104,21 +105,17 @@ public:
     virtual std::string describe() const = 0;
 };
 
-std::unique_ptr<Deliverer> make_device_deliverer(
-    tt::tt_metal::IDevice* device, uint32_t grid_width, uint32_t cores, L1Layout layout, std::string& error);
 
 struct H2DSocketConfig {
     uint32_t fifo_size = 1u << 20;  // per core. reserve_bytes blocks once this fills.
     uint32_t page_size = 0;         // 0 = use the PCIe alignment, i.e. finest legal grain.
-    bool device_pull = true;        // false = HOST_PUSH; see the L1 warning above.
-    bool socket_is_the_doorbell = true;
-    // RING ALIASING. each core's socket ring is mapped MAP_FIXED over
+    // h2d ring aliasing. each core's socket ring is mapped MAP_FIXED over
     // rx_arena_offset(core) within this region, so the peer's RMA -- which already targets
-    // exactly that offset (host_socket.cpp:664) -- lands directly in the ring and the
-    // RX-arena memcpy stops existing. The peer needs no change: same offsets, same MR, same
-    // key. Requires fifo_size == the payload size; see write_payload().
+    // exactly that offset -- lands directly in the ring and the RX-arena memcpy stops
+    // existing. The peer needs no change: same offsets, same MR, same key. Requires
+    // fifo_size == the payload size; see write_payload().
     //
-    // MUST BE SET BEFORE THE REGION IS PINNED AND REGISTERED. MAP_FIXED replaces the physical
+    // must be set before the region is pinned and registered. MAP_FIXED replaces the physical
     // pages behind these addresses, and an MR registered first would go on naming the old
     // ones -- the NIC then DMAs into pages that have been unmapped, with nothing reporting
     // it. The deliverer therefore has to be constructed ahead of Transport::connect().
@@ -137,15 +134,14 @@ std::unique_ptr<Deliverer> make_h2d_socket_deliverer(
 
 // The Tensix wall clock, as the host addresses it. Blackhole:
 // RISCV_DEBUG_REGS_START_ADDR (0xFFB12000) | 0x1F0. Duplicated here rather than included
-// because tensix.h is a device-side header; the value is pinned by the static_assert in
-// the kernel's own use of the macro, and a mismatch shows up as a nonsensical clock rate
+// because tensix.h is a device-side header; a mismatch shows up as a nonsensical clock rate
 // at startup rather than as a wrong latency later.
 constexpr uint64_t kWallClockLo = 0xFFB12000ull | 0x1F0ull;
 constexpr uint64_t kWallClockHi = 0xFFB12000ull | 0x1F8ull;
 
 // Measures cycles per second by sampling the wall clock around a known host interval.
-// A RATE, not an epoch -- which is all the differential timing design needs, and is why
-// there is no Cristian handshake here. Returns 0 if the sample looks implausible.
+// A RATE, not an epoch -- which is all the differential timing design needs. Returns 0
+// if the sample looks implausible.
 double measure_ns_per_cycle(Deliverer& deliverer, uint32_t core, uint32_t sample_ms, std::string& detail);
 
 }  // namespace tt::tt_metal::experimental

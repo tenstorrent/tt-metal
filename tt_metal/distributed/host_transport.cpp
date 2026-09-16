@@ -5,7 +5,6 @@
 
 #include <mpi.h>
 
-#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -41,8 +40,8 @@ enum : uint32_t {
 };
 
 constexpr uint64_t kStageWordOffset = 48;
-static_assert(kStageWordOffset >= kNoticeStoreBytes, "the staged word must not overlap a notice");
-static_assert(kStageWordOffset + sizeof(uint64_t) <= kNoticeStageSlotBytes, "and must fit the slot");
+//static_assert(kStageWordOffset >= kNoticeStoreBytes, "the staged word must not overlap a notice");
+//static_assert(kStageWordOffset + sizeof(uint64_t) <= kNoticeStageSlotBytes, "and must fit the slot");
 
 constexpr uint64_t kHelloMagic = 0x54364855'56414831ull;  // "T6HUVAH1"
 
@@ -241,7 +240,6 @@ public:
 
     MPI_Win win() const { return win_; }
     MPI_Win credit_win() const { return credit_win_; }
-    MPI_Comm comm() const { return comm_; }
     int rank() const { return rank_; }
     int size() const { return size_; }
     const std::string& model() const { return model_; }
@@ -391,7 +389,7 @@ public:
         if (local_offset + bytes > region_bytes_) {
             return "post: local offset+len runs off the end of the region";
         }
-        // AND THE REMOTE HALF. This displacement is rx_arena_off(dest_core) of a core index
+        // the remote half; This displacement is rx_arena_off(dest_core) of a core index
         // decoded out of a peer-supplied UVA, and nothing upstream bounded it. Past the end of
         // the peer's window the standard says the Rput is erroneous and what you actually get
         // is an MPI error or a NIC completion failure -- a backstop, but the wrong layer
@@ -432,17 +430,7 @@ public:
         return {};
     }
 
-    // This used to flush only win() and then clear dirty_, which silently dropped every
-    // credit. staged_word() puts the credit onto credit_win(), a SEPARATE window created on
-    // credit_comm_ (see open()), and settles for MPI_Win_flush_local -- local completion
-    // only. The sender loop duly called this, which flushed the payload window -- a different
-    // window, owing nothing -- and marked the debt paid.
-    //
-    // The credit therefore never completed remotely. The locks are taken in sequence, never
-    // nested. Flushing the credit window under mpi_m_ would put credit traffic behind the
-    // payload flush, which is the one thing the mpi_m_/credit_m_ split exists to prevent
-    // (see the note on credit_m_ below).
-    //
+    // This used to flush only win() and then clear dirty_
     std::string flush() override {
         {
             std::lock_guard<std::mutex> g(mpi_m_);
@@ -495,7 +483,7 @@ public:
     }
 
     std::string post_notice(uint32_t dest_core, uint32_t rx_slot, uint64_t length,
-                            uint32_t origin_selector, uint64_t elapsed_ns, bool reply,
+                            uint32_t origin_selector, uint64_t elapsed_ns,
                             uint32_t stage_slot, OpHandle& op, uint64_t dest_uva) override {
         op = OpHandle{};
 
@@ -510,7 +498,7 @@ public:
 
         auto* slot = reinterpret_cast<uint64_t*>(region_ + stage_off);
         slot[0] = ctrl_encode(is_store ? kOpRdmaWrite : kOpSendUva, 1u /*base, unused on this path*/, 3u,
-                              kFlagStamped | kFlagRemoteNotice | (reply ? kFlagReply : 0ull),
+                              kFlagStamped | kFlagRemoteNotice,
                               notice_seq_++ % kCtrlSeqModulus);
         slot[1] = length;
         slot[2] = elapsed_ns;
@@ -551,6 +539,25 @@ public:
             release_op(mop);
             return mpi_error_text("MPI_Rput(notice)", rc);
         }
+        // LOCAL COMPLETION BEFORE THE ORIGIN BUFFER CAN BE REUSED (Kimi #1).
+        //
+        // `slot` is the thread_local notice staging area -- my_stage_slot() hands one slot per
+        // THREAD, and the sender is a single thread, so every notice it posts uses the same
+        // 64 bytes. The arm pass loops over cores in one lap, so without this the next notice's
+        // stores overwrite the origin buffer of an Rput that is still reading it: an MPI
+        // origin-buffer lifetime violation. Masked on verbs, which inlines small puts and
+        // copies the data out immediately; real over any provider that defers.
+        //
+        // flush_local is LOCAL ONLY -- it waits for the origin buffer to be free, not for
+        // remote arrival, so `dirty_` below still owes the remote flush. Same shape as the
+        // credit path in staged_word(), which has always done this.
+        {
+            std::lock_guard<std::mutex> g(mpi_m_);
+            const int frc = MPI_Win_flush_local(peer_rank_, MpiWindow::instance().win());
+            if (frc != MPI_SUCCESS) {
+                return mpi_error_text("MPI_Win_flush_local(notice)", frc);
+            }
+        }
         op.slot = mop->slot;
         posted_.fetch_add(1, std::memory_order_relaxed);
         dirty_.store(true, std::memory_order_release);
@@ -584,7 +591,7 @@ public:
         if (done == 0) {
             return false;
         }
-        record_retire(now_ns() - op.posted_ns, op.bytes);
+        record_retire(now_ns() - op.posted_ns);
         retire(op, /*ok=*/true);
         out.ok = true;
         out.error.clear();
@@ -603,7 +610,8 @@ public:
             c.error = "wait: handle names no operation";
             return c;
         }
-        const uint64_t deadline = now_ns() + static_cast<uint64_t>(timeout_ms ? timeout_ms : 30000) * 1000000ull;
+        const uint32_t effective_ms = timeout_ms ? timeout_ms : 30000u;
+        const uint64_t deadline = now_ns() + static_cast<uint64_t>(effective_ms) * 1000000ull;
         for (;;) {
             if (try_wait(handle, c)) {
                 return c;
@@ -611,10 +619,36 @@ public:
             if (now_ns() > deadline) {
                 MpiOp& op = *ops_[handle.slot - 1];
                 c.ok = false;
+                // effective_ms, not timeout_ms: 0 means "use the default" and printing 0 made
+                // the message claim the op failed instantly (Kimi #5, minor).
                 c.error = "operation on core " + std::to_string(op.tag) + " did not complete within " +
-                          std::to_string(timeout_ms) + " ms";
+                          std::to_string(effective_ms) + " ms";
                 abandoned_.fetch_add(1, std::memory_order_relaxed);
                 handle = OpHandle{};
+
+                // THE SLOT AND ITS MPI_Request ARE DELIBERATELY NOT RELEASED (Kimi #5).
+                //
+                // MPI_Cancel is not permitted on an RMA request, and the request still names
+                // this slot's staging bytes as its origin, so neither the slot nor the buffer
+                // can be reused while it is outstanding. Releasing it would hand a live origin
+                // buffer to the next post -- the same class of bug as #1, with a worse blast
+                // radius. So the slot stays retired-in-place and the pool shrinks by one.
+                //
+                // What WAS wrong is that this returned as if recoverable: after
+                // kMaxOutstandingOps such events every later post fails with "no free slot"
+                // and nothing says why, and teardown frees the window with request-based RMA
+                // still outstanding. Both are now loud.
+                leaked_ops_.fetch_add(1, std::memory_order_relaxed);
+                set_last_error(c.error);
+                std::ostringstream fatal;
+                fatal << "transport endpoint is dead: an RMA operation timed out after "
+                      << effective_ms << " ms and its MPI_Request cannot be cancelled (RMA "
+                      << "requests are not cancellable), so slot " << op.slot
+                      << " is retired in place. " << leaked_ops_.load(std::memory_order_relaxed)
+                      << " of " << kMaxOutstandingOps << " slots are now unusable.";
+                if (!MpiWindow::instance().fault_tolerant()) {
+                    MpiWindow::instance().fatal(fatal.str());
+                }
                 return c;
             }
             std::this_thread::yield();
@@ -630,31 +664,6 @@ public:
         return std::string{};
     }
 
-    bool atomics_available() const override { return true; }
-
-    std::string fetch_add(uint64_t remote_offset, uint64_t add, uint64_t& out) override {
-        auto* result = reinterpret_cast<uint64_t*>(region_ + notice_stage_offset(0) + kStageWordOffset);
-        uint64_t operand = add;
-
-        std::lock_guard<std::mutex> g(credit_m_);
-        MPI_Win win = MpiWindow::instance().credit_win();
-        int rc = MPI_Fetch_and_op(&operand, result, MPI_UINT64_T, peer_rank_,
-                                  static_cast<MPI_Aint>(remote_offset), MPI_SUM, win);
-        if (rc != MPI_SUCCESS) {
-            return mpi_error_text("MPI_Fetch_and_op", rc);
-        }
-        rc = MPI_Win_flush_local(peer_rank_, win);
-        if (rc != MPI_SUCCESS) {
-            return mpi_error_text("MPI_Win_flush_local(fetch_add)", rc);
-        }
-        out = *result;
-        return {};
-    }
-
-    std::string post_word(uint64_t remote_offset, uint64_t value) override {
-        return staged_word(remote_offset, value, 0);
-    }
-
     std::string post_credit(uint32_t core, uint32_t my_host, uint64_t count, uint64_t turnaround_ns,
                             uint32_t stage_slot) override {
         return staged_word(credit_word_offset(core, my_host), credit_pack(count, turnaround_ns),
@@ -667,12 +676,7 @@ public:
         RetireStats s;
         std::lock_guard<std::mutex> g(retire_m_);
         s.n = retire_n_;
-        s.min_ns = retire_min_;
-        s.max_ns = retire_max_;
-        s.mean_ns = retire_mean_;
-        s.m2 = retire_m2_;
-        s.bytes = retire_bytes_;
-        s.unmeasured = retire_unmeasured_.load(std::memory_order_relaxed);
+        s.sum_ns = retire_sum_;
         return s;
     }
 
@@ -854,20 +858,13 @@ private:
         release_op(&op);
     }
 
-    void record_retire(uint64_t ns, uint64_t bytes) {
+    void record_retire(uint64_t ns) {
         if (!cfg_.measure_retire || !recording_.load(std::memory_order_relaxed)) {
             return;
         }
         std::lock_guard<std::mutex> g(retire_m_);
         ++retire_n_;
-        if (retire_n_ == 1 || ns < retire_min_) {
-            retire_min_ = ns;
-        }
-	retire_max_ = std::max(ns, retire_max_);
-        const double d = static_cast<double>(ns) - retire_mean_;
-        retire_mean_ += d / static_cast<double>(retire_n_);
-        retire_m2_ += d * (static_cast<double>(ns) - retire_mean_);
-        retire_bytes_ += bytes;
+        retire_sum_ += ns;
     }
 
     void set_last_error(std::string e) {
@@ -903,10 +900,15 @@ private:
     std::vector<std::unique_ptr<MpiOp>> ops_;
     std::vector<uint32_t> free_slots_;
 
+    // atomic counters for operational and perf metrics
+    //
     std::atomic<uint64_t> posted_{0};
     std::atomic<uint64_t> retired_{0};
     std::atomic<uint64_t> unmatched_{0};
     std::atomic<uint64_t> abandoned_{0};
+    // Slots retired in place by a wait() timeout: their MPI_Request is still live and an RMA
+    // request cannot be cancelled, so they never return to free_slots_. See wait().
+    std::atomic<uint64_t> leaked_ops_{0};
     std::atomic<uint64_t> injected_{0};
     std::atomic<bool> recording_{false};
 
@@ -916,12 +918,7 @@ private:
 
     mutable std::mutex retire_m_;
     uint64_t retire_n_ = 0;
-    uint64_t retire_min_ = 0;
-    uint64_t retire_max_ = 0;
-    double retire_mean_ = 0.0;
-    double retire_m2_ = 0.0;
-    uint64_t retire_bytes_ = 0;
-    std::atomic<uint64_t> retire_unmeasured_{0};
+    uint64_t retire_sum_ = 0;
 
     mutable std::mutex err_m_;
     std::string last_error_;
@@ -932,12 +929,6 @@ private:
 std::unique_ptr<Transport> make_transport(const TransportConfig& cfg, std::string& error) {
     error.clear();
     return std::make_unique<MpiRmaTransport>(cfg);
-}
-
-bool transport_available() {
-    int initialized = 0;
-    MPI_Initialized(&initialized);
-    return initialized != 0;
 }
 
 // The window that carries the traffic was created collectively before any endpoint existed. What

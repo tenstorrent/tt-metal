@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/sockets/D2H2H2DSocket.hpp>
+#include <tt-metalium/experimental/sockets/d2h2h2d_socket.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -23,8 +23,10 @@ namespace tt::tt_metal::experimental {
 struct L1Map {
     static constexpr uint32_t kStageSlotBytes = 16;
     static constexpr uint32_t kStageSlots = 5;
+
     // A doorbell gets its own cache line, so ringing one never disturbs a neighbour's meaning.
     static constexpr uint32_t kDoorbellBytes = 64;
+
     // The receive SCR. host_deliver.cpp writes it as ONE 8-byte strict-ordered UC store and
     // kernels/test_kernel_pull.cpp reads it back as a uint64_t, so 8 is exact, not a round-up.
     static constexpr uint32_t kDestWordBytes = 8;
@@ -59,16 +61,14 @@ struct L1Map {
     }
 
     D2H2H2DSocket::StoreGuard store_guard() const {
-        return D2H2H2DSocket::StoreGuard{payload_addr, l1_size, signal_addr, completion_addr, stop_addr};
+        return D2H2H2DSocket::StoreGuard{payload_addr,      l1_size,  signal_addr,
+                                         completion_addr,  stop_addr, /*ring_bytes=*/0u,
+                                         dest_word_addr};
     }
 
     uint32_t store_dest(uint32_t dest_offset, bool is_store) const {
         return is_store ? (payload_addr + dest_offset) : 0u;
     }
-    // commented out b/c deadcode -- never called, and byte-identical to store_dest() above
-    // uint32_t verify_at(uint32_t dest_offset, bool is_store) const {
-    //     return is_store ? (payload_addr + dest_offset) : 0u;
-    // }
 
     std::string describe() const;
 };
@@ -100,13 +100,10 @@ struct D2DSocketConfig {
 
     double ns_per_cycle_override = 0.0;
 
-    bool h2d_socket = true;
 
     bool measure_retire = false;
     bool same_host = false;
 
-    bool ladder_enabled = false;
-    bool ladder_quiesce = false;
 };
 
 class D2DSocket {
@@ -124,10 +121,7 @@ public:
     const ClockSync& clock() const { return clock_; }
     double ns_per_cycle() const { return ns_per_cycle_; }
     const std::string& clock_rate_detail() const { return clock_rate_detail_; }
-    const VolumeLadder& ladder() const { return ladder_; }
     HostRegion& region() const;
-    // commented out b/c deadcode
-    // D2H2H2DSocket& inner() const { return *inner_; }
     Transport* primary_transport() const { return primary_.get(); }
     Deliverer* deliverer() const { return deliverer_.get(); }
     uint32_t peer_count() const { return static_cast<uint32_t>(1 + mesh_peers_.size()); }
@@ -170,9 +164,6 @@ private:
     std::vector<std::unique_ptr<Transport>> mesh_peers_;
 
     ClockSync clock_{};  // 5
-
-    VolumeLadder ladder_{};
-    LadderSync ladder_sync_{};
 
     std::unique_ptr<D2H2H2DSocket> inner_;
 };

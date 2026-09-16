@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/sockets/D2H2H2DSocket.hpp>
+#include <tt-metalium/experimental/sockets/d2h2h2d_socket.hpp>
 
 #include <algorithm>
+#include <vector>
 #include <chrono>
 #include <cstring>
 #include <iostream>
 #include <sstream>
-#include <utility>
 
 namespace tt::tt_metal::experimental {
 
@@ -27,19 +27,19 @@ constexpr uint64_t kCreditWaitNs = 30ull * 1000 * 1000 * 1000;
 // Lifecycle
 // ===========================================================================
 
-D2H2H2DSocket::D2H2H2DSocket(HostRegion& region, Deliverer* deliverer, HostTopology topo,
-                             ClockSync clock, SocketConfig cfg, Transport& transport)
-    : region_(region),
-      deliverer_(deliverer),
-      topo_(topo),
-      clock_(std::move(clock)),
-      cfg_(cfg),
-      transport_(transport),
-      credit_out_(topo.num > 0 ? topo.num : 1),
-      delivered_per_core_(kProvisionedCores),
-      deliver_m_(kProvisionedCores),
-      notice_sent_(kProvisionedCores),
-      tx_retired_(kProvisionedCores) {
+D2H2H2DSocket::D2H2H2DSocket(
+    HostRegion& region, Deliverer* deliverer, HostTopology topo, SocketConfig cfg, Transport& transport) :
+    region_(region),
+    deliverer_(deliverer),
+    topo_(topo),
+    cfg_(cfg),
+    transport_(transport),
+    credit_out_(topo.num > 0 ? topo.num : 1),
+    delivered_per_core_(kProvisionedCores),
+    deliver_m_(kProvisionedCores),
+    notice_sent_(kProvisionedCores),
+    send_started_(kProvisionedCores),
+    tx_retired_(kProvisionedCores) {
     for (auto& per_host : credit_out_) {
         per_host = std::vector<std::atomic<uint64_t>>(kProvisionedCores);
     }
@@ -68,13 +68,13 @@ bool D2H2H2DSocket::open(std::string& err) {
     }
 
     ScanConfig sc;
-    sc.ladder = cfg_.ladder;
-    sc.ladder_sync = cfg_.ladder_sync;
     sc.workers = cfg_.workers;
     sc.pin_threads = cfg_.pin;
     // Delivery driven by RX control word, it is always on.
     sc.scan_rx = true;
-    // Only the slots this payload can use.
+    // only slots payload can use -- the same number the ring was sized with and the
+    // same number the sender windows on. A mismatch in either direction is silent data loss.
+    sc.rx_slots = kNumAliasRingSlots;
     // Stopping after `msgs * 2` serviced jobs counts two different things
     // in one budget, so a side receiving faster than it sends reaches the total while still
     // owing sends -- it stops, and its peer starves waiting for a tail that never comes.
@@ -129,14 +129,6 @@ void D2H2H2DSocket::add_sample(WorkerStats& ws, bool rec, uint32_t hop, uint64_t
     // includes the startup transient.
     if (rec) {
         ws.hop[hop].add(ns);
-    }
-}
-
-void D2H2H2DSocket::add_sample_with_size(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns,
-                                         uint64_t amt) {
-    if (rec) {
-        ws.hop[hop].add(ns);
-        ws.hop_wire_bytes[hop] += amt;
     }
 }
 
@@ -223,6 +215,34 @@ uint32_t D2H2H2DSocket::my_stage_slot() {
 
 uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t stage,
                                       uint64_t& stage_ns, bool rec) {
+    // credit on every exist not just successs
+    //
+    // This function has nine refusal paths that `return 0`, and the credit post used to sit at
+    // the very end, after all of them. So a refused message -- a bad length, a store fault, an
+    // L1 write error, a delivery timeout -- returned no credit, the sender's gate stayed shut
+    // for that core forever, and its producer blocked on a slot that would never free.
+    //
+    // Credit means "the slot is free, you may reuse it" -- which is TRUE after a refusal,
+    // because this side is not holding the slot. `delivered` is the counter that means the
+    // bytes landed. So crediting a refusal is not a false success; it is flow control telling
+    // the truth while `delivered` and first_error_ carry the failure.
+    //
+    // The guard fires on every path. The turnaround it reports is 0 unless the success path
+    // sets it, because a refusal has no meaningful turnaround to publish.
+    uint64_t credit_turnaround_ns = 0;
+    struct CreditOnExit {
+        D2H2H2DSocket* self;
+        const Job& job;
+        const uint64_t& turnaround;
+        bool armed;
+        ~CreditOnExit() {
+            if (armed) {
+                self->post_credit_for(job, turnaround);
+            }
+        }
+    } credit_guard{this, job, credit_turnaround_ns,
+                   (ctrl_flags(job.ctrl) & kFlagRemoteNotice) != 0};
+
     if (deliverer_ == nullptr) {
         fail("an RX notice arrived but no deliverer is configured -- the H2D leg cannot run");
         return 0;
@@ -237,7 +257,7 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         return 0;
     }
 
-    // THE EFFECTIVE ADDRESS. Zero for kOpSendUva, which takes the layout's fixed destination.
+    // effective address; Zero for kOpSendUva, which takes the layout's fixed destination.
     uint32_t dst_l1 = 0;
     if (ctrl_op_is_store(ctrl_opcode(job.ctrl))) {
         if (job.operand_count < 4) {
@@ -247,19 +267,45 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         const uint64_t dest_uva = job.operand[3];
         const uint32_t off = uva_offset(dest_uva);
         const char* why = nullptr;
+        // guard must be complete bfore trusted for use
+        //
+        // Every clause below is of the form `off < X + 4 && off + length > X`. With X == 0 that
+        // is true only for off < 4, so an UNSET field silently checks almost nothing -- the
+        // guard appears to be enforcing and is not. A store's offset comes from another
+        // machine, so a half-initialised guard is an arbitrary-write primitive with a
+        // reassuring name. Refuse rather than half-check.
+        if (store_guard_.hi == 0 || store_guard_.signal_addr == 0 || store_guard_.completion_addr == 0 ||
+            store_guard_.stop_addr == 0 || store_guard_.dest_word_addr == 0) {
+            store_faults_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream m;
+            m << "store fault: core " << job.core
+              << " -- the store guard is incomplete (lo=" << store_guard_.lo << " hi=" << store_guard_.hi
+              << " signal=" << store_guard_.signal_addr << " completion=" << store_guard_.completion_addr
+              << " stop=" << store_guard_.stop_addr << " dest_word=" << store_guard_.dest_word_addr
+              << "); a zero field checks nothing, so stores are refused rather than half-checked";
+            fail(m.str());
+            return 0;
+        }
         if (off < store_guard_.lo) {
             why = "below the allocator base -- that L1 belongs to tt-metal";
         } else if (off > store_guard_.hi || static_cast<uint64_t>(off) + length > store_guard_.hi) {
             why = "runs past the end of this core's L1";
         } else if ((off < store_guard_.signal_addr + 4 && off + length > store_guard_.signal_addr) ||
                    (off < store_guard_.completion_addr + 4 && off + length > store_guard_.completion_addr) ||
-                   (off < store_guard_.stop_addr + 4 && off + length > store_guard_.stop_addr)) {
+                   (off < store_guard_.stop_addr + 4 && off + length > store_guard_.stop_addr) ||
+                   // RX SCR, is 8 bytes wide, not four: the encoding packs the offset AND the
+		   // length into one uint64_t, and the pull kernel reads it as a uint64_t, so a
+		   // store clipping either half forges a pull order the kernel then executes.
+		   // sizeof(uint64_t) rather than L1Map::kDestWordBytes because L1Map lives in
+		   // d2d_socket.hpp, which depends on this header rather than the other way round.
+                   (off < store_guard_.dest_word_addr + sizeof(uint64_t) &&
+                    off + length > store_guard_.dest_word_addr)) {
             // a 'forged' doorbell releases a kernel for bytes that never arrived, which is why
             // this is a fault and not a clamp.
-            why = "overlaps a doorbell word (rdma_signal / rdma_completion / stop)";
+            why = "overlaps a doorbell word (rdma_signal / rdma_completion / stop / receive SCR)";
         } else if (store_guard_.ring_bytes != 0 &&
                    static_cast<uint64_t>(off) + length > store_guard_.ring_bytes) {
-            // PAST THE END OF THE RING, which lo/hi cannot see: they bound L1, and this offset
+            // past end of ring, which lo/hi cannot see: they bound L1, and this offset
             // is about to be handed to a kernel that reads pcie_data_addr + off out of the
             // aliased host ring. Under the sizing the socket path uses today -- one payload per
             // ring -- every store lands here, which is correct: a store needs the ring sized to
@@ -305,7 +351,10 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     // keeps this stage meaning "bytes are in L1" rather than "bytes are in host RAM and a core
     // will fetch them shortly".
     const uint64_t t1b = now_ns();
-    if (const std::string e = deliverer_->wait_delivered(job.core, static_cast<uint32_t>(bell)); !e.empty()) {
+    // length, not `bell`: wait_delivered() waits for THIS message's bytes to be acked.
+    // It was handed the doorbell value, which it could not use and discarded.
+    if (const std::string e = deliverer_->wait_delivered(job.core, static_cast<uint32_t>(length));
+        !e.empty()) {
         fail("delivery: " + e);
         return 0;
     }
@@ -317,8 +366,6 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     add_sample_with_window(ws, rec, stage, t2 - t0, length, t0, t2);
     stage_ns = t2 - t0;
     ws.delivered++;
-    // one for each message delivered -- the receiving side's contribution to the volume ladder.
-    ladder_note_message(ws, rec, length);
     counters_.delivered.fetch_add(1, std::memory_order_relaxed);
 
     // A remotely-loaded (armed) notice needs a credit returned: the sender cannot see that this slot is
@@ -331,21 +378,27 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         uint64_t expect_zero = 0;
         rx_first_ctrl_.compare_exchange_strong(expect_zero, job.ctrl, std::memory_order_relaxed);
     }
-    if ((ctrl_flags(job.ctrl) & kFlagRemoteNotice) != 0) {
-        rx_remote_notice_.fetch_add(1, std::memory_order_relaxed);
-        // origin selector -- it names the peer as well as its core, which is what
-        // a bare core index could not do once there was more than one peer.
-        const uint32_t origin_sel =
-            job.operand_count > 2 ? static_cast<uint32_t>(job.operand[2])
-                                  : t6_global_selector(topo_.ident, cfg_.chip, job.core, topo_.chips_per_host);
-        // The turn around travels with the credit.
-	// Entered vs returned: if these differ, the call is wedged inside, not failing.
-	rx_origin_sel_.store(origin_sel, std::memory_order_relaxed);
-	rx_credits_posted_.fetch_add(1, std::memory_order_relaxed);
-	return_credit(origin_sel, stage_ns);
-	rx_credits_done_.fetch_add(1, std::memory_order_relaxed);
-    }
+    // The real turnaround, published by the exit guard above. Set here and only here: every
+    // other path out of this function reports 0.
+    credit_turnaround_ns = stage_ns;
     return length;
+}
+
+// The credit a remotely-armed notice owes. Called by deliver_to_l1()'s exit guard, so it runs
+// on refusals too -- with turnaround 0, because a message that was not delivered has no
+// turnaround worth publishing.
+void D2H2H2DSocket::post_credit_for(const Job& job, uint64_t turnaround_ns) {
+    rx_remote_notice_.fetch_add(1, std::memory_order_relaxed);
+    // origin selector -- it names the peer as well as its core, which is what
+    // a bare core index could not do once there was more than one peer.
+    const uint32_t origin_sel =
+        job.operand_count > 2 ? static_cast<uint32_t>(job.operand[2])
+                              : t6_global_selector(topo_.ident, cfg_.chip, job.core, topo_.chips_per_host);
+    // Entered vs returned: if these differ, the call is wedged inside, not failing.
+    rx_origin_sel_.store(origin_sel, std::memory_order_relaxed);
+    rx_credits_posted_.fetch_add(1, std::memory_order_relaxed);
+    return_credit(origin_sel, turnaround_ns);
+    rx_credits_done_.fetch_add(1, std::memory_order_relaxed);
 }
 
 uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
@@ -373,7 +426,6 @@ uint64_t D2H2H2DSocket::service_rx(const Job& job, WorkerStats& ws, bool rec) {
     // that side report a confident zero.
     if (rec) {
         ws.timed_bytes += moved;
-        trace_add(ws, rec, timed_start_ns(), moved, stage_ns);
     }
     const uint64_t total_ns = carried_ns + stage_ns;
 
@@ -388,6 +440,17 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
     //
     // The immediate form publishes ONE operand register -- the destination UVA -- because its
     // length rides in the control word. Requiring two would reject it as malformed.
+    // kOpNop: ready (armed) with nothing to send. It still has to count as done and retire the bank,
+    // for the reason stated just above -- the producer blocks on tx_done. service_one() has
+    // already recorded the notice hop by the time we get here, which is the one measurement a
+    // nop exists to take, so there is nothing else for this path to do.
+    //
+    // ctrl_validate now refuses a nop carrying operands
+    if (ctrl_opcode(job.ctrl) == kOpNop) {
+        counters_.tx_done.fetch_add(1, std::memory_order_release);
+        retire_tx(job.core);
+        return 0;
+    }
     const bool store_imm = ctrl_op_has_imm(ctrl_opcode(job.ctrl));
     if (job.operand_count < (store_imm ? 1u : 2u)) {
         fail("TX message published fewer operands than its opcode needs");
@@ -435,12 +498,11 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
             return 0;
 
         case kHostReachLocal: {
-            // Symmetric operation is native here (see the header): one side's cores are
-            // sources, the other's are destinations, and each core therefore holds ONE L1
-            // buffer at a shared address instead of two. A UVA that resolves to THIS host
-            // names a core that is already a source, so delivering into it would put a second
-            // writer on the buffer that core is sending from -- overwriting a payload it had
-            // not finished sending.
+            // Symmetric operation one side's cores are sources, the other's are destinations,
+	    // and each core therefore holds ONE L1 buffer at a shared address instead of two.
+	    // A UVA that resolves to THIS host names a core that is already a source, so
+	    // delivering into it would put a second writer on the buffer that core is sending
+	    // from -- overwriting a payload it had not finished sending.
             //
             // Destinations are pre-filled with the complement of what should arrive, so a
             // payload delivered to the wrong place still verifies as correct wherever it did
@@ -504,7 +566,14 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
         }
     }
 
-    const uint32_t structural = cfg_.cores ? cfg_.cores : 1u;
+    // STRUCTURAL CEILING: cores x receive slots per core.
+    //
+    // Was `cfg_.cores` alone, which was correct while a destination core had 1 rx control
+    // word -- the window could then only be across cores. Option B gives each core
+    // kNumAliasRingSlots slots, so the ceiling is the product. Leaving it at cores
+    // capped in_flight at 1 for a single-core run and the per-core credit window never opened
+    const uint32_t rx_slots_per_core = kNumAliasRingSlots;
+    const uint32_t structural = (cfg_.cores ? cfg_.cores : 1u) * (rx_slots_per_core ? rx_slots_per_core : 1u);
     send_blocking_ = cfg_.send_blocking;
     if (send_blocking_) {
         if (cfg_.send_window != 0 && cfg_.send_window != 1) {
@@ -516,10 +585,11 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
     } else if (cfg_.send_window == 0) {
         send_window_ = structural;  // unset is not zero: the pre-knob behaviour
     } else if (cfg_.send_window > structural) {
-        err = "send window " + std::to_string(cfg_.send_window) + " exceeds cores in use (" +
-              std::to_string(structural) +
-              "); a destination core has ONE RX control word, so the window is across cores, "
-              "never within one";
+        err = "send window " + std::to_string(cfg_.send_window) + " exceeds cores x rx slots (" +
+              std::to_string(structural) + " = " + std::to_string(cfg_.cores ? cfg_.cores : 1u) +
+              " cores x " + std::to_string(rx_slots_per_core) +
+              " slots); the window spans cores AND a core's own receive slots -- it used to be "
+              "across cores only, when a destination core had a single RX control word";
         return false;
     } else {
         uint64_t depth = 0;
@@ -534,7 +604,10 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
             if (static_cast<uint64_t>(cfg_.send_window) > allowed) {
                 err = "send window " + std::to_string(cfg_.send_window) +
                       " exceeds what this endpoint's TX queue allows (" + std::to_string(allowed) +
-                      "; tx_attr->size=" + std::to_string(depth) + ")";
+                      // dead-code review
+                      // was "; tx_attr->size=" -- a libfabric endpoint attribute. The number is
+                      // the probed TX queue depth; name it that.
+                      "; endpoint tx depth=" + std::to_string(depth) + ")";
                 return false;
             }
         }
@@ -686,12 +759,12 @@ uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t
 // The sender, as a state machine
 // ===========================================================================
 //
-// One thread that posted a payload and waited on it inline held at most ONE RMA in flight on
-// the whole machine. The
-// payload must still COMPLETE before its notice is posted, so each message walks two phases and
-// the loop polls all of them instead of blocking on one.
+// One thread that posted a payload and waited on it inline held at most 1 RMA
+// in flight on the whole machine. The payload must still COMPLETE before its
+// notice is posted, so each message walks two phases and the loop polls all
+// of them instead of blocking on one.
 
-bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& ws, bool rec) {
+bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, uint32_t depth, WorkerStats& ws, bool rec) {
     if (slot.phase != SendSlot::kIdle) {
         return false;
     }
@@ -700,24 +773,28 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
     // Checked BEFORE dequeuing: a request pulled off and found unsendable would have to be
     // pushed back, reordering it against its own core's traffic.
     //
-    // CHEAPEST CHECK FIRST -- one relaxed atomic load for the common "nothing queued" lap.
+    // one relaxed atomic load for the common "nothing queued" lap.
     if (send_pending_[core].load(std::memory_order_acquire) == 0) {
         return false;
     }
-    const uint64_t already = notice_sent_[core].load(std::memory_order_acquire);
+    // window - was `credit_total(core) < notice_sent_[core]`, i.e. depth 1: message n+1
+    // could not start until n had been credited. Now up to `depth` may be outstanding, which
+    // is exactly the number of slots the aliased ring was sized for.
+    //
+    // started, not notice_sent_: a slot is occupied from the payload post onward.
+    const uint64_t already = send_started_[core].load(std::memory_order_acquire);
     if (already > 0) {
-        if (credit_total(region_, core) < already) {
+        // unsigned underflow guard. `already - credit` wraps to ~2^64 if credit ever exceeds
+        // started, which makes this >= depth forever: the core stops sending and never
+        // recovers. Credit CAN run ahead -- send_fail_slot() does not adjust notice_sent_, so a
+        // notice that became remotely visible but whose completion was abandoned leaves the
+        // peer crediting a message this side never counted
+        const uint64_t credited = credit_total(region_, core);
+        if (already > credited && already - credited >= depth) {
             if (!send_blocking_) {
+                ++ws.tx_credit_skips;
                 return false;
             }
-            // Safe only because this is the dedicated sender
-            // thread: the scan workers keep delivering while it sleeps, and delivering is what
-            // makes the peer return the credit. It reinstates the head-of-line stall on purpose
-            // -- that is the behaviour under measurement, not a defect.
-            //
-            // STATE 1 IS "credit-wait", and the stall dump advertises it by name. Without these
-            // two stores a sender parked here reports `idle` -- a dump that says the opposite of
-            // what is happening.
             sender_state_.store(1, std::memory_order_relaxed);
             const uint64_t dl = now_ns() + kCreditWaitNs;
             while (credit_total(region_, core) < already && now_ns() < dl) {
@@ -744,6 +821,9 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
         send_depth_.fetch_sub(1, std::memory_order_release);
     }
 
+    slot.rx_slot = static_cast<uint32_t>(send_started_[core].fetch_add(1, std::memory_order_release) %
+                                        (depth ? depth : 1u));
+
     add_sample(ws, rec, kHopSendQueueWait, now_ns() - r.t_queued);
 
     const uint64_t local_off = HostRegion::tx_arena_off(r.src_core);
@@ -759,10 +839,9 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
         retire_tx(r.src_core);
         return false;
     }
-    // ONE RECEIVE SLOT. The aliased ring's data region is exactly one payload, so the arena
-    // start is the only place a payload can land.
-    //
-    const uint64_t remote_off = HostRegion::rx_arena_off(r.dest_core) + store_off;
+
+    const uint64_t remote_off =
+        rx_slot_offset(r.dest_core, slot.rx_slot, static_cast<uint64_t>(r.length)) + store_off;
 
     // The endpoint for this message's destination, resolved on the posting thread.
     uint32_t why = kPeerOk;
@@ -847,8 +926,7 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
             const uint64_t t_close = now_ns();
             const uint64_t stage_ns = t_close - slot.t0;
             const bool timed = rec && slot.t0 >= timed_start_ns();
-            add_sample_with_size(ws, timed, kHopHostToRemoteHost, stage_ns,
-                                 static_cast<uint64_t>(slot.r.length) + kNoticeBytes);
+            add_sample(ws, timed, kHopHostToRemoteHost, stage_ns);
             if (timed) {
                 ws.hop_payload_bytes[kHopHostToRemoteHost] += slot.r.length;
                 ws.hop_window[kHopHostToRemoteHost].add(slot.t0, t_close);
@@ -864,10 +942,8 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
             }
             const uint64_t moved = slot.r.length;
             ws.bytes += moved;
-            ladder_note_message(ws, rec, moved);
             if (rec) {
                 ws.timed_bytes += moved;
-                trace_add(ws, rec, timed_start_ns(), moved, stage_ns);
             }
             counters_.tx_done.fetch_add(1, std::memory_order_release);
             retire_tx(slot.r.src_core);
@@ -885,17 +961,43 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
 void D2H2H2DSocket::send_fail_slot(SendSlot& slot) {
     transport_failed_.store(true, std::memory_order_release);
     sender_state_.store(0, std::memory_order_relaxed);
+    // tx_done ALWAYS advances: the producer blocks on it, so a message that failed must still
+    // count or the run reports a drain timeout instead of the actual error.
     counters_.tx_done.fetch_add(1, std::memory_order_release);
-    retire_tx(slot.r.src_core);
+
+    // retire_tx() rings rdma_completion, which frees the kernel to overwrite its TX arena. That
+    // arena is the ORIGIN BUFFER of the payload MPI_Rput. Releasing it while the Rput is still
+    // outstanding hands the NIC a buffer the device is rewriting -- corruption on the wire with
+    // nothing reporting it.
+    //
+    // kAwaitPayload is exactly the state where that is possible: the Rput is posted and has NOT
+    // reached local completion. Every other phase has already passed local completion
+    // (kPayloadLocal is set by send_poll when the payload retires locally), so the origin is
+    // free and retiring is safe.
+    //
+    // MPI_Cancel is not permitted on an RMA request, and completing is what just timed out. The choice
+    // is release-and-corrupt or hold-and-stall, and holding is correct -- the run is over either
+    // way (transport_failed_ is now set), and a stalled producer reaches the drain deadline with
+    // first_error_ reported, which is a diagnosis. Corruption is not.
+    if (slot.phase == SendSlot::kAwaitPayload) {
+        fail("payload op abandoned on core " + std::to_string(slot.r.src_core) +
+             " with its MPI_Rput still outstanding; NOT ringing rdma_completion, because that "
+             "would free the kernel to overwrite the TX arena the abandoned put still reads "
+             "from. An RMA request cannot be cancelled, so this core's producer stays blocked "
+             "and the run ends on the drain deadline with this error rather than with corrupt "
+             "payload bytes.");
+    } else {
+        retire_tx(slot.r.src_core);
+    }
     slot.phase = SendSlot::kIdle;
 }
 
 bool D2H2H2DSocket::send_arm_notice(SendSlot& slot) {
     sender_state_.store(3, std::memory_order_relaxed);
     if (const std::string e = slot.tp->post_notice(
-            slot.r.dest_core, /*rx_slot=*/0u, slot.r.length,
+            slot.r.dest_core, slot.rx_slot, slot.r.length,
             t6_global_selector(topo_.ident, cfg_.chip, slot.r.src_core, topo_.chips_per_host),
-            slot.r.accumulated_ns + (now_ns() - slot.t0), /*reply=*/false, my_stage_slot(),
+            slot.r.accumulated_ns + (now_ns() - slot.t0), my_stage_slot(),
             slot.notice_op, slot.r.dest_uva);
         !e.empty()) {
         fail("transport notice: " + e);
@@ -907,8 +1009,24 @@ bool D2H2H2DSocket::send_arm_notice(SendSlot& slot) {
 }
 
 void D2H2H2DSocket::sender_loop() {
-    std::vector<SendSlot> slots(kProvisionedCores);
+    // SEND DEPTH PER DESTINATION CORE
+    //
+    // Three things must agree on this number or the run corrupts silently, and all of them
+    // derive it from kNumAliasRingSlots:
+    //   * the aliased ring's size   -- scfg.fifo_size = kNumAliasRingSlots * bytes
+    //   * this window and the rx_slot the notice carries
+    //   * ScanConfig::rx_slots, how many slots the receiver sweeps
+    // payload_bytes == 0 yields 1, so a caller that does not set it keeps the old behaviour.
+    const uint32_t depth = kNumAliasRingSlots;
+
+    std::vector<SendSlot> slots(static_cast<size_t>(kProvisionedCores) * depth);
+    // Slot s of core c. Core-major so one core's slots are contiguous, which is what the
+    // per-core inner loops below walk.
+    const auto slot_at = [&](uint32_t core, uint32_t s) -> SendSlot& {
+        return slots[static_cast<size_t>(core) * depth + s];
+    };
     if (cfg_.measure_credit) {
+        // STILL PER CORE, not per slot. Correct only while depth == 1
         credit_watch_.assign(kProvisionedCores, CreditWatch{});
     }
     WorkerStats& ws = sender_stats_;
@@ -927,21 +1045,27 @@ void D2H2H2DSocket::sender_loop() {
         // POLL FIRST, so a completion frees its slot before the start pass looks at it -- the
         // other order costs a full lap of latency per message.
         for (uint32_t c = 0; c < n; ++c) {
-            if (slots[c].phase != SendSlot::kIdle) {
-                progressed |= send_poll(slots[c], ws, rec);
+            for (uint32_t sl = 0; sl < depth; ++sl) {
+                SendSlot& slot = slot_at(c, sl);
+                if (slot.phase != SendSlot::kIdle) {
+                    progressed |= send_poll(slot, ws, rec);
+                }
             }
         }
 
         to_flush.clear();
         uint32_t pending_payloads = 0;
         for (uint32_t c = 0; c < n; ++c) {
-            if (slots[c].phase != SendSlot::kPayloadLocal) {
-                continue;
-            }
-            ++pending_payloads;
-            Transport* const tp = slots[c].tp;
-            if (std::find(to_flush.begin(), to_flush.end(), tp) == to_flush.end()) {
-                to_flush.push_back(tp);
+            for (uint32_t sl = 0; sl < depth; ++sl) {
+                SendSlot& slot = slot_at(c, sl);
+                if (slot.phase != SendSlot::kPayloadLocal) {
+                    continue;
+                }
+                ++pending_payloads;
+                Transport* const tp = slot.tp;
+                if (std::find(to_flush.begin(), to_flush.end(), tp) == to_flush.end()) {
+                    to_flush.push_back(tp);
+                }
             }
         }
         // How deep the batch actually was. Counted before the flushes run, so it is the number
@@ -957,22 +1081,28 @@ void D2H2H2DSocket::sender_loop() {
             }
             fail("transport flush: " + e);
             for (uint32_t c = 0; c < n; ++c) {
-                if (slots[c].phase == SendSlot::kPayloadLocal && slots[c].tp == tp) {
-                    send_fail_slot(slots[c]);
+                for (uint32_t sl = 0; sl < depth; ++sl) {
+                    SendSlot& slot = slot_at(c, sl);
+                    if (slot.phase == SendSlot::kPayloadLocal && slot.tp == tp) {
+                        send_fail_slot(slot);
+                    }
                 }
             }
             progressed = true;
         }
 
         for (uint32_t c = 0; c < n; ++c) {
-            if (slots[c].phase != SendSlot::kPayloadLocal) {
-                continue;
+            for (uint32_t sl = 0; sl < depth; ++sl) {
+                SendSlot& slot = slot_at(c, sl);
+                if (slot.phase != SendSlot::kPayloadLocal) {
+                    continue;
+                }
+                const uint64_t t_at_peer = now_ns();
+                const bool at_peer_timed = rec && slot.t0 >= timed_start_ns();
+                add_sample_with_window(ws, at_peer_timed, kHopH2HPayloadAtPeer, t_at_peer - slot.t0,
+                                       slot.r.length, slot.t0, t_at_peer);
+                progressed |= send_arm_notice(slot);
             }
-            const uint64_t t_at_peer = now_ns();
-            const bool at_peer_timed = rec && slots[c].t0 >= timed_start_ns();
-            add_sample_with_window(ws, at_peer_timed, kHopH2HPayloadAtPeer, t_at_peer - slots[c].t0,
-                                   slots[c].r.length, slots[c].t0, t_at_peer);
-            progressed |= send_arm_notice(slots[c]);
         }
 
         // THE CREDIT PASS -- post -> the far side has ACTED, and the subtraction that turns it
@@ -1009,18 +1139,45 @@ void D2H2H2DSocket::sender_loop() {
         }
 
         for (uint32_t c = 0; c < n; ++c) {
-            if (slots[c].phase != SendSlot::kIdle) {
-                ++in_flight;
+            for (uint32_t sl = 0; sl < depth; ++sl) {
+                if (slot_at(c, sl).phase != SendSlot::kIdle) {
+                    ++in_flight;
+                }
             }
         }
-        for (uint32_t k = 0; k < n; ++k) {
+        // UP TO cores x depth STARTS PER LAP, not one per core.
+        //
+        // This loop ran `k < n` and started at most ONE message per core per lap (the inner
+        // loop breaks after the first idle slot). send_window_ is still the ceiling; this
+	// only stops the LOOP BOUND from being a second, tighter one.
+        const uint32_t start_attempts = n * (depth ? depth : 1u);
+        for (uint32_t k = 0; k < start_attempts; ++k) {
             if (in_flight >= send_window_) {
                 break;
             }
             const uint32_t c = (send_rr_ + k) % n;
-            if (send_try_start(slots[c], c, ws, rec)) {
-                progressed = true;
-                ++in_flight;
+            // FIRST IDLE SLOT of this core. At depth 1 this is exactly the old slots[c]; at
+            // greater depth it is what lets a second message start before the first retires.
+            // send_try_start() returns false on a non-idle slot, so trying them in order is
+            // also the correctness check.
+            bool started = false;
+            for (uint32_t sl = 0; sl < depth; ++sl) {
+                SendSlot& slot = slot_at(c, sl);
+                if (slot.phase != SendSlot::kIdle) {
+                    continue;
+                }
+                if (send_try_start(slot, c, depth, ws, rec)) {
+                    progressed = true;
+                    ++in_flight;
+                    started = true;
+                }
+                break;
+            }
+            // Nothing startable on this core -- queue empty, or the credit window is full.
+            // With one core that ends the pass rather than spinning depth times over the same
+            // refusal, which is what inflated the skip counter.
+            if (!started && n == 1u) {
+                break;
             }
         }
         send_rr_ = (send_rr_ + 1) % n;
@@ -1068,6 +1225,48 @@ void D2H2H2DSocket::sender_loop() {
             }
         }
 
+        // stop must termiante with work stuck in the queue
+        //
+        // The exit below needs send_depth_ == 0, and send_depth_ only falls when
+        // send_try_start() dequeues. But send_try_start() returns false BEFORE dequeuing when
+        // the credit gate is shut -- and a failed deliver_to_l1() on the peer skips
+        // return_credit(), so the gate can be shut forever. Queued requests were then never
+        // started, never failed and never retired: send_depth_ stayed non-zero, this loop never
+        // returned, sender_.join() hung, and first_error_ was never printed. One L1-write error
+        // or one wait_delivered timeout turned into a hung process with no diagnosis.
+        //
+        // So once stop is requested and the transport is known bad, drain what is left by
+        // FAILING it rather than sending it. Each request still counts as done and still
+        // retires its core, because the device producer is blocked on exactly that.
+        if (send_stop_ && transport_failed_.load(std::memory_order_acquire)) {
+            // Dequeue under the lock; retire OUTSIDE it. retire_tx() rings the kernel's
+            // completion word, which is a PCIe write -- holding send_m_ across one per queued
+            // message would block the producer for the whole drain, and calling fail() under it
+            // would put send_m_ -> err_mutex_ into the lock order for no reason.
+            std::vector<uint32_t> to_retire;
+            {
+                std::lock_guard<std::mutex> dg(send_m_);
+                for (uint32_t c = 0; c < send_q_.size(); ++c) {
+                    while (!send_q_[c].empty()) {
+                        const SendReq r = send_q_[c].front();
+                        send_q_[c].pop_front();
+                        send_pending_[c].fetch_sub(1, std::memory_order_release);
+                        send_depth_.fetch_sub(1, std::memory_order_release);
+                        to_retire.push_back(r.src_core);
+                    }
+                }
+            }
+            if (!to_retire.empty()) {
+                for (const uint32_t src : to_retire) {
+                    counters_.tx_done.fetch_add(1, std::memory_order_release);
+                    retire_tx(src);
+                }
+                fail("sender stopped with " + std::to_string(to_retire.size()) +
+                     " message(s) still queued and the transport already failed; they were "
+                     "retired unsent so the run reports the first error instead of hanging");
+            }
+        }
+
         std::unique_lock<std::mutex> g(send_m_);
         if (send_stop_ && send_depth_.load(std::memory_order_acquire) == 0) {
             return;
@@ -1093,34 +1292,20 @@ void D2H2H2DSocket::append_transport_stats(RunStats& s) const {
     s.window = send_window_;
     s.sender_shape = send_blocking_ ? "blocking" : "windowed";
 
+    // Two counters add, so folding peers needs no weighted mean and no special first case.
+    // d.sum is now a MEASURED total rather than mean*n back-computed from it, so latency_us
+    // for this hop is checkable against the count the same way every other hop's is.
     RetireStats rs{};
     for (Transport* t : peers_.all()) {
         const RetireStats one = t->retire_stats();
-        if (one.n == 0) {
-            continue;
-        }
-        if (rs.n == 0) {
-            rs = one;
-            continue;
-        }
-        const double delta = one.mean_ns - rs.mean_ns;
-        const uint64_t n = rs.n + one.n;
-        rs.m2 += one.m2 +
-                 delta * delta * static_cast<double>(rs.n) * static_cast<double>(one.n) / static_cast<double>(n);
-        rs.mean_ns += delta * static_cast<double>(one.n) / static_cast<double>(n);
-        rs.min_ns = std::min(rs.min_ns, one.min_ns);
-        rs.max_ns = std::max(rs.max_ns, one.max_ns);
-        rs.n = n;
+        rs.n += one.n;
+        rs.sum_ns += one.sum_ns;
     }
     if (rs.n > 0) {
         WorkerStats w{};
         Dist& d = w.hop[kHopH2HRetire];
         d.n = rs.n;
-        d.min = rs.min_ns;
-        d.max = rs.max_ns;
-        d.mean = rs.mean_ns;
-        d.m2 = rs.m2;
-        d.sum = static_cast<uint64_t>(rs.mean_ns * static_cast<double>(rs.n));
+        d.sum = rs.sum_ns;
         s.per_worker.push_back(w);
     }
 }
@@ -1131,9 +1316,6 @@ void D2H2H2DSocket::dump_transport(std::string& into) const {
         const TransportDiag d = tp_i->diag();
         m << "    transport[host " << tp_i->peer().host_id << "]: posted=" << d.posted
           << " retired=" << d.retired << " injected=" << d.injected
-          // commented out b/c the wedge markers are commented out; nothing sets the field any
-          // more, so printing it would claim word_phase=0 -- "no credit wedged" -- always.
-          // << " word_phase=" << d.word_phase
           << " outstanding=" << d.outstanding
           << " unmatched=" << d.unmatched << " abandoned=" << d.abandoned;
         if (d.outstanding != 0) {
@@ -1152,8 +1334,6 @@ RunStats D2H2H2DSocket::collect() const {
     const uint64_t t0 = timed_start_ns_.load(std::memory_order_relaxed);
     const uint64_t t1 = timed_end_ns_.load(std::memory_order_relaxed);
     s.timed_ns = (t0 > 0 && t1 > t0) ? (t1 - t0) : 0;
-    // The width the trace actually used, so the trace file is self-describing.
-    s.trace_shift = trace_shift();
     append_transport_stats(s);
     return s;
 }
@@ -1161,8 +1341,6 @@ RunStats D2H2H2DSocket::collect() const {
 std::string D2H2H2DSocket::stall_dump(const char* where) const {
     std::ostringstream m;
     m << "\n  [STALL @ " << where << "]\n";
-    // `home=` dropped: home_done is never incremented, so a stall dump reported it as 0
-    // and invited the reader to conclude the return leg had stalled. There is no return leg.
     m << "    tx_done=" << counters_.tx_done.load() << " delivered=" << counters_.delivered.load()
       << " routed_remote=" << counters_.routed_remote.load()
       << " errors=" << counters_.errors.load() << "\n";

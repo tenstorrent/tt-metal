@@ -3,10 +3,11 @@
 
 // The one region: a single statically-allocated, 2 MiB-aligned span that holds every
 // core's register bank and every core's TX/RX arenas, pinned once for the TT device and
-// registered once with libfabric.
+// exposed once in the MPI RMA window.
 //
 //   PinnedMemory::Create(...)  -> PCIDevice::map_for_dma -> TENSTORRENT_IOCTL_PIN_PAGES
-//   fi_mr_reg(...)             -> ibv_reg_mr             -> the NIC's own page pin
+//   MPI_Win_create(...)        -> ibv_reg_mr             -> the NIC's own page pin
+//                                 (under osc/ucx; see ucx-for-osc-not-pml)
 //
 // Neither allocates and neither moves the pages; both take a reference to the same
 // physical memory, which the kernel refcounts. That is what lets a Tensix core's posted
@@ -26,7 +27,6 @@
 
 #include <tt-metalium/experimental/sockets/internal/host_uva.hpp>
 #include <cstdlib>
-#include <string>
 #include <thread>
 
 #include <tt-metalium/experimental/sockets/internal/host_stats.hpp>  // now_ns()
@@ -49,15 +49,14 @@ struct DeviceView {
     uint32_t pcie_xy_enc = 0;
     uint64_t io_base = 0;  // device-side address of region byte 0
 
-    uint64_t io_addr(uint64_t offset) const { return io_base + offset; }
 };
 
 // Reading a control word the device wrote by DMA. An ordinary load is correct on x86 --
 // PCIe writes land in coherent memory -- but the compiler must be stopped from hoisting
 // it out of a poll loop, and the acquire is what orders the subsequent operand reads
-// after it. This is the load half of the ordering claim the whole protocol rests on:
-// PCIe posted writes from one source to one endpoint complete in order, so a visible
-// control word implies the operands behind it have landed.
+// after it. This is the load half of the ordering claim of the protocol: PCIe posted
+// writes from one source to one endpoint complete in order, so a visible control word
+// implies the operands behind it have landed.
 inline uint64_t load_acquire(const volatile uint64_t* p) {
     return __atomic_load_n(const_cast<const uint64_t*>(p), __ATOMIC_ACQUIRE);
 }
@@ -82,26 +81,6 @@ public:
         HostTopology topology,
         Grid grid);
 
-    // Provisions the region WITHOUT a device: same static storage, same offsets, same
-    // header, but no PinnedMemory and therefore no device view. Everything the host half
-    // does -- the sweep, the work stealing, the duplicate filter, UVA routing, and
-    // libfabric registration -- works against this exactly as it does against a pinned
-    // region, because none of it touches the device.
-    //
-    // This is the same region object and the same code path minus the
-    // two device-specific steps, which is what makes a self-test run on it evidence about
-    // the real thing. What it cannot exercise is the PCIe leg: nothing here arrives by
-    // posted write from a Tensix, so ordering that PCIe would guarantee is enforced by
-    // ordinary release stores instead. device().io_base stays 0 and is_pinned() is false,
-    // so a caller that needs the device view can tell.
-    static HostRegion& provision_unpinned(uint32_t cores_in_use, HostTopology topology, Grid grid);
-
-    bool is_pinned() const { return pinned_ != nullptr; }
-
-    // Attaches to an already-provisioned region in THIS process (the region is static,
-    // so the second caller in a process gets the same one). Verifies the published
-    // geometry before returning -- see verify_header().
-    static HostRegion& attached();
     static bool is_provisioned();
 
     uint8_t* base() const { return base_; }
@@ -110,31 +89,29 @@ public:
     // address is fixed from program start and does not depend on provision() having run.
     //
     // This exists for exactly one caller: H2D ring aliasing has to MAP_FIXED the sockets'
-    // rings over the RX arenas BEFORE provision() pins the region, because pinning captures
-    // the physical pages and MAP_FIXED afterwards would swap them out from under both the
+    // rings over the RX arenas before provision() pins the region. pinning captures the
+    // physical pages and MAP_FIXED afterwards would swap them out from under both the
     // pin and the MR -- leaving the NIC writing pages that are no longer there, with nothing
-    // reporting it. So the overlay runs before there is a HostRegion to ask, and base() is
-    // not yet available. Do not use this to bypass provisioning for anything else: the
-    // returned memory is unvalidated, unzeroed and unpinned until provision() runs.
+    // reporting it.
+    //
+    // The overlay runs before there is a HostRegion to ask, and base() is not yet available.
+    // Do not use this to bypass provisioning for anything else: the returned memory is
+    // unvalidated, unzeroed and unpinned until provision() runs.
     static uint8_t* reserved_base();
 
     // H2D ring aliasing MAP_FIXEDs an H2DSocket's own shm ring over rx_arena(core).
     static void declare_rx_alias(uint32_t core, uint64_t fill_bytes, uint64_t mapped_bytes);
     static void clear_rx_aliases();
+
     // How many bytes of `core`'s RX arena this region may write, and where the tail it may
     // write again begins. Both are kArenaBytes / kArenaBytes for an unaliased core, which is
     // what makes the fill loop below need no special case.
     static uint64_t rx_fill_bytes(uint32_t core);
     static uint64_t rx_tail_offset(uint32_t core);
 
-    static bool rx_is_aliased(uint32_t core) { return rx_fill_bytes(core) != kArenaBytes; }
-
     uint64_t pinned_bytes() const { return pinned_bytes_; }
     uint32_t cores_in_use() const { return cores_in_use_; }
     const DeviceView& device() const { return device_; }
-    HostTopology topology() const { return topology_; }
-    uint32_t chip() const { return chip_; }
-    Grid grid() const { return grid_; }
 
     RegionHeader* header() const { return reinterpret_cast<RegionHeader*>(base_); }
 
@@ -155,19 +132,16 @@ public:
     // large enough that only one message fits an arena.
     volatile uint64_t* rx_notice(uint32_t core, uint32_t slot) const { return reg(core, rx_slot_reg(slot)); }
 
-    // Needs the payload size because the pool is carved out of the
-    // single RX arena at runtime rather than being a fixed subdivision -- that is what keeps
-    // both the memory and the 1.5 MiB payload ceiling exactly where they were.
+    // Needs the payload size because the pool is from a single RX arena at runtime
+    // rather than being a fixed subdivision
     uint8_t* rx_slot(uint32_t core, uint32_t slot, uint64_t payload_bytes) const {
         return base_ + rx_slot_offset(core, slot, payload_bytes);
     }
 
-    // `head` is advanced by SENDERS with a one-sided atomic; `tail` is
-    // published by this host as it drains. A sender may use ticket n only while
-    // n - tail < slots. There is exactly one pair per core and NO per-sender state, which is
-    // what makes the receive cost independent of how many hosts exist.
-    volatile uint64_t* slot_head(uint32_t core) const { return reg_at(slot_head_offset(core)); }
-    volatile uint64_t* slot_tail(uint32_t core) const { return reg_at(slot_tail_offset(core)); }
+    // `head` is advanced by senders with a one-sided atomic; `tail` is published by this
+    // host as it drains. A sender may use ticket n only while n - tail < slots. There is
+    // exactly one pair per core and NO per-sender state, which is what makes the receive
+    // cost independent of how many hosts exist.
     uint8_t* tx_arena(uint32_t core) const { return base_ + tx_arena_offset(core); }
     uint8_t* rx_arena(uint32_t core) const { return base_ + rx_arena_offset(core); }
 
@@ -175,12 +149,6 @@ public:
     // the NIC (an MR-relative offset) and the Tensix kernel (a device IO address).
     static uint64_t tx_arena_off(uint32_t core) { return tx_arena_offset(core); }
     static uint64_t rx_arena_off(uint32_t core) { return rx_arena_offset(core); }
-    static uint64_t rx_slot_off(uint32_t core, uint32_t slot, uint64_t payload_bytes) {
-        return rx_slot_offset(core, slot, payload_bytes);
-    }
-    // Region-relative, for a sender addressing the PEER's window rather than its own.
-    static uint64_t slot_head_off(uint32_t core) { return slot_head_offset(core); }
-    static uint64_t slot_tail_off(uint32_t core) { return slot_tail_offset(core); }
 
     // Zeroes every control word and fills both arenas with the COMPLEMENT of what a
     // correct transfer would deposit. a destination pre-filled with the
@@ -191,9 +159,9 @@ public:
     void reset_banks_and_arenas(uint8_t fill = kArenaFill);
 
     // Compares the published header against this build's constants. The failure this
-    // catches is for chips_per_host: two parties with
-    // different geometry compute different offsets for the same core, each reads the
-    // wrong 64 bytes, finds them idle, and reports nothing.
+    // catches is for chips_per_host: two parties with different geometry compute different
+    // offsets for the same core, each reads the wrong 64 bytes, finds them idle, and
+    // reports nothing.
     std::string verify_header() const;  // empty string == agreement
 
     static constexpr uint8_t kArenaFill = 0xA5;
@@ -236,9 +204,8 @@ PinLimits query_pin_limits(const std::shared_ptr<tt::tt_metal::distributed::Mesh
 // one cache line either way, and taking a peer list here would make a hot-path read depend on
 // state that can change.
 //
-// MASKED TO THE LOW 32 BITS, because the high half of each word now carries that peer's measured
-// turnaround (see credit_pack in host_uva_layout.hpp). Summing the raw words would add ~10^6 to
-// the count per credit and the send gate would open on the first message and never close.
+// masked to low 32 bits, because the high half of each word now carries that peer's measured
+// turnaround (see credit_pack in host_uva_layout.hpp).
 inline uint64_t credit_total(const HostRegion& region, uint32_t core) {
     uint64_t sum = 0;
     for (uint32_t p = 0; p < kMaxCreditPeers; ++p) {
@@ -247,13 +214,12 @@ inline uint64_t credit_total(const HostRegion& region, uint32_t core) {
     return sum;
 }
 
-// The turnaround one PEER reported with its most recent credit for this core, in nanoseconds on
-// THAT PEER'S clock. Not summed and not averaged across peers -- it belongs to one message, and
-// the only caller that can use it is the sender of that message, which knows which peer it went
-// to.
+// The turnaround one peer reported with its most recent credit for this core, in nanoseconds on
+// that peer's clock. Not summed and not averaged across peers -- it belongs to one message, and
+// the only caller that can use it is the sender of that message, which knows the target peer
 //
 // Zero means "no credit from this peer yet", which is indistinguishable from a genuinely
-// zero turnaround. The caller treats zero as absent, which is right: deliver_to_l1 brackets a
+// zero turnaround. The caller treats zero as absent: deliver_to_l1 brackets a
 // PCIe write and a doorbell, so a true zero does not occur.
 inline uint64_t credit_turnaround_ns(const HostRegion& region, uint32_t core, uint32_t peer_host) {
     if (peer_host >= kMaxCreditPeers) {

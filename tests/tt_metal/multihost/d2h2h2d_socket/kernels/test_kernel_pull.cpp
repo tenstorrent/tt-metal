@@ -48,45 +48,25 @@ void kernel_main() {
     // The host writes 1 here when it has no more messages for this core. See below for why
     // a message COUNT cannot do this job.
     constexpr uint32_t stop_addr = get_compile_time_arg_val(4);
-    // THE RECEIVE STATUS CONTROL REGISTER, and it is what makes a UVA store work here.
+    // THE RECEIVE STATUS CONTROL REGISTER. dst_l1_addr above is a compile arg -- one address
+    // for the whole run, which is all kOpSendUva needs. A store names its own address per
+    // message, which no compile arg can carry, so the host writes `(offset, length)` into this
+    // L1 word with the opcode implied by the register. See rx_scr_armed() in host_uva_layout.hpp.
     //
-    // dst_l1_addr above is a COMPILE arg -- one address for the whole run -- which is all
-    // kOpSendUva ever needs, its destination being fixed by definition. A store names its
-    // own address per message, and no compile arg can carry that. So the host writes an
-    // instruction into this L1 word: `(offset, length)`, with the opcode implied by the
-    // register. See host_uva_layout.hpp for the encoding and rx_scr_armed().
-    //
-    // IT IS ALSO THE DOORBELL. The word both announces the message and describes it, so the
-    // host's side of this leg is ONE strict-ordered UC write rather than an advertisement
-    // followed by a separate ring.
-    //
-    // A ZEROED WORD IS NOT AN INSTRUCTION -- rx_scr_armed() requires the magic and a
-    // non-zero length. L1 is not zeroed between sweep points (one process per point), so
-    // without that guard a leftover word would decode as a live receive. The X280 side paid
-    // 144 phantom transfers for exactly this omission.
+    // It is also the DOORBELL, so the host's side is one strict-ordered UC write rather than an
+    // advertisement plus a ring. A ZEROED WORD IS NOT AN INSTRUCTION -- rx_scr_armed() requires
+    // the magic and a non-zero length, because L1 is not zeroed between sweep points.
     constexpr uint32_t dest_word_addr = get_compile_time_arg_val(5);
 
-    // RUNTIME, NOT COMPILE-TIME, and this is the one that would silently corrupt.
-    //
-    // Each core owns its own H2DSocket, and each socket's config buffer is a separate
-    // MeshBuffer allocation -- so the addresses DIFFER per
-    // core even though every core runs identical code. Baking one into a compile arg would
-    // point all 109 cores at one core's socket: every core would decode the same ring, race
-    // each other's read_ptr, and report success while delivering garbage. The host passes
-    // each core its own.
+    // RUNTIME, NOT COMPILE-TIME -- the one that would silently corrupt. Each core owns its own
+    // H2DSocket and each config buffer is a separate MeshBuffer allocation, so the addresses
+    // differ per core even though every core runs identical code. Baking one into a compile arg
+    // would point every core at one core's socket: all decoding the same ring, racing each
+    // other's read_ptr, reporting success while delivering garbage.
     const uint32_t socket_config_addr = get_arg_val<uint32_t>(0);
-    // NOT A MESSAGE COUNT -- 0 means "this core receives nothing", anything else means
-    // "receive until stopped". An earlier version took the expected count and looped that
-    // many times, which failed on the first real run: the host delivered 130 messages for a
-    // 128-message configuration (two duplicate control words got past the sequence filter),
-    // the receiver had already exited after its 16th, and the host waited forever for a
-    // doorbell nobody would ring -- `core 3 doorbell stuck at 16, expected 17`.
-    //
-    // The duplicates are a property of the protocol this kernel sits under, not of the
-    // socket, and on the push path they are harmless: the host rewrites the same bytes and
-    // the doorbell simply runs ahead. A receiver whose correctness depends on the exact
-    // number of messages it will be handed is the wrong shape for a data path, so it is not
-    // told a number.
+    // NOT A MESSAGE COUNT -- 0 means "this core receives nothing", anything else "receive until
+    // stopped". A receiver whose correctness depends on the exact number of messages it will
+    // be handed is the wrong shape for a data path, so it is not told a number.
     const uint32_t enabled = get_arg_val<uint32_t>(1);
 
     // A core with no traffic is still launched, so the L1 map is identical on every core --
@@ -100,12 +80,9 @@ void kernel_main() {
     SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(socket, page_size);
 
-    // In DEVICE_PULL the ring is pinned HOST memory, so fifo_addr is a logical anchor and
-    // read_ptr is an offset against it -- not an L1 address. (read_ptr - fifo_addr) is the
-    // byte offset into the host buffer; adding it to the published PCIe base is the whole
-    // address translation. Getting this backwards reads the right number of bytes from the
-    // wrong place and verifies as garbage, which is why it is spelled out rather than
-    // folded into the call.
+    // In DEVICE_PULL the ring is pinned HOST memory: fifo_addr is a logical anchor and read_ptr
+    // an offset against it, not an L1 address. (read_ptr - fifo_addr) plus the published PCIe
+    // base is the whole translation. Backwards, it reads the right bytes from the wrong place.
     const uint64_t pcie_data_addr =
         (static_cast<uint64_t>(socket.h2d.data_addr_hi) << 32) | static_cast<uint64_t>(socket.h2d.data_addr_lo);
     const uint32_t pcie_xy_enc = socket.h2d.pcie_xy_enc;
@@ -119,26 +96,9 @@ void kernel_main() {
 
     uint32_t i = 0;
     while (stop[0] == 0) {
-        // === THE RECEIVE STATUS CONTROL REGISTER =====================================
-        //
-        // THIS WORD IS THE DOORBELL AND THE INSTRUCTION AT ONCE. The host writes one
-        // strict-ordered 8-byte UC word saying "a message is waiting, at `offset`, `length`
-        // bytes" -- so the leg that used to take two writes (advertise, then ring
-        // rdma_signal) takes one. The opcode is implied: there is exactly one thing a
-        // receive register can mean.
-        //
-        // ONE NUMBER, TWO MEANINGS. The host arena is an exact mirror of this L1
-        // (kArenaBytes == l1_size_per_core() == 0x180000), and the sender placed the bytes
-        // in it at the offset they are to occupy here. So `offset` is both where to read in
-        // the ring and where to write in L1, and this read needs no address arithmetic at
-        // all.
-        //
-        // CHECKED BEFORE THE SOCKET, and cheaply: it is a local L1 load, where
-        // socket_wait_for_pages spins on a word the host updates over PCIe. A run that never
-        // issues a store never arms this and falls straight through to the legacy path.
-        //
-        // invalidate_l1_cache() because the host wrote it over PCIe and this core's L1 cache
-        // has no idea.
+        // ONE NUMBER, TWO MEANINGS: the host arena mirrors this L1 exactly, so `offset` is both
+        // where to read in the ring and where to write in L1. Checked first because it is a
+        // cheap local load. invalidate_l1_cache() because the host wrote the word over PCIe.
         invalidate_l1_cache();
         const uint64_t scr = *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(dest_word_addr);
         if (tt::tt_metal::experimental::rx_scr_armed(scr)) {
@@ -153,9 +113,10 @@ void kernel_main() {
             // sequence number: freshness is a property of the word, not of remembered state.
             *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(dest_word_addr) = 0;
             // The completion, in the OTHER direction: "I have taken it". The SCR is the
-            // host's doorbell to us; this is ours back to the host, and wait_delivered polls
-            // it. Counted here rather than from a loop bound so an extra message increments
-            // it like any other.
+            // host's doorbell to us; this is ours back to the host. Counted here rather than
+            // from a loop bound so an extra message increments it like any other.
+            // Nothing polls this word: wait_delivered() polls bytes_acked in pinned host RAM
+            // instead, to avoid a non-posted PCIe read contending with the payload reads.
             *signal = ++i;
             continue;
         }
@@ -178,11 +139,8 @@ void kernel_main() {
 	    // WC/UC ordering argument host_deliver.hpp makes for the push path.
             noc_async_read_barrier();
         } else {
-            // HOST_PUSH: the host already wrote these bytes into this core's L1 FIFO, so
-            // read_ptr IS an L1 address (not an offset, as it is in DEVICE_PULL) and there
-            // is no PCIe read to do. The copy exists so the payload ends up at the same
-            // dst_l1_addr in both modes and one verifier covers both; a real consumer would
-            // read it in place and skip this.
+            // HOST_PUSH: read_ptr IS an L1 address here, so there is no PCIe read. The copy
+            // only exists so both modes land at the same dst_l1_addr for one verifier.
             volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.read_ptr);
             volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
             for (uint32_t w = 0; w < page_size / sizeof(uint32_t); ++w) {

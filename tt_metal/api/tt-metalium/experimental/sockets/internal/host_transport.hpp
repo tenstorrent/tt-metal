@@ -3,25 +3,23 @@
 
 // The host-to-host leg: one interface over MPI one-sided RMA.
 //
-//   single host, two processes:  osc/sm or osc/rdma, chosen by the runtime
-//   two hosts,   two processes:  osc/rdma or osc/ucx, chosen by the runtime
-//
-// MPI_Win_create() is called exactly once, over the same span PinnedMemory pinned. Both are
-// independent, refcounted pins of the same pages -- one for the TT device, one for the NIC --
-// so a payload a Tensix core pushed over PCIe is already inside the window when the transport
-// goes to send it. No bounce buffer, no per-message registration, and the send is described by
-// an OFFSET into the region rather than by a pointer, which is exactly how a window is
-// addressed: (target rank, displacement).
+// two windows are created over the same span PinnedMemory pinned -- the data window, and a
+// separate credit window on its own communicator. Those pins are independent and refcounted,
+// one for the TT device and one for the NIC, so a payload a Tensix core pushed over PCIe is
+// already inside the window when the transport sends it: no bounce buffer, no per-message
+// registration, and a send is described by an OFFSET into the region rather than a pointer,
+// which is exactly how a window is addressed -- (target rank, displacement).
 //
 // A one-sided MPI_Rput into the peer's RX arena is the operation this design wants. What MPI
-// will NOT give is remote completion from the operation's own handle:
-// MPI_Rput retires when the ORIGIN buffer is reusable. See flush() below; it is the single
-// semantic difference the whole port turns on.
+// will NOT give is remote completion from the operation's own handle: MPI_Rput retires when the
+// ORIGIN buffer is reusable. See flush(); it is the semantic difference the whole port turns on.
 //
-// Transport selection is the launcher's job, not this file's. The one component that would
-// break the design is osc/pt2pt, which needs the TARGET to enter MPI for a put to progress
-// while the receiving host here only polls memory -- and it excludes itself, refusing to build
-// a window at all under MPI_THREAD_MULTIPLE. describe() names what was actually chosen.
+//   osc/rdma + btl uct -- the verified path.
+//   osc/ucx            -- ABORTS.
+//
+// describe() reports the MPI library and the window memory model, NOT which osc component was
+// selected. To tell whether RDMA actually engaged, read the clock sync's min RTT -- single-digit
+// microseconds means the HCA, hundreds means the probes fell back to tcp.
 #pragma once
 
 #include <cstdint>
@@ -54,12 +52,7 @@ struct TransportConfig {
 
 struct RetireStats {
     uint64_t n = 0;
-    uint64_t min_ns = 0;
-    uint64_t max_ns = 0;
-    double mean_ns = 0.0;
-    double m2 = 0.0;
-    uint64_t bytes = 0;  // payload bytes across the measured operations
-    uint64_t unmeasured = 0;
+    uint64_t sum_ns = 0;  // nanoseconds, totalled over n measured retires
 };
 
 // What the two sides must tell each other before a byte moves. Exchanged with a pairwise
@@ -101,11 +94,6 @@ struct TransportDiag {
     uint64_t abandoned = 0;   // ops a waiter timed out on and left to the provider
     uint64_t injected = 0;    // sent inline, no completion expected -- see OpHandle
     uint64_t oldest_tag = 0;  // caller tag of the longest-outstanding op
-    // commented out b/c the wedge markers that fed it are commented out -- see staged_word()
-    // in host_transport.cpp. Uncomment this, the stores there, and the diag() line together.
-    // Which step of a credit write is in flight, 0 when none. Nonzero in a stall dump means a
-    // credit is wedged: 1 entered, 2 holds credit_m_, 3 past MPI_Put, 4 past flush_local.
-    // uint32_t word_phase = 0;
     std::string last_error;
 };
 
@@ -118,13 +106,6 @@ public:
     virtual std::string post(
         uint64_t local_offset, uint64_t remote_offset, uint64_t bytes, uint64_t tag, OpHandle& op) = 0;
 
-    // MPI Progress. An idle sender makes no MPI calls at all, and one-sided operations
-    // still need the TARGET side to progress before they complete -- so a peer's credit
-    // MPI_Put blocks until this side happens to call into MPI. Cheap, and safe to call from
-    // any thread on a transport that permits it.
-    //
-    // Empty by intent to conform to an inherited interface.
-    //
     virtual std::string progress() { return {}; }
 
     virtual bool needs_flush() const = 0;
@@ -137,7 +118,6 @@ public:
         uint64_t length,
         uint32_t origin_selector,
         uint64_t elapsed_ns,
-        bool reply,
         uint32_t stage_slot,
         OpHandle& op,
         uint64_t dest_uva) = 0;
@@ -160,16 +140,6 @@ public:
 
     virtual std::string post_credit(
         uint32_t core, uint32_t my_host, uint64_t count, uint64_t turnaround_ns, uint32_t stage_slot) = 0;
-
-    virtual std::string post_word(uint64_t remote_offset, uint64_t value) = 0;
-
-    virtual std::string fetch_add(uint64_t remote_offset, uint64_t add, uint64_t& out) {
-        (void)remote_offset;
-        (void)add;
-        (void)out;
-        return "this transport does not implement fetch_add";
-    }
-    virtual bool atomics_available() const { return false; }
 };
 
 std::unique_ptr<Transport> make_transport(const TransportConfig& cfg, std::string& error);
@@ -233,8 +203,6 @@ public:
         }
         return v;
     }
-    uint32_t connected() const { return static_cast<uint32_t>(all().size()); }
-    bool empty() const { return connected() == 0; }
 
 private:
     std::vector<Transport*> entries_;
@@ -257,7 +225,5 @@ inline const char* peer_why_name(uint32_t why) {
         default: return "?";
     }
 }
-
-bool transport_available();
 
 }  // namespace tt::tt_metal::experimental

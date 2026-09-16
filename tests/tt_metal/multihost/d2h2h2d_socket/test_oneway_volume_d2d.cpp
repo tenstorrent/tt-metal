@@ -18,8 +18,8 @@
 #include <tt-metalium/experimental/sockets/internal/host_deliver.hpp>
 #include <tt-metalium/experimental/sockets/internal/host_region.hpp>
 #include <tt-metalium/experimental/sockets/internal/host_scan.hpp>
-#include <tt-metalium/experimental/sockets/D2DSocket.hpp>
-#include <tt-metalium/experimental/sockets/D2H2H2DSocket.hpp>
+#include <tt-metalium/experimental/sockets/d2d_socket.hpp>
+#include <tt-metalium/experimental/sockets/d2h2h2d_socket.hpp>
 
 #if !defined(TT_METAL_HOST_BRIDGE)
 #error "this test needs TT_METAL_HOST_BRIDGE: D2H2H2DSocket IS the middle hop, and it has no transport-less form."
@@ -43,7 +43,6 @@ namespace {
 const char* kProg = "test";
 
 struct Options {
-    bool layout = false;
     int device_id = -1;
     uint32_t cores = 4;
     uint32_t bytes = 4096;
@@ -52,13 +51,7 @@ struct Options {
     bool steady = false;
     uint32_t steady_pct = 10;
     bool h2d_socket = true;
-    uint32_t dest_offset = 0;
-    bool store = false;
     uint32_t l1_lo = 0, l1_hi = 0, l1_signal = 0, l1_completion = 0, l1_stop = 0, l1_dest_word = 0;
-    std::string csv_rotate;
-    std::string volume_csv;
-    std::string trace_csv;
-    bool volume_quiesce = false;
     uint32_t warmup = 0;
     uint32_t workers = 0;
     bool pin = true;
@@ -74,7 +67,6 @@ struct Options {
     bool use_transport = false;
     bool same_host = false;
     bool measure_retire = false;
-    bool roundtrip = false;
     double ns_per_cycle = 0.0;
 
     std::string csv;
@@ -85,13 +77,12 @@ struct Options {
 
 void usage() {
     std::cout <<
-        R"(test -- t6_host_uva's path driven through D2H2H2DSocket (finalized/)
+        R"(test -- the D2H2H2DSocket path driven through D2DSocket.
 
-Same flags, same CSV schema and the same kernel as t6_host_uva, so rows from the two are
-directly comparable. Use --tag to tell them apart in one CSV.
+Same flags, CSV schema and kernel as test_oneway_volume, so rows from the two are directly
+comparable. Use --tag to tell them apart in one CSV.
 
-MODES
-  --layout                 print the region layout and exit (no device, no peer)
+MODE
   --device <umd id>        real run: Tensix cores push into host arenas
 
 SHAPE
@@ -99,76 +90,40 @@ SHAPE
   --bytes N                payload per message (default 4096, max 1572864)
   --iters N                messages per core (default 16)
   --volume N[K|M|G]        total traffic target; derives --iters
-  --steady                 14 KiB chunks, 1 GiB of traffic, 10%% warmup discarded
+  --steady N               discard the first N%% of traffic before recording
   --warmup N               iterations to discard before recording
   --workers N              scan threads (default: one per CPU, capped at --cores)
-  --trace-csv PATH         cumulative-volume time series
   --send-window N          cap RMAs in flight across the sender (default: --cores).
                            Refused above --cores.
-  --send-blocking          post-and-wait, credit waited, one in flight -- the revert path
-                           to the pre-2026-08-28 sender.
-                           NOT the same as --send-window 1, which still spins.
+  --send-blocking          post-and-wait, one in flight. NOT --send-window 1, which spins.
   --no-pin                 do not pin worker threads to CPUs
-  --oneway                 t6 -> host -> [remote host] -> t6      (the only shape)
-
-                           (--roundtrip is NOT listed because it does not parse: no
-                           case sets o.roundtrip true. The return half went with
-                           libfabric -- see TODO_D2H2H2D.md P6.)
-
-ENVIRONMENT (applied first; any command-line flag overrides)
-  TT_RDMA_CHIPS_PER_HOST   same as --chips-per-host
-
-  The sender knobs are FLAGS ONLY -- --send-window and --send-blocking. Their TT_HOST_UVA_*
-  twins were a liability rather than a convenience: four pair runs on 2026-08-28 set
-  TT_HOST_UVA_SEND_WINDOW against binaries that had no such variable and silently measured
-  the default instead. One spelling cannot go unread.
-
-  Host identity is NOT configurable: --host-ident and --host-num are the MPI rank and world
-  size. Two sources for one fact is how the peer table and the communicator end up disagreeing.
+  --oneway                 t6 -> host -> [remote host] -> t6 (the only shape)
 
 TOPOLOGY
-  (host identity is the MPI rank; see ENVIRONMENT above)
+  Host identity is the MPI rank and world size, not configurable.
   --chips-per-host N       selector slot stride (default 1)
   --chip N                 which chip on this host (default 0)
 
 HOST-TO-HOST
-  (there is no bootstrap to configure. --server, --peer, --peers, --port, --provider and
-   --bind-addr are GONE, removed 2026-09-03: the parser never accepted any of them, so
-   every one of them failed the run with "unknown flag" while this text advertised it.
-   They date from the sockets bootstrap, which connect_mesh() replaced -- it builds one
-   endpoint per peer rank and takes identity from DistributedContext, so there is no
-   address list, no port, no listen/connect asymmetry and no provider to name. The last
-   of those is the one that cost a measurement: `provider` was a dead Options field, and
-   the CSV's provider column comes from a hardcoded "mpi-rma" at the run_* call site, so
-   csv files carry provider=mpi-rma no matter what the tag or the flag said.
-   make_transport() returns MpiRmaTransport unconditionally -- see host_transport.cpp.)
+  There is no bootstrap to configure: connect_mesh() builds one endpoint per peer rank and
+  takes identity from DistributedContext.
   --same-host              both processes on one box: skip clock sync
   --measure-retire         time each payload write from POST to COMPLETION, reported as
                            diag:h2h-retire. Nothing waits. Needs more than one rank.
-                           NOTE the row pools payload retires with 40-byte notice retires,
-                           so its mean is the per-op cost of neither. It is also POST to
-                           LOCAL completion under MPI, which is not the transfer: see
-                           host_transport.cpp flush() and MEASURING-BANDWIDTH.md.
-  --h2d socket             ACCEPTED AND REDUNDANT. Host-to-device delivery is always
-                           tt-metal's H2DSocket in DEVICE_PULL: the device reads the payload
-                           out of pinned host memory, and ring aliasing puts the peer's RMA
-                           straight into that ring, so the payload crosses host RAM once.
-                           `--h2d write` -- host CPU stores into L1 over the PCIe BAR -- is
-                           REFUSED: it plateaus at 314 MB/s where this reaches 2577, and at
-                           110 cores it trips UMD's MMIO per-op timeout mid-run.
-  (there is no --deliver flag: delivery is H2DSocket DEVICE_PULL, see --h2d above. The
-   old --deliver push/pull selected between this and an unimplemented bespoke-kernel pull
-   whose only artefact is kernels/test_kernel_pull.cpp; keeping a flag whose sole other
-   value was refused made the real pull path -- --h2d socket -- look unimplemented.)
+                           The row pools payload retires with 40-byte notice retires, so its
+                           mean is the per-op cost of neither, and it is POST to LOCAL
+                           completion under MPI -- not the transfer. See flush().
+
+  Delivery is always H2DSocket DEVICE_PULL; there is no flag. Ring aliasing puts the peer's
+  RMA straight into the ring, so the payload crosses host RAM once.
 
 OUTPUT
   --csv FILE               append per-hop rows
-  --tag STR                label for the CSV rows (default: socket-*)
+  --csv-append             append instead of truncating
+  --tag STR                label for the CSV rows
 
-NOT HERE
-  --hh-pingpong            no device and no register file, so it exercises nothing in
-                           D2H2H2DSocket. Run it from t6_host_uva.
-
+ENVIRONMENT (applied first; any flag overrides)
+  TT_RDMA_CHIPS_PER_HOST   same as --chips-per-host
 )";
 }
 
@@ -230,7 +185,6 @@ bool parse(int argc, char** argv, Options& o) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--help" || a == "-h") { usage(); std::exit(0); }
-        else if (a == "--layout") { o.layout = true; }
         else if (a == "--device") { o.device_id = std::stoi(next(i)); }
         else if (a == "--cores") { o.cores = std::stoul(next(i)); }
         else if (a == "--bytes") { o.bytes = std::stoul(next(i)); }
@@ -250,19 +204,6 @@ bool parse(int argc, char** argv, Options& o) {
                     return false;
                 }
             }
-        }
-        else if (a == "--csv-rotate") { o.csv_rotate = next(i); }
-        else if (a == "--volume-csv") { o.volume_csv = next(i); }
-        else if (a == "--trace-csv") { o.trace_csv = next(i); }
-        else if (a == "--volume-quiesce") { o.volume_quiesce = true; }
-        else if (a == "--store") {
-            o.store = true;
-        }
-        else if (a == "--dest-offset") {
-            // Byte offset from payload_addr; the allocator base is added where it is known.
-            // Implies --store: an offset with no store to carry it would be silently ignored.
-            o.dest_offset = static_cast<uint32_t>(std::stoul(next(i), nullptr, 0));
-            o.store = true;
         }
         else if (a == "--volume") {
             std::string v = next(i);
@@ -288,7 +229,7 @@ bool parse(int argc, char** argv, Options& o) {
             o.send_window = static_cast<uint32_t>(n);
         }
         else if (a == "--send-blocking") { o.send_blocking = true; }
-        else if (a == "--oneway") { o.roundtrip = false; }
+        else if (a == "--oneway") { /* accepted, no-op -- see Options::roundtrip */ }
         else if (a == "--chips-per-host") { o.chips_per_host = std::stoul(next(i)); }
         else if (a == "--chip") { o.chip = std::stoul(next(i)); }
         else if (a == "--same-host") { o.same_host = true; }
@@ -297,10 +238,6 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--csv-append") { o.csv_append = true; }
         else if (a == "--tag") { o.tag = next(i); }
         else { std::cerr << "error: unknown flag " << a << "\n"; usage(); return false; }
-    }
-
-    if (!o.csv_rotate.empty()) {
-        return true;  // rotate-and-exit: no mode, no device, nothing below applies
     }
 
     if (o.bytes == 0 || o.bytes > kArenaBytes) {
@@ -313,8 +250,7 @@ bool parse(int argc, char** argv, Options& o) {
     }
     if (o.host_ident >= o.host_num) {
         // Not a flag error: both numbers come from the communicator, so this is a broken MPI
-        // world rather than something the caller typed. Naming the flags that used to set them
-        // sends the reader looking for a spelling that no longer exists.
+        // world rather than something the caller typed.
         std::cerr << "error: MPI rank " << o.host_ident << " is not < world size " << o.host_num
                   << ". Identity comes from the communicator, not from a flag.\n";
         return false;
@@ -339,8 +275,8 @@ bool parse(int argc, char** argv, Options& o) {
                      "here, and that is only coherent when every destination is on the other host.\n";
         return false;
     }
-    if (!o.layout && o.device_id < 0) {
-        std::cerr << "error: pick a mode -- --layout or --device N\n";
+    if (o.device_id < 0) {
+        std::cerr << "error: no mode -- pass --device N\n";
         return false;
     }
     if (o.steady) {
@@ -421,65 +357,11 @@ bool parse(int argc, char** argv, Options& o) {
     return true;
 }
 
-void print_layout(const Options& o) {
-    std::cout << "\n=== " << kProg << " region layout (identical to t6_host_uva) ===\n\n";
-    std::printf("  register bank      %u registers x %u B = %u B\n", kRegistersPerBank, kRegisterBytes, kBankBytes);
-    std::printf("                     %u data (0..%u), control TX=%u RX=%u\n", kDataRegisters, kDataRegisters - 1,
-                kCtrlTx, kCtrlRx);
-    std::printf("  arena              %llu B TX + %llu B RX = %llu B per core\n",
-                (unsigned long long)kArenaBytes, (unsigned long long)kArenaBytes,
-                (unsigned long long)kArenaStride);
-    std::printf("  provisioned cores  %u\n", kProvisionedCores);
-    std::printf("  header             %llu B at offset 0\n", (unsigned long long)kHeaderBytes);
-    std::printf("  bank array         %llu B at offset %llu\n", (unsigned long long)kBankArrayBytes,
-                (unsigned long long)kHeaderBytes);
-    std::printf("  arena array        at offset %llu (2 MiB aligned)\n", (unsigned long long)kArenaArrayOffset);
-    std::printf("  full region        %llu B (%llu MiB)\n", (unsigned long long)kRegionBytesMax,
-                (unsigned long long)(kRegionBytesMax >> 20));
-    std::printf("  pinned for %-4u    %llu B (%llu MiB)\n", o.cores,
-                (unsigned long long)pinned_bytes_for(o.cores), (unsigned long long)(pinned_bytes_for(o.cores) >> 20));
-
-    std::cout << "\n  core   bank offset    TX arena       RX arena\n";
-    std::cout << "  ---- ------------ -------------- --------------\n";
-    const uint32_t show = std::min<uint32_t>(o.cores, 8);
-    for (uint32_t c = 0; c < show; ++c) {
-        std::printf("  %4u %12llu %14llu %14llu\n", c, (unsigned long long)bank_offset(c),
-                    (unsigned long long)tx_arena_offset(c), (unsigned long long)rx_arena_offset(c));
-    }
-    if (o.cores > show) {
-        std::printf("  ... %u more\n", o.cores - show);
-    }
-
-    const uint64_t sample = ctrl_encode(kOpSendUva, 0, 2, kFlagStamped, 7);
-    std::cout << "\n=== control word ===\n\n";
-    std::printf("  example (op=send_uva base=0 count=2 flags=stamped seq=7) = 0x%016llx\n",
-                (unsigned long long)sample);
-    std::printf("    magic    0x%04X   version %u   seq %u\n", ctrl_magic(sample), ctrl_version(sample),
-                ctrl_sequence(sample));
-    std::printf("    opcode   %u        base %u   count %u   flags 0x%llx\n", ctrl_opcode(sample),
-                ctrl_base(sample), ctrl_count(sample), (unsigned long long)ctrl_flags(sample));
-    std::printf("    validate -> %s\n", ctrl_verdict_name(ctrl_validate(sample)));
-    std::printf("    a zeroed bank   -> %s\n", ctrl_verdict_name(ctrl_validate(0)));
-    std::printf("    a legacy v2 word -> %s\n", ctrl_verdict_name(ctrl_validate(0x57A7ull << 48)));
-
-    const HostTopology t{o.host_ident, o.host_num, o.chips_per_host};
-    std::cout << "\n=== routing ===\n\n";
-    std::printf("  topology ident=%u num=%u chips_per_host=%u -> %s\n", t.ident, t.num, t.chips_per_host,
-                host_topology_ok(t) ? "ok" : "REJECTED");
-    for (uint32_t h = 0; h < std::min<uint32_t>(o.host_num + 1, 4); ++h) {
-        const uint64_t u = uva_encode(kRegionT6, t6_global_selector(h, o.chip, 3, o.chips_per_host), 0, 0);
-        std::printf("  uva 0x%016llx -> host %u chip %u core %u : %s\n", (unsigned long long)u,
-                    uva_t6_host(u, o.chips_per_host), uva_t6_chip(u, o.chips_per_host), uva_t6_core(u),
-                    host_reach_name(uva_host_reach(u, t)));
-    }
-    std::cout << "\n";
-}
 
 bool verify_delivery(Deliverer& deliverer, const Options& o, std::string& detail) {
     const uint32_t last = o.iters - 1;
-    const uint32_t verify_at = o.store ? (o.l1_lo + o.dest_offset) : 0u;
     for (uint32_t core = 0; core < o.cores; ++core) {
-        const std::vector<uint8_t> got = deliverer.read_payload(core, o.bytes, verify_at);
+        const std::vector<uint8_t> got = deliverer.read_payload(core, o.bytes, 0u);
         if (got.size() < o.bytes) {
             detail = "core " + std::to_string(core) + ": short read from L1";
             return false;
@@ -550,11 +432,6 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
     Deliverer* const deliverer = sock.deliverer();
     const ClockSync& clock = sock.clock();
 
-    if (sock.ladder().enabled) {
-        std::cout << "  volume ladder " << sock.ladder().marks.size() << " checkpoints, " << o.bytes
-                  << " B chunks over " << (sock.ladder().total_bytes >> 20) << " MiB recorded -> "
-                  << o.volume_csv << "\n";
-    }
     std::cout << "  socket        D2DSocket -> D2H2H2DSocket\n";
 
     const uint64_t msgs = static_cast<uint64_t>(o.cores) * o.iters;
@@ -642,21 +519,6 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
     sock.stop();
 
     RunStats stats = sock.collect();
-    if (!o.volume_csv.empty() && stats.ladder.enabled) {
-        stats.ladder_seal_final();
-        const bool fresh = !std::ifstream(o.volume_csv).good();
-        std::ofstream lf(o.volume_csv, std::ios::app);
-        if (!lf) {
-            std::cerr << "warning: could not open " << o.volume_csv << " for the volume ladder\n";
-        } else {
-            if (fresh) {
-                lf << ladder_csv_header();
-            }
-            lf << ladder_csv_rows(stats, o.tag);
-            std::cout << "  volume ladder -> " << o.volume_csv << " (" << stats.ladder_points()
-                      << " checkpoints reached of " << stats.ladder.marks.size() << ")\n";
-        }
-    }
     stats.payload_bytes = o.bytes;
     stats.cores = o.cores;
     stats.iters = o.iters;
@@ -689,19 +551,6 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
     stats.warmup_applied = o.warmup > 0;
     stats.timed_iters = o.iters - o.warmup;
     stats.ns_per_cycle = o.ns_per_cycle;
-
-    if (!o.trace_csv.empty()) {
-        std::ofstream f(o.trace_csv, std::ios::trunc);
-        f << format_trace_csv(stats, o.tag);
-        const uint64_t clamped = stats.total_trace_clamped();
-        std::cout << "  trace written to " << o.trace_csv << " (bucket " << (1ull << stats.trace_shift)
-                  << " ns";
-        if (clamped > 0) {
-            std::cout << "; " << clamped << " samples FOLDED into the last bucket -- raise "
-                      << "the run outlasted the trace span";
-        }
-        std::cout << ")\n";
-    }
 
     std::cout << format_table(stats);
 
@@ -748,18 +597,11 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
     if (!o.csv.empty()) {
         std::string path = o.csv;
         bool truncate = !o.csv_append;
-        if (truncate) {
-            std::string err;
-            const std::string archived = rotate_csv(path, err);
-            if (!err.empty()) {
-                path += "." + make_run_id() + ".csv";
-                std::cerr << "  " << err << "\n  writing to " << path << " instead\n";
-            } else if (!archived.empty()) {
-                std::cout << "  rotated previous csv to " << archived << "\n";
+        if (!truncate) {
+            if (const std::string e = csv_schema_error(path, basic_csv_header()); !e.empty()) {
+                path += ".new";
+                std::cerr << "  " << e << "\n  writing to " << path << " instead\n";
             }
-        } else if (const std::string e = csv_schema_error(path, basic_csv_header()); !e.empty()) {
-            path += ".new";
-            std::cerr << "  " << e << "\n  writing to " << path << " instead\n";
         }
         const bool fresh = truncate || !std::ifstream(path).good();
         std::ofstream f(path, truncate ? std::ios::trunc : std::ios::app);
@@ -855,11 +697,8 @@ int run_device(Options& o) {
     dc.send_window = o.send_window;
     dc.send_blocking = o.send_blocking;
     dc.pin = o.pin;
-    dc.h2d_socket = o.h2d_socket;
     dc.measure_retire = o.measure_retire;
     dc.same_host = o.same_host;
-    dc.ladder_enabled = !o.volume_csv.empty();
-    dc.ladder_quiesce = o.volume_quiesce;
 
     std::string serr;
     std::unique_ptr<D2DSocket> sock = D2DSocket::create(mesh_device, device, dc, serr);
@@ -880,18 +719,10 @@ int run_device(Options& o) {
     std::cout << "  clock: " << sock->clock().describe() << "\n";
     std::cout << "  l1 map        " << l1.describe() << "\n";
 
-    auto kernel_opcode_fn = [&o]() -> uint32_t {
-        uint32_t retval = static_cast<uint32_t>(kOpRdmaWrite);
-        if (!o.store) {
-            retval = static_cast<uint32_t>(kOpSendUva);
-        } else if (o.bytes <= kCtrlImmMax) {
-            retval = static_cast<uint32_t>(kOpRdmaWriteImm);
-        }
-        return retval;
-    };
-
-    const uint32_t kernel_opcode = kernel_opcode_fn();
-    const uint32_t store_dest_addr = l1.store_dest(o.dest_offset, o.store);
+    // Stores are not supported (see host_deliver.cpp), so the opcode is always kOpSendUva
+    // and the store destination is unused.
+    const uint32_t kernel_opcode = static_cast<uint32_t>(kOpSendUva);
+    const uint32_t store_dest_addr = 0;
 
     o.l1_lo = l1.payload_addr;
     o.l1_hi = l1.l1_size;
@@ -899,14 +730,6 @@ int run_device(Options& o) {
     o.l1_completion = l1.completion_addr;
     o.l1_stop = l1.stop_addr;
     o.l1_dest_word = l1.dest_word_addr;
-
-    if (o.store) {
-        std::printf("  store         %s, dest 0x%08X (payload_addr 0x%08X + 0x%X)\n",
-                    (kernel_opcode == static_cast<uint32_t>(kOpRdmaWriteImm))
-                        ? "rdma_write_imm (length in the instruction)"
-                        : "rdma_write (length in a register)",
-                    store_dest_addr, l1.payload_addr, o.dest_offset);
-    }
 
     CoreRangeSet cores;
     std::vector<CoreCoord> core_list;
@@ -1005,24 +828,6 @@ int main(int argc, char** argv) {
     resolve_identity(o);
     if (!parse(argc, argv, o)) {
         return 2;
-    }
-    if (!o.csv_rotate.empty()) {
-        std::string err;
-        const std::string archived = rotate_csv(o.csv_rotate, err);
-        if (!err.empty()) {
-            std::cerr << "error: " << err << "\n";
-            return 2;
-        }
-        if (archived.empty()) {
-            std::cout << "no existing " << o.csv_rotate << " to rotate\n";
-        } else {
-            std::cout << "rotated " << o.csv_rotate << " -> " << archived << "\n";
-        }
-        return 0;
-    }
-    if (o.layout) {
-        print_layout(o);
-        return 0;
     }
     return run_device(o);
 }

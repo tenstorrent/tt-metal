@@ -1,48 +1,37 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// The send leg: a Tensix core pushing a payload into its own arena in pinned host RAM,
-// then arming its own control word to tell the host the bytes are there.
+// The send leg: a Tensix core pushes a payload into its own arena in pinned host RAM, then
+// arms its own control word to tell the host the bytes are there.
 //
 // THE WHOLE PROTOCOL IN FOUR WRITES
-//
-//   1. payload  -> my TX arena in host RAM   (chunked posted PCIe writes)
-//   2. operands -> my data registers          (one 8 B posted write each)
+//   1. payload  -> my TX arena in host RAM  (chunked posted PCIe writes)
+//   2. operands -> my data registers        (one 8 B posted write each)
 //   3. fence
-//   4. control  -> my TX control register     (ONE indivisible 8 B posted write)
+//   4. control  -> my TX control register   (ONE indivisible 8 B posted write)
 //
-// Step 4 is the commit. Everything it refers to -- the opcode, which registers hold the
-// operands, how many there are, and the sequence number that says it is new -- travels in
-// that single 8-byte store, so the host can never see a trigger that points at operands
-// which have not landed.
+// Step 4 is the commit: opcode, which registers hold the operands, how many, and the sequence
+// that says it is new all travel in that single 8-byte store, so the host can never see a
+// trigger pointing at operands that have not landed.
 //
-// WHY THAT ORDERING IS SOUND AND NOT JUST HOPEFUL. All four are posted PCIe writes from
-// the SAME source (this core's NOC port) to the SAME endpoint (the PCIe tile). PCIe
-// producer-consumer ordering says posted writes on that path complete in order, so a
-// host that observes the control word is guaranteed the payload and operands behind it
-// are already in memory. The explicit barrier before step 4 is what stops the NOC from
-// reordering them before they reach the PCIe tile -- the PCIe guarantee starts there,
-// not here. d2h_push_bench learned the same lesson: without the fence the host reads a
-// page the write has not finished filling, and it looks like torn data rather than a
-// missing barrier.
+// THAT ORDERING IS SOUND, NOT HOPEFUL. All four are posted PCIe writes from the same source
+// (this core's NOC port) to the same endpoint (the PCIe tile), and PCIe producer-consumer
+// ordering completes them in order -- so a host that sees the control word is guaranteed the
+// payload behind it is in memory. The barrier before step 4 is what stops the NOC reordering
+// them before they reach the tile; the PCIe guarantee starts there, not here. Without it the
+// host reads a page the write has not finished filling, which looks like torn data.
 //
-// A CORE IS NEVER HANDED ITS OWN INDEX. It computes it from get_absolute_logical_x()/y()
-// and the grid width, so there is no argument a caller could get wrong that would make
-// this core write into another core's bank or arena. That is the same structural
-// property rdma_reg_layout.hpp relies on, and it is why none of the offset helpers take
-// a "which core" parameter from the wire.
+// A CORE IS NEVER HANDED ITS OWN INDEX -- it computes it from get_absolute_logical_x()/y() and
+// the grid width, so no caller argument can make this core write into another core's bank.
 
 #include <stdint.h>
 
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
 
-// Spelled from the repo root, as the host side spells it, NOT relatively. Out of tree the kernel
-// sat at finalized/test/kernels/, so "../../" was finalized/ where these two headers lived; in
-// tree they are in tt_metal/distributed/ and the kernel is three directories away under tests/.
-// A relative path here compiles only in the layout it was written for, and the failure lands in
-// the JIT build at run time -- after the device is open and the transport connected -- rather
-// than in the host build where it would be cheap to see.
+// Spelled from the repo root, not relatively: a relative path compiles only in the layout it
+// was written for, and the failure lands in the JIT build at run time -- after the device is
+// open and the transport connected -- rather than in the host build where it is cheap to see.
 #include <tt-metalium/experimental/sockets/internal/host_uva.hpp>
 #include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 
@@ -60,11 +49,10 @@ inline uint64_t wall_clock() {
     return static_cast<uint64_t>(l) | (static_cast<uint64_t>(h) << 32);
 }
 
-// A single NOC transaction has a length limit, and EXCEEDING IT DOES NOT FAIL -- it
-// writes nothing. Measured in d2h_push_bench on this tree: page sizes up to 16384 push
-// correctly and 32768 hangs the host forever waiting for bytes that were never sent,
-// with no error on either side. That is the worst shape a limit can have, so the chunk
-// loop is unconditional rather than a cap someone has to remember to respect.
+// A single NOC transaction has a length limit and EXCEEDING IT DOES NOT FAIL -- it writes
+// nothing. Measured: pages up to 16384 push correctly, 32768 hangs the host forever waiting for
+// bytes never sent, with no error on either side. Worst shape a limit can have, so the chunk
+// loop is unconditional rather than a cap someone must remember to respect.
 constexpr uint32_t kMaxNocWrite = 8192;
 
 // Push `bytes` from L1 `src` to host-region offset `dst_off`. Posted and unfenced: the
@@ -84,36 +72,21 @@ inline void push_to_host(
     }
 }
 
-// One 64-bit register. Staged through L1 because the NOC moves memory to memory; there is
-// no store-immediate-to-host path.
+// EVERY WRITE NEEDS ITS OWN STAGING SLOT. These are async posted writes -- the NOC reads the
+// source after the call returns -- so sharing one address means later stores clobber the word
+// before the earlier transfer has read it.
 //
-// EVERY WRITE NEEDS ITS OWN STAGING SLOT. These are ASYNC POSTED writes: the NOC reads the
-// source some time after the call returns. Staging four operands through one address means
-// the second store clobbers the word before the first transfer has read it, and all four
-// registers arrive holding whichever value landed last. Measured on the first real device
-// run: the host rejected the message with "TX message length out of range" because
-// register 1 held the destination UVA instead of the length.
-//
-// SLOTS ARE 16 B APART, not 8. The NOC requires source and destination to agree in bits
-// [3:0] for a narrow transfer, and "if they disagree the one from the destination address
-// is assumed" -- the data silently lands at the wrong offset (blackhole/noc/noc.h). The
-// destination is a 64 B-aligned register, so bits [3:0] are zero and the source must match.
+// SLOTS ARE 16 B APART, not 8: the NOC requires source and destination to agree in bits [3:0]
+// for a narrow transfer or the data silently lands at the wrong offset (blackhole/noc/noc.h).
+// The destination is a 64 B-aligned register, so the source must match.
 constexpr uint32_t kStageSlotBytes = 16;
 
-// THE LANDING PROBE. A non-posted read of the last bytes we just pushed, issued after the write
-// fence, whose only purpose is to come back.
-//
-// noc_async_write_barrier() waits for the NOC to acknowledge the payload writes, and on a push
-// to host the party that acknowledges is the PCIe TILE -- so the fence means "accepted for
-// transmission", not "in host memory". At small payloads the whole push fits in the tile's
-// outstanding-write credits and the fence returns before a single byte has crossed the link:
-// 16 KiB on 110 cores measured 3.191 us, which is 565 GB/s of aggregate push against a link
-// that carries about 15.
-//
-// PCIe forbids a read completion from passing previously posted writes on the same path, so the
-// data coming back is proof the writes ahead of it landed. 16 bytes because the probe's SIZE is
-// irrelevant -- it is the round trip that carries the guarantee -- and 16 keeps source and
-// destination agreeing in bits [3:0], which the NOC requires for a narrow transfer.
+// THE LANDING PROBE. noc_async_write_barrier() is acknowledged by the PCIe TILE, so it means
+// "accepted for transmission", not "in host memory" -- at small payloads the push fits in the
+// tile's credits and the fence returns before a byte crosses the link (16 KiB on 110 cores
+// measured 3.191 us, implying 565 GB/s on a ~15 GB/s link). PCIe forbids a read completion
+// passing prior posted writes, so a read that comes back proves they landed. 16 bytes: the size
+// is irrelevant, and 16 keeps source and destination agreeing in bits [3:0].
 constexpr uint32_t kLandingProbeBytes = 16;
 
 // Reads `size` from host offset `src_pcie` into L1. Same shape as the pull kernel's
@@ -155,14 +128,9 @@ void kernel_main() {
     constexpr uint32_t await_completion = get_compile_time_arg_val(11);
     constexpr uint32_t completion_addr = get_compile_time_arg_val(12);  // rdma_completion: my request retired
 
-    // --- Landing verification (off by default) -----------------------------
-    //
-    // OPT-IN, AND IT HAS TO BE. The probe puts a full PCIe round trip on every message's
-    // critical path -- instrumentation that changes the thing it measures, which this file's
-    // WorkerStats padding exists to avoid elsewhere. With it off the bracket is what it always
-    // was and a bandwidth run is bit-for-bit unchanged; with it on stage 1 is honest and the
-    // throughput number from that run must not be quoted. That is the split the latency mode
-    // exists to enforce.
+    // Landing verification, OFF BY DEFAULT: the probe puts a full PCIe round trip on every
+    // message's critical path, so a run with it on measures a slower pipeline. Stage 1 is
+    // honest with it, but that run's throughput must not be quoted.
     constexpr uint32_t verify_landing = get_compile_time_arg_val(13);
     constexpr uint32_t landing_addr = get_compile_time_arg_val(14);  // 16 B scratch for the probe
 
@@ -184,23 +152,15 @@ void kernel_main() {
     const uint64_t my_reg2 = tt::tt_metal::experimental::reg_offset(me, 2);
     const uint64_t my_reg3 = tt::tt_metal::experimental::reg_offset(me, 3);
 
-    // The destination, as one forwarded 64-bit word. Region kRegionT6 with a positional
-    // (host, chip, core) selector: this word is carried unmodified all the way to the
-    // far host, so its meaning must not depend on who is holding it.
-    //
-    // Computed ONCE, outside the loop: the destination is fixed for the life of the run, so
-    // this measures the transport and not the addressing. Register 0 is still written every
-    // iteration -- it simply carries a constant -- so making the address vary per message
-    // needs no wire change, only a value that changes here.
+    // The destination as one forwarded 64-bit word, carried unmodified to the far host, so its
+    // meaning must not depend on who holds it. Computed once: the destination is fixed for the
+    // run, so this measures the transport and not the addressing.
     const uint64_t dest_uva =
         tt::tt_metal::experimental::uva_encode(tt::tt_metal::experimental::kRegionT6, dest_selector, 0, dest_offset);
 
-    // TWO DOORBELLS. `completion` says the LOCAL host has consumed this core's control
-    // word, so the register is free to re-arm. `signal` says bytes from somebody else
-    // landed in L1. Pacing on the wrong one is a deadlock: waiting for `signal` makes this
-    // core's next request depend on a REMOTE peer sending to it, which combined with the
-    // sender-side credit forms two interlocking depth-1 ladders. Measured stalling at 144
-    // of 160 on a two-host run with nothing lost -- just nobody able to proceed.
+    // TWO DOORBELLS. `completion`: the local host consumed this core's control word, so the
+    // register may re-arm. `signal`: bytes from somebody else landed in L1. Pacing on `signal`
+    // deadlocks -- it makes this core's next request depend on a remote peer sending to it.
     volatile tt_l1_ptr uint32_t* completion = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(completion_addr);
     volatile tt_l1_ptr uint32_t* signal = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_addr);
     volatile tt_l1_ptr uint32_t* payload_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(payload_addr);
@@ -210,18 +170,10 @@ void kernel_main() {
     *completion = 0;
     *signal = 0;
 
-    // Until now this kernel stamped only word 0 (the iteration) and left the rest of the
-    // payload as whatever L1 happened to hold. That was invisible because verify_delivery()
-    // never ran on the device path: every two-host run has routed_remote > 0 and skips
-    // verification as unwitnessable, and the constant-byte probes it uses (0x40 + core at
-    // offsets 4, bytes/2 and bytes-1) were only ever produced by the SELF-TEST's stand-in
-    // producer. So the bytes a Tensix actually pushed were never checked -- only counted.
-    //
-    // With one shared L1 buffer (--symmetric) the receiving side is the witness and does run
-    // that check, so the pattern has to be real. It is written before the loop rather than per
-    // iteration: it is a constant, and re-filling 1 MiB every iteration would put a memset
-    // inside the thing being timed.
-    {
+    // A real payload pattern (0x40 + core), because with one shared L1 buffer the receiving
+    // side is the witness and does check it. Written before the loop, not per iteration: it is
+    // a constant, and re-filling 1 MiB each time would put a memset inside the timed region.
+    if (iterations != 0) {
         const uint32_t b = 0x40u + (me & 0x1Fu);
         const uint32_t w = b | (b << 8) | (b << 16) | (b << 24);
         // From word 1: word 0 is the per-iteration stamp, which must keep varying or a stale
@@ -232,25 +184,16 @@ void kernel_main() {
     }
 
     for (uint32_t i = 0; i < iterations; ++i) {
-        // STAGE 1 STARTS HERE. This core measures its OWN push -- payload, operands, the
-        // fence and the trigger -- in its own cycles, and publishes the duration with the
-        // message. Nothing subtracts a host timestamp from a device one anywhere in the
-        // chain; the host only needs a cycles->ns RATE, which is one measured scalar
-        // rather than a continuously drifting epoch offset.
+        // STAGE 1 STARTS HERE, measured in this core's own cycles and published with the
+        // message. Nothing subtracts a host timestamp from a device one; the host needs only a
+        // cycles->ns rate.
         const uint64_t t_push0 = wall_clock();
-        // STAMP THE ITERATION INTO THE PAYLOAD. Without it every message is
-        // byte-identical, and a host that re-reads a STALE arena cannot be told from one
-        // that received a fresh push -- the comparison passes either way. That is not
-        // hypothetical here: the host is released by the control word, so a payload write
-        // that has not landed would still let it proceed. A varying stamp is what makes
-        // the ordering claim testable rather than assumed.
+        // Stamp the iteration: without it every message is byte-identical and a host re-reading
+        // a STALE arena cannot be told from one that got a fresh push.
         payload_word[0] = i;
-        // THE SELECTOR THIS MESSAGE NAMES, stamped into the payload so the receiver can check
-        // it landed where the address said. The memset pattern identifies the SENDER, so it
-        // cannot answer that -- and while every mode sent core c to core c the difference was
-        // invisible. See kPayloadDestOffset.
-        //
-        // Written BEFORE push_to_host, because that is the call that moves these bytes.
+        // The selector this message names, so the receiver can check it landed where the address
+        // said -- the payload pattern identifies the SENDER and cannot answer that. Written
+        // before push_to_host, which is the call that moves these bytes.
         payload_word[tt::tt_metal::experimental::kPayloadDestOffset / sizeof(uint32_t)] = dest_selector;
 
         push_to_host(payload_addr, io_base, pcie_xy_enc, my_tx_arena, payload_bytes);
@@ -274,11 +217,9 @@ void kernel_main() {
         // before the control word joins the queue behind it.
         noc_async_write_barrier();
 
-        // THE FENCE IS NOT LANDING, and until 2026-09-08 stage 1 ended here anyway. See
-        // kLandingProbeBytes: the barrier above is acknowledged by the PCIe tile, so what it
-        // proves is that the writes were accepted, not that they crossed. The probe below is
-        // what closes that gap, and it is measured separately because it is the instrument's
-        // cost rather than the transfer's.
+        // THE FENCE IS NOT LANDING. The barrier above is acknowledged by the PCIe tile, so it
+        // proves the writes were accepted, not that they crossed. The probe below closes that
+        // gap, measured separately because it is the instrument's cost, not the transfer's.
         const uint64_t t_fenced = wall_clock();
         uint64_t visibility = 0;
         if constexpr (verify_landing != 0) {
@@ -290,36 +231,31 @@ void kernel_main() {
             visibility = wall_clock() - t_fenced;
         }
 
-        // Written AFTER the fence and before the trigger: the elapsed value must be visible to
-        // the host, and the trigger is what makes it so.
-        //
-        // BOTH HALVES IN ONE REGISTER -- total in the low 32 bits, the probe's own cost in the
-        // high 32, per kFlagElapsedSplit. The host reports the total as t6->host and the probe
-        // as diag:d2h-visibility, so neither number hides inside the other. When the probe is
-        // off the high half is zero and the total is the old fence-only bracket, which is why
-        // the driver must not set kFlagElapsedSplit's companion expectation without it.
+        // After the fence, before the trigger: the trigger is what makes this visible to the
+        // host. BOTH HALVES IN ONE REGISTER per kFlagElapsedSplit -- total low, the probe's own
+        // cost high -- reported as t6->host and diag:d2h-visibility so neither hides the other.
+        // With the probe off the high half is zero.
         write_reg64(stage_addr, 2,
                     tt::tt_metal::experimental::elapsed_pack((t_fenced - t_push0) + visibility, visibility),
                     io_base, pcie_xy_enc, my_reg2);
         noc_async_write_barrier();
 
-        // The sequence number is what distinguishes a re-armed word from the one the host
-        // already serviced. It wraps at 4096; the host compares against the last sequence
-        // it saw for this bank, so a wrap is fine as long as the host is not more than
-        // 4095 messages behind -- and if it were, the arena would have been overwritten
-        // long before the counter mattered.
-        // count = 4: dest UVA, length, elapsed, origin core. kFlagCycles tells the host
-        // the elapsed field is in Tensix cycles and needs its rate applied -- a cycle
-        // count read as nanoseconds is wrong by roughly the clock rate and still looks
-        // like a plausible duration, so it is flagged rather than inferred.
-        // TWO ENCODINGS, CHOSEN AT COMPILE TIME. The immediate form puts the byte count in
-        // bits [17:8] where base/count live for every other opcode, so the two words cannot
-        // be built by one call taking both -- a `base` passed here would be read as part of
-        // a length. See ctrl_encode_imm() in host_uva_layout.hpp.
+        // THE COMMIT. Three things ride in this one word:
         //
-        // The operand layout under the immediate form is fixed BY THE OPCODE rather than
-        // described by base/count: register 0 is the destination UVA, 2 the elapsed
-        // accumulator, 3 this core's index. Register 1 is not written.
+        //   sequence  -- distinguishes a re-armed word from the one already serviced. Wraps at
+        //               4096, which is safe unless the host falls 4095 messages behind, by
+        //               which point the arena has been overwritten anyway.
+        //   count = 4 -- dest UVA, length, elapsed, origin core.
+        //   kFlagCycles -- the elapsed field is in Tensix CYCLES and needs the host's rate
+        //               applied. A cycle count read as nanoseconds is wrong by roughly the
+        //               clock rate and still looks like a plausible duration, so it is flagged
+        //               rather than inferred.
+        //
+        // TWO ENCODINGS, CHOSEN AT COMPILE TIME. The immediate form puts the byte count in bits
+        // [17:8] where base/count live for every other opcode, so one call cannot build both --
+        // a `base` passed there would be read as part of a length. Its operand layout is fixed
+        // BY THE OPCODE instead: register 0 is the destination UVA, 2 the elapsed accumulator,
+        // 3 this core's index, and register 1 is not written. See ctrl_encode_imm().
         const uint64_t ctrl =
             (opcode == tt::tt_metal::experimental::kOpRdmaWriteImm)
                 ? tt::tt_metal::experimental::ctrl_encode_imm(
@@ -331,13 +267,9 @@ void kernel_main() {
         noc_async_write_barrier();
 
         if (await_completion) {
-            // Wait for rdma_completion -- MY request retired, this control register is
-            // free. Not rdma_signal, which is about traffic somebody else sent me and has
-            // no bearing on whether my own slot is reusable.
-            //
-            // Spinning on an L1 word the host writes over PCIe, not on a host-memory word
-            // this core would read back: a device read of host RAM is a non-posted round
-            // trip and would put a PCIe latency inside the loop being measured.
+            // rdma_completion, not rdma_signal: only the former says MY slot is reusable.
+            // Spinning on an L1 word the host writes, not a host-memory word this core reads --
+            // a device read of host RAM is a non-posted round trip inside the measured loop.
             while (*completion != (i + 1)) {
                 invalidate_l1_cache();
             }
