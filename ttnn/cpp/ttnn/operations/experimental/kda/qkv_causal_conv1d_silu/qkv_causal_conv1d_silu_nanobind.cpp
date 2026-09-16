@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #include "qkv_causal_conv1d_silu_nanobind.hpp"
-#include "pack_convolution_carry.hpp"
 #include "qkv_causal_conv1d_silu.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail {
@@ -78,46 +77,6 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("program_config").noconvert(),
         nb::arg("wrap_row") = 0,
         nb::arg("wrap_indicator") = nb::none(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
-
-    ttnn::bind_function<"pack_convolution_carry", "ttnn.experimental.kda.">(
-        mod,
-        R"doc(
-        Pack the one-tile sequence-parallel causal-convolution publication.
-
-        Ordinary devices publish their physical final history. The device whose
-        local wrap indicator is nonzero publishes the history immediately before
-        wrap_row and retains its physical final history in the next rows.
-
-        Args:
-            input (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 ``[1,T,C]``.
-                T and C must be positive and tile-aligned.
-            wrap_indicator (ttnn.Tensor): Interleaved TILE FLOAT32 tensor on
-                the same device; its first scalar is the local predicate.
-            wrap_row (int): Tile-aligned boundary in ``[history_rows,T)``.
-
-        Keyword Args:
-            history_rows (int): Positive history length H with ``2*H <= 32``;
-                defaults to three.
-            memory_config (ttnn.MemoryConfig, optional): Interleaved output
-                placement; defaults to DRAM.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
-                Device compute configuration.
-
-        Returns:
-            ttnn.Tensor: New BFLOAT16 TILE ``[1,32,C]`` publication. Rows 0:H
-                contain input[wrap_row-H:wrap_row] on the boundary device and
-                input[T-H:T] elsewhere. Rows H:2H contain input[T-H:T] only on
-                the boundary device. All remaining rows are zero. Inputs are
-                immutable and the output owns separate storage.
-        )doc",
-        &ttnn::experimental::kda::pack_convolution_carry,
-        nb::arg("input").noconvert(),
-        nb::arg("wrap_indicator").noconvert(),
-        nb::arg("wrap_row"),
-        nb::kw_only(),
-        nb::arg("history_rows") = 3,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }

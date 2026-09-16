@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry, exchange_split_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -262,24 +262,16 @@ class ttKDA:
         qkv: ttnn.Tensor,
         convolution_state: ttnn.Tensor,
         topology: ChronologicalTopology,
+        wrap_indicator: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
-        channels = self._convolution_width
-        sequence = qkv.shape[1]
-        if self.sequence_parallel_size > 1:
-            convolution_state, new_state = exchange_convolution_carry(
-                qkv,
-                convolution_state,
-                sequence_parallel_axis=self.sequence_parallel_axis,
-                topology=topology,
-            )
-        else:
-            new_state = ttnn.slice(
-                qkv,
-                (0, sequence - (config.conv_kernel_size - 1), 0),
-                (qkv.shape[0], sequence, channels),
-            )
+        convolution_state, new_state = exchange_convolution_carry(
+            qkv,
+            convolution_state,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            topology=topology,
+        )
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv,
             convolution_state,
@@ -288,34 +280,7 @@ class ttKDA:
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return q, k, v, new_state
-
-    def _convolve_split_qkv(
-        self,
-        qkv: ttnn.Tensor,
-        convolution_state: ttnn.Tensor,
-        topology: ChronologicalTopology,
-        wrap_indicator: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Convolve the full partition once with both required history planes."""
-        history, new_state = exchange_split_convolution_carry(
-            qkv,
-            convolution_state,
-            sequence_parallel_axis=self.sequence_parallel_axis,
-            topology=topology,
-            wrap_indicator=wrap_indicator,
-        )
-        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv,
-            history,
-            *self.weights.convolution_taps,
-            self.config.q_dim,
-            self.config.k_dim,
-            self.config.v_dim,
-            program_config=self.qkv_convolution_program_config,
-            wrap_row=topology.head_rows,
+            wrap_row=topology.head_rows if topology.is_split else 0,
             wrap_indicator=wrap_indicator,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -469,11 +434,8 @@ class ttKDA:
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        if topology.is_split:
-            wrap_indicator = self._wrap_indicators[topology.boundary_chip]
-            q, k, v, new_convolution = self._convolve_split_qkv(qkv, convolution_state, topology, wrap_indicator)
-        else:
-            q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, topology)
+        wrap_indicator = self._wrap_indicators[topology.boundary_chip] if topology.is_split else None
+        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, topology, wrap_indicator)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
