@@ -1612,18 +1612,11 @@ void ValidateProgramSpec(
             dfb.unique_id,
             tp_name);
         // Spec-time sizing check. A borrowed DFB lives in ONE core's slice of the backing buffer,
-        // so the bound is that buffer's per-bank allocation -- not compute_packed_buffer_size_bytes(),
-        // which is both whole-tensor and unpadded and so under-reports a single shard whenever the
-        // shard spec over-covers the logical data. Row-major sharded tensors are the common case:
-        // they align on width only (create_default_alignment_rm), so their height never pads up to
-        // the shard height, and a tensor can be legally smaller than one of its own shards.
+        // so the bound is that buffer's per-bank allocation.
         //
         // TensorSpec yields the per-bank figure without a Buffer: sharded specs take pages-per-bank
         // from the shard spec or the distribution spec, interleaved specs divide their page count by
-        // num_banks. Feeding it the allocator's real bank count for this tensor's buffer type makes
-        // the interleaved case div_up(pages, banks) * aligned_page_size -- the same arithmetic the
-        // attach-time check gets from a concrete Buffer (aligned_size_per_bank() ->
-        // calculate_bank_size_spread) -- rather than the whole-tensor bound a hardcoded 1 would give.
+        // num_banks.
         // The attach-time check in AttachBorrowedDFBBuffers (program_run_args.cpp) stays
         // authoritative; this one just stops deferring a rejection it can already make.
         //
