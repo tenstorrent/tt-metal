@@ -12,6 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
+#include "ttnn/operations/rand/rand.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
@@ -30,20 +31,25 @@ struct RandDeviceOperation {
         ttsl::SmallVector<bool> mesh_dim_is_sharded;
         std::optional<tt::tt_metal::TensorTopology> tensor_topology;
         std::optional<std::vector<ttnn::MeshCoordinate>> restricted_mesh_coords;
+        RandGenerator generator;
+        bool has_state;
 
         // Cache key. Seed, bounds, and topology-dependent seed mapping are dynamic and are re-applied per dispatch
         // via override_runtime_arguments. A restricted coordinate set changes which devices have programs, so it is
         // structural and must be included. `device` must be FIRST:
         // rand has no input tensor, so the framework discovers the mesh device via
         // get_first_object_of_type over attribute_values(), whose tuple path inspects only element 0.
-        static constexpr auto attribute_names =
-            std::forward_as_tuple("device", "shape", "dtype", "layout", "memory_config", "restricted_mesh_coords");
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "device", "shape", "dtype", "layout", "memory_config", "restricted_mesh_coords", "generator", "has_state");
         auto attribute_values() const {
-            return std::forward_as_tuple(device, shape, dtype, layout, memory_config, restricted_mesh_coords);
+            return std::forward_as_tuple(
+                device, shape, dtype, layout, memory_config, restricted_mesh_coords, generator, has_state);
         }
     };
 
-    struct tensor_args_t {};
+    struct tensor_args_t {
+        std::optional<Tensor> state;
+    };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
@@ -85,5 +91,7 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     float upper_bound,
     uint32_t seed,
     ttsl::SmallVector<bool> mesh_dim_is_sharded = {},
-    std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt,
+    RandGenerator generator = RandGenerator::LFSR,
+    const std::optional<Tensor>& state = std::nullopt);
 }  // namespace ttnn::prim

@@ -11,10 +11,13 @@
 namespace ttnn::operations::rand {
 
 void RandDeviceOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         operation_attributes.lower_bound <= operation_attributes.upper_bound,
         "Rand: inclusive lower bound must be <= inclusive upper bound");
+    TT_FATAL(
+        operation_attributes.has_state == tensor_args.state.has_value(),
+        "Rand: has_state attribute must match the presence of the state tensor");
 }
 
 void RandDeviceOperation::validate_on_program_cache_miss(
@@ -63,7 +66,9 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     float upper_bound,
     uint32_t seed,
     ttsl::SmallVector<bool> mesh_dim_is_sharded,
-    std::optional<tt::tt_metal::TensorTopology> tensor_topology) {
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology,
+    RandGenerator generator,
+    const std::optional<Tensor>& state) {
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     std::optional<std::vector<ttnn::MeshCoordinate>> restricted_mesh_coords;
     if (tensor_topology.has_value() && tensor_topology->mesh_coords().size() < device.num_devices()) {
@@ -81,7 +86,9 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
             seed,
             std::move(mesh_dim_is_sharded),
             std::move(tensor_topology),
-            std::move(restricted_mesh_coords)},
-        OperationType::tensor_args_t{});
+            std::move(restricted_mesh_coords),
+            generator,
+            state.has_value()},
+        OperationType::tensor_args_t{state});
 }
 }  // namespace ttnn::prim

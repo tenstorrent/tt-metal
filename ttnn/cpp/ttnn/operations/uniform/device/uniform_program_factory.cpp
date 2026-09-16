@@ -141,6 +141,8 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
     // Writer kernel
     KernelDescriptor::CompileTimeArgs writer_ct_args{output_cb_id};
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+    writer_ct_args.push_back(0);  // no state tensor
+    writer_ct_args.push_back(0);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = WRITER_KERNEL_PATH;
@@ -155,7 +157,7 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
     compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {output_cb_id};
+    compute_desc.compile_time_args = {output_cb_id, 0 /*LFSR*/, 0 /*no state*/, 0};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         // Retain generated values in FP32 until packing so reduced destination
@@ -180,7 +182,8 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
         // cache-miss build, re-applied on every cache hit by override_runtime_arguments().
         compute_desc.runtime_args.emplace_back(
             core,
-            KernelDescriptor::CoreRuntimeArgs{seed, lower_bound_bits, upper_bound_bits, tile_offset, units_per_core});
+            KernelDescriptor::CoreRuntimeArgs{
+                seed, lower_bound_bits, upper_bound_bits, tile_offset, units_per_core, 0u});
 
         writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
     }
