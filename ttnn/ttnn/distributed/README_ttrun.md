@@ -28,7 +28,7 @@ tt-run automatically:
 1. Resolves a **Phase 1 cache directory** under `generated/ttrun/` from the MGD bytes (single file, or mapping YAML **plus** each referenced **`.textproto`**) and host set (or mock descriptor contents); see [Phase 1 cache directory](#phase-1-cache-directory) below.
 2. If that directory already has valid cached outputs and a matching fingerprint, **skips** `generate_rank_bindings`; otherwise runs it on the specified hosts (or mock ranks), passing **`-m`** or **`-M`** to match how you invoked **tt-run**.
 3. Waits 5 seconds for file sync after Phase 1 (e.g., NFS) when Phase 1 runs.
-4. Launches your program with the generated (or cached) rank bindings and rankfile.
+4. Launches your program with the generated (or cached) rank bindings and rankfile, adding **`--bind-to none`**: the generated rankfile places each rank with `slot=0`, which PRRTE would otherwise read as a binding to **one core** per rank (every host thread of the workload shares it). Pass your own policy through **`--mpi-args "--bind-to ..."`**, or set **`TT_RUN_BIND_TO_NONE=0`**, to keep PRRTE's placement. **`--bare`** adds nothing. Legacy mode (**`--rank-binding`**) is unchanged, since a hand-written rankfile may carry real slot ranges.
 
 ### Basic Usage
 
