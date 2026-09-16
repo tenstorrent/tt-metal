@@ -2954,6 +2954,84 @@ class TestGraphCaptureToFile:
         assert json.loads(execution[5]) == json.loads(params["worker_core_ranges"])
 
     @skip_for_slow_dispatch()
+    @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_loudbox")], indirect=True)
+    def test_execution_fans_out_to_every_device_in_the_mesh(self, mesh_device, tmp_report_dir):
+        """One program_execution per physical device a single workload landed on.
+
+        On a single-device host the fan-out in track_mesh_workload_execution always yields
+        exactly one node, so nothing there distinguishes device_id from physical_device_id,
+        and one operation never produces enough executions to exercise execution_id's
+        per-operation stride. A replicated mesh workload covers both.
+        """
+        report_path = tmp_report_dir / "mesh_fanout_report.json"
+        db_dir = tmp_report_dir / "db"
+        num_devices = mesh_device.get_num_devices()
+        assert num_devices > 1, "fan-out is only observable on a multi-device mesh"
+
+        torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+        lhs, rhs = (
+            ttnn.from_torch(
+                torch_input,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(2)
+        )
+
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config("enable_logging", True):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                _ = ttnn.add(lhs, rhs)
+                ttnn.synchronize_device(mesh_device)
+            finally:
+                captured_graph = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        execution_nodes = [node for node in captured_graph if node.get("node_type") == "program_execution"]
+        assert len(execution_nodes) == num_devices
+        params = [node["params"] for node in execution_nodes]
+
+        # device_id names the MeshDevice and so repeats across the fan-out; physical_device_id
+        # names the chip and so must not.
+        assert {param["device_id"] for param in params} == {mesh_device.id()}
+        assert len({param["physical_device_id"] for param in params}) == num_devices
+        # global_call_count encodes the chip, which is what keeps per-device profiler rows apart.
+        for param in params:
+            assert param["global_call_count"] == (param["runtime_id"] << 10) | param["physical_device_id"]
+        assert len({param["global_call_count"] for param in params}) == num_devices
+
+        # The manager partitions the mesh uniformly, so it is snapshotted once for the mesh
+        # rather than once per chip in the fan-out.
+        manager_nodes = [node for node in captured_graph if node.get("node_type") == "sub_device_manager"]
+        assert len(manager_nodes) == 1
+        assert manager_nodes[0]["params"]["device_id"] == mesh_device.id()
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT e.execution_id, e.operation_id, e.physical_device_id, e.global_call_count, x.sub_device_id "
+                "FROM operation_executions e "
+                "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank "
+                "ORDER BY e.physical_device_id"
+            ).fetchall()
+            # Executions carry the remapped mesh id, so every row must resolve against devices.
+            dangling = conn.execute(
+                "SELECT COUNT(*) FROM operation_executions e "
+                "LEFT JOIN devices d ON d.device_id = e.device_id AND d.rank = e.rank "
+                "WHERE d.device_id IS NULL"
+            ).fetchone()[0]
+
+        assert len(rows) == num_devices
+        assert dangling == 0
+        # All of them hang off the one ttnn.add, which is what puts execution_id's stride under
+        # load: ids are operation_id * stride + index, so a collision here would drop a row.
+        assert len({row[1] for row in rows}) == 1
+        assert len({row[0] for row in rows}) == num_devices
+        assert {row[2] for row in rows} == {param["physical_device_id"] for param in params}
+        assert {row[3] for row in rows} == {param["global_call_count"] for param in params}
+        assert {row[4] for row in rows} == {0}
+
+    @skip_for_slow_dispatch()
     @pytest.mark.skipif(not is_wormhole_b0(), reason="Sub-device graph-report coverage targets Wormhole")
     def test_sub_device_execution_metadata_round_trip(self, device, tmp_report_dir):
         report_path = tmp_report_dir / "sub_device_report.json"
