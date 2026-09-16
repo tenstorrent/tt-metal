@@ -1250,6 +1250,7 @@
     # Empty-generation regressions live here, after the perf test has compiled the pipeline they
     # share: 118 s here against 294 s in the unit job.
     pytest models/experimental/xtts/tests/pcc/test_empty_generation.py --timeout=900
+    pytest models/experimental/xtts/tests/pcc/test_budget_length_generation.py --timeout=900
     python models/experimental/xtts/demo/xtts_demo.py
   model: xtts-v2
   model_family: XTTS

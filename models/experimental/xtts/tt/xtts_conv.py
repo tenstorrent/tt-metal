@@ -9,6 +9,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
+def is_l1_clash(exc: BaseException) -> bool:
+    """Return whether an exception is a static-CB / L1-buffer clash."""
+    msg = str(exc).lower()
+    return "circular buffer" in msg or "clash" in msg
+
+
 def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
     """Gather to DRAM interleaved and reshape, optionally RM."""
     x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -165,6 +171,20 @@ class TtConv1d(LightweightModule):
         if conv_config_overrides:
             for _k, _v in conv_config_overrides.items():
                 setattr(self.conv_config, _k, _v)
+        # Retry config for shapes whose auto-sharded program clashes with live L1 buffers (the
+        # decode trace keeps its tensors allocated while the vocoder runs): the same config with
+        # act/weight double buffering off, which halves those circular buffers at equal output.
+        self._single_buffer_config = ttnn.Conv1dConfig(
+            weights_dtype=weights_dtype,
+            deallocate_activation=False,
+            activation=activation,
+        )
+        if conv_config_overrides:
+            for _k, _v in conv_config_overrides.items():
+                setattr(self._single_buffer_config, _k, _v)
+        self._single_buffer_config.enable_act_double_buffer = False
+        self._single_buffer_config.enable_weights_double_buffer = False
+        self._single_buffer_keys = set()
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=math_fidelity,
@@ -191,7 +211,30 @@ class TtConv1d(LightweightModule):
             combined = ttnn.to_layout(ttnn.add(self._raw_bias_fp32, cond_bias), ttnn.ROW_MAJOR_LAYOUT)
             bias_tensor = ttnn.from_device(combined)
             ttnn.deallocate(combined)
-        out, out_length, [weight, bias] = ttnn.conv1d(
+        config = self._single_buffer_config if key in self._single_buffer_keys else self.conv_config
+        try:
+            out, out_length, [weight, bias] = self._conv1d(x, bias_tensor, batch_size, input_length, config)
+        except RuntimeError as e:
+            if config is self._single_buffer_config or not is_l1_clash(e):
+                raise
+            self._single_buffer_keys.add(key)
+            self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
+            out, out_length, [weight, bias] = self._conv1d(
+                x, bias_tensor, batch_size, input_length, self._single_buffer_config
+            )
+        self.tt_weight = weight
+        if fold:
+            self._folded_bias[fold_key] = (cond_bias, bias)
+        else:
+            self.tt_bias = bias
+        self._prepared_for = key
+        if keep_sharded:
+            return ttnn.reshape(out, [batch_size, out_length, self.out_channels])
+        return _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
+
+    def _conv1d(self, x, bias_tensor, batch_size, input_length, conv_config):
+        """Run ttnn.conv1d with the given config, returning (out, out_length, [weight, bias])."""
+        return ttnn.conv1d(
             input_tensor=x,
             weight_tensor=self.tt_weight,
             bias_tensor=bias_tensor,
@@ -206,20 +249,11 @@ class TtConv1d(LightweightModule):
             batch_size=batch_size,
             input_length=input_length,
             dtype=self.activations_dtype,
-            conv_config=self.conv_config,
+            conv_config=conv_config,
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        self.tt_weight = weight
-        if fold:
-            self._folded_bias[fold_key] = (cond_bias, bias)
-        else:
-            self.tt_bias = bias
-        self._prepared_for = key
-        if keep_sharded:
-            return ttnn.reshape(out, [batch_size, out_length, self.out_channels])
-        return _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
 
 
 class TtConvTranspose1d(LightweightModule):
