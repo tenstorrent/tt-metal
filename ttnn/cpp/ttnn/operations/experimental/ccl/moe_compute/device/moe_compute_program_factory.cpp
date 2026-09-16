@@ -1159,13 +1159,24 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t tile_width = tilize_input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_height = tilize_input_tensor.tensor_spec().tile().get_height();
     const uint32_t output_height_shard_dim = args.output_height_shard_dim;
-
-    // this logic is awkward. needs to match selective_reduce_combine_program_factory.
-    constexpr auto double_buffer = 2;
-    const auto shards = tilize_output_tensor.memory_config().shard_spec()->grid.num_cores();
-    const auto token_expert_row_offset = tilize_output_tensor.logical_shape().volume() / shards /
-                                         (hidden_size / combine_data_parallel_cores / double_buffer) /
-                                         combine_token_parallel_cores;
+    const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
+    const uint32_t token_segment_size_bytes =
+        output_shard_width_tiles * tile_width * tilize_output_tensor.element_size();
+    constexpr uint32_t num_source_buffers = 2;
+    const auto& source_shard_shape = tilize_output_tensor.memory_config().shard_spec()->shape;
+    // token_expert_row_offset is in token-segment rows (hidden_size / combine_data_parallel_cores
+    // wide): dm1 turns it into the byte offset of ring entry 1 inside each combine core's shard
+    // (rows * combine_shard_width_tiles * tile_width_size_bytes). The shard itself is
+    // [2 x 32, hidden_size], so the offset is 32 * combine_data_parallel_cores segment rows, not 32.
+    // Same helper and arguments as selective_reduce_combine's consumer side.
+    const auto fused_source_layout = ttnn::experimental::prim::detail::compute_fused_source_buffer_layout(
+        source_shard_shape[0],
+        source_shard_shape[1],
+        hidden_size / combine_data_parallel_cores,
+        tilize_output_tensor.buffer()->aligned_size_per_bank(),
+        token_segment_size_bytes,
+        num_source_buffers);
+    const uint32_t token_expert_row_offset = fused_source_layout.rows_per_buffer;
 
     // NOC_MAX_BURST_SIZE — arch-dependent, used by dm1 to split ring A2A packets
     const uint32_t noc_max_burst_bytes = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 16384u : 8192u;
@@ -1173,7 +1184,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     // activation function
     const ttnn::experimental::prim::detail::MoEActivationFunction activation_type = args.activation_type;
 
-    const uint32_t output_shard_width_tiles = hidden_size / tile_width / combine_data_parallel_cores;
     // num_banks: number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on.
     // Ring size equals the live bank count: 12 on WH (no DRAM-bank harvesting), 7/8 on BH.
     // Ring cores and banks are 1:1, so no cross-bank walk is needed.

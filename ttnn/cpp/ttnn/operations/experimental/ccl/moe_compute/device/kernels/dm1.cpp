@@ -237,20 +237,24 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
+
+        // Zero-token experts produce no chunks, so skip the whole per-expert
+        // matmul<->combine handshake (buffer-free wait, combine_semaphore_inc, double-buffer
+        // toggle). The combine writer skips these experts gated on the same tilize-produced
+        // counts, so semaphore totals and double-buffer parity stay aligned. compute_only
+        // has no combine writer: keep the toggle so host readback sees the same halves.
+        if constexpr (!compute_only) {
+            if (active_tokens == 0) {
+                continue;
+            }
+        }
+
         const uint32_t tokens_per_height_shard_chunk = active_tokens / height_shard_dim;
         const uint32_t tokens_per_height_shard_rem = active_tokens % height_shard_dim;
         const uint32_t output_buffer_offset_bytes = shard_offset_per_expert_bytes * output_buffer_idx;
 
         uint32_t dest_height_shard_start = 0;
         uint32_t shard_row_start = 0;
-
-        // required to prevent a race with combine writer (only relevant in production:
-        // compute_only has no combine writer to coordinate with).
-        if constexpr (!compute_only) {
-            if (num_expert_chunks == 0) {
-                combine_sem.wait(combine_semaphore_val);
-            }
-        }
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             // Device 2.0 migration: legacy primitives retained: state-machine setup

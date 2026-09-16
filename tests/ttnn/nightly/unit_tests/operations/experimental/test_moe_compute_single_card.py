@@ -160,10 +160,12 @@ def _run_moe_compute_single_card_test(
     compute_only=True,
     skip_on_ci=False,
     matmul_xfail_on_bh=False,
+    local_combine=False,
 ):
     """
-    Single-card MoE compute test body. cluster_axis is fixed to None
-    (no dispatch axis on 1x1 mesh).
+    Single-card MoE compute test body. cluster_axis is None (no dispatch axis on a 1x1
+    mesh) unless local_combine=True, which selects axis 0 explicitly; on a 1x1 mesh that
+    axis has size one, so the op takes the same FullLocal path as cluster_axis=None.
 
     The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
     BH) — the same ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used
@@ -203,6 +205,7 @@ def _run_moe_compute_single_card_test(
     logger.info(f"  mesh_shape: {mesh_shape}")
     logger.info(f"  cluster_axis: {cluster_axis}")
     logger.info(f"  compute_only: {compute_only}")
+    logger.info(f"  local_combine: {local_combine}")
     logger.info(f"  num_devices: {num_devices}")
     logger.info(f"  tokens_per_device: {tokens_per_device}, total_tokens: {total_tokens}")
     logger.info(f"  experts: {experts}, experts_per_device: {experts_per_device}")
@@ -406,9 +409,10 @@ def _run_moe_compute_single_card_test(
             output_height_shard_dim=output_height_shard_dim,
             intermediate_size=N,
             has_bias=has_bias,
-            # cluster_axis=None: required for both compute_only and single-device fused (FullLocal).
-            # topology/num_links/mux/semaphore must be None for both paths.
-            cluster_axis=None,
+            # cluster_axis=None: required for compute_only and for the implicit 1x1 FullLocal
+            # call. local_combine=True instead names the size-one axis 0 explicitly.
+            # topology/num_links/mux/semaphore must be None for all of these paths.
+            cluster_axis=0 if local_combine else None,
             topology=None,
             num_links=None,
             mux_core_range_set=None,
@@ -416,6 +420,7 @@ def _run_moe_compute_single_card_test(
             optional_cross_device_semaphore=None,
             activation_type=activation_type,
             compute_only=compute_only,
+            local_combine=local_combine,
         )
 
     def deallocate_l1_moe_compute_outputs(output_tensors):
@@ -807,12 +812,37 @@ def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
     )
 
 
-# Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
-    """compute_only=True with cluster_axis set must raise (loud rejection per spec)."""
-    # Build minimal valid input shapes; we do NOT need the op to actually run --
-    # validation must reject the bad arg combination before kernel launch.
+def test_moe_compute_single_card_explicit_local_combine(mesh_device, mesh_shape):
+    """local_combine=True with cluster_axis naming a size-one axis matches the implicit 1x1 FullLocal call."""
+    hidden_size = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=16,
+        tokens_per_device=1,
+        selected_experts_k=8,
+        N=512,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=False,
+        local_combine=True,
+    )
+
+
+def _minimal_rejection_inputs(mesh_device):
+    """Replicated inputs with valid shapes for argument-validation tests. The op must reject
+    the bad argument combination before any kernel launch, so the weights are placeholders."""
     hidden_size = 7168
     tokens_per_device = 32
     experts = 8
@@ -868,25 +898,45 @@ def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, 
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    return (tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2)
 
+
+def _call_moe_compute_for_rejection(mesh_device, **overrides):
+    kwargs = dict(
+        layer_id=0,
+        output_height_shard_dim=4,
+        intermediate_size=2048,
+        has_bias=False,
+        cluster_axis=None,
+        topology=None,
+        num_links=None,
+        mux_core_range_set=None,
+        optional_output_tensor=None,
+        optional_cross_device_semaphore=None,
+        activation_type=MoEActivationFunction.SILU,
+        compute_only=False,
+    )
+    kwargs.update(overrides)
+    return ttnn.experimental.moe_compute(*_minimal_rejection_inputs(mesh_device), **kwargs)
+
+
+# Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
+    """compute_only=True with cluster_axis set must raise (loud rejection per spec)."""
     with expect_error(RuntimeError, r"compute_only.*cluster_axis"):
-        ttnn.experimental.moe_compute(
-            tt_sparse,
-            tt_indices,
-            tt_scores,
-            tt_mapping,
-            tt_w0_w1,
-            tt_w2,
-            layer_id=0,
-            output_height_shard_dim=4,
-            intermediate_size=2048,
-            has_bias=False,
-            cluster_axis=1,  # <-- conflicting with compute_only=True
-            topology=None,
-            num_links=None,
-            mux_core_range_set=None,
-            optional_output_tensor=None,
-            optional_cross_device_semaphore=None,
-            activation_type=MoEActivationFunction.SILU,
-            compute_only=True,
-        )
+        _call_moe_compute_for_rejection(mesh_device, compute_only=True, cluster_axis=1)
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_local_combine_rejects_compute_only(mesh_device, mesh_shape, expect_error):
+    """local_combine=True and compute_only=True are mutually exclusive."""
+    with expect_error(RuntimeError, r"compute_only.*local_combine"):
+        _call_moe_compute_for_rejection(mesh_device, compute_only=True, local_combine=True)
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_local_combine_rejects_shared_experts(mesh_device, mesh_shape, expect_error):
+    """local_combine=True has no shared-expert path; the caller runs shared experts separately."""
+    with expect_error(RuntimeError, r"local_combine.*shared experts"):
+        _call_moe_compute_for_rejection(mesh_device, local_combine=True, num_shared_experts_per_device=1)
