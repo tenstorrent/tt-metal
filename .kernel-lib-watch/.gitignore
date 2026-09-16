@@ -1,0 +1,10 @@
+# Host-local credentials
+slack_webhook
+slack_bot_token
+oauth_token
+
+# Runtime state, locks, and logs
+state.json
+.watch.lock
+.bootstrap.lock
+*.log

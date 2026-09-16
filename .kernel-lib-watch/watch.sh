@@ -1,0 +1,629 @@
+#!/usr/bin/env bash
+# Kernel Lib pipeline watcher — invoked by cron (or manually).
+# Posts one Slack digest with per-pipeline status. Uses a cache keyed by
+# run_id so unchanged pipelines reuse their previous summary block without
+# re-invoking the LLM.
+#
+# Run manually with DRY_RUN=1 to print the digest instead of posting.
+
+set -euo pipefail
+
+# Self-locating: derive home from the script's own path so a copied instance
+# (e.g. ~/.kernel-lib-watch) reads its OWN config/state, never a sibling watcher's.
+# SDPA_HOME keeps its original name on purpose: this file is a near-verbatim
+# copy of .sdpa-watch/watch.sh and .conv-watch/watch.sh, and renaming the
+# variable would turn every future fix-port between the three into a manual
+# merge. Only the header comment and the digest title differ.
+SDPA_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SDPA_HOME/config.sh"
+
+STATE="$SDPA_HOME/state.json"
+PROMPT_TEMPLATE="$SDPA_HOME/agent_prompt.txt"
+AGENT_ERR="$SDPA_HOME/agent_errors.log"
+DRY_RUN="${DRY_RUN:-0}"
+
+ts()  { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
+log() { echo "[$(ts)] $*" >&2; }
+
+if [[ -z "$TT_METAL_DIR" || ! -d "$TT_METAL_DIR/.git" ]]; then
+  log "FATAL: TT_METAL_DIR must name a tt-metal Git checkout; set it in the host-local config or environment"
+  exit 1
+fi
+
+# Serialize runs: prevent overlapping invocations (a stray second cron daemon,
+# or a manual run coinciding with a scheduled tick) from double-posting to Slack
+# or racing on the shared ~/.claude/.credentials.json OAuth refresh. Non-blocking
+# — if another instance already holds the lock, log once and exit cleanly.
+exec 200>"$SDPA_HOME/.watch.lock"
+if ! flock -n 200; then
+  log "another watch.sh instance holds the lock — skipping this tick"
+  exit 0
+fi
+
+# Extract failure markers from a failed run's job logs. Outputs a single
+# multi-job blob suitable for inclusion in the agent prompt.
+# Reads $job_pattern from caller's scope: if non-empty, only failed jobs
+# whose .name matches (grep -E -i) the pattern have their logs fetched.
+fetch_failure_logs() {
+  local rid="$1"
+  local failed_jobs combined jid jname jlog_full raw_signals ci_summary generic_signals jlog
+  failed_jobs=$(gh api "repos/$REPO/actions/runs/$rid/jobs" --paginate \
+                --jq '.jobs[] | select(.conclusion=="failure") | "\(.id)\t\(.name)"' 2>/dev/null)
+  if [[ -z "$failed_jobs" ]]; then
+    printf '(no failed jobs reported)'
+    return
+  fi
+  if [[ -n "${job_pattern:-}" ]]; then
+    local before_count after_count
+    before_count=$(printf '%s\n' "$failed_jobs" | grep -c .)
+    failed_jobs=$(printf '%s\n' "$failed_jobs" | grep -E -i "$job_pattern" || true)
+    after_count=$(printf '%s\n' "$failed_jobs" | grep -c .)
+    log "  job filter '$job_pattern': $after_count/$before_count failed jobs in scope"
+    if [[ -z "$failed_jobs" ]]; then
+      printf '(no in-scope failed jobs — %d failed jobs filtered out by pattern /%s/)' \
+             "$before_count" "$job_pattern"
+      return
+    fi
+  fi
+  combined=""
+  while IFS=$'\t' read -r jid jname; do
+    [[ -z "$jid" ]] && continue
+    jlog_full=$(gh api "repos/$REPO/actions/jobs/$jid/logs" 2>/dev/null)
+    # Long CI logs bury the actionable device failure well before the wrapper's
+    # final "exit code 250" line. Preserve raw watcher/assert context and the
+    # structured CI root-cause section when present. The old generic-only grep
+    # kept the wrapper error and discarded both, producing useless digests.
+    raw_signals=$(printf '%s' "$jlog_full" \
+      | { grep -E -B 6 -A 24 'Watcher stopped the device|tripped an assert on line|Watcher detected tripped assert|Fatal Python error|TT_FATAL|TT_ASSERT|PCC.{0,80}(fail|mismatch)|AssertionError|FAILED ' || true; })
+    ci_summary=$(printf '%s' "$jlog_full" \
+      | { grep -E -B 2 -A 10 '#### Error Message|#### Root Cause|#### Suggested Action|<summary>Failed Tests' || true; })
+    generic_signals=$(printf '%s' "$jlog_full" \
+      | { grep -E -B 5 -A 30 '##\[error\]|Traceback|Process completed with exit code' || true; })
+    jlog="${raw_signals}${raw_signals:+$'\n'}${ci_summary}${ci_summary:+$'\n'}${generic_signals}"
+    [[ -z "$jlog" ]] && jlog=$(printf '%s' "$jlog_full" | tail -c 12000)
+    # Keep every failed job represented without allowing one noisy compile log
+    # to consume the entire agent prompt. Root-cause summaries occur near the
+    # end of the selected material and survive this cap.
+    jlog=$(printf '%s' "$jlog" | tail -c 18000)
+    combined+="=== JOB: $jname ===
+$jlog
+
+"
+  done <<<"$failed_jobs"
+  printf '%s' "${combined:-(log fetch failed)}"
+}
+
+# Run the agent on one run and emit a summary block. Reads $display,
+# $workflow, $state_key, $test_hint, $prev_sha from the caller's scope.
+analyze_run() {
+  local rid="$1" rnum="$2" rconcl="$3" rsha="$4" rurl="$5" note="$6"
+  local logs="(no log fetched)" commits ctx prompt summary rc
+
+  [[ "$rconcl" == "failure" ]] && logs=$(fetch_failure_logs "$rid")
+
+  commits="(no prior run tracked)"
+  if [[ -n "$prev_sha" && "$prev_sha" != "$rsha" ]]; then
+    commits=$(git -C "$TT_METAL_DIR" log --oneline "$prev_sha..$rsha" 2>/dev/null | head -50 \
+              || echo "(range unavailable)")
+  fi
+
+  ctx=$(cat <<EOF
+Pipeline display name: $display
+Workflow file: $workflow
+Run: #$rnum  conclusion=$rconcl  sha=$rsha
+URL: $rurl
+Test focus hint: $test_hint
+${note:+Note: $note}
+
+Commits since last analyzed run (${prev_sha:0:7}..${rsha:0:7}):
+$commits
+
+Failure log excerpt (truncated to last ~40k chars):
+$logs
+EOF
+)
+  prompt="$(cat "$PROMPT_TEMPLATE")
+
+# Context
+$ctx"
+
+  set +e
+  summary=$(cd "$TT_METAL_DIR" && \
+            claude --model "$MODEL" -p <<<"$prompt" 2>>"$AGENT_ERR")
+  rc=$?
+  # rc=127 means the claude binary vanished mid-call — almost always its
+  # self-updater swapping claude.exe while we ran. Wait out the swap and
+  # retry once before giving up on this run.
+  if [[ $rc -eq 127 ]]; then
+    log "  claude not found (rc=127) — likely a binary swap; retrying in 20s"
+    sleep 20
+    summary=$(cd "$TT_METAL_DIR" && \
+              claude --model "$MODEL" -p <<<"$prompt" 2>>"$AGENT_ERR")
+    rc=$?
+  fi
+  set -e
+
+  # opus-4.8 sometimes emits reasoning prose before the block despite the
+  # prompt's "one block and nothing else" rule. Keep only from the "▸ *"
+  # header line onward so neither the digest nor the success-line collapse
+  # ever ingests preamble. If no header line exists the result is empty and
+  # the fallback below fires (malformed output treated as an agent failure).
+  if [[ $rc -eq 0 && -n "$summary" ]]; then
+    summary=$(printf '%s\n' "$summary" | sed -n '/^▸/,$p')
+  fi
+
+  # Agent failure: 🟡 block (not ⚠️ — that triggers the walk-back) plus
+  # the last cached summary so the digest still shows real test state.
+  # 🟡 first line tells the caller to skip persisting, so next tick retries.
+  if [[ $rc -ne 0 || -z "$summary" ]]; then
+    log "  agent failed on #$rnum (rc=$rc); using fallback block"
+    local cached
+    cached=$(jq -r --arg w "$state_key" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      cached=$(printf '%s' "$cached" | sed -E '1 s/^▸ \*[^*]+\*  ?//')
+    else
+      cached="(none)"
+    fi
+    summary="▸ *$display*  🟡 agent error (rc=$rc) — run #${rnum} ($rconcl) not analyzed — $rurl
+↳ last cached: $cached"
+  fi
+  printf '%s' "$summary"
+}
+
+# MODE B auth: refresh the interactive OAuth credential ourselves if it is at
+# or near expiry. Headless `claude -p` reads $CLAUDE_CREDS_FILE but never
+# refreshes it, so without this an unattended cron dies once the ~8h access
+# token lapses. We POST the rotating refresh token to the OAuth endpoint and
+# write the new access/refresh/expiry back atomically. Returns 0 if the
+# credential is usable afterwards (fresh already, or refreshed), 1 otherwise.
+refresh_oauth_credential() {
+  local creds="$CLAUDE_CREDS_FILE"
+  if [[ ! -f "$creds" ]]; then
+    log "  no OAuth credential at $creds — log into 'claude' once to seed it, or drop a setup-token in $OAUTH_TOKEN_FILE"
+    return 1
+  fi
+  local exp now rt resp code body at nrt ein exp_ms
+  exp=$(jq -r '.claudeAiOauth.expiresAt // 0' "$creds" 2>/dev/null || echo 0)
+  now=$(( $(date -u +%s) * 1000 ))
+  if (( exp > now + OAUTH_REFRESH_MARGIN_SEC * 1000 )); then
+    return 0   # still comfortably valid — nothing to do
+  fi
+  rt=$(jq -r '.claudeAiOauth.refreshToken // empty' "$creds" 2>/dev/null)
+  if [[ -z "$rt" ]]; then
+    log "  credential has no refresh token — cannot auto-refresh"
+    return 1
+  fi
+  log "  OAuth access token at/near expiry — refreshing via $OAUTH_TOKEN_ENDPOINT"
+  resp=$(curl -sS -w '\n__HTTP__%{http_code}' -X POST "$OAUTH_TOKEN_ENDPOINT" \
+         -H 'Content-Type: application/json' \
+         -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"$rt\",\"client_id\":\"$OAUTH_CLIENT_ID\"}" \
+         2>>"$AGENT_ERR")
+  code=$(printf '%s' "$resp" | sed -n 's/.*__HTTP__//p')
+  body=$(printf '%s' "$resp" | sed 's/__HTTP__[0-9]*$//')
+  if [[ "$code" != "200" ]]; then
+    log "  refresh failed (HTTP ${code:-?}) — keeping existing token; preflight will decide"
+    return 1
+  fi
+  at=$(printf '%s' "$body" | jq -r '.access_token // empty')
+  nrt=$(printf '%s' "$body" | jq -r '.refresh_token // empty')
+  ein=$(printf '%s' "$body" | jq -r '.expires_in // 28800')
+  if [[ -z "$at" ]]; then
+    log "  refresh response missing access_token — keeping existing token"
+    return 1
+  fi
+  exp_ms=$(( now + ein * 1000 ))
+  # Merge into the credential, preserving all other fields; rotate the refresh
+  # token if the server returned a new one. Atomic write + 600 perms.
+  if jq --arg at "$at" --arg rt "${nrt:-$rt}" --argjson exp "$exp_ms" \
+        '.claudeAiOauth.accessToken=$at | .claudeAiOauth.refreshToken=$rt | .claudeAiOauth.expiresAt=$exp' \
+        "$creds" > "$creds.tmp" 2>>"$AGENT_ERR"; then
+    mv "$creds.tmp" "$creds" && chmod 600 "$creds"
+    log "  OAuth token refreshed (valid ~$(( ein / 3600 ))h)"
+    return 0
+  fi
+  rm -f "$creds.tmp"
+  log "  failed to write refreshed credential"
+  return 1
+}
+
+# ---------- prerequisites ----------
+# Auth (see config.sh "Auth" for the full rationale). Two modes, MODE A first:
+#   A) a long-lived $OAUTH_TOKEN_FILE (from `claude setup-token`) → exported as
+#      CLAUDE_CODE_OAUTH_TOKEN; no refresh needed.
+#   B) otherwise the interactive $CLAUDE_CREDS_FILE, which we auto-refresh here
+#      because headless `claude -p` won't. Zero-manual once a /login seeds it.
+# A stale ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN would override either, so
+# unset both defensively before every run.
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+OAUTH_TOKEN_FILE="${OAUTH_TOKEN_FILE:-$SDPA_HOME/oauth_token}"
+if [[ -s "$OAUTH_TOKEN_FILE" ]]; then
+  log "auth: MODE A (long-lived setup-token)"
+  CLAUDE_CODE_OAUTH_TOKEN="$(tr -d '[:space:]' < "$OAUTH_TOKEN_FILE")"
+  export CLAUDE_CODE_OAUTH_TOKEN
+else
+  log "auth: MODE B (auto-refreshed interactive credential)"
+  refresh_oauth_credential || true   # non-fatal; preflight is the gate
+fi
+# Preflight so an expired/revoked/un-refreshable token fails loudly HERE (once,
+# in the log) instead of silently degrading every pipeline to a 🟡 block.
+if ! printf 'reply with the single word OK' \
+     | claude --model "$MODEL" -p >/dev/null 2>>"$AGENT_ERR"; then
+  log "FATAL: auth preflight failed — token expired/revoked and could not refresh. Re-seed via 'claude' /login (MODE B) or 'claude setup-token' → $OAUTH_TOKEN_FILE (MODE A). See $AGENT_ERR"
+  exit 1
+fi
+
+SLACK_URL=""
+if [[ -f "$SLACK_WEBHOOK_FILE" ]]; then
+  SLACK_URL="$(cat "$SLACK_WEBHOOK_FILE")"
+fi
+SLACK_BOT_TOKEN=""
+if [[ -n "${SLACK_BOT_TOKEN_FILE:-}" && -f "$SLACK_BOT_TOKEN_FILE" ]]; then
+  SLACK_BOT_TOKEN="$(tr -d '[:space:]' < "$SLACK_BOT_TOKEN_FILE")"
+fi
+if [[ -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]]; then
+  log "slack: bot-API mode — edit-in-place digest in $SLACK_CHANNEL_ID"
+elif [[ -n "$SLACK_URL" ]]; then
+  log "slack: webhook mode — new message per tick (no bot token/channel configured)"
+elif [[ "$DRY_RUN" != "1" ]]; then
+  log "FATAL: no Slack credentials — need $SLACK_BOT_TOKEN_FILE + SLACK_CHANNEL_ID, or $SLACK_WEBHOOK_FILE (run with DRY_RUN=1 to test without Slack)"
+  exit 1
+fi
+
+[[ -f "$STATE" ]] || echo '{}' > "$STATE"
+
+# Debounce duplicate invocations: two cron daemons run on this host, so each
+# scheduled tick fires 2-3×. The flock above only SERIALIZES them — a
+# duplicate that starts after the first finishes still reruns the whole tick,
+# and its API burst right on the heels of the healthy run's is exactly what
+# trips GitHub's secondary rate limit (the all-"no runs" digest flap).
+# FORCE=1 overrides for deliberate back-to-back manual runs.
+if [[ "${FORCE:-0}" != "1" && "$DRY_RUN" != "1" ]]; then
+  last_end=$(jq -r '._last_tick_end // 0' "$STATE" 2>/dev/null || echo 0)
+  now_epoch=$(date +%s)
+  if (( now_epoch - last_end < 600 )); then
+    log "duplicate-tick debounce — previous tick finished $((now_epoch - last_end))s ago (<600s); FORCE=1 to override"
+    exit 0
+  fi
+fi
+
+# Best-effort fetch so commit-range lookups work.
+git -C "$TT_METAL_DIR" fetch --quiet origin "$BRANCH" 2>/dev/null \
+  || log "warn: git fetch failed; commit-range data may be stale"
+
+# ---------- per-pipeline processing ----------
+blocks=()
+api_failures=0
+
+for entry in "${PIPELINES[@]}"; do
+  IFS='|' read -r state_key workflow display event_filter run_pattern test_hint job_pattern <<<"$entry"
+  log "checking: $workflow ($display; state=$state_key; event=$event_filter)"
+
+  reanalyze=false
+  if [[ "${REANALYZE_CONFIG:-}" == "1" || "${REANALYZE_CONFIG:-}" == "$state_key" ]]; then
+    reanalyze=true
+    log "  forced reanalysis requested for $state_key"
+  fi
+
+  evq="${event_filter:+&event=$event_filter}"
+
+  # Latest run on $BRANCH (any status). We deliberately do NOT pass
+  # status=completed: a re-attempt flips the run back to in_progress, and
+  # the filter would then hide it and surface an OLDER completed run.
+  # Status is checked client-side below.
+  # per_page=30 + newest created_at within this configuration instead of
+  # trusting item [0] of a
+  # per_page=1 response: the list endpoint occasionally serves a stale page
+  # whose first item is an ancient run (2026-08-19 it returned May's #6154
+  # as L2's "latest", which then got cached as current state).
+  if ! runs=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&per_page=30$evq" \
+        2>>"$AGENT_ERR"); then
+    # gh failed (burst rate limit / auth / network) — NOT the same as "no
+    # runs". Reuse the cached summary so the digest content (and therefore
+    # its fingerprint) stays stable instead of flapping to a bogus
+    # all-"no runs" digest; only surface an error block when there is no
+    # cache to fall back on. Root-cause error text lands in agent_errors.log.
+    api_failures=$((api_failures + 1))
+    cached=$(jq -r --arg w "$state_key" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      blocks+=("$cached")
+      log "  WARN: gh api failed — reusing cached summary (see agent_errors.log)"
+    else
+      blocks+=("▸ *$display* — ⚠️ _GitHub query failed this tick_")
+      log "  WARN: gh api failed — no cache to fall back on"
+    fi
+    continue
+  fi
+  run=$(jq -c --arg p "$run_pattern" \
+        '[.workflow_runs[] | select((.display_title // .name // "") | test($p; "i"))] | sort_by(.created_at) | last' \
+        <<<"$runs")
+
+  if [[ -z "$run" || "$run" == "null" ]]; then
+    blocks+=("▸ *$display* — _no runs on ${BRANCH}_")
+    log "  no runs found"
+    continue
+  fi
+
+  run_id=$(jq -r '.id'         <<<"$run")
+  status=$(jq -r '.status // "unknown"' <<<"$run")
+  conclusion=$(jq -r '.conclusion // "unknown"' <<<"$run")
+  sha=$(jq -r '.head_sha'      <<<"$run")
+  url=$(jq -r '.html_url'      <<<"$run")
+  run_number=$(jq -r '.run_number' <<<"$run")
+
+  prev=$(jq --arg w "$state_key" '.[$w] // {}' "$STATE")
+  prev_id=$(jq -r '.run_id // ""' <<<"$prev")
+  prev_sha=$(jq -r '.sha    // ""' <<<"$prev")
+  prev_num=$(jq -r '.run_number // 0' <<<"$prev")
+
+  # Cache hit: same run as last time (covers in-progress re-attempts of the
+  # cached run too — run_id is stable across attempts).
+  if [[ "$run_id" == "$prev_id" && "$reanalyze" != "true" ]]; then
+    cached=$(jq -r --arg w "$state_key" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      blocks+=("$cached")
+      log "  cache hit (run #$run_number unchanged)"
+      continue
+    fi
+  fi
+
+  # Latest run is in-flight (fresh trigger queued, or a re-attempt). The
+  # cache-hit check above already handles re-attempts of the cached run.
+  # Here we must look past the in-flight run to the latest *completed*
+  # run: if a newer completion exists than what's cached, analyze it;
+  # otherwise the cache is still the freshest real result.
+  if [[ "$status" != "completed" ]]; then
+    log "  run #$run_number is $status — checking latest completed"
+    completed_runs=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=30$evq" \
+                     2>/dev/null || echo '{"workflow_runs":[]}')
+    completed_run=$(jq -c --arg p "$run_pattern" \
+                    '[.workflow_runs[] | select((.display_title // .name // "") | test($p; "i"))] | sort_by(.created_at) | last' \
+                    <<<"$completed_runs")
+    completed_id=""
+    if [[ -n "$completed_run" && "$completed_run" != "null" ]]; then
+      completed_id=$(jq -r '.id // empty' <<<"$completed_run")
+    fi
+
+    if [[ -n "$completed_id" && ( "$completed_id" != "$prev_id" || "$reanalyze" == "true" ) ]]; then
+      run="$completed_run"
+      run_id="$completed_id"
+      status=$(jq -r '.status // "unknown"'         <<<"$run")
+      conclusion=$(jq -r '.conclusion // "unknown"' <<<"$run")
+      sha=$(jq -r '.head_sha'                       <<<"$run")
+      url=$(jq -r '.html_url'                       <<<"$run")
+      run_number=$(jq -r '.run_number'              <<<"$run")
+      log "  latest completed is #$run_number ($conclusion) — analyzing"
+    else
+      cached=$(jq -r --arg w "$state_key" '.[$w].summary // ""' "$STATE")
+      if [[ -n "$cached" ]]; then
+        blocks+=("$cached")
+        log "  no newer completed run — reusing cached summary"
+        continue
+      fi
+      blocks+=("▸ *$display* — _no completed runs on ${BRANCH}_")
+      log "  no completed runs and no cache"
+      continue
+    fi
+  fi
+
+  # Stale-page guard: state_key isolates one configuration, and run_number is
+  # monotonic within its workflow. A chosen run older than the cached run for
+  # this SAME configuration can only mean the API served a stale page. Runs
+  # from other configurations have different state keys and are never compared.
+  if (( prev_num > 0 && run_number < prev_num )); then
+    cached=$(jq -r --arg w "$state_key" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      blocks+=("$cached")
+      log "  stale API page (run #$run_number < cached #$prev_num) — reusing cached summary"
+      continue
+    fi
+  fi
+
+  # Cache miss: analyze the chosen run.
+  log "  new run #$run_number ($conclusion) — analyzing"
+  summary=$(analyze_run "$run_id" "$run_number" "$conclusion" "$sha" "$url" "")
+
+  # If the primary run didn't actually run tests (per the agent's ⚠️
+  # emoji — which covers infra setup failures as well as the GH-level
+  # cancel/timeout conclusions), surface the most recent run where tests
+  # *did* run so the digest still reflects real test state.
+  primary_first_line=$(printf '%s' "$summary" | head -n1)
+  if [[ "$primary_first_line" == *⚠️* ]]; then
+    log "  primary classified ⚠️ (tests didn't run) — searching for last test-ran run"
+    # Walk back through recent completed runs (newest first), skipping
+    # the primary itself, runs whose GH conclusion already implies no
+    # test execution, and any candidate the agent also classifies ⚠️.
+    # Capped to avoid burning many agent calls when an infra outage
+    # affects a streak of runs.
+    fb_summary=""
+    fb_checked=0
+    fb_max=4
+    while IFS=$'\t' read -r cid cconcl csha curl crnum; do
+      [[ -z "$cid" || "$cid" == "$run_id" ]] && continue
+      case "$cconcl" in
+        success|failure) ;;
+        *) continue ;;
+      esac
+      (( ++fb_checked ))
+      log "  fallback candidate #$crnum ($cconcl) — analyzing"
+      cand_summary=$(analyze_run "$cid" "$crnum" "$cconcl" "$csha" "$curl" \
+                     "Latest completed run #$run_number did not execute tests. Analyze this earlier run as the current real test state.")
+      cand_first=$(printf '%s' "$cand_summary" | head -n1)
+      if [[ "$cand_first" != *⚠️* ]]; then
+        fb_summary="$cand_summary"
+        log "  fallback: #$crnum is the latest test-ran run"
+        break
+      fi
+      log "  #$crnum also classified ⚠️ — continuing"
+      (( fb_checked >= fb_max )) && { log "  giving up after $fb_max candidates"; break; }
+    done < <(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=30$evq" 2>/dev/null \
+             | jq -r --arg p "$run_pattern" \
+               '[.workflow_runs[] | select((.display_title // .name // "") | test($p; "i"))] | sort_by(.created_at) | reverse | .[] | "\(.id)\t\(.conclusion)\t\(.head_sha)\t\(.html_url)\t\(.run_number)"')
+
+    if [[ -n "$fb_summary" ]]; then
+      # Strip the "▸ *Name*  " prefix from the fallback so the combined
+      # block has a single pipeline header.
+      fb_stripped=$(printf '%s' "$fb_summary" | sed -E '1 s/^▸ \*[^*]+\*  ?//')
+      summary="$summary
+↳ Last test-ran: $fb_stripped"
+    else
+      summary="$summary
+↳ Last test-ran: not found within recent runs"
+    fi
+  fi
+
+  blocks+=("$summary")
+
+  # 🟡 = agent error fallback; keep the old cache entry so the next tick
+  # sees a cache miss and retries the analysis.
+  if [[ "$(printf '%s' "$summary" | head -n1)" == *🟡* ]]; then
+    log "  not persisting state for #$run_number (agent error)"
+    continue
+  fi
+
+  # Persist new state, keyed on the primary (latest) run id. run_number
+  # feeds the stale-page guard above.
+  jq --arg w "$state_key" --arg id "$run_id" --arg sha "$sha" --arg sm "$summary" \
+     --argjson num "$run_number" \
+     '.[$w] = {run_id: $id, run_number: $num, sha: $sha, summary: $sm, updated: now}' \
+     "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+done
+
+# Total API outage → nothing was actually checked this tick. Don't post:
+# with every block degraded the digest is either garbage ("no runs"-style)
+# or a stale echo of the cache claiming a fresh "checked" time.
+if (( api_failures >= ${#PIPELINES[@]} )); then
+  log "WARN: all ${#PIPELINES[@]} GitHub queries failed this tick — skipping Slack post"
+  exit 0
+fi
+
+# ---------- assemble digest (Slack Block Kit) ----------
+# Default to a portable timezone; a runtime config may override DISPLAY_TZ.
+ts_human="$(TZ="$DISPLAY_TZ" date +'%Y-%m-%d %H:%M %Z')"
+title="Kernel Lib Pipelines — $BRANCH — $ts_human"
+
+# Split into success (collapse to one line) and failure (keep full block).
+success_names=()
+failure_blocks=()
+for b in "${blocks[@]}"; do
+  first_line=$(printf '%s' "$b" | head -n1)
+  if [[ "$first_line" == *✅* ]]; then
+    name=$(printf '%s' "$first_line" | sed -E 's/^▸ \*([^*]+)\*.*/\1/')
+    success_names+=("$name")
+  else
+    failure_blocks+=("$b")
+  fi
+done
+
+success_line=""
+if [[ ${#success_names[@]} -gt 0 ]]; then
+  joined=$(printf ', %s' "${success_names[@]}")
+  joined="${joined:2}"
+  success_line="✅ $joined"
+fi
+
+# ---------- status fingerprint & tick history (bot-API mode) ----------
+# Fingerprint = digest content minus timestamps. Same fingerprint as the last
+# posted message → same status → chat.update that message in place, appending
+# this tick's time to the "checked:" history line. Different fingerprint →
+# post a brand-new message (so status CHANGES still notify) with a fresh tick
+# list. History lives in state.json under _slack.
+fingerprint=$(printf '%s\n' "$success_line" "${failure_blocks[@]+"${failure_blocks[@]}"}" \
+              | sha256sum | awk '{print $1}')
+
+slack_mode="webhook"
+[[ -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]] && slack_mode="bot"
+
+msg_ts=""
+ticks_json="[]"
+if [[ "$slack_mode" == "bot" ]]; then
+  same=$(jq -r --arg ch "$SLACK_CHANNEL_ID" --arg fp "$fingerprint" \
+         '(._slack.channel // "") == $ch and (._slack.fingerprint // "") == $fp' "$STATE")
+  if [[ "$same" == "true" ]]; then
+    msg_ts=$(jq -r '._slack.ts // ""' "$STATE")
+    ticks_json=$(jq -c '._slack.ticks // []' "$STATE")
+  fi
+  # Append this tick; keep the last 48 so a week-long steady state can't
+  # blow past Slack's 3000-char section limit.
+  ticks_json=$(jq -c --arg t "$ts_human" '(. + [$t]) | .[-48:]' <<<"$ticks_json")
+fi
+ticks_line=$(jq -r 'if length > 1 then "checked: " + join("  ·  ") else "" end' <<<"$ticks_json")
+
+payload=$(jq -nc \
+  --arg title "$title" \
+  --arg succ "$success_line" \
+  --arg ticks "$ticks_line" \
+  --args \
+  '{
+     text: $title,
+     blocks: (
+       [{type: "header", text: {type: "plain_text", text: $title, emoji: true}}]
+       + (if $ticks != "" then [{type: "context", elements: [{type: "mrkdwn", text: $ticks}]}] else [] end)
+       + (if $succ != "" then [{type: "section", text: {type: "mrkdwn", text: $succ}}] else [] end)
+       + ($ARGS.positional | map([{type: "divider"},
+                                  {type: "section", text: {type: "mrkdwn", text: .}}]) | add // [])
+     )
+   }' \
+  "${failure_blocks[@]+"${failure_blocks[@]}"}")
+
+# ---------- post or dry-run ----------
+if [[ "$DRY_RUN" == "1" ]]; then
+  log "DRY RUN — would post to Slack:"
+  echo "================================================================"
+  echo "$title"
+  [[ -n "$success_line" ]] && echo "$success_line"
+  for b in "${failure_blocks[@]+"${failure_blocks[@]}"}"; do
+    echo "----------------------------------------------------------------"
+    printf '%s\n' "$b"
+  done
+  echo "================================================================"
+elif [[ "$slack_mode" == "bot" ]]; then
+  # Same status as the standing message → chat.update it (tick appended).
+  # Different status / no standing message / update failed → chat.postMessage
+  # a fresh one. Either way persist {ts, fingerprint, ticks} under _slack.
+  if [[ -n "$msg_ts" ]]; then
+    resp=$(printf '%s' "$payload" \
+           | jq -c --arg ch "$SLACK_CHANNEL_ID" --arg ts "$msg_ts" '. + {channel: $ch, ts: $ts}' \
+           | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                  -H 'Content-Type: application/json; charset=utf-8' \
+                  --data @- https://slack.com/api/chat.update)
+    if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
+      log "same status — updated Slack digest ts=$msg_ts (tick $(jq 'length' <<<"$ticks_json"), ${#payload} chars JSON)"
+    else
+      log "WARN: chat.update failed ($(jq -r '.error // "unparseable"' <<<"$resp")) — posting fresh digest"
+      msg_ts=""
+    fi
+  fi
+  if [[ -z "$msg_ts" ]]; then
+    resp=$(printf '%s' "$payload" \
+           | jq -c --arg ch "$SLACK_CHANNEL_ID" '. + {channel: $ch}' \
+           | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                  -H 'Content-Type: application/json; charset=utf-8' \
+                  --data @- https://slack.com/api/chat.postMessage)
+    if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
+      msg_ts=$(jq -r '.ts' <<<"$resp")
+      log "status changed/new — posted Slack digest ts=$msg_ts (${#payload} chars JSON)"
+    else
+      log "WARN: chat.postMessage failed: $resp"
+    fi
+  fi
+  if [[ -n "$msg_ts" ]]; then
+    jq --arg ch "$SLACK_CHANNEL_ID" --arg ts "$msg_ts" --arg fp "$fingerprint" \
+       --argjson ticks "$ticks_json" \
+       '._slack = {channel: $ch, ts: $ts, fingerprint: $fp, ticks: $ticks}' \
+       "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+  fi
+else
+  resp=$(printf '%s' "$payload" \
+         | curl -sS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_URL")
+  if [[ "$resp" == "ok" ]]; then
+    log "posted to Slack (${#payload} chars JSON)"
+  else
+    log "WARN: Slack response: $resp"
+  fi
+fi
+
+# Feed the duplicate-tick debounce at the top of the script.
+if [[ "$DRY_RUN" != "1" ]]; then
+  jq --argjson t "$(date +%s)" '._last_tick_end = $t' "$STATE" > "$STATE.tmp" \
+    && mv "$STATE.tmp" "$STATE"
+fi
