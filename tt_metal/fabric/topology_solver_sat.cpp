@@ -484,13 +484,13 @@ inline void topology_sat_add_at_least_k_counter(
 
 // At-least-k on independent literals.  Uses the small combinatorial encoding when affordable (O(C(m,m-k+1))
 // clauses), otherwise falls back to the sequential counter encoding (O(m*k) clauses + aux vars).
-inline bool topology_sat_add_at_least_k_literals(
+bool topology_sat_add_at_least_k_literals(
     TopologySatSolver& solver,
     const std::vector<int>& lits,
     size_t k,
     size_t max_combination_clauses,
     std::string* trivial_reason,
-    int extra_lit = 0) {
+    int extra_lit) {
     const size_t m = lits.size();
     if (k == 0) {
         return true;
@@ -533,40 +533,46 @@ inline bool topology_sat_add_at_least_k_literals(
     return true;
 }
 
-// Sequential (Sinz 2005) at-most-one encoding: O(n) clauses + O(n) auxiliary register variables instead of the
-// O(n^2) pairwise binary clauses.  Sequential encoding improves unit-propagation on large domains.
-inline void topology_sat_add_at_most_one_sequential(TopologySatSolver& solver, const std::vector<int>& lits) {
-    const size_t n = lits.size();
+namespace {
+constexpr std::size_t kPairwiseAtMostOneCutoff = 8;
+}  // namespace
+
+void topology_sat_add_at_most_one(TopologySatSolver& solver, const std::vector<int>& lits) {
+    const std::size_t n = lits.size();
     if (n <= 1) {
         return;
     }
-    if (n == 2) {
-        solver.add(-lits[0]);
-        solver.add(-lits[1]);
-        solver.add(0);
+    if (n <= kPairwiseAtMostOneCutoff) {
+        for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t j = i + 1; j < n; ++j) {
+                solver.add(-lits[i]);
+                solver.add(-lits[j]);
+                solver.add(0);
+            }
+        }
         return;
     }
-    std::vector<int> r;
-    r.reserve(n - 1);
-    for (size_t i = 0; i < n - 1; ++i) {
-        r.push_back(solver.declare_one_more_variable());
+    std::vector<int> chain;
+    chain.reserve(n - 1);
+    for (std::size_t i = 0; i < n - 1; ++i) {
+        chain.push_back(solver.declare_one_more_variable());
     }
     solver.add(-lits[0]);
-    solver.add(r[0]);
+    solver.add(chain[0]);
     solver.add(0);
-    for (size_t i = 1; i < n - 1; ++i) {
+    for (std::size_t i = 1; i + 1 < n; ++i) {
         solver.add(-lits[i]);
-        solver.add(r[i]);
+        solver.add(chain[i]);
         solver.add(0);
-        solver.add(-r[i - 1]);
-        solver.add(r[i]);
+        solver.add(-chain[i - 1]);
+        solver.add(chain[i]);
         solver.add(0);
-        solver.add(-r[i - 1]);
         solver.add(-lits[i]);
+        solver.add(-chain[i - 1]);
         solver.add(0);
     }
-    solver.add(-r[n - 2]);
-    solver.add(-lits[n - 1]);
+    solver.add(-lits.back());
+    solver.add(-chain.back());
     solver.add(0);
 }
 
@@ -909,7 +915,7 @@ void topology_sat_encode_exactly_one_per_target(TopologySatSolver& solver, const
             solver.add(lit);
         }
         solver.add(0);
-        topology_sat_add_at_most_one_sequential(solver, lits);
+        topology_sat_add_at_most_one(solver, lits);
     }
 }
 
@@ -928,7 +934,7 @@ void topology_sat_encode_injectivity(
         }
     }
     for (size_t g = 0; g < ng; ++g) {
-        topology_sat_add_at_most_one_sequential(solver, lits_per_global[g]);
+        topology_sat_add_at_most_one(solver, lits_per_global[g]);
     }
 }
 
@@ -1305,7 +1311,7 @@ void topology_sat_append_preferred_hit_indicators(
 }
 
 // indicator <=> OR_p (a_p & b_p)  (Tseitin on pairwise AND of two positive assign literals).
-inline bool topology_sat_define_indicator_as_or_of_pairwise_and(
+bool topology_sat_define_indicator_as_or_of_pairwise_and(
     TopologySatSolver& solver, int indicator, const std::vector<std::pair<int, int>>& pair_lits) {
     if (pair_lits.empty()) {
         solver.add(-indicator);

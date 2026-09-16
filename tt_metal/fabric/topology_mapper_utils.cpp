@@ -788,11 +788,13 @@ std::map<MeshId, MeshPhysicalLayout> mesh_physical_layouts_from_psd_placements(
     return layouts;
 }
 
-PhysicalMultiMeshGraph build_physical_from_adjacency_guided_placement(
+std::vector<PhysicalMultiMeshGraph> build_physical_from_adjacency_guided_placement_n(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const std::vector<const tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors,
-    const tt::tt_fabric::ValidGroupingsMap& valid_groupings) {
+    const tt::tt_fabric::ValidGroupingsMap& valid_groupings,
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings,
+    std::size_t max_graphs) {
     using namespace ::tt::tt_fabric;
 
     TT_FATAL(valid_groupings.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
@@ -800,41 +802,95 @@ PhysicalMultiMeshGraph build_physical_from_adjacency_guided_placement(
         !valid_groupings.at("MESH").empty(),
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
 
-    const auto placements = physical_grouping_descriptor.solve_adjacency_guided_placement(
-        mesh_graph_descriptors, valid_groupings, physical_system_descriptor);
+    const std::size_t solution_cap = max_graphs == 0 ? kPhysicalMultiMeshGraphEnumerationCap : max_graphs;
+    const auto placement_sets = physical_grouping_descriptor.solve_adjacency_guided_placement_n(
+        mesh_graph_descriptors,
+        valid_groupings,
+        physical_system_descriptor,
+        solution_cap,
+        /*node_budget=*/0,
+        nullptr,
+        per_mgd_pinnings);
     TT_FATAL(
-        !placements.empty(),
+        !placement_sets.empty(),
         "Topology mapper failed to find adjacency-guided placements for {} mesh graph descriptor(s) on a system with "
-        "{} "
-        "ASICs",
+        "{} ASICs",
         mesh_graph_descriptors.size(),
         physical_system_descriptor.get_asic_descriptors().size());
 
     log_info(
         tt::LogFabric,
-        "Adjacency-guided placement seated {} mesh(es) from {} descriptor(s)",
-        placements.size(),
+        "Adjacency-guided placement produced {} footprint-distinct seating(s); {} mesh(es) per seating from {} "
+        "descriptor(s)",
+        placement_sets.size(),
+        placement_sets.front().size(),
         mesh_graph_descriptors.size());
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
-    return build_hierarchical_from_flat_graph(flat_graph, placements);
+    std::vector<PhysicalMultiMeshGraph> graphs;
+    graphs.reserve(placement_sets.size());
+    for (const auto& placements : placement_sets) {
+        if (placements.empty()) {
+            continue;
+        }
+        graphs.push_back(build_hierarchical_from_flat_graph(flat_graph, placements));
+    }
+    return graphs;
+}
+
+PhysicalMultiMeshGraph build_physical_from_adjacency_guided_placement(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<const tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors,
+    const tt::tt_fabric::ValidGroupingsMap& valid_groupings,
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings) {
+    auto graphs = build_physical_from_adjacency_guided_placement_n(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        mesh_graph_descriptors,
+        valid_groupings,
+        per_mgd_pinnings,
+        /*max_graphs=*/1);
+    TT_FATAL(!graphs.empty(), "Internal error: adjacency-guided placement returned no physical graph");
+    return std::move(graphs.front());
 }
 
 }  // namespace
 
-PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+std::vector<PhysicalMultiMeshGraph> build_physical_multi_mesh_adjacency_graph_n(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<PinningsByMesh>& pinnings) {
+    const std::optional<PinningsByMesh>& pinnings,
+    std::size_t max_graphs) {
     const auto gv_start = std::chrono::steady_clock::now();
     auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgd(
         mesh_graph_descriptor, physical_system_descriptor, pinnings);
     const auto gv_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - gv_start).count();
     log_info(tt::LogFabric, "TIMING get_valid_groupings_for_mgd: {} ms", gv_ms);
-    return build_physical_from_adjacency_guided_placement(
-        physical_system_descriptor, physical_grouping_descriptor, {&mesh_graph_descriptor}, valid_groupings);
+    std::vector<std::optional<PinningsByMesh>> per_mgd_pinnings;
+    if (pinnings.has_value()) {
+        per_mgd_pinnings.push_back(*pinnings);
+    }
+    return build_physical_from_adjacency_guided_placement_n(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        {&mesh_graph_descriptor},
+        valid_groupings,
+        per_mgd_pinnings,
+        max_graphs);
+}
+
+PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
+    const std::optional<PinningsByMesh>& pinnings) {
+    auto graphs = build_physical_multi_mesh_adjacency_graph_n(
+        physical_system_descriptor, physical_grouping_descriptor, mesh_graph_descriptor, pinnings, /*max_graphs=*/1);
+    TT_FATAL(!graphs.empty(), "Internal error: build_physical_multi_mesh_adjacency_graph produced no graph");
+    return std::move(graphs.front());
 }
 
 namespace {
@@ -855,12 +911,10 @@ void assign_pgd_pinnings_to_rank_bound_physical_graph(
     }
 
     const auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgd(
-        // FIXME: Revert this this way to test and catch failure
-        // mesh_graph_descriptor, physical_system_descriptor, pinnings, /*require_placement=*/false);
         mesh_graph_descriptor,
         physical_system_descriptor,
         pinnings,
-        /*require_placement=*/true);
+        /*require_placement=*/false);
     if (!valid_groupings_map.contains("MESH") || valid_groupings_map.at("MESH").empty()) {
         log_debug(
             tt::LogFabric,
@@ -951,7 +1005,31 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgds(
         mesh_graph_descriptors, physical_system_descriptor, per_mgd_pinnings);
     return build_physical_from_adjacency_guided_placement(
-        physical_system_descriptor, physical_grouping_descriptor, descriptor_ptrs, valid_groupings);
+        physical_system_descriptor, physical_grouping_descriptor, descriptor_ptrs, valid_groupings, per_mgd_pinnings);
+}
+
+std::vector<PhysicalMultiMeshGraph> build_physical_multi_mesh_adjacency_graph_n(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
+    const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings,
+    std::size_t max_graphs) {
+    std::vector<const tt::tt_fabric::MeshGraphDescriptor*> descriptor_ptrs;
+    descriptor_ptrs.reserve(mesh_graph_descriptors.size());
+    for (const auto& descriptor : mesh_graph_descriptors) {
+        descriptor_ptrs.push_back(&descriptor);
+    }
+    validate_shared_inter_mesh_policy(descriptor_ptrs);
+
+    auto valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgds(
+        mesh_graph_descriptors, physical_system_descriptor, per_mgd_pinnings);
+    return build_physical_from_adjacency_guided_placement_n(
+        physical_system_descriptor,
+        physical_grouping_descriptor,
+        descriptor_ptrs,
+        valid_groupings,
+        per_mgd_pinnings,
+        max_graphs);
 }
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
@@ -2410,6 +2488,35 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         ++emitted_;
         return full;
     }
+}
+
+MultiPhysicalMultiMeshSolutionEnumerator::MultiPhysicalMultiMeshSolutionEnumerator(
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const std::vector<PhysicalMultiMeshGraph>& adjacency_maps_physical,
+    const TopologyMappingConfig& config,
+    bool unique_shapes,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank) {
+    per_physical_.reserve(adjacency_maps_physical.size());
+    for (const PhysicalMultiMeshGraph& physical : adjacency_maps_physical) {
+        per_physical_.push_back(std::make_unique<MultiMeshSolutionEnumerator>(
+            adjacency_map_logical, physical, config, unique_shapes, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank));
+    }
+}
+
+std::optional<TopologyMappingResult> MultiPhysicalMultiMeshSolutionEnumerator::next() {
+    if (per_physical_.empty()) {
+        return std::nullopt;
+    }
+    for (std::size_t pass = 0; pass < per_physical_.size(); ++pass) {
+        MultiMeshSolutionEnumerator& enumerator = *per_physical_[next_physical_index_];
+        next_physical_index_ = (next_physical_index_ + 1) % per_physical_.size();
+        if (auto solution = enumerator.next()) {
+            ++emitted_;
+            return solution;
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
