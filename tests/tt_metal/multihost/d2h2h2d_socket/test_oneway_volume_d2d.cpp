@@ -46,6 +46,9 @@ struct Options {
     int device_id = -1;
     uint32_t cores = 4;
     uint32_t bytes = 4096;
+    // 4096 is both the default and a legitimate payload, so the steady block below cannot read
+    // `bytes == 4096` as "unset" the way it reads `volume == 0`.
+    bool bytes_set = false;
     uint32_t iters = 16;
     uint64_t volume = 0;
     bool steady = false;
@@ -67,6 +70,9 @@ struct Options {
     bool use_transport = false;
     bool same_host = false;
     bool measure_retire = false;
+    // Every core sends and receives. Needs delivery to own its L1 buffer, halving the largest
+    // payload that fits. Off: rank 0 sends, the rest receive, one shared buffer per core.
+    bool bidir = false;
     double ns_per_cycle = 0.0;
 
     std::string csv;
@@ -87,7 +93,9 @@ MODE
 
 SHAPE
   --cores N                cores in use (default 4). Each costs 3 MiB of pinned arena.
-  --bytes N                payload per message (default 4096, max 1572864)
+  --bytes N                payload per message (default 4096, max 1572864).
+                           --steady raises the DEFAULT to 14336; passing --bytes always
+                           wins and the substitution is printed when it happens.
   --iters N                messages per core (default 16)
   --volume N[K|M|G]        total traffic target; derives --iters
   --steady N               discard the first N%% of traffic before recording
@@ -97,7 +105,9 @@ SHAPE
                            Refused above --cores.
   --send-blocking          post-and-wait, one in flight. NOT --send-window 1, which spins.
   --no-pin                 do not pin worker threads to CPUs
-  --oneway                 t6 -> host -> [remote host] -> t6 (the only shape)
+  --bidir                  every core on every host sends AND receives, in a ring
+                           (host h -> h+1). Delivery gets its own L1 buffer, so the
+                           largest --bytes that fits is halved.
 
 TOPOLOGY
   Host identity is the MPI rank and world size, not configurable.
@@ -187,7 +197,8 @@ bool parse(int argc, char** argv, Options& o) {
         if (a == "--help" || a == "-h") { usage(); std::exit(0); }
         else if (a == "--device") { o.device_id = std::stoi(next(i)); }
         else if (a == "--cores") { o.cores = std::stoul(next(i)); }
-        else if (a == "--bytes") { o.bytes = std::stoul(next(i)); }
+        else if (a == "--bidir") { o.bidir = true; }
+        else if (a == "--bytes") { o.bytes = std::stoul(next(i)); o.bytes_set = true; }
         else if (a == "--iters") { o.iters = std::stoul(next(i)); }
         else if (a == "--warmup") { o.warmup = std::stoul(next(i)); }
         else if (a == "--steady") {
@@ -195,7 +206,7 @@ bool parse(int argc, char** argv, Options& o) {
             // OPTIONAL ARGUMENT. `--steady` alone keeps the historical 10%; `--steady 25`
             // sets it. Peeked rather than consumed with next(), because --steady has always
             // been a bare flag and swallowing the following token would turn every existing
-            // `--steady --oneway` into a parse error.
+            // `--steady --measure-retire` into a parse error.
             if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
                 o.steady_pct = static_cast<uint32_t>(number(i, "a percentage 0..99"));
                 if (o.steady_pct > 99) {
@@ -229,7 +240,6 @@ bool parse(int argc, char** argv, Options& o) {
             o.send_window = static_cast<uint32_t>(n);
         }
         else if (a == "--send-blocking") { o.send_blocking = true; }
-        else if (a == "--oneway") { /* accepted, no-op -- see Options::roundtrip */ }
         else if (a == "--chips-per-host") { o.chips_per_host = std::stoul(next(i)); }
         else if (a == "--chip") { o.chip = std::stoul(next(i)); }
         else if (a == "--same-host") { o.same_host = true; }
@@ -256,23 +266,27 @@ bool parse(int argc, char** argv, Options& o) {
         return false;
     }
     if (o.measure_retire && !o.use_transport) {
-        std::cerr << "error: --measure-retire needs a transport, which means a job of TWO MPI\n"
-                     "  RANKS -- launch with `mpirun -n 2`. This process is rank " << o.host_ident
+        std::cerr << "error: --measure-retire needs a transport, which means a job of TWO OR MORE\n"
+                     "  MPI RANKS -- launch with `mpirun -n 2`. This process is rank " << o.host_ident
                   << " of " << o.host_num
                   << ".\n"
                      "  Locally routed messages are delivered by memcpy, so there is no posted\n"
                      "  operation to time.\n";
         return false;
     }
-    // SYMMETRIC OPERATION IS NATIVE AND ASSUMED, so this is not conditional on a flag: the
-    // path is chip->host->host->chip, exactly two hosts. With one host the sender and the
-    // receiver would be the same core and the shared L1 buffer would have two writers.
-    // D2H2H2DSocket::open() enforces the same thing; this refuses earlier, before anything
-    // has been provisioned or connected.
-    if (o.host_num != 2) {
-        std::cerr << "error: --host-num must be 2. One L1 buffer per core at a shared address is "
-                     "native\n"
-                     "here, and that is only coherent when every destination is on the other host.\n";
+    // One L1 buffer per core at a shared address means a core cannot be both a source and a
+    // destination, so senders and receivers live on different hosts: rank 0 sends, the rest
+    // receive. At three or more ranks that is the fan-out deal below.
+    if (o.host_num < 2) {
+        std::cerr << "error: --host-num must be at least 2 -- the path is chip->host->host->chip.\n"
+                     "This process is rank " << o.host_ident << " of " << o.host_num
+                  << ". Launch under mpirun with two or more ranks.\n";
+        return false;
+    }
+    if (o.host_num > kMaxHosts) {
+        std::cerr << "error: --host-num " << o.host_num << " exceeds the " << kMaxHosts
+                  << " hosts the region layout can address -- a credit is indexed by the\n"
+                     "receiver's host id inside one 64 B register line. See kMaxHosts.\n";
         return false;
     }
     if (o.device_id < 0) {
@@ -280,11 +294,18 @@ bool parse(int argc, char** argv, Options& o) {
         return false;
     }
     if (o.steady) {
-        if (o.bytes == 4096) {
+        // --steady changes what two other options default to, and reports both: a number
+        // quietly becoming a different number is the failure this tree keeps producing. 14336
+        // is a chosen operating point, not a layout bound -- kArenaBytes / 14336 is not integral.
+        if (!o.bytes_set) {
             o.bytes = 14336;
+            std::cout << "  --steady  =>  --bytes " << o.bytes
+                      << " (the steady default; pass --bytes to override)\n";
         }
         if (o.volume == 0) {
             o.volume = 1ull << 30;
+            std::cout << "  --steady  =>  --volume " << (o.volume >> 20)
+                      << " MiB (the steady default; pass --volume to override)\n";
         }
     }
     if (o.volume > 0) {
@@ -352,15 +373,65 @@ bool parse(int argc, char** argv, Options& o) {
         if (o.steady) {
             o.tag += "-steady";
         }
-        o.tag += "-ow";  // was `o.roundtrip ? "-rt" : "-ow"` -- o.roundtrip cannot be true
+        // The shape, because the tag is how CSV rows are told apart.
+        o.tag += o.bidir ? "-bidir" : "-ow";
     }
     return true;
 }
 
 
+// the fan-out deal. Rank 0 sends, ranks 1..N-1 receive, core i goes to core i on host
+// 1 + (i % (N - 1)): every destination core gets one source core on one source host, and no
+// core is both. At two hosts it is `dest_host = 1`. host_num >= 2 is refused in validate().
+uint32_t fanout_dest_host(uint32_t core, uint32_t host_num) { return 1u + (core % (host_num - 1u)); }
+
+// the ring, used by --bidir. Host h sends to h+1, so a destination host takes traffic from
+// exactly one predecessor and every destination core keeps one source host -- the invariant
+// D2H2H2DSocket latches. Core i sends to core i on h+1 and receives from core i on h-1.
+uint32_t ring_dest_host(uint32_t host_ident, uint32_t host_num) { return (host_ident + 1u) % host_num; }
+
+// counted, not divided: cores / (host_num - 1) drops the remainder, and a receiver owed one
+// message too many times out on a run that delivered everything it was sent.
+uint32_t fanout_cores_for(uint32_t host, uint32_t cores, uint32_t host_num) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < cores; ++i) {
+        if (fanout_dest_host(i, host_num) == host) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+// where core i's messages GO, and whether this rank receives into core i. The two must agree
+// or a receiver waits for a core nobody sends to; both derive from the same flag.
+uint32_t dest_host_for(uint32_t core, const Options& o) {
+    return o.bidir ? ring_dest_host(o.host_ident, o.host_num) : fanout_dest_host(core, o.host_num);
+}
+
+bool receives_into(uint32_t core, const Options& o) {
+    if (o.bidir) {
+        return true;  // ring: every core receives from its predecessor
+    }
+    return o.host_ident != 0 && fanout_dest_host(core, o.host_num) == o.host_ident;
+}
+
+uint32_t rx_cores_for(const Options& o) {
+    if (o.bidir) {
+        return o.cores;
+    }
+    return o.host_ident == 0 ? 0u : fanout_cores_for(o.host_ident, o.cores, o.host_num);
+}
+
 bool verify_delivery(Deliverer& deliverer, const Options& o, std::string& detail) {
     const uint32_t last = o.iters - 1;
+    uint32_t checked = 0;
     for (uint32_t core = 0; core < o.cores; ++core) {
+        // Only the cores something is sent to: an unsent core's L1 holds the seed pattern,
+        // which passes the byte checks below. Under --bidir that is every core.
+        if (!receives_into(core, o)) {
+            continue;
+        }
+        ++checked;
         const std::vector<uint8_t> got = deliverer.read_payload(core, o.bytes, 0u);
         if (got.size() < o.bytes) {
             detail = "core " + std::to_string(core) + ": short read from L1";
@@ -422,6 +493,12 @@ bool verify_delivery(Deliverer& deliverer, const Options& o, std::string& detail
             }
         }
     }
+    // A verifier that checked nothing must not answer "verified". run_common refuses an empty
+    // rank earlier; this is the second guard on the same vacuous pass.
+    if (checked == 0) {
+        detail = "no cores on this rank were dealt a sender, so there is nothing here to verify";
+        return false;
+    }
     return true;
 }
 
@@ -434,12 +511,40 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
 
     std::cout << "  socket        D2DSocket -> D2H2H2DSocket\n";
 
-    const uint64_t msgs = static_cast<uint64_t>(o.cores) * o.iters;
+    // What the sender owes vs what this receiver is owed. They differ once the deal spreads
+    // the sender's cores over more than one receiver.
+    const uint64_t msgs_sent = static_cast<uint64_t>(o.cores) * o.iters;
 
-    const bool tx_side = o.host_ident == 0;
-    const bool rx_side = o.host_ident != 0;
-    std::cout << "  symmetric   one L1 buffer per core, shared address; this side "
-              << (tx_side ? "SENDS only" : "RECEIVES only") << "\n";
+    // Under --bidir every rank is both. The socket services both directions on the same
+    // threads regardless; it is one shared L1 buffer per core that forbids it, not the socket.
+    const bool tx_side = o.bidir || o.host_ident == 0;
+    const bool rx_side = o.bidir || o.host_ident != 0;
+    const uint32_t my_cores = rx_cores_for(o);
+    const uint64_t msgs_recv = static_cast<uint64_t>(my_cores) * o.iters;
+    if (o.bidir) {
+        std::cout << "  bidir       delivery has its own L1 buffer; every core SENDS and RECEIVES\n"
+                  << "  ring        host " << o.host_ident << " -> host "
+                  << ring_dest_host(o.host_ident, o.host_num) << ", core i to core i\n";
+    } else {
+        std::cout << "  symmetric   one L1 buffer per core, shared address; this side "
+                  << (tx_side ? "SENDS only" : "RECEIVES only") << "\n";
+    }
+    if (!o.bidir && o.host_num > 2) {
+        std::cout << "  fan-out     rank 0 -> ranks 1.." << (o.host_num - 1)
+                  << ", core i to core i on host 1 + (i % " << (o.host_num - 1) << ")\n";
+        if (rx_side) {
+            std::cout << "              this rank is dealt " << my_cores << " of " << o.cores
+                      << " cores => " << msgs_recv << " messages\n";
+        }
+        if (rx_side && my_cores == 0) {
+            std::cerr << "error: the deal gave this rank no cores -- --cores " << o.cores << " over "
+                      << (o.host_num - 1) << " receivers leaves rank " << o.host_ident
+                      << " with nothing, and a rank that receives nothing cannot verify anything.\n"
+                         "  Use at least --cores "
+                      << (o.host_num - 1) << ".\n";
+            return 2;
+        }
+    }
 
     std::string oerr;
     if (!sock.open(oerr)) {
@@ -459,6 +564,11 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
                 std::cerr << "  giving up on " << what << ": the transport has faulted\n";
                 return;
             }
+            // A refused message is not recoverable either, and the reason is on the peer.
+            if (sock.peer_refused()) {
+                std::cerr << "  giving up on " << what << ": a peer refused a message\n";
+                return;
+            }
             const uint64_t now_count = c.load(std::memory_order_acquire);
             if (now_count != seen) {
                 seen = now_count;
@@ -473,12 +583,13 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
         }
     };
 
-    const uint64_t sent_target = tx_side ? msgs : 0;
+    const uint64_t sent_target = tx_side ? msgs_sent : 0;
     if (sent_target) {
         wait_for(sock.counters().tx_done, sent_target, 30ull * 1000 * 1000 * 1000, "tx_done");
     }
 
-    const uint32_t barrier_ms = static_cast<uint32_t>(60000 + std::min<uint64_t>(msgs, 600000));
+    // The sender's total on both sides: the barrier completes only when every rank has.
+    const uint32_t barrier_ms = static_cast<uint32_t>(60000 + std::min<uint64_t>(msgs_sent, 600000));
     if (transport != nullptr) {
         for (Transport* t : sock.peers_for_barrier()) {
             if (const std::string be = t->barrier(); !be.empty()) {
@@ -489,12 +600,13 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
     }
 
     if (rx_side) {
-        wait_for(sock.counters().delivered, msgs, 15ull * 1000 * 1000 * 1000, "delivered");
+        wait_for(sock.counters().delivered, msgs_recv, 15ull * 1000 * 1000 * 1000, "delivered");
     }
 
-    if (rx_side) {
-        sock.stamp_timed_end();
-    } else if (transport != nullptr && o.host_num > 1) {
+    // A sender must drain its credits before stamping, or its interval ends at the last post
+    // and the bandwidth is over-reported. Keyed on tx_side, not on "not a receiver", because
+    // under --bidir every rank is both.
+    if (tx_side && transport != nullptr && o.host_num > 1) {
         uint32_t slow_core = 0;
         if (!drain_credits(region, o.cores, o.iters, static_cast<uint64_t>(barrier_ms) * 1000000ull,
                            slow_core)) {
@@ -502,8 +614,8 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
                       << o.iters
                       << "); the bandwidth interval is bounded by posts, not arrivals -- do not quote it\n";
         }
-        sock.stamp_timed_end();
     }
+    sock.stamp_timed_end();
 
     // Before stop(): our workers and the progress thread must still be live while the peer
     // drains.
@@ -520,10 +632,12 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
 
     RunStats stats = sock.collect();
     stats.payload_bytes = o.bytes;
-    stats.cores = o.cores;
+    // the cores this rank used, not --cores. The bandwidth cell divides a measured byte counter
+    // so it is right either way, but `cores` is what a reader multiplies out to cross-check it.
+    stats.cores = rx_side ? my_cores : o.cores;
     stats.iters = o.iters;
     stats.provider = provider_label_str;
-    stats.mode = tx_side ? "sym-tx" : "sym-rx";
+    stats.mode = o.bidir ? "sym-bidir" : (tx_side ? "sym-tx" : "sym-rx");
     stats.host_clock_valid = clock.valid;
     stats.host_clock_uncertainty_ns = clock.uncertainty_ns;
     stats.device_clock_valid = o.ns_per_cycle > 0.0;
@@ -617,14 +731,14 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
     if (cn.errors.load()) {
         why << cn.errors.load() << " service errors. ";
     }
-    const uint64_t want_delivered = !rx_side ? 0 : msgs;
+    const uint64_t want_delivered = !rx_side ? 0 : msgs_recv;
     if (cn.delivered.load() < want_delivered) {
         ok = false;
         why << "delivered " << cn.delivered.load() << " of " << want_delivered << " into L1. ";
     }
-    if (tx_side && cn.tx_done.load() < msgs) {
+    if (tx_side && cn.tx_done.load() < msgs_sent) {
         ok = false;
-        why << "sent " << cn.tx_done.load() << " of " << msgs << " messages. ";
+        why << "sent " << cn.tx_done.load() << " of " << msgs_sent << " messages. ";
     }
     if (ok && cn.routed_remote.load() == 0 && deliverer) {
         std::string detail;
@@ -634,8 +748,9 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
         }
     } else if (cn.routed_remote.load() > 0) {
         std::cout << "\n  NOTE: " << cn.routed_remote.load()
-                  << " messages were routed to the peer. Their arrival is the PEER's to verify;\n"
-                     "        this process cannot witness it and does not claim to.\n";
+                  << " messages were routed to a peer. Their arrival is the RECEIVING\n"
+                     "        rank's to verify; this process cannot witness it and does not\n"
+                     "        claim to.\n";
     }
 
     std::cout << "\n" << (ok ? "PASS" : "FAIL") << (ok ? "" : ": " + why.str()) << "\n\n";
@@ -691,19 +806,29 @@ int run_device(Options& o) {
     dc.grid_width = g.width;
     dc.grid_height = g.height;
     dc.payload_bytes = o.bytes;
-    dc.iters = o.iters;
-    dc.warmup = o.warmup;
     dc.workers = o.workers;
     dc.send_window = o.send_window;
     dc.send_blocking = o.send_blocking;
     dc.pin = o.pin;
-    dc.measure_retire = o.measure_retire;
-    dc.same_host = o.same_host;
+    dc.bidirectional = o.bidir;
 
     std::string serr;
     std::unique_ptr<D2DSocket> sock = D2DSocket::create(mesh_device, device, dc, serr);
     if (!sock) {
         std::cerr << "socket bringup failed: " << serr << "\n";
+        return 1;
+    }
+
+    // this program IS A measurement, so it always opts in. Collective and before open(), so
+    // every rank reaches it here. --iters stays out: it bounds this program's kernels, and the
+    // socket has no use for it.
+    D2DMeasurementConfig mc;
+    mc.warmup = o.warmup;
+    mc.measure_retire = o.measure_retire;
+    mc.ns_per_cycle_override = o.ns_per_cycle;
+    mc.same_host = o.same_host;
+    if (const std::string me = sock->measure(mc); !me.empty()) {
+        std::cerr << "measurement setup failed: " << me << "\n";
         return 1;
     }
     const L1Map& l1 = sock->l1();
@@ -739,7 +864,7 @@ int run_device(Options& o) {
         cores = cores.merge(CoreRangeSet(CoreRange(c, c)));
     }
 
-    const uint32_t dest_host = (o.host_num > 1) ? ((o.host_ident + 1) % o.host_num) : o.host_ident;
+
 
     Program program = CreateProgram();
     auto kernel = CreateKernel(
@@ -749,12 +874,32 @@ int run_device(Options& o) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
-            .compile_args = sock->sender_compile_args(
-                /*iterations=*/(o.host_ident != 0) ? 0u : o.iters, kernel_opcode,
-                static_cast<uint32_t>(kFlagStamped), /*await_completion=*/true)});
+            // this program's kernel, SO this program's argument order. Every value comes from
+            // the socket -- l1() and region().device() -- but the order belongs to whoever owns
+            // the kernel file it has to match. test_oneway_volume.cpp builds it the same way.
+            .compile_args = {
+                region.device().pcie_xy_enc,
+                static_cast<uint32_t>(region.device().io_base & 0xFFFFFFFFull),
+                static_cast<uint32_t>(region.device().io_base >> 32),
+                g.width,
+                l1.payload_addr,
+                l1.stage_addr,
+                l1.signal_addr,
+                o.bytes,
+                (o.bidir || o.host_ident == 0) ? o.iters : 0u,
+                kernel_opcode,
+                // unconditionally: the kernel always writes elapsed_pack(), so register 2 is
+                // packed whether the flag is set or not and the flag only tells the host to
+                // unpack it. Unset, t6->host is wrong by 2^32x the probe cost once one runs.
+                static_cast<uint32_t>(kFlagStamped | kFlagElapsedSplit),
+                1u,  // await_completion: the kernel's control word is a single slot
+                l1.completion_addr,
+                0u,  // verify_landing -- this program has no --verify-landing
+                0u,  // landing_addr -- never read; the probe branch is if constexpr'd away
+            }});
 
     for (uint32_t i = 0; i < o.cores; ++i) {
-        const uint32_t sel = t6_global_selector(dest_host, o.chip, i, o.chips_per_host);
+        const uint32_t sel = t6_global_selector(dest_host_for(i, o), o.chip, i, o.chips_per_host);
         SetRuntimeArgs(program, kernel, core_list[i], {sel, store_dest_addr});
     }
 
@@ -778,9 +923,10 @@ int run_device(Options& o) {
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::NOC_1,
-                .compile_args = sock->receiver_compile_args()});
+                .compile_args = {l1.deliver_addr, o.bytes, l1.signal_addr, 1u, l1.stop_addr,
+                                 l1.dest_word_addr}});
         for (uint32_t i = 0; i < o.cores; ++i) {
-            const uint32_t enabled = (o.host_ident == 0) ? 0u : 1u;
+            const uint32_t enabled = (o.bidir || o.host_ident != 0) ? 1u : 0u;
             SetRuntimeArgs(program, recv_kernel, core_list[i], {cfg_addrs[i], enabled});
         }
         if (const std::string e = sock->deliverer()->arm_receivers(); !e.empty()) {

@@ -228,6 +228,16 @@ inline uint64_t credit_turnaround_ns(const HostRegion& region, uint32_t core, ui
     return credit_turnaround_of(load_acquire(region.reg_at(credit_word_offset(core, peer_host))));
 }
 
+// Did this peer refuse the message its most recent credit frees? Attribution is free: the
+// word's position in the line IS the writer's host id. Credit still means "the slot is free",
+// true after a refusal; this is what lets the sender stop at the first one.
+inline bool credit_refused(const HostRegion& region, uint32_t core, uint32_t peer_host) {
+    if (peer_host >= kMaxCreditPeers) {
+        return false;
+    }
+    return credit_refused_of(load_acquire(region.reg_at(credit_word_offset(core, peer_host))));
+}
+
 // Returns false on timeout, and the caller reports rather than aborts: a drain that timed out
 // means the interval is wider than intended, which weakens a number without invalidating a run.
 inline bool drain_credits(HostRegion& region, uint32_t cores, uint64_t want, uint64_t budget_ns, uint32_t& slow_core) {

@@ -85,7 +85,10 @@ constexpr uint64_t kCtrlMagic = 0x484Full;  // 'H','O' -- host-owned register fi
 constexpr uint32_t kCtrlMagicShift = 48;
 constexpr uint64_t kCtrlMagicMask = 0xFFFFull;
 
-constexpr uint64_t kCtrlVersion = 3ull;
+// the gate ON the credit word's encoding. Nothing in that word says who wrote it, so this is
+// what protects it: ctrl_validate() is exact-match, so builds at different versions service no
+// control word in either direction and never exchange a credit to misread.
+constexpr uint64_t kCtrlVersion = 4ull;
 constexpr uint32_t kCtrlVersionShift = 44;
 constexpr uint64_t kCtrlVersionMask = 0xFull;
 
@@ -376,8 +379,6 @@ constexpr uint64_t kArenaBytes = 1536ull * 1024ull;  // 1.5 MiB, one Tensix L1
 constexpr uint64_t kArenasPerCore = 2;                           // TX, RX
 constexpr uint64_t kArenaStride = kArenaBytes * kArenasPerCore;  // 3 MiB per core
 
-static_assert(kArenaBytes == 0x180000ull, "an arena is exactly one Blackhole Tensix L1");
-
 // Provisioned core count. 128 rather than the 110 a Blackhole 11x10 grid actually has:
 // it is a power of two, so core -> offset is a shift rather than a multiply on the
 // kernel side where that arithmetic sits in the hot path, and it leaves room for a
@@ -461,6 +462,10 @@ constexpr uint64_t rx_slot_offset(uint32_t core, uint32_t slot, uint64_t payload
 //
 constexpr uint32_t kNumAliasRingSlots = 1;
 
+// The arena bound is the other half and cannot live here: it depends on the payload, which is
+// a per-run value. It is enforced per message instead, on both sides -- see the slot-aware
+// length checks in D2H2H2DSocket::deliver_to_l1() and send_try_start().
+
 // The pinned prefix for a run using `cores` cores. Everything the device or the NIC can
 // touch must be inside this, and the program asserts that before it arms anything.
 constexpr uint64_t pinned_bytes_for(uint32_t cores) {
@@ -493,12 +498,26 @@ constexpr uint64_t credit_word_offset(uint32_t core, uint32_t peer_host) {
     return reg_offset(core, kArgCreditReg) + static_cast<uint64_t>(peer_host) * sizeof(uint64_t);
 }
 
+// The host ceiling is the credit line, not the UVA selector (which fits 16). Host id
+// kMaxCreditPeers would write register 5, which credit_total() never sums: the RMA succeeds
+// and that core's sender gate never reopens. Checked in D2H2H2DSocket::open().
+constexpr uint32_t kMaxHosts = kMaxCreditPeers;
+
+// the credit word: [63] refused | [62:32] turnaround ns on the receiver's clock | [31:0] count
+// consumed. one indivisible write, not two registers -- separate one-sided puts have no MPI
+// ordering, so a sender seeing count n could pair it with a flag from n-1. 31 turnaround bits,
+// not 32, so a real 2.15 s delivery cannot saturate into the flag.
 constexpr uint64_t kCreditCountMask = 0xFFFFFFFFull;
-constexpr uint64_t credit_pack(uint64_t count, uint64_t turnaround_ns) {
-    return ((turnaround_ns > kCreditCountMask ? kCreditCountMask : turnaround_ns) << 32) | (count & kCreditCountMask);
+constexpr uint64_t kCreditTurnaroundMask = 0x7FFFFFFFull;
+constexpr uint64_t kCreditRefusedBit = 1ull << 63;
+
+constexpr uint64_t credit_pack(uint64_t count, uint64_t turnaround_ns, bool refused = false) {
+    return ((turnaround_ns > kCreditTurnaroundMask ? kCreditTurnaroundMask : turnaround_ns) << 32) |
+           (count & kCreditCountMask) | (refused ? kCreditRefusedBit : 0ull);
 }
 constexpr uint64_t credit_count_of(uint64_t w) { return w & kCreditCountMask; }
-constexpr uint64_t credit_turnaround_of(uint64_t w) { return (w >> 32) & kCreditCountMask; }
+constexpr uint64_t credit_turnaround_of(uint64_t w) { return (w >> 32) & kCreditTurnaroundMask; }
+constexpr bool credit_refused_of(uint64_t w) { return (w & kCreditRefusedBit) != 0ull; }
 
 // ---------------------------------------------------------------------------
 // The region header

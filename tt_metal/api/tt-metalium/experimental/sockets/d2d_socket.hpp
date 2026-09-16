@@ -42,17 +42,29 @@ struct L1Map {
 
     uint32_t deliver_addr = 0;
 
-    static L1Map compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes);
+    // deliver_addr is its own buffer rather than aliased onto payload_addr. Aliased costs one
+    // payload of L1 but a core can then send or receive, not both -- its kernel and host
+    // delivery would write the same bytes. Separate costs two, and is what the ring needs.
+    bool bidirectional = false;
 
-    // One past the last byte compute() claimed. dest_word_addr is the highest field, so this
-    // is the number the L1 bound has to be taken against -- not payload_addr + payload_bytes,
-    // which leaves control_bytes() of tail unchecked.
-    uint32_t end() const { return dest_word_addr + kDestWordBytes; }
+    static L1Map compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes, bool bidirectional = false);
+
+    // How many payload-sized buffers this layout claims. The only place the 1-vs-2 lives.
+    uint32_t payload_copies() const { return bidirectional ? 2u : 1u; }
+
+    // One past the last byte compute() claimed. The control words are the top of the aliased
+    // layout; when delivery has its own buffer that buffer sits above them and is the top.
+    uint32_t end() const { return bidirectional ? deliver_end : (dest_word_addr + kDestWordBytes); }
 
     // Everything compute() stacks ABOVE the payload: the staging slots, the three doorbell
-    // lines, the dest word. Measured from stage_addr, so it is independent of payload_bytes,
-    // and a field added anywhere below end() is accounted for without editing a tally.
-    uint32_t control_bytes() const { return end() - stage_addr; }
+    // lines, the dest word. Deliberately not end() - stage_addr: it must stay independent of
+    // payload_bytes, and under bidirectional end() includes a payload.
+    uint32_t control_bytes() const { return dest_word_addr + kDestWordBytes - stage_addr; }
+
+    // end() of the delivery buffer, set by compute() only when bidirectional. No trailing
+    // underscore: every other member of this struct is public and unadorned, and in this tree
+    // the underscore means private.
+    uint32_t deliver_end = 0;
 
     std::string fits(uint32_t payload_bytes) const;
 
@@ -86,11 +98,11 @@ struct D2DSocketConfig {
     uint32_t grid_height = 0;
 
     // --- the payload ---
+    //
+    // one size for the socket's life -- the H2D ring's requirement. The T6 signals each message's
+    // length at run time and the host uses it, but the aliased ring is kNumAliasRingSlots * this
+    // and write_payload() refuses anything that is not an exact divisor of fifo_size.
     uint32_t payload_bytes = 0;
-
-    // --- the run, for the warmup gate and the ladder ---
-    uint32_t iters = 0;
-    uint32_t warmup = 0;
 
     // --- knobs, forwarded to SocketConfig ---
     uint32_t workers = 0;
@@ -98,12 +110,31 @@ struct D2DSocketConfig {
     bool send_blocking = false;
     bool pin = true;
 
+    // Give delivery its own L1 buffer instead of aliasing it onto the send buffer, so a core
+    // can hold an outbound and an inbound payload at once. Costs a second payload of L1,
+    // halving the largest payload that fits. See L1Map::bidirectional.
+    bool bidirectional = false;
+};
+
+// what A measurement needs and A data mover does not. None of it changes where a byte goes:
+// a socket built without it moves traffic and records nothing, and never runs a clock sync.
+// measure() is the opt-in, which keeps socket creation independent of any timing prerequisite.
+struct D2DMeasurementConfig {
+    // Iterations per core discarded before the counters start. 0 records from the first
+    // message. Multiplied by `cores` to get the message count the gate actually counts.
+    uint32_t warmup = 0;
+
+    // Time each payload write from post to local completion, reported as diag:h2h-retire.
+    // Costs work on the sender thread, which is this path's measured bottleneck, so a
+    // bandwidth run must not pay for a number it does not print.
+    bool measure_retire = false;
+
+    // Device cycles -> ns. 0 measures it, which takes ~50 ms and touches the device.
     double ns_per_cycle_override = 0.0;
 
-
-    bool measure_retire = false;
+    // One box, one hardware clock: the offset is 0 by construction and estimating it would
+    // substitute noise for a known value. Only ever consumed by the clock sync.
     bool same_host = false;
-
 };
 
 class D2DSocket {
@@ -118,8 +149,16 @@ public:
     D2DSocket& operator=(const D2DSocket&) = delete;
 
     const L1Map& l1() const { return l1_; }
+    // Both are only populated once measure() has run; before that the clock is invalid and
+    // ns_per_cycle is 0, which is what a cycles-flagged sample treats as "no scale".
     const ClockSync& clock() const { return clock_; }
     double ns_per_cycle() const { return ns_per_cycle_; }
+
+    // opt IN TO measurement. Before open(), because the scan pool and sender read these after.
+    // collective -- it runs the clock sync, so every rank must call it at the same point.
+    // Returns an error string; empty means measuring.
+    std::string measure(const D2DMeasurementConfig& m);
+    bool measuring() const { return measuring_; }
     const std::string& clock_rate_detail() const { return clock_rate_detail_; }
     HostRegion& region() const;
     Transport* primary_transport() const { return primary_.get(); }
@@ -128,9 +167,8 @@ public:
     std::string deliverer_describe() const;
     std::string transport_describe() const;
 
-    std::vector<uint32_t> sender_compile_args(
-        uint32_t iterations, uint32_t opcode, uint32_t flags, bool await_completion) const;
-    std::vector<uint32_t> receiver_compile_args() const;
+    // No kernel compile-arg builders here: a kernel's argument order belongs to whoever owns
+    // the kernel. Callers assemble their own from l1() and region().device().
 
     // --- pass-throughs ----------------------------------------------------
     bool open(std::string& err);
@@ -143,6 +181,7 @@ public:
     void stamp_timed_end();
     uint64_t timed_start_ns() const;
     bool transport_failed() const;
+    bool peer_refused() const;
     std::string first_error() const;
     std::string stall_dump(const char* where) const;
     uint64_t store_faults() const;
@@ -151,6 +190,9 @@ private:
     D2DSocket() = default;
 
     D2DSocketConfig cfg_{};
+    D2DMeasurementConfig measure_cfg_{};
+    bool measuring_ = false;
+    bool opened_ = false;
     L1Map l1_{};
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;

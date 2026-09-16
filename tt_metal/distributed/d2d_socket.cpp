@@ -27,16 +27,26 @@ constexpr uint32_t align64(uint32_t v) { return (v + 0x3Fu) & ~0x3Fu; }
 // L1Map
 // ===========================================================================
 
-L1Map L1Map::compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes) {
+L1Map L1Map::compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes, bool bidirectional) {
     L1Map m;
     m.l1_size = l1_size;
+    m.bidirectional = bidirectional;
     m.payload_addr = align64(l1_base);
     m.stage_addr = m.payload_addr + align64(payload_bytes);
-    m.signal_addr = m.stage_addr + kStageSlots * kStageSlotBytes;
-    m.completion_addr = m.signal_addr + kDoorbellBytes;
-    m.stop_addr = m.completion_addr + kDoorbellBytes;
-    m.dest_word_addr = m.stop_addr + kDoorbellBytes;
-    m.deliver_addr = m.payload_addr;
+    m.signal_addr = m.stage_addr + L1Map::kStageSlots * L1Map::kStageSlotBytes;
+    m.completion_addr = m.signal_addr + L1Map::kDoorbellBytes;
+    m.stop_addr = m.completion_addr + L1Map::kDoorbellBytes;
+    m.dest_word_addr = m.stop_addr + L1Map::kDoorbellBytes;
+    if (bidirectional) {
+        // Its own buffer, above the control words, so a core can hold an outbound payload and
+        // an inbound one at once. The pull kernel already takes this as a compile arg and
+        // never reads payload_addr, so nothing below the map changes.
+        m.deliver_addr = align64(m.dest_word_addr + L1Map::kDestWordBytes);
+        m.deliver_end = m.deliver_addr + align64(payload_bytes);
+    } else {
+        m.deliver_addr = m.payload_addr;
+        m.deliver_end = 0;
+    }
     return m;
 }
 
@@ -50,18 +60,20 @@ std::string L1Map::fits(uint32_t payload_bytes) const {
         // otherwise wrap a uint32 here.
         const uint32_t aligned = stage_addr - payload_addr;  // align64(payload_bytes), as built
         const uint32_t pad = aligned > payload_bytes ? aligned - payload_bytes : 0u;
-        const uint32_t overhead = control_bytes() + pad;
+        const uint32_t copies = payload_copies();
+        const uint32_t overhead = control_bytes() + copies * pad;
         // The largest payload that WOULD fit is 64-aligned and so carries no pad of its own,
         // which makes control_bytes() alone the floor -- min_l1 is what a zero-byte payload
         // already costs. Guarded: a high allocator base can put min_l1 above l1_size, and
         // unguarded this wrapped and advertised a ~4 GB ceiling.
         const uint32_t min_l1 = payload_addr + control_bytes();
-        const uint32_t ceiling = l1_size > min_l1 ? ((l1_size - min_l1) & ~0x3Fu) : 0u;
+        const uint32_t ceiling = l1_size > min_l1 ? (((l1_size - min_l1) / copies) & ~0x3Fu) : 0u;
         std::ostringstream o;
         o << "payload " << payload_bytes << " B does not fit L1 on this core.\n"
           << "  L1 per core        " << l1_size << " B\n"
           << "  allocator base     " << payload_addr << " B\n"
-          << "  needed             " << payload_bytes << " B (one shared buffer) + " << overhead
+          << "  needed             " << copies << " x " << payload_bytes << " B ("
+          << (bidirectional ? "send + deliver" : "one shared buffer") << ") + " << overhead
           << " B of control words\n"
           << "  largest payload    " << ceiling << " B\n"
           << "The 1.5 MiB arena is the HOST-side buffer; L1 has to hold what the device holds.";
@@ -115,7 +127,7 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     const uint32_t l1_base =
         static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
     const uint32_t l1_size = static_cast<uint32_t>(device->l1_size_per_core());
-    s->l1_ = L1Map::compute(l1_base, l1_size, cfg.payload_bytes);
+    s->l1_ = L1Map::compute(l1_base, l1_size, cfg.payload_bytes, cfg.bidirectional);
     if (const std::string e = s->l1_.fits(cfg.payload_bytes); !e.empty()) {
         err = e;
         return nullptr;
@@ -126,7 +138,9 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     // Needed by the store guard, which must be given the ring it bounds against.
     H2DSocketConfig scfg;
     scfg.page_size = cfg.payload_bytes;
-    scfg.fifo_size = cfg.payload_bytes;
+    // from kNumAliasRingSlots. The layout header names four consumers that must derive from
+    // that constant and warns a mismatch "corrupts silently"; this is one of the four.
+    scfg.fifo_size = kNumAliasRingSlots * cfg.payload_bytes;
     scfg.alias_region_base = HostRegion::reserved_base();
     const uint32_t h2d_ring_bytes = scfg.fifo_size;
     s->deliverer_ = make_h2d_socket_deliverer(s->mesh_device_, cfg.grid_width, cfg.cores, layout, scfg, derr);
@@ -135,13 +149,10 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
         return nullptr;
     }
 
-    if (cfg.ns_per_cycle_override > 0.0) {
-        s->ns_per_cycle_ = cfg.ns_per_cycle_override;
-        s->clock_rate_detail_ = "supplied by the caller";
-    } else {
-        s->ns_per_cycle_ = measure_ns_per_cycle(*s->deliverer_, /*core=*/0, /*sample_ms=*/50,
-                                                s->clock_rate_detail_);
-    }
+    // A measurement input costing ~50 ms on the device, so it belongs to measure(). 0 here: a
+    // cycles-flagged sample treats that as "no scale" and contributes nothing, which is the
+    // honest answer for a socket nobody is measuring.
+    s->clock_rate_detail_ = "not measured -- measure() was not called";
 
     HostRegion* region_p = nullptr;
     try {
@@ -168,7 +179,9 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     tc.chips_per_host = cfg.chips_per_host;
     tc.grid_width = cfg.grid_width;
     tc.cores_in_use = cfg.cores;
-    tc.measure_retire = cfg.measure_retire;
+    // Off at creation; measure() opts in through set_measure_retire(), so a socket that is
+    // only moving bytes never pays for the timing.
+    tc.measure_retire = false;
 
     std::vector<std::unique_ptr<Transport>> owned;
     PeerTable bringup_table;
@@ -185,17 +198,6 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     owned.erase(owned.begin());
     s->mesh_peers_ = std::move(owned);
 
-    {
-        const auto& ctx = mh::DistributedContext::get_current_world();
-        const uint32_t self = static_cast<uint32_t>(*ctx->rank());
-        const uint32_t peer = (self == 0) ? 1u : 0u;
-        s->clock_ = sync_clocks(ctx, mh::Rank{static_cast<int>(peer)}, /*initiator=*/self < peer, cfg.same_host);
-        if (!s->clock_.valid) {
-            err = "refusing to report cross-host hop timings without a clock offset: " + s->clock_.error;
-            return nullptr;
-        }
-    }
-
     SocketConfig sc;
     sc.chip = cfg.chip;
     sc.cores = cfg.cores;
@@ -203,9 +205,8 @@ std::unique_ptr<D2DSocket> D2DSocket::create(
     sc.pin = cfg.pin;
     sc.send_window = cfg.send_window;
     sc.send_blocking = cfg.send_blocking;
-    sc.ns_per_cycle = s->ns_per_cycle_;
-    sc.record_from_start = cfg.warmup == 0;
-    sc.warmup_msgs = static_cast<uint64_t>(cfg.warmup) * static_cast<uint64_t>(cfg.cores);
+    // ns_per_cycle, record_from_start and warmup_msgs are measurement parameters and are set
+    // by measure() through D2H2H2DSocket::configure_measurement(), before open().
 
     s->inner_ = std::make_unique<D2H2H2DSocket>(
         region, s->deliverer_.get(), HostTopology{cfg.host_ident, cfg.host_num, cfg.chips_per_host}, sc, *s->primary_);
@@ -230,37 +231,57 @@ HostRegion& D2DSocket::region() const { return *region_; }
 std::string D2DSocket::deliverer_describe() const { return deliverer_->describe(); }
 std::string D2DSocket::transport_describe() const { return primary_->describe(); }
 
-std::vector<uint32_t> D2DSocket::sender_compile_args(
-    uint32_t iterations, uint32_t opcode, uint32_t flags, bool await_completion) const {
-    const DeviceView& dev = region_->device();
-    return {
-        dev.pcie_xy_enc,
-        static_cast<uint32_t>(dev.io_base & 0xFFFFFFFFull),
-        static_cast<uint32_t>(dev.io_base >> 32),
-        cfg_.grid_width,
-        l1_.payload_addr,
-        l1_.stage_addr,
-        l1_.signal_addr,
-        cfg_.payload_bytes,
-        iterations,
-        opcode,
-        flags,
-        await_completion ? 1u : 0u,
-        l1_.completion_addr,
-        0u,  // verify_landing
-        0u,  // landing_addr -- never read: the probe branch is if constexpr'd away
-    };
-}
-
-std::vector<uint32_t> D2DSocket::receiver_compile_args() const {
-    return {l1_.deliver_addr, cfg_.payload_bytes, l1_.signal_addr, 1u, l1_.stop_addr, l1_.dest_word_addr};
-}
-
 // ===========================================================================
 // Pass-throughs
 // ===========================================================================
 
-bool D2DSocket::open(std::string& err) { return inner_->open(err); }
+std::string D2DSocket::measure(const D2DMeasurementConfig& m) {
+    // Before the collective below, so a late call fails on every rank without any of them
+    // entering a clock sync they would discard.
+    if (opened_) {
+        return "measure: the socket is already open; measurement must be configured before open()";
+    }
+    if (measuring_) {
+        return "measure: already measuring; call it once";
+    }
+    measure_cfg_ = m;
+
+    // Device cycles -> ns, for the stage the kernel reports in Tensix cycles.
+    if (m.ns_per_cycle_override > 0.0) {
+        ns_per_cycle_ = m.ns_per_cycle_override;
+        clock_rate_detail_ = "supplied by the caller";
+    } else {
+        ns_per_cycle_ = measure_ns_per_cycle(*deliverer_, /*core=*/0, /*sample_ms=*/50, clock_rate_detail_);
+    }
+
+    // collective. Every rank must reach this at the same point: rank 0 probes each peer in
+    // turn and the others answer. It lives here so a socket that is not being measured neither
+    // runs it nor fails to be built when it cannot.
+    {
+        namespace mh = tt::tt_metal::distributed::multihost;
+        const auto& ctx = mh::DistributedContext::get_current_world();
+        clock_ = sync_clocks_to_hub(ctx, m.same_host);
+        if (!clock_.valid) {
+            return "refusing to report cross-host hop timings without a clock offset: " + clock_.error;
+        }
+    }
+
+    // Refuses if open() has already run -- checked inside the socket rather than trusted here.
+    if (const std::string e = inner_->configure_measurement(
+            static_cast<uint64_t>(m.warmup) * static_cast<uint64_t>(cfg_.cores), ns_per_cycle_);
+        !e.empty()) {
+        return e;
+    }
+    inner_->set_measure_retire(m.measure_retire);
+
+    measuring_ = true;
+    return {};
+}
+
+bool D2DSocket::open(std::string& err) {
+    opened_ = true;
+    return inner_->open(err);
+}
 void D2DSocket::stop() { inner_->stop(); }
 const SocketCounters& D2DSocket::counters() const { return inner_->counters(); }
 std::vector<Transport*> D2DSocket::peers_for_barrier() const { return inner_->peers_for_barrier(); }
@@ -269,6 +290,7 @@ void D2DSocket::open_recording_gate() { inner_->open_recording_gate(); }
 void D2DSocket::stamp_timed_end() { inner_->stamp_timed_end(); }
 uint64_t D2DSocket::timed_start_ns() const { return inner_->timed_start_ns(); }
 bool D2DSocket::transport_failed() const { return inner_->transport_failed(); }
+bool D2DSocket::peer_refused() const { return inner_->peer_refused(); }
 std::string D2DSocket::first_error() const { return inner_->first_error(); }
 std::string D2DSocket::stall_dump(const char* where) const { return inner_->stall_dump(where); }
 uint64_t D2DSocket::store_faults() const { return inner_->store_faults(); }

@@ -77,9 +77,7 @@ std::string csv_schema_error(const std::string& path, const std::string& want_he
 }
 
 uint64_t measure_clock_overhead_ns() {
-    // Minimum of many back-to-back reads. The MINIMUM, not the mean: what is wanted is the
-    // cost of the call with nothing in the way, and the mean folds in whatever else the
-    // scheduler did during the loop.
+    // Minimum of many back-to-back reads.
     constexpr int kTrials = 2000;
     uint64_t best = UINT64_MAX;
     for (int i = 0; i < kTrials; ++i) {
@@ -117,9 +115,6 @@ std::string format_table(const RunStats& s) {
     o << "  stage                     count       mean\n";
     o << "  ----------------------- ------- ----------\n";
 
-    // One emitter for both tables: they print the same three columns. Stages show an empty row
-    // when they have no samples -- a missing leg must not read as a leg that was never part of
-    // the path -- while an absent diagnostic just means "not applicable here", so it is skipped.
     auto emit_rows = [&](uint32_t from, uint32_t to, bool show_empty) {
         for (uint32_t h = from; h < to; ++h) {
             const Dist d = s.merged(h);
@@ -152,8 +147,6 @@ std::string format_table(const RunStats& s) {
         }
     }
 
-    // The bounds, stated next to the rows they apply to rather than buried. A stage whose
-    // duration is smaller than its own uncertainty is not a measurement.
     o << "\n  clock domains crossed by the rows marked above:\n";
     if (s.device_clock_valid) {
         std::snprintf(line, sizeof(line), "    dev  : device<->host calibrated, +/- %" PRIu64 " ns\n",
@@ -313,6 +306,12 @@ std::string sample_count_warning(const RunStats& s) {
     std::vector<std::pair<uint32_t, uint64_t>> pop;
     std::map<uint64_t, int> tally;
     for (uint32_t h = 0; h < kHopCount; ++h) {
+        // diag:h2h-retire counts transport ops, two per message, so it sits at ~2x the message
+	// population by construction on every run. Flagging it would teach the reader to skip
+	// a warning that is meant to mean something.
+        if (h == kHopH2HRetire) {
+            continue;
+        }
         const Dist d = s.merged(h);
         if (d.n == 0) {
             continue;
@@ -332,40 +331,42 @@ std::string sample_count_warning(const RunStats& s) {
         }
     }
 
-    std::ostringstream gross, minor;
-    int n_gross = 0, n_minor = 0;
+    // what the gate-flip race can account for. The gate is read at three instants -- per
+    // serviced job, inside the scanner, and in the sender loop -- so a message in flight when it
+    // opens is counted by whichever read landed after the flip. At most `window` can be in
+    // flight, so a deficit up to that is the race; past it, samples are being dropped.
+    const uint64_t in_flight = s.window != 0 ? s.window : s.cores;
+    const uint64_t tolerance = in_flight != 0 ? in_flight : 4;
+
+    std::ostringstream gross;
+    int n_gross = 0;
     for (const auto& [h, n] : pop) {
         if (n == modal) {
             continue;
         }
         const int64_t delta = static_cast<int64_t>(n) - static_cast<int64_t>(modal);
-        const double frac = static_cast<double>(delta < 0 ? -delta : delta) / static_cast<double>(modal);
+        const uint64_t mag = static_cast<uint64_t>(delta < 0 ? -delta : delta);
+        if (mag <= tolerance) {
+            continue;  // the gate-flip race accounts for it
+        }
+        const double frac = static_cast<double>(mag) / static_cast<double>(modal);
         char line[160];
         std::snprintf(line, sizeof(line), "    %-22s %10" PRIu64 "  (%+" PRId64 ", %.3f%% of %" PRIu64 ")\n",
                       hop_name(h), n, delta, frac * 100.0, modal);
-        if (frac > 0.01) {
-            gross << line;
-            ++n_gross;
-        } else if (delta > 4 || delta < -4) {
-            minor << line;
-            ++n_minor;
-        }
+        gross << line;
+        ++n_gross;
     }
-    if (n_gross == 0 && n_minor == 0) {
+    if (n_gross == 0) {
         return {};
     }
 
     std::ostringstream o;
-    if (n_gross > 0) {
-        o << "\n  !! ROW POPULATION MISMATCH: " << n_gross << " row(s) do not share this run's sample count.\n"
-             "     A row built from a different population is not comparable to the rows beside it,\n"
-             "     and its mean is whatever its surviving samples happened to be. Do not quote these:\n"
-          << gross.str();
-    }
-    if (n_minor > 0) {
-        o << "\n  note: " << n_minor << " row(s) off by a handful of samples (gate-flip race, ANALYSIS.md B.1):\n"
-          << minor.str();
-    }
+    o << "\n  !! ROW POPULATION MISMATCH: " << n_gross << " row(s) are short or long by more than the\n"
+         "     " << tolerance << " samples the gate-flip race can account for (the send window -- that is the\n"
+         "     most messages that can be in flight when the recording gate opens). A row built from\n"
+         "     a different population is not comparable to the rows beside it, and its mean is\n"
+         "     whatever its surviving samples happened to be. Do not quote these:\n"
+      << gross.str();
     return o.str();
 }
 
@@ -388,28 +389,6 @@ std::string pinning_warning(const RunStats& s) {
     return o.str();
 }
 
-// ===========================================================================
-//
-//   bandwidth_gb_per_s   == payload_bytes / hop_window_ns  <- all three LEG rows
-//   bandwidth_gb_per_s   == payload_bytes / window_ns      <- the END_TO_END row only
-//   messages_per_second  == samples * 1e9 / <that row's denominator>
-//   latency_us           == total_ns / samples / 1000
-//   payload_bytes        == samples * bytes_per_message
-//
-//   payload_bytes / total_ns        the PER-CORE PUSH RATE -- bytes over the time cores spent
-//                                   inside the leg. This is what the t6->host bandwidth cell
-//                                   printed until 2026-09-07: 29.207 GB/s at 512 K, 93% of
-//                                   Gen5 x8. It is a real number and it is NOT a link rate; it
-//                                   does not become one by multiplying by `cores`.
-//   total_ns / hop_window_ns        MESSAGES IN FLIGHT (T/W) -- the concurrency, and exactly the
-//                                   factor by which S/T understates S/W.
-//
-// so S/W == (S/T) x (T/W) is checkable on the row, which is the whole reason both columns stay.
-//
-// GB/s needs no scale factor: 1 byte/ns is 1e9 B/s is 1 GB/s decimal. The division is the
-// answer as written.
-//
-// ===========================================================================
 std::string basic_csv_header() {
     return "stage,samples,payload_bytes,window_ns,hop_window_ns,bandwidth_gb_per_s,"
            "messages_per_second,latency_us,total_ns,bytes_per_message,cores,run_id,host_ident\n";
@@ -417,8 +396,9 @@ std::string basic_csv_header() {
 
 std::string format_basic_csv(const RunStats& s, const std::string& tag) {
     (void)tag;
-    static constexpr uint32_t kRows[] = {kHopT6ToHost, kHopHostToRemoteHost, kHopRemoteHostToRemoteT6,
-                                         kHopOneWayTotal};
+    static constexpr uint32_t kRows[] = {kHopT6ToHost,       kHopHostToRemoteHost, kHopRemoteHostToRemoteT6,
+                                         kHopOneWayTotal,    kHopH2HPayloadAtPeer, kHopH2HCreditRaw,
+                                         kHopH2HNet};
     std::ostringstream o;
     char line[512];
     for (const uint32_t h : kRows) {

@@ -59,11 +59,9 @@ struct SocketConfig {
     // volume ladder, or null. Owned by the caller and must outlive the socket -- it is
     // handed straight to ScanConfig, which hands it to every worker.
 
-    // Payload. Needed only to size the receive-slot sweep: the number of
-    // slots a message of this size leaves in an arena is what the scanner should look at, not
-    // the maximum.
-    //
-    uint32_t payload_bytes = 0;
+    // No `payload_bytes` here on purpose: open() sets the receive-slot sweep from
+    // kNumAliasRingSlots, and the arena bound is checked per message and slot-aware, which
+    // needs no per-run size. See deliver_to_l1() and send_try_start().
 
     uint32_t chip = 0;     // our own chip index, for the origin selector a notice carries
     uint32_t cores = 0;    // cores in use; bounds the stall dump and the local check
@@ -153,11 +151,10 @@ struct SocketCounters {
 // ---------------------------------------------------------------------------
 // Operates with symmetry
 //
-//   open()        refuses unless the topology really is two hosts.
-//   service_tx()  refuses a LOCAL destination. A UVA resolving to this host names a core that
-//                 is already a source, so delivering into it would put a second writer on the
-//                 buffer that core is sending from -- overwriting a payload it had not finished
-//                 sending, with nothing anywhere reporting it.
+//   open()          < 2 hosts, > kMaxHosts, or a topology the UVA selector cannot name
+//   service_tx()    a local destination -- that core already sends from the same buffer
+//   deliver_to_l1() a second source host for a destination core; see rx_source_host_
+// Up to kMaxHosts and fan-out yes; fan-in onto a shared destination core no.
 //
 // ---------------------------------------------------------------------------
 // Sending must not happen on a scan thread. The send path waits on completions, and a worker
@@ -218,6 +215,31 @@ public:
     std::string first_error() const;
 
     bool transport_failed() const { return transport_failed_.load(std::memory_order_acquire); }
+    // A peer freed a slot without delivering. Latched, so the sender stops at the first one
+    // rather than reporting it per message, and so a caller's wait can give up early.
+    bool peer_refused() const { return peer_refused_.load(std::memory_order_acquire); }
+
+    // measurement parameters, settable only before open(). After open() the scan pool and the
+    // sender thread read cfg_ without synchronisation, so this refuses rather than racing.
+    std::string configure_measurement(uint64_t warmup_msgs, double ns_per_cycle) {
+        if (scanner_) {
+            return "configure_measurement: the socket is already open; the scan pool is reading "
+                   "these fields";
+        }
+        cfg_.warmup_msgs = warmup_msgs;
+        cfg_.ns_per_cycle = ns_per_cycle;
+        // The gate starts shut when a warmup is pending, open otherwise -- the same rule
+        // record_from_start expressed at construction.
+        set_recording(warmup_msgs == 0);
+        return {};
+    }
+
+    void set_measure_retire(bool on) {
+        for (Transport* t : peers_.all()) {
+            t->set_measure_retire(on);
+        }
+        transport_.set_measure_retire(on);
+    }
 
     void set_recording(bool on) {
         recording_.store(on, std::memory_order_relaxed);
@@ -269,11 +291,11 @@ private:
     void append_transport_stats(RunStats& s) const;
     void dump_transport(std::string& into) const;
 
-    void return_credit(uint32_t origin_selector, uint64_t turnaround_ns);
+    void return_credit(uint32_t origin_selector, uint64_t turnaround_ns, bool refused);
     // Posts the credit a REMOTELY-armed notice owes, deriving the origin selector from the job.
     // Extracted 2026-09-14 so deliver_to_l1() can credit on EVERY exit rather than only on the
-    // success path -- see the CreditOnExit guard there.
-    void post_credit_for(const Job& job, uint64_t turnaround_ns);
+    // success path -- see the CreditOnExit guard there. `refused` is that guard's verdict.
+    void post_credit_for(const Job& job, uint64_t turnaround_ns, bool refused);
 
     // ---- shared helpers --------------------------------------------------
     void fail(const std::string& what);
@@ -312,9 +334,9 @@ private:
         uint64_t deadline = 0;
         Transport* tp = nullptr;
         // Which of the destination core's receive slots this message lands in. DERIVED from
-        // the sender's own message index (send_started_[core] % depth), not claimed with an
-        // atomic -- valid because two hosts means ONE sender per destination core, so nothing
-        // is contended. Claiming is only needed at three or more hosts.
+        // the sender's own message index (send_started_[core] % depth), not claimed -- valid
+        // while a destination core has one source host, which rx_source_host_ now enforces
+        // rather than the host count. Fan-in is what would need claiming.
         //
         // RESTORED 2026-09-14 for option B. The receiver dispatches slots in order
         // (BankScanner::next_rx_slot_), which is what keeps the aliased ring's read pointer
@@ -368,6 +390,13 @@ private:
     std::vector<std::atomic<uint64_t>> send_started_;  // notices armed in the peer's bank
     std::vector<std::atomic<uint64_t>> tx_retired_;   // the value rdma_completion carries
 
+    // The source host a destination core belongs to, latched by its first remote message on the
+    // receiver -- the only side that sees every source. Enforces one source host per destination
+    // core, which rx_slot (derived, not claimed), the aliased FIFO ring and delivered_per_core_
+    // all depend on. Detects fan-in; deliver_to_l1() says why that is not the same as fixing it.
+    static constexpr uint32_t kRxSourceUnset = ~0u;
+    std::vector<std::atomic<uint32_t>> rx_source_host_;
+
     // 0 idle, 1 credit-wait, 2 payload, 3 notice. Written by the sender thread, read by the
     // stall dump. A sender parked in a state it cannot report reads as `idle`, which is worse
     // than no dump at all.
@@ -385,6 +414,7 @@ private:
     std::string first_error_;
 
     std::atomic<bool> transport_failed_{false};
+    std::atomic<bool> peer_refused_{false};
 
     // Each core has a single queue. A destination core has one RX control word, so at most one message
     // may be outstanding to it; (per-core queues) lets the sender hold a window across cores. It also

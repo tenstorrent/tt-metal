@@ -39,9 +39,14 @@ D2H2H2DSocket::D2H2H2DSocket(
     deliver_m_(kProvisionedCores),
     notice_sent_(kProvisionedCores),
     send_started_(kProvisionedCores),
-    tx_retired_(kProvisionedCores) {
+    tx_retired_(kProvisionedCores),
+    rx_source_host_(kProvisionedCores) {
     for (auto& per_host : credit_out_) {
         per_host = std::vector<std::atomic<uint64_t>>(kProvisionedCores);
+    }
+    // Not left at 0: that is host 0, a real host id, and every core would start out claimed.
+    for (auto& src : rx_source_host_) {
+        src.store(kRxSourceUnset, std::memory_order_relaxed);
     }
     // Sized to the provisioned maximum like every other per-core vector, so the enqueue path
     // can index by src_core without a bounds decision on the hot path. Missing this compiles
@@ -55,11 +60,28 @@ D2H2H2DSocket::D2H2H2DSocket(
 D2H2H2DSocket::~D2H2H2DSocket() { stop(); }
 
 bool D2H2H2DSocket::open(std::string& err) {
-    // EXACTLY TWO HOSTS - needs to be changed. the ticket system adresses this issue
-    if (topo_.num != 2) {
-        err = "D2H2H2DSocket needs exactly two hosts, not " + std::to_string(topo_.num) +
-              " -- the path is chip->host->host->chip, and its symmetric operation (one shared "
-              "L1 buffer per core) is only coherent when every destination is on the other host";
+    // Only what the layout can address. The property that actually matters -- one source host
+    // per destination core -- is enforced per core on the receive path; see rx_source_host_.
+    if (!host_topology_ok(topo_)) {
+        err = "D2H2H2DSocket: host topology is not addressable -- ident " + std::to_string(topo_.ident) + " of " +
+              std::to_string(topo_.num) + " hosts at " + std::to_string(topo_.chips_per_host) +
+              " chips per host does not fit the UVA selector's " + std::to_string(kT6MaxSlots) +
+              " host x chip slots, or names a host that is not one of them";
+        return false;
+    }
+    if (topo_.num < 2) {
+        err = "D2H2H2DSocket needs at least two hosts, not " + std::to_string(topo_.num) +
+              " -- the path is chip->host->host->chip, and with one host a UVA resolving to it "
+              "is refused outright, so no credit is ever returned and every send stalls on a "
+              "gate the peer that would open it does not exist to open";
+        return false;
+    }
+    // The credit line caps this, not the selector. See kMaxHosts.
+    if (topo_.num > kMaxHosts) {
+        err = "D2H2H2DSocket: " + std::to_string(topo_.num) + " hosts exceeds the " + std::to_string(kMaxHosts) +
+              " this layout can address -- a credit is indexed by the receiver's host id inside "
+              "register " + std::to_string(kArgCreditReg) + "'s 64 B line, and a host past the end of it would "
+              "write a register credit_total() never reads";
         return false;
     }
     // Transport first: the pool's callback can hand work to the sender the moment it starts.
@@ -230,17 +252,22 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     // The guard fires on every path. The turnaround it reports is 0 unless the success path
     // sets it, because a refusal has no meaningful turnaround to publish.
     uint64_t credit_turnaround_ns = 0;
+    // The guard's verdict, carried in bit 63 of the credit word. Set true at the one success
+    // point below, so every `return 0` path out of this function is a refusal by construction
+    // rather than by an inventory of the paths.
+    bool credit_delivered = false;
     struct CreditOnExit {
         D2H2H2DSocket* self;
         const Job& job;
         const uint64_t& turnaround;
+        const bool& delivered;
         bool armed;
         ~CreditOnExit() {
             if (armed) {
-                self->post_credit_for(job, turnaround);
+                self->post_credit_for(job, turnaround, !delivered);
             }
         }
-    } credit_guard{this, job, credit_turnaround_ns,
+    } credit_guard{this, job, credit_turnaround_ns, credit_delivered,
                    (ctrl_flags(job.ctrl) & kFlagRemoteNotice) != 0};
 
     if (deliverer_ == nullptr) {
@@ -252,9 +279,44 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
         return 0;
     }
     const uint64_t length = job.operand[0];  // base was kArgLength, so operand[0] IS the length
-    if (length == 0 || length > kArenaBytes) {
-        fail("RX notice with an out-of-range length");
+    // slot-aware: this slot starts at slot * length, so (slot + 1) * length is what must fit
+    // the arena. Bounding one payload alone holds only at slot 0; past it the overflow lands in
+    // the next core's TX arena, which is this process's own memory and so faults nothing.
+    const uint64_t slot_span = static_cast<uint64_t>(job.slot + 1) * length;
+    if (length == 0 || slot_span > kArenaBytes) {
+        std::ostringstream m;
+        m << "RX notice with an out-of-range length: slot " << job.slot << " x " << length
+          << " B needs " << slot_span << " B of a " << kArenaBytes << " B arena";
+        fail(m.str());
         return 0;
+    }
+
+    // one source host per destination core. After the credit guard so a refusal still frees the
+    // sender's slot, before write_payload() so these bytes do not reach L1. Remote
+    // origin-bearing notices only -- a local one has a single producer.
+    //
+    // detects fan-in without making it safe: a payload lands in the arena before its notice is
+    // serviced, so a second host can overwrite one in flight and the first delivery then
+    // reports success on wrong bytes. Failing the run is the most a derived slot can offer.
+    if (credit_guard.armed && job.operand_count > 2) {
+        const uint32_t origin_host = t6_selector_host(static_cast<uint32_t>(job.operand[2]), topo_.chips_per_host);
+        uint32_t held = kRxSourceUnset;
+        if (!rx_source_host_[job.core].compare_exchange_strong(
+                held, origin_host, std::memory_order_acq_rel, std::memory_order_acquire) &&
+            held != origin_host) {
+            // `held` is the established owner -- compare_exchange_strong writes the observed
+            // value back on failure. Not routed_nowhere: that means a UVA named a host with no
+            // peer, a provisioning gap, and pooling the two would make neither diagnosable.
+            std::ostringstream m;
+            m << "destination core " << job.core << " has two source hosts: host " << held
+              << " claimed it and host " << origin_host
+              << " has now sent to it. Both derive the same receive slot (SendSlot::rx_slot) and "
+                 "the aliased H2D ring is a FIFO, so they overwrite each other. Fan-in needs "
+                 "senders to claim slots with a one-sided atomic; give each destination core a "
+                 "single source host instead.";
+            fail(m.str());
+            return 0;
+        }
     }
 
     // effective address; Zero for kOpSendUva, which takes the layout's fixed destination.
@@ -381,13 +443,14 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
     // The real turnaround, published by the exit guard above. Set here and only here: every
     // other path out of this function reports 0.
     credit_turnaround_ns = stage_ns;
+    credit_delivered = true;
     return length;
 }
 
 // The credit a remotely-armed notice owes. Called by deliver_to_l1()'s exit guard, so it runs
 // on refusals too -- with turnaround 0, because a message that was not delivered has no
 // turnaround worth publishing.
-void D2H2H2DSocket::post_credit_for(const Job& job, uint64_t turnaround_ns) {
+void D2H2H2DSocket::post_credit_for(const Job& job, uint64_t turnaround_ns, bool refused) {
     rx_remote_notice_.fetch_add(1, std::memory_order_relaxed);
     // origin selector -- it names the peer as well as its core, which is what
     // a bare core index could not do once there was more than one peer.
@@ -397,7 +460,7 @@ void D2H2H2DSocket::post_credit_for(const Job& job, uint64_t turnaround_ns) {
     // Entered vs returned: if these differ, the call is wedged inside, not failing.
     rx_origin_sel_.store(origin_sel, std::memory_order_relaxed);
     rx_credits_posted_.fetch_add(1, std::memory_order_relaxed);
-    return_credit(origin_sel, turnaround_ns);
+    return_credit(origin_sel, turnaround_ns, refused);
     rx_credits_done_.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -551,7 +614,7 @@ uint64_t D2H2H2DSocket::service_one(const Job& job, WorkerStats& ws) {
 // ===========================================================================
 
 bool D2H2H2DSocket::start_transport(std::string& err) {
-    // PEER TABLE, built from the transport this class was constructed with plus any mesh
+    // peer table, built from the transport this class was constructed with plus any mesh
     // peers. Sized to the whole topology so a host inside it with no entry reports a
     // provisioning gap rather than being indistinguishable from a host that does not exist.
     peers_.configure(topo_.num, topo_.ident);
@@ -566,12 +629,11 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
         }
     }
 
-    // STRUCTURAL CEILING: cores x receive slots per core.
-    //
-    // Was `cfg_.cores` alone, which was correct while a destination core had 1 rx control
-    // word -- the window could then only be across cores. Option B gives each core
-    // kNumAliasRingSlots slots, so the ceiling is the product. Leaving it at cores
-    // capped in_flight at 1 for a single-core run and the per-core credit window never opened
+    // cores x receive slots per core. Was `cfg_.cores` alone, which was correct while
+    // a destination core had 1 rx control word -- the window could then only be across
+    // cores. Option B gives each core kNumAliasRingSlots slots, so the ceiling is the
+    // product. Leaving it at cores capped in_flight at 1 for a single-core run and the
+    // per-core credit window never opened
     const uint32_t rx_slots_per_core = kNumAliasRingSlots;
     const uint32_t structural = (cfg_.cores ? cfg_.cores : 1u) * (rx_slots_per_core ? rx_slots_per_core : 1u);
     send_blocking_ = cfg_.send_blocking;
@@ -604,9 +666,6 @@ bool D2H2H2DSocket::start_transport(std::string& err) {
             if (static_cast<uint64_t>(cfg_.send_window) > allowed) {
                 err = "send window " + std::to_string(cfg_.send_window) +
                       " exceeds what this endpoint's TX queue allows (" + std::to_string(allowed) +
-                      // dead-code review
-                      // was "; tx_attr->size=" -- a libfabric endpoint attribute. The number is
-                      // the probed TX queue depth; name it that.
                       "; endpoint tx depth=" + std::to_string(depth) + ")";
                 return false;
             }
@@ -648,7 +707,7 @@ void D2H2H2DSocket::stop_transport() {
     sender_.join();
 }
 
-void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_ns) {
+void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_ns, bool refused) {
     const uint32_t origin_host = t6_selector_host(origin_selector, topo_.chips_per_host);
     const uint32_t origin_core = t6_selector_core(origin_selector);
     rx_origin_host_.store(origin_host, std::memory_order_relaxed);
@@ -657,13 +716,22 @@ void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_
              " which is outside the configured topology");
         return;
     }
+    // Distinct from the bound above -- that is the run's host count, this is the register
+    // layout -- and this index becomes a remote offset from a wire-supplied selector.
+    if (origin_host >= kMaxCreditPeers) {
+        fail("credit: origin selector names host " + std::to_string(origin_host) + " but only " +
+             std::to_string(kMaxCreditPeers) +
+             " credit words fit register " + std::to_string(kArgCreditReg) +
+             "'s line; crediting it would write a register credit_total() does not sum");
+        return;
+    }
     if (origin_core >= kProvisionedCores) {
         fail("credit: origin selector names core " + std::to_string(origin_core) +
              " which is outside the provisioned core range");
         return;
     }
     const uint64_t n = credit_out_[origin_host][origin_core].fetch_add(1, std::memory_order_relaxed) + 1;
-    // ONE PEER OR REFUSE. With several peers a credit sent to the wrong one stalls the real
+    // one peer or refuse; with several peers a credit sent to the wrong one stalls the real
     // sender forever, and an uncredited sender reads as a hang over there.
     uint32_t why = kPeerOk;
     Transport* const back = peers_.for_host(origin_host, why);
@@ -673,7 +741,8 @@ void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_
         fail("credit: origin host " + std::to_string(origin_host) + ": " + peer_why_name(why));
         return;
     }
-    if (const std::string e = back->post_credit(origin_core, topo_.ident, n, turnaround_ns, my_stage_slot());
+    if (const std::string e =
+            back->post_credit(origin_core, topo_.ident, n, turnaround_ns, refused, my_stage_slot());
         !e.empty()) {
         fail("credit: " + e);
         transport_failed_.store(true, std::memory_order_release);
@@ -809,6 +878,21 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, uint32_t depth
         }
     }
 
+    // Already latched: drain the queue without posting or building an error per message. The
+    // first refusal below is the one that reports.
+    if (peer_refused_.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> g(send_m_);
+        if (!send_q_[core].empty()) {
+            const SendReq dropped = send_q_[core].front();
+            send_q_[core].pop_front();
+            send_pending_[core].fetch_sub(1, std::memory_order_release);
+            send_depth_.fetch_sub(1, std::memory_order_release);
+            counters_.tx_done.fetch_add(1, std::memory_order_release);
+            retire_tx(dropped.src_core);
+        }
+        return false;
+    }
+
     SendReq r;
     {
         std::lock_guard<std::mutex> g(send_m_);
@@ -821,6 +905,19 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, uint32_t depth
         send_depth_.fetch_sub(1, std::memory_order_release);
     }
 
+    // the peer refused. After the dequeue, where dest_host is known, read from that peer's own
+    // credit word -- its position in the line is the writer's host id. The reason lives on the
+    // peer; this stops us sending the rest of the run to learn it.
+    if (credit_refused(region_, core, r.dest_host)) {
+        peer_refused_.store(true, std::memory_order_release);
+        fail("host " + std::to_string(r.dest_host) + " refused a message from core " + std::to_string(core) +
+             " -- it freed the slot without delivering. The reason is on that host, in its own "
+             "first error; this side stops rather than sending the rest of the run.");
+        counters_.tx_done.fetch_add(1, std::memory_order_release);
+        retire_tx(r.src_core);
+        return false;
+    }
+
     slot.rx_slot = static_cast<uint32_t>(send_started_[core].fetch_add(1, std::memory_order_release) %
                                         (depth ? depth : 1u));
 
@@ -828,12 +925,14 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, uint32_t depth
 
     const uint64_t local_off = HostRegion::tx_arena_off(r.src_core);
     const uint32_t store_off = (r.dest_uva != 0) ? uva_offset(r.dest_uva) : 0u;
-    // checked by tx/rx endpoints - past the arena is the next core's TX
-    // arena, and that is this side's memory.
-    if (static_cast<uint64_t>(store_off) + r.length > kArenaBytes) {
+    // slot-aware, and outbound so the bytes never leave. remote_off below starts at
+    // rx_slot * length, so that is where the span to bound starts. The receiver checks it too.
+    const uint64_t slot_off = static_cast<uint64_t>(slot.rx_slot) * static_cast<uint64_t>(r.length);
+    if (slot_off + static_cast<uint64_t>(store_off) + r.length > kArenaBytes) {
         std::ostringstream m;
-        m << "store fault: destination offset 0x" << std::hex << store_off << std::dec << " + length "
-          << r.length << " runs past the " << kArenaBytes << " B arena and into the next core's";
+        m << "store fault: slot " << slot.rx_slot << " at offset " << slot_off << " B + destination offset 0x"
+          << std::hex << store_off << std::dec << " + length " << r.length << " runs past the " << kArenaBytes
+          << " B arena and into the next core's";
         fail(m.str());
         counters_.tx_done.fetch_add(1, std::memory_order_release);
         retire_tx(r.src_core);

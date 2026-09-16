@@ -343,6 +343,7 @@ struct MpiOp {
 class MpiRmaTransport final : public Transport {
 public:
     explicit MpiRmaTransport(TransportConfig cfg) : cfg_(cfg) {
+        measure_retire_.store(cfg.measure_retire, std::memory_order_relaxed);
         ops_.reserve(kMaxOutstandingOps);
         free_slots_.reserve(kMaxOutstandingOps);
         for (uint32_t i = 0; i < kMaxOutstandingOps; ++i) {
@@ -508,7 +509,7 @@ public:
         }
 
         const uint64_t target = reg_offset(dest_core, rx_slot_reg(rx_slot));
-        // BOUNDED AGAINST THE BANK ARRAY, NOT THE WINDOW, because the window check would pass:
+        // bounded against the bank array, not the window; the window check would pass:
         // the array holds kProvisionedCores banks of kBankBytes inside the first 2 MiB, so
         // reg_offset() of an out-of-range core stays comfortably INSIDE the peer's window and
         // lands in the padding above the banks. That write succeeds, the notice is never seen,
@@ -539,7 +540,8 @@ public:
             release_op(mop);
             return mpi_error_text("MPI_Rput(notice)", rc);
         }
-        // LOCAL COMPLETION BEFORE THE ORIGIN BUFFER CAN BE REUSED (Kimi #1).
+
+        // local completion before origin buffer reuse
         //
         // `slot` is the thread_local notice staging area -- my_stage_slot() hands one slot per
         // THREAD, and the sender is a single thread, so every notice it posts uses the same
@@ -620,24 +622,22 @@ public:
                 MpiOp& op = *ops_[handle.slot - 1];
                 c.ok = false;
                 // effective_ms, not timeout_ms: 0 means "use the default" and printing 0 made
-                // the message claim the op failed instantly (Kimi #5, minor).
+                // the message claim the op failed instantly
                 c.error = "operation on core " + std::to_string(op.tag) + " did not complete within " +
                           std::to_string(effective_ms) + " ms";
                 abandoned_.fetch_add(1, std::memory_order_relaxed);
                 handle = OpHandle{};
 
-                // THE SLOT AND ITS MPI_Request ARE DELIBERATELY NOT RELEASED (Kimi #5).
-                //
+		// slot + MPI_Request are not released
+		//
                 // MPI_Cancel is not permitted on an RMA request, and the request still names
                 // this slot's staging bytes as its origin, so neither the slot nor the buffer
                 // can be reused while it is outstanding. Releasing it would hand a live origin
                 // buffer to the next post -- the same class of bug as #1, with a worse blast
                 // radius. So the slot stays retired-in-place and the pool shrinks by one.
                 //
-                // What WAS wrong is that this returned as if recoverable: after
-                // kMaxOutstandingOps such events every later post fails with "no free slot"
-                // and nothing says why, and teardown frees the window with request-based RMA
-                // still outstanding. Both are now loud.
+                // kMaxOutstandingOps every later post fails with "no free slot" and nothing says
+		// why, and teardown frees the window with request-based RMA still outstanding.
                 leaked_ops_.fetch_add(1, std::memory_order_relaxed);
                 set_last_error(c.error);
                 std::ostringstream fatal;
@@ -665,8 +665,15 @@ public:
     }
 
     std::string post_credit(uint32_t core, uint32_t my_host, uint64_t count, uint64_t turnaround_ns,
-                            uint32_t stage_slot) override {
-        return staged_word(credit_word_offset(core, my_host), credit_pack(count, turnaround_ns),
+                            bool refused, uint32_t stage_slot) override {
+        // staged_word() only checks the offset is inside the region, which register
+        // kArgCreditReg + 1 is. credit_total() does not sum it, so the write succeeds and that
+        // core's gate never reopens.
+        if (my_host >= kMaxCreditPeers) {
+            return "post_credit: host " + std::to_string(my_host) + " has no credit word -- only " +
+                   std::to_string(kMaxCreditPeers) + " fit register " + std::to_string(kArgCreditReg) + "'s line";
+        }
+        return staged_word(credit_word_offset(core, my_host), credit_pack(count, turnaround_ns, refused),
                            stage_slot);
     }
 
@@ -681,6 +688,8 @@ public:
     }
 
     void set_recording(bool on) override { recording_.store(on, std::memory_order_relaxed); }
+
+    void set_measure_retire(bool on) override { measure_retire_.store(on, std::memory_order_relaxed); }
 
     std::string describe() const override {
         MpiWindow& w = MpiWindow::instance();
@@ -859,7 +868,7 @@ private:
     }
 
     void record_retire(uint64_t ns) {
-        if (!cfg_.measure_retire || !recording_.load(std::memory_order_relaxed)) {
+        if (!measure_retire_.load(std::memory_order_relaxed) || !recording_.load(std::memory_order_relaxed)) {
             return;
         }
         std::lock_guard<std::mutex> g(retire_m_);
@@ -911,6 +920,7 @@ private:
     std::atomic<uint64_t> leaked_ops_{0};
     std::atomic<uint64_t> injected_{0};
     std::atomic<bool> recording_{false};
+    std::atomic<bool> measure_retire_{false};
 
     // Set by every one-sided write, cleared by a successful flush(). Written from the scan
     // workers (credits) and the sender thread (payloads), read by the sender thread.

@@ -136,10 +136,16 @@ public:
 
     virtual void set_recording(bool) {}
 
+    // Retire timing, switchable after construction so it can be a measurement opt-in rather
+    // than a creation-time fact. Only called before any traffic flows.
+    virtual void set_measure_retire(bool) {}
+
     virtual std::string barrier() = 0;
 
+    // `refused` is bit 63 of the credit word: this side freed the slot without delivering.
     virtual std::string post_credit(
-        uint32_t core, uint32_t my_host, uint64_t count, uint64_t turnaround_ns, uint32_t stage_slot) = 0;
+        uint32_t core, uint32_t my_host, uint64_t count, uint64_t turnaround_ns, bool refused,
+        uint32_t stage_slot) = 0;
 };
 
 std::unique_ptr<Transport> make_transport(const TransportConfig& cfg, std::string& error);

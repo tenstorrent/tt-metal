@@ -35,13 +35,17 @@ struct ClockSync {
     uint32_t samples = 0;
     bool same_host = false;
     bool valid = false;
+    // Set when this sync covers more than one peer (sync_clocks_to_hub). offset_ns is then one
+    // peer's, so it does not convert another's timestamps; uncertainty_ns and valid still cover
+    // the whole set.
+    bool multi_peer = false;
     std::string error;
 
-    // Converts a peer timestamp to our timeline. Refuses rather than guesses when the
-    // sync failed: a silently unconverted peer timestamp would produce a hop duration in
-    // the hundreds of seconds, which looks like a hang rather than like a bug.
+    // Converts a peer timestamp to our timeline. Refuses rather than guesses when the sync
+    // failed: an unconverted peer timestamp reads as a hang, not a bug. Refuses a multi-peer
+    // sync because "which peer's clock" has no answer there.
     bool to_local(uint64_t peer_ts, uint64_t& out) const {
-        if (!valid) {
+        if (!valid || multi_peer) {
             return false;
         }
         const int64_t v = static_cast<int64_t>(peer_ts) + offset_ns;
@@ -66,5 +70,12 @@ ClockSync sync_clocks(
     bool initiator,
     bool same_host,
     uint32_t samples = 64);
+
+// rank 0 IS the hub: it initiates against 1..N-1 in ascending order and everyone else answers
+// once, so `initiator` needs no negotiation. Sequential -- overlapping probes would put
+// queueing delay into the minimum-RTT estimate. Returns the worst-uncertainty peer's sync
+// whole so the triple stays self-consistent, sets multi_peer, and returns a failure as-is.
+ClockSync sync_clocks_to_hub(
+    const tt::tt_metal::distributed::multihost::ContextPtr& ctx, bool same_host, uint32_t samples = 64);
 
 }  // namespace tt::tt_metal::experimental

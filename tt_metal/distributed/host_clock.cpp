@@ -48,6 +48,10 @@ std::string ClockSync::describe() const {
     }
     o << "offset " << offset_ns << " ns (+/- " << uncertainty_ns << " ns), min RTT " << min_rtt_ns << " ns over "
       << samples << " samples";
+    if (multi_peer) {
+        o << " -- WORST of several peers; the bound covers them all, the offset is that one "
+             "peer's and does not convert another's timestamps";
+    }
     return o.str();
 }
 
@@ -142,6 +146,47 @@ ClockSync sync_clocks(const ContextPtr& ctx, Rank peer, bool initiator, bool sam
     s.samples = samples;
     s.valid = true;
     return s;
+}
+
+ClockSync sync_clocks_to_hub(const ContextPtr& ctx, bool same_host, uint32_t samples) {
+    if (same_host) {
+        ClockSync s;
+        s.same_host = true;
+        s.valid = true;
+        return s;
+    }
+    if (!ctx) {
+        ClockSync s;
+        s.error = "no distributed context";
+        return s;
+    }
+
+    const uint32_t self = static_cast<uint32_t>(*ctx->rank());
+    const uint32_t num = static_cast<uint32_t>(*ctx->size());
+    if (num < 2) {
+        ClockSync s;
+        s.error = "a clock sync needs a peer; this is a one-rank job";
+        return s;
+    }
+
+    // Not the hub: answer rank 0 once.
+    if (self != 0) {
+        return sync_clocks(ctx, Rank{0}, /*initiator=*/false, same_host, samples);
+    }
+
+    ClockSync worst;
+    for (uint32_t p = 1; p < num; ++p) {
+        ClockSync s = sync_clocks(ctx, Rank{static_cast<int>(p)}, /*initiator=*/true, same_host, samples);
+        if (!s.valid) {
+            s.error = "clock sync with rank " + std::to_string(p) + " failed: " + s.error;
+            return s;
+        }
+        if (!worst.valid || s.uncertainty_ns >= worst.uncertainty_ns) {
+            worst = s;
+        }
+    }
+    worst.multi_peer = num > 2;
+    return worst;
 }
 
 }  // namespace tt::tt_metal::experimental
