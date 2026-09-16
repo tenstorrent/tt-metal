@@ -16,6 +16,8 @@ from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tile_shape import TileShape, construct_tile_shape
 
 from .compute_pipeline import ComputePipeline
+from .golden.executor import GoldenExecutor
+from .pipeline_plan import plan_pipeline
 
 
 @dataclass
@@ -52,11 +54,9 @@ class L1Operation:
         return self.math.pack_body(self, config)
 
     def golden(self, config):
-        # calculate l1 golden
-        self.math.golden(self, config, GoldenType.L1_GOLDEN)
-
-        # calculate master golden
-        self.math.golden(self, config, GoldenType.MASTER_GOLDEN)
+        blocks = plan_pipeline(self)
+        for golden_type in (GoldenType.L1_GOLDEN, GoldenType.MASTER_GOLDEN):
+            GoldenExecutor(self, config, golden_type).run(blocks)
 
     def __str__(self):
         return (

@@ -111,6 +111,13 @@ class LoopPlan:
         walked = [v for k, v in self.origins.items() if not _is_template(k)]
         return len(walked[0]) if walked else None
 
+    @property
+    def num_banks(self) -> Optional[int]:
+        walked = self._walked_len()
+        if walked is None:
+            return None
+        return (walked + self.blocks_per_bank - 1) // self.blocks_per_bank
+
     def _block_origin(self, base_var, values, bank_idx, block):
         if _is_template(base_var):
             return values[block]
