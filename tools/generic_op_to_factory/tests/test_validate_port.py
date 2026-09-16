@@ -168,14 +168,14 @@ def test_acceptance_rejects_every_nonpassing_outcome(port, monkeypatch, status):
 
 
 @pytest.mark.parametrize("omit", [True, False])
-def test_default_flow_runs_only_two_full_suites_and_cache(port, omit):
+def test_final_validation_runs_only_two_full_suites_after_acceptance(port, omit):
     if omit:
         del port["smoke_nodeid"]
     else:
         port["smoke_nodeid"] = None
     validate_port.initialize(port)
     validation = validate_port.PortValidation(port["workspace"])
-    validation.run("acceptance")
+    validation.run("native_compare")
     for stage in ("source_smoke", "native_smoke"):
         attempt = validation.workspace / f"attempts/{stage}/001"
         assert (attempt / "skipped.json").is_file()
@@ -305,10 +305,10 @@ def test_complete_synthetic_port_and_resume(port):
     validation = validate_port.PortValidation(port["workspace"])
     validation.run("acceptance")
     record_review(validation)
-    state = validation.run()
+    state = validation.run("complete")
     assert all(r["status"] == "complete" for r in state["stages"].values())
     before = (validation.workspace / "state.json").read_bytes()
-    validation.run()
+    validation.run("complete")
     assert (validation.workspace / "state.json").read_bytes() == before
 
 
@@ -337,11 +337,11 @@ def test_missing_review_blocks_completion_without_rerunning_device_stages(port):
     with pytest.raises(  # allow-pytest.raises: host-only workflow validation
         ExportError, match="Independent review required"
     ):
-        validation.run()
+        validation.run("complete")
     assert validation.state["stages"]["complete"]["status"] == "pending"
     prior_cache = dict(validation.state["stages"]["acceptance"])
     record_review(validation)
-    validation.run(retry=True)
+    validation.run("complete", retry=True)
     assert validation.state["stages"]["acceptance"] == prior_cache
 
 
@@ -372,7 +372,7 @@ def test_completed_review_drift_is_rejected(port):
     validation = validate_port.PortValidation(port["workspace"])
     validation.run("acceptance")
     record_review(validation)
-    validation.run()
+    validation.run("complete")
     (validation.workspace / "review.json").write_text("{}")
     with pytest.raises(  # allow-pytest.raises: host-only workflow validation
         ExportError, match="evidence/runtime changed"
@@ -397,10 +397,10 @@ def test_measurement_evidence_is_checked(port, tmp_path):
         validate_port.verify_review(receipt, validation.state["plan_sha256"])
 
 
-def test_port_drift_blocks_resume(port):
+def test_acceptance_contract_cannot_change_during_factory_iteration(port):
     validate_port.initialize(port)
     (Path(port["runtime"]) / "tests/test_cache.py").write_text("# changed\n")
-    with pytest.raises(ExportError, match="drift"):  # allow-pytest.raises: host-only workflow validation
+    with pytest.raises(ExportError, match="acceptance tests changed"):  # allow-pytest.raises: fixed test contract
         validate_port.PortValidation(port["workspace"]).run()
 
 
@@ -451,11 +451,101 @@ def test_port_rejects_unsafe_or_ambiguous_configuration(port, key, value, messag
     assert not Path(port["workspace"]).exists()
 
 
-def test_port_new_untracked_source_blocks_resume(port):
+def test_port_new_untracked_source_starts_iteration(port):
     validate_port.initialize(port)
     (Path(port["runtime"]) / "new_factory.cpp").write_text("// new source\n")
-    with pytest.raises(ExportError, match="drift"):  # allow-pytest.raises: host-only workflow validation
-        validate_port.PortValidation(port["workspace"]).run()
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run()
+    assert "new_factory.cpp" in validation.planned["untracked_files"]
+    assert validation.state["stages"]["acceptance"]["status"] == "complete"
+
+
+def test_default_iteration_stops_at_acceptance_before_goldens(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run()
+    assert list(validate_port.STAGES[:3]) == ["build", "factory_contract", "acceptance"]
+    assert validation.state["stages"]["acceptance"]["status"] == "complete"
+    assert all(validation.state["stages"][stage]["status"] == "pending" for stage in validate_port.STAGES[3:])
+    assert not (validation.workspace / "attempts/source").exists()
+
+
+def test_factory_edit_supersedes_completed_results_in_same_workspace(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run()
+    record_review(validation)
+    validation.run("complete")
+    previous_sha = validation.state["plan_sha256"]
+    old_log = validation.workspace / "attempts/acceptance/001/acceptance.log"
+    old_bytes = old_log.read_bytes()
+    (Path(port["runtime"]) / port["factory_contract"]["factory_source"]).write_text("// corrected factory\n")
+    # A new process, same command and workspace; no re-init or --retry needed.
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run()
+    assert validation.state["plan_sha256"] != previous_sha
+    assert old_log.read_bytes() == old_bytes
+    for stage in ("build", "factory_contract", "acceptance"):
+        assert len(validation.state["stages"][stage]["attempts"]) == 2
+        assert validation.state["stages"][stage]["status"] == "complete"
+    for stage in validate_port.STAGES[3:]:
+        assert validation.state["stages"][stage]["status"] == "pending"
+    with pytest.raises(ExportError, match="review must match"):  # allow-pytest.raises: stale review
+        validation.run("complete")
+    record_review(validation)
+    validation.run("complete", retry=True)
+    assert validation.state["stages"]["complete"]["status"] == "complete"
+
+
+def test_failed_acceptance_fix_rebuilds_and_retests_in_place(port, monkeypatch):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    original = validation.execute
+
+    def fail_acceptance(stage, attempt):
+        if stage == "acceptance":
+            raise ExportError("Synthetic factory defect")
+        return original(stage, attempt)
+
+    monkeypatch.setattr(validation, "execute", fail_acceptance)
+    with pytest.raises(ExportError, match="factory defect"):  # allow-pytest.raises: synthetic failure
+        validation.run()
+    (Path(port["runtime"]) / port["factory_contract"]["factory_source"]).write_text("// fix\n")
+    monkeypatch.setattr(validation, "execute", original)
+    validation.run()
+    assert validation.state["stages"]["acceptance"]["status"] == "complete"
+    assert len(validation.state["stages"]["build"]["attempts"]) == 2
+    assert not (validation.workspace / "attempts/source").exists()
+
+
+def test_edit_during_stage_does_not_receive_a_pass(port, monkeypatch):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    original = validation.execute
+
+    def edit_while_testing(stage, attempt):
+        result = original(stage, attempt)
+        if stage == "acceptance":
+            (Path(port["runtime"]) / port["factory_contract"]["factory_source"]).write_text("// concurrent edit\n")
+        return result
+
+    monkeypatch.setattr(validation, "execute", edit_while_testing)
+    with pytest.raises(ExportError, match="Source changed during validation"):  # allow-pytest.raises: freshness
+        validation.run()
+    assert validation.state["stages"]["acceptance"]["status"] == "blocked"
+
+
+def test_factory_edit_cannot_bypass_live_command_guard(port):
+    import os
+
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run()
+    (validation.workspace / "attempts/acceptance/001/live.command.json").write_text(json.dumps({"pid": os.getpid()}))
+    (Path(port["runtime"]) / port["factory_contract"]["factory_source"]).write_text("// fix\n")
+    with pytest.raises(ExportError, match="may still be alive"):  # allow-pytest.raises: process guard
+        validation.run()
+    assert len(validation.state["stages"]["build"]["attempts"]) == 1
 
 
 def test_port_rejects_missing_acceptance_tests(port):

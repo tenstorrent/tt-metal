@@ -23,13 +23,18 @@ under this protocol. No operation has been measured by writing this document.
 
 ```mermaid
 flowchart TD
-    A[Freeze candidate, target build, cases and budgets] --> B[Build and factory contract]
-    B --> C[Frozen Python golden suite on target]
+    A[Prepare evaluated source and initial acceptance tests] --> B[Build and factory contract]
+    B --> P[Run native acceptance tests]
+    P --> Q{Acceptance passes?}
+    Q -- No --> Y[Agent fixes factory in place]
+    Y --> B
+    Q -- Yes --> C[Original Python golden suite on target]
     C --> D{Source baseline admissible?}
     D -- Yes --> E[Native golden suite on same target]
     D -- No --> X[Investigate source failures or incomplete evaluated checkpoint]
     E --> F{Same cases and accepted behavior?}
-    F -- No --> Y[Fix and create fresh validation evidence]
+    F -- No --> X2[Investigate mismatch without weakening tests]
+    X2 -- Factory defect --> Y
     F -- Yes --> G[Host contract and planner comparison]
     G --> H[Cache transitions and refresh verification]
     H --> I{Behavior gates pass?}
@@ -39,12 +44,18 @@ flowchart TD
     K -- No --> L[Regression or insufficient evidence: hold migration]
     K -- Yes --> M[Independent review of final source and evidence]
     M --> N[Accept migration for declared scope]
+    M -- Factory finding --> Y
 ```
 
 Host comparison cases can run alongside the corresponding golden/cache stages;
 they need not add another full golden-suite traversal. Performance runs are
 separate focused workloads. The two default golden executions and optional
 historical diagnostic remain as described in [PORT_FLOW.md](PORT_FLOW.md).
+The acceptance loop uses the same editable factory and workspace. An implementation
+change invalidates previous passes; final golden checks, performance evidence and
+review must describe the corrected code. The driver defaults to acceptance only;
+golden checks are explicitly requested after that loop passes. Repairs are agent-led,
+not an automatic LLM invocation inside the driver.
 
 ## 2. Freeze what is being compared
 

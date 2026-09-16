@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resumable golden parity and native acceptance validation of a reviewed C++ port.
+"""Acceptance-driven, in-place development and validation of a C++ port.
 
 The default input is a complete evaluated branch frozen by prepare_branch.
 Legacy export/preparation configs remain supported for historical diagnostics.
-Translation is authored/reviewed before initialization; this driver never
-invents a port, repairs failures, or queries a DB.
+An agent authors and repairs the port in place using the initial acceptance
+tests. This driver runs checks and invalidates stale results; it never invents
+a port, invokes an LLM, repairs failures, or queries a DB.
 """
 
 import argparse
@@ -45,13 +46,13 @@ from tools.generic_op_to_factory.prepare_baseline import GitTree, verify_prepara
 STAGES = (
     "build",
     "factory_contract",
+    "acceptance",
     "source_smoke",
     "source",
     "source_compare",
     "native_smoke",
     "native",
     "native_compare",
-    "acceptance",
     "review",
     "complete",
 )
@@ -298,6 +299,7 @@ def plan(config):
         "suite": suite,
         "tracked_diff_sha256": digest(tree.git("diff", "--binary", "HEAD", "--").decode()),
         "untracked_files": untracked_hashes,
+        "acceptance_sha256": {test: file_hash(runtime / test) for test in tests},
         "implementation": {
             p.name: file_hash(p)
             for p in (
@@ -335,12 +337,57 @@ class PortValidation:
         if str(self.workspace) != self.config["workspace"] or digest(self.planned) != self.state["plan_sha256"]:
             raise ExportError("Validation workspace identity changed")
         if plan(self.config) != self.planned:
-            raise ExportError("Port source, input or configuration drift; use a new validation workspace")
+            raise ExportError("Source changed during validation; stop editing, then rerun in this workspace")
         for record in self.state["stages"].values():
             if record["status"] == "complete":
                 for path, sha in record["evidence"].items():
                     if file_hash(path) != sha:
                         raise ExportError(f"Validation evidence/runtime changed: {path}")
+
+    def check_unfinished_commands(self):
+        # Check before resetting stages as well as before retrying: an old test
+        # process must never overlap a new build or device invocation.
+        for record in self.state["stages"].values():
+            for old in record["attempts"]:
+                for path in (self.workspace / old).glob("*.command.json"):
+                    command = json.loads(path.read_bytes())
+                    if "finished_at" not in command:
+                        if not command.get("pid"):
+                            raise ExportError("Unfinished command identity unknown")
+                        try:
+                            os.kill(command["pid"], 0)
+                        except ProcessLookupError:
+                            pass
+                        else:
+                            raise ExportError("Unfinished command may still be alive")
+
+    def refresh_candidate(self):
+        """Accept in-place implementation edits without carrying forward passes."""
+        if str(self.workspace) != self.config["workspace"] or digest(self.planned) != self.state["plan_sha256"]:
+            raise ExportError("Validation workspace identity changed")
+        current = plan(self.config)
+        if current == self.planned:
+            return
+        mutable = {"tracked_diff_sha256", "untracked_files"}
+        if {k: v for k, v in current.items() if k not in mutable} != {
+            k: v for k, v in self.planned.items() if k not in mutable
+        }:
+            raise ExportError(
+                "Validation inputs, configuration, tooling or acceptance tests changed; review the contract"
+            )
+        self.check_unfinished_commands()
+        for record in self.state["stages"].values():
+            attempts = record["attempts"]
+            record.clear()
+            record.update(status="pending", attempts=attempts)
+        self.planned = current
+        self.state.update(plan_sha256=digest(current), candidate_updated_at=now())
+        write_json(self.workspace / "plan.json", self.planned)
+        write_json(self.workspace / "state.json", self.state)
+        print(
+            "PORT: implementation edited in place; previous results superseded, rebuilding and rerunning acceptance",
+            flush=True,
+        )
 
     def execute(self, stage, attempt):
         c = self.config
@@ -479,7 +526,7 @@ class PortValidation:
             if receipt_path.is_symlink() or not receipt_path.is_file():
                 raise ExportError(
                     "Independent review required: supply workspace/review.json for this plan; "
-                    "inspect findings, fix/revalidate in a new workspace if needed, then --retry"
+                    "inspect findings, fix/revalidate in place if needed, then --through complete --retry"
                 )
             receipt = json.loads(receipt_path.read_bytes())
             evidence = verify_review(receipt, self.state["plan_sha256"])
@@ -517,9 +564,10 @@ class PortValidation:
             raise ExportError("Case outcomes differ; see comparison.json")
         return {}
 
-    def run(self, through="complete", retry=False):
+    def run(self, through="acceptance", retry=False):
         with locked(self.workspace):
             self.state = json.loads((self.workspace / "state.json").read_bytes())
+            self.refresh_candidate()
             self.validate()
             for stage in STAGES[: STAGES.index(through) + 1]:
                 record = self.state["stages"][stage]
@@ -528,24 +576,14 @@ class PortValidation:
                 if record["status"] != "pending":
                     if not retry:
                         raise ExportError(f"{stage} is {record['status']}; inspect then explicitly --retry")
-                    for old in record["attempts"]:
-                        for p in (self.workspace / old).glob("*.command.json"):
-                            command = json.loads(p.read_bytes())
-                            if "finished_at" not in command:
-                                if not command.get("pid"):
-                                    raise ExportError("Unfinished command identity unknown")
-                                try:
-                                    os.kill(command["pid"], 0)
-                                except ProcessLookupError:
-                                    pass
-                                else:
-                                    raise ExportError("Unfinished command may still be alive")
+                    self.check_unfinished_commands()
                 attempt = self.workspace / "attempts" / stage / f"{len(record['attempts']) + 1:03d}"
                 if not attempt.resolve().is_relative_to(self.workspace):
                     raise ExportError("Attempt path is redirected")
                 attempt.mkdir(parents=True)
                 record["attempts"].append(str(attempt.relative_to(self.workspace)))
                 record.update(status="running", started_at=now())
+                write_json(attempt / "candidate.json", {"plan_sha256": self.state["plan_sha256"]})
                 write_json(self.workspace / "state.json", self.state)
                 print(f"PORT: {stage} started ({attempt})", flush=True)
                 try:
@@ -597,7 +635,7 @@ def main():
         sub.add_parser(name).add_argument("--config", type=Path, required=True)
     command = sub.add_parser("run")
     command.add_argument("--workspace", type=Path, required=True)
-    command.add_argument("--through", choices=STAGES, default="complete")
+    command.add_argument("--through", choices=STAGES, default="acceptance")
     command.add_argument("--retry", action="store_true")
     sub.add_parser("status").add_argument("--workspace", type=Path, required=True)
     args = parser.parse_args()

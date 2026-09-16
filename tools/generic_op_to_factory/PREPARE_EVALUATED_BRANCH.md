@@ -123,13 +123,20 @@ python3 -m tools.generic_op_to_factory.validate_port plan --config /localdev/ast
 python3 -m tools.generic_op_to_factory.validate_port init --config /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/inputs/port.json
 python3 -m tools.generic_op_to_factory.validate_port run \
   --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation --through acceptance
+# Fix the factory in place and repeat acceptance until it passes. Then:
+python3 -m tools.generic_op_to_factory.validate_port run \
+  --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation --through native_compare
 # Obtain independent review and supply review.json using REVIEW.md.
 python3 -m tools.generic_op_to_factory.validate_port run \
-  --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation
+  --workspace /localdev/astancov/sample-migration-target/generated/generic_op_to_factory/validation --through complete
 ```
 
-There is one build, one full source golden, one full native golden and a separate
-focused native acceptance suite. The source/native route is checked and native generic-op
+Development repeats the incremental build and focused native acceptance suite
+in the same worktree. The initial acceptance tests stay unchanged; the agent fixes
+the factory. A plain `run` stops at acceptance. Final validation adds one full
+source golden and one full native golden on the same candidate build. Factory
+edits invalidate earlier passes and review without requiring a new workspace.
+The source/native route is checked and native generic-op
 fallback is forbidden. `source_compare` records the fresh source outcomes, not
 a DB comparison. **The source suite does not have to be green.** Ordinary source
 failures/errors remain visible and do not prevent the native suite from running.

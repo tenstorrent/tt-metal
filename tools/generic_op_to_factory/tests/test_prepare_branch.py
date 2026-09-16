@@ -256,7 +256,7 @@ def test_branch_validation_never_reads_db_or_installs_export(branch_port, monkey
     monkeypatch.setattr(validate_port.prepare_target, "inspect", forbidden)
     validate_port.initialize(branch_port)
     validation = validate_port.PortValidation(branch_port["workspace"])
-    validation.run("acceptance")
+    validation.run("native_compare")
     suites = list(validation.workspace.glob("attempts/*/001/junit.xml"))
     assert {path.parent.parent.name for path in suites} == {"source", "native", "acceptance"}
     comparison = json.loads((validation.workspace / "attempts/source_compare/001/comparison.json").read_bytes())
@@ -264,7 +264,7 @@ def test_branch_validation_never_reads_db_or_installs_export(branch_port, monkey
     assert comparison["observed_failures"] == 0
     assert validation.planned["historical_failures"] is None
     record_review(validation)
-    validation.run()
+    validation.run("complete")
     result = json.loads((validation.workspace / "attempts/complete/001/result.json").read_bytes())
     assert result["input_mode"] == "evaluated_branch"
     assert result["historical_failures"] is None
@@ -280,11 +280,26 @@ def test_branch_validation_rejects_mixed_historical_config(branch_port):
         validate_port.plan(branch_port)
 
 
-def test_branch_port_edits_are_frozen_on_resume(branch_port):
+def test_branch_acceptance_tests_are_protected_on_resume(branch_port):
     validate_port.initialize(branch_port)
     (Path(branch_port["runtime"]) / "tests/test_cache.py").write_text("changed test")
-    with pytest.raises(ExportError, match="drift"):  # allow-pytest.raises: final source snapshot
-        validate_port.PortValidation(branch_port["workspace"]).validate()
+    with pytest.raises(ExportError, match="acceptance tests changed"):  # allow-pytest.raises: fixed test contract
+        validate_port.PortValidation(branch_port["workspace"]).run()
+
+
+def test_branch_factory_is_improved_in_place(branch_port):
+    validate_port.initialize(branch_port)
+    validation = validate_port.PortValidation(branch_port["workspace"])
+    validation.run()
+    factory = Path(branch_port["runtime"]) / branch_port["factory_contract"]["factory_source"]
+    factory.write_text("// corrected descriptor factory\n")
+    validation.run()
+    assert len(validation.state["stages"]["acceptance"]["attempts"]) == 2
+    assert validation.state["stages"]["source"]["status"] == "pending"
+    source = Path(branch_port["runtime"]) / "ttnn/ttnn/operations/sample_op/planner.py"
+    source.write_text("# not a factory fix\n")
+    with pytest.raises(ExportError, match="Undeclared change"):  # allow-pytest.raises: original remains reference
+        validation.run()
 
 
 @pytest.mark.parametrize("configured", ["failed"], indirect=True)
@@ -320,9 +335,9 @@ def test_failing_source_never_disables_native_outcome_or_case_checks(branch_port
     validate_port.initialize(branch_port)
     validation = validate_port.PortValidation(branch_port["workspace"])
     with pytest.raises(ExportError, match="Case outcomes differ"):  # allow-pytest.raises: mandatory parity gate
-        validation.run("acceptance")
+        validation.run("native_compare")
     assert validation.state["stages"]["native_compare"]["status"] == "blocked"
-    assert validation.state["stages"]["acceptance"]["status"] == "pending"
+    assert validation.state["stages"]["acceptance"]["status"] == "complete"
 
 
 def test_obsolete_source_failure_switch_is_not_silently_accepted(branch_port):

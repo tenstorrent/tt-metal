@@ -15,9 +15,21 @@ instead of `preparation`, `export`, `phase` and
 baseline comes from running the unchanged operation and golden suite already
 on that branch; DB retrieval and a historical checkout are not involved.
 
-The validation sequence is **one parity-enabled correctness build → factory contract → source golden →
-source-baseline check → native golden → source/native comparison → native acceptance tests
-→ independent review → scoped receipt**. Smokes and precompile remain optional.
+The development loop is **edit the ProgramDescriptor factory in place → incremental
+parity-enabled build → factory contract → native acceptance tests → inspect failures
+and fix the factory → repeat**. Use the acceptance tests generated at the start;
+do not weaken assertions to accommodate a factory defect. The agent makes the fixes;
+the driver runs checks, reports failures, and invalidates stale results. It does
+not invoke an LLM automatically.
+
+`run` defaults to stopping after acceptance. Once acceptance passes, explicitly
+continue with `run --through native_compare`: **source golden → source-baseline
+check → native golden → source/native comparison**. Then obtain independent review
+and use `run --through complete` for the scoped receipt. Smokes and precompile
+remain optional. Unchanged completed stages are reused; factory edits invalidate
+all stages, including goldens and review. No extra checkout, source snapshot or
+validation directory is needed for a repair. Full golden suites are not part of
+each acceptance iteration.
 `source_compare` records the source baseline; it does not require a green source
 suite or claim a DB comparison. Ordinary source failures/errors proceed to native
 execution. `native_compare` enforces the same case set and exact outcome classes;
@@ -39,7 +51,7 @@ cache requirements. Keep source-only planner inspection separate.
 
 Configure a nonempty, unique `acceptance_tests` list of repository-relative `.py`
 files below `tests/`. During migration, the `acceptance` stage runs that list
-**once, on C++ only**, after golden parity. It is not a second source run of the
+**on C++ only**, before golden parity, once per candidate iteration. It is not a second source run of the
 skill's tests. Its route adapter supplies `TT_PRE_MIGRATION_MODE=native` and
 `TT_PRE_MIGRATION_ENTRY=native_entry` inside the pytest process before collection.
 Suites must resolve that entry at setup, use the same assertions on both routes,
@@ -167,15 +179,16 @@ validation and retain its changed-baseline scope in completion evidence.
    changes separately from independently justified ABI/API adaptations. No Python planner dispatch or
    fallback to `generic_op` is permitted in the native path.
 5. Supply a native entry-point mapping and operation-specific cache regression
-   tests to `tools.generic_op_to_factory.validate_port`. That driver checkpoints build → compiled factory contract → optional source smoke
+   tests to `tools.generic_op_to_factory.validate_port`. That driver runs build → compiled factory contract → native acceptance tests.
+   Fix the factory in place and repeat until those tests pass. Then request optional source smoke
    → target-source golden suite → DB comparison → optional native smoke → native golden
-   suite → source/native comparison → native acceptance tests → independent code-quality /
+   suite → source/native comparison → independent code-quality /
    host-performance review → scoped completion evidence. Use the independent
    agent task and receipt contract in [REVIEW.md](REVIEW.md). Confirmed findings
-   must be fixed and revalidated before completion; changed source needs a new
-   validation workspace and a fresh review bound to that plan.
+   must be fixed in place and revalidated before completion; changed source needs
+   fresh passing results and a fresh review, not a new validation workspace.
 
-The default flow runs **two full golden suites on one final target build**:
+Final validation runs **two full golden suites on one final target build**:
 frozen Python source, then native C++. The DB comparison and source/native
 comparison read existing result files; they do not launch tests. Cache tests
 are a separate, focused check of repeated invocation and address changes.
@@ -203,10 +216,13 @@ python3 -m tools.generic_op_to_factory.prepare_target --preparation /absolute/pr
 
 python3 -m tools.generic_op_to_factory.validate_port plan --config /absolute/port.json
 python3 -m tools.generic_op_to_factory.validate_port init --config /absolute/port.json
-python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation --through acceptance
+# Repeat this command after each in-place factory fix. It stops at acceptance.
+python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation
+# Once acceptance passes, run the two full golden suites on this candidate.
+python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation --through native_compare
 # Independent agent reviews the final source and evidence; reconcile findings,
 # then write /absolute/new-validation/review.json as described in REVIEW.md.
-python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation
+python3 -m tools.generic_op_to_factory.validate_port run --workspace /absolute/new-validation --through complete
 python3 -m tools.generic_op_to_factory.validate_port status --workspace /absolute/new-validation
 ```
 
@@ -287,12 +303,17 @@ logs/caches out of source snapshots; tracked source there is forbidden. The lega
 historical mode still requires its validation workspace outside the target repo.
 In either mode, validation outputs cannot be placed inside frozen inputs.
 It records tracked diffs, untracked non-ignored source hashes, input/reference
-hashes, commands, logs, JUnit and build libraries. Source/configuration drift
-blocks resume. `--through STAGE` stops at a checkpoint. Failed/interrupted
-stages require inspection followed by explicit `--retry`; old evidence is
-retained, and potentially live unfinished commands block retry. Changes to a
-port require a new validation workspace, not edited receipts. A completed
-comparison is not a request to rerun a completed device stage.
+hashes, commands, logs, JUnit and build libraries. Native implementation edits
+automatically update the current candidate fingerprint and reset all stages to
+pending while retaining prior attempt logs. These hashes identify which code was
+tested; they do not make the factory immutable. Acceptance-file edits, original
+source/evaluator changes and configuration/tooling changes are not factory repairs
+and require explicit contract review. Edits during a running check block its pass.
+`--through STAGE` stops at a checkpoint; the default is `acceptance`. With unchanged
+source, failed/interrupted stages require inspection followed by explicit `--retry`.
+Potentially live unfinished commands block retry or candidate replacement.
+Previously completed stages are reused only while source and evidence still match.
+Old attempt receipts remain historical; `state.json` identifies current passes.
 
 Completion requires a recorded independent review and is scoped to the recorded
 golden outcomes/tolerances and supplied native acceptance tests. It does not claim universal support, tracing compatibility,

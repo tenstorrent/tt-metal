@@ -155,7 +155,7 @@ def test_port_completion_keeps_substitution_scope(port, donor):
     validation = validate_port.PortValidation(port["workspace"])
     validation.run("acceptance")
     record_review(validation)
-    validation.run()
+    validation.run("complete")
     result = json.loads((validation.workspace / "attempts/complete/001/result.json").read_text())
     assert "not exact historical" in result["baseline_scope"]
     assert result["dependency_substitutions"][0]["sha256"] == resolved[0]["sha256"]

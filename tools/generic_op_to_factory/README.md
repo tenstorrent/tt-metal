@@ -1,7 +1,8 @@
 # Generic operation → C++ ProgramDescriptor-factory migration
 
 This tt-metal-owned tool post-processes a **complete evaluated run branch** and
-validates an authored native port with two golden suites on one target build.
+develops a native port against acceptance tests generated at the start, then
+validates golden parity with two suites on the final target build.
 The branch's final commit, not the DB's `starting_commit`, supplies the operation,
 supporting tt-metal changes and evaluator gitlink. Historical reconstruction is
 an explicit legacy diagnostic, not a prerequisite. All orchestration, mapping,
@@ -32,7 +33,9 @@ step; it does not add an automated gate to the validation driver.
 2. [Prepare an isolated worktree from the supplied branch](PREPARE_EVALUATED_BRANCH.md).
 3. [Map the operation](MAPPING.md) and author its native
    [ProgramDescriptor factory](FACTORY_CONTRACT.md).
-4. [Validate source/native golden parity and native acceptance tests](PORT_FLOW.md), then complete
+4. [Build and run native acceptance tests](PORT_FLOW.md). Fix the factory in place
+   and repeat in the same workspace; `validate_port run` stops at acceptance by default.
+5. After acceptance passes, explicitly run source/native golden comparison, then complete
    the [independent review gate](REVIEW.md).
 
 Run entry points from this tt-metal repository root, for example:
@@ -56,6 +59,9 @@ case identities and outcome classes, preserving matching failures as failures.
 Separately, the required `acceptance_tests` file list runs on C++ only. These
 ordinary Python tests encode the skill-authored operation contract, including
 but not limited to cache behavior. Every selected acceptance test must pass.
+Factory edits invalidate old passes automatically; no new checkout or validation
+workspace is required. Keep the initial acceptance contract, and fix the factory
+against it. The agent performs repairs; the driver does not call an LLM itself.
 Preparation inputs, validation logs and device-build caches live under the target
 worktree's ignored `generated/generic_op_to_factory/` directory, not beside the worktree.
 DB exports remain optional provenance/results artifacts; branch validation does

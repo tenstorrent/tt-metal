@@ -44,7 +44,11 @@ Reusable agent task (replace paths, not with production run IDs):
 
 The author reconciles each finding; a test passing is not evidence that a code
 quality finding is resolved. Fix defects and run proportionate checks. Source
-changes require a new validation workspace; never alter old successful receipts.
+changes are made in place. Rerun `validate_port run` in the same workspace to rebuild
+and pass the original acceptance tests, then `run --through native_compare` for
+golden comparison. The driver invalidates previous passes and review approval
+when the implementation changes; old logs remain history, not current evidence.
+Re-review the corrected factory and provide a receipt for the current plan hash.
 No numerical performance claim is required for a behavior-only receipt:
 `not_measured` is an honest outcome but is not PR-ready performance evidence.
 The required native hot/cold comparison is described in
@@ -56,7 +60,7 @@ performance gate.
 Public-call wall time includes binding, allocation, dispatch and possibly device
 backpressure; it is not an isolated measurement of the cache-hit hook.
 
-After `run --through acceptance`, supply `WORKSPACE/review.json`:
+After acceptance passes and `run --through native_compare` finishes, supply `WORKSPACE/review.json`:
 
 ```json
 {
@@ -100,4 +104,5 @@ and checks it on resume. These are audit checks, not authentication of agent
 identity or proof that prose is truthful; the initiating agent/user remains
 responsible for genuine independent review. Missing/stale/unresolved review
 blocks completion. If execution already reached a blocked review stage, inspect
-and supply the receipt, then use `run --retry`; completed tests are not rerun.
+and supply the receipt, then use `run --through complete --retry`; unchanged
+completed tests are not rerun. A plain `run` stops after acceptance.

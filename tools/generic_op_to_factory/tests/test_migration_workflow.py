@@ -47,7 +47,8 @@ else:
     output = next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--junitxml='))
     root = ET.Element('testsuite')
     case = ET.SubElement(root, 'testcase', classname='eval.golden_tests.sample_suite.test_golden', name='test_sample[case]')
-    failed = STATUS == 'failed'
+    # The fixture's status models golden outcomes; acceptance is a separate contract.
+    failed = STATUS == 'failed' and '--migration-acceptance-route' not in sys.argv
     if failed:
         ET.SubElement(case, 'failure', message='synthetic failure')
     ET.ElementTree(root).write(output, encoding='utf-8')
