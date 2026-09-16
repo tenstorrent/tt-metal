@@ -232,6 +232,24 @@
   team: models
   budget_type: unit
 
+- name: Qwen3.6-35B-A3B MoE unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_moe_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/unit/test_moe.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+  model: qwen3.6-35b-a3b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+      tier: 1
+  owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+  team: models
+  budget_type: unit
+
 - name: Mistral-7B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -1644,6 +1662,21 @@
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
+- name: HunyuanImage-3.0 unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
+    models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh unit \
+      --timeout 540 models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -m "not slow"
+  model: hunyuan-image-3.0
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
   team: models
   budget_type: unit
 

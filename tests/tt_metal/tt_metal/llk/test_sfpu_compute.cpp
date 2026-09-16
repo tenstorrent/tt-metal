@@ -62,6 +62,8 @@ namespace unit_tests::sfpu_util {
 const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
+    {"relu_min", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0, 0x40A33333u);"}}},  // 5.1f
+    {"relu_max", {{"SFPU_OP_CHAIN_0", "relu_max_tile_init(); relu_max_tile(0, 0x40A33333u);"}}},  // 5.1f
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
@@ -140,6 +142,12 @@ bool is_int8_binary_sfpu_op(const std::string& op_name) {
 float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "relu") {
         return fmaxf(input, 0.0f);
+    }
+    if (op_name == "relu_min") {
+        return fmaxf(input, 5.1f);
+    }
+    if (op_name == "relu_max") {
+        return fmaxf(0.0f, fminf(input, 5.1f));
     }
     if (op_name == "exponential") {
         return std::exp(input);
@@ -319,6 +327,9 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     }
     if (op_name == "clamp") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
+    }
+    if ((op_name == "relu_min") || (op_name == "relu_max")) {
+        return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 10.0f, numel, seed);
     }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
 }
@@ -872,16 +883,16 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
 
     // Input
     const bool is_fp32 = (test_config.l1_input_data_format == tt::DataFormat::Float32);
-    // The Float32 device path only wires up relu in v1; the golden/input/check helpers below are
-    // format-generic, so this is the single place that pins the supported-op set for Float32.
-    TT_FATAL(!is_fp32 || test_config.sfpu_op == "relu", "Float32 SFPU path supports relu only in v1");
+    const bool is_relu_family =
+        test_config.sfpu_op == "relu" || test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
+    TT_FATAL(!is_fp32 || is_relu_family, "Float32 SFPU path supports relu / relu_min / relu_max only in v1");
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
     const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-    // Float32 packs 1:1 into uint32 words (pack_vector accepts sizeof(PackType) >= sizeof(ValueType)),
-    // so the bf16 uniform-random generator works for both; relu uses the [-1, 1] default range.
+    const bool relu_threshold_op = test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     std::vector<uint32_t> packed_input =
-        is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, numel, seed)
+        is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(
+                      relu_threshold_op ? -2.0f : -1.0f, relu_threshold_op ? 10.0f : 1.0f, numel, seed)
                 : sfpu_util::generate_packed_sfpu_input(numel, test_config.sfpu_op, seed);
 
     // Golden output
@@ -1590,6 +1601,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
+        std::make_tuple(1, "relu_min"),
+        std::make_tuple(1, "relu_max"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
@@ -1603,6 +1616,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "rsqrt"),
         std::make_tuple(1, "mul_unary"),
         std::make_tuple(4, "relu"),
+        std::make_tuple(4, "relu_min"),
+        std::make_tuple(4, "relu_max"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
@@ -1630,7 +1645,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
     if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
         GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
     }
-    if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu")) ||
+    if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu" || sfpu_op == "relu_min" || sfpu_op == "relu_max")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "log"))) {
         GTEST_SKIP();
@@ -1655,6 +1670,8 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture,
     ::testing::Values(
         std::make_tuple(1, "relu"),
+        std::make_tuple(1, "relu_min"),
+        std::make_tuple(1, "relu_max"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
@@ -1667,6 +1684,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "rsqrt"),
         std::make_tuple(1, "mul_unary"),
         std::make_tuple(4, "relu"),
+        std::make_tuple(4, "relu_min"),
+        std::make_tuple(4, "relu_max"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
@@ -1721,6 +1740,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
+        std::make_tuple(1, "relu_min"),
+        std::make_tuple(1, "relu_max"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
@@ -1733,6 +1754,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sign"),
         std::make_tuple(1, "rsqrt"),
         std::make_tuple(4, "relu"),
+        std::make_tuple(4, "relu_min"),
+        std::make_tuple(4, "relu_max"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
@@ -1759,7 +1782,7 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, Tensix
     if (arch_ == tt::ARCH::QUASAR && is_unary_sfpu_op_unsupported_on_quasar(sfpu_op)) {
         GTEST_SKIP() << "SFPU unary op '" << sfpu_op << "' has no Quasar compute-API implementation";
     }
-    if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu")) ||
+    if (((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "relu" || sfpu_op == "relu_min" || sfpu_op == "relu_max")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "exponential")) ||
         ((arch_ == tt::ARCH::WORMHOLE_B0) && (sfpu_op == "log"))) {
         GTEST_SKIP();
@@ -1785,6 +1808,8 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture,
     ::testing::Values(
         std::make_tuple(1, "relu"),
+        std::make_tuple(1, "relu_min"),
+        std::make_tuple(1, "relu_max"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
         std::make_tuple(1, "gelu"),
@@ -1796,6 +1821,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sign"),
         std::make_tuple(1, "rsqrt"),
         std::make_tuple(4, "relu"),
+        std::make_tuple(4, "relu_min"),
+        std::make_tuple(4, "relu_max"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
         std::make_tuple(4, "gelu"),
@@ -1911,25 +1938,31 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     // 1 and 4-tile, SyncFull and SyncHalf
-    for (const uint32_t num_tiles : {1u, 4u}) {
-        for (const bool dst_full_sync_en : {true, false}) {
-            SCOPED_TRACE(
-                std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
-            run_quasar_sfpu_unpack_to_dest_fp32(this->device(), num_tiles, "relu", dst_full_sync_en);
+    for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
+        for (const uint32_t num_tiles : {1u, 4u}) {
+            for (const bool dst_full_sync_en : {true, false}) {
+                SCOPED_TRACE(
+                    std::string(sfpu_op) + " num_tiles=" + std::to_string(num_tiles) +
+                    (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+                run_quasar_sfpu_unpack_to_dest_fp32(this->device(), num_tiles, sfpu_op, dst_full_sync_en);
+            }
         }
     }
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
     // 16-bit operand explicitly unpacked to Dest
-    for (const bool dst_full_sync_en : {true, false}) {
-        for (uint32_t num_tiles : {1u, 4u}) {
-            log_info(
-                tt::LogTest,
-                "Quasar SFPU 16b->DEST: num_tiles={} {}",
-                num_tiles,
-                dst_full_sync_en ? "SyncFull" : "SyncHalf");
-            run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, "relu", dst_full_sync_en);
+    for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            for (uint32_t num_tiles : {1u, 4u}) {
+                log_info(
+                    tt::LogTest,
+                    "Quasar SFPU 16b->DEST: op={} num_tiles={} {}",
+                    sfpu_op,
+                    num_tiles,
+                    dst_full_sync_en ? "SyncFull" : "SyncHalf");
+                run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, sfpu_op, dst_full_sync_en);
+            }
         }
     }
 }

@@ -959,12 +959,12 @@ static void preflight_fft_input(
 
     auto* dev = real.device();
     TT_FATAL(dev != nullptr, "{}: input tensor must reside on a device.", op_name);
+    const auto arch = dev->arch();
     TT_FATAL(
-        dev->arch() == tt::ARCH::WORMHOLE_B0,
-        "{}: only Wormhole B0 is supported (got arch={}). "
-        "Blackhole/Grayskull paths are not validated; use ttnn.experimental.fft only on WH.",
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+        "{}: only Wormhole B0 and Blackhole are supported (got arch={}).",
         op_name,
-        static_cast<int>(dev->arch()));
+        static_cast<int>(arch));
 
     if (imag.has_value()) {
         const auto& im = *imag;
