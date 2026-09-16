@@ -3,6 +3,5 @@
 """Public DeepSeek-V4 prefill API."""
 
 from models.demos.deepseek_v3_d_p.tt.v4.block import TtV4Block
-from models.demos.deepseek_v3_d_p.tt.v4.residual import MhcResidual
 
-__all__ = ["TtV4Block", "MhcResidual"]
+__all__ = ["TtV4Block"]

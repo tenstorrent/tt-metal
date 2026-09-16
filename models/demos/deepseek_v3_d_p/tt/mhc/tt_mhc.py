@@ -279,11 +279,20 @@ class TtMHCWrap(LightweightModule):
                 out[j] = ttnn.addcmul(out[j], res[i], cmb[i * n + j])
         return ttnn.concat(out, dim=-1)
 
-    def forward(self, x, sublayer):
-        """x: [1,1,T,n*C]; sublayer: [1,1,T,C] -> [1,1,T,C]. Returns [1,1,T,n*C]."""
+    def forward(self, x, sublayer, sublayer_dtype=None):
+        """x: [1,1,T,n*C]; sublayer: [1,1,T,C] -> [1,1,T,C]. Returns [1,1,T,n*C].
+
+        The mHC arithmetic needs fp32 and the sublayer has its own dtype: ``sublayer_dtype`` casts
+        the collapsed hidden to it going in, and back to ``x``'s dtype coming out.
+        """
         residual = x
         h, post, comb = self.hc_pre(x)
-        h = sublayer(h)
+        if sublayer_dtype is None:
+            h = sublayer(h)
+        else:
+            out = sublayer(ttnn.typecast(h, sublayer_dtype))
+            h = ttnn.typecast(out, x.dtype)
+            ttnn.deallocate(out)
         return self.hc_post(h, residual, post, comb)
 
 

@@ -15,13 +15,14 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig
+from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
-from models.demos.deepseek_v3_d_p.tt.v4.residual import MhcResidual
 
 _ATTENTION = {
     "sliding_attention": TtSWA,
@@ -159,14 +160,22 @@ class TtV4Block(LightweightModule):
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
         )
 
-        self.attn_res, self.ffn_res = MhcResidual.pair(
-            mesh_device,
-            config,
-            mhc_weights,
-            tp_axis=tp_axis,
-            num_links=num_links,
-            topology=tp_topology,
-            sublayer_dtype=_SUBLAYER_DTYPE,
+        assert mhc_weights is not None and set(mhc_weights) >= {
+            "attn",
+            "ffn",
+        }, f"both sites need an (fn, base, scale) triple; got keys {sorted(mhc_weights or ())}"
+        mhc_cfg = MHCConfig(
+            dim=config.hidden_size,
+            n=config.hc_mult,
+            sinkhorn_iters=config.hc_sinkhorn_iters,
+            eps=config.hc_eps,
+            norm_eps=config.rms_norm_eps,
+        )
+        self.attn_res = TtMHCWrap(
+            mesh_device, mhc_cfg, *mhc_weights["attn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
+        )
+        self.ffn_res = TtMHCWrap(
+            mesh_device, mhc_cfg, *mhc_weights["ffn"], tp_axis=tp_axis, num_links=num_links, topology=tp_topology
         )
 
     def forward(
@@ -206,7 +215,8 @@ class TtV4Block(LightweightModule):
             ttnn.deallocate(normed)
             return ttnn.unsqueeze(out, dim=0)
 
-        return self.ffn_res(self.attn_res(x, _attn), _ffn)
+        x = self.attn_res(x, _attn, sublayer_dtype=_SUBLAYER_DTYPE)
+        return self.ffn_res(x, _ffn, sublayer_dtype=_SUBLAYER_DTYPE)
 
     def release_sub_device_managers(self):
         """Drop the MoE's shared-expert overlap sub-device manager before the mesh closes."""
