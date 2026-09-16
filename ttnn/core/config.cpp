@@ -5,6 +5,7 @@
 #include "ttnn/config.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -21,6 +22,16 @@
 #include <tt-metalium/experimental/inspector_config.hpp>
 
 namespace ttnn::core {
+
+namespace {
+std::atomic<MatmulRegistryMode> matmul_registry_mode{MatmulRegistryMode::Off};
+}  // namespace
+
+MatmulRegistryMode get_matmul_registry_mode() noexcept { return matmul_registry_mode.load(std::memory_order_relaxed); }
+
+void set_matmul_registry_mode(const MatmulRegistryMode mode) noexcept {
+    matmul_registry_mode.store(mode, std::memory_order_relaxed);
+}
 
 Config CONFIG{};
 
@@ -168,6 +179,7 @@ std::vector<std::pair<std::string, std::string>> Config::get_config_entries() co
                 fmt::format("{}", reflect::get<I>(this->attributes)));
         },
         this->attributes);
+    entries.emplace_back("matmul_registry_mode", fmt::format("{}", get_matmul_registry_mode()));
     return entries;
 }
 
@@ -295,6 +307,7 @@ std::ostream& operator<<(std::ostream& os, const Config& config) {
                << fmt::format("{}", reflect::get<I>(config.attributes)) << ",";
         },
         config.attributes);
+    os << "matmul_registry_mode=" << fmt::format("{}", get_matmul_registry_mode()) << ",";
     os << fmt::format("{}", config.get<"report_path">());
     os << "}";
     return os;
