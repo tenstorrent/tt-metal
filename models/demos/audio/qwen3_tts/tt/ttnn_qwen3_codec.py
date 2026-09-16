@@ -51,6 +51,12 @@ from models.demos.audio.qwen3_tts import weights as checkpoint
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import MASK_FILL, _compute_config
 
 SNAKE_EPS = 1e-9
+# Frame counts the decoder rounds up to. Every distinct length compiles its own convolution
+# programs, and tt-metal keeps each one's L1_SMALL scratch for the life of the device: three
+# different lengths filled the 64 KB region and the next block to ask for scratch failed.
+# Rounding up to a multiple of this decodes a few frames of padding, which the causal
+# convolutions let us trim off exactly, and keeps the program count flat.
+LENGTH_BUCKET = 32
 # `EuclideanCodebook.epsilon`: the floor on a codebook's running count before it divides.
 # Every count in this checkpoint is at least 0.022, so it never binds; it is here because
 # the quotient is upstream's and the constant should say which one.
@@ -536,12 +542,38 @@ class TtCodecDecoder:
             return x, intermediates
         return x
 
-    def decode(self, codes):
-        """codes [1, 16, T] -> waveform [1, 1, 1920 * T] on host, matching the reference."""
+    def decode(self, codes, bucket=LENGTH_BUCKET):
+        """codes [1, 16, T] -> waveform [1, 1, 1920 * T] on host, matching the reference.
+
+        **Decoded at a bucketed length and trimmed back.** Every distinct frame count
+        compiles its own convolution programs, and tt-metal keeps each program's L1_SMALL
+        scratch until the device closes: a server speaking utterances of three different
+        lengths filled the 64 KB region, and the next block that wanted scratch could not
+        allocate. Rounding the length up to a multiple of `bucket` holds the program count
+        flat, so only the first utterance in each bucket compiles.
+
+        Trimming is exact rather than approximate. Every convolution here is causal and the
+        attention is windowed backwards, so no output sample depends on a later frame, and
+        the padding frames cannot change the samples in front of them.
+        `test_bucketing_does_not_change_the_samples_it_keeps` measures that.
+
+        Pass `bucket=1` to decode exactly the frames given, which is what the PCC tests do
+        so their measurements are not reading padded audio.
+        """
+        frames = codes.shape[-1]
+        padded = frames if bucket <= 1 else -(-frames // bucket) * bucket
+        if padded > frames:
+            # The last frame repeated: a valid code, in distribution, and thrown away after.
+            codes = torch.cat([codes, codes[..., -1:].expand(-1, -1, padded - frames)], dim=-1)
+
         latents = self.latents(codes)
         cos, sin, mask = self.host_inputs(latents.shape[1])
         to_device = lambda tensor: ttnn.from_torch(
             tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        waveform = self(to_device(latents), to_device(cos), to_device(sin), to_device(mask))
-        return ttnn.to_torch(waveform).float().reshape(1, -1).unsqueeze(1)
+        try:
+            waveform = self(to_device(latents), to_device(cos), to_device(sin), to_device(mask))
+            samples = ttnn.to_torch(waveform).float().reshape(1, -1)
+            return samples[:, : frames * self.upsample].unsqueeze(1)
+        finally:
+            self._prepared.clear()

@@ -66,6 +66,8 @@ live. Both are why `_capture` warms both decoders before it captures either, and
 loop below releases the one buffer it allocates per frame.
 """
 
+import time
+
 import torch
 import torch.nn.functional as F
 
@@ -353,6 +355,10 @@ class Qwen3TTSPipeline:
 
         self.generation = checkpoint.generation_config()
         self.generator = None if seed is None else torch.Generator().manual_seed(seed)
+        # Filled in by every generate, so a caller can see where the time went. The first
+        # utterance at any new prompt length or frame count also compiles its kernels, and
+        # that lands inside whichever stage triggered it.
+        self.last_timings = {}
 
     def _capture(self):
         """Warm both decoders, then capture both, in that order.
@@ -398,6 +404,25 @@ class Qwen3TTSPipeline:
         """The 16 codebooks of one frame, summed against `tts_pad`: the next prompt position."""
         return self.tables.frames(frame) + self.tables.tts_pad
 
+    def reseed(self, seed=None):
+        """Restart the sampler from `seed`, or make it unseeded again.
+
+        Sampling draws from one generator for the whole pipeline, so a caller that wants
+        each utterance reproducible on its own has to reset it between them.
+        """
+        self.generator = None if seed is None else torch.Generator().manual_seed(int(seed))
+
+    def release(self):
+        """Drop both captured traces, so eager device work is safe again.
+
+        Anything untraced hangs the card while a trace is live, `build_clone_reference`
+        included, so call this before building a second reference clip in a process that
+        has already generated something. `generate` and `generate_clone` release on their
+        own, since each starts with an eager prefill.
+        """
+        self.talker.release()
+        self.predictor.release()
+
     def _decode_frames(self, embeddings, limit, on_frame=None):
         """Prefill the prompt, then sample frames until end of speech. Returns codes [T, 16].
 
@@ -412,17 +437,22 @@ class Qwen3TTSPipeline:
                 "build the pipeline with a larger max_frames"
             )
 
-        self.talker.release()
-        self.predictor.release()
+        self.release()
         self.talker.reset()
+        started = time.time()
         hidden = self.talker.prefill(embeddings)
         last = ttnn.slice(hidden, [0, prompt - 1, 0], [1, prompt, hidden.shape[2]])
         ttnn.deallocate(hidden)
+        timings = {"prompt": prompt, "prefill_s": time.time() - started}
+
+        started = time.time()
         self._capture()
+        timings["capture_s"] = time.time() - started
 
         inner = self._inner_pick()
         penalty = self.generation.get("repetition_penalty", 1.0)
         frames, seen = [], []
+        started = time.time()
         for step in range(limit):
             logits = ttnn.linear(last, self.codec_head)
             row = ttnn.to_torch(logits).float().reshape(-1)
@@ -439,6 +469,11 @@ class Qwen3TTSPipeline:
                 on_frame(step, frame)
             last = self.talker.step(self._frame_embedding(frame), prompt + step)
 
+        timings["decode_s"] = time.time() - started
+        timings["frames"] = len(frames)
+        timings["ms_per_frame"] = 1000 * timings["decode_s"] / max(len(frames), 1)
+        self.last_timings = timings
+
         if not frames:
             raise RuntimeError("the talker emitted end-of-speech before any frame")
         return torch.tensor(frames, dtype=torch.long)
@@ -452,7 +487,9 @@ class Qwen3TTSPipeline:
         limit = min(max_frames or self.max_frames, self.max_frames)
         embeddings, _ = build_custom_voice_prefill(text, speaker, language, self.tables)
         codes = self._decode_frames(embeddings, limit, on_frame)
+        started = time.time()
         waveform = self.codec.decode(codes.t().unsqueeze(0)).reshape(1, -1)
+        self.last_timings["codec_s"] = time.time() - started
         return waveform, codes
 
     def generate_clone(self, text, reference, language="Auto", max_frames=None, on_frame=None):
@@ -472,5 +509,8 @@ class Qwen3TTSPipeline:
         codes = self._decode_frames(embeddings, limit, on_frame)
 
         together = torch.cat([reference.codes.t(), codes], dim=0)
+        started = time.time()
         waveform = self.codec.decode(together.t().unsqueeze(0)).reshape(1, -1)
+        self.last_timings["codec_s"] = time.time() - started
+        self.last_timings["codec_frames"] = together.shape[0]
         return waveform[:, reference.frames * self.codec.upsample :], codes

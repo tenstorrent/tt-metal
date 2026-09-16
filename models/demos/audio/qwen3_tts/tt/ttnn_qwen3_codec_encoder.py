@@ -393,11 +393,16 @@ class TtCodecEncoder:
         to_device = lambda tensor: ttnn.from_torch(
             tensor, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
         )
-        latents = self(
-            ttnn.from_torch(audio, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device),
-            to_device(cos),
-            to_device(sin),
-            to_device(mask),
-        )
-        codes = self.quantize(latents, prefix=prefix)
-        return codes[:, :, : self.frames(samples)]
+        try:
+            latents = self(
+                ttnn.from_torch(audio, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device),
+                to_device(cos),
+                to_device(sin),
+                to_device(mask),
+            )
+            codes = self.quantize(latents, prefix=prefix)
+            return codes[:, :, : self.frames(samples)]
+        finally:
+            # Same reason as the decoder's: keyed by length while the clip runs, dropped
+            # afterwards so they stop holding L1. See `TtCodecDecoder.decode`.
+            self._prepared.clear()

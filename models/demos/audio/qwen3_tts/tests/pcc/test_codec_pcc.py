@@ -50,6 +50,10 @@ WAVEFORM_PCC = 0.99
 # the representative one. Measured 0.954; see the module docstring.
 QUIET_WAVEFORM_PCC = 0.94
 
+# How close a bucketed decode must stay to the exact one. Measured 0.99969; the difference
+# is the accumulation order a different parallelisation gives, not a structural one.
+BUCKETING_PCC = 0.999
+
 FRAMES = 8
 STAGES = ["pre_conv", "pre_transformer", "upsample.0.1", "upsample.1.1"] + [f"decoder.{i}" for i in range(7)]
 
@@ -149,7 +153,7 @@ def test_waveform_matches_the_reference(device, reference):
     gold = reference(codes)
     model = TtCodecDecoder(device, preprocess_codec_parameters(device))
 
-    waveform = model.decode(codes)
+    waveform = model.decode(codes, bucket=1)
     expected_samples = codes.shape[-1] * 1920
 
     assert waveform.shape == (1, 1, expected_samples), f"got {tuple(waveform.shape)}"
@@ -173,9 +177,38 @@ def test_real_frames_from_the_model_still_track(device, reference):
     gold = reference(frames)
     model = TtCodecDecoder(device, preprocess_codec_parameters(device))
 
-    measured = _pcc(gold, model.decode(frames))
+    measured = _pcc(gold, model.decode(frames, bucket=1))
     print(f"real frames pcc {measured:.6f}")
     assert measured >= QUIET_WAVEFORM_PCC, f"real frames below {QUIET_WAVEFORM_PCC}: {measured:.6f}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_bucketing_does_not_change_the_samples_it_keeps(device, reference):
+    """Decoding a padded length and trimming back gives the same audio.
+
+    Not bit for bit: `ttnn.conv1d` picks its parallelisation from the input length, so a
+    padded decode accumulates in a different order. Measured 0.9997 against the exact
+    decode, and no worse against the reference, which puts the difference inside what bf16
+    already costs (the decoder's own gate is 0.99).
+
+    What makes it safe structurally is that every convolution here is causal and the
+    attention only looks backwards, so no output sample depends on a later frame. What makes
+    it worth doing is that every distinct frame count compiles its own programs, and
+    tt-metal holds each program's L1_SMALL scratch until the device closes: three lengths
+    filled the 64 KB region and the next block to want scratch could not allocate.
+    """
+    codes = random_codes(FRAMES)  # 8 frames, so a 32-frame bucket pads by 24
+    model = TtCodecDecoder(device, preprocess_codec_parameters(device))
+
+    exact = model.decode(codes, bucket=1)
+    bucketed = model.decode(codes)
+    gold = reference(codes)
+
+    assert bucketed.shape == exact.shape == (1, 1, FRAMES * 1920)
+    agreement = _pcc(exact, bucketed)
+    print(f"bucketed against exact: pcc {agreement:.6f}, max abs difference {(bucketed - exact).abs().max():.5f}")
+    assert agreement >= BUCKETING_PCC, f"bucketing moved the audio: {agreement:.6f}"
+    assert _pcc(gold, bucketed) >= WAVEFORM_PCC, "and it must still track the reference"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -190,7 +223,7 @@ def test_one_instance_handles_changing_clip_length(device, reference):
     results = {}
     for frames in (4, 8, 4):
         codes = random_codes(frames)
-        measured = _pcc(reference(codes), model.decode(codes))
+        measured = _pcc(reference(codes), model.decode(codes, bucket=1))
         print(f"  {frames} frames on the shared instance: pcc {measured:.6f}")
         results.setdefault(frames, []).append(measured)
         assert measured >= WAVEFORM_PCC, f"{frames} frames below {WAVEFORM_PCC}: {measured:.6f}"

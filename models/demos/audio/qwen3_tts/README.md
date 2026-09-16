@@ -29,6 +29,46 @@ The speaker encoder reads a reference clip and emits one 2048-wide vector, which
 single position of the talker's prompt. Its width matches the talker's hidden size, so
 nothing projects between them.
 
+## Demo
+
+Two entry points under `demo/`, mirroring the XTTS-v2 demo next door.
+
+One utterance:
+
+```bash
+python -m models.demos.audio.qwen3_tts.demo.demo "Text to speak." \
+    --ref my_voice.wav --ref-text "exactly what my_voice.wav says"
+```
+
+Or interactively, which loads the weights once and then speaks every line you type:
+
+```bash
+python -m models.demos.audio.qwen3_tts.demo.demo_server \
+    --ref my_voice.wav --ref-text "exactly what my_voice.wav says"
+```
+
+```
+text [1]> One.  This is the first line the server speaks today.
+  END-TO-END: 27.91 s  |  3.76 s audio (7.42x RT)  |  outputs/out_1.wav
+    prefill 1.6 s, capture 1.5 s, decode 2.2 s (47 frames at 46 ms), codec 22.3 s
+text [2]> Two.  And here is a second one, in the same voice.
+  END-TO-END: 3.11 s  |  4.80 s audio (0.65x RT)  |  outputs/out_2.wav
+    prefill 0.2 s, capture 0.1 s, decode 2.6 s (60 frames at 43 ms), codec 0.3 s
+```
+
+The first utterance compiles its kernels. Every one after it runs from the captured traces
+and a warm length bucket, at **0.6 to 0.7x real time**. `\ref PATH | TRANSCRIPT` switches
+voice, `\similarity` reports how close each utterance is to the reference clip, `\seed N`
+changes the sampler, `\quit` leaves.
+
+`--ref-text` is not optional, and it is the thing most likely to be got wrong. This model
+clones in context: the prompt carries the clip's transcript beside its codes, so the model is
+told what the clip said as well as how it sounded. Three to ten seconds of clean speech works
+well, and the transcript has to cover the whole clip.
+
+Either demo takes `--speaker ryan` instead of `--ref` to use one of the nine CustomVoice
+voices, and `--ckpt` to point at a checkpoint directory.
+
 ## Voice cloning
 
 Every block is in, and cloning is what joins them. Give it a reference clip and its
@@ -99,8 +139,18 @@ A CustomVoice utterance, 86 text tokens, on one P300 chip:
 44 ms per frame, of which the talker's 28-layer step is 13 and the predictor's 15 steps are
 30. Both run from captured traces over a KV cache; the uncached talker step cost 2471 ms.
 
-The first run at any new codec length pays its kernel build: 48 s against 7.9 s for the same
-341 frames a second time. Length bucketing would flatten that and is not done yet.
+Those numbers are one cold utterance. In a process that speaks more than one, the second
+onward reach **0.6 to 0.7x real time**, because the codec's length bucketing means it stops
+recompiling: measured 22.3 s on the first utterance and 0.3 s on the next four.
+
+**Length bucketing is not only a speed fix.** Every distinct frame count compiles its own
+convolution programs, and tt-metal holds each program's L1_SMALL scratch until the device
+closes, about 24 KB a length. Three utterances of different lengths filled the 64 KB region
+and the next block that wanted scratch could not allocate: the interactive demo died on its
+third line. Rounding the decode up to a multiple of 32 frames keeps the program count flat.
+The padding frames are thrown away, and `test_bucketing_does_not_change_the_samples_it_keeps`
+measures what that costs: PCC 0.9999 against an exact decode, which is inside what bf16
+already costs.
 
 ## Sampling
 
@@ -150,7 +200,7 @@ work never materialises the talker.
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoints and, for the device tests, a card. 107 tests, 185 s warm.
+it needs only the checkpoints and, for the device tests, a card. 108 tests, 200 s warm.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
@@ -292,7 +342,6 @@ equality.
 The KV cache and the traces are in (see Speed above). What is left, roughly in order of what
 it would buy:
 
-- Length bucketing for the codec decoder, so a new frame count stops paying its kernel build.
 - Warming the prefill at the shapes a server will see, so the first utterance is not the slow one.
 - `bfp8_b` weights, judged on token agreement rather than PCC: bf16 already sits at 0.995, so
   PCC alone will not say whether the codes move.
@@ -320,6 +369,7 @@ duplicate these tests or claim coverage that does not exist.
 | `frontend.py` | host text path: tokenizer, prompt wrappers, language resolution |
 | `sampling.py` | host sampler, matching `transformers`' processor order |
 | `audio.py` | host audio path: file to 24 kHz waveform, waveform to log-mel |
+| `demo/` | one-shot CLI and an interactive server |
 | `tt/` | TTNN blocks |
 | `reference/` | CPU references (PCC oracles); `reference/qwen/` is vendored upstream, Apache-2.0 |
 | `tests/` | host tests, `tests/pcc/` for device correctness |
