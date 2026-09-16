@@ -21,6 +21,11 @@ from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import (
     create_dram_expert_tensors_multi_device,
     encode_expert_indices,
 )
+from models.demos.deepseek_v3_b1.tests.unit_tests.compressed_determinism_utils import (
+    DET_ITERS,
+    K27_FORMAT_WEIGHTS,
+    K27_FORMATS,
+)
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
@@ -1108,6 +1113,31 @@ def _build_sram_fmt_data(sram_cts, mesh_device, sram_core_grid, sram_k_per_core,
 # ---------------------------------------------------------------------------
 
 
+def _assert_expert_stable(launch, result, sram_out_tensor, iterations):
+    """Re-run the expert matmul and require the DRAM and SRAM outputs to stay bitwise equal.
+
+    Nothing is rebuilt between runs, so a difference means the device gives two answers for
+    one program and one set of inputs. The SRAM output is included because the hot-expert
+    matmul is a separate kernel from the DRAM one and can be unstable on its own.
+    """
+    named = [("dram", result)] + ([("sram", sram_out_tensor)] if sram_out_tensor is not None else [])
+    reference = {name: ttnn.to_torch(t).clone() for name, t in named}
+    divergences = []
+    for i in range(1, iterations + 1):
+        launch()
+        for name, t in named:
+            got = ttnn.to_torch(t)
+            if not torch.equal(got, reference[name]):
+                diff = got != reference[name]
+                divergences.append(
+                    f"  run {i} [{name}]: {int(diff.sum())} / {diff.numel()} elements differ, "
+                    f"max |diff| = {(got.float() - reference[name].float()).abs().max().item()}"
+                )
+    assert not divergences, "Output is not bitwise stable over {} re-runs:\n{}".format(
+        iterations, "\n".join(divergences[:10])
+    )
+
+
 def _run_standard(
     mesh_device,
     M,
@@ -1132,6 +1162,7 @@ def _run_standard(
     k_parallel_per_bank=1,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    determinism_iterations=0,
 ):
     """Standard path: WIDTH_SHARDED SRAM, per-expert output slices on compute_core_grid."""
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
@@ -1300,34 +1331,40 @@ def _run_standard(
         if has_sram
         else (None, None, None, None, None)
     )
-    result = ExpertKernel.op(
-        a_tensor,
-        sram_cts,
-        dram_cts,
-        out_tensor,
-        index_tensor,
-        num_active_experts=num_active_experts,
-        subblock_k=subblock_k,
-        subblock_n=subblock_n,
-        dram_core_grid=dram_core_grid,
-        dram_meta_tensors=dram_meta_tensors,
-        dram_per_core_n=dram_per_core_N,
-        has_sram=has_sram,
-        sram_core_grid=sram_core_grid,
-        sram_fmt_tensor=sram_fmt_tensor,
-        sram_base_addr_tensor=sram_base_addr_tensor,
-        sram_fmt_l1_addrs=sram_fmt_l1_addrs,
-        sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
-        sram_k_offsets=sram_k_offsets,
-        n_parallel_per_bank=n_parallel_per_bank,
-        k_parallel_per_bank=k_parallel_per_bank,
-        sram_per_core_n=sram_per_core_N,
-        sram_k_per_core=Kt,
-        sram_output_tensor=sram_out_tensor,
-        dram_fuse_silu=dram_fuse_silu,
-        tp_expert=tp_expert,
-        num_loop_iters=num_loop_iters,
-    )
+
+    def _launch():
+        return ExpertKernel.op(
+            a_tensor,
+            sram_cts,
+            dram_cts,
+            out_tensor,
+            index_tensor,
+            num_active_experts=num_active_experts,
+            subblock_k=subblock_k,
+            subblock_n=subblock_n,
+            dram_core_grid=dram_core_grid,
+            dram_meta_tensors=dram_meta_tensors,
+            dram_per_core_n=dram_per_core_N,
+            has_sram=has_sram,
+            sram_core_grid=sram_core_grid,
+            sram_fmt_tensor=sram_fmt_tensor,
+            sram_base_addr_tensor=sram_base_addr_tensor,
+            sram_fmt_l1_addrs=sram_fmt_l1_addrs,
+            sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
+            sram_k_offsets=sram_k_offsets,
+            n_parallel_per_bank=n_parallel_per_bank,
+            k_parallel_per_bank=k_parallel_per_bank,
+            sram_per_core_n=sram_per_core_N,
+            sram_k_per_core=Kt,
+            sram_output_tensor=sram_out_tensor,
+            dram_fuse_silu=dram_fuse_silu,
+            tp_expert=tp_expert,
+            num_loop_iters=num_loop_iters,
+        )
+
+    result = _launch()
+    if determinism_iterations:
+        _assert_expert_stable(_launch, result, sram_out_tensor, determinism_iterations)
     if active_sram:
         _validate_sram_output(
             sram_out_tensor,
@@ -1382,6 +1419,7 @@ def _run_accum(
     fmt_ratios=None,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    determinism_iterations=0,
 ):
     """Accumulation path: WIDTH_SHARDED SRAM, expert outputs summed in-place.
 
@@ -1538,34 +1576,40 @@ def _run_accum(
         if has_sram
         else (None, None, None, None, None)
     )
-    result = ExpertKernel.op(
-        a_tensor,
-        sram_cts,
-        dram_cts,
-        out_tensor,
-        index_tensor,
-        num_active_experts=num_active_experts,
-        subblock_k=subblock_k,
-        subblock_n=subblock_n,
-        dram_core_grid=dram_core_grid,
-        dram_meta_tensors=dram_meta_tensors,
-        dram_per_core_n=dram_per_core_N,
-        has_sram=has_sram,
-        sram_core_grid=sram_core_grid,
-        sram_fmt_tensor=sram_fmt_tensor,
-        sram_base_addr_tensor=sram_base_addr_tensor,
-        sram_fmt_l1_addrs=sram_fmt_l1_addrs,
-        sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
-        sram_k_offsets=sram_k_offsets,
-        n_parallel_per_bank=n_parallel_per_bank,
-        accum_experts=True,
-        sram_per_core_n=sram_per_core_N,
-        sram_k_per_core=Kt,
-        sram_output_tensor=sram_out_tensor,
-        tp_expert=tp_expert,
-        num_loop_iters=num_loop_iters,
-        primary_at_last_offset=primary_at_last_offset,
-    )
+
+    def _launch():
+        return ExpertKernel.op(
+            a_tensor,
+            sram_cts,
+            dram_cts,
+            out_tensor,
+            index_tensor,
+            num_active_experts=num_active_experts,
+            subblock_k=subblock_k,
+            subblock_n=subblock_n,
+            dram_core_grid=dram_core_grid,
+            dram_meta_tensors=dram_meta_tensors,
+            dram_per_core_n=dram_per_core_N,
+            has_sram=has_sram,
+            sram_core_grid=sram_core_grid,
+            sram_fmt_tensor=sram_fmt_tensor,
+            sram_base_addr_tensor=sram_base_addr_tensor,
+            sram_fmt_l1_addrs=sram_fmt_l1_addrs,
+            sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
+            sram_k_offsets=sram_k_offsets,
+            n_parallel_per_bank=n_parallel_per_bank,
+            accum_experts=True,
+            sram_per_core_n=sram_per_core_N,
+            sram_k_per_core=Kt,
+            sram_output_tensor=sram_out_tensor,
+            tp_expert=tp_expert,
+            num_loop_iters=num_loop_iters,
+            primary_at_last_offset=primary_at_last_offset,
+        )
+
+    result = _launch()
+    if determinism_iterations:
+        _assert_expert_stable(_launch, result, sram_out_tensor, determinism_iterations)
     if active_sram:
         _validate_sram_output_accum(
             sram_out_tensor,
@@ -1617,6 +1661,7 @@ def _run_slice_k(
     k_parallel_per_bank=1,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    determinism_iterations=0,
 ):
     """K-sliced path: HEIGHT_SHARDED SRAM, separate output grids."""
     cores_per_dram_bank = n_parallel_per_bank * k_parallel_per_bank
@@ -1757,34 +1802,40 @@ def _run_slice_k(
         if has_sram
         else (None, None, None, None, None)
     )
-    result = ExpertKernel.op(
-        a_tensor,
-        sram_cts,
-        dram_cts,
-        out_tensor,
-        index_tensor,
-        num_active_experts=num_active_experts,
-        subblock_k=subblock_k,
-        subblock_n=subblock_n,
-        dram_core_grid=dram_core_grid,
-        dram_meta_tensors=dram_meta_tensors,
-        dram_per_core_n=dram_per_core_N,
-        has_sram=has_sram,
-        sram_core_grid=sram_core_grid,
-        sram_fmt_tensor=sram_fmt_tensor,
-        sram_base_addr_tensor=sram_base_addr_tensor,
-        sram_fmt_l1_addrs=sram_fmt_l1_addrs,
-        sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
-        sram_k_offsets=sram_k_offsets,
-        n_parallel_per_bank=n_parallel_per_bank,
-        k_parallel_per_bank=k_parallel_per_bank,
-        sram_per_core_n=sram_per_core_N,
-        sram_k_per_core=sram_k_per_core,
-        sram_output_tensor=sram_out_tensor,
-        dram_fuse_silu=dram_fuse_silu,
-        tp_expert=tp_expert,
-        num_loop_iters=num_loop_iters,
-    )
+
+    def _launch():
+        return ExpertKernel.op(
+            a_tensor,
+            sram_cts,
+            dram_cts,
+            out_tensor,
+            index_tensor,
+            num_active_experts=num_active_experts,
+            subblock_k=subblock_k,
+            subblock_n=subblock_n,
+            dram_core_grid=dram_core_grid,
+            dram_meta_tensors=dram_meta_tensors,
+            dram_per_core_n=dram_per_core_N,
+            has_sram=has_sram,
+            sram_core_grid=sram_core_grid,
+            sram_fmt_tensor=sram_fmt_tensor,
+            sram_base_addr_tensor=sram_base_addr_tensor,
+            sram_fmt_l1_addrs=sram_fmt_l1_addrs,
+            sram_base_addrs_l1_addrs=sram_base_addrs_l1_addrs,
+            sram_k_offsets=sram_k_offsets,
+            n_parallel_per_bank=n_parallel_per_bank,
+            k_parallel_per_bank=k_parallel_per_bank,
+            sram_per_core_n=sram_per_core_N,
+            sram_k_per_core=sram_k_per_core,
+            sram_output_tensor=sram_out_tensor,
+            dram_fuse_silu=dram_fuse_silu,
+            tp_expert=tp_expert,
+            num_loop_iters=num_loop_iters,
+        )
+
+    result = _launch()
+    if determinism_iterations:
+        _assert_expert_stable(_launch, result, sram_out_tensor, determinism_iterations)
     if active_sram:
         _validate_sram_output_slice_k(
             sram_out_tensor,
@@ -1844,6 +1895,7 @@ def _run_hybrid_expert_multi_device(
     k_parallel_per_bank=1,
     num_loop_iters=1,
     primary_at_last_offset=False,
+    determinism_iterations=0,
 ):
     """Dispatcher: delegate to the appropriate variant.
 
@@ -1893,6 +1945,7 @@ def _run_hybrid_expert_multi_device(
             k_parallel_per_bank=k_parallel_per_bank,
             num_loop_iters=num_loop_iters,
             primary_at_last_offset=primary_at_last_offset,
+            determinism_iterations=determinism_iterations,
         )
     elif accum_experts:
         _run_accum(
@@ -1917,6 +1970,7 @@ def _run_hybrid_expert_multi_device(
             fmt_ratios,
             num_loop_iters=num_loop_iters,
             primary_at_last_offset=primary_at_last_offset,
+            determinism_iterations=determinism_iterations,
         )
     else:
         _run_standard(
@@ -1943,6 +1997,7 @@ def _run_hybrid_expert_multi_device(
             k_parallel_per_bank=k_parallel_per_bank,
             num_loop_iters=num_loop_iters,
             primary_at_last_offset=primary_at_last_offset,
+            determinism_iterations=determinism_iterations,
         )
 
 
@@ -2873,4 +2928,101 @@ def test_matmul_expert_bspm_sparse_activation(bh_2d_mesh_device):
         bspm_expert_configs=[(0, 0), (1, 0), (2, 0), (3, 0)],  # 4 registered experts
         active_expert_ids=[0, 2],  # sparse: only experts 0 and 2 selected this step
         pcc_threshold=0.90,
+    )
+
+
+# ======================================================================================
+# Bitwise determinism
+# ======================================================================================
+#
+# The cases above check accuracy with PCC. PCC cannot see an unstable kernel, because each
+# run is compared with the golden and not with the other runs. These cases run the same
+# program repeatedly and require the output to stay bitwise equal.
+#
+# Both compressed matmuls are covered. The DRAM one streams the cold experts, and the SRAM
+# one holds the hot experts in L1; _assert_expert_stable compares both outputs. The K2.7
+# decode run uses both, and it loads the hot experts K-sliced, which is the slice-K path.
+
+
+@pytest.mark.parametrize(
+    "formats,fmt_ratios",
+    [(["bfp4"], None), (K27_FORMATS, K27_FORMAT_WEIGHTS)],
+    ids=["bfp4_only", "k27_bspm_mix"],
+)
+def test_hybrid_expert_determinism_standard(device, formats, fmt_ratios):
+    """Gate/up shape, 2 SRAM + 2 DRAM experts, all active. bfp4_only is the control."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=4,
+        sram_expert_ids=[0, 2],
+        dram_expert_ids=[1, 3],
+        active_expert_ids=[0, 1, 2, 3],
+        formats_per_device=[formats],
+        sram_n_parallel=8,
+        fmt_ratios=fmt_ratios,
+        determinism_iterations=DET_ITERS,
+    )
+
+
+@pytest.mark.parametrize(
+    "formats,fmt_ratios",
+    [(["bfp4"], None), (K27_FORMATS, K27_FORMAT_WEIGHTS)],
+    ids=["bfp4_only", "k27_bspm_mix"],
+)
+def test_hybrid_expert_determinism_accum(device, formats, fmt_ratios):
+    """Down-proj shape with accumulation over experts, 3 SRAM + 5 DRAM, 4 active."""
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=256,
+        N=7168,
+        num_experts=8,
+        sram_expert_ids=[1, 4, 6],
+        dram_expert_ids=[0, 2, 3, 5, 7],
+        active_expert_ids=[0, 1, 4, 7],
+        formats_per_device=[formats],
+        sram_n_parallel=56,
+        num_subblocks_k=1,
+        accum_experts=True,
+        fmt_ratios=fmt_ratios,
+        determinism_iterations=DET_ITERS,
+    )
+
+
+@pytest.mark.requires_grid_size((12, 10))
+@pytest.mark.parametrize(
+    "formats,fmt_ratios",
+    [(["bfp4"], None), (K27_FORMATS, K27_FORMAT_WEIGHTS)],
+    ids=["bfp4_only", "k27_bspm_mix"],
+)
+def test_hybrid_expert_determinism_slice_k_gate_grid(device, formats, fmt_ratios):
+    """The production gate-proj layout: K-sliced SRAM experts on the irregular A-core grid.
+
+    This is how the decode run loads its hot experts, and the SRAM cores overlap the DRAM
+    bank cores, so it also covers the per-core push/pop on that overlap.
+    """
+    a_cores, _ = _build_ab_grids(device)
+    _run_hybrid_expert_multi_device(
+        device,
+        M=1,
+        K=7168,
+        N=256,
+        num_experts=8,
+        sram_expert_ids=[2, 5],
+        dram_expert_ids=list(range(8)),
+        active_expert_ids=list(range(8)),
+        formats_per_device=[formats],
+        sram_cores_override=a_cores,
+        sram_k_parallel=8,
+        sram_n_parallel=8,
+        dram_fuse_silu=True,
+        num_subblocks_n=1,
+        n_parallel_per_bank=1,
+        k_parallel_per_bank=2,
+        fmt_distribution="uniform",
+        fmt_ratios=fmt_ratios,
+        determinism_iterations=DET_ITERS,
     )

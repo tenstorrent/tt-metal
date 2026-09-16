@@ -22,6 +22,16 @@ from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, Comp
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
 from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import COMPRESSED_FORMATS, ttnn_quantize_fn
 from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
+from models.demos.deepseek_v3_b1.tests.unit_tests.compressed_determinism_utils import (
+    DET_ITERS,
+    K27_FORMAT_RATIOS,
+    K27_FORMATS,
+    K27_HIDDEN,
+    K27_PER_DEVICE_MOE_N,
+    assert_bitwise_stable,
+    build_stream_format_pattern,
+    quantize_per_tile,
+)
 
 
 def scale_tiles_for_mixed_formats(b_torch, formats):
@@ -101,6 +111,7 @@ def _run_matmul_custom_compressed_with_assignment(
     assignment,
     num_cores=1,
     pcc_threshold=0.98,
+    determinism_iterations=0,
 ):
     """Helper: run custom compressed A @ decompress(B_compressed).
 
@@ -191,6 +202,17 @@ def _run_matmul_custom_compressed_with_assignment(
     passing, pcc_message = comp_pcc(torch_expected, output_torch, pcc_threshold)
     logger.info(pcc_message)
     assert passing, pcc_message
+
+    if determinism_iterations:
+        assert_bitwise_stable(
+            lambda: ttnn.to_torch(MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl=impl)),
+            determinism_iterations,
+            context=f"impl={impl}, M={M}, K={K}, N={N}, num_cores={num_cores}",
+            assignment=assignment,
+            per_core_n_tiles=n_per_core // 32,
+            reference=output_torch.clone(),
+        )
+
     return passing, pcc_message
 
 
@@ -602,3 +624,151 @@ def test_matmul_custom_compressed_bspm_mixed_budget(device):
     assert passing_bfp4, f"Uniform BFP4 PCC too low: {pcc_bfp4}"
     # BFP4-only must be at least as good as the mixed 3.5 b/e (allow 1% tolerance for rng variance)
     assert float(pcc_bfp4) >= float(pcc_35) - 0.01, f"Uniform BFP4 PCC ({pcc_bfp4}) should be >= 3.5 b/e PCC ({pcc_35})"
+
+
+# ======================================================================================
+# Determinism, with an explicitly specified tile-format distribution
+# ======================================================================================
+#
+# The cases above take their tile formats from CompressedTensorAssigner, so the mix follows
+# the data and a test cannot state it. These cases set the format of every tile, run the
+# kernel many times, and require a bitwise equal output every time. PCC cannot see an
+# unstable kernel, because each run is compared with the golden and not with the other runs.
+#
+# The implementations do not all accept every mix. The rules below are the ones the
+# parametrization of test_matmul_custom_compressed_single_core already applies, kept in one
+# predicate so an invalid combination fails with a clear message instead of a device error.
+
+# K2.7-Code per-device gate/up shape. bfp0 needs a runtime barrier implementation, and this
+# shape has no room for a constexpr one, so the mixed cases run on "runtime barrier".
+_DET_SHAPE = (1, K27_HIDDEN, K27_PER_DEVICE_MOE_N)
+# Narrower shape for the implementation sweep: the constexpr variants unroll the per-tile
+# format metadata, and 224 x 8 tiles overflows the kernel config buffer.
+_DET_IMPL_SHAPE = (1, K27_HIDDEN, 64)
+
+
+def _impl_rejects(impl, formats, shape):
+    """Return why this implementation cannot take this mix and shape, or None if it can."""
+    if ("bfp2" in formats or "bfp0" in formats) and "barrier" not in impl:
+        return "bfp2/bfp0 need barrier synchronization"
+    if "bfp0" in formats and "constexpr" in impl:
+        return "bfp0 does not work with the constexpr implementations"
+    if shape == (1, 7168, 256) and "constexpr" in impl:
+        return "not enough program memory for a constexpr implementation at this shape"
+    return None
+
+
+def _barrier_impls_for(formats, shape):
+    """The implementations that accept this mix and shape, as pytest ids."""
+    return [i for i in IMPLEMENTATIONS if _impl_rejects(i, formats, shape) is None]
+
+
+def _run_determinism_case(
+    device,
+    impl,
+    formats,
+    pattern,
+    *,
+    shape=_DET_SHAPE,
+    num_cores=1,
+    ratios=None,
+    seed=0,
+    pcc_threshold=0.98,
+    iterations=None,
+):
+    """Build a weight tensor with a stated per-tile format mix, then check bitwise stability.
+
+    The weights are quantized on the host with the same per-tile formats before they go to the
+    device, so the golden is exact for the mix and the first run is checked for correctness as
+    well: a stable but wrong result is not a pass.
+    """
+    M, K, N = shape
+    reason = _impl_rejects(impl, formats, shape)
+    assert reason is None, f"impl {impl!r} cannot take formats {formats} at {shape}: {reason}"
+
+    tile_w = 32
+    kt, nt = K // tile_w, N // tile_w
+    codes = build_stream_format_pattern(kt * nt, formats, pattern, period=kt, seed=seed, ratios=ratios)
+    assignment = codes.reshape(kt, nt)
+
+    torch.manual_seed(seed)
+    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_b = quantize_per_tile(torch.randn((K, N)).float(), assignment)
+
+    _run_matmul_custom_compressed_with_assignment(
+        device,
+        M,
+        K,
+        N,
+        impl,
+        torch_a,
+        torch_b,
+        assignment,
+        num_cores=num_cores,
+        pcc_threshold=pcc_threshold,
+        determinism_iterations=iterations or DET_ITERS,
+    )
+
+
+@pytest.mark.parametrize(
+    "formats",
+    [
+        ["bfp4", "bfp2", "bfp0"],
+        ["bfp4", "bfp0"],
+        ["bfp2", "bfp0"],
+        ["bfp4", "bfp2"],
+        ["bfp4"],
+        ["bfp2"],
+    ],
+    ids=["bfp4_bfp2_bfp0", "bfp4_bfp0", "bfp2_bfp0", "bfp4_bfp2", "bfp4_only", "bfp2_only"],
+)
+def test_matmul_custom_compressed_determinism_format_mix(device, formats):
+    """Alternating tile distribution, repeated many times, on the runtime barrier implementation.
+
+    The two single-format rows are the controls: if they stay stable and a mixed row does
+    not, the format change is the cause.
+    """
+    _run_determinism_case(device, "runtime barrier", formats, "alternate")
+
+
+@pytest.mark.parametrize("impl", _barrier_impls_for(["bfp4", "bfp2"], _DET_IMPL_SHAPE))
+def test_matmul_custom_compressed_determinism_impl(device, impl):
+    """Every implementation that accepts a bfp4/bfp2 mix, against a format change at each tile.
+
+    These are separate compute-kernel code paths for the same matmul, and the per-tile format
+    metadata is what they handle differently.
+    """
+    _run_determinism_case(device, impl, ["bfp4", "bfp2"], "alternate", shape=_DET_IMPL_SHAPE)
+
+
+@pytest.mark.parametrize("pattern", ["alternate", "pairs", "blocks", "random"])
+def test_matmul_custom_compressed_determinism_transition_pattern(device, pattern):
+    """bfp4/bfp2 with the format transitions at different granularities.
+
+    Narrows a failure to handling inside a pair, between pairs, or at a block boundary.
+    """
+    _run_determinism_case(device, "runtime barrier", ["bfp4", "bfp2"], pattern)
+
+
+def test_matmul_custom_compressed_determinism_k27_mix(device):
+    """K2.7 per-device gate/up shape with the shipped map's format ratios."""
+    _run_determinism_case(device, "runtime barrier", K27_FORMATS, "ratios", ratios=K27_FORMAT_RATIOS)
+
+
+@pytest.mark.parametrize("num_cores", [2, 13, 32])
+def test_matmul_custom_compressed_determinism_multicore(device, num_cores):
+    """The K2.7 mix spread over several cores, so each core holds its own N slice."""
+    if num_cores == 32:
+        # Same known failure that test_matmul_custom_compressed_multicore skips: a runtime
+        # implementation on 32 cores with anything but plain bfp8 gives a PCC error. The
+        # output comes back constant, so there is nothing to compare for stability.
+        pytest.skip("FIXME: PCC ERROR (runtime impl, 32 cores, non-bfp8 formats)")
+    _run_determinism_case(
+        device,
+        "runtime barrier",
+        K27_FORMATS,
+        "ratios",
+        shape=(1, K27_HIDDEN, 64 * num_cores),
+        num_cores=num_cores,
+        ratios=K27_FORMAT_RATIOS,
+    )
