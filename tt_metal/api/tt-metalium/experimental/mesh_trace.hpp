@@ -26,8 +26,8 @@ using TraceRuntimeArgName = ttsl::StrongType<std::string, struct TraceRuntimeArg
 using TraceCommonRuntimeArgName = ttsl::StrongType<std::string, struct TraceCommonRuntimeArgNameTag>;
 
 struct TraceTensorArgPath {
-    // Identifies the program explicitly. Resolved when passed in via
-    // MeshTraceBuilder::enqueue.
+    // Identifies a field in a workload program. MeshTraceBuilder::add() maps
+    // this program reference to the staged trace-node instance it creates.
     std::reference_wrapper<const Program> program;
     TensorParamName param_name;
 };
@@ -49,8 +49,11 @@ struct TraceCommonRuntimeArgPath {
     std::string arg_name;
 };
 
-// Used to define trace parameters. Multiple paths can map to a single
-// trace parameter, so long as they share the same underlying type.
+// Builder-time mappings from trace parameter names to fields in workload
+// programs. Multiple paths can map to a single trace parameter, so long as
+// they share the same underlying type. add() resolves programs to staged trace
+// nodes; build() resolves those node fields to locations in its MeshTrace's
+// final DRAM buffer.
 struct TraceParameters {
     Table<TraceTensorArgName, std::vector<TraceTensorArgPath>> tensor_parameters;
     Table<TraceRuntimeArgName, std::vector<TraceRuntimeArgPath>> runtime_parameters;
@@ -87,19 +90,26 @@ public:
 
     // Record one workload iteration. Only enqueues exist here: reads, writes,
     // and events are unrepresentable during recording by construction.
-    // The program references within parameters are mapped to internal trace
-    // nodes, removing any dependency to the lifetime of a program object.
-    // Every tensor buffer the workload references is stored internally as a
-    // shared pointer, keeping its lifetime and address stable for the recording.
+    // The program references within parameters are mapped to the trace-node
+    // instances staged for this workload, removing any dependency on the
+    // lifetime of the program object.
+    // Tensor allocations remain externally managed: the trace records the
+    // device addresses used by each program but does not retain tensor buffers.
+    // Allocations and frees between recorded workloads are tracked as metadata
+    // so their addresses can be validated for safe replay.
     void add(MeshWorkload& workload, const TraceParameters& parameters = {});
 
     // Assemble the recording, commit it to device DRAM, and bind it to cq_id.
     // Repeatable: each call produces an independent MeshTrace.
-    // Tensor buffer pins taken at enqueue are passed to the MeshTrace, so callers
-    // manage no tensor lifetimes. Exception: raw addresses smuggled in as plain
-    // runtime arg values are invisible here and must stay valid until the last
-    // replay. The trace itself lives in the reserved trace region if one is
-    // configured, otherwise in regular DRAM.
+    // Trace-parameter mappings are resolved from staged node fields to offsets
+    // in the new trace's DRAM buffer. The resulting registry belongs to that
+    // MeshTrace, so the builder may be cleared or destroyed independently.
+    // No tensor buffer ownership is transferred to the MeshTrace. The allocator
+    // may reuse storage between programs, but each recorded or patched address
+    // must refer to valid backing storage when its command executes. Raw
+    // addresses smuggled in as plain runtime arg values are invisible to
+    // allocation tracking. The trace itself lives in the reserved trace region
+    // if one is configured, otherwise in regular DRAM.
     //
     // Should build the program binaries and load them onto DRAM as well,
     // removing the need for a warm up.
@@ -117,9 +127,10 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// A replayable trace resident in device DRAM. Holds every tensor buffer it
-// references as an internal shared pointer. Move-only RAII handle: destruction
-// releases the device buffer, all patch state, and all tensor buffer pins.
+// A replayable trace resident in device DRAM. It owns a registry mapping trace
+// parameter names to patch locations in that DRAM buffer, along with allocation-
+// safety metadata, but does not own referenced tensor buffers. Move-only RAII
+// handle: destruction releases the trace's device buffer and registry.
 class MeshTrace {
 public:
     // Cannot be copied
@@ -135,10 +146,12 @@ public:
     // device to finish; blocking=false returns once the replay is issued.
     // void replay(bool blocking) const; // NOTE: Separating out as free function for now to mirror EnqueueMeshWorkload
 
-    // Patch registered parameters for future replays. Transactional: unknown
-    // names, kind mismatches, or a replay in flight reject the whole patch.
-    // The trace keeps patched tensors' buffers alive until they are patched
-    // out or the trace is destroyed; callers need not extend their lifetime.
+    // Patch registered parameters for future replays. The trace resolves each
+    // name through its own registry and writes the value to every corresponding
+    // location in its DRAM buffer. Transactional: unknown names, kind
+    // mismatches, or a replay in flight reject the whole patch. Patching records
+    // tensor addresses but does not extend tensor-buffer lifetimes. The backing
+    // allocation must be valid when replay accesses it.
     void update_args(const TraceArgPatch& patch);
 
     MeshDevice& device() const;

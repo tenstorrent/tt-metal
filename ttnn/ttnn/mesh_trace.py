@@ -21,11 +21,13 @@ NEW_TRACE_API = r"""
 #     record_compiled(builder, compiled, pending)
 #       compiled.map_trace_parameters
 #         Adapter::map_trace_parameters
-#           Softmax::map_trace_parameters  → paths + encode fn
-#       metal MeshTraceBuilder::add(paths only)
-#       TTNN builder keeps encode fns
-#   builder.build → TTNN MeshTrace(metal, layout)
-#   update_args: layout.encode(op_param) → metal uint32 words
+#           Softmax::map_trace_parameters  → program-field paths + encode fn
+#       metal MeshTraceBuilder::add maps program fields → staged trace nodes
+#       TTNN builder keeps only encode/type metadata
+#   builder.build
+#       Metal resolves trace-node fields → DRAM patch locations
+#       each MeshTrace owns its resulting patch registry
+#   update_args: encode(op_param) → registry lookup → patch trace DRAM
 # Hot path (unchanged cost): launch = compile + dispatch
 # =============================================================================
 
@@ -36,40 +38,70 @@ attn_scores = ttnn.from_torch(torch.randn(1, 8, 32, 32), device=mesh_device, lay
 attn_mask = ttnn.from_torch(torch.zeros(1, 8, 32, 32), device=mesh_device, layout=ttnn.TILE_LAYOUT)
 new_scores = ttnn.from_torch(torch.randn(1, 8, 32, 32), device=mesh_device, layout=ttnn.TILE_LAYOUT)
 
-IN = ttnn.TraceParam(default=attn_scores, name="input")  # object is the identity; name is the registry key
+IN = ttnn.TraceParam(default=attn_scores, name="input")  # name is the registry identity
 SCALE = ttnn.TraceParam(default=0.125, name="scale")
 
 builder = ttnn.MeshTraceBuilder(mesh_device)
-# IN, SCALE registered. attn_mask and is_causal_mask=True are plain values (not patchable).
-out = builder.add(ttnn.scale_mask_softmax, IN, SCALE, attn_mask, is_causal_mask=True)
-for _ in range(iters - 1):
-    out = builder.add(ttnn.scale_mask_softmax, IN, SCALE, attn_mask, is_causal_mask=True)
 
-trace_cq0 = builder.build(cq_id=0)
-trace_cq1 = builder.build(cq_id=1)
+with builder:
+    # IN, SCALE registered. attn_mask and is_causal_mask=True are plain values (not patchable).
+    out = ttnn.scale_mask_softmax(IN, SCALE, attn_mask, is_causal_mask=True)
+    for _ in range(iters - 1):
+        out = ttnn.scale_mask_softmax(out, SCALE, attn_mask, is_causal_mask=True)
+
+    trace_run_1_cq0 = builder.build(cq_id=0)
+    trace_run_1_cq1 = builder.build(cq_id=1)
+
+# Optionally clear the contents of the Mesh builder, allowing recording a new trace from scratch
+# without re-allocation
+builder.clear()
+
+with builder:
+    out = ttnn.scale_mask_softmax(IN, SCALE, attn_mask, is_causal_mask=True)
+    for _ in range(iters - 1):
+        out = ttnn.scale_mask_softmax(out, SCALE, attn_mask, is_causal_mask=True)
+
+    trace_run_2_cq0 = builder.build(cq_id=0)
+    trace_run_2_cq1 = builder.build(cq_id=1)
+
+# Built traces outlive the builder
+builder.deallocate()
 
 # Pass in TraceParam directly or string name directly for updating
-trace_cq0.update_args({IN: new_scores, "scale": 0.25})
-trace_cq1.update_args({IN: new_scores, "scale": 0.50})
+trace_run_1_cq0.update_args({IN: new_scores, "scale": 0.25})
+trace_run_2_cq1.update_args({IN: new_scores, "scale": 0.50})
 
-trace_cq0.replay(blocking=False)
-trace_cq1.replay(blocking=False)
+trace_run_1_cq0.replay(blocking=False)
+trace_run_1_cq1.replay(blocking=False)
+trace_run_2_cq0.replay(blocking=False)
+trace_run_2_cq1.replay(blocking=False)
 
 ttnn.synchronize_device(mesh_device)
-trace_cq0.deallocate()
-trace_cq1.deallocate()
+trace_run_1_cq0.deallocate()
+trace_run_1_cq1.deallocate()
+trace_run_2_cq0.deallocate()
+trace_run_2_cq1.deallocate()
 
 
 # -----------------------------------------------------------------------------
 # 2. Python MeshTraceBuilder.add
 # -----------------------------------------------------------------------------
 import inspect
+from functools import wraps
+
+
+# Builders are selected by the device carried by an operation's tensor arguments.
+# ASSUMPTION: tensor.device() returns the same canonical Python MeshDevice object
+# that was passed to MeshTraceBuilder. MeshDevice.active_trace_builder() exposes
+# the non-owning C++ builder pointer used by both Python interception and enqueue.
 
 
 class TraceParam:
-    def __init__(self, default, name=None):
+    def __init__(self, default, name):
+        if not isinstance(name, str) or not name:
+            raise ValueError("TraceParam name must be a non-empty string")
         self.default = default
-        self.name = name  # required for intern; omit → "param_<id>"
+        self.name = name
 
 
 class _PendingBind:
@@ -83,24 +115,34 @@ class _PendingBind:
 class MeshTraceBuilder:
     def __init__(self, mesh_device):
         self._cxx = experimental.MeshTraceBuilder(mesh_device)
-        self._interned: dict[int, str] = {}
-        self._used_names: set[str] = set()
-        # Registry name → layout registered by factories (kind + encode fn).
+        self._mesh_device = mesh_device
+        # TTNN-only encode/type metadata. The Metal patch-location registry is
+        # created independently for each MeshTrace during _cxx.build().
         self._layout: dict[str, experimental.TraceParamLayout] = {}
+        self._active = False
+        self._deallocated = False
 
     def add(self, op, *args, **kwargs):
+        self._ensure_valid()
         pending, call = self._unwrap(op, args, kwargs)
         cxx_pending = [self._to_cxx_bind(b) for b in pending]
+        # ASSUMPTION: compile enters the C++ compile-only path directly; it does
+        # not invoke the decorated Python operation and cannot recurse into add().
         compiled = experimental.compile(op, call)  # no enqueue
         outputs, mapped = experimental.record_compiled(self._cxx, compiled, cxx_pending)
         self._merge_layout(mapped)
         return outputs
 
     def build(self, cq_id):
+        self._ensure_valid()
         return MeshTrace(
             self._cxx.build(self._cxx.device().mesh_command_queue(cq_id)),
             layout=dict(self._layout),
         )
+
+    def _ensure_valid(self):
+        if self._deallocated:
+            raise RuntimeError("MeshTraceBuilder has been deallocated")
 
     def _merge_layout(self, mapped):
         for name, entry in mapped.layout.items():
@@ -124,27 +166,65 @@ class MeshTraceBuilder:
         return pending, call
 
     def _intern(self, param: TraceParam) -> str:
-        key = id(param)
-        if key in self._interned:
-            return self._interned[key]
-        name = param.name if param.name is not None else f"param_{key}"
-        if name in self._used_names:
-            raise ValueError(f"TraceParam name {name!r} is already registered")
-        self._used_names.add(name)
-        self._interned[key] = name
-        return name
+        # Names, rather than Python object identity, define trace parameters.
+        return param.name
 
     def _to_cxx_bind(self, bind: _PendingBind):
         return experimental.PendingBind(
-            registry_name=self._interned[id(bind.param)],
+            registry_name=bind.param.name,
             invoke_name=bind.invoke_name,
         )
 
+    def __enter__(self):
+        self._ensure_valid()
+        if self._active:
+            raise RuntimeError("MeshTraceBuilder is already active")
+
+        if self._mesh_device.active_trace_builder() is not None:
+            raise RuntimeError("Another MeshTraceBuilder is already active for this MeshDevice")
+
+        # ASSUMPTION: enable() registers a non-owning, thread-local pointer to the
+        # Metal builder on MeshDevice. The enqueue path consults that pointer for
+        # ordinary operations that contain no TraceParam.
+        self._cxx.enable()
+        self._active = True
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        # Always restore normal enqueue behavior, including when model execution
+        # raises. Returning False preserves the original exception.
+        try:
+            self._cxx.disable()
+        finally:
+            self._active = False
+        return False
+
+    def clear(self):
+        self._ensure_valid()
+        if self._active:
+            raise RuntimeError("Cannot clear an active MeshTraceBuilder")
+
+        # ASSUMPTION: MeshTraceBuilder::clear() clears staged trace nodes,
+        # unresolved node mappings, and allocation-safety metadata while
+        # retaining reusable host capacity.
+        self._cxx.clear()
+        self._layout.clear()
+
+    def deallocate(self):
+        self._ensure_valid()
+        if self._active:
+            raise RuntimeError("Cannot deallocate an active MeshTraceBuilder")
+
+        self._cxx.deallocate()
+        self._layout.clear()
+        self._deallocated = True
 
 class MeshTrace:
     def __init__(self, cxx, layout):
         self._cxx = cxx
-        self._layout = layout  # registry_name → TraceParamLayout (factory-registered)
+        # TTNN encoding metadata only. _cxx owns the registry that maps these
+        # names to patch locations in this trace's DRAM buffer.
+        self._layout = layout
 
     def update_args(self, patch):
         metal = experimental.TraceArgPatch()
@@ -200,9 +280,32 @@ struct TraceParamLayout {
 };
 
 struct MappedTraceParameters {
+    // Factory output: names mapped to fields in workload Programs. These are
+    // not final trace-buffer locations yet.
     tt::tt_metal::distributed::experimental::TraceParameters paths;
     std::unordered_map<std::string, TraceParamLayout> layout;  // keyed by registry_name
 };
+
+// Metal builder state, conceptually:
+//
+//   staged_nodes
+//       The same MeshTraceNodes used by the existing trace implementation.
+//
+//   staged_parameter_mappings
+//       registry_name → fields in specific staged node instances.
+//
+// MeshTraceBuilder::add() creates the nodes for a workload and resolves each
+// Program-based TraceParameters path to the corresponding node instance. It
+// does not compute DRAM offsets because assembly has not happened yet.
+//
+// MeshTraceBuilder::build() assembles the nodes, observes where every mapped
+// field lands in the assembled command words, and creates:
+//
+//   MeshTraceParameterRegistry
+//       registry_name → kind + locations in this MeshTrace's DRAM buffer
+//
+// Each build creates a separate registry because each MeshTrace owns a separate
+// assembled buffer. No builder or Program references survive in that registry.
 
 struct CompiledMeshWorkload {
     tt::tt_metal::distributed::MeshWorkload workload;
@@ -272,7 +375,10 @@ auto record_compiled(
                 "TraceParam arguments are unsupported");
         }
     }
-    metal_builder.add(compiled.workload, mapped.paths);  // encode fns stay in TTNN
+    // Metal converts mapped.paths from Program fields to fields in the staged
+    // MeshTraceNode instances created for this workload. Final DRAM locations
+    // are resolved later, independently for every build().
+    metal_builder.add(compiled.workload, mapped.paths);
     return std::pair{compiled.outputs, mapped};
     // dispatch is not called
 }
@@ -303,6 +409,110 @@ struct ProgramSpecMeshWorkloadFactoryAdapter {
     }
 };
 
+# -----------------------------------------------------------------------------
+# 6. Trace parameter decorator
+# -----------------------------------------------------------------------------
+# This decorates Operation.__call__ and FastOperation.__call__, not each
+# operation implementation. Individual TTNN operations remain unchanged.
+
+def _unwrap_trace_param(value):
+    # TraceParam is intentionally supported only as a direct operation argument.
+    return value.default if isinstance(value, TraceParam) else value
+
+
+def _find_mesh_device(args, kwargs):
+    mesh_device = None
+    for value in (*args, *kwargs.values()):
+        value = _unwrap_trace_param(value)
+        candidate = None
+        if isinstance(value, ttnn.Tensor):
+            candidate = value.device()
+        elif isinstance(value, ttnn.MeshDevice):
+            candidate = value
+
+        if candidate is None:
+            continue
+        if mesh_device is not None and candidate is not mesh_device:
+            raise ValueError("Operation arguments belong to different MeshDevices")
+        mesh_device = candidate
+    return mesh_device
+
+
+def trace_parameter_support(call):
+    @wraps(call)
+    def eval_trace_params(operation, *args, **kwargs):
+        if not any(isinstance(value, TraceParam) for value in (*args, *kwargs.values())):
+            # Ordinary operations follow the existing path. If a builder is
+            # active, the C++ enqueue shim records their workload without paths.
+            return call(operation, *args, **kwargs)
+
+        mesh_device = _find_mesh_device(args, kwargs)
+        if mesh_device is None:
+            raise RuntimeError("Cannot find a MeshDevice in operation arguments")
+        builder = mesh_device.active_trace_builder()
+
+        if builder is not None:
+            # ASSUMPTION: only registered C++ operations have a compileable
+            # workload. Python composite operations forward TraceParams until a
+            # C++ leaf operation reaches this decorator.
+            if getattr(operation, "is_cpp_operation", False):
+                return builder.add(operation, *args, **kwargs)
+            return call(operation, *args, **kwargs)
+
+        # TraceParams evaluate to defaults when tracing is inactive.
+        unwrapped_args = tuple(_unwrap_trace_param(value) for value in args)
+        unwrapped_kwargs = {name: _unwrap_trace_param(value) for name, value in kwargs.items()}
+        return call(operation, *unwrapped_args, **unwrapped_kwargs)
+
+    return eval_trace_params
+
+
+# Both classes are required: TTNN selects one globally based on fast-runtime
+# configuration.
+class Operation:
+    @trace_parameter_support
+    def __call__(self, *args, **kwargs):
+        ...
+
+class FastOperation:
+    @trace_parameter_support
+    def __call__(self, *args, **kwargs):
+        ...
+
+# -----------------------------------------------------------------------------
+# 7. Helper encoding functions for common conversions
+# -----------------------------------------------------------------------------
+# [high bits | low bits]
+
+// float → IEEE-754 bits
+uint32_t encode_float32_bits(const TraceScalar&);
+
+// int32 → two's-complement bits
+uint32_t encode_int32_bits(const TraceScalar&);
+
+// uint32 → unchanged bits
+uint32_t encode_uint32(const TraceScalar&);
+
+// float → [bf16 | bf16]
+uint32_t encode_bfloat16_pair(const TraceScalar&);
+
+// float → [zero | bf16]
+uint32_t encode_bfloat16_low(const TraceScalar&);
+
+// float → [bf16 | zero]
+uint32_t encode_bfloat16_high(const TraceScalar&);
+
+// value → [uint16 | uint16]
+uint32_t encode_uint16_pair(const TraceScalar&);
+
+// value → [zero | uint16]
+uint32_t encode_uint16_low(const TraceScalar&);
+
+// value → [uint16 | zero]
+uint32_t encode_uint16_high(const TraceScalar&);
+
+// float → four identical FP8 E4M3 bytes
+uint32_t encode_float8_e4m3_quad(const TraceScalar&);
 
 # -----------------------------------------------------------------------------
 # 6. SoftmaxProgramFactoryAttentionOptimized — the 1:1
@@ -338,13 +548,19 @@ struct SoftmaxProgramFactoryAttentionOptimized {
         MappedTraceParameters mapped;
         for (const auto& bind : pending) {
             if (bind.invoke_name == "input_tensor") {
-                mapped.paths.tensor_parameters[TraceTensorArgName(bind.registry_name)].push_back(
-                    TraceTensorArgPath{.program = program, .param_name = SRC});
-                mapped.layout[bind.registry_name] = TraceParamLayout{.kind = TraceParamKind::Tensor};
+                mapped.paths
+                    .tensor_parameters[TraceTensorArgName(bind.registry_name)]
+                    .push_back(TraceTensorArgPath{
+                        .program = program,
+                        .param_name = SRC});
+                mapped.layout[bind.registry_name] =
+                    TraceParamLayout{.kind = TraceParamKind::Tensor};
             } else if (bind.invoke_name == "scale") {
-                TT_FATAL(!pre_scale_nodes.empty(), "scale is only a reader RTA when a mask is fused");
-                mapped.paths.runtime_parameters[TraceRuntimeArgName(bind.registry_name)].push_back(
-                    TraceRuntimeArgPath{
+                TT_FATAL(!pre_scale_nodes.empty(),
+                         "scale is only a reader RTA when a mask is fused");
+                mapped.paths
+                    .runtime_parameters[TraceRuntimeArgName(bind.registry_name)]
+                    .push_back(TraceRuntimeArgPath{
                         .program = program,
                         .kernel_name = READER,
                         .arg_name = "pre_scale",
@@ -352,13 +568,11 @@ struct SoftmaxProgramFactoryAttentionOptimized {
                 mapped.layout[bind.registry_name] = TraceParamLayout{
                     .kind = TraceParamKind::Runtime,
                     // Same conversion create_program_artifacts already does.
-                    .encode = [](const TraceScalar& s) -> uint32_t {
-                        return std::bit_cast<uint32_t>(std::get<float>(s.value));
-                    }};
+                    .encode = encode_float32_bits};
             } else {
                 TT_THROW(
-                    "scale_mask_softmax does not expose invoke '{}' as a trace parameter "
-                    "(supported: input_tensor, scale)",
+                    "scale_mask_softmax does not expose invoke '{}' as a"
+                    "trace parameter (supported: input_tensor, scale)",
                     bind.invoke_name);
             }
         }
@@ -366,9 +580,15 @@ struct SoftmaxProgramFactoryAttentionOptimized {
     }
 };
 
-// This call: paths.tensor_parameters["input"] = {program, "src"}
-//            paths.runtime_parameters["scale"] = {program, "reader", "pre_scale", nodes…}
-//            layout["scale"] = Runtime + [](s) { return bit_cast<uint32_t>(get<float>(s)); }
+
+// During add():
+//   paths.tensor_parameters["input"] = {program, "src"}
+//     → builder mapping {"input" → staged node's "src" field}
+//   paths.runtime_parameters["scale"] = {program, "reader", "pre_scale", nodes…}
+//     → builder mapping {"scale" → staged node's selected "pre_scale" fields}
+//
+// During each build(), those node fields become registry entries containing
+// locations in that MeshTrace's assembled DRAM buffer.
 // Other factories can do math or packing in the same slot, e.g.
 //   [](const TraceScalar& s) { return bit_cast<uint32_t>(1.f / get<float>(s.value)); }
 //   [](const TraceScalar& s) {
@@ -380,13 +600,16 @@ struct SoftmaxProgramFactoryAttentionOptimized {
 # -----------------------------------------------------------------------------
 # 7. update_args / replay
 # -----------------------------------------------------------------------------
-# MeshTrace::update_args: kind picks the Metal table; encode (if set) turns the op param
-# into a uint32. Empty encode means the patch value is already a uint32 word.
+# TTNN encode/type metadata converts op-level values into Metal patch values.
+# MeshTrace::update_args then looks up each name in that trace's own registry
+# and writes the value to every corresponding location in its DRAM buffer.
+# Empty scalar encode means the patch value is already a uint32 word.
 
 # trace_cq0.update_args({IN: new_scores, "scale": 0.25})
 #   layout["input"] is Tensor → TraceArgPatch.tensor_args["input"] = new_scores.mesh_tensor()
 #   layout["scale"].encode(TraceScalar{0.25f}) = bit_cast → 0x3E800000
-# Metal MeshTrace::update_args(patch) sees only tensors and uint32 words.
+# Metal MeshTrace::update_args(patch) sees only tensors and uint32 words, resolves
+# their names through its patch-location registry, and updates trace DRAM.
 """
 
 

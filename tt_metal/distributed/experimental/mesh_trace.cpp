@@ -9,7 +9,12 @@
 
 namespace tt::tt_metal::distributed::experimental {
 
-class MeshTraceBuilder::Impl {};
+class MeshTraceBuilder::Impl {
+    // Will own the staged MeshTraceNodes used by the existing trace path.
+    // TraceParameters passed to add() are resolved from Program fields to
+    // fields in these specific node instances. They remain node mappings until
+    // build() assembles a concrete trace buffer.
+};
 
 MeshTraceBuilder::MeshTraceBuilder(MeshDevice& /*device*/) : impl_(std::make_unique<Impl>()) {}
 
@@ -33,8 +38,12 @@ void MeshTraceBuilder::deallocate() {}
 
 class MeshTrace::Impl {
 private:
-    // Probable wont keep this struct, but this is what defines a
-    // mesh trace so the contents should stay.
+    // build() resolves the builder's node mappings to locations in this
+    // instance's assembled DRAM buffer. MeshTrace owns that parameter registry;
+    // it does not retain the builder, staged nodes, Programs, or tensor buffers.
+    //
+    // Probably won't keep this struct, but this is what defines a mesh trace so
+    // the contents should stay.
     struct MeshTraceBuffer {
         class MeshTraceDescriptor {
         public:
