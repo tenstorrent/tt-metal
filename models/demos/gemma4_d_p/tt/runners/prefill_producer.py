@@ -74,7 +74,12 @@ def wait_for_layers(channel, timeout_s):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--service-id", default=os.getenv("PREFILL_H2D_SERVICE_ID", "gemma4_prefill"))
-    parser.add_argument("--slots", type=int, default=int(os.getenv("PREFILL_NUM_USERS", "6")), choices=range(1, 7))
+    parser.add_argument(
+        "--slots",
+        type=int,
+        default=int(os.getenv("PREFILL_NUM_USERS", str(Gemma4ServiceConfig.MAX_USERS))),
+        choices=range(1, Gemma4ServiceConfig.MAX_USERS + 1),
+    )
     parser.add_argument("--tokens", type=int, default=Gemma4ServiceConfig.MAX_SEQ_LEN)
     parser.add_argument(
         "--text", type=Path, action="append", help="One UTF-8 text file per slot; defaults to six Gutenberg books"

@@ -36,7 +36,7 @@ def validate_params(params):
         if getattr(params, name) != value:
             raise ValueError(f"Gemma4 prefill requires {name}={value}, got {getattr(params, name)}")
     if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USERS:
-        raise ValueError("Gemma4 prefill requires 1 to 6 KV slots")
+        raise ValueError(f"Gemma4 prefill requires 1 to {Gemma4ServiceConfig.MAX_USERS} KV slots")
 
 
 class Gemma4PrefillAdapter(PrefillModelAdapter):
