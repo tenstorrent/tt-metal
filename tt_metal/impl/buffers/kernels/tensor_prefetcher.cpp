@@ -338,6 +338,7 @@ void kernel_main() {
             continue;
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
+        const bool synchronize_sender = req->prefetch.synchronize_sender != 0;
 
         const uint32_t req_num_entries = req->prefetch.num_entries;
         const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
@@ -848,19 +849,22 @@ void kernel_main() {
         // resumes at the right ring offset.
         store_sender_state(state, iface);
 
-        // Keep the two senders for this bank at the same request boundary. A
-        // sender that runs ahead cannot complete the layer by itself, but it can
-        // consume GDDR, NoC, and GCB resources needed by its slower peer.
-        if (is_coordinator) {
-            noc_semaphore_wait(sender_sync_semaphore, handshake_target);
-            noc_semaphore_inc(peer_sender_sync_semaphore, 1);
-            noc_async_atomic_barrier();
-        } else {
-            noc_semaphore_inc(peer_sender_sync_semaphore, 1);
-            noc_async_atomic_barrier();
-            noc_semaphore_wait(sender_sync_semaphore, handshake_target);
+        if (synchronize_sender) {
+            // Keep dual senders for this bank at the same request boundary. A
+            // sender that runs ahead cannot complete the layer by itself, but it
+            // can consume resources needed by its slower peer. Single-sender
+            // banks skip this handshake because their peer remains parked.
+            if (is_coordinator) {
+                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
+                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
+                noc_async_atomic_barrier();
+            } else {
+                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
+                noc_async_atomic_barrier();
+                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
+            }
+            ++handshake_target;
         }
-        ++handshake_target;
 
         socket_pop_pages(socket, 1);
         socket_notify_sender(socket);

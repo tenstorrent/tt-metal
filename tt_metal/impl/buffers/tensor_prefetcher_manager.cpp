@@ -752,6 +752,7 @@ MeshCoordinateRangeSet TensorPrefetcherManager::full_mesh_subset() const {
 
 std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serialize_request_pages(
     const experimental::GlobalCircularBuffer& gcb,
+    const std::vector<uint32_t>& target_sender_indices,
     const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const {
     TT_FATAL(!data_tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
 
@@ -761,6 +762,19 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     // GCB with a different receiver count. total_receivers (== ring_size) and
     // receivers_per_bank are independent of how many DRISC senders drive a bank.
     const auto& mapping = gcb.sender_receiver_core_mapping();
+    TT_FATAL(
+        target_sender_indices.size() == mapping.size(),
+        "Tensor prefetcher has {} target sender indices for {} GCB sender mappings",
+        target_sender_indices.size(),
+        mapping.size());
+    std::vector<bool> synchronize_sender(mapping.size(), false);
+    for (uint32_t s = 0; s < target_sender_indices.size(); ++s) {
+        const uint32_t sender_index = target_sender_indices[s];
+        const uint32_t peer_index = (sender_index % 2 == 0) ? sender_index + 1 : sender_index - 1;
+        synchronize_sender[s] =
+            std::find(target_sender_indices.begin(), target_sender_indices.end(), peer_index) !=
+            target_sender_indices.end();
+    }
     uint32_t total_receivers = 0;
     for (const auto& [_sender, receivers] : mapping) {
         total_receivers += receivers.num_cores();
@@ -985,10 +999,9 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     }
 
     // ---- Materialize each logical page into one byte buffer per sender ----
-    // Header/entry/geometry bytes are identical across senders; only each slot's rotation region
-    // differs (this sender's slice of the caller's global rotation). A page whose every slot is
-    // batched (no rotation) is byte-identical for all mapped GCB senders, so it is emitted once
-    // rather than making identical copies.
+    // Entry/geometry bytes are identical across senders. Each page still carries
+    // a sender-specific peer-synchronization flag and, for streaming tensors, that
+    // sender's slice of the caller's global rotation.
     std::vector<std::vector<std::vector<uint8_t>>> pages;
     pages.reserve(plans.size());
     for (const auto& plan : plans) {
@@ -1000,8 +1013,8 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             }
         }
         // Build the sender-independent template once (header + entries + each slot's geometry,
-        // rotation regions left zero); each sender's page is a copy with only its rotation slices
-        // overwritten. Avoids re-stamping the identical header/entry/geometry bytes per sender.
+        // rotation regions left zero); each sender's page is a copy with its synchronization
+        // flag and optional rotation slices overwritten.
         std::vector<uint8_t> templ(aligned_page_bytes, 0);
         auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(templ.data());
         header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
@@ -1019,10 +1032,12 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             std::memcpy(templ.data() + slot_start, &plan.slots[i].geom, kLayoutBytes);
         }
 
-        const uint32_t num_variants = page_has_rotation ? static_cast<uint32_t>(mapping.size()) : 1u;
+        const uint32_t num_variants = static_cast<uint32_t>(mapping.size());
         std::vector<std::vector<uint8_t>> per_sender(num_variants);
         for (uint32_t s = 0; s < num_variants; ++s) {
             std::vector<uint8_t> page = templ;
+            reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data())->prefetch.synchronize_sender =
+                synchronize_sender[s] ? 1 : 0;
             if (page_has_rotation) {
                 const auto& slab = slab_idx_by_sender[s];
                 const uint32_t bank = static_cast<uint32_t>(mapping[s].first.x);
@@ -1079,7 +1094,8 @@ void TensorPrefetcherManager::queue(
     // or more pages, each an independent request. The per-GCB fifo_wr_ptr persists across
     // requests, so the split is invisible to the receiver. A streaming logical page is materialized
     // per mapped GCB sender because each carries a different rotation slice.
-    std::vector<std::vector<std::vector<uint8_t>>> pages = serialize_request_pages(gcb, tensors);
+    std::vector<std::vector<std::vector<uint8_t>>> pages =
+        serialize_request_pages(gcb, target_sender_indices, tensors);
 
     // Target devices: subset if given, else full mesh. Caller is responsible
     // for keeping tensors and the GCB alive until stop() — see the public API doc.

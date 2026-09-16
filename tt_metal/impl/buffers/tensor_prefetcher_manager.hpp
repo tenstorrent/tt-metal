@@ -143,11 +143,13 @@ private:
     void allocate_sockets();
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per
-    // logical page; each entry is either one shared page or a vector in GCB sender-mapping
-    // order. The header/entry/geometry bytes are identical across senders, while a streaming
-    // page carries only that GCB sender's slice of the per-receiver rotation table.
+    // logical page; each entry is a vector in GCB sender-mapping order. The
+    // entry/geometry bytes are identical across senders, while each page carries
+    // that sender's synchronization flag and, when streaming, its slice of the
+    // per-receiver rotation table.
     std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
         const experimental::GlobalCircularBuffer& gcb,
+        const std::vector<uint32_t>& target_sender_indices,
         const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
     MeshCoordinateRangeSet full_mesh_subset() const;
 

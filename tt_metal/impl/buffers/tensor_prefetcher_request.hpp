@@ -131,11 +131,11 @@ struct TensorPrefetcherBaseCmd {
     TensorPrefetcherCmdId cmd_id;  // 1 byte
 } __attribute__((packed));
 
-// PREFETCH payload. The leading pad keeps the 32-bit fields 4-byte aligned past the
-// one-byte base (mirrors the pad fields in cq_commands.hpp commands); the resulting
-// 12-byte header then keeps the entry table 4-byte aligned.
+// PREFETCH payload. The one-byte sender-sync flag also keeps the following fields
+// aligned past the one-byte base; the resulting 12-byte header keeps the entry
+// table 4-byte aligned.
 struct TensorPrefetcherPrefetchCmd {
-    uint8_t pad1;
+    uint8_t synchronize_sender;  // 1 when this bank's peer sender receives the same request
     uint16_t num_entries;     // number of valid TensorPrefetcherEntry entries
     uint32_t num_layouts;     // number of valid TensorPrefetcherTensorLayout table entries
     uint32_t gcb_state_addr;  // DRISC L1 base of the target GCB's sender state block
