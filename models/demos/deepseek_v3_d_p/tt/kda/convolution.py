@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_topology import ChronologicalTopology
 
 
 def exchange_convolution_carry(
@@ -13,7 +13,7 @@ def exchange_convolution_carry(
     initial_carry: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    topology: OffsetTopology,
+    topology: ChronologicalTopology,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
@@ -49,7 +49,7 @@ def exchange_split_convolution_carry(
     initial_carry: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    topology: OffsetTopology,
+    topology: ChronologicalTopology,
     wrap_indicator: ttnn.Tensor,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Exchange both history planes using the layer's split selector.
@@ -77,7 +77,7 @@ def _exchange_published_carry(
     initial_carry: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    topology: OffsetTopology,
+    topology: ChronologicalTopology,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     batch, history, channels = initial_carry.shape
     sp_size = tiled_tail.device().shape[sequence_parallel_axis]

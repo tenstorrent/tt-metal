@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class OffsetTopology:
+class ChronologicalTopology:
     """Chronological segment topology for one prefill chunk.
 
     ``boundary_chip`` owns the head segment (rows ``0:head_rows``) and, when
@@ -61,7 +61,7 @@ class OffsetTopology:
         return (chip - 1) % self.sp_size
 
 
-def _offset_topology(actual_start: int, sp_size: int, local_rows: int) -> OffsetTopology:
+def _chronological_topology(actual_start: int, sp_size: int, local_rows: int) -> ChronologicalTopology:
     """Derive topology from layer-validated inputs for ``actual_start`` on an SP ring.
 
     ``actual_start`` is the absolute global position of the chunk's first token.
@@ -71,7 +71,7 @@ def _offset_topology(actual_start: int, sp_size: int, local_rows: int) -> Offset
     start = actual_start % (sp_size * local_rows)
     tail_rows = start % local_rows
     head_rows = local_rows - tail_rows
-    return OffsetTopology(
+    return ChronologicalTopology(
         sp_size=sp_size,
         local_rows=local_rows,
         boundary_chip=(start // local_rows) % sp_size,
