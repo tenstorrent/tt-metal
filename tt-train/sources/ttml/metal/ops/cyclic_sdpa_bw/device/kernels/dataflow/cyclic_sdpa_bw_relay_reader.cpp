@@ -164,7 +164,8 @@ void kernel_main() {
     // With one chunk and one pair this is the op as it was.
     const uint32_t chunks = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 2u);
     const uint32_t pairs = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 3u);
-    const uint32_t pair_table_arg = core_coords_arg + 2u * kCores + 4u;
+    const uint32_t heads = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 4u);
+    const uint32_t pair_table_arg = core_coords_arg + 2u * kCores + 5u;
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
     constexpr uint32_t vWt = get_compile_time_arg_val(2);
     constexpr uint32_t release_sem_id = get_compile_time_arg_val(3);
@@ -365,9 +366,10 @@ void kernel_main() {
     // front. Increments are atomic and order-independent, so this needs no
     // synchronisation of its own.
     for (uint32_t s = 0; s < slice_count; ++s) {
+    // Slices are pair-major: all heads of pair 0, then of pair 1 (see the host).
     const uint32_t sl = first_slice + s * slice_stride;
-    const uint32_t bh = sl / pairs;
-    const uint32_t pair = sl % pairs;
+    const uint32_t bh = sl % heads;
+    const uint32_t pair = sl / heads;
     const uint32_t row_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * pair);
     const uint32_t col_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * pair + 1u);
     row_base = (bh * chunks + row_chunk) * 2u * kCores * row_tiles;

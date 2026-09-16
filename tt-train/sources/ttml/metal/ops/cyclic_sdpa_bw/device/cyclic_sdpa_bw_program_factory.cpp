@@ -156,16 +156,38 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // schedule's N is a chunk, not the whole sequence.
     const uint32_t chunks = std::max(1U, args.sequence_chunks);
     const uint32_t pairs = static_cast<uint32_t>(std::max<size_t>(1, args.row_chunks.size()));
-    const uint32_t slices = static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]) * pairs;
+    const uint32_t heads = static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]);
+    const uint32_t slices = heads * pairs;
+    // Chunk pairs that share a row chunk (dQ) or a column chunk (dK, dV) write
+    // the same gradient rows; run side by side as slices of different groups
+    // they would accumulate into them at once. Slices are dealt pair-major
+    // (slice = pair * heads + head), so with a group count that divides the
+    // head count every pair of one head lands in the same group, in turn.
+    bool pairs_share_outputs = false;
+    for (uint32_t p = 0; p < pairs; ++p) {
+        for (uint32_t q = p + 1U; q < pairs; ++q) {
+            pairs_share_outputs |=
+                (args.row_chunks[p] == args.row_chunks[q]) || (args.col_chunks[p] == args.col_chunks[q]);
+        }
+    }
     const uint32_t N = static_cast<uint32_t>(shape[2]) / chunks;
     const uint32_t d = static_cast<uint32_t>(shape[3]);
 
-    const auto layout = plan_layout(
+    auto layout = plan_layout(
         device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, args.max_groups);
+    if (pairs_share_outputs) {
+        uint32_t g = std::min(layout.groups, heads);
+        while (heads % g != 0U) {
+            --g;
+        }
+        if (g != layout.groups) {
+            layout = plan_layout(device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, g);
+        }
+    }
     // The pair table the kernels decode a slice with: pairs x (row chunk,
     // column chunk). Appended after everything else so the address slots
     // that override_runtime_arguments patches stay where they are.
-    std::vector<uint32_t> pair_table = {chunks, pairs};
+    std::vector<uint32_t> pair_table = {chunks, pairs, heads};
     for (uint32_t p = 0; p < pairs; ++p) {
         pair_table.push_back(args.row_chunks.empty() ? 0U : args.row_chunks[p]);
         pair_table.push_back(args.col_chunks.empty() ? 0U : args.col_chunks[p]);

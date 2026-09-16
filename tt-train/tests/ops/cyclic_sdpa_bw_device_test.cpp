@@ -848,8 +848,9 @@ Gradients run_relay(
             // the count and stride after their other arguments.
             relay_reader_args.push_back(1u);  // slice_count
             relay_reader_args.push_back(1u);  // slice_stride
-            // One chunk, one pair (0, 0): the whole sequence against itself.
-            for (const uint32_t v : {1u, 1u, 0u, 0u}) {
+            // One chunk, one pair (0, 0): the whole sequence against itself;
+            // as many heads as groups, one slice each.
+            for (const uint32_t v : {1u, 1u, groups, 0u, 0u}) {
                 relay_reader_args.push_back(v);
             }
             SetRuntimeArgs(program, reader, core, relay_reader_args);
@@ -859,7 +860,7 @@ Gradients run_relay(
                  static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
                  static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
                  static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
-                 c == 1u ? 1u : 0u, 1u, 1u, /* chunks */ 1u, /* pairs */ 1u, 0u, 0u});
+                 c == 1u ? 1u : 0u, 1u, 1u, /* chunks */ 1u, /* pairs */ 1u, /* heads */ groups, 0u, 0u});
             SetRuntimeArgs(program, compute, core, {c, 1u});
         }
     }
