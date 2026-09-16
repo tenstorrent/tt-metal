@@ -296,20 +296,29 @@ end
 /////////////
 // Instruction macro definitions
 // Consult instruction documentation in assembly.yaml
+// WARNING: this block was carried over from the tt-1xx (Wormhole/Blackhole) instruction encoding and has not been
+// re-validated for Quasar. Several opcodes below were reassigned to different instructions on Quasar (per
+// tt_llk_quasar/common/inc/ckernel_ops.h, the generated single source of truth for this ISA) and are NOT safe to use
+// as documented here. None of these macros currently have call sites in this repo (see
+// https://github.com/tenstorrent/tt-metal/issues/55681), so this is a latent trap rather than an active bug -- do
+// not use INSTRN_PACRNL, INSTRN_SEARCHX, INSTRN_RSTDMA, INSTRN_FLUSH_DMA, or INSTRN_MV_REG_TO_FLOPS on Quasar without
+// first confirming the opcode against ckernel_ops.h.
 #define INSTRN_GETDESC(arg) (0x40000000 | (arg))  // Unimplemented.
-#define INSTRN_PACRNL(arg) (0x41000000 | (arg))   // Pack row from DST to L0/L1
+#define INSTRN_PACRNL(arg) \
+    (0x41000000 | (arg))  // WRONG on Quasar: 0x41 is TT_OP_COMMIT_SHADOW, not "pack row from DST to L0/L1".
 #define INSTRN_UNPACR(arg) (0x42000000 | (arg))   // Unpack row from tile in L0 to SRCA/SRCB
 #define INSTRN_SEARCHX(arg) \
     (0x43000000 |           \
-     (arg))  // Search for start of selected row within tile. To be invoked prior to each invocation of UNPACR.
-#define INSTRN_RSTDMA 0x44000000  // Soft reset of TDMA engine
+     (arg))  // WRONG on Quasar: 0x43 is TT_OP_UNPACR_NOP, not "search for start of selected row within tile".
+#define INSTRN_RSTDMA \
+    0x44000000  // WRONG on Quasar: 0x44 is TT_OP_UNPACR0_TILE_INC, not "soft reset of TDMA engine".
 #define INSTRN_SET_DMA_REG(arg) \
     (0x45000000 | (arg))  // Set TDMA register file register with 16b immediate value provided with instruction
 #define INSTRN_FLUSH_DMA(arg) \
-    (0x46000000 | (arg))  // Flush TDMA engine or some subset of it as specified by instruction argument
+    (0x46000000 | (arg))  // INVALID on Quasar: 0x46 is not defined for this architecture per ckernel_ops.h.
 #define INSTRN_MV_REG_TO_FLOPS(arg) \
-    (0x48000000 | (arg))  // Move data from TDMA register file into flip flops driving actual config signals. Used for
-                          // certain TDMA configuration signal setting.
+    (0x48000000 | (arg))  // INVALID on Quasar: 0x48 is not defined for this architecture per ckernel_ops.h. The
+                          // REG2FLOP_TARGET_* operands below are only meaningful for this (nonexistent) instruction.
 #define INSTRN_LOAD_IND(arg) \
     (0x49000000 | (arg))  // Load indirect from address specified in a TDMA register, with offset specified in TDMA
                           // register to a TDMA register. Supports autoincrementing offset
