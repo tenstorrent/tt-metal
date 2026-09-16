@@ -23,7 +23,7 @@ from loguru import logger
 
 import ttnn
 
-from ...tests.test_factory import parametrize_mesh_with_fabric
+from ...tests.test_factory import parametrize_mesh_with_fabric, skip_if_weights_exceed_dram
 
 
 def _is_moe_model(model_path):
@@ -131,6 +131,11 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
         pytest.skip(
             "single-device L1 limit: 12B global-layer packed SDPA exceeds single-device L1 (use a TP mesh, e.g. 1x4)"
         )
+
+    # The TP check above only rules out TP=1. A wide model on a narrow multi-device
+    # mesh (31B on 1x2) still overflows Wormhole DRAM while the weight cache is
+    # built, which is an OOM abort rather than a skip.
+    skip_if_weights_exceed_dram(mesh_device, model_path=model_path)
 
     from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
     from models.demos.gemma4.tt.generator import Gemma4Generator
@@ -275,6 +280,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         pytest.skip(_PLI_UNSUPPORTED_REASON)
     if mesh_device.get_num_devices() == 1:
         pytest.skip("single-device L1 limit: use a TP mesh (e.g. 1x4)")
+    skip_if_weights_exceed_dram(mesh_device, model_path=model_path)
 
     from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
     from models.demos.gemma4.tt.generator import Gemma4Generator
