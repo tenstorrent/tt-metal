@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <internal/mesh_workload.hpp>
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt_stl/fmt.hpp>
@@ -505,8 +504,3 @@ uint32_t MeshWorkload::get_cb_size(
 }
 
 }  // namespace tt::tt_metal::distributed
-
-const std::unordered_set<tt::tt_metal::SubDeviceId>& tt::tt_metal::internal::get_mesh_workload_sub_device_ids(
-    distributed::MeshWorkload& mesh_workload, distributed::MeshDevice* mesh_device) {
-    return mesh_workload.impl().determine_sub_device_ids(mesh_device);
-}

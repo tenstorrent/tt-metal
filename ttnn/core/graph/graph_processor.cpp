@@ -10,7 +10,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
-#include <internal/mesh_workload.hpp>
 #include <tt_metal/impl/version.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <cstdlib>
@@ -552,6 +551,45 @@ void GraphProcessor::track_program_execution(const ProgramExecutionPlacement& pl
     graph[current_op_id.top()].connections.push_back(counter);
 }
 
+namespace {
+// Resolves the sub-devices a program occupies using only the public Metalium surface.
+//
+// detail::ProgramImpl::determine_sub_device_ids is the authority for this, but it lives in a
+// private header that TTNN cannot include: tt_metal exports only api/, so pulling in
+// program_impl.hpp drags llrt/hal.hpp and the rest of Metalium's private include roots with it.
+// Rather than widen that boundary for a reporting feature, capture re-derives the answer the same
+// way Metalium does, and is honest about resolving nothing when it cannot.
+//
+// Two cases, mirroring ProgramImpl:
+//   * Default manager -- the whole grid is one sub-device, so the answer is unconditionally 0 and
+//     no program inspection is needed. This is what ProgramImpl short-circuits to as well.
+//   * Otherwise -- intersect the program's circular buffers against each sub-device's worker
+//     cores. ProgramImpl intersects kernel-group core ranges, which are private; circular buffers
+//     are the public proxy for the same compute cores. A program that allocates no circular
+//     buffers resolves to nothing and its execution goes unrecorded.
+std::unordered_set<tt::tt_metal::SubDeviceId> resolve_program_sub_device_ids(
+    const tt::tt_metal::Program& program, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    if (mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id()) {
+        return {tt::tt_metal::SubDeviceId{0}};
+    }
+
+    const auto circular_buffers = program.circular_buffers();
+    std::unordered_set<tt::tt_metal::SubDeviceId> sub_device_ids;
+    for (uint32_t index = 0; index < mesh_device->num_sub_devices(); ++index) {
+        const auto sub_device_id = tt::tt_metal::SubDeviceId{static_cast<uint8_t>(index)};
+        const auto sub_device_cores =
+            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
+        for (const auto& circular_buffer : circular_buffers) {
+            if (!sub_device_cores.intersection(circular_buffer->core_ranges()).empty()) {
+                sub_device_ids.insert(sub_device_id);
+                break;
+            }
+        }
+    }
+    return sub_device_ids;
+}
+}  // namespace
+
 void track_mesh_workload_execution(
     tt::tt_metal::distributed::MeshWorkload& workload,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
@@ -602,14 +640,22 @@ void track_mesh_workload_execution(
         }
     }
 
-    // FDMeshCommandQueue::enqueue_mesh_workload enforces this same invariant and has already run by
-    // the time we get here, so a violation is not reachable through dispatch. Capture is passive
-    // observation, though, so it declines to record rather than aborting the caller's run.
-    const auto& sub_device_ids = tt::tt_metal::internal::get_mesh_workload_sub_device_ids(workload, mesh_device);
+    // Union across the workload's programs, the way MeshWorkloadImpl does.
+    std::unordered_set<tt::tt_metal::SubDeviceId> sub_device_ids;
+    for (const auto& program_entry : workload.get_programs()) {
+        const auto program_sub_device_ids = resolve_program_sub_device_ids(program_entry.second, mesh_device);
+        sub_device_ids.insert(program_sub_device_ids.begin(), program_sub_device_ids.end());
+    }
+
+    // Dispatch enforces the single-sub-device invariant before this point, so a workload that
+    // resolves to anything else here means capture could not re-derive the placement -- a program
+    // with no circular buffers to match on, most likely. Capture is passive observation, so it
+    // declines to record the execution rather than guessing or aborting the caller's run. The
+    // manager topology recorded above still stands.
     if (sub_device_ids.size() != 1) {
         log_warning(
             tt::LogAlways,
-            "Graph capture skipped a workload execution: expected exactly one sub-device, found {}.",
+            "Graph capture skipped a workload execution: could not resolve it to a single sub-device (resolved {}).",
             sub_device_ids.size());
         return;
     }
