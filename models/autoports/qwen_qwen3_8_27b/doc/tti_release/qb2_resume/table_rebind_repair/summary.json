@@ -1,0 +1,61 @@
+{
+  "status": "accepted_adapter_repair_only",
+  "utc": "2026-09-16T08:12:19.017480+00:00",
+  "host_tests": {
+    "adapter": 4,
+    "b2_harness": 21,
+    "exit_code": 0
+  },
+  "serial_rebind": {
+    "old_handles": {
+      "trace": "MeshTraceId(2)",
+      "sample_trace": "MeshTraceId(3)",
+      "prefill_trace": "None",
+      "prefill_sample_trace": "None",
+      "_recurrent_reset_trace": "None"
+    },
+    "released_handles": {
+      "trace": "None",
+      "sample_trace": "None",
+      "prefill_trace": "None",
+      "prefill_sample_trace": "None",
+      "_recurrent_reset_trace": "None"
+    },
+    "state_exact": true,
+    "kv_exact": true
+  },
+  "serial_stages": [
+    "prefill_0",
+    "prefill_2048",
+    "decode_0",
+    "decode_1",
+    "decode_2",
+    "decode_3"
+  ],
+  "actual_run_exit": 1,
+  "whole_b2_status": "failed_inactive_token_comparison_under_investigation",
+  "ownership": {
+    "samples": 428,
+    "errors": [],
+    "max_sample_gap_seconds": 0.10209581255912781
+  },
+  "device_close_returned": true,
+  "owners_after": {
+    "/proc/driver/tenstorrent/0/pids": [],
+    "/proc/driver/tenstorrent/1/pids": [],
+    "/proc/driver/tenstorrent/2/pids": [],
+    "/proc/driver/tenstorrent/3/pids": []
+  },
+  "native_maps": {
+    "/home/mvasiljevic/qwen38-full-rerun/tt-metal/build_Release/lib/_ttnncpp.so": "d9d8d553dd3889f0c3e1f31b6b384a2bacd485974b11ef1dc5b36519917839eb",
+    "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/ttnn/_ttnn.so": "8f5b58e74dd5cdbaeb2355ea216b9c9db6316cac40e47e9cc4a9ad97d8f2258c"
+  },
+  "source_adapter_sha256": "7b01605e8791912f92c91baa0858fc8dbffbe5697e28a345a2e56c8ca19c48f1",
+  "evidence": {
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision4/actual.json": "5bc5dce17371bc725a7b06c72ab4a9b35a934a479a82559287cab52ad3a1a57b",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision4/actual_execution.json": "035403cadba679e11b5de5212e94e2572328857349020a04dff19341f600fd1e",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-candidate/probes_revision4/owner_observation.json": "ed38c83db7887768d323df0ba7b5cc1a9e2189db856eda49291313e319e9fd27",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/batched-prefill-rebind-candidate/test_host.py": "e21031190441728ded0aaf93858b910bf3eb9ed69cfe3688bbb0c514b832907c"
+  },
+  "limits": "No complete B2, serving, performance or Stage11 pass. 100ms sampled ownership does not exclude shorter events."
+}

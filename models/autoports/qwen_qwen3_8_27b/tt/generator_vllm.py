@@ -111,6 +111,23 @@ class Qwen38ForCausalLM:
             raise ValueError("Serving must pass the exact vLLM allocated cache")
 
     def _table(self, page_table, slots=None):
+        if self.generator.page_host is None:
+            source = torch.as_tensor(page_table, dtype=torch.int32)
+            shape = tuple(self.generator.page_table.shape)
+            if source.ndim != 2 or len(shape) != 2 or not 1 <= source.shape[1] <= shape[1]:
+                raise ValueError("Page table exceeds the serving context or row mapping")
+            rows = list(range(source.shape[0])) if slots is None else list(slots)
+            if (
+                len(rows) != shape[0]
+                or len(rows) != source.shape[0]
+                or any(type(row) is not int for row in rows)
+                or set(rows) != set(range(shape[0]))
+            ):
+                raise ValueError("A device-table rebind requires every serving row before partial updates")
+            # Every physical row is replaced; do not invent unobserved device rows.
+            target = torch.zeros(shape, dtype=torch.int32)
+            target[rows, : source.shape[1]] = source
+            return target
         source = torch.as_tensor(page_table, dtype=torch.int32)
         target = self.generator.page_host.clone()
         rows = list(range(source.shape[0])) if slots is None else slots
