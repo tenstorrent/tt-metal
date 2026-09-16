@@ -1453,11 +1453,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     // Runs before decode, which would otherwise consume stale source-mesh action maps. The
                     // landing encode replaces them from this mesh's destination-major route table.
                     fabric_set_2d_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
-                    // The landing rebuild restarts the packet's journey through this mesh, so its Y leg
-                    // begins here. An E/W facing normally skips the Y byte because intramesh Y-before-X
-                    // guarantees the Y leg finished before any E/W router saw the packet -- a guarantee the
-                    // boundary crossing voids. Decode Y-first on every facing so a landing that owes a N/S
-                    // hop emits one; live_eth_mask_2d already keeps those arms live on an intermesh router.
+                    // Rebuilt map requires Y action decode first.
                     action = Routing2DCodec::decode_action_y_first(
                         packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 } else {
