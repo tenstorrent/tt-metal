@@ -10,7 +10,7 @@
 
 #include <cstring>
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -38,7 +38,7 @@ void fill_pattern(std::vector<uint32_t>& data, uint32_t tag) {
 
 }  // namespace unit_tests::dm::pcie_mid_cleanup
 
-TEST_F(GenericMeshDeviceFixture, PCIeMidCleanup) {
+TEST_F(UnitMeshFastDispatchFixture, PCIeMidCleanup) {
     namespace test_consts = unit_tests::dm::pcie_mid_cleanup;
 
     auto mesh_device = get_mesh_device();
@@ -46,9 +46,6 @@ TEST_F(GenericMeshDeviceFixture, PCIeMidCleanup) {
 
     if (device->arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "NOC_TARG_ADDR_MID/NOC_RET_ADDR_MID PCIe routing is Blackhole-specific";
-    }
-    if (!device->is_mmio_capable()) {
-        GTEST_SKIP() << "PCIe routing test requires an MMIO-capable device";
     }
 
     const CoreCoord logical_core = {0, 0};
