@@ -241,7 +241,10 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     // Quasar dispatch-engine FD uses dedicated dispatch tiles from the soc `dispatch:` list, so
     // Tensix workers listed under dispatch_cores in the fast-dispatch core descriptor YAML are not
     // reserved (same effective worker pool as slow dispatch).
-    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) || quasar_dispatch_engine_fd) {
+    // A worker-grid override (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE) is honoured on the dispatch-engine
+    // path too, falling through to the descriptor-derived grid below.
+    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) ||
+        (quasar_dispatch_engine_fd && !get_rtoptions().is_core_grid_override_todeprecate())) {
         compute_grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
         if (quasar_dispatch_engine_fd) {
             log_info(
