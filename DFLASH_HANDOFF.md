@@ -29,6 +29,37 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
+### CORRECTION: the capture is NOT offset-specific -- that finding was a fixture artifact
+
+Commits 4a57957c44f and 0aa99e9361d claim the verify trace is only valid at the chunk_start it was
+captured at, and localise the bake to the first full-attention layer. **Both claims are wrong.**
+With the fixture bug removed, every arm is exact:
+
+    capture@0   replay@0     logits pcc 1.0   argmax 1.0000   all taps 1.0
+    capture@0   replay@128   logits pcc 1.0   argmax 1.0000   all taps 1.0     <- was 0.843 / 0.0625
+    capture@128 replay@128   logits pcc 1.0   argmax 1.0000   all taps 1.0
+
+ONE capture serves every chunk_start as well as every valid_len. The 0.843 came from the test
+itself: `capture_verify_trace` runs real forwards, those include `paged_fill_cache`, and capturing
+at offset 0 wrote its dummy zero tokens over KV pages 0..1 -- the prefix the test had just primed.
+The capture@128 arm looked healthy for the mirror-image reason. The "first divergence at L3 [attn]"
+was L3 being the first layer to READ the clobbered KV, not the first to bake anything.
+
+WHAT SURVIVES: the fix. `lo == 0` moves demo acceptance 1.138 -> 4.950 and the 200-token crossing
+arm 1.118 -> 4.471, matching pure-eager exactly. Those are end-to-end measurements, so replaying
+past the anchor IN THE LOOP is genuinely broken -- the explanation was wrong, not the effect.
+
+LEADING HYPOTHESIS NOW: the anchor GDN snapshot interacting with the parked trace. The passing test
+takes a FRESH snapshot (`save_gdn_state()`), while `TtTarget.forward` re-anchors with
+`save_gdn_state(into=self._anchor_gdn)`. That reuse is independently implicated -- DFLASH_FRESH_ANCHOR=1
+moves post-anchor acceptance 1.118 -> 1.617 and removes the output corruption, and the same reuse in
+`reset()` SIGBUSed the drafter. Next experiment: re-run test_verify_traced_at_offset.py with the
+snapshot reused instead of freshly allocated, which is the one difference left between it and the loop.
+
+IGNORE the "routes to the remaining 2.6x" list below that is premised on a ttnn SDPA fix; the op is
+not at fault. The ~2.6x is still on the table, but the path to it runs through whatever makes a
+traced replay misbehave after a re-anchor in the loop.
+
 ### FIXED: the capture is only valid at chunk_start=0, and the loop replayed it everywhere
 
 The anchor cliff below is real, but re-anchoring was never the culprit. The TRACE was.

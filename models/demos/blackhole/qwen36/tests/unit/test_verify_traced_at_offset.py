@@ -2,31 +2,41 @@
 # SPDX-License-Identifier: Apache-2.0
 """Is the traced verify still correct at a NON-ZERO chunk_start -- on logits AND on taps?
 
-``test_dflash_target_trace_replay.py`` proves replay == eager, but only at ``chunk_start=0``, which
-is the one offset the capture itself was taken at. The speculative loop spends most of a long
-generation somewhere else: ``TtTarget`` re-anchors every ANCHOR tokens, so every verify after the
-first bucket runs at ``chunk_start=128``, 256, ... against a trace captured at 0.
+ANSWER: YES. All three arms are pcc 1.0 with argmax agreement 1.0000 and every tap exact:
 
-WHY THIS FILE EXISTS. Acceptance collapses to exactly 1 -- every draft rejected, for the rest of the
-generation -- the moment a run crosses the anchor, and the collapse is caused by the TRACE, not by
-re-anchoring (tests/reference/test_dflash_anchor_crossing.py):
+    capture@0   replay@0     logits pcc 1.0   argmax 1.0000   all taps 1.0
+    capture@0   replay@128   logits pcc 1.0   argmax 1.0000   all taps 1.0
+    capture@128 replay@128   logits pcc 1.0   argmax 1.0000   all taps 1.0
 
-    traced verify   before the anchor 4.241, after 1.118, 37/728 non-ascii in the output
-    EAGER verify    before the anchor 4.241, after 4.471,  0/810 non-ascii
+``test_dflash_target_trace_replay.py`` only ever checked ``chunk_start=0``, the offset the capture
+is taken at, so this closes that gap: ONE capture serves every chunk_start as well as every
+valid_len, and the replay machinery is not offset-specific.
 
-Eager crosses the boundary with acceptance intact. So re-anchoring is sound and the replay is not.
+READ THE FIXTURE NOTE BEFORE TRUSTING ANY RESULT FROM THIS FILE. An earlier version of this test
+reported capture@0 replay@128 at logits pcc 0.843 with argmax agreement 0.0625 -- one row in
+sixteen -- and that number was entirely an artifact of the fixture. ``capture_verify_trace`` runs
+real forwards (two warm-up passes plus the captured one), and those include ``paged_fill_cache``,
+so capturing at offset 0 writes its dummy all-zero tokens over KV pages 0..1 -- exactly the prefix
+this test had primed. The replay then attended a zeroed prefix. The capture@128 arm looked healthy
+for the mirror-image reason: it clobbered pages 2..3, which the replay immediately rewrote.
 
-LOGITS AND TAPS ARE CHECKED SEPARATELY, and that separation is the point. The emitted tokens stay
-plausible (clean English once the re-anchor snapshot is allocated fresh rather than reused), so the
-target's ARGMAX survives whatever is wrong -- while the drafter, which eats the taps, fails
-completely. ``Qwen36Model.take_taps`` already documents that exact asymmetry from a previous bug:
-handing the drafter the wrong rows "reads as a plausible-looking tap (PCC ~0.38 vs the host taps)
-and drafts pure garbage". A defect that moves logits a little and taps a lot is therefore expected,
-and a test that only compared logits would miss it.
+Re-priming after the capture removes the artifact and all three arms pass. The real loop never had
+this problem: ``TtTarget.forward`` re-runs the whole bucket eagerly when it crosses an anchor, which
+rewrites those pages before any traced tail replays.
 
-The eager path is the reference: it takes ``chunk_start`` as a plain int and rebuilds everything per
-call, and ``TtTarget``'s own docstring records it as exact at these offsets ("PCC against a one-shot
-prefill is exactly 1.0 at offsets 128 and 256").
+WHAT THIS DOES NOT EXPLAIN, and what is therefore still open. Restricting the trace to ``lo == 0``
+demonstrably fixes the loop -- demo acceptance 1.138 -> 4.950, and on the 200-token crossing arm
+1.118 -> 4.471, matching pure-eager exactly (tests/reference/test_dflash_anchor_crossing.py). Those
+are end-to-end measurements, not fixture artifacts, so replaying past the anchor IN THE LOOP really
+is broken. But it is not because the capture bakes chunk_start, because this file shows it does not.
+
+The leading remaining hypothesis is an interaction between the anchor GDN snapshot and the parked
+trace, which this file cannot see because it takes a FRESH snapshot (``_prime`` calls
+``save_gdn_state()`` with no ``into=``) while ``TtTarget.forward`` re-anchors with
+``save_gdn_state(into=self._anchor_gdn)``. That reuse is independently implicated: DFLASH_FRESH_ANCHOR=1
+moves post-anchor acceptance 1.118 -> 1.617 and removes the output corruption outright, and adding
+the same reuse to ``reset()`` SIGBUSed the drafter. To test it, re-run this file with the snapshot
+reused rather than freshly allocated.
 
 Run::
 
@@ -133,6 +143,17 @@ def test_traced_matches_eager_at_offset(mesh_device, device_params, capture_at, 
 
     # ---- capture at `capture_at` (0 is what the shipping path does), then replay at `chunk_start`.
     model.capture_verify_trace(page_table, ANCHOR, capture_chunk_start=capture_at)
+
+    # THE CAPTURE WRITES TO THE PAGED KV. capture_verify_trace runs real forwards (two warm-up
+    # passes plus the captured one) and those include paged_fill_cache, so it fills the pages for
+    # `capture_at` with its dummy all-zero tokens. At capture_at=0 that clobbers the very prefix
+    # this test primed, and a replay at chunk_start=128 would then attend a zeroed prefix -- which
+    # looks exactly like "the trace is invalid at a different offset" while actually being a
+    # fixture artifact. Re-prime so the prefix pages hold the real prefix again.
+    #
+    # The real loop does not have this problem: TtTarget.forward re-runs the whole bucket eagerly
+    # when it crosses an anchor, which rewrites those pages before any traced tail replays.
+    anchor_state = _prime()
 
     model.restore_gdn_state(anchor_state)
     token_buf = torch.zeros(1, ANCHOR, dtype=torch.int32)
