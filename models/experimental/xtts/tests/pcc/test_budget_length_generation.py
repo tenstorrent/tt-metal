@@ -11,23 +11,23 @@ the traced pipeline keeps alive around the vocoder ("Statically allocated circul
 program 1429 clash with L1 buffers"). An exact-length sweep over budgets 150..239 reproduced it
 at budgets 223, 224 and 225 (222-224 codes) and nowhere else. The perf test (188 codes) and the
 empty-generation test never reach those lengths, so this pins the path deterministically with
-``min_new_tokens == max_new_tokens`` at a clashing budget and at the full budget.
+``min_new_tokens == max_new_tokens`` at a clashing budget (the full budget, 239 codes, passes on main).
 """
 import pytest
 import torch
 import ttnn
 
-from models.experimental.xtts.config import GENERATION, L1_SMALL_SIZE, SESSION_TRACE_REGION
+from models.experimental.xtts.config import L1_SMALL_SIZE, SESSION_TRACE_REGION
 from models.experimental.xtts.tests.pcc.test_empty_generation import SAMPLING, _inputs, _max_seq
 
 
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": SESSION_TRACE_REGION}], indirect=True
 )
-@pytest.mark.parametrize("budget", [223, GENERATION.max_tokens], ids=["clash_223", "max"])
-def test_budget_length_generation_vocodes(device, xtts_state_dict, reset_seeds, budget):
-    """A pass that runs out its code budget still vocodes through the traced path."""
+def test_budget_length_generation_vocodes(device, xtts_state_dict, reset_seeds):
+    """A pass that runs out a clashing code budget still vocodes through the traced path."""
     tt, wav, spk_tt, padded, real_len, pad_to = _inputs(device, xtts_state_dict)
+    budget = 223  # 222 codes: the residual conv1d 32->32 k=7 d=5 at L=247296 clashes without the fallback
     wav_dev, codes, perf = tt.inference_fully_traced(
         padded,
         wav,
