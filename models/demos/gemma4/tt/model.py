@@ -1185,7 +1185,7 @@ class Gemma4Model:
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
+            from models.demos.gemma4.tt.dram_sharded import linear_l1_safe, lm_head_decode_config
 
             lm_head_pc, lm_head_out_memcfg, lm_head_ckc = lm_head_decode_config(
                 self.mesh_device,
@@ -1194,7 +1194,12 @@ class Gemma4Model:
                 n=self.lm_head_weight.shape[-1],
                 weight=self.lm_head_weight,
             )
-            logits = ttnn.linear(
+            # Via linear_l1_safe like the other tuned matmuls: the vocab shard
+            # width alone does not decide whether the 1D-mcast config's CBs fit
+            # L1 (the compute grid moves it too), so a shape that clears the
+            # bound in lm_head_decode_config can still overflow and must fall
+            # back per-shape rather than kill the run.
+            logits = linear_l1_safe(
                 hidden_states,
                 self.lm_head_weight,
                 program_config=lm_head_pc,

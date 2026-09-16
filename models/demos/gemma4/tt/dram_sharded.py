@@ -702,6 +702,13 @@ def lm_head_decode_config(mesh_device, m, k, n, weight=None):
         return None, None, None
     if n > 64 * 1024:
         # Too wide for the 1D-mcast program config; keep an explicit fidelity.
+        # This width bound is necessary but not sufficient: whether the CBs fit
+        # also depends on the compute grid. A 262144 vocab at tp=4 shards to
+        # exactly 65536 and passes here, but then needs per_core_N=32 on a WH
+        # 8x8 grid (2333920 B of CBs against a 1499136 B L1) versus 16 on a BH
+        # 13x10 grid, where it fits. The call site goes through
+        # ``linear_l1_safe`` so that case falls back per-shape instead of
+        # surrendering the tuned path everywhere.
         return None, None, wide_vocab_lm_head_ckc(weight)
     grid = mesh_device.compute_with_storage_grid_size()
     program_config = prefill_progcfg_1d(
