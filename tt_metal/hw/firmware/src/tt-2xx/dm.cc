@@ -381,7 +381,9 @@ extern "C" uint32_t _start1() {
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
+#ifndef FDS_SIGNALLING
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+#endif
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 #ifdef FDS_SIGNALLING
@@ -411,6 +413,9 @@ extern "C" uint32_t _start1() {
         overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
         asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
         asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
+        // Publish DONE only after FDS can take a go interrupt: the host's wait on DONE is the only
+        // barrier before the dispatch cores launch.
+        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 #endif
         trigger_sync_register_init();
 
