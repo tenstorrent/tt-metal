@@ -282,6 +282,27 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         d_sub_w = std::min<uint32_t>(DST_CAPACITY, per_core_N_d);
     }
     const uint32_t d_out_subblock_w = d_sub_w;
+    // Ceil, not exact: the last subblock may be narrower (d_out_subblock_w_tail). Equal to the
+    // exact division whenever the width divides, which is every shape but the ragged one.
+    const uint32_t d_in1_num_subblocks = (per_core_N_d + d_out_subblock_w - 1) / d_out_subblock_w;
+    const uint32_t d_out_subblock_w_tail = per_core_N_d - (d_in1_num_subblocks - 1) * d_out_subblock_w;
+    const bool d_subblocks_exact = (d_out_subblock_w_tail == d_out_subblock_w);
+
+    // Output CB: writer drains one subblock at a time. 2-subblock staging
+    // pipelines compute/writer one-ahead and is safe under the tightest L1
+    // budget (the 256-expert / 32-per-chip case the unfused path is run on).
+    constexpr uint32_t cb_out_stage_count = 2u;
+    // A CB wraps only when a push lands EXACTLY on fifo_limit (adaptive_chunk.hpp). On a ragged
+    // subblock grid the pushes alternate width and tail, so a ring sized in SUBBLOCKS is never hit
+    // exactly and the write pointer walks off into neighbouring L1. Size the ragged case in whole
+    // output ROWS -- the row period per_core_N_d is what the push sequence repeats on. Exact grids
+    // keep the original subblock sizing.
+    //
+    // Sized here, ahead of the L1 fitter, because cb_footprint_bytes must budget the ring that is
+    // actually allocated: the ragged row-sized ring is ceil(per_core_N_d / d_out_subblock_w) times
+    // the exact-grid one (22 tiles vs 16 on the 11-column grid).
+    const uint32_t cb_out_tiles =
+        d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d) * cb_out_stage_count;
 
     // -------------------------- data formats / tile sizes -----------------
     const tt::DataFormat x_df = tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype());
@@ -335,16 +356,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         if (op.x_is_row_major) {
             total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
         }
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
-        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;        // cb_in1_down
-        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;                   // cb_gate_intermed
-        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;                   // cb_activated
-        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;                // cb_mm_partials_gu
-        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;                // cb_mm_partials_up
-        total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;                  // cb_mm_partials_d
-        total += static_cast<uint64_t>(d_out_subblock_h * d_out_subblock_w * 2) * out_tile_size;  // cb_out
-        total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;               // cb_in0_down_full
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
+        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;  // cb_in1_down
+        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_gate_intermed
+        total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_activated
+        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_gu
+        total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_up
+        total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;            // cb_mm_partials_d
+        total += static_cast<uint64_t>(cb_out_tiles) * out_tile_size;                       // cb_out
+        total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;         // cb_in0_down_full
         // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
         // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
         total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
@@ -459,10 +480,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t gu_out_block_num_tiles = per_core_M * per_core_N_gu;
 
     const uint32_t d_in0_num_subblocks = per_core_M / d_out_subblock_h;
-    // Ceil, not exact: the last subblock may be narrower (d_out_subblock_w_tail). Equal to the
-    // exact division whenever the width divides, which is every shape but the ragged one.
-    const uint32_t d_in1_num_subblocks = (per_core_N_d + d_out_subblock_w - 1) / d_out_subblock_w;
-    const uint32_t d_out_subblock_w_tail = per_core_N_d - (d_in1_num_subblocks - 1) * d_out_subblock_w;
     const uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
     const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
     const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
@@ -647,18 +664,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         partials_d_df,
         /*tiles=*/d_out_block_num_tiles,
         partials_d_tile_size);
-    // Output CB: writer drains one subblock at a time. 2-subblock staging
-    // pipelines compute/writer one-ahead and is safe under the tightest L1
-    // budget (the 256-expert / 32-per-chip case the unfused path is run on).
-    constexpr uint32_t cb_out_stage_count = 2u;
-    // A CB wraps only when a push lands EXACTLY on fifo_limit (adaptive_chunk.hpp). On a ragged
-    // subblock grid the pushes alternate width and tail, so a ring sized in SUBBLOCKS is never hit
-    // exactly and the write pointer walks off into neighbouring L1. Size the ragged case in whole
-    // output ROWS -- the row period per_core_N_d is what the push sequence repeats on. Exact grids
-    // keep the original subblock sizing.
-    const bool d_subblocks_exact = (d_out_subblock_w_tail == d_out_subblock_w);
-    const uint32_t cb_out_tiles =
-        d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d) * cb_out_stage_count;
     make_cb(
         CB_OUT,
         out_df,

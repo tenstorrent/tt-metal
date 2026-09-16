@@ -50,21 +50,11 @@ class KimiK3Config:
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
     # Routed-expert hybrid split: experts with <= this many active tokens go to
-<<<<<<< HEAD
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross repeatedly on the
-    # 3584x3072 routed-expert shape: the composite's cost is flat inside an M chunk while the
-    # fused op's rises with the count, so the composite takes 352-512, loses 576-768 where the
-    # tail per_core_M rounds 18 tile-rows up to 32, and wins outright from 896. 768 is the
-    # aggregate-optimal cut over that sawtooth (+0.14% against a per-count oracle, worst cell
-    # +23% at 512). Measured under SituGlu, the activation these experts actually run.
-    # Not enabled: only Kimi K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
-=======
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
     # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M
     # chunk while the fused op's rises with the count. The composite takes 192 by 8.5% and never
     # gives the band back. Measured under SituGlu, the activation these experts actually run.
     # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
->>>>>>> 1aa3dfd9e27 (routed_expert: re-derive the hybrid thresholds and add the 768 ISL point)
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
