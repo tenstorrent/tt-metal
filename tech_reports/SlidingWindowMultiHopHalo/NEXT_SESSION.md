@@ -1,14 +1,42 @@
-# Handoff — state as of 2026-09-16 17:25Z
+# Handoff — state as of 2026-09-16 20:05Z
 
-**Read order:** this file →
-[`MULTIHOP_SWA_HALO.md`](MULTIHOP_SWA_HALO.md) §11 (full session-3 record).
+**Read order:** [`README.md`](README.md) (the seeding doc: what this is, what to do next, what NOT
+to do) → this file (state and commands) → [`MULTIHOP_SWA_HALO.md`](MULTIHOP_SWA_HALO.md) §11-12
+(full record and reproduction).
 
 ## State
 
-* Repo `/data/kmabee/tt-metal-2`, branch `main` @ `df15dfd17d5`, **16 files, ~640 insertions,
-  UNCOMMITTED.** That is the whole multi-hop + link-sharing implementation. Offered to commit to a
-  branch; not done, user has not asked.
-* Binary is current **and installed** (see the trap below). Board released.
+* Branch **`kmabee/gemma4-swa-multihop-halo`**, pushed to `tenstorrent/tt-metal`, based on
+  `main @ df15dfd17d5`. Two commits, working tree clean, **no PR opened yet**:
+  * `21df7f2031e` — implementation + these docs (18 files)
+  * `e4c0df6a76e` — tests (2 files)
+* Verified on device against exactly what is committed: accuracy gate **3 passed**; chunk-0 times
+  **131.2 / 173.9 / 242.6 ms** for chunks 2048 / 4096 / 8192 on 8x4.
+* A `/simplify` pass ran after the first commit — 10 cleanups applied, see "What the cleanup pass
+  changed" below. Perf and correctness confirmed unchanged by it.
+* Working dir `/data/kmabee/tt-metal-2`. Board released, nothing running.
+* **Rebuild before the next device run**: pre-commit reformatted a kernel header after the last
+  `--target install`, so `build_Release/lib/_ttnncpp.so` is one formatting pass stale. Kernel
+  headers are JIT-compiled so results are still valid, but do not trust a mixed state.
+
+## What the cleanup pass changed (context for a reviewer)
+
+Four parallel review agents (reuse / simplification / efficiency / altitude). Applied: dropped a
+provably-dead `link_base` ternary; replaced two derivable config fields with accessors; swapped a
+hand-rolled semaphore-id scan for `find_available_semaphore_id` (restoring the missing
+`NUM_SEMAPHORES` bound); routed all three hop-count derivations through one layout call; removed a
+`hop_count()` + `TT_FATAL` the validator already enforced; made the device header call the host
+`chunked_sliding_halo_hop_rows` instead of copying it; named `max_source_ranges`' ring-size
+assumption **and added a validator check** (an over-wide ring previously produced an empty work plan,
+i.e. silently no attention); collapsed a 4x-duplicated Python guard into one helper; parametrized
+two pairs of copy-pasted tests; deleted a `GEMMA4_PREFILL_DUMP_DIR` debug block whose premise this
+work disproved.
+
+Deliberately NOT applied, with reasons: `halo_links_per_hop = max(1, links/hops)` (a real
+generalization that would use all links when `links > hops`, but it is a no-op on this 2-link box so
+it could not be tested); restructuring the halo helper to take a hop vector and return its cores;
+promoting the link hand-off to the CCL layer or the fabric mux (mux overhead only amortizes around
+1.5 MB/link, a hop here is ~0.5 MB); several micro-optimisations rated negligible.
 
 ## Both original tasks are DONE
 

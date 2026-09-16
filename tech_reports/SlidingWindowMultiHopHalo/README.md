@@ -23,14 +23,18 @@ therefore a floor under TTFT. This work generalises the halo to any hop count, a
 ERISC exposes only one worker sender channel per direction — makes hops **time-share** the fabric
 links rather than requiring one link each.
 
-## 2. Status: done and gated
+## 2. Status: done, gated, and on a branch
 
 | | |
 |---|---|
 | Multi-hop halo, any `h <= ring_size` | **works** |
 | Hops sharing links (4 hops on 2 links) | **works** |
 | Correctness, 1 / 2 / 4 hops, SP8 + linear fabric | **3 passed** (~70 s) |
-| Deployed 1-hop path | **unchanged** — 242.7 ms vs 243.1 ms before |
+| Deployed 1-hop path | **unchanged** — 242.6 ms vs 243.1 ms before |
+| Branch | `kmabee/gemma4-swa-multihop-halo`, pushed, **no PR opened yet** |
+
+Two commits: `21df7f2031e` (implementation + these docs) and `e4c0df6a76e` (tests).
+[`NEXT_SESSION.md`](NEXT_SESSION.md) has the exact state, the cleanup-pass record and the commands.
 
 ## 3. The numbers that matter
 
