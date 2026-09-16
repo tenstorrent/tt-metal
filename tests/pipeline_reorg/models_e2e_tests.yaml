@@ -507,6 +507,23 @@
   team: models
   budget_type: e2e
 
+- name: Qwen3.6-35B-A3B e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
+    pytest --timeout 3600 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k"
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+  model: qwen3.6-35b-a3b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 45
+      tier: 1
+      release_ready: false
+  owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+  team: models
+  budget_type: e2e
+
 # ── Gemma ──────────────────────────────────────────────────────────
 
 # Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
@@ -1157,6 +1174,25 @@
       release_ready: false
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: e2e
+
+# ── HunyuanImage-3.0 ───────────────────────────────────────────────
+- name: HunyuanImage-3.0 T2I e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
+    export HY_NUM_LAYERS=8
+    export HY_STEPS=8
+    export HY_VERBOSE=1
+    models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh e2e \
+      --timeout 1080 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
+  model: hunyuan-image-3.0
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
+  team: models
   budget_type: e2e
 
 # ── Stable Diffusion 3.5 Large (TT-DiT) ────────────────────────────

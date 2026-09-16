@@ -4,12 +4,14 @@
 
 import gc
 import tempfile
+import threading
 import typing
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
 import ttnn
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS
+from ttnn.tools import trace_allocation_tracker
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_slow_dispatch
@@ -160,8 +162,10 @@ def test_single_device_multi_trace(device, shape, blocking):
 
 
 @skip_for_slow_dispatch()
-@pytest.mark.skipif(not ttnn.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup")
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.skipif(
+    not trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup"
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}, {"trace_region_size": 0}], indirect=True)
 def test_trace_allocation_tracking_is_per_trace(device, expect_error):
     shape = (1, 1, 32, 32)
     trace_input = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
@@ -206,7 +210,9 @@ def test_trace_allocation_tracking_is_per_trace(device, expect_error):
 
 
 @skip_for_slow_dispatch()
-@pytest.mark.skipif(not ttnn.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup")
+@pytest.mark.skipif(
+    not trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup"
+)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_error):
     shape = (1, 1, 32, 32)
@@ -219,13 +225,57 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
     try:
+        # If the first query finds an unsafe tensor retained only by a Python
+        # reference cycle, conditional GC must retire it and allow replay.
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            cycle = []
+            cyclic_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+            cyclic_tensor_id = cyclic_tensor.buffer_unique_id()
+            cycle.extend((cycle, cyclic_tensor))
+            del cyclic_tensor
+            del cycle
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            assert cyclic_tensor_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+
+        if trace_allocation_tracker.TRACE_ALLOC_DIAGNOSTICS:
+            # Each Python thread must drain only the allocations it dispatched,
+            # even when both threads share the same device allocator.
+            allocation_barrier = threading.Barrier(2)
+
+            def allocate_and_drain_pending():
+                tensor = ttnn._ttnn.operations.core.allocate_tensor_on_device(
+                    ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
+                )
+                buffer_id = tensor.buffer_unique_id()
+                allocation_barrier.wait()
+                pending = set(ttnn._ttnn.operations.trace.drain_pending_traceback_ids())
+                return tensor, buffer_id, pending
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(allocate_and_drain_pending)
+                second = executor.submit(allocate_and_drain_pending)
+                first_tensor, first_id, first_pending = first.result()
+                second_tensor, second_id, second_pending = second.result()
+
+            assert first_id in first_pending
+            assert second_id not in first_pending
+            assert second_id in second_pending
+            assert first_id not in second_pending
+            first_tensor.deallocate()
+            second_tensor.deallocate()
+
         marked = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         marked_id = marked.buffer_unique_id()
         assert marked_id in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
-        assert ttnn.mark_corruptible(marked) == marked_id
+        assert trace_allocation_tracker.acknowledge_corruptible(marked) is None
         assert marked_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
 
-        with ttnn.corruptible_allocation_scope(device):
+        with trace_allocation_tracker.corruptible_allocation_scope(device):
             scoped = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         assert scoped.buffer_unique_id() not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
 
@@ -235,6 +285,20 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         del temporary
         gc.collect()
         assert temporary_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+
+        if trace_allocation_tracker.TRACE_ALLOC_DIAGNOSTICS:
+            from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
+
+            # The aggregate diagnostics registry does not perform per-trace
+            # stale-ID cleanup: deallocation must update it eagerly as well.
+            assert temporary_id not in ttnn._ttnn.operations.trace.get_all_unsafe_tracked_ids()
+
+            # An ordinary operation boundary, rather than trace replay, must
+            # reconcile Python tracebacks with the eagerly updated C++ state.
+            with trace_allocation_tracker.corruptible_allocation_scope(device):
+                reconciliation_boundary = ttnn.neg(trace_input)
+            assert temporary_id not in TraceAllocationTracker._tracebacks
+            reconciliation_boundary.deallocate()
 
         # All three allowed cases remain safe to replay while the acknowledged tensors are still alive.
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
@@ -247,12 +311,23 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
             ttnn.CONFIG.enable_fast_runtime_mode = fast_runtime_mode
         unsafe_map = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
         assert unsafe_map[unsafe_a.buffer_unique_id()].startswith("ttnn.")
-        if TRACE_ALLOC_DIAGNOSTICS:
-            from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
-
-            assert temporary_id not in UnsafeAllocationTracker._tracebacks
+        if trace_allocation_tracker.TRACE_ALLOC_DIAGNOSTICS:
+            # Exercise retirement before the pending ID is drained: bypass the
+            # registered-operation wrapper, then deallocate the raw allocation.
+            # Its thread-local pending ID is filtered against authoritative
+            # allocator accounting at the next operation boundary.
+            raw_temporary = ttnn._ttnn.operations.core.allocate_tensor_on_device(
+                ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
+            )
+            raw_temporary_id = raw_temporary.buffer_unique_id()
+            del raw_temporary
+            gc.collect()
+            assert raw_temporary_id not in ttnn._ttnn.operations.trace.get_all_unsafe_tracked_ids()
+            assert raw_temporary_id not in ttnn._ttnn.operations.trace.drain_pending_traceback_ids()
 
         unsafe_b = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        if trace_allocation_tracker.TRACE_ALLOC_DIAGNOSTICS:
+            assert raw_temporary_id not in TraceAllocationTracker._tracebacks
         with expect_error(RuntimeError, "Found 2 device buffer") as error:
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
         assert f"Buffer {unsafe_a.buffer_unique_id()}" in str(error.value)
@@ -263,3 +338,22 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         ttnn.release_trace(device, trace_id)
 
     assert trace_output.is_allocated()
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_allocation_tracking_release_trace_is_idempotent(device):
+    shape = (1, 1, 32, 32)
+    input_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    ttnn.neg(input_dev)
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    output = ttnn.neg(input_dev)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    # The keyword form must work identically with and without allocation tracking.
+    ttnn.execute_trace(mesh_device=device, trace_id=trace_id, cq_id=0, blocking=True)
+    ttnn.release_trace(device, trace_id)
+    ttnn.release_trace(device, trace_id)
+
+    assert output.is_allocated()
