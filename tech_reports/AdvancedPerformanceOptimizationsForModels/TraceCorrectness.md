@@ -55,7 +55,7 @@ As a consequence, all allocations made after some trace has been captured, and n
 
 You can use the trace allocation tracker tool to check a program for potentially unsafe allocations.
 
-If we capture multiple traces, we may want to persist the input tensors as placeholders where new inputs will be copied, while being aware that the old contents may be corrupted by executing other traces. To exempt such tensors from validation use mark_corruptible(tensor).
+If we capture multiple traces, we may want to persist the input tensors as placeholders where new inputs will be copied, while being aware that the old contents may be corrupted by executing other traces. To exempt such tensors from validation, use `trace_allocation_tracker.acknowledge_corruptible(tensor)`.
 
 Buffer allocations may not be explicit!
 For example `ttnn.reshape`, when first executed with a new shape, may allocate a lookup table to speed up future executions. If this happens after some trace has already been captured, executing that trace may corrupt this table. This will lead to undefined behavior, including data corruption and hangs.
@@ -71,11 +71,11 @@ TT_METAL_TRACE_ALLOC_TRACKING=1 python your_program.py
 
 The environment variables are read once while TT-NN starts up, so they must be set before `import ttnn`. Changing them from Python after importing TT-NN has no effect.
 
-Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it runs Python garbage collection and checks whether any buffers unsafe for the requested trace are still alive. If so, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting the buffers. Buffers that have already been released are removed from the accounting automatically.
+Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it checks whether any buffers unsafe for the requested trace are still alive. If it finds candidates, it runs Python garbage collection and checks again. If unsafe buffers remain, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting them. Buffers that have already been released are removed from the accounting automatically.
 
-Accounting is kept separately for each trace. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)`, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
+Accounting is kept separately for each `(sub-device manager, trace ID)` pair. Trace IDs are interpreted under the currently active sub-device manager, so the manager used to capture a trace must also be active when the trace is ended, executed, or released. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)` under one manager, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
 
-Trace buffers in the reserved `BufferType::TRACE` region are excluded because that region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead a top-down DRAM allocation and is tracked as unsafe for older traces. Until https://github.com/tenstorrent/tt-metal/issues/48869 is fixed, this is another reason to avoid dynamic trace storage with multiple traces.
+Trace storage itself is excluded from accounting. Buffers in the reserved `BufferType::TRACE` region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead allocated top-down in DRAM; capture validates its address against the current capture's DRAM high-water marks and the maximum high-water mark of every live trace. Capture fails rather than retaining a dynamic trace buffer that could be corrupted by replay.
 
 For more information about where unsafe buffers were allocated and which Python objects still hold them, enable diagnostics as well:
 
@@ -110,15 +110,19 @@ This option should normally be used only to reduce diagnostic noise while invest
 Some trace inputs and outputs are intentionally reused even though replaying another trace may overwrite them. Acknowledge a specific device tensor after allocating it with:
 
 ```python
-ttnn.mark_corruptible(tensor)
+from ttnn.tools import trace_allocation_tracker
+
+trace_allocation_tracker.acknowledge_corruptible(tensor)
 ```
 
-This immediately removes the tensor's backing buffer from validation. Views share their backing-buffer ID, so marking a view acknowledges the shared buffer as well.
+This immediately removes the tensor's backing buffer from validation. Views share their backing-buffer ID, so acknowledging a view acknowledges the shared buffer as well.
 
 If a narrowly scoped block creates several intentionally corruptible buffers, the whole block can be acknowledged:
 
 ```python
-with ttnn.corruptible_allocation_scope(device):
+from ttnn.tools import trace_allocation_tracker
+
+with trace_allocation_tracker.corruptible_allocation_scope(device):
     trace_input = create_trace_input()
     trace_output = create_trace_output()
 ```
@@ -144,12 +148,14 @@ If there are multiple decision points and capturing traces for all combinations 
 Usually, the traces are recorded into a pre-allocated trace region, with its size set when opening the device.
 This means you need to appropriately size the buffer to accommodate all traces you plan to capture.
 
-You can avoid this by passing `trace_region_size=0`. With this set, traces will be saved in dynamically allocated buffers.
-As of July 2026, dynamic trace buffer allocation should be avoided when using multiple traces due to a bug https://github.com/tenstorrent/tt-metal/issues/48869
+You can avoid this by passing `trace_region_size=0`. With this set, traces will be saved in dynamically allocated, top-down DRAM buffers. The allocation is validated against the DRAM high-water marks of the current capture and every live trace. If the trace buffer could overlap memory used by trace replay, capture fails and a reserved trace region must be used instead.
 
 # Common pattern
 
 ```
+from ttnn.tools import trace_allocation_tracker
+
+
 class FunGen:
     @staticmethod
     def fun(x, cond_a, cond_b):
@@ -184,8 +190,8 @@ class FunGen:
                 # These two may be overwritten by executing other traces,
                 # But we always write them before use
                 # and read from them right after executing their trace
-                ttnn.mark_corruptible(x)
-                ttnn.mark_corruptible(out)
+                trace_allocation_tracker.acknowledge_corruptible(x)
+                trace_allocation_tracker.acknowledge_corruptible(out)
                 self.trace_inputs[trace_key] = x
                 self.trace_ids[trace_key] = trace_id
                 self.trace_outputs[trace_key] = out
