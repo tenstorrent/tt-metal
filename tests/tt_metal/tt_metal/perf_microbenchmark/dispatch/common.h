@@ -1413,7 +1413,10 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const tt_metal::NOC upstream_noc =
         (device_->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
     const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
-    const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
+    // The slow-dispatch harness has no downstream and no dispatch_s. Name the dispatcher's own tile
+    // for both instead of the {0,0} / (255,255) placeholders: the CQ kernels latch these coordinates
+    // at entry, and a placeholder has no address-map entry under ATT (the resolver traps on it).
+    const auto downstream_virtual = my_virtual;
 
     const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
     const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
@@ -1509,8 +1512,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1556,8 +1559,8 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(my_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},
