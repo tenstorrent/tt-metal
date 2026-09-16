@@ -4,8 +4,7 @@
 
 #include "sdpa_fw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "sdpa_fw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -23,39 +22,13 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
                                  const std::string& name,
                                  const tt::tt_metal::Layout required_layout,
                                  const tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "SDPAForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+        check_device_tensor(tensor, "SDPAForward", name, {.dtypes = {required_dtype}, .layout = required_layout});
 
         TT_FATAL(
             tensor.padded_shape().rank() == 4U,
             "Tensor '{}' must have rank 4, but got rank {}",
             name,
             tensor.padded_shape().rank());
-
-        TT_FATAL(
-            tensor.layout() == required_layout,
-            "Tensor '{}' must have layout '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "Tensor '{}' must have data type '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
     check_tensor(query, "Query", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);

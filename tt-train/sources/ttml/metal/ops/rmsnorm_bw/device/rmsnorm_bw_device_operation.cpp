@@ -4,8 +4,7 @@
 
 #include "rmsnorm_bw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "rmsnorm_bw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -13,38 +12,6 @@ namespace ttml::metal::ops::rmsnorm_bw::device {
 
 void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "RMSNormBackward operation requires {} to be on Device. Input storage type: {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(
-            tensor.buffer() != nullptr,
-            "Operands to RMSNormBackward need to be allocated in buffers on the device. Buffer is null. Tensor name {}",
-            name);
-
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "RMSNormBackward operation requires tensor to be in Tile layout. {} tensor layout: {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "RMSNormBackward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "RMSNormBackward operation requires Interleaved memory layout. {} "
-            "memory layout: `{}`",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
     const auto& input_tensor = tensor_args.input;
     const auto& gamma_tensor = tensor_args.gamma;
     const auto& rms_tensor = tensor_args.rms;
@@ -52,15 +19,16 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_da_tensor = tensor_args.preallocated_da;
     const auto& preallocated_dgamma_components_tensor = tensor_args.preallocated_dgamma_components;
 
-    check_tensor(input_tensor, "Input");
-    check_tensor(gamma_tensor, "Gamma");
-    check_tensor(rms_tensor, "RMS");
-    check_tensor(dL_dout_tensor, "dL_dout");
+    check_device_tensor(input_tensor, "RMSNormBackward", "Input");
+    check_device_tensor(gamma_tensor, "RMSNormBackward", "Gamma");
+    check_device_tensor(rms_tensor, "RMSNormBackward", "RMS");
+    check_device_tensor(dL_dout_tensor, "RMSNormBackward", "dL_dout");
     if (preallocated_da_tensor.has_value()) {
-        check_tensor(preallocated_da_tensor.value(), "Preallocated dL_da");
+        check_device_tensor(preallocated_da_tensor.value(), "RMSNormBackward", "Preallocated dL_da");
     }
     if (preallocated_dgamma_components_tensor.has_value()) {
-        check_tensor(preallocated_dgamma_components_tensor.value(), "Preallocated dL_dgamma_components");
+        check_device_tensor(
+            preallocated_dgamma_components_tensor.value(), "RMSNormBackward", "Preallocated dL_dgamma_components");
     }
 }
 
