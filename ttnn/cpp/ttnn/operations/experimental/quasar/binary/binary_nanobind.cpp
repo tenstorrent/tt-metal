@@ -21,7 +21,6 @@
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
 #include <ttnn-nanobind/span_caster.hpp>
-#include <cstdint>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
@@ -96,7 +95,7 @@ using InplaceTensorFn = Tensor (*)(
 
 using BitwiseScalarFn = Tensor (*)(
     const Tensor&,
-    std::int32_t,
+    int32_t,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
@@ -1613,11 +1612,8 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            nb::overload_cast<
-                const Tensor&,
-                std::int32_t,
-                const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&>(&pow),
+            nb::overload_cast<const Tensor&, int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&>(
+                &pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),

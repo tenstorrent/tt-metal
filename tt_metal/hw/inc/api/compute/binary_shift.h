@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_shift.h"
@@ -38,7 +37,7 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void binary_left_shift_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for left shift. Supported data formats are: Int32, UInt32, UInt16");
@@ -83,7 +82,7 @@ ALWI void binary_left_shift_tile(std::uint32_t idst0, std::uint32_t idst1, std::
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void binary_right_shift_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for right shift. Supported data formats are: Int32, UInt32, UInt16");
@@ -140,7 +139,7 @@ ALWI void binary_right_shift_tile(std::uint32_t idst0, std::uint32_t idst1, std:
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void binary_logical_right_shift_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
+ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for logical right shift. Supported data formats are: Int32, UInt32, UInt16");

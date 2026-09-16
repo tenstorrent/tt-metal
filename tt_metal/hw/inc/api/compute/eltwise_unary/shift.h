@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_unary_shift.h"
@@ -31,7 +30,7 @@ namespace ckernel {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void left_shift_tile(std::uint32_t idst, std::uint32_t param0) {
+ALWI void left_shift_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
@@ -56,7 +55,7 @@ ALWI void left_shift_tile(std::uint32_t idst, std::uint32_t param0) {
  */
 // clang-format on
 template <DataFormat data_format>
-ALWI void right_shift_tile(std::uint32_t idst, std::uint32_t param0) {
+ALWI void right_shift_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX, data_format), idst, VectorMode::RC, param0));
 }
