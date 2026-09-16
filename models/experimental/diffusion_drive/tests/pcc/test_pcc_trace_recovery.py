@@ -41,7 +41,7 @@ _INJECTED = "injected failure inside trace capture"
 
 
 def _features() -> dict:
-    """Production-resolution random features (DD-4 sizes)."""
+    """Production-resolution random features (README 3.6)."""
     return {
         "camera_feature": torch.randn(1, 3, 256, 1024),
         "lidar_feature": torch.randn(1, 1, 256, 256),
@@ -98,7 +98,7 @@ def _assert_device_usable(device, ttnn_model, features) -> None:
     ttnn.deallocate(probe)
 
     # And the recovery the agent actually advertises: keep serving eagerly.
-    torch.manual_seed(1234)  # pin DDIM noise (DD-5)
+    torch.manual_seed(1234)  # pin DDIM noise (README 3.5)
     out = ttnn_model(features)
     assert out["trajectory"].shape == (1, 8, 3)
     assert torch.isfinite(out["trajectory"]).all(), "eager fallback produced non-finite trajectory"

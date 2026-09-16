@@ -97,7 +97,7 @@ def _open_build_trace(checkpoint_path: str, anchors_path: str, device_id: int):
     from models.experimental.diffusion_drive.tt.config import ModelConfig
     from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
 
-    # DD-1: ttnn.conv2d allocates from the L1_SMALL bank; default 0 → OOM.
+    # ttnn.conv2d allocates from the L1_SMALL bank; default 0 → OOM (README 3.3).
     # Trace capture additionally needs a trace region (256 MB validated).
     open_kwargs = {"device_id": device_id, "l1_small_size": 32768}
     if _trace_enabled():

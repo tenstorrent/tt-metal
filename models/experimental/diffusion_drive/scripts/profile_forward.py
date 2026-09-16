@@ -62,7 +62,7 @@ def _time_calls(fn, features, iters: int, seed: int = 1234) -> list:
     device->host sync, so each timed call includes the full forward."""
     times = []
     for _ in range(iters):
-        torch.manual_seed(seed)  # pin DDIM noise so every call is equal work (DD-5)
+        torch.manual_seed(seed)  # pin DDIM noise so every call is equal work (README 3.5)
         t0 = time.perf_counter()
         fn(features)
         times.append((time.perf_counter() - t0) * 1000.0)

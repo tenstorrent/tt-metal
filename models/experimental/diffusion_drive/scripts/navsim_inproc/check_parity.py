@@ -62,7 +62,7 @@ def main() -> None:
         "status_feature": torch.randn(1, 8),
     }
 
-    # 3. Reference forward — pin DDIM noise (DD-5).
+    # 3. Reference forward — pin DDIM noise (README 3.5).
     torch.manual_seed(1234)
     with torch.no_grad():
         ref_out = ref_model(features)

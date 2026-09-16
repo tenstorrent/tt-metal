@@ -140,7 +140,7 @@ def _run_model(checkpoint: str, anchors_path: str, out_path: str) -> str:
             "lidar_feature": torch.randn(1, 1, 256, 256),
             "status_feature": torch.randn(1, 8),
         }
-        torch.manual_seed(1234)  # pin DDIM noise (DD-5)
+        torch.manual_seed(1234)  # pin DDIM noise (README 3.5)
         out = ttnn_model(features)
     finally:
         ttnn.close_device(device)
