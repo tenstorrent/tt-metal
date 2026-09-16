@@ -23,6 +23,7 @@ from .tile_constants import (
 )
 from .tile_shape import construct_tile_shape
 from .ulp import (
+    MANTISSA_BITS_FOR_ULP,
     ulp_dtype,
     ulp_elementwise_valid,
     ulp_verdict_message,
@@ -611,11 +612,13 @@ def passed_test(
 
     With *max_ulp* set, the gate becomes "every element is within *max_ulp* representable
     steps of the reference" and both the tolerance check and the PCC check are skipped.
-    That is not a loosening. On an eltwise tensor a step budget is strictly stronger than
-    either: ``atol=0.05`` is ~6 bf16 steps at 1.0 and ~0.02 at 512, so a tolerance loose
-    enough to pass the tail is blind in the middle, and PCC is a shape metric that stays
-    above 0.99 through error levels no consumer would accept. Running all three would only
-    add two weaker ways to fail. This mirrors the MX path, which has always returned on
+    That is not a loosening *for a budget small enough to be worth having*. ``atol=0.05``
+    is ~6 bf16 steps at 1.0 and ~0.02 at 512, so a tolerance loose enough to pass the tail
+    is blind in the middle, and PCC is a shape metric that stays above 0.99 through error
+    levels no consumer would accept. The bound is the ``rtol`` half rather than the
+    ``atol`` one: ``rtol * |v|`` is about ``rtol * 2**mantissa_bits`` steps at large
+    magnitude, ~6 for bf16 and ~51 for fp16, and a budget past that is looser than what it
+    displaced with no PCC behind it. The gate warns when a budget crosses that line. This mirrors the MX path, which has always returned on
     its lattice verdict without consulting PCC.
 
     *near_zero_atol* is the floor under that budget for the lanes where the reference
@@ -641,6 +644,23 @@ def passed_test(
         # their fp32 view would hand the caller a gate it does not have.
         gate_dtype = ulp_dtype(output_data_format)
         warn_if_threshold_unmeaningful(max_ulp, gate_dtype)
+        # The claim that a step budget is stronger than what it replaces counts only the
+        # atol term. The rtol half of isclose is itself a step budget at large magnitude:
+        # `rtol * |v|` is about `rtol * 2**mantissa_bits` steps there, roughly 6 for bf16
+        # and 51 for fp16. Past that a budget is looser than the tolerance it displaced,
+        # and PCC is no longer behind it either, since this arm returns before it.
+        displaced = tolerances[output_data_format].rtol * (
+            1 << MANTISSA_BITS_FOR_ULP[gate_dtype]
+        )
+        if max_ulp > displaced:
+            logger.warning(
+                "max_ulp={} is looser than the rtol={} tolerance it replaces (~{:.0f} "
+                "steps at large magnitude) and PCC no longer backs it up. Tighten the "
+                "budget, or keep the op on the tolerance metric.",
+                max_ulp,
+                tolerances[output_data_format].rtol,
+                displaced,
+            )
         ignored = {
             "custom_atol": custom_atol,
             "custom_rtol": custom_rtol,
@@ -648,6 +668,12 @@ def passed_test(
             "custom_bfp4_max_ulp_diff": custom_bfp4_max_ulp_diff,
         }
         named = sorted(name for name, value in ignored.items() if value is not None)
+        if L1_to_L1_iterations != 1:
+            # Its only effect here is target_pcc = pow(0.99, n), which this arm returns
+            # before reaching. The `is not None` comprehension cannot catch it because the
+            # default is 1, and a caller passing it positionally alongside a budget would
+            # lose the multi-pass allowance in silence while its four siblings raise.
+            named.append("L1_to_L1_iterations")
         if named:
             raise ValueError(
                 f"max_ulp replaces the tolerance and PCC gates, so {', '.join(named)} "
@@ -676,9 +702,21 @@ def passed_test(
     ulp_distances = None
 
     if max_ulp is not None:
-        is_valid, ulp_distances = ulp_elementwise_valid(
+        is_valid, ulp_distances, ulp_rescued = ulp_elementwise_valid(
             golden_tensor, res_tensor, max_ulp, near_zero_atol=near_zero_atol
         )
+        if output_data_format == DataFormat.Bfp8_b and not torch.all(is_valid):
+            # A bf16 step count is block-blind, so on its own it charges the kernel for
+            # legal quantization: one step of the Bfp8_b lattice is
+            # 2**(floor(log2 amax) - floor(log2 x) + 1) bf16 steps, which for a block with
+            # amax 2.77 makes a lane at 0.06 about 64 perfectly legal steps. near_zero_atol
+            # cannot absorb that, because its band is 1% of the *tensor* maximum and the
+            # lane is only small relative to its own block. So the budget arm ORs in the
+            # same lattice compare the tolerance arm does: the step budget gates the SFPU's
+            # own error, and the lattice accepts quantization the format is entitled to.
+            is_valid = is_valid | _bfp_block_aware_compare(
+                golden_tensor, res_tensor, mantissa_bits=7, max_ulp_diff=1
+            )
     elif output_data_format == DataFormat.Bfp8_b:
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
@@ -752,17 +790,27 @@ def passed_test(
         # Ahead of the tile dump below, so the worst lane and what a step is worth there
         # are the first thing in the log rather than the last. Logged on a pass too: it
         # turns every enrolled test into an accuracy datapoint for free.
+        # Exclude the lanes the near-zero floor accepted: they hold the largest step
+        # counts in the tensor by construction, so ranking every lane names a lane that
+        # passed and leaves the one that failed out of the message entirely.
+        ranked = ~ulp_rescued
         summary = ulp_verdict_message(
             golden_tensor,
             res_tensor,
             ulp_distances,
             output_data_format,
+            mask=ranked,
             max_ulp=max_ulp,
+            flush_subnormals=None,
         )
         if is_within_tolerance:
             logger.debug("ULP within budget — {}", summary)
-        else:
+        elif print_errors and not _RECORD_TEST_ORDER:
             logger.error("ULP budget exceeded — {}", summary)
+        else:
+            # A caller that asked for silence still gets the line, but not at a level that
+            # appends to the persistent test_errors.log that CI uploads.
+            logger.debug("ULP budget exceeded — {}", summary)
 
     if output_data_format.is_mx_format():
         # Every MX low-bit format is judged by its lattice-aware compare
@@ -855,6 +903,13 @@ def passed_test(
                 )
 
     if max_ulp is not None:
+        # torch.all is True on an empty mask, and this returns before the
+        # golden_tensor.abs().max() below that used to raise on a 0-element read-back, so
+        # without this an empty tensor would report a pass having compared nothing.
+        if golden_tensor.numel() == 0:
+            raise ValueError(
+                "passed_test received an empty tensor; there is nothing to compare"
+            )
         # A step budget already subsumes both remaining checks; see the docstring.
         return bool(is_within_tolerance)
 

@@ -6,24 +6,34 @@ import numpy as np
 import torch
 
 from .format_config import DataFormat
-from .llk_params import format_dict
-from .ulp import ULP_FORMATS
-
-# Formats with a defined torch floating dtype usable for true local ULP. Owned by
-# helpers.ulp, which gates the integer ULP metric on the same set.
-_ULP_FORMATS = ULP_FORMATS
+from .ulp import has_ulp_gate, ulp_dtype
 
 
 def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     """Gap from each golden value to the next representable number in *out_fmt*."""
     golden = np.asarray(golden, dtype=np.float64)
-    if out_fmt not in _ULP_FORMATS:
+    # Asked through helpers.ulp rather than against a local tuple, so the proxy formats
+    # it gates (Bfp8_b in bfloat16 space) are measured here too. Probing a private copy
+    # of the native set left the sweep writing NaN for exactly the format the gate can
+    # judge.
+    if not has_ulp_gate(out_fmt):
         return np.full(golden.shape, np.nan, dtype=np.float64)
 
-    torch_dtype = format_dict[out_fmt]
+    torch_dtype = ulp_dtype(out_fmt)
     abs_g = torch.tensor(np.abs(golden), dtype=torch_dtype)
     nxt = torch.nextafter(abs_g, torch.tensor(float("inf"), dtype=torch_dtype))
-    return (nxt - abs_g).to(torch.float32).numpy().astype(np.float64)
+    step = (nxt - abs_g).to(torch.float32).numpy().astype(np.float64)
+    # Same finfo.max fixup local_step carries: nextafter from the largest finite goes to
+    # Inf, so the gap is infinite where the binade downward is the same size. Without it
+    # the docstring claim that the two share one nextafter definition fails at the top of
+    # the range.
+    largest = float(torch.finfo(torch_dtype).max)
+    at_max = np.abs(golden) == largest
+    if at_max.any():
+        top = torch.tensor(largest, dtype=torch_dtype)
+        below = torch.nextafter(top, torch.tensor(0.0, dtype=torch_dtype))
+        step = np.where(at_max, float((top - below).to(torch.float32)), step)
+    return step
 
 
 def compute_pointwise_metrics(

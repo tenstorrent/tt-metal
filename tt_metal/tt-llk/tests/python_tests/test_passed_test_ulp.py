@@ -18,6 +18,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+from helpers.ulp import ulp_distance
 from helpers.utils import calculate_pcc, passed_test
 
 TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
@@ -249,12 +250,48 @@ def test_a_failure_at_the_top_of_the_range_does_not_log_an_infinite_step(capture
 
 
 def test_bfp8_b_is_gated_in_bf16_step_space():
-    """``passed_test`` has already cast Bfp8_b to bfloat16, and Bfp8_b's 7 magnitude bits
-    are bf16's mantissa width, so the budget is a real per-element criterion here."""
+    """The budget gates the SFPU's own error; the block lattice accepts quantization.
+
+    A constant tile cannot exercise this — every lane is its own block maximum, so one
+    bf16 step is also one lattice step and the lattice arm accepts anything the budget
+    would. The tile below spans a wide magnitude range inside each 16-element block, which
+    is the case where the two criteria actually differ.
+    """
     fmt = DataFormat.Bfp8_b
-    golden = _tile(1.0, fmt)
+    golden = torch.zeros(TILE_SIZE, dtype=torch.bfloat16)
+    # One large element per block, so every other lane is small relative to its own block.
+    golden[0::16] = 64.0
+    golden[1::16] = 0.5
+    for offset in range(2, 16):
+        golden[offset::16] = 0.25
+
     assert passed_test(golden, golden.clone(), fmt, max_ulp=0)
-    assert not passed_test(golden, _step(golden, 2), fmt, max_ulp=1, print_errors=False)
+
+    # A lane wrong by far more than either criterion allows must still fail.
+    broken = golden.clone()
+    broken[1] = 8.0
+    assert not passed_test(golden, broken, fmt, max_ulp=1, print_errors=False)
+
+
+def test_a_bfp8_b_budget_does_not_charge_for_legal_block_quantization():
+    """A bf16 step count is block-blind: one step of the Bfp8_b lattice is
+    ``2**(floor(log2 amax) - floor(log2 x) + 1)`` bf16 steps, so a lane small relative to
+    its block is many bf16 steps away while being perfectly legal. ``near_zero_atol``
+    cannot absorb it — its band is 1% of the *tensor* maximum, and such a lane is only
+    small relative to its own block — so the budget arm ORs in the same lattice compare
+    the tolerance arm uses.
+    """
+    fmt = DataFormat.Bfp8_b
+    golden = torch.zeros(TILE_SIZE, dtype=torch.bfloat16)
+    golden[0::16] = 2.77
+    for offset in range(1, 16):
+        golden[offset::16] = 0.06
+
+    # One lattice step on a small lane inside a wide block, which is ~64 bf16 steps.
+    quantized = golden.clone()
+    quantized[1::16] = float(torch.tensor(0.06 + 2.0 ** (1 - 6), dtype=torch.bfloat16))
+    assert int(ulp_distance(golden, quantized).max()) > 1
+    assert passed_test(golden, quantized, fmt, max_ulp=1)
 
 
 @pytest.mark.parametrize(
@@ -351,3 +388,92 @@ def test_a_budget_inside_the_ceiling_does_not_warn(captured_logs):
     golden = _tile(1.0, fmt)
     assert passed_test(golden, _step(golden, 3), fmt, max_ulp=128)
     assert "exceeds the largest meaningful" not in "\n".join(captured_logs)
+
+
+def test_a_silenced_failure_does_not_append_to_the_persistent_error_log(captured_logs):
+    """``print_errors=False`` asks for silence, but the ULP headline sat outside that
+    guard — and its sink is ``mode="a"`` on ``test_errors.log``, which CI uploads. The
+    line is still emitted so the message stays assertable; only its level drops."""
+    from loguru import logger as loguru_logger
+
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    errors = []
+    sink = loguru_logger.add(errors.append, level="ERROR", format="{message}")
+    try:
+        assert not passed_test(
+            golden, _step(golden, 9), fmt, max_ulp=1, print_errors=False
+        )
+    finally:
+        loguru_logger.remove(sink)
+
+    assert errors == [], "print_errors=False must not emit an ERROR record"
+    assert "ULP budget exceeded" in "\n".join(captured_logs)
+
+
+def test_a_reported_failure_still_logs_at_error_level(captured_logs):
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    assert not passed_test(golden, _step(golden, 9), fmt, max_ulp=1, print_errors=True)
+    assert "ULP budget exceeded" in "\n".join(captured_logs)
+
+
+def test_the_headline_names_the_lane_that_failed_not_one_the_floor_rescued(
+    captured_logs,
+):
+    """Ranking every lane let a rescued lane -- which holds the largest step count in the
+    tensor by construction -- take the headline while the actual failure went unmentioned.
+    With ``print_errors=False`` that line is the only output there is."""
+    fmt = DataFormat.Float32
+    golden = torch.linspace(1.0, 100.0, TILE_SIZE, dtype=torch.float32)
+    golden[-1] = 1e-8  # rescued by the floor, enormous step count
+    result = golden.clone()
+    result[-1] = 2e-8
+    result[5] = golden[5] + 1.0  # the real failure, far fewer steps
+
+    assert not passed_test(
+        golden, result, fmt, max_ulp=2, near_zero_atol=1e-7, print_errors=False
+    )
+    logged = "\n".join(captured_logs)
+    assert "@ [5]" in logged, logged[:400]
+    assert f"@ [{TILE_SIZE - 1}]" not in logged
+
+
+def test_a_budget_alongside_multiple_l1_passes_raises():
+    """``L1_to_L1_iterations`` only ever fed ``target_pcc = pow(0.99, n)``, which this arm
+    returns before reaching, so a caller passing it with a budget silently lost the
+    multi-pass allowance while its four siblings raised. Its default is ``1``, not
+    ``None``, so the `is not None` check could not see it."""
+    golden = _tile(1.0, DataFormat.Float16_b)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="L1_to_L1_iterations"
+    ):
+        passed_test(golden, golden.clone(), DataFormat.Float16_b, 2, max_ulp=1)
+
+
+def test_an_empty_tensor_is_not_reported_as_a_pass():
+    """``torch.all`` on an empty mask is ``True``, and the budget arm returns before the
+    ``abs().max()`` that used to raise, so an empty read-back would pass having compared
+    nothing."""
+    empty = torch.zeros(0, dtype=torch.bfloat16)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="nothing to compare"
+    ):
+        passed_test(empty, empty.clone(), DataFormat.Float16_b, max_ulp=0)
+
+
+def test_a_budget_looser_than_the_tolerance_it_replaces_warns(captured_logs):
+    """The bound is the rtol half, not the atol one: ``rtol * |v|`` is about
+    ``rtol * 2**mantissa_bits`` steps at large magnitude, ~6 for bf16. Past that the
+    budget is looser than what it displaced and PCC is no longer behind it."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    assert passed_test(golden, _step(golden, 3), fmt, max_ulp=64)
+    assert "looser than the rtol" in "\n".join(captured_logs)
+
+
+def test_a_tight_budget_does_not_warn_about_the_tolerance_it_replaces(captured_logs):
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    assert passed_test(golden, _step(golden, 3), fmt, max_ulp=4)
+    assert "looser than the rtol" not in "\n".join(captured_logs)
