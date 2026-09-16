@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
+#include <array>
 #include <set>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <umd/device/types/arch.hpp>
@@ -166,6 +170,42 @@ TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet
     EXPECT_EQ(resolved, expected) << "LOGICAL and TRANSLATED requests named different DRAM cores";
     // No two logical coords may collapse onto one core, or a core would go unvisited.
     EXPECT_EQ(resolved.size(), logical_cores.size()) << "LOGICAL DRAM coords are not distinct after resolution";
+}
+
+// SYS-4948: each dram_view carries two endpoint assignments and the loader picks one from the CMFW
+// version. CI runs on pre-relocation firmware, so the relocated_* pair is never parsed there -- a
+// typo in it would pass CI and only surface once the new firmware rolls out, as a device-init abort
+// or a noc collision. Validate both pairs here so either one being malformed fails at PR time.
+TEST_F(DramSubchannelHelperFixture, DramViewsCarryBothEndpointAssignments) {
+    auto mesh_device = devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
+    const std::string& descriptor_path = soc_desc.device_descriptor_file_path;
+    YAML::Node descriptor = YAML::LoadFile(descriptor_path);
+    YAML::Node dram_views = descriptor["dram_views"];
+    ASSERT_TRUE(dram_views) << "no dram_views in " << descriptor_path;
+
+    const int num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    ASSERT_GT(num_subchannels, 0);
+
+    constexpr std::array<const char*, 4> endpoint_keys = {
+        "eth_endpoint", "worker_endpoint", "relocated_eth_endpoint", "relocated_worker_endpoint"};
+
+    for (const auto& dram_view : dram_views) {
+        const size_t channel = dram_view["channel"].as<size_t>();
+        for (const char* key : endpoint_keys) {
+            ASSERT_TRUE(dram_view[key]) << "channel " << channel << " is missing '" << key << "'";
+            const auto subchannels = dram_view[key].as<std::vector<int>>();
+            EXPECT_FALSE(subchannels.empty()) << "channel " << channel << " has an empty '" << key << "'";
+            for (int subchannel : subchannels) {
+                EXPECT_GE(subchannel, 0) << "channel " << channel << " '" << key << "' has negative subchannel";
+                EXPECT_LT(subchannel, num_subchannels)
+                    << "channel " << channel << " '" << key << "' subchannel " << subchannel
+                    << " exceeds the DRAM grid (" << num_subchannels << " subchannels)";
+            }
+        }
+    }
 }
 
 TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {

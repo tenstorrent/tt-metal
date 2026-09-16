@@ -50,6 +50,18 @@
 //                           off (lean): only the markers the CI metrics consume are
 //                           emitted, minimizing profiler perturbation of the op2op number.
 //
+// Direction isolation (for DRAM bandwidth measurement rather than op-to-op latency):
+//   --read-only             isolate read BW: the writer pops the output CB without writing to
+//                           DRAM. Implies --bypass-compute.
+//   --write-only            isolate write BW: the reader issues NO NoC read, just the CB
+//                           handshake, so DRAM sees writes only. Implies --bypass-compute.
+//                           Pair with --output-cb-depth-tiles > 2; at depth 2 the writer
+//                           flushes every tile and the result is CB-bound, not DRAM-bound.
+//   --bypass-compute        compute becomes a CB pass-through (no unpack/copy/pack), taking the
+//                           math datapath out of the measured path. Implied by the two above;
+//                           pass it explicitly only for a full read+write op. --compute-nops is
+//                           rejected with it, and output validation is skipped.
+//
 // Research characterization knobs (ungated; used by op_to_op_sweep.py, not the CI gate):
 //   --kernel-unroll N        repeat the whole reader/compute/writer workload N times inside
 //                            ONE program invocation with no barrier between reps (default 1).
@@ -200,6 +212,13 @@ struct BenchmarkConfig {
     // Read-only mode: writer pops from output CB but skips DRAM writes.
     // Isolates pure DRAM read BW through the reader pipeline.
     bool read_only = false;
+    // Write-only mode: reader issues no NoC read at all (CB handshake only), so DRAM sees
+    // writes and nothing else. Isolates pure DRAM write BW. Implies --bypass-compute.
+    bool write_only = false;
+    // Compute becomes a CB pass-through: no unpack/copy/pack, math datapath idle. Implied by
+    // --read-only and --write-only; pass explicitly only for a full read+write op with compute
+    // taken out of the measured path. Skips output validation (the CB payload is stale L1).
+    bool bypass_compute = false;
     // Detailed profiling (research only). Default OFF = lean: kernels emit only the
     // markers the CI metrics consume -- compute PROG_ID / tile-0 TILE_IDX / FINISH_LAST_PUSH
     // (for pack_to_unpack) plus the firmware {BRISC,NCRISC,TRISC}-KERNEL zones (for the gated
@@ -307,6 +326,22 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     }
     if (test_args::has_command_option(args, "--read-only")) {
         cfg.read_only = true;
+    }
+    if (test_args::has_command_option(args, "--write-only")) {
+        cfg.write_only = true;
+    }
+    if (test_args::has_command_option(args, "--bypass-compute")) {
+        cfg.bypass_compute = true;
+    }
+    // Isolating one direction only measures that direction if compute is out of the path:
+    // otherwise the packer paces the writer (write side) or back-pressures the reader (read side).
+    if (cfg.read_only || cfg.write_only) {
+        cfg.bypass_compute = true;
+    }
+    // Keep this AFTER every assignment to bypass_compute above. Ordered before them it silently
+    // validates output that passthrough never wrote.
+    if (cfg.bypass_compute) {
+        cfg.skip_output_validation = true;
     }
     if (test_args::has_command_option(args, "--skip-output-validation")) {
         cfg.skip_output_validation = true;
@@ -721,6 +756,18 @@ BuiltProgram build_program(
     // Compute -> writer unchanged: still wait_front(1) / pack one tile at a time.
     const uint32_t output_cb_depth = cfg.output_cb_depth_tiles > 0 ? cfg.output_cb_depth_tiles : 2;
 
+    TT_FATAL(!(cfg.read_only && cfg.write_only), "--read-only and --write-only isolate opposite directions; pick one");
+    // The writer flushes on a full output CB, so a shallow one throttles the very traffic
+    // --write-only exists to measure.
+    TT_FATAL(
+        !cfg.write_only || output_cb_depth > 2,
+        "--write-only needs --output-cb-depth-tiles > 2 (got {}); at depth 2 the writer flushes after "
+        "every tile and the measured rate is CB-bound, not DRAM-bound",
+        output_cb_depth);
+    TT_FATAL(
+        !(cfg.bypass_compute && cfg.num_nops_per_tile > 0),
+        "--compute-nops ({}) has no effect with a pass-through compute kernel (implied by --read-only/--write-only)",
+        cfg.num_nops_per_tile);
     TT_FATAL(
         input_cb_depth >= push_tiles,
         "input CB depth ({}) must be >= --reader-push-tiles ({})",
@@ -797,7 +844,7 @@ BuiltProgram build_program(
     // Compile-time args order MUST match reader_interleaved.cpp:
     //   [0]=cb_in, [1]=READER_MODE, [2]=PUSH_TILE_COUNT, [3]=TILES_PER_PAGE,
     //   [4]=TRID_IN_FLIGHT, [5]=CROSS_PROGRAM_OFFSET_TILES, [6]=PROFILE_DETAIL,
-    //   [7]=READ_BYTES_OVERRIDE, then TensorAccessorArgs starting at index 8.
+    //   [7]=READ_BYTES_OVERRIDE, [8]=WRITE_ONLY, then TensorAccessorArgs starting at index 9.
     const uint32_t cross_program_offset_tiles = cfg.cross_program_dram_offset ? total_num_tiles : 0u;
     // Mode-2 cheap-read reads READ_BYTES_OVERRIDE bytes into the fixed cb_base landing zone;
     // a value larger than one DRAM page would read past the accessor page and overrun that L1
@@ -817,7 +864,8 @@ BuiltProgram build_program(
         trid_in_flight,
         cross_program_offset_tiles,
         cfg.profile_detail ? 1u : 0u,
-        cfg.reader_read_bytes};
+        cfg.reader_read_bytes,
+        cfg.write_only ? 1u : 0u};
     // Defaults: reader=NOC0, writer=NOC1 (measured best). --reader-noc/--writer-noc override.
     // HARD CONSTRAINT: the two data-movement kernels on a core must be on DIFFERENT NoCs.
     // Putting both on the same NoC hangs the device (requires a chip reset), so fail fast.
@@ -862,7 +910,7 @@ BuiltProgram build_program(
 
     // Compute: copy_tile + tunable NOP spin.
     std::vector<uint32_t> compute_compile_time_args = {
-        kInputCbId, kOutputCbId, cfg.num_nops_per_tile, cfg.profile_detail ? 1u : 0u};
+        kInputCbId, kOutputCbId, cfg.num_nops_per_tile, cfg.profile_detail ? 1u : 0u, cfg.bypass_compute ? 1u : 0u};
     auto compute_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/kernels/compute_copy_with_nops.cpp",
@@ -950,7 +998,7 @@ int main(int argc, char** argv) {
             "op_to_op_latency: device_id={}, pages_per_core={}, reader_push_tiles={}, input_cb_depth_tiles={}, "
             "output_cb_depth_tiles={}, reader_mode={}, compute_nops={}, num_programs={}, warmup={}, use_trace={}, "
             "use_device_profiler={}, use_realtime_profiler={}, trace_region_size={}, trace_warmup_replays={}, "
-            "read_only={}",
+            "read_only={}, write_only={}, bypass_compute={}",
             cfg.device_id,
             cfg.num_pages_per_core,
             cfg.reader_push_tile_count,
@@ -965,7 +1013,9 @@ int main(int argc, char** argv) {
             cfg.use_realtime_profiler,
             cfg.trace_region_size,
             cfg.trace_warmup_replays,
-            cfg.read_only);
+            cfg.read_only,
+            cfg.write_only,
+            cfg.bypass_compute);
         TT_FATAL(cfg.num_programs >= 1, "--num-programs must be >= 1");
         TT_FATAL(cfg.num_pages_per_core >= 1, "--num-pages-per-core must be >= 1");
         TT_FATAL(cfg.reader_push_tile_count >= 1, "--reader-push-tiles must be >= 1");
@@ -1183,7 +1233,7 @@ int main(int argc, char** argv) {
                 "dispatch done/go: --use-realtime-profiler -> profile_log_device_rt.csv).");
         }
 
-        if (!cfg.read_only && !cfg.skip_output_validation) {
+        if (!cfg.read_only && !cfg.write_only && !cfg.bypass_compute && !cfg.skip_output_validation) {
             std::vector<uint32_t> output_data;
             distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
 
