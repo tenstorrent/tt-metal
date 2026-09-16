@@ -36,7 +36,7 @@ inline bool operands_use_2x_format(const std::uint32_t operand0, const std::uint
  * only 0 is valid
  * @param operandA: Logical dataflow buffer identifier for input 0 (-> SrcB)
  * @param operandB: Logical dataflow buffer identifier for input 1 (-> SrcA)
- * @param transpose: Transpose flag; not supported on Quasar. Present so this signature matches
+ * @param transpose: Transpose flag; not required for Quasar. Present so this signature matches
  *        the Wormhole/Blackhole llk_api and the shared Compute API needs no arch branch.
  * @param ct_dim: number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: number of tiles in the row dimension for a matrix multiply
@@ -54,7 +54,6 @@ inline void llk_math_matmul_init_no_mop(
     static_assert(
         THROTTLE_LEVEL == 0,
         "Quasar no-mop matmul only supports THROTTLE_LEVEL == 0; Quasar has no throttled MVMUL sequences");
-    LLK_ASSERT(!transpose, "non-default transpose not supported on Quasar");
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
@@ -133,7 +132,7 @@ inline void llk_math_matmul_no_mop(
  * only 0 is valid
  * @param operandA: Logical dataflow buffer identifier for input 0 (-> SrcB)
  * @param operandB: Logical dataflow buffer identifier for input 1 (-> SrcA)
- * @param transpose: Transpose flag; only false is supported on Quasar. Present so this signature matches
+ * @param transpose: Transpose flag; not required for Quasar. Present so this signature matches
  *        the Wormhole/Blackhole llk_api and the shared Compute API needs no arch branch.
  * @param ct_dim: number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: number of tiles in the row dimension for a matrix multiply
@@ -150,7 +149,6 @@ inline void llk_math_matmul_reinit_no_mop(
     static_assert(
         THROTTLE_LEVEL == 0,
         "Quasar no-mop matmul only supports THROTTLE_LEVEL == 0; Quasar has no throttled MVMUL sequences");
-    LLK_ASSERT(!transpose, "non-default transpose not supported on Quasar");
 
     if (operands_use_2x_format(operandA, operandB)) {
         _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(ct_dim, rt_dim);
