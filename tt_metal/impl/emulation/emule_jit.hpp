@@ -19,6 +19,9 @@
 
 namespace tt::tt_metal::emule {
 
+// FNV hex buffer size (16 hex digits + null) — shared with program_model's cache-key building.
+constexpr size_t FNV_HEX_BUF_SIZE = 17;
+
 struct DeferredCompile {
     std::string src_path;
     std::vector<uint32_t> compile_args;
