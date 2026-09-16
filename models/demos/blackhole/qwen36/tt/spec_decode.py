@@ -107,6 +107,7 @@ class SpeculativeDecoder:
             "traced verify advances GDN with the fused recurrent op and decode must use the same math"
         )
         self._vfy_captured = False
+        self._setup_traced = False  # commit/reseed/draft captures: once per decoder, not per generate
         # QWEN36_SPEC_TRACED_COMMIT=0 reverts the commit phase to the eager per-layer
         # commit_verify_slot loop; the default replays one pre-captured trace per accepted-prefix
         # index instead. Measured A/B at ISL 16k, K=7 (traced_16k demo case): commit 4.87 -> 3.21
@@ -189,7 +190,7 @@ class SpeculativeDecoder:
             self.mtp.seed_draft_window(tok_tt, anchor_hidden)
             ttnn.deallocate(tok_tt)
             idxs = [self.mtp.draft_leg(k) for k in range(self.K)]
-            return [self._id_to_host(i) for i in idxs]  # one sync, K ids
+            return self._ids_to_host(idxs)  # ONE sync for all K ids
 
         owned_tok = [tok_tt]
         h = anchor_hidden
@@ -204,7 +205,7 @@ class SpeculativeDecoder:
             h = h_next
         if h is not anchor_hidden:
             ttnn.deallocate(h)
-        drafts = [self._id_to_host(t) for t in owned_tok[1:]]  # one sync, K ids
+        drafts = self._ids_to_host(owned_tok[1:])  # ONE sync for all K ids
         for t in owned_tok:
             ttnn.deallocate(t)
         return drafts
@@ -239,6 +240,35 @@ class SpeculativeDecoder:
         the vocab-sharded and gathered logit forms.
         """
         return self.mtp._argmax_last(logits)
+
+    def _ids_to_host(self, id_tts):
+        """K device ids -> list[int] in ONE device->host transfer.
+
+        Each _id_to_host is a BLOCKING to_list(), so reading K ids one at a time pays K round trips
+        for K*4 bytes. Concatenating on device first pays one. The draft chain ends with exactly this
+        readback (the chain itself stays on device precisely to avoid per-step host trips), and K
+        doubled from 6 to 11 when the fused spec-SDPA lifted the Wormhole cap -- so this went from 6
+        trips to 11. Order is preserved: concat on dim 0 in the order given.
+        """
+        if not id_tts:
+            return []
+        if len(id_tts) == 1:
+            return [self._id_to_host(id_tts[0])]
+        cat = ttnn.concat([ttnn.reshape(t, (1, 1)) for t in id_tts], dim=0)  # [K, 1]
+        flat = ttnn.get_device_tensors(cat)[0].to_list()
+        ttnn.deallocate(cat)
+        out = []
+
+        def _walk(v):
+            if isinstance(v, list):
+                for e in v:
+                    _walk(e)
+            else:
+                out.append(int(v))
+
+        _walk(flat)
+        assert len(out) == len(id_tts), f"batched id readback got {len(out)} ids, wanted {len(id_tts)}"
+        return out
 
     def _id_to_host(self, id_tt):
         """[*,1] uint32 device id -> python int. Reads only the device-0 replica: the logits are
@@ -735,7 +765,16 @@ class SpeculativeDecoder:
         # commit ops read the per-token state buffer that capture allocates. Their programs were
         # compiled by capture_verify_trace's commit_warmup, before ANY begin_trace_capture, so
         # nothing compiles here with the verify trace parked.
-        self._commit_traced = bool(self.traced_commit and model.capture_commit_traces())
+        # CAPTURED ONCE, not per generate. capture_commit_traces() is K traces (one per accepted-
+        # prefix index mi in 0..T-2), and MEASURED at K=11 that is 1.02s of a 2.30s TTFT -- it scales
+        # with K, so lifting the Wormhole cap 6 -> 11 doubled it. Nothing COMPILES here (the programs
+        # were warmed by capture_verify_trace's commit_warmup), so re-capturing buys nothing on its
+        # own; the reason it used to run every call was that its release+re-capture reclaimed trace
+        # memory, which forced the draft window to be re-captured after it. Skip both together and
+        # that coupling disappears -- see the draft-window note below for the failure this must not
+        # reproduce. Guarded by the same flag, so they cannot drift apart.
+        if not self._setup_traced:
+            self._commit_traced = bool(self.traced_commit and model.capture_commit_traces())
         # Draft-window CAPTURE, last and EVERY generate. Two reasons it must be re-captured rather
         # than captured once: capture_commit_traces() above releases and re-captures its own traces
         # on every call, which reclaims trace memory the drafter traces would be sitting in, and the
@@ -744,7 +783,12 @@ class SpeculativeDecoder:
         # ([4752, 16666, 321, 4752, 16666, 321]) and acceptance falling 4.00 -> 2.25 of 6.
         # Nothing RECOMPILES here (compile_draft_window early-outs on its `compiled` flag), so this
         # cannot clobber the verify or commit traces it follows.
-        if self._batched_reseed and self.traced_reseed and getattr(model, "_vfy_rows_out", None) is not None:
+        if (
+            not self._setup_traced
+            and self._batched_reseed
+            and self.traced_reseed
+            and getattr(model, "_vfy_rows_out", None) is not None
+        ):
             # Aim every padding row at the scratch block so the compile pass's throwaway KV write
             # cannot touch the sequence, then compile + capture against the verify trace's own
             # persistent rows buffer (a fixed address the replay re-reads each iteration).
@@ -764,10 +808,11 @@ class SpeculativeDecoder:
             self.mtp.release_reseed_window()
             self.mtp.capture_reseed_window(model._vfy_rows_out)
             self._reseed_traced = True
-        if self.traced_draft:
+        if not self._setup_traced and self.traced_draft:
             self.mtp.release_draft_window()
             self.mtp.capture_draft_window()
             self._draft_traced = True
+        self._setup_traced = True
         logger.info(
             f"[spec] commit={'traced' if self._commit_traced else 'eager'} "
             f"draft={'traced' if self._draft_traced else 'eager'}"

@@ -903,22 +903,45 @@ class TPAttention:
         ),  # three groups of 4, 36 cores/head each -> 108 active (2 idle), 6 tree rounds (at cap), same Tg=4 CB footprint
     }
 
+    # WORMHOLE. Same splits (Tg=4 everywhere), cores-per-head rescaled from Blackhole's 110-core
+    # grid to Wormhole's 8x8=64. Per-core L1 is sized by Tg, NOT by the core count -- every Q-shaped
+    # CB in the kernel scales with Tg -- so a Tg=4 entry that fits Blackhole fits here too; what has
+    # to change is only how many cores split one head's KV scan, which must satisfy
+    # groups * cores_per_head <= 64 or the factory leaves the grid over-subscribed.
+    #
+    # WHY THIS MATTERS MORE THAN THE SDPA TIME ITSELF: text_demo caps K at 6 on Wormhole while
+    # Blackhole runs 11, purely because the K=11 -> T=12 split needs this table. Without it every
+    # candidate row re-scans the KV. MEASURED on T3K/27B at ISL 128, legacy path:
+    #     K=11  accept 5.25/11  6.25 tok/iter  340.8 ms  18.88 tok/s
+    #     K= 6  accept 4.00/6   5.00 tok/iter  251.7 ms  20.22 tok/s  <- the cap
+    # Acceptance is high at every K (79% at depth 4), so K=11 loses on COST, not draft quality.
+    _SPEC_SDPA_L1_FIT_WH = {
+        4: (1, 64, 0),  # one group, whole 64-core grid on one reduction group
+        8: (2, 32, 0),  # two groups of 4, 32 cores/head -> 64 active
+        12: (3, 21, 0),  # three groups of 4, 21 cores/head -> 63 active (1 idle)
+        # 16/20 fit L1 and run clean, but the DRAFTER saturates at ~6.1 accepted, so K=15/19 commit
+        # no more than K=11 while costing more legs (48.11 / 41.89 vs 54.46 tok/s). Kept because
+        # this is a capability table -- the policy that picks K lives in demo/text_demo.py.
+        16: (4, 16, 0),  # four groups of 4, 16 cores/head -> 64 active
+        20: (5, 12, 0),  # five groups of 4, 12 cores/head -> 60 active (4 idle)
+    }
+
     def _spec_sdpa_plan(self, T):
         """(SDPAProgramConfig, groups B, tiles-per-group Tg) for the fused spec-verify SDPA at T
         candidates, or None when T has no L1-fitting split (caller falls back to the legacy B=T
         call)."""
         if T not in self._spec_sdpa_cfg_cache:
             plan = None
-            # ARCH-GATED. _SPEC_SDPA_L1_FIT's (cores-per-head, group) pairs were measured on
-            # Blackhole's 110-core grid; Wormhole tops out at 8x8 (fewer after harvesting), so
-            # max_cores_per_head_batch=55 per group does not describe this grid at all and the op
-            # would either TT_FATAL on the L1 budget or run a split that was never measured. On
-            # Wormhole the plan is None, which falls through to the legacy B=T call the hybrid
-            # verify already ships. Re-tune the table on a WH grid before removing this gate.
-            fit = self._SPEC_SDPA_L1_FIT.get(T) if tpc.is_blackhole() else None
+            # ARCH-KEYED. The two tables hold the same splits with cores-per-head sized to their
+            # own grid (110 on Blackhole, 64 on Wormhole); a Blackhole entry used on Wormhole asks
+            # for more cores than exist and the op TT_FATALs on the L1 budget. The grid is read
+            # below, so a harvested Wormhole with fewer than 64 usable cores still clamps.
+            fit = (self._SPEC_SDPA_L1_FIT if tpc.is_blackhole() else self._SPEC_SDPA_L1_FIT_WH).get(T)
             if fit is not None:
                 groups, max_cores, k_chunk = fit
                 grid = self.mesh.compute_with_storage_grid_size()
+                # Clamp to the grid actually present (harvesting can leave <64 on Wormhole).
+                max_cores = max(1, min(max_cores, (grid.x * grid.y) // groups))
                 plan = (
                     ttnn.SDPAProgramConfig(
                         compute_with_storage_grid_size=(grid.x, grid.y),

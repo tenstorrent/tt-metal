@@ -724,8 +724,19 @@ class TPGatedDeltaNet:
         """_conv1d_prefill for the fullbatch verify: window pre-built, new_state dead."""
         return self._conv1d_window(win, T)
 
-    def _conv1d_prefill(self, qkv, T, conv_state, _force_splice=False):
+    def _conv1d_prefill(self, qkv, T, conv_state, _force_splice=False, carry_len=None):
         """Depthwise causal conv1d + SiLU via ttnn.conv1d. Returns (out [1,T,C], new_state [1,K-1,C]) DRAM TILE.
+
+        ``carry_len``: take the cross-chunk carry from the first ``carry_len`` rows instead of all T.
+        A MASKED bucket is right-padded -- only the first valid_len rows are real -- so the register
+        tail is at valid_len, not T. Reading it at T carries padding into the next chunk, and that
+        was the ONLY reason a masked bucket fell back to the MAC FIR. Both halves are now measured
+        (tests/test_gdn_tp.py::test_gdn_conv_fir_vs_native_masked):
+          * the conv OUTPUT is equivalent under masking -- PCC 0.999996 on the real rows (it is
+            causal with a right-side pad, so every real position sees only real inputs);
+          * _shift_register_tail(qkv, valid_len) is BIT-IDENTICAL to the FIR's one-hot carry select
+            (max|diff| 0.0) -- they name the same rows and return the same bytes.
+        None = unmasked, carry from T, byte-identical to before.
 
         Prepends K-1 carry rows with padding=0 so one program serves every chunk (native pad only zeros,
         so it can't inject cross-chunk carry into a shared trace).
@@ -745,7 +756,7 @@ class TPGatedDeltaNet:
         if tpc.is_blackhole():
             # ---- Blackhole: the validated TILE prologue, byte-for-byte unchanged. ----
             # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
-            new_state = self._shift_register_tail(qkv, T, conv_state, C)
+            new_state = self._shift_register_tail(qkv, T if carry_len is None else carry_len, conv_state, C)
             new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
             if conv_state is None:
                 pad = ttnn.zeros(
@@ -765,7 +776,7 @@ class TPGatedDeltaNet:
             # callers that still hand over TILE (per-user prefill, tests calling this directly).
             qkv_rm = qkv if qkv.layout == _rm else ttnn.to_layout(qkv, _rm, memory_config=_dram)
             # Only K-1 rows, so tilizing the carry back is ~12us, not a full-tensor relayout.
-            new_state = self._shift_register_tail(qkv_rm, T, conv_state, C)
+            new_state = self._shift_register_tail(qkv_rm, T if carry_len is None else carry_len, conv_state, C)
             new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
             # Splice: build the fix conv's input HERE, while qkv_rm and conv_state are both certainly
             # alive. Doing it after the big conv would race the `deallocate(xin)` below, which frees
@@ -1089,9 +1100,36 @@ class TPGatedDeltaNet:
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         _cstate = self.conv_carry if carry else None
-        if _use_native_conv1d:
-            # Native depthwise ttnn.conv1d (masked buckets keep the MAC FIR: valid_len new_state differs)
-            conv, conv_new_state = self._conv1d_prefill(qkv, T, _cstate)
+        # A masked bucket takes the native conv too, with its carry read at valid_len. This is the
+        # path MTP verify runs on all 48 GDN layers -- it always masks (K+1 candidates in a 128-row
+        # bucket) -- and the FIR it used to fall back to reads K shifted windows at offsets 1..K-1,
+        # never tile-aligned, so each tap untilizes/tilizes the whole tensor: MEASURED 3 x (untilize
+        # 29us + slice 6us + tilize 30us + addcmul 13us) plus the x_padded prologue = ~312us of an
+        # 871us GDN layer, 36%, on every one of those 48 layers.
+        #
+        # Equivalence is MEASURED, not argued (test_gdn_conv_fir_vs_native_masked): output PCC
+        # 0.999996 on the real rows, carry bit-identical. NOTE what that does NOT buy: greedy
+        # trajectories still shift, because Wormhole's chunk-vs-recurrent GDN kernels agree only to
+        # ~0.9993 per layer (vs Blackhole's ~0.99996) and 48 layers of that compounds past any
+        # near-tie. The gate for a change here is therefore losslessness + acceptance, NOT an
+        # unchanged fingerprint -- the same bar the fused spec-SDPA change met, where losslessness
+        # actually improved.
+        #
+        # Narrow on purpose: scalar valid_len only (a per-row list has no single tail) and
+        # valid_len >= K-1 so the tail lies inside qkv and needs no carry splice.
+        _vl_native = self._normalize_valid_len(valid_len, T)
+        _masked_native = (
+            not _use_native_conv1d
+            and self._gdn_conv1d
+            and _vl_native is not None
+            and not isinstance(_vl_native, (list, tuple))
+            and int(_vl_native) >= self.K - 1
+            and self._conv1d_native_fits_l1(T)
+        )
+        if _use_native_conv1d or _masked_native:
+            conv, conv_new_state = self._conv1d_prefill(
+                qkv, T, _cstate, carry_len=(int(_vl_native) if _masked_native else None)
+            )
         else:
             conv, conv_new_state = _causal_conv1d_fir(
                 qkv,
