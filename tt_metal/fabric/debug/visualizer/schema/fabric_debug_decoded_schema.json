@@ -1,0 +1,531 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_decoded_schema.json",
+  "title": "Decoded fabric debug state",
+  "description": "Offline, merged interpretation consumed by the static viewer.",
+  "type": "object",
+  "required": [
+    "decoded_version",
+    "kind",
+    "generated_at",
+    "inputs",
+    "run",
+    "fabric_context",
+    "enums",
+    "coverage",
+    "topology",
+    "routers"
+  ],
+  "properties": {
+    "decoded_version": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "fabric_debug_decoded" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/input" }
+    },
+    "run": { "$ref": "#/$defs/run" },
+    "fabric_context": {
+      "type": "object",
+      "required": ["topology", "is_2d_routing", "packet_header_type"],
+      "properties": {
+        "topology": { "type": "string" },
+        "is_2d_routing": { "type": "boolean" },
+        "packet_header_type": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "enums": { "type": "object", "additionalProperties": { "type": "object" } },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "topology": { "$ref": "#/$defs/topology" },
+    "routers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/router" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "required": ["mesh_id", "chip_id", "eth_chan"],
+      "properties": {
+        "mesh_id": { "type": "integer" },
+        "chip_id": { "type": "integer" },
+        "eth_chan": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "required": ["manifest", "snapshot", "raw"],
+      "properties": {
+        "manifest": {
+          "type": "object",
+          "required": ["path", "sha256", "mpi_rank", "host_rank", "sha_verified"],
+          "properties": {
+            "path": { "type": "string" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "mpi_rank": { "type": "integer" },
+            "host_rank": { "type": "integer" },
+            "sha_verified": { "type": ["boolean", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "snapshot": {
+          "type": ["object", "null"],
+          "required": ["path", "sha256", "captured_at", "provenance"],
+          "properties": {
+            "path": { "type": "string" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "captured_at": { "type": "string", "format": "date-time" },
+            "provenance": { "type": "object" }
+          },
+          "additionalProperties": false
+        },
+        "raw": {
+          "type": ["object", "null"],
+          "required": ["file", "size", "sha256", "present", "verified"],
+          "properties": {
+            "file": { "type": "string" },
+            "size": { "type": "integer", "minimum": 0 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "present": { "type": "boolean" },
+            "verified": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "run": {
+      "type": "object",
+      "required": ["arch", "fabric_config", "topology", "is_2d_routing", "udm_mode", "world_size"],
+      "properties": {
+        "arch": { "type": "string" },
+        "fabric_config": { "type": "string" },
+        "topology": { "type": "string" },
+        "is_2d_routing": { "type": "boolean" },
+        "udm_mode": { "type": "string" },
+        "world_size": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "routers_total",
+        "captured",
+        "ok",
+        "unreadable",
+        "reset",
+        "torn",
+        "unknown",
+        "unsupported",
+        "not_captured",
+        "identity_mismatch",
+        "manifest_sha_unverified"
+      ],
+      "properties": {
+        "routers_total": { "type": "integer", "minimum": 0 },
+        "captured": { "type": "integer", "minimum": 0 },
+        "ok": { "type": "integer", "minimum": 0 },
+        "unreadable": { "type": "integer", "minimum": 0 },
+        "reset": { "type": "integer", "minimum": 0 },
+        "torn": { "type": "integer", "minimum": 0 },
+        "unknown": { "type": "integer", "minimum": 0 },
+        "unsupported": { "type": "integer", "minimum": 0 },
+        "not_captured": { "type": "integer", "minimum": 0 },
+        "identity_mismatch": { "type": "integer", "minimum": 0 },
+        "manifest_sha_unverified": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "topology": {
+      "type": "object",
+      "required": ["meshes", "links"],
+      "properties": {
+        "meshes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["mesh_id", "chips"],
+            "properties": {
+              "mesh_id": { "type": "integer" },
+              "chips": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["fabric_chip_id", "mesh_coord", "physical_chip_id", "asic_id", "routers"],
+                  "properties": {
+                    "fabric_chip_id": { "type": "integer" },
+                    "mesh_coord": {
+                      "type": ["array", "null"],
+                      "items": { "type": "integer" },
+                      "minItems": 2,
+                      "maxItems": 2
+                    },
+                    "physical_chip_id": { "type": ["integer", "null"] },
+                    "asic_id": { "type": ["string", "null"] },
+                    "routers": {
+                      "type": "array",
+                      "items": { "$ref": "#/$defs/endpoint" }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["src", "dst", "stall_score", "status"],
+            "properties": {
+              "src": { "$ref": "#/$defs/endpoint" },
+              "dst": { "$ref": "#/$defs/endpoint" },
+              "stall_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+              "status": {
+                "enum": ["ok", "unreadable", "reset", "torn", "unknown", "unsupported", "not_captured"]
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "router": {
+      "type": "object",
+      "required": [
+        "id",
+        "layout_id",
+        "instance",
+        "direction",
+        "routing_plane",
+        "link_class",
+        "capture",
+        "identity",
+        "lifecycle",
+        "liveness",
+        "channels",
+        "stall_score",
+        "regions",
+        "rings",
+        "warnings"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/endpoint" },
+        "layout_id": { "type": ["string", "null"] },
+        "instance": { "type": ["object", "null"] },
+        "direction": { "type": ["string", "null"] },
+        "routing_plane": { "type": ["integer", "null"] },
+        "link_class": { "type": ["string", "null"] },
+        "capture": {
+          "type": "object",
+          "required": [
+            "status",
+            "error",
+            "snapshot_index",
+            "torn",
+            "owner_alive",
+            "manifest_sha_verified"
+          ],
+          "properties": {
+            "status": {
+              "enum": ["ok", "unreadable", "reset", "torn", "unknown", "unsupported", "not_captured"]
+            },
+            "error": { "type": ["string", "null"] },
+            "snapshot_index": { "type": ["integer", "null"], "minimum": 0 },
+            "torn": { "type": "boolean" },
+            "owner_alive": { "type": ["boolean", "null"] },
+            "manifest_sha_verified": { "type": ["boolean", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "identity": {
+          "type": "object",
+          "required": ["my_mesh_id", "my_device_id", "matches"],
+          "properties": {
+            "my_mesh_id": { "type": ["integer", "null"] },
+            "my_device_id": { "type": ["integer", "null"] },
+            "matches": { "type": ["boolean", "null"] }
+          },
+          "additionalProperties": false
+        },
+        "lifecycle": {
+          "type": ["object", "null"],
+          "properties": {
+            "edm_status": { "$ref": "#/$defs/enum_value" },
+            "termination_signal": { "$ref": "#/$defs/enum_value" },
+            "go_signal": { "$ref": "#/$defs/enum_value" },
+            "exit_state": {
+              "enum": [
+                "running_or_host_gone",
+                "orderly_exit",
+                "teardown_stuck",
+                "initializing",
+                "wiped_or_never_ran",
+                "unknown"
+              ]
+            }
+          },
+          "required": ["edm_status", "termination_signal", "go_signal", "exit_state"]
+        },
+        "liveness": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/liveness" }
+          ]
+        },
+        "channels": { "$ref": "#/$defs/channels" },
+        "stall_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "regions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/region" }
+        },
+        "rings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ring" }
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "enum_value": {
+      "type": "object",
+      "required": ["raw", "name"],
+      "properties": {
+        "raw": { "type": ["integer", "null"] },
+        "name": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "liveness": {
+      "type": "object",
+      "required": ["classification", "fabric_samples", "base_fw_samples", "other_samples", "samples"],
+      "properties": {
+        "classification": {
+          "enum": ["advancing", "static", "reset", "unknown", "insufficient"]
+        },
+        "fabric_samples": { "type": "integer", "minimum": 0 },
+        "base_fw_samples": { "type": "integer", "minimum": 0 },
+        "other_samples": { "type": "integer", "minimum": 0 },
+        "samples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["t", "raw", "format"],
+            "properties": {
+              "t": { "type": ["string", "null"] },
+              "raw": { "type": ["integer", "null"] },
+              "format": { "enum": ["fabric", "base_fw", "other"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "region": {
+      "type": "object",
+      "required": [
+        "id",
+        "parent",
+        "backing",
+        "allocated",
+        "enabled",
+        "writer",
+        "status",
+        "error",
+        "raw_ref",
+        "value"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "parent": { "type": "string" },
+        "backing": { "enum": ["group", "unreserved_l1", "fixed_l1", "stream_reg"] },
+        "schema": { "type": "string" },
+        "allocated": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "writer": { "type": "string" },
+        "address": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 0 },
+        "count": { "type": "integer", "minimum": 0 },
+        "stride": { "type": "integer", "minimum": 0 },
+        "stream_id": { "type": "integer", "minimum": 0 },
+        "status": {
+          "enum": [
+            "ok",
+            "unreadable",
+            "reset",
+            "torn",
+            "unknown",
+            "unsupported",
+            "not_captured",
+            "unallocated"
+          ]
+        },
+        "error": { "type": ["string", "null"] },
+        "raw_ref": {
+          "type": ["object", "null"],
+          "properties": {
+            "file": { "type": "string" },
+            "offset": { "type": "integer", "minimum": 0 },
+            "size": { "type": "integer", "minimum": 0 },
+            "blob": { "type": "string" }
+          },
+          "required": ["file", "offset", "size", "blob"],
+          "additionalProperties": false
+        },
+        "raw_hex": { "type": "string", "pattern": "^[0-9a-f]*$" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "ring": {
+      "type": "object",
+      "required": [
+        "id",
+        "status",
+        "error",
+        "depth",
+        "stride",
+        "occupied_count",
+        "occupancy_source",
+        "occupancy_status",
+        "raw_ref"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "status": {
+          "enum": ["ok", "unreadable", "reset", "torn", "unknown", "unsupported", "not_captured"]
+        },
+        "error": { "type": ["string", "null"] },
+        "depth": { "type": "integer", "minimum": 0 },
+        "stride": { "type": "integer", "minimum": 0 },
+        "occupied_count": { "type": ["integer", "null"], "minimum": 0 },
+        "occupancy_source": { "type": ["string", "null"] },
+        "occupancy_status": { "enum": ["ok", "inconsistent", "unknown"] },
+        "raw_ref": { "type": ["object", "null"] },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["index", "slot_state", "raw_ref", "header", "error"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 0 },
+              "slot_state": { "const": "unknown" },
+              "raw_ref": {
+                "type": "object",
+                "required": ["file", "offset", "size"],
+                "properties": {
+                  "file": { "type": "string" },
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "size": { "type": "integer", "minimum": 0 }
+                },
+                "additionalProperties": false
+              },
+              "header": { "type": ["object", "null"] },
+              "error": { "type": ["string", "null"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "channels": {
+      "type": "object",
+      "required": ["senders", "receivers", "downstream"],
+      "properties": {
+        "senders": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sender_channel" }
+        },
+        "receivers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/receiver_channel" }
+        },
+        "downstream": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/downstream_channel" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "sender_channel": {
+      "type": "object",
+      "required": [
+        "index",
+        "vc",
+        "role",
+        "depth",
+        "free_slots",
+        "occupied",
+        "acked_pending",
+        "completed_pending",
+        "credit_backing",
+        "connection",
+        "torn",
+        "status"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "vc": { "type": ["integer", "null"], "minimum": 0 },
+        "role": { "enum": ["worker", "upstream"] },
+        "depth": { "type": ["integer", "null"], "minimum": 0 },
+        "free_slots": { "type": ["integer", "null"] },
+        "occupied": { "type": ["integer", "null"] },
+        "acked_pending": { "type": ["integer", "null"] },
+        "completed_pending": { "type": ["integer", "null"] },
+        "credit_backing": { "enum": ["stream_reg", "counter"] },
+        "connection": { "$ref": "#/$defs/enum_value" },
+        "torn": { "type": "boolean" },
+        "status": { "enum": ["ok", "torn", "unknown", "inconsistent"] },
+        "counters": {
+          "type": "object",
+          "properties": {
+            "to_sender_ack": { "type": ["integer", "null"] },
+            "to_sender_completion": { "type": ["integer", "null"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "receiver_channel": {
+      "type": "object",
+      "required": ["index", "vc", "depth", "pkts_pending", "torn", "status"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "vc": { "type": ["integer", "null"], "minimum": 0 },
+        "depth": { "type": ["integer", "null"], "minimum": 0 },
+        "pkts_pending": { "type": ["integer", "null"] },
+        "torn": { "type": "boolean" },
+        "status": { "enum": ["ok", "torn", "unknown", "inconsistent"] }
+      },
+      "additionalProperties": false
+    },
+    "downstream_channel": {
+      "type": "object",
+      "required": ["vc", "edge", "free_slots", "depth", "torn", "status"],
+      "properties": {
+        "vc": { "type": "integer", "minimum": 0 },
+        "edge": { "type": "integer", "minimum": 0 },
+        "free_slots": { "type": ["integer", "null"] },
+        "depth": { "type": ["integer", "null"], "minimum": 0 },
+        "torn": { "type": "boolean" },
+        "status": { "enum": ["ok", "torn", "unknown", "inconsistent"] }
+      },
+      "additionalProperties": false
+    }
+  }
+}

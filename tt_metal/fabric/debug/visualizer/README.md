@@ -4,14 +4,16 @@ A tool for visually analyzing the state of fabric at a static point in time.
 
 The intended hang-debug workflow is: *fabric init* writes a topology **manifest**, the *capture tool* peeks the live fabric-router cores named in that file, and a *later viewer* renders the combined artifacts. Capture does not start fabric and does not need a live host process, rather just the topology manifest from the target-device's host, and a connection to the target-device (via tt-exalens) so that we can actually extract device-state.
 
-This README will grow with the viewer. What exists today is the schema contract and the capture tool.
+This README covers the schema contract, the capture tool, the offline decoder, and the static viewer.
 
 ## Components
 
 ```
 visualizer/
-  schema/     JSON schemas for the manifest and snapshot
+  schema/     JSON schemas for the manifest, snapshot, and decoded state
   capture/    ttexalens peek driven by the manifest
+  decode/     offline interpreter of those artifacts
+  viewer/     static HTML/JS page that reads one decoded.json
 ```
 
 
@@ -33,6 +35,7 @@ Capture never invents topology. It requires:
 2. **The JSON schemas** in `schema/`. These are the stability boundary for the tool — consumers depend on `manifest_version` / `snapshot_version` and the documented shapes, not on ControlPlane C++ signatures.
   - `schema/fabric_debug_manifest_schema.json` — topology artifact from fabric init
   - `schema/fabric_debug_snapshot_schema.json` — live peek artifact from capture
+  - `schema/fabric_debug_decoded_schema.json` — typed offline state from decode
 
 A snapshot copies the manifest's `run` identity (`arch`, `fabric_config`, `host_rank`, `mpi_rank`, `world_size`) and records `manifest.sha256` of the file bytes as read. That hash is how a snapshot pairs to a manifest after files have been copied and renamed. `run.written_at` stays on the manifest only. `host_rank` is the mesh-graph slice; `mpi_rank` is the MPI process. They are not always the same.
 
@@ -61,10 +64,24 @@ Internally the CLI is a thin wrap around four modules:
 
 A typical hang is assumed to leave fabric mostly stuck, so snapshots taken a bit apart on different hosts still describe the same jam. Wall clocks will move; router ids should not.
 
+### Decode tool
+
+`decode/cli.py` is offline. It never talks to a device. Pair snapshots to manifests by `manifest.sha256` (not by filename), merge one owner per router, and write one `fabric_debug_decoded` JSON (`tmp` + rename).
+
+```bash
+python3 tt_metal/fabric/debug/visualizer/decode/cli.py \
+  generated/fabric \
+  -o generated/fabric/fabric_debug_decoded.json
+```
+
+Pass directories or individual JSON files. `--slots none` skips packet-header decode (Galaxy size control); ring summaries still include occupancy counts from streams. `--expert-raw` embeds hex for captured regions up to 64 bytes. `--allow-manifest-mismatch` pairs by run identity when the exact hash is unavailable.
+
+Decode does not invent occupancy from packet headers. Sender `occupied` is `depth - free_slots`; receiver `pkts_pending` is the `pkts_sent` stream; every ring slot stays `slot_state: unknown` because the kernel read/write indices live in RISC locals. `stall_score` is a heuristic in `[0, 1]` for later colouring, not a diagnosis: idle-healthy and hung-backpressure can look the same in one snapshot.
+
 #### Offline tests
 
 ```bash
-python3 -m pytest tt_metal/fabric/debug/visualizer/capture/tests/ -q --noconftest
+python3 -m pytest tt_metal/fabric/debug/visualizer/capture/tests tt_metal/fabric/debug/visualizer/decode/tests tt_metal/fabric/debug/visualizer/viewer/tests -q --noconftest
 ```
 
 `--noconftest` skips the repo-root `conftest.py`, which otherwise imports `ttnn`. These tests do not need devices.
@@ -77,7 +94,7 @@ Expected on an idle Wormhole T3K after `FABRIC_2D` is up (`8` chips, `40` router
 2. `lifecycle.edm_status` is `READY_FOR_TRAFFIC` (`2746467283` / `0xA3B3C3D3`) on every router.
 3. `identity.my_mesh_id` / `my_device_id` match the manifest row for all `40`.
 4. Heartbeat increases across the three liveness rounds while the owner is alive.
-5. **Kill-then-capture:** `SIGKILL` the fabric owner (no `close_device`), capture again. Image must not be all-zero / reset; heartbeat must now be static. That is the hang-debug premise; record pass or fail.
+5. **Kill-then-capture:** `SIGKILL` the fabric owner (no `close_device`), capture again. Image must not be all-zero / reset. Heartbeat may still move: on Wormhole the fabric kernel and ethernet base firmware share the same L1 word (`0x1F80`), so a changing word is not proof the fabric heartbeat is alive. Record pass or fail.
 6. Wall-clock the image pass. If it is minutes, make `--no-l1-image` the documented first look.
 
 Hold fabric without teardown, then freeze or kill the owner:
@@ -111,7 +128,58 @@ kill -9 <owner-pid>
 5. Kill-then-capture **retains L1**. No router in reset; no `unreserved` image is all-zero; all 40 `unreserved` SHA-256 values match the live capture. `owner_alive` was `true` while the ttnn owner ran and `null` after `SIGKILL` (the `/proc` fd scan is best-effort).
 6. Image pass is seconds, not minutes.
 
+Decode of those same artifacts (`slice_e_live.json` / `slice_e_killed.json`, 2026-09-15):
+
+1. `40/40` routers `ok`; `exit_state` `running_or_host_gone` on all 40; routing-table identity matches the manifest row on all 40; `routing_l1_info_t.my_mesh_coord` equals `chip.mesh_coord`; `mesh_shape` is `{y: 2, x: 4}`; telemetry `static_info.mesh_id/device_id` match the endpoint.
+2. Credits on the idle fabric: 160 enabled senders `occupied 0` (worker depth 14, three upstream depth 4); 40 receivers `pkts_pending 0`; 64 enabled downstream edges `free_slots 4`. All 200 packet rings `occupancy_status ok` with `occupied_count 0`. `stall_score` is `0` on every router and every outgoing link.
+3. `connection_sem` is **not** all `unused` while idle: 72 `open`, 88 `unused`. Worker (and some upstream) connections stay open after fabric init; occupancy still reads empty.
+4. Liveness is `advancing` on 20 routers and `insufficient` on 20 (those 20 sampled only `0xABCD…` base-FW words). None classified `static`. Live vs killed decode differs in `owner_alive` (`true` → `null`) and the heartbeat sample values; occupancy and stall scores do not change.
+5. Heartbeat after `SIGKILL` still moves because the ERISC keeps running without a host process, and because that word is shared with ethernet base firmware. Kill-then-capture is still the hang-debug premise for **L1 retention**, not for a frozen heartbeat.
+
 `BaseFabricFixture` now reads `MetalContext::instance().get_cluster().arch()` instead of `get_umd_arch_name()`, which was a second UMD topology discovery.
+
+### Viewer
+
+The viewer is a static page. It never talks to a device, ttexalens, or MPI, and it does not re-derive topology, credit polarity, or occupancy. Open one `kind: fabric_debug_decoded` file (`decoded_version: 1`) via the file picker, or serve the folder and choose a committed fixture.
+
+```bash
+# from the tt-metal repo root
+python3 tt_metal/fabric/debug/visualizer/viewer/serve.py
+# http://127.0.0.1:8765  (Cache-Control: no-store)
+# fallback: python3 -m http.server --bind 127.0.0.1 8765
+#   from tt_metal/fabric/debug/visualizer/viewer
+```
+
+`file://` works for the picker but cannot `fetch` `fixtures/index.json`. Committed fixtures (1D line, 2×2 mesh, torus wrap, two meshes, stalled link, coverage holes) are the UI's hardware stand-in. Do not commit a 4 MB T3K decode.
+
+Regenerate fixtures after decode-output changes:
+
+```bash
+python3 tt_metal/fabric/debug/visualizer/viewer/tests/make_fixtures.py
+python3 -m pytest tt_metal/fabric/debug/visualizer/viewer/tests -q --noconftest
+```
+
+Occupancy in the panel is `occupied/depth` from streams. Ring `slot_state` is always `unknown`. `stall_score` is a colour heuristic: idle-healthy and hung-backpressure can look the same at occupancy 0. The stalled-link fixture is the hot-edge check; idle T3K is uniformly cool.
+
+#### Open a T3K decode
+
+```bash
+python3 tt_metal/fabric/debug/visualizer/decode/cli.py \
+  generated/fabric/slice_e_live.json generated/fabric/fabric_debug_manifest_rank_1_of_1.json \
+  -o /tmp/decoded_slice_e_live.json
+python3 tt_metal/fabric/debug/visualizer/viewer/serve.py
+# pick /tmp/decoded_slice_e_live.json
+```
+
+Expected on idle Wormhole T3K (`FABRIC_2D` 2×4):
+
+1. Coverage `40/40 ok`, header `WORMHOLE_B0` / `FABRIC_2D` / `HybridMeshPacketHeaderT<36>`.
+2. One 2×4 chip grid; 40 ports; 40 edges all cool (`stall_score` 0).
+3. Click a port: senders occupied 0 (worker depth 14, upstream 4), receivers pending 0, some `connection` `open`. Region tree shows named credits without the UI knowing stream ids.
+4. Identity matches; `exit_state` `running_or_host_gone`; liveness `advancing` or `insufficient` — insufficient is not reset.
+5. Killed decode: same map; `owner_alive` null in capture provenance.
+
+**2026-09-15 picker pass** (`/tmp/decoded_slice_e_live.json`, same artifacts as decode slice E): coverage `ok: 40`, `stall_score` 0 on every router and link, 40 cool ports on a 2×4 grid. The stalled-link fixture is required to see a hot edge.
 
 #### Producing a manifest for a live capture
 

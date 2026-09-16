@@ -1,0 +1,1322 @@
+{
+  "decoded_version": 1,
+  "kind": "fabric_debug_decoded",
+  "generated_at": "2026-09-15T00:00:00Z",
+  "inputs": [
+    {
+      "manifest": {
+        "path": "fixtures/source/manifest.json",
+        "sha256": "ef4e8eea6262081473c4f1544db750d7942c582162c391e87eb11245396ffe30",
+        "mpi_rank": 0,
+        "host_rank": 0,
+        "sha_verified": true
+      },
+      "snapshot": {
+        "path": "fixtures/source/snapshot.json",
+        "sha256": "9ff52df7de4ba7e54c91a47f6e0f7e82d3af361892a191da109afea8e44cd94d",
+        "captured_at": "2026-09-15T00:00:00Z",
+        "provenance": {
+          "ttexalens_version": "test",
+          "tt_umd_version": "test",
+          "hostname": "fixture-host",
+          "owner_alive": false,
+          "argv": [
+            "capture"
+          ]
+        }
+      },
+      "raw": {
+        "file": "snapshot.bin",
+        "size": 3888,
+        "sha256": "82c246949f12154cb75274624af7dae57a8bc00c85f9b50b91136968546caabd",
+        "present": true,
+        "verified": true
+      }
+    }
+  ],
+  "run": {
+    "arch": "WORMHOLE_B0",
+    "fabric_config": "FABRIC_2D",
+    "topology": "Mesh",
+    "is_2d_routing": true,
+    "udm_mode": "DISABLED",
+    "world_size": 1
+  },
+  "fabric_context": {
+    "topology": "Mesh",
+    "is_2d_routing": true,
+    "packet_header_size_bytes": 96,
+    "max_payload_size_bytes": 4320,
+    "channel_buffer_size_bytes": 4352,
+    "tensix_enabled": false,
+    "bubble_flow_control": false,
+    "routing_2d_route_buffer_size": 36,
+    "packet_header_type": "HybridMeshPacketHeaderT<36>"
+  },
+  "enums": {
+    "EDMStatus": {
+      "READY_FOR_TRAFFIC": 2746467283
+    },
+    "TerminationSignal": {
+      "IMMEDIATELY_TERMINATE": 2
+    },
+    "RouterCommand": {
+      "RUN": 0
+    },
+    "RunMsg": {
+      "RUN_MSG_GO": 128,
+      "RUN_MSG_DONE": 0
+    },
+    "RouterState": {
+      "INITIALIZING": 0,
+      "RUNNING": 1,
+      "PAUSED": 2,
+      "DRAINING": 3,
+      "RETRAINING": 4
+    },
+    "ConnectionState": {
+      "unused": 0,
+      "open": 1,
+      "close_request": 2
+    }
+  },
+  "topology": {
+    "meshes": [
+      {
+        "mesh_id": 0,
+        "shape": [
+          1,
+          1
+        ],
+        "chips": [
+          {
+            "fabric_chip_id": 0,
+            "mesh_coord": [
+              0,
+              0
+            ],
+            "physical_chip_id": 0,
+            "asic_id": "0x0000000000000001",
+            "routers": [
+              {
+                "mesh_id": 0,
+                "chip_id": 0,
+                "eth_chan": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "mesh_id": 1,
+        "shape": [
+          1,
+          1
+        ],
+        "chips": [
+          {
+            "fabric_chip_id": 0,
+            "mesh_coord": [
+              0,
+              0
+            ],
+            "physical_chip_id": 0,
+            "asic_id": "0x0000000000000001",
+            "routers": [
+              {
+                "mesh_id": 1,
+                "chip_id": 0,
+                "eth_chan": 0
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "links": [
+      {
+        "src": {
+          "mesh_id": 0,
+          "chip_id": 0,
+          "eth_chan": 0
+        },
+        "dst": {
+          "mesh_id": 1,
+          "chip_id": 0,
+          "eth_chan": 0
+        },
+        "direction": "Z",
+        "routing_plane": 0,
+        "link_class": "intermesh",
+        "wrap": false,
+        "cross_host": false,
+        "stall_score": 0.0,
+        "status": "ok"
+      },
+      {
+        "src": {
+          "mesh_id": 1,
+          "chip_id": 0,
+          "eth_chan": 0
+        },
+        "dst": {
+          "mesh_id": 0,
+          "chip_id": 0,
+          "eth_chan": 0
+        },
+        "direction": "Z",
+        "routing_plane": 0,
+        "link_class": "intermesh",
+        "wrap": false,
+        "cross_host": false,
+        "stall_score": 0.0,
+        "status": "ok"
+      }
+    ]
+  },
+  "routers": [
+    {
+      "id": {
+        "mesh_id": 0,
+        "chip_id": 0,
+        "eth_chan": 0
+      },
+      "layout_id": "L0123456789abcdef",
+      "instance": {
+        "handshake": 16,
+        "sender_channels_per_vc": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "receiver_channels_per_vc": [
+          1,
+          0
+        ],
+        "downstream_edm_mask_per_vc": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "tensix_extension": false,
+        "udm_mode": false,
+        "worker_sender_channel": 0,
+        "credit_plan": {
+          "vc0_uses_counters": false,
+          "vc1_uses_counters": false,
+          "vc2_uses_counters": false
+        }
+      },
+      "direction": "E",
+      "routing_plane": 0,
+      "link_class": "intramesh",
+      "capture": {
+        "status": "ok",
+        "error": null,
+        "snapshot_index": 0,
+        "torn": false,
+        "owner_alive": false,
+        "manifest_sha_verified": true
+      },
+      "identity": {
+        "my_mesh_id": 0,
+        "my_device_id": 0,
+        "matches": true
+      },
+      "lifecycle": {
+        "edm_status": {
+          "raw": 2746467283,
+          "name": "READY_FOR_TRAFFIC"
+        },
+        "termination_signal": {
+          "raw": 0,
+          "name": null
+        },
+        "go_signal": {
+          "raw": 128,
+          "name": "RUN_MSG_GO"
+        },
+        "exit_state": "running_or_host_gone"
+      },
+      "regions": [
+        {
+          "id": "lifecycle",
+          "parent": "",
+          "backing": "group",
+          "allocated": false,
+          "enabled": true,
+          "writer": "none",
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": null
+        },
+        {
+          "id": "lifecycle.handshake",
+          "parent": "lifecycle",
+          "backing": "unreserved_l1",
+          "schema": "handshake_info_t",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 16,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 16,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "local_value": 170,
+            "neighbor_mesh_id": 7,
+            "neighbor_device_id": 8
+          }
+        },
+        {
+          "id": "credits.sender.0.free_slots",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": true,
+          "writer": "worker",
+          "stream_id": 22,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 2,
+            "post": 2,
+            "torn": false
+          }
+        },
+        {
+          "id": "credits.sender.1.free_slots",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": false,
+          "writer": "worker",
+          "stream_id": 23,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 11987,
+            "post": 11987,
+            "torn": false
+          }
+        },
+        {
+          "id": "lifecycle.edm_status",
+          "parent": "lifecycle",
+          "backing": "unreserved_l1",
+          "schema": "EDMStatus",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 32,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 32,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "raw": 2746467283,
+            "name": "READY_FOR_TRAFFIC"
+          }
+        },
+        {
+          "id": "sender.0.control.conn_info",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "EDMChannelWorkerLocationInfo",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 64,
+          "size": 64,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 64,
+            "size": 64,
+            "blob": "unreserved"
+          },
+          "value": {
+            "worker_semaphore_address": 4660,
+            "worker_teardown_semaphore_address": 22136,
+            "worker_xy": {
+              "x": 3,
+              "y": 4
+            },
+            "edm_read_counter": 99
+          }
+        },
+        {
+          "id": "sender.0.control.cursor",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "SenderChannelProducerCursor",
+          "allocated": true,
+          "enabled": true,
+          "writer": "worker",
+          "address": 128,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 128,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "write_counter": 17,
+            "write_index": 1
+          }
+        },
+        {
+          "id": "credits.counters",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "u32_counter_array",
+          "allocated": true,
+          "enabled": true,
+          "writer": "peer",
+          "address": 144,
+          "size": 16,
+          "count": 4,
+          "stride": 4,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 144,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "counters": [
+              10,
+              20,
+              30,
+              40
+            ]
+          }
+        },
+        {
+          "id": "future.schema",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "future_type",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 160,
+          "size": 4,
+          "status": "unsupported",
+          "error": "unknown region schema 'future_type'",
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 160,
+            "size": 4,
+            "blob": "unreserved"
+          },
+          "value": null
+        },
+        {
+          "id": "sender.0.control.connection_sem",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "u32",
+          "allocated": true,
+          "enabled": true,
+          "writer": "worker",
+          "address": 176,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 176,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "word": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "id": "sender.0.ring",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "packet_ring",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 256,
+          "size": 192,
+          "count": 2,
+          "stride": 96,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 256,
+            "size": 192,
+            "blob": "unreserved"
+          },
+          "value": null
+        },
+        {
+          "id": "receiver.0.ring",
+          "parent": "",
+          "backing": "group",
+          "allocated": false,
+          "enabled": true,
+          "writer": "none",
+          "count": 8,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": null
+        },
+        {
+          "id": "receiver.0.pkts_sent",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "stream_id": 4,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 0,
+            "post": 0,
+            "torn": false
+          }
+        },
+        {
+          "id": "credits.downstream.vc0.edge1.free_slots",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": true,
+          "writer": "peer",
+          "stream_id": 13,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 4,
+            "post": 4,
+            "torn": false
+          }
+        },
+        {
+          "id": "hal",
+          "parent": "",
+          "backing": "group",
+          "allocated": false,
+          "enabled": true,
+          "writer": "none",
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": null
+        },
+        {
+          "id": "hal.telemetry",
+          "parent": "hal",
+          "backing": "fixed_l1",
+          "schema": "fabric_telemetry",
+          "allocated": true,
+          "enabled": true,
+          "writer": "host",
+          "address": 2000,
+          "size": 160,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 1024,
+            "size": 160,
+            "blob": "fabric_telemetry"
+          },
+          "value": {
+            "static_info": {
+              "version": 1,
+              "mesh_id": 0,
+              "neighbor_mesh_id": 1,
+              "device_id": 0,
+              "neighbor_device_id": 2,
+              "direction": 3,
+              "supported_stats": 15,
+              "fabric_config": 4
+            },
+            "dynamic_info": {
+              "tx_bandwidth": {
+                "elapsed_active_cycles": 1,
+                "elapsed_cycles": 2,
+                "num_words_sent": 3,
+                "num_packets_sent": 4
+              },
+              "rx_bandwidth": {
+                "elapsed_active_cycles": 5,
+                "elapsed_cycles": 6,
+                "num_words_sent": 7,
+                "num_packets_sent": 8
+              },
+              "erisc": [
+                {
+                  "router_state": {
+                    "raw": 1,
+                    "name": "RUNNING"
+                  },
+                  "tx_heartbeat": 9,
+                  "rx_heartbeat": 10
+                },
+                {
+                  "router_state": {
+                    "raw": 2,
+                    "name": "PAUSED"
+                  },
+                  "tx_heartbeat": 11,
+                  "rx_heartbeat": 12
+                }
+              ]
+            },
+            "postcode": 51966,
+            "scratch": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          }
+        },
+        {
+          "id": "hal.routing_table",
+          "parent": "hal",
+          "backing": "fixed_l1",
+          "schema": "routing_l1_info_t",
+          "allocated": true,
+          "enabled": true,
+          "writer": "host",
+          "address": 3000,
+          "size": 2704,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 1184,
+            "size": 2704,
+            "blob": "routing_table"
+          },
+          "value": {
+            "state": {
+              "raw": 1,
+              "name": "RUNNING"
+            },
+            "command": {
+              "raw": 0,
+              "name": "RUN"
+            },
+            "my_mesh_id": 0,
+            "my_device_id": 0,
+            "intra_mesh_directions": [
+              "E"
+            ],
+            "inter_mesh_directions": [
+              "E",
+              "E"
+            ],
+            "route_table_raw_offset": 516,
+            "exit_node_table_raw_offset": 1676,
+            "my_mesh_coord": {
+              "y": 0,
+              "x": 0
+            },
+            "mesh_shape": {
+              "y": 1,
+              "x": 1
+            }
+          }
+        }
+      ],
+      "warnings": [],
+      "liveness": {
+        "classification": "insufficient",
+        "fabric_samples": 1,
+        "base_fw_samples": 0,
+        "other_samples": 0,
+        "samples": [
+          {
+            "t": "2026-09-15T00:00:00Z",
+            "raw": 3703177280,
+            "format": "fabric"
+          }
+        ]
+      },
+      "rings": [
+        {
+          "id": "sender.0.ring",
+          "status": "ok",
+          "error": null,
+          "depth": 2,
+          "stride": 96,
+          "occupied_count": 0,
+          "occupancy_source": "stream",
+          "occupancy_status": "ok",
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 256,
+            "size": 192,
+            "blob": "unreserved"
+          }
+        }
+      ],
+      "channels": {
+        "senders": [
+          {
+            "index": 0,
+            "vc": 0,
+            "role": "worker",
+            "depth": 2,
+            "free_slots": 2,
+            "occupied": 0,
+            "acked_pending": null,
+            "completed_pending": null,
+            "credit_backing": "stream_reg",
+            "connection": {
+              "raw": 0,
+              "name": "unused"
+            },
+            "torn": false,
+            "status": "ok"
+          }
+        ],
+        "receivers": [
+          {
+            "index": 0,
+            "vc": 0,
+            "depth": 8,
+            "pkts_pending": 0,
+            "torn": false,
+            "status": "ok"
+          }
+        ],
+        "downstream": [
+          {
+            "vc": 0,
+            "edge": 1,
+            "free_slots": 4,
+            "depth": null,
+            "torn": false,
+            "status": "ok"
+          }
+        ]
+      },
+      "stall_score": 0.0
+    },
+    {
+      "id": {
+        "mesh_id": 1,
+        "chip_id": 0,
+        "eth_chan": 0
+      },
+      "layout_id": "L0123456789abcdef",
+      "instance": {
+        "handshake": 16,
+        "sender_channels_per_vc": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "receiver_channels_per_vc": [
+          1,
+          0
+        ],
+        "downstream_edm_mask_per_vc": [
+          1,
+          0,
+          0,
+          0
+        ],
+        "tensix_extension": false,
+        "udm_mode": false,
+        "worker_sender_channel": 0,
+        "credit_plan": {
+          "vc0_uses_counters": false,
+          "vc1_uses_counters": false,
+          "vc2_uses_counters": false
+        }
+      },
+      "direction": "Z",
+      "routing_plane": 0,
+      "link_class": "intermesh",
+      "capture": {
+        "status": "ok",
+        "error": null,
+        "snapshot_index": 0,
+        "torn": false,
+        "owner_alive": false,
+        "manifest_sha_verified": true
+      },
+      "identity": {
+        "my_mesh_id": 1,
+        "my_device_id": 0,
+        "matches": true
+      },
+      "lifecycle": {
+        "edm_status": {
+          "raw": 2746467283,
+          "name": "READY_FOR_TRAFFIC"
+        },
+        "termination_signal": {
+          "raw": 0,
+          "name": null
+        },
+        "go_signal": {
+          "raw": 128,
+          "name": "RUN_MSG_GO"
+        },
+        "exit_state": "running_or_host_gone"
+      },
+      "regions": [
+        {
+          "id": "lifecycle",
+          "parent": "",
+          "backing": "group",
+          "allocated": false,
+          "enabled": true,
+          "writer": "none",
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": null
+        },
+        {
+          "id": "lifecycle.handshake",
+          "parent": "lifecycle",
+          "backing": "unreserved_l1",
+          "schema": "handshake_info_t",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 16,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 16,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "local_value": 170,
+            "neighbor_mesh_id": 7,
+            "neighbor_device_id": 8
+          }
+        },
+        {
+          "id": "credits.sender.0.free_slots",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": true,
+          "writer": "worker",
+          "stream_id": 22,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 2,
+            "post": 2,
+            "torn": false
+          }
+        },
+        {
+          "id": "credits.sender.1.free_slots",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": false,
+          "writer": "worker",
+          "stream_id": 23,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 11987,
+            "post": 11987,
+            "torn": false
+          }
+        },
+        {
+          "id": "lifecycle.edm_status",
+          "parent": "lifecycle",
+          "backing": "unreserved_l1",
+          "schema": "EDMStatus",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 32,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 32,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "raw": 2746467283,
+            "name": "READY_FOR_TRAFFIC"
+          }
+        },
+        {
+          "id": "sender.0.control.conn_info",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "EDMChannelWorkerLocationInfo",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 64,
+          "size": 64,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 64,
+            "size": 64,
+            "blob": "unreserved"
+          },
+          "value": {
+            "worker_semaphore_address": 4660,
+            "worker_teardown_semaphore_address": 22136,
+            "worker_xy": {
+              "x": 3,
+              "y": 4
+            },
+            "edm_read_counter": 99
+          }
+        },
+        {
+          "id": "sender.0.control.cursor",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "SenderChannelProducerCursor",
+          "allocated": true,
+          "enabled": true,
+          "writer": "worker",
+          "address": 128,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 128,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "write_counter": 17,
+            "write_index": 1
+          }
+        },
+        {
+          "id": "credits.counters",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "u32_counter_array",
+          "allocated": true,
+          "enabled": true,
+          "writer": "peer",
+          "address": 144,
+          "size": 16,
+          "count": 4,
+          "stride": 4,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 144,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "counters": [
+              10,
+              20,
+              30,
+              40
+            ]
+          }
+        },
+        {
+          "id": "future.schema",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "future_type",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 160,
+          "size": 4,
+          "status": "unsupported",
+          "error": "unknown region schema 'future_type'",
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 160,
+            "size": 4,
+            "blob": "unreserved"
+          },
+          "value": null
+        },
+        {
+          "id": "sender.0.control.connection_sem",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "u32",
+          "allocated": true,
+          "enabled": true,
+          "writer": "worker",
+          "address": 176,
+          "size": 16,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 176,
+            "size": 16,
+            "blob": "unreserved"
+          },
+          "value": {
+            "word": 0,
+            "words": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "id": "sender.0.ring",
+          "parent": "",
+          "backing": "unreserved_l1",
+          "schema": "packet_ring",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "address": 256,
+          "size": 192,
+          "count": 2,
+          "stride": 96,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 256,
+            "size": 192,
+            "blob": "unreserved"
+          },
+          "value": null
+        },
+        {
+          "id": "receiver.0.ring",
+          "parent": "",
+          "backing": "group",
+          "allocated": false,
+          "enabled": true,
+          "writer": "none",
+          "count": 8,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": null
+        },
+        {
+          "id": "receiver.0.pkts_sent",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": true,
+          "writer": "any_erisc",
+          "stream_id": 4,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 0,
+            "post": 0,
+            "torn": false
+          }
+        },
+        {
+          "id": "credits.downstream.vc0.edge1.free_slots",
+          "parent": "",
+          "backing": "stream_reg",
+          "allocated": true,
+          "enabled": true,
+          "writer": "peer",
+          "stream_id": 13,
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": {
+            "pre": 4,
+            "post": 4,
+            "torn": false
+          }
+        },
+        {
+          "id": "hal",
+          "parent": "",
+          "backing": "group",
+          "allocated": false,
+          "enabled": true,
+          "writer": "none",
+          "status": "ok",
+          "error": null,
+          "raw_ref": null,
+          "value": null
+        },
+        {
+          "id": "hal.telemetry",
+          "parent": "hal",
+          "backing": "fixed_l1",
+          "schema": "fabric_telemetry",
+          "allocated": true,
+          "enabled": true,
+          "writer": "host",
+          "address": 2000,
+          "size": 160,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 1024,
+            "size": 160,
+            "blob": "fabric_telemetry"
+          },
+          "value": {
+            "static_info": {
+              "version": 1,
+              "mesh_id": 0,
+              "neighbor_mesh_id": 1,
+              "device_id": 0,
+              "neighbor_device_id": 2,
+              "direction": 3,
+              "supported_stats": 15,
+              "fabric_config": 4
+            },
+            "dynamic_info": {
+              "tx_bandwidth": {
+                "elapsed_active_cycles": 1,
+                "elapsed_cycles": 2,
+                "num_words_sent": 3,
+                "num_packets_sent": 4
+              },
+              "rx_bandwidth": {
+                "elapsed_active_cycles": 5,
+                "elapsed_cycles": 6,
+                "num_words_sent": 7,
+                "num_packets_sent": 8
+              },
+              "erisc": [
+                {
+                  "router_state": {
+                    "raw": 1,
+                    "name": "RUNNING"
+                  },
+                  "tx_heartbeat": 9,
+                  "rx_heartbeat": 10
+                },
+                {
+                  "router_state": {
+                    "raw": 2,
+                    "name": "PAUSED"
+                  },
+                  "tx_heartbeat": 11,
+                  "rx_heartbeat": 12
+                }
+              ]
+            },
+            "postcode": 51966,
+            "scratch": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          }
+        },
+        {
+          "id": "hal.routing_table",
+          "parent": "hal",
+          "backing": "fixed_l1",
+          "schema": "routing_l1_info_t",
+          "allocated": true,
+          "enabled": true,
+          "writer": "host",
+          "address": 3000,
+          "size": 2704,
+          "status": "ok",
+          "error": null,
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 1184,
+            "size": 2704,
+            "blob": "routing_table"
+          },
+          "value": {
+            "state": {
+              "raw": 1,
+              "name": "RUNNING"
+            },
+            "command": {
+              "raw": 0,
+              "name": "RUN"
+            },
+            "my_mesh_id": 0,
+            "my_device_id": 0,
+            "intra_mesh_directions": [
+              "E"
+            ],
+            "inter_mesh_directions": [
+              "E",
+              "E"
+            ],
+            "route_table_raw_offset": 516,
+            "exit_node_table_raw_offset": 1676,
+            "my_mesh_coord": {
+              "y": 0,
+              "x": 0
+            },
+            "mesh_shape": {
+              "y": 1,
+              "x": 1
+            }
+          }
+        }
+      ],
+      "warnings": [],
+      "liveness": {
+        "classification": "insufficient",
+        "fabric_samples": 1,
+        "base_fw_samples": 0,
+        "other_samples": 0,
+        "samples": [
+          {
+            "t": "2026-09-15T00:00:00Z",
+            "raw": 3703177280,
+            "format": "fabric"
+          }
+        ]
+      },
+      "rings": [
+        {
+          "id": "sender.0.ring",
+          "status": "ok",
+          "error": null,
+          "depth": 2,
+          "stride": 96,
+          "occupied_count": 0,
+          "occupancy_source": "stream",
+          "occupancy_status": "ok",
+          "raw_ref": {
+            "file": "snapshot_0.bin",
+            "offset": 256,
+            "size": 192,
+            "blob": "unreserved"
+          }
+        }
+      ],
+      "channels": {
+        "senders": [
+          {
+            "index": 0,
+            "vc": 0,
+            "role": "worker",
+            "depth": 2,
+            "free_slots": 2,
+            "occupied": 0,
+            "acked_pending": null,
+            "completed_pending": null,
+            "credit_backing": "stream_reg",
+            "connection": {
+              "raw": 0,
+              "name": "unused"
+            },
+            "torn": false,
+            "status": "ok"
+          }
+        ],
+        "receivers": [
+          {
+            "index": 0,
+            "vc": 0,
+            "depth": 8,
+            "pkts_pending": 0,
+            "torn": false,
+            "status": "ok"
+          }
+        ],
+        "downstream": [
+          {
+            "vc": 0,
+            "edge": 1,
+            "free_slots": 4,
+            "depth": null,
+            "torn": false,
+            "status": "ok"
+          }
+        ]
+      },
+      "stall_score": 0.0
+    }
+  ],
+  "coverage": {
+    "routers_total": 2,
+    "captured": 2,
+    "ok": 2,
+    "unreadable": 0,
+    "reset": 0,
+    "torn": 0,
+    "unknown": 0,
+    "unsupported": 0,
+    "not_captured": 0,
+    "identity_mismatch": 0,
+    "manifest_sha_unverified": 0
+  }
+}
