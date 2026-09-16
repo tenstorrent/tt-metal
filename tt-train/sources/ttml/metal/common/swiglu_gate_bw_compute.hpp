@@ -42,10 +42,12 @@ inline void swiglu_gate_bw_block() {
 
     // sigmoid(gate) -> cb_sigmoid, stored for reuse in both gradients.
     tile_regs_acquire();
+    copy_init(cb_gate);
     for (uint32_t i = 0; i < block_size; ++i) {
-        copy_init(cb_gate);
         copy_tile(cb_gate, i, i);
-        sigmoid_tile_init();
+    }
+    sigmoid_tile_init();
+    for (uint32_t i = 0; i < block_size; ++i) {
         sigmoid_tile(i);
     }
     tile_regs_commit();
@@ -73,10 +75,12 @@ inline void swiglu_gate_bw_block() {
 
     // silu'(gate) = sigmoid(gate) * (1 + gate * (1 - sigmoid(gate))).
     tile_regs_acquire();
+    copy_init(cb_sigmoid);
     for (uint32_t i = 0; i < block_size; ++i) {
-        copy_init(cb_sigmoid);
         copy_tile(cb_sigmoid, i, i);
-        binop_with_scalar_tile_init();
+    }
+    binop_with_scalar_tile_init();
+    for (uint32_t i = 0; i < block_size; ++i) {
         rsub_unary_tile(i, one);
     }
     tile_regs_commit();
@@ -87,7 +91,9 @@ inline void swiglu_gate_bw_block() {
     mul_init(cb_gate, cb_scratch);
     for (uint32_t i = 0; i < block_size; ++i) {
         mul_tiles(cb_gate, cb_scratch, i, i, i);
-        binop_with_scalar_tile_init();
+    }
+    binop_with_scalar_tile_init();
+    for (uint32_t i = 0; i < block_size; ++i) {
         add_unary_tile(i, one);
     }
     tile_regs_commit();
