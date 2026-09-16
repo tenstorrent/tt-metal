@@ -1275,7 +1275,14 @@
 # absent. Giving them a PR-CI home needs a new impl leg in that workflow (or an entry in a matrix
 # whose workflow already has a CPU invocation); until then `-m cpu_only` is a one-liner to run by
 # hand and the labels are in place for whoever adds the leg.
-- name: "(Llama-3.1-8B) prefill module PCC (MLP/RoPE/KV/attention/decoder/model)"
+  # Commas, not slashes, in the module list: the workflow interpolates this name straight into
+  # `test-log-<name> (attempt N)` and `triage_output_<name> ...`, and upload-artifact rejects a
+  # forward slash outright (NTFS-safe naming). With slashes the test-log upload exits 1, which the
+  # container hook then reports as "Executing the custom container implementation failed" -- three
+  # scary annotations on a job that is otherwise green, and no uploaded log to check. The
+  # triage_output upload carries the same name, so it would have failed the same way exactly when
+  # it matters most: on a hang, which is the only time it has files to upload.
+- name: "(Llama-3.1-8B) prefill module PCC (MLP, RoPE, KV, attention, decoder, model)"
   fabric_profile: torus_xy
   cmd: |
     export LOGURU_LEVEL=INFO
@@ -1354,6 +1361,47 @@
       # Cold 16 GB safetensors read (no tilized cache for this model) plus 32-layer weight upload,
       # kernel JIT for both chunk buckets, two chunks of prefill, and a 32-layer K+V read-back.
       timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+# Throughput at the production shape. Separate from the accuracy stage above because it must NOT
+# share a pytest session with it: the accuracy cells read the whole KV cache back to host in Python,
+# which costs more than the prefill and would dominate any timing taken alongside them.
+#
+# No throughput floor is asserted -- there is no target for this model yet, so a gate here would be
+# an invented number. The cells assert only what is structural (per-chunk cost must not collapse as
+# context grows) and log the rest, so CI carries the numbers and a regression is visible in the log
+# before anyone has agreed what "too slow" means.
+- name: "(Llama-3.1-8B) prefill throughput 8k@1024, 32L real weights"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export LLAMA31_8B_REAL_WEIGHTS=1
+
+    # One pytest per cell, for the same host-RAM reason as the accuracy stage: each cell builds its
+    # own runtime from the 16 GB checkpoint, and two resident copies stall in weight upload.
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      for cell in test_prefill_throughput test_prefill_scaling_with_context; do
+        python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/perf/test_prefill_perf.py \
+          -k "${cell}" -v --tb=short -p no:randomly
+      done
+    '
+  test_type: llama_3p1_8b_prefill_perf
+  test_tags: [llama_3p1_8b, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Two cells, each paying its own cold 16 GB read and 32-layer upload; the timed loops
+      # themselves are seconds. The scaling cell also warms 9 KV-length buckets.
+      timeout: 40
       tier: 2
       release_ready: false
   owner_id: U08HM8SL5U4 # Maciek Dragula
