@@ -258,6 +258,41 @@ def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
 
 
+# The affected band is exactly two binades of ``beta * x`` wide, so promoting every bfloat16 bit
+# pattern to float32 lands ~128 inputs inside it for any beta; a float32-only sweep is what is
+# needed, the bfloat16 path clamps its residual to zero and never reaches the tail.
+@pytest.mark.parametrize("beta", [0.5, 1, 2, 10, 100])
+def test_softplus_fp32_deep_negative_tail_all_bitpatterns(device, beta):
+    """Every bfloat16 bit pattern promoted to float32, checking the deep negative tail.
+
+    Once ``beta * x`` is far enough below zero the true softplus is smaller than the smallest
+    normal float and the kernel must return exactly ``0``. The float32 tail range-reduces with
+    ``_sfpu_round_to_nearest_int32_``, whose ``2**23 + 2**22`` magic constant is only valid while
+    ``|beta * x * log2(e)| <= 2**22``. Past that the integer part came back with the wrong sign,
+    the flush-to-zero guard on the reconstructed exponent never fired, and softplus returned
+    ``+-inf``, ``NaN`` or values up to ``FLT_MAX`` where the answer is ``0``.
+    """
+    threshold = 20.0
+    torch_input_tensor = flush_subnormal_values_to_zero(generate_all_bfloat16_bitpatterns(torch.float32))
+    reference = torch.nn.functional.softplus(torch_input_tensor.to(torch.float64), beta=beta, threshold=threshold)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.softplus(input_tensor, beta=beta, threshold=threshold))
+
+    finite = torch.isfinite(torch_input_tensor)
+    assert torch.isfinite(result[finite]).all(), f"softplus produced non-finite output for finite input (beta={beta})"
+
+    # softplus(x) -> exp(beta*x)/beta as x -> -inf, so the deep tail underflows all the way to
+    # zero; the reference is evaluated in float64 so that only inputs whose exact result is far
+    # below the float32 subnormal range are asserted on.
+    underflowed = finite & (reference == 0)
+    assert underflowed.any()
+    assert (result[underflowed] == 0).all(), (
+        f"softplus returned a non-zero value where the exact result underflows to zero "
+        f"(beta={beta}, worst |result| = {result[underflowed].abs().max().item():g})"
+    )
+
+
 def test_tanhshrink_ulp(device):
     """ULP regression guard for the dedicated tanhshrink SFPU op (issue #45520).
 
