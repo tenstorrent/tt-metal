@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdlib>
-#include <string_view>
 #include "l1_banking_allocator.hpp"
 
 #include <allocator.hpp>
@@ -31,6 +29,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 
 namespace tt::tt_metal {
 
@@ -222,15 +221,17 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
-    // The quasar_aether_2x3 map's DRAM endpoints are addressable within a 64 MiB
-    // local field while the DRAM view is larger. Clamp the bank size so top-down
-    // allocations (kernel binaries) never compose an out-of-window operand.
+    // Under ATT a DRAM endpoint is only addressable within its window's local-address field, which
+    // can be smaller than the descriptor's DRAM view (quasar_aether_2x3: 64 MiB). Clamp the bank size
+    // to the selected map's window so top-down allocations (kernel binaries) never compose an
+    // out-of-window operand; see qa_att_windows.hpp for the per-map limits.
     uint64_t att_dram_view_size = soc_desc.dram_view_size;
     if (hal.get_arch() == tt::ARCH::QUASAR) {
-        const char* att_map = std::getenv("TT_METAL_NOC_ATT");
-        if (att_map != nullptr && std::string_view(att_map) == "quasar_aether_2x3") {
-            constexpr uint64_t k_aether_dram_window_span = 1ull << 26;
-            att_dram_view_size = std::min<uint64_t>(att_dram_view_size, k_aether_dram_window_span);
+        if (const auto att_map = env.get_rtoptions().get_noc_att_map(); att_map.has_value()) {
+            const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
+            TT_ASSERT(map_info != nullptr, "Unknown TT_METAL_NOC_ATT map '{}'", *att_map);
+            att_dram_view_size =
+                std::min<uint64_t>(att_dram_view_size, quasar_att::dram_window_local_address_limit(*map_info));
         }
     }
     AllocatorConfig config(
