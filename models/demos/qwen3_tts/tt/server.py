@@ -1,0 +1,3582 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+"""
+Qwen3-TTS server-side TTNN implementation.
+
+Reusable server-context, AR-loop, and ICL-embedding code for the Qwen3-TTS
+pipeline. Demos (CLI / web) and inference servers all import from here.
+
+Public surface:
+- ``TTSConfig``, ``TTSServerContext``        – per-deployment config + warmed state
+- ``init_server_context(device, model, config, main_weights)``
+                                              – pre-compiles all kernels and
+                                                captures all production traces
+- ``run_inference(ctx, model, device, ...)`` – per-request AR loop (zero
+                                                trace capture / kernel compile)
+- ``encode_reference_audio(audio_path, ...)`` – Mimi encode → ref_codes
+                                                (cached in .refcache.pt)
+- ``create_icl_embedding_ttnn(...)``         – build ICL embedding for prefill
+- ``decode_audio(codes, decoder_weights)``   – Mimi decode → 24 kHz waveform
+- ``load_weights()``                         – HF download (main + speech_tokenizer)
+- ``allocate_kv_cache(...)``, ``deallocate_kv_cache(...)``
+
+Architecture:
+- Speaker Encoder (TTNN) – ECAPA-TDNN
+- Text Projection (TTNN) – project text embeddings
+- Talker (TTNN) – 28-layer transformer + codec_head
+- CodePredictor (TTNN) – 5-layer transformer + 15 LM heads
+- Speech Tokenizer (Mimi) is reference PyTorch (uses 1D conv + reflect pad
+  not available in TTNN today).
+
+KV Cache:
+- Talker uses KV cache: prefill ICL sequence once, then decode 1 token at a time.
+- CodePredictor uses KV cache: prefill [past_hidden, code0], then decode codes 1-14.
+- Drops O(n²) → O(n) for generation.
+"""
+
+import os
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import numpy as np
+import soundfile as sf
+import torch
+import torch.nn.functional as F
+
+import ttnn
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch_chip0 as _mesh_to_torch_chip0
+from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS
+from models.demos.qwen3_tts.tt.utils import last_real_hidden_row
+
+
+def _user_path_no_dotdot(path: str) -> Path:
+    p = Path(path).expanduser()
+    if ".." in p.parts:
+        raise ValueError("paths must not contain '..' path components")
+    return p.resolve()
+
+
+def allocate_kv_cache(
+    device,
+    num_layers: int,
+    batch_size: int,
+    num_kv_heads: int,
+    max_seq_len: int,
+    head_dim: int,
+) -> List[Tuple[ttnn.Tensor, ttnn.Tensor]]:
+    """
+    Allocate KV cache tensors for all layers.
+
+    On TP>1 (multi-chip mesh), creates per-chip local_kv_heads = num_kv_heads // tp_size
+    tensors, matching the Attention module which also uses local head counts.
+    """
+    import torch as _torch
+
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+    from models.demos.qwen3_tts.tt.mesh_utils import is_mesh_device as _is_mesh
+
+    _mesh = _is_mesh(device)
+    tp = get_tp_size(device) if _mesh else 1
+    assert num_kv_heads % tp == 0
+    local_kv_heads = num_kv_heads // tp
+    _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if _mesh else None
+
+    kv_caches = []
+    for _ in range(num_layers):
+        k_cache = ttnn.from_torch(
+            _torch.zeros(batch_size, local_kv_heads, max_seq_len, head_dim, dtype=_torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_mesh_mapper,
+        )
+        v_cache = ttnn.from_torch(
+            _torch.zeros(batch_size, local_kv_heads, max_seq_len, head_dim, dtype=_torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_mesh_mapper,
+        )
+        kv_caches.append((k_cache, v_cache))
+    return kv_caches
+
+
+def deallocate_kv_cache(kv_caches: List[Tuple[ttnn.Tensor, ttnn.Tensor]]):
+    """Deallocate KV cache tensors."""
+    for k_cache, v_cache in kv_caches:
+        ttnn.deallocate(k_cache)
+        ttnn.deallocate(v_cache)
+
+
+@dataclass
+class TTSConfig:
+    """Configuration for TTS generation."""
+
+    # Codec special tokens
+    codec_bos_id: int = 2149
+    codec_eos_id: int = 2150
+    codec_pad_id: int = 2148
+    codec_think_id: int = 2154
+    codec_think_bos_id: int = 2156
+    codec_think_eos_id: int = 2157
+
+    # TTS special tokens
+    tts_bos_token_id: int = 151672
+    tts_eos_token_id: int = 151673
+    tts_pad_token_id: int = 151671
+
+    # Language IDs
+    codec_language_ids: dict = None
+
+    # Generation
+    max_new_tokens: int = 256
+    temperature: float = 0.9
+    top_k: int = 50
+    greedy: bool = False
+    repetition_penalty: float = 1.0  # >1.0 discourages repetition (e.g., 1.1-1.3)
+
+    # Post-processing: trim reference echo from start of generated audio.
+    # ICL TTS models briefly reproduce the reference speaker's last word
+    # before transitioning to the target text. Trim those leading codec frames.
+    # Default 4 frames = 0.32s at 12.5fps. Set to 0 to disable.
+    trim_codec_frames: int = 4
+
+    # Model dims
+    hidden_size: int = 2048
+    num_code_groups: int = 16
+
+    def __post_init__(self):
+        if self.codec_language_ids is None:
+            # Codec language IDs as used by demo_pure_reference_tts.py / HF Qwen3-TTS.
+            self.codec_language_ids = {
+                "english": 2050,
+                "chinese": 2055,
+                "german": 2053,
+                "italian": 2070,
+                "portuguese": 2071,
+                "spanish": 2054,
+                "japanese": 2058,
+                "korean": 2064,
+                "french": 2061,
+                "russian": 2069,
+            }
+
+
+def load_weights(hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"):
+    """Load model weights."""
+    from huggingface_hub import snapshot_download
+    from safetensors.torch import load_file
+
+    print(f"Loading model weights ({hf_id})...")
+    model_path = Path(snapshot_download(hf_id, allow_patterns=["*.safetensors"])).resolve()
+
+    # Main model weights
+    main_dict = {}
+    for f in model_path.glob("*.safetensors"):
+        if "speech_tokenizer" not in str(f):
+            main_dict.update(load_file(f))
+    print(f"  Loaded {len(main_dict)} main weights")
+
+    # Speech tokenizer decoder weights (for audio synthesis)
+    speech_path = model_path / "speech_tokenizer" / "model.safetensors"
+    speech_dict = load_file(speech_path)
+    decoder_weights = {k[8:]: v.float() for k, v in speech_dict.items() if k.startswith("decoder.")}
+    print(f"  Loaded {len(decoder_weights)} decoder weights")
+
+    return main_dict, decoder_weights
+
+
+def encode_reference_audio(
+    audio_path: str, main_weights: dict = None, cache_path: str = None
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Encode reference audio to codes and extract speaker embedding using TTNN speaker encoder.
+
+    Caches results to disk so the slow CPU MimiModel only runs once.
+    Cache path defaults to <audio_path>.refcache.pt
+
+    ``main_weights`` is unused (kept for call-site compatibility); pass ``None``.
+
+    Returns:
+        ref_codes: [seq_len, 16] - RVQ codes
+        audio_data: [num_samples] - raw waveform (for TTNN speaker encoder)
+    """
+    audio_p = _user_path_no_dotdot(audio_path)
+    if not audio_p.is_file():
+        raise FileNotFoundError(audio_path)
+
+    if cache_path is None:
+        cache_path = str(audio_p.with_suffix("")) + ".refcache.pt"
+    else:
+        cache_path = str(_user_path_no_dotdot(cache_path))
+
+    # Load from cache if available
+    if Path(cache_path).exists():
+        print(f"\nLoading cached reference encoding from {cache_path}")
+        cached = torch.load(cache_path, weights_only=True)
+        ref_codes = cached["ref_codes"]
+        audio_data = cached["audio_data"]
+        print(f"  Reference codes: {ref_codes.shape}  (loaded from cache)")
+        print(f"  Audio duration: {len(audio_data)/24000:.2f}s")
+        return ref_codes, audio_data
+
+    from models.demos.qwen3_tts.reference.functional import speech_tokenizer_encoder_forward_mimi
+
+    print("\nEncoding reference audio (first run - will cache result)...")
+
+    # Load audio — convert to WAV via ffmpeg first so soundfile can read any format.
+    # The input path is user-supplied, so it is re-checked here at the call rather
+    # than relying only on `_user_path_no_dotdot` above: an absolute path to a file
+    # that exists, handed to an argv list and never to a shell. `ffmpeg` itself comes
+    # off PATH, so it is pinned to an absolute path to a real file the same way.
+    import shutil
+    import subprocess
+    import tempfile
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not os.path.isfile(os.path.abspath(ffmpeg)):
+        raise FileNotFoundError("ffmpeg is required to decode the reference audio, but is not on PATH")
+    src_wav = os.path.abspath(str(audio_p))
+    if not os.path.isfile(src_wav):
+        raise FileNotFoundError(audio_path)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_wav = tmp.name
+    subprocess.run(
+        [os.path.abspath(ffmpeg), "-y", "-i", src_wav, "-ac", "1", "-ar", "24000", "-f", "wav", tmp_wav],
+        check=True,
+        capture_output=True,
+        shell=False,
+    )
+    audio_data, sr = sf.read(tmp_wav)
+    os.unlink(tmp_wav)
+    audio_data = torch.from_numpy(audio_data.astype(np.float32))
+    if audio_data.dim() == 2:
+        audio_data = audio_data.mean(dim=1)
+    # sr is already 24000 (ffmpeg resampled above), so no further resampling needed
+
+    print(f"  Audio duration: {len(audio_data)/24000:.2f}s")
+
+    # Encode to codes using reference implementation (speech tokenizer encoder)
+    ref_codes = speech_tokenizer_encoder_forward_mimi(audio_data.unsqueeze(0))  # [1, 16, seq_len]
+    ref_codes = ref_codes.squeeze(0).T  # [seq_len, 16]
+    print(f"  Reference codes: {ref_codes.shape}")
+
+    # Save to cache
+    torch.save({"ref_codes": ref_codes, "audio_data": audio_data}, cache_path)
+    print(f"  Cached to {cache_path}")
+
+    return ref_codes, audio_data
+
+
+def create_icl_embedding_ttnn(
+    target_text: str,
+    ref_text: str,
+    ref_codes: torch.Tensor,
+    speaker_embedding: torch.Tensor,
+    tokenizer,
+    model,
+    device,
+    config: TTSConfig,
+    main_weights: dict,
+    language: str = "english",
+) -> Tuple[ttnn.Tensor, torch.Tensor, torch.Tensor, list]:
+    """
+    Create ICL (In-Context Learning) input embeddings using TTNN operations.
+
+    Uses TTNN for:
+    - Text embedding lookup
+    - Text projection
+    - Codec embedding lookup
+
+    Returns:
+        inputs_embeds: TTNN tensor [batch, 1, seq_len, hidden_size]
+        trailing_text_hidden: PyTorch tensor for remaining text
+        tts_pad_embed: PyTorch tensor for padding
+    """
+    print("\nCreating ICL embeddings (TTNN)...")
+
+    # Get embedding weights from model for PyTorch operations
+    # (needed for combining embeddings before TTNN forward)
+    text_embed_weight = model.talker.text_embedding
+    codec_embed_weight = model.talker.codec_embedding
+
+    # Tokenize texts
+    ref_text_ids = tokenizer.encode(ref_text, add_special_tokens=False, return_tensors="pt")
+    target_text_ids = tokenizer.encode(target_text, add_special_tokens=False, return_tensors="pt")
+    role_ids = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False, return_tensors="pt")
+
+    print(f"  Role tokens: {role_ids.shape[1]}")
+    print(f"  Reference text tokens: {ref_text_ids.shape[1]}")
+    print(f"  Target text tokens: {target_text_ids.shape[1]}")
+    print(f"  Reference codes: {ref_codes.shape[0]}")
+
+    # === Get embeddings using TTNN ===
+
+    # TTS special token embeddings (text embedding + projection)
+    tts_tokens = torch.tensor([[config.tts_bos_token_id, config.tts_eos_token_id, config.tts_pad_token_id]])
+    tts_tokens_tt = ttnn.from_torch(tts_tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tts_embeds_tt = model.get_text_embedding(tts_tokens_tt)
+    tts_embeds_proj_tt = model.project_text(tts_embeds_tt)
+    tts_embeds_proj = _mesh_to_torch(tts_embeds_proj_tt).squeeze(1).float()  # [1, 3, 2048]
+
+    tts_bos_embed = tts_embeds_proj[:, 0:1, :]
+    tts_eos_embed = tts_embeds_proj[:, 1:2, :]
+    tts_pad_embed = tts_embeds_proj[:, 2:3, :]
+
+    # Role token embeddings
+    role_ids_tt = ttnn.from_torch(role_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    role_embeds_tt = model.get_text_embedding(role_ids_tt)
+    role_embeds_proj_tt = model.project_text(role_embeds_tt)
+    role_embeds_proj = _mesh_to_torch(role_embeds_proj_tt).squeeze(1).float()
+
+    # Combined text embeddings (ref_text + target_text)
+    combined_text_ids = torch.cat([ref_text_ids, target_text_ids], dim=1)
+    combined_text_ids_tt = ttnn.from_torch(
+        combined_text_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    combined_text_embeds_tt = model.get_text_embedding(combined_text_ids_tt)
+    combined_text_proj_tt = model.project_text(combined_text_embeds_tt)
+    combined_text_proj = _mesh_to_torch(combined_text_proj_tt).squeeze(1).float()
+
+    # Full text embedding with EOS
+    text_embed = torch.cat([combined_text_proj, tts_eos_embed], dim=1)
+    text_lens = text_embed.shape[1]
+
+    # === Codec embeddings ===
+    lang_id = config.codec_language_ids.get(language.lower(), config.codec_language_ids["english"])
+
+    # Codec prefix tokens
+    codec_prefix_ids = torch.tensor(
+        [[config.codec_think_id, config.codec_think_bos_id, lang_id, config.codec_think_eos_id]]
+    )
+    codec_suffix_ids = torch.tensor([[config.codec_pad_id, config.codec_bos_id]])
+
+    codec_prefix_ids_tt = ttnn.from_torch(
+        codec_prefix_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    codec_suffix_ids_tt = ttnn.from_torch(
+        codec_suffix_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+    codec_prefix_embeds = _mesh_to_torch(model.get_codec_embedding(codec_prefix_ids_tt)).float()
+    codec_suffix_embeds = _mesh_to_torch(model.get_codec_embedding(codec_suffix_ids_tt)).float()
+
+    # Ensure 3D shape [batch, seq, hidden]
+    if codec_prefix_embeds.dim() == 2:
+        codec_prefix_embeds = codec_prefix_embeds.unsqueeze(0)
+    if codec_suffix_embeds.dim() == 2:
+        codec_suffix_embeds = codec_suffix_embeds.unsqueeze(0)
+
+    # Insert speaker embedding
+    codec_input_embedding = torch.cat(
+        [
+            codec_prefix_embeds,
+            speaker_embedding.view(1, 1, -1),
+            codec_suffix_embeds,
+        ],
+        dim=1,
+    )
+
+    # Prefix combined
+    codec_len = codec_input_embedding.shape[1]
+    prefix_text = torch.cat(
+        [
+            tts_pad_embed.expand(-1, codec_len - 2, -1),
+            tts_bos_embed,
+        ],
+        dim=1,
+    )
+    prefix_combined = prefix_text + codec_input_embedding[:, :-1, :]
+
+    # === Reference codes embedding (sum of all 16 codebooks) ===
+    # Get CodePredictor embeddings for codebooks 1-15 from main_weights
+    code_pred_embeds = []
+    for i in range(config.num_code_groups - 1):
+        key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
+        if key in main_weights:
+            code_pred_embeds.append(main_weights[key].float())
+        else:
+            print(f"  WARNING: Missing CodePredictor embedding {key}")
+    print(f"  Loaded {len(code_pred_embeds)} CodePredictor embeddings")
+
+    # Get main codec embedding from TTNN tensor
+    codec_embed_torch = _mesh_to_torch(codec_embed_weight).squeeze(0).squeeze(0).float()
+
+    # Build reference code embeddings using proper codebook embeddings
+    ref_len = ref_codes.shape[0]
+    codec_embeds_list = []
+
+    for i in range(config.num_code_groups):
+        code_ids = ref_codes[:, i : i + 1]  # [ref_len, 1]
+        if i == 0:
+            # First codebook uses main talker codec_embedding
+            cb_embed = F.embedding(code_ids, codec_embed_torch)
+        else:
+            # Codebooks 1-15 use CodePredictor embeddings
+            if i - 1 < len(code_pred_embeds):
+                cb_embed = F.embedding(code_ids, code_pred_embeds[i - 1])
+            else:
+                cb_embed = F.embedding(code_ids, codec_embed_torch)  # Fallback
+        codec_embeds_list.append(cb_embed)
+
+    stacked_embeds = torch.cat(codec_embeds_list, dim=1)  # [ref_len, 16, 2048]
+    summed_embeds = stacked_embeds.sum(dim=1).unsqueeze(0)  # [1, ref_len, 2048]
+
+    # Prepend codec_bos
+    codec_bos_ids = torch.tensor([[config.codec_bos_id]])
+    codec_bos_ids_tt = ttnn.from_torch(codec_bos_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    codec_bos_embed = _mesh_to_torch(model.get_codec_embedding(codec_bos_ids_tt)).float()  # [1, 1, 2048]
+    if codec_bos_embed.dim() == 2:
+        codec_bos_embed = codec_bos_embed.unsqueeze(1)  # [1, 1, 2048]
+
+    codec_embed = torch.cat([codec_bos_embed, summed_embeds], dim=1)
+    codec_lens = codec_embed.shape[1]
+
+    # === Build ICL input ===
+    if text_lens > codec_lens:
+        icl_input_embed = text_embed[:, :codec_lens, :] + codec_embed
+        trailing_text_hidden = text_embed[:, codec_lens:, :]
+        print(f"  Text > Codec: {text_lens} > {codec_lens}")
+        print(f"  trailing_text_hidden: {trailing_text_hidden.shape[1]} tokens")
+    else:
+        padding_len = codec_lens - text_lens
+        text_padded = torch.cat([text_embed, tts_pad_embed.expand(-1, padding_len, -1)], dim=1)
+        icl_input_embed = text_padded + codec_embed
+        trailing_text_hidden = tts_pad_embed
+        print(f"  Text <= Codec: {text_lens} <= {codec_lens}")
+
+    # Concatenate all parts
+    inputs_embeds = torch.cat(
+        [
+            role_embeds_proj,
+            prefix_combined,
+            icl_input_embed,
+        ],
+        dim=1,
+    )
+
+    print(f"  Total input length: {inputs_embeds.shape[1]}")
+
+    # Convert to TTNN
+    inputs_embeds_tt = ttnn.from_torch(
+        inputs_embeds.unsqueeze(1),  # [1, 1, seq_len, 2048]
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    return inputs_embeds_tt, trailing_text_hidden, tts_pad_embed, code_pred_embeds
+
+
+def sample_token(
+    logits: torch.Tensor,
+    temperature: float = 0.9,
+    top_k: int = 50,
+    greedy: bool = False,
+    repetition_penalty: float = 1.0,
+    generated_tokens: List[int] = None,
+) -> int:
+    """Sample next token from logits with optional repetition penalty.
+
+    Args:
+        logits: Logits tensor [vocab_size]
+        temperature: Sampling temperature (ignored if greedy=True)
+        top_k: Top-k filtering (ignored if greedy=True)
+        greedy: Use argmax instead of sampling
+        repetition_penalty: Penalty for previously generated tokens (>1.0 discourages repetition)
+        generated_tokens: List of previously generated token IDs for repetition penalty
+    """
+    if greedy:
+        return logits.argmax().item()
+
+    # float32: faster topk/softmax/multinomial on CPU than bfloat16 for this vocab size
+    if logits.dtype != torch.float32:
+        logits = logits.float()
+
+    # Apply repetition penalty to previously generated tokens (vectorized; hot loop)
+    if repetition_penalty != 1.0 and generated_tokens:
+        idx = torch.tensor(list(set(generated_tokens)), dtype=torch.long, device=logits.device)
+        vocab = logits.numel()
+        idx = idx[(idx >= 0) & (idx < vocab)]
+        if idx.numel() > 0:
+            vals = logits[idx]
+            logits[idx] = torch.where(vals > 0, vals / repetition_penalty, vals * repetition_penalty)
+
+    logits = logits / temperature
+    if top_k > 0:
+        top_k = min(top_k, logits.size(-1))
+        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+        logits[indices_to_remove] = float("-inf")
+    probs = F.softmax(logits, dim=-1)
+    return int(torch.multinomial(probs, num_samples=1).item())
+
+
+def build_cp_decode_trace_h2d_constants(
+    cp_cos_table: torch.Tensor,
+    cp_sin_table: torch.Tensor,
+    num_cp_heads: int,
+    max_cp_seq_len: int,
+    num_decode_traces: int,
+) -> Tuple[list, list, list]:
+    """Pre-build TILE-layout host tensors for CP decode trace H2D (cos, sin, mask per trace index).
+
+    Masks match the cumulative attention pattern used in the generation loop for each
+    decode position (cp_pos = 2 .. num_decode_traces+1).
+    """
+    cos_hosts: list = []
+    sin_hosts: list = []
+    mask_hosts: list = []
+    for trace_i in range(num_decode_traces):
+        cp_pos = 2 + trace_i
+        mh = torch.full((1, num_cp_heads, 1, max_cp_seq_len), float("-inf"), dtype=torch.float32)
+        mh[0, :, 0, : cp_pos + 1] = 0.0
+        cs = cp_cos_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        sn = cp_sin_table[cp_pos : cp_pos + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        cos_hosts.append(ttnn.from_torch(cs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        sin_hosts.append(ttnn.from_torch(sn, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        mask_hosts.append(ttnn.from_torch(mh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT))
+    return cos_hosts, sin_hosts, mask_hosts
+
+
+def build_talker_decode_trace_h2d_constants(
+    talker_cos_table: torch.Tensor,
+    talker_sin_table: torch.Tensor,
+    num_talker_heads: int,
+    max_talker_seq_len: int,
+    real_seq_len: int,
+) -> Tuple[list, list, list, list]:
+    """Pre-build TILE/RM host tensors for Talker decode H2D: cos, sin, mask, cur_pos per absolute T.
+
+    For each decode position ``T`` in ``[real_seq_len, max_talker_seq_len)``, the mask matches
+    the incremental pattern: prefill columns ``0:real_seq_len`` plus decode columns
+    ``real_seq_len : T+1`` set to 0; remainder ``-inf``.
+    """
+    cos_h: list = []
+    sin_h: list = []
+    mask_h: list = []
+    pos_h: list = []
+    # The mask is BFLOAT16 and single-head on purpose. It holds only 0.0 and -inf,
+    # both exact in bf16, and fused SDPA typecasts an fp32 mask to bf16 anyway
+    # (prepare_fused_sdpa_mask) — so this is the same bytes SDPA already saw, minus a
+    # per-step typecast. Every head also held an IDENTICAL row, so num_talker_heads
+    # copies were uploaded per frame where one broadcasts. Together they cut the
+    # largest single H2D transfer in the AR loop by an order of magnitude.
+    _mask_heads = 1
+    for T in range(real_seq_len, max_talker_seq_len):
+        mh = torch.full((1, _mask_heads, 1, max_talker_seq_len), float("-inf"), dtype=torch.float32)
+        mh[0, :, 0, :real_seq_len] = 0.0
+        mh[0, :, 0, real_seq_len : T + 1] = 0.0
+        cs = talker_cos_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        sn = talker_sin_table[T : T + 1].unsqueeze(0).unsqueeze(0).bfloat16()
+        cos_h.append(ttnn.from_torch(cs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        sin_h.append(ttnn.from_torch(sn, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        mask_h.append(ttnn.from_torch(mh.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        pos_h.append(
+            ttnn.from_torch(torch.tensor([T], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        )
+    return cos_h, sin_h, mask_h, pos_h
+
+
+def _alloc_token_buf(device, shape=(1, 1, 1)) -> ttnn.Tensor:
+    """Allocate a uint32 ROW_MAJOR DRAM token output buffer for ttnn.argmax."""
+    return ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.int32),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _argmax_into(logits_tt: ttnn.Tensor, out_tok_tt: ttnn.Tensor) -> None:
+    """Untilize + multicore argmax into a pre-allocated uint32 RM token buffer.
+
+    Multicore ``ttnn.argmax`` only supports ROW_MAJOR inputs. Plain ``ttnn.untilize``
+    on a tile-padded Y (e.g. ``[1,1,1,vocab]`` padded to ``[1,1,32,vocab]``)
+    silently mixes padded rows into row 0. Use ``untilize_with_unpadding`` with
+    the LOGICAL last index to drop tile padding cleanly.
+    """
+    # End index per dim is logical_size - 1.
+    end = [int(s) - 1 for s in logits_tt.shape]
+    logits_rm = ttnn.untilize_with_unpadding(logits_tt, output_tensor_end=end, use_multicore=True)
+    # ttnn.argmax dropped its use_multicore kwarg; passing it raises TypeError, which made
+    # this whole greedy fast path dead code. Multicore selection is internal now.
+    ttnn.argmax(logits_rm, dim=-1, keepdim=False, output_tensor=out_tok_tt)
+    ttnn.deallocate(logits_rm)
+
+
+def _read_device_token(tok_tt: ttnn.Tensor, index: int = 0) -> int:
+    """D2H read of a single token id from on-device argmax/sampling output (uint32 RM).
+
+    For ttnn.argmax, the output is a small [...,1] uint32 tensor and we read element
+    [index]. For ttnn.sampling (which requires 32 users per kernel invocation, so
+    we replicate batch=1 across 32 users), the output is shape [1,1,1,32] and we
+    read user[0] (index=0).
+    """
+    return int(_mesh_to_torch_chip0(tok_tt).flatten()[index].item())
+
+
+# --- In-trace device sampling -------------------------------------------------
+# ttnn.topk only takes the multicore path at width >= 8192 (multi_core_min_width);
+# our 2048-wide CP vocab would otherwise run single-core, so we pad first. Pad value
+# must stay well clear of real logits (O(10)) while staying representable in bfloat16
+# after the sampling kernel's exp().
+_SAMPLING_PAD_W = 8192
+# ttnn.topk goes multi-core when `topk_multicore_structurally_eligible` holds
+# (ttnn/cpp/ttnn/operations/reduction/topk/device/topk_utils.cpp):
+#
+#     width_gate = (reduced_width >= multi_core_min_width)           # 8192
+#               || (num_tile_rows <= multi_core_low_ht_max_tile_rows # 2
+#                   && reduced_width >= multi_core_low_ht_min_width) # 1024
+#     && is_pow2(reduced_width) && reduced_width < 65535 && k <= 64
+#
+# _SAMPLING_PAD_W=8192 predates the Ht-aware second clause. A CP logit row is
+# [1,1,1,2048] — ONE tile row — so it already qualifies at its native width, and
+# padding to 8192 only makes the sort network 4x wider. topk is monotonically slower
+# as the padded width grows, and the Pad + FillPad ops are pure added cost on top,
+# so the native width wins outright.
+#
+# Numerics: the top-64 VALUES are bit-exact either way (torch.equal) — with 2048 real
+# logits the -1e4 padding can never enter a top-64.
+# values are exactly EQUAL in bf16, and the Gumbel noise row is i.i.d. per rank,
+# so permuting which draw lands on which of two equal-logit candidates leaves
+# the sampled distribution unchanged. Distributionally exact, not bit-identical.
+# QWEN3_TTS_SAMPLING_PAD_W=8192 restores the old width.
+_SAMPLING_MIN_MULTICORE_W = 1024  # topk_constants.hpp multi_core_low_ht_min_width
+_SAMPLING_MAX_LOW_HT_TILE_ROWS = 2  # topk_constants.hpp multi_core_low_ht_max_tile_rows
+
+
+def _sampling_topk_width(vocab: int, rows: int) -> int:
+    """Smallest width that keeps ``ttnn.topk`` on its multi-core path."""
+    forced = os.environ.get("QWEN3_TTS_SAMPLING_PAD_W")
+    if forced:
+        return int(forced)
+    tile_rows = (rows + 31) // 32
+    if tile_rows > _SAMPLING_MAX_LOW_HT_TILE_ROWS:
+        return _SAMPLING_PAD_W
+    w = 1 << max(int(vocab) - 1, 0).bit_length()  # next pow2 >= vocab
+    return max(w, _SAMPLING_MIN_MULTICORE_W)
+
+
+_SAMPLING_NEG = -1e4
+# ttnn.topk requires k to be a multiple of 32; 64 is the smallest value that covers
+# the demo's top_k=50. Ranks in [top_k, 64) are masked off by the noise tile.
+_SAMPLING_TOPK = 64
+# One 32-row tile of Gumbel noise per frame: one row per sampling call in the frame
+# (CP prefill + 14 CP decode steps = 15 slots), plus slot 15 for the Talker's codec0
+# sample, which runs in the Talker trace off the SAME tile — it is refreshed once per
+# frame, before either trace replays, so slot 15 is an independent draw at no extra H2D.
+_NOISE_SLOTS = 32
+_TALKER_NOISE_SLOT = 15
+
+
+class _DeviceSampler:
+    """Exact top-k + temperature sampling *inside* a Metal trace, via Gumbel-max.
+
+    Why not ``ttnn.sampling``'s own RNG: its ``seed`` is a **compile-time** kernel
+    argument (``constexpr auto seed = get_arg(args::seed)``), and the random tile is
+    generated once per kernel launch. A traced sampling op therefore replays the
+    *same* uniform draw u on every frame, making the token a deterministic function
+    of the logits. Measured on 200 real CP logit vectors, a baked seed picks the
+    rank-8 candidate on ~every step (u=0.5) or the rank-14 candidate (u=0.63) — a
+    systematic bias, not sampling. All 32 "users" also share one draw (verified:
+    32/32 identical tokens), so replicating the batch buys no extra randomness.
+
+    So randomness enters as *data* instead, via Gumbel-max::
+
+        argmax_i(logits_i / T + g_i),  g_i ~ Gumbel(0, 1)
+
+    is an exact draw from ``softmax(logits / T)``, and since argmax is invariant to
+    a positive scale this equals ``argmax_i(logits_i + T * g_i)`` — so the host folds
+    T into the noise and no scaling op runs on device. Restricting the argmax to the
+    top-k candidates makes it an exact draw from the top-k-renormalised softmax,
+    i.e. exactly what :func:`sample_token` computes on the host.
+
+    The chain per call is::
+
+        pad(logits -> 8192) -> topk(k=64) -> add(noise row) -> sampling(k=1)
+
+    ``ttnn.sampling`` with k=1 degenerates to "return input_indices[argmax(values)]"
+    (verified 20/20 against a host argmax-gather), which is exactly the index gather
+    Gumbel-max needs and which no plain ttnn op provides. Noise columns >= top_k hold
+    ``_SAMPLING_NEG``, so the same tile that carries the randomness also applies the
+    top-k truncation for free.
+
+    Validated on real CP logit vectors: the total-variation distance from an exact
+    top-k softmax draw sits at the Monte-Carlo floor for the same number of draws, i.e.
+    this is a correct sampler, not an approximation of one.
+
+    Per-frame host cost is one ``torch.rand`` and one small H2D of the noise tile,
+    replacing the per-code-group CPU topk+softmax+multinomial calls.
+    """
+
+    def __init__(self, device, top_k: int, temperature: float, seed: int = 1):
+        self.device = device
+        self._noise_hosts = None
+        self._noise_gen = torch.Generator()
+        # One draw off the global RNG, so --seed still determines the noise stream.
+        self._noise_gen.manual_seed(int(torch.randint(0, 2**31 - 1, (1,)).item()))
+        self.top_k = min(int(top_k), _SAMPLING_TOPK) if top_k > 0 else _SAMPLING_TOPK
+        self.temperature = float(temperature)
+        self.seed = seed
+        _grid = device.compute_with_storage_grid_size()
+        self._full_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_grid.x - 1, _grid.y - 1))]
+        )
+        # topk's grid. Defaults to the full grid: narrowing it MEASURED WORSE in situ.
+        #
+        # ttnn.topk splits the reduced dim over local cores and merges them on ONE final
+        # core, picking the split by minimising 7*Wt_local + 2*Wt_final -- constants its
+        # own source says were "fitted on p150a silicon", i.e. Blackhole. This is
+        # Wormhole, so the split looked worth questioning, and sub_core_grids is the only
+        # call-site lever (`sorted` is passed to the kernels and never branched on, so
+        # sorted=False buys nothing).
+        #
+        # A standalone sweep at the sampler's exact shape ([1,1,32,2048] bf16 DRAM, k=64)
+        # said a narrower grid was monotonically faster. It was wrong. Those were HOST
+        # timings around a single dispatched call, most of which is dispatch overhead, so
+        # what they actually ranked was program setup cost, not kernel time. In the traced
+        # CP frame, where dispatch is amortised away, the narrow grid is clearly WORSE.
+        #
+        # Lesson for the next person: rank kernels with a traced per-op profile, never
+        # with a host-side loop around one op.
+        # The knob is kept for A/B: QWEN3_TTS_SAMPLING_TOPK_GRID=XxY, 0x0 = full grid.
+        _tg = os.environ.get("QWEN3_TTS_SAMPLING_TOPK_GRID", "0x0")
+        try:
+            _tx, _ty = (int(v) for v in _tg.lower().split("x"))
+        except ValueError:
+            _tx = _ty = 0
+        if _tx > 0 and _ty > 0 and _tx <= _grid.x and _ty <= _grid.y:
+            self._topk_grid = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_tx - 1, _ty - 1))]
+            )
+        else:
+            self._topk_grid = self._full_grid
+        # ttnn.sampling runs one core per user; we have a single user (batch=1).
+        self._sampling_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(0, 0), 1, self._full_grid, row_wise=True
+        )
+        self._mesh_mapper = _replicate_mapper(device)
+        # With TP > 1 every chip runs this sampling chain on its OWN copy of the
+        # logits, and the model's tensor-parallel path does not produce bit-identical
+        # logits on every device: in the real demo a few percent of sampled tokens
+        # differ between the two N300 chips. That is invisible while the host
+        # samples (it reads chip 0 and broadcasts one embedding back), but fatal once
+        # the token is embedded ON device: each chip would embed a different token and
+        # the tensor-parallel halves silently diverge, which degenerated generation and
+        # stopped it ever reaching EOS. So all_gather the sampled id and keep device
+        # 0's, making every chip agree by construction.
+        from models.demos.qwen3_tts.tt.mesh_utils import get_mesh_shape, get_tp_size
+
+        self._tp_size = get_tp_size(device)
+        if self._tp_size > 1:
+            _rows, _cols = get_mesh_shape(device)
+            self._cluster_axis = 1 if _rows == 1 else 0
+        else:
+            self._cluster_axis = None
+
+        def _rm(t, dtype):
+            return ttnn.from_torch(
+                t, device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mesh_mapper
+            )
+
+        # k=1: the top-k truncation is already applied by the noise tile, so the
+        # sampling kernel only has to return the argmax of the perturbed values.
+        self.k_tensor = _rm(torch.full((1,), 1, dtype=torch.int32), ttnn.uint32)
+        self.p_tensor = _rm(torch.full((1,), 1.0, dtype=torch.float32), ttnn.bfloat16)
+        # temp multiplies the values before the kernel's softmax (it is 1/T, not T),
+        # but with k=1 the softmax collapses to a single candidate, so 1.0 is correct
+        # and the real temperature is carried by the noise scale instead.
+        self.temp_tensor = _rm(torch.full((1,), 1.0, dtype=torch.float32), ttnn.bfloat16)
+
+        # [1, 32, 1, 64]: one tile per slot along dim 1 so row slices are tile-aligned
+        # (the old [1, 1, 32, 64] layout lowered to Untilize→Slice→Tilize per call).
+        self.noise_tt = ttnn.from_torch(
+            torch.zeros(1, _NOISE_SLOTS, 1, _SAMPLING_TOPK, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._mesh_mapper,
+        )
+        # Host-side scratch reused every frame (no per-frame allocation).
+        self._noise_cpu = torch.empty(1, _NOISE_SLOTS, 1, _SAMPLING_TOPK, dtype=torch.float32)
+        self._noise_cpu[..., self.top_k :] = _SAMPLING_NEG
+        self._zero_noise = os.environ.get("QWEN3_TTS_CP_NOISE", "1") == "0"
+
+    def alloc_token_buf(self) -> ttnn.Tensor:
+        """Sampled-token buffer, shaped ``[1, 1]`` so it feeds ``ttnn.embedding`` directly."""
+        return ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._mesh_mapper,
+        )
+
+    def warm_ccl(self) -> None:
+        """Force the token all_gather's global semaphores to exist before trace capture.
+
+        ``ttnn.all_gather`` allocates its CCL semaphores lazily on first use. First use
+        would otherwise be the fused frame's untraced warmup, i.e. after the Talker
+        traces were captured — and a buffer allocated then can be overwritten when
+        those traces replay (see the unsafe-allocation note on the table upload).
+        """
+        if self._tp_size <= 1:
+            return
+        tok = self.alloc_token_buf()
+        gathered = ttnn.all_gather(
+            ttnn.reshape(tok, [1, 1, 1, 1]),
+            dim=-1,
+            cluster_axis=self._cluster_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(gathered)
+        ttnn.deallocate(tok)
+
+    def _fill_noise_cpu(self) -> None:
+        if self._zero_noise:
+            self._noise_cpu[0, :, 0, : self.top_k] = 0.0
+            return
+        u = torch.rand(_NOISE_SLOTS, self.top_k, generator=self._noise_gen)
+        u.clamp_(1e-12, 1.0 - 1e-12)
+        # Gumbel(0,1) = -log(-log(u)); fold the temperature in (argmax is scale-free).
+        self._noise_cpu[0, :, 0, : self.top_k] = -torch.log(-torch.log(u)) * self.temperature
+
+    def prebuild_noise(self, n_frames: int) -> None:
+        """Draw and tilize every frame's Gumbel tile up front.
+
+        ``refresh_noise`` did the draw AND the ``ttnn.from_torch`` (which tilizes and
+        replicates across the mesh on the host) inside the AR loop, both of them costing
+        more than the H2D that actually had to be there. None of it depends on anything
+        the frame computes, so it all moves to setup.
+
+        The draws come from a private generator seeded off the global RNG, so a run is
+        still reproducible from ``--seed`` and the tile sequence no longer depends on
+        how many times the AR loop happens to touch the global RNG.
+        """
+        self._noise_hosts = []
+        for _ in range(n_frames):
+            self._fill_noise_cpu()
+            self._noise_hosts.append(
+                ttnn.from_torch(
+                    self._noise_cpu.bfloat16(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=self._mesh_mapper,
+                )
+            )
+
+    def refresh_noise(self, step: int = -1) -> None:
+        """Upload this frame's Gumbel tile (one ~4 KB H2D/frame).
+
+        With :meth:`prebuild_noise` called, ``step`` picks a pre-drawn, pre-tilized
+        host tile and only the H2D happens here. Otherwise the tile is drawn now.
+        """
+        if self._noise_hosts is not None and 0 <= step < len(self._noise_hosts):
+            ttnn.copy_host_to_device_tensor(self._noise_hosts[step], self.noise_tt)
+            return
+        # Debug gate _zero_noise: with no noise, Gumbel-max degenerates to argmax over
+        # the top-k, so the whole device chain must reproduce the host greedy path
+        # token-for-token. Used to prove the chain independently of the RNG.
+        self._fill_noise_cpu()
+        host = ttnn.from_torch(
+            self._noise_cpu.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._mesh_mapper,
+        )
+        ttnn.copy_host_to_device_tensor(host, self.noise_tt)
+
+    def append_sampling(self, logits_tt: ttnn.Tensor, slot: int, out_tok_tt: ttnn.Tensor) -> None:
+        """Append the sampling chain for one step; safe inside ``begin_trace_capture``.
+
+        ``logits_tt`` is ``[1, 1, 1, vocab]`` BFLOAT16 TILE. ``slot`` selects which row
+        of the noise tile this call consumes — every call in a frame must use a
+        different slot, or they would share one Gumbel draw.
+        """
+        vocab = int(logits_tt.shape[-1])
+        target_w = _sampling_topk_width(vocab, int(logits_tt.shape[-2]))
+        if vocab < target_w:
+            padded = ttnn.pad(
+                logits_tt,
+                [(0, 0), (0, 0), (0, 0), (0, target_w - vocab)],
+                value=_SAMPLING_NEG,
+            )
+        else:
+            padded = logits_tt
+        values, indices = ttnn.topk(
+            padded,
+            k=_SAMPLING_TOPK,
+            dim=-1,
+            largest=True,
+            sorted=True,
+            sub_core_grids=self._topk_grid,
+        )
+        if padded is not logits_tt:
+            ttnn.deallocate(padded)
+        noise_row = ttnn.slice(self.noise_tt, [0, slot, 0, 0], [1, slot + 1, 1, _SAMPLING_TOPK])
+        perturbed = ttnn.add(values, noise_row)
+        ttnn.deallocate(values)
+        ttnn.deallocate(noise_row)
+        # ttnn.topk emits UINT16 TILE indices; sampling needs UINT32 ROW_MAJOR.
+        idx_rm = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(indices)
+        idx_u32 = ttnn.typecast(idx_rm, ttnn.uint32)
+        ttnn.deallocate(idx_rm)
+        tok4 = ttnn.reshape(out_tok_tt, [1, 1, 1, 1])
+        ttnn.sampling(
+            perturbed,
+            idx_u32,
+            k=self.k_tensor,
+            p=self.p_tensor,
+            temp=self.temp_tensor,
+            seed=self.seed,
+            sub_core_grids=self._sampling_grid,
+            output_tensor=tok4,
+        )
+        ttnn.deallocate(perturbed)
+        ttnn.deallocate(idx_u32)
+        if self._tp_size > 1:
+            gathered = ttnn.all_gather(
+                tok4, dim=-1, cluster_axis=self._cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            first = ttnn.slice(gathered, [0, 0, 0, 0], [1, 1, 1, 1])
+            ttnn.deallocate(gathered)
+            ttnn.assign(first, tok4)
+            ttnn.deallocate(first)
+
+
+def _replicate_mapper(device):
+    """ReplicateTensorToMesh for a multi-chip mesh, else None (plain from_torch)."""
+    try:
+        if device.__class__.__name__ == "MeshDevice" and device.get_num_devices() > 1:
+            return ttnn.ReplicateTensorToMesh(device)
+    except Exception:
+        pass
+    return None
+
+
+def upload_embed_tables(device, codec_embed_torch: torch.Tensor, code_pred_embeds: List[torch.Tensor]):
+    """Upload the 16 codec embedding tables to device for in-trace ``ttnn.embedding``.
+
+    Returns ``(codec_embed_tt, [code_pred_embed_tt, ...])``, ROW_MAJOR BFLOAT16.
+    ``ttnn.embedding`` requires BFLOAT16 weights; the checkpoint stores these tables
+    as BF16 already (``load_weights`` only calls ``.float()`` on them), so the upload
+    is value-exact and a float32 embedding *output* summed on device reproduces the
+    host ``F.embedding`` + float32 accumulate bit-for-bit.
+    """
+    mapper = _replicate_mapper(device)
+
+    def _up(t):
+        return ttnn.from_torch(
+            t.bfloat16(),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    return _up(codec_embed_torch), [_up(t) for t in code_pred_embeds]
+
+
+def append_device_embedding(tok_tt: ttnn.Tensor, table_tt: ttnn.Tensor, hidden: int, dtype=ttnn.bfloat16):
+    """``ttnn.embedding`` for a single device-resident token id -> ``[1,1,1,hidden]`` TILE."""
+    emb = ttnn.embedding(tok_tt, table_tt, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    out = ttnn.reshape(emb, [1, 1, 1, hidden])
+    return out
+
+
+@dataclass
+class FusedCpState:
+    """Everything the fused single-trace CP frame needs.
+
+    The whole CodePredictor frame — constant restore, prefill-input build, prefill,
+    all ``num_code_groups - 2`` decode steps, every sample, and the accumulated
+    Talker input embedding — is captured as ONE Metal trace. The autoregressive
+    dependency between CP steps used to force a host round-trip per step (sample on
+    CPU, ``F.embedding``, H2D the next input); with sampling and the embedding
+    lookup both on device, the chain closes on-device and the 14 steps become one
+    replay.
+
+    Per frame the host does: one H2D of a pre-drawn Gumbel noise tile, one
+    ``execute_trace``, and one D2H of all 16 sampled token ids. Code 0 is sampled by
+    the Talker trace straight into ``tok_bufs[0]``, and the trailing-text row is only
+    re-uploaded when it changes, so neither normally costs an H2D. Everything else
+    stays on device.
+    """
+
+    trace_id: int
+    tokens_out: Any  # [1,1,1,num_code_groups] uint32 RM: codes 0..15, one D2H/frame
+    tok_bufs: List[Any]  # [1,1] uint32 RM per code group; [0] is H2D'd from the Talker
+    sampler: Any  # _DeviceSampler
+    trail_row_tt: Any  # [1,1,1,H] fp32: trailing-text (or pad) row for this frame
+    trail_row_h2d: List[Any]  # prebuilt host rows, indexed by decode step
+    src_hidden_tt: Any = None  # persistent copy of the Talker hidden (see below)
+    restores_in_trace: bool = True  # False -> loop does them eagerly (bisection flag)
+    codec_embed_tt: Any = None  # device copy of the 3072-row talker codec table
+    builds_talker_embed: bool = True  # False -> host rebuilds it (bisection flag)
+
+
+def build_trailing_row_h2d(
+    trailing_text_hidden: torch.Tensor,
+    tts_pad_embed: torch.Tensor,
+    max_new_tokens: int,
+) -> list:
+    """Prebuild the per-step trailing-text row uploaded into the fused CP trace.
+
+    The Talker's next input embedding is ``sum_i embed(code_i) + trailing_row[step]``.
+    The embedding sum runs on device, but ``trailing_text_hidden`` comes out of a
+    float32 projection and is NOT bf16-representable, so it cannot go through
+    ``ttnn.embedding`` (which requires bf16 weights) without perturbing the Talker
+    input. Uploading the single float32 row we need each frame keeps the sum
+    bit-exact with the host path for one ~8 KB H2D.
+
+    Past ``trailing_len`` every step uploads the SAME pad row, so those entries are one
+    shared host tensor: the loop compares identity and skips the H2D when it would
+    rewrite bytes the device buffer already holds. An H2D costs about the same wall time
+    whatever its size, and a long utterance spends most of its frames past the trailing
+    text.
+    """
+    trailing_len = int(trailing_text_hidden.shape[1])
+
+    def _to_host(row):
+        return ttnn.from_torch(row.reshape(1, 1, 1, -1).float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+    pad_row_host = _to_host(tts_pad_embed)
+    rows = []
+    for step in range(max_new_tokens):
+        rows.append(_to_host(trailing_text_hidden[:, step : step + 1, :]) if step < trailing_len else pad_row_host)
+    return rows
+
+
+def capture_fused_cp_trace(
+    device,
+    model,
+    config,
+    *,
+    cp_trans_mat,
+    cp_kv_caches_persistent,
+    cp_kv_zero_hosts,
+    cp_prefill_embed_tt,
+    cp_prefill_mask_tt,
+    cp_prefill_cos_tt,
+    cp_prefill_sin_tt,
+    cp_prefill_mask_src,
+    cp_prefill_cos_src,
+    cp_prefill_sin_src,
+    cp_decode_embed_tt,
+    cp_decode_cos_tts,
+    cp_decode_sin_tts,
+    cp_decode_mask_tts,
+    talker_hidden_src_tt,
+    talker_embed_dst_tt,
+    codec_embed_tt,
+    cp_embed_tts,
+    talker_h: int,
+    sampler,
+    tok_bufs: list,
+    trail_row_tt,
+    trail_row_h2d: list,
+    build_talker_embed: bool = True,
+    restore_in_trace: bool = True,
+) -> FusedCpState:
+    """Capture the entire CP frame as one trace. See :class:`FusedCpState`."""
+    n_codes = config.num_code_groups
+    assert len(tok_bufs) == n_codes, "tok_bufs must be pre-allocated before any trace capture"
+    hidden_seq = int(talker_hidden_src_tt.shape[2])
+
+    def _body():
+        # (1) Restore the CP constants that the Talker's paged_update_cache clobbers,
+        # and re-zero the CP KV caches. These were 3 + 2*num_layers host-dispatched
+        # ttnn.assign calls per frame; inside the trace they cost no dispatch at all.
+        if restore_in_trace:
+            ttnn.assign(cp_prefill_mask_src, cp_prefill_mask_tt)
+            ttnn.assign(cp_prefill_cos_src, cp_prefill_cos_tt)
+            ttnn.assign(cp_prefill_sin_src, cp_prefill_sin_tt)
+            for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
+                ttnn.assign(k_zero, k_cache)
+                ttnn.assign(v_zero, v_cache)
+
+        # (2) CP prefill input = [Talker hidden (last pos) ; embed(code0)], on device.
+        # Was: D2H the Talker hidden, host F.embedding, torch.cat, H2D.
+        if hidden_seq > 1:
+            h_last = ttnn.slice(talker_hidden_src_tt, [0, 0, hidden_seq - 1, 0], [1, 1, hidden_seq, talker_h])
+        else:
+            h_last = talker_hidden_src_tt
+        e0 = append_device_embedding(tok_bufs[0], codec_embed_tt, talker_h, dtype=ttnn.bfloat16)
+        cp_in = ttnn.concat([h_last, e0], dim=2)
+        ttnn.deallocate(e0)
+        if hidden_seq > 1:
+            ttnn.deallocate(h_last)
+        # Land it in the buffer the untraced path used, so the forward sees the exact
+        # same tensor spec (L1, bf16, TILE) it was tuned for.
+        ttnn.assign(cp_in, cp_prefill_embed_tt)
+        ttnn.deallocate(cp_in)
+
+        # (3) CP prefill -> sample code 1.
+        logits_pf, _ = model.code_predictor.forward_single_step(
+            cp_prefill_embed_tt,
+            cp_prefill_cos_tt,
+            cp_prefill_sin_tt,
+            cp_trans_mat,
+            generation_step=1,
+            kv_caches=cp_kv_caches_persistent,
+            start_pos=0,
+            mode="prefill",
+            cp_prefill_mask=cp_prefill_mask_tt,
+            return_hidden_state=False,
+        )
+        vocab = int(logits_pf.shape[3])
+        # Prefill emits [1,1,2,vocab]; only position 1 (post-code0) is a prediction.
+        lg1 = ttnn.slice(logits_pf, [0, 0, 1, 0], [1, 1, 2, vocab])
+        ttnn.deallocate(logits_pf)
+        sampler.append_sampling(lg1, 0, tok_bufs[1])
+        ttnn.deallocate(lg1)
+
+        # (4) Decode steps 2..n-1: embed the previous sampled token on device, run one
+        # CP step, sample. No host in the loop.
+        for slot, code_idx in enumerate(range(2, n_codes), start=1):
+            emb = append_device_embedding(
+                tok_bufs[code_idx - 1], cp_embed_tts[code_idx - 2], talker_h, dtype=ttnn.bfloat16
+            )
+            ttnn.assign(emb, cp_decode_embed_tt)
+            ttnn.deallocate(emb)
+            logits_dc, _ = model.code_predictor.forward_single_step(
+                cp_decode_embed_tt,
+                cp_decode_cos_tts[slot - 1],
+                cp_decode_sin_tts[slot - 1],
+                cp_trans_mat,
+                generation_step=code_idx,
+                kv_caches=cp_kv_caches_persistent,
+                start_pos=code_idx,
+                mode="decode",
+                cur_pos_tensor=None,
+                decode_attn_mask=cp_decode_mask_tts[slot - 1],
+                return_hidden_state=False,
+            )
+            sampler.append_sampling(logits_dc, slot, tok_bufs[code_idx])
+            ttnn.deallocate(logits_dc)
+
+        # (5) All sampled ids concatenated so the host needs ONE D2H (64 bytes) per
+        # frame instead of one blocking read per CP step. Code 0 is included even
+        # though this trace does not sample it: when the Talker trace does (see
+        # codec0_in_talker_trace), tok_bufs[0] is already on device and folding it in
+        # here costs one element of an existing concat, while sparing the loop a
+        # SECOND D2H for it — and on this host a D2H costs the same wall time whatever
+        # its size, making it the most expensive non-trace item in the frame.
+        tokens = ttnn.concat([ttnn.reshape(t, [1, 1, 1, 1]) for t in tok_bufs], dim=-1)
+
+        # (6) Next Talker input embedding, accumulated on device in float32 (which is
+        # bit-exact with the host's F.embedding + float32 sum, since every codec table
+        # is bf16 in the checkpoint). Replaces host embedding work plus a wide H2D.
+        if not build_talker_embed:
+            return tokens
+        acc = append_device_embedding(tok_bufs[0], codec_embed_tt, talker_h, dtype=ttnn.float32)
+        for i in range(1, n_codes):
+            row = append_device_embedding(tok_bufs[i], cp_embed_tts[i - 1], talker_h, dtype=ttnn.float32)
+            nxt = ttnn.add(acc, row)
+            ttnn.deallocate(acc)
+            ttnn.deallocate(row)
+            acc = nxt
+        with_trail = ttnn.add(acc, trail_row_tt)
+        ttnn.deallocate(acc)
+        talker_embed = ttnn.typecast(with_trail, ttnn.bfloat16)
+        ttnn.deallocate(with_trail)
+        ttnn.assign(talker_embed, talker_embed_dst_tt)
+        ttnn.deallocate(talker_embed)
+        return tokens
+
+    # Untraced warmup: every program in the body must already be in the cache, or
+    # trace capture hits "Writes are not supported during trace capture".
+    print("  Untraced warmup: fused CP frame (prefill + decode steps + sampling)...")
+    warm_tokens = _body()
+    ttnn.deallocate(warm_tokens)
+    ttnn.synchronize_device(device)
+
+    print("  Capturing fused CP frame trace (1 trace for the whole CodePredictor frame)...")
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        tokens_out = _body()
+    finally:
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+    ttnn.mark_corruptible(tokens_out)
+    print(f"  Fused CP trace captured (tokens_out {tokens_out.shape}).")
+
+    return FusedCpState(
+        trace_id=trace_id,
+        tokens_out=tokens_out,
+        tok_bufs=tok_bufs,
+        sampler=sampler,
+        trail_row_tt=trail_row_tt,
+        trail_row_h2d=trail_row_h2d,
+        src_hidden_tt=talker_hidden_src_tt,
+        codec_embed_tt=codec_embed_tt,
+        restores_in_trace=restore_in_trace,
+        builds_talker_embed=build_talker_embed,
+    )
+
+
+def _sample_token_gumbel_emulation(logits_1d: torch.Tensor, temperature: float, top_k: int) -> int:
+    """Host emulation of the in-trace device sampler, op for op.
+
+    Bisection tool only (QWEN3_TTS_CP_HOST_GUMBEL=1): runs the exact algorithm
+    _DeviceSampler appends to the trace — topk to 64 on the bf16 logits, add
+    T*Gumbel to the values, mask ranks >= top_k, argmax, gather through the topk
+    indices — but on the host, so a behavioural difference between this and
+    :func:`sample_token` separates "the algorithm" from "the device implementation".
+    """
+    vals, idx = torch.topk(logits_1d.bfloat16().float(), _SAMPLING_TOPK)
+    u = torch.rand(_SAMPLING_TOPK).clamp_(1e-12, 1.0 - 1e-12)
+    noise = -torch.log(-torch.log(u)) * temperature
+    k = min(top_k, _SAMPLING_TOPK) if top_k > 0 else _SAMPLING_TOPK
+    noise[k:] = _SAMPLING_NEG
+    pert = (vals.bfloat16() + noise.bfloat16()).bfloat16()
+    return int(idx[int(pert.argmax())])
+
+
+def sample_from_tt_vocab_logits(
+    logits_tt: ttnn.Tensor,
+    *,
+    temperature: float,
+    top_k: int,
+    greedy: bool,
+    repetition_penalty: float = 1.0,
+    generated_tokens: Optional[List[int]] = None,
+    prof_acc: Optional[Dict[str, float]] = None,
+) -> int:
+    """Argmax or sample from on-device logits [..., seq, vocab].
+
+    **Greedy** uses full-vocab ``to_torch`` then CPU ``argmax`` (same sequence-axis
+    handling as sampling). The previous ``untilize`` + on-device ``argmax`` path
+    could return invalid token IDs for some sliced / trace-backed logits tensors,
+    which then broke ``F.embedding`` in the CP decode loop.
+
+    **Sampling** (temperature / top_k / multinomial) uses full-vocab ``to_torch`` on
+    device logits, then :func:`sample_token` on the host. On-device top-k paths were
+    measured as slower than bf16 logits D2H for this demo's vocab width and trace count.
+
+    If ``prof_acc`` is set, adds seconds to keys ``device_logits`` (full logits
+    ``to_torch``) and ``cpu_sample`` (:func:`sample_token` only).
+    """
+    _pc = time.perf_counter
+    t0 = _pc() if prof_acc is not None else 0.0
+    th = _mesh_to_torch(logits_tt, dtype=torch.bfloat16)
+    if th.ndim >= 3 and th.shape[-2] > 1:
+        th = th[:, :, -1, :]
+    th1d = th.reshape(-1).contiguous()
+    t1 = _pc() if prof_acc is not None else 0.0
+    if greedy:
+        out = int(th1d.float().argmax().item())
+        if prof_acc is not None:
+            prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (t1 - t0)
+        return out
+    with torch.inference_mode():
+        if os.environ.get("QWEN3_TTS_CP_HOST_GUMBEL", "0") == "1":
+            out = _sample_token_gumbel_emulation(th1d, temperature, top_k)
+        else:
+            out = sample_token(
+                th1d,
+                temperature,
+                top_k,
+                greedy,
+                repetition_penalty,
+                generated_tokens,
+            )
+    if prof_acc is not None:
+        prof_acc["device_logits"] = prof_acc.get("device_logits", 0.0) + (t1 - t0)
+        prof_acc["cpu_sample"] = prof_acc.get("cpu_sample", 0.0) + (_pc() - t1)
+    return out
+
+
+SUPPORTED_PREFILL_LENS = list(PREFILL_SEQS)
+
+
+def get_padded_prefill_len(seq_len: int) -> int:
+    """Get the smallest supported prefill length >= seq_len."""
+    for bucket in SUPPORTED_PREFILL_LENS:
+        if seq_len <= bucket:
+            return bucket
+    return SUPPORTED_PREFILL_LENS[-1]
+
+
+def build_prefill_attn_mask(
+    real_seq_len: int,
+    padded_seq_len: int,
+    max_seq_len: int,
+    num_heads: int,
+) -> torch.Tensor:
+    """Build a causal + padding mask for traced Talker prefill.
+
+    Returns float32 tensor [1, num_heads, padded_seq_len, max_seq_len]:
+      - Row i can attend to columns 0..min(i, real_seq_len-1)
+      - All other positions (padding columns, future columns, empty cache) are -inf
+    """
+    mask = torch.full((1, num_heads, padded_seq_len, max_seq_len), float("-inf"))
+    for i in range(padded_seq_len):
+        end_j = min(i + 1, real_seq_len)
+        mask[0, :, i, :end_j] = 0.0
+    return mask
+
+
+def generate_codes_ttnn(
+    model,
+    device,
+    inputs_embeds_tt: ttnn.Tensor,
+    trailing_text_hidden: torch.Tensor,
+    tts_pad_embed: torch.Tensor,
+    code_pred_embeds: list,
+    config: TTSConfig,
+    use_kv_cache: bool = True,
+    use_trace: bool = True,
+    use_2cq: bool = False,
+    streaming_decoder=None,
+) -> Union[Tuple[torch.Tensor, dict], Tuple[None, dict]]:
+    """
+    Generate codec tokens autoregressively using TTNN Talker and CodePredictor.
+
+    Flow (SpeechT5-style):
+    Following the tt-metal reference pattern (generator.py / simple_text_demo.py):
+    1. Pad input to bucket size + build causal+padding mask
+    2. Warmup: compile ALL TTNN kernels with exact shapes (dummy data)
+    3. Allocate persistent KV caches
+    4. Run Talker prefill NON-TRACED (fills KV cache, gets first token)
+    5. Capture decode traces: Talker decode, CP prefill, CP decode x13
+    6. Generation loop: execute traces only (measured inference)
+
+    Args:
+        model: Qwen3TTS model (TTNN)
+        device: TTNN device
+        inputs_embeds_tt: Initial embeddings [1, 1, seq_len, 2048]
+        trailing_text_hidden: Remaining text embeddings
+        tts_pad_embed: Padding embedding
+        code_pred_embeds: List of CodePredictor embedding weights (for codes 1-15)
+        config: TTS configuration
+        use_kv_cache: Must be True — False raises NotImplementedError (no cacheless path)
+        use_trace: Must be True — False raises NotImplementedError (no untraced path)
+        use_2cq: If True, issue H2D copies on CQ1 and overlap with trace on CQ0 (requires
+            device opened with num_command_queues=2; see tech_reports/AdvancedPerformanceOptimizationsForModels).
+
+    Returns:
+        (codes, compile_timings): codes are [seq_len, 16] or None. compile_timings holds
+        warmup, trace_capture, avg_decode_ms, steady_avg_decode_ms, steady_frames_per_sec,
+        num_generated_frames, and use_2cq.
+    """
+    from models.demos.qwen3_tts.tt.rope import compute_rope_frequencies, get_rope_tensors, get_transformation_mat
+
+    # Neither switch was ever honoured: this path allocates the Talker/CP KV caches and
+    # captures and replays the prefill, Talker and CP traces unconditionally, so a caller
+    # asking for either mode silently got the traced, cached one anyway. Refuse the value
+    # rather than accept and ignore it — building real untraced / cacheless paths is a
+    # separate piece of work, and until then the honest answer is "not supported".
+    if not use_kv_cache:
+        raise NotImplementedError(
+            "use_kv_cache=False (--no-kv-cache) is not supported: this path always uses the Talker and "
+            "CodePredictor KV caches."
+        )
+    if not use_trace:
+        raise NotImplementedError(
+            "use_trace=False (--no-trace) is not supported: this path always captures and replays the "
+            "prefill, Talker and CodePredictor traces."
+        )
+
+    print("\nGenerating codes with TTNN (with KV cache)...")
+    if use_2cq:
+        print("2 CQ: H2D on CQ1, traces on CQ0 (AdvancedPerformanceOptimizationsForModels §2.3.2)")
+
+    # Get transformation matrices
+    talker_trans_mat = get_transformation_mat(model.talker_config.head_dim, device)
+    cp_trans_mat = get_transformation_mat(model.code_predictor_config.head_dim, device)
+
+    # Get codec embedding for building next input (Talker embedding for code 0)
+    codec_embed_torch = _mesh_to_torch(model.talker.codec_embedding).squeeze(0).squeeze(0).float()
+
+    all_codes = []
+    real_seq_len = inputs_embeds_tt.shape[2]
+    talker_h = model.talker_config.hidden_size
+    head_dim = model.talker_config.head_dim
+    # Use per-chip (local) head counts when TP>1 — attn masks and program configs must match.
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+
+    _tp = get_tp_size(model.device) if model.device.__class__.__name__ == "MeshDevice" else 1
+    _talker_num_heads = model.talker_config.num_attention_heads // _tp
+    cp_head_dim = model.code_predictor_config.head_dim
+    cp_rope_theta = model.code_predictor_config.rope_theta
+    _cp_num_heads = model.code_predictor_config.num_attention_heads // _tp
+    max_cp_seq_len = 32
+
+    # === STEP 1: Pad input to bucket size ===
+    # Multiple traced-prefill buckets — short prompts (e.g. 61 tokens) take
+    # bucket 64 to avoid numerical drift from padding deeper into a 128 trace.
+    _TRACED_PREFILL_BUCKETS = (32, 64, 128)
+    if real_seq_len <= _TRACED_PREFILL_BUCKETS[-1]:
+        padded_seq_len = next(b for b in _TRACED_PREFILL_BUCKETS if b >= real_seq_len)
+    else:
+        padded_seq_len = get_padded_prefill_len(real_seq_len)
+    print(f"  Input padding: {real_seq_len} -> {padded_seq_len} (bucket)")
+
+    if padded_seq_len > real_seq_len:
+        pad_len = padded_seq_len - real_seq_len
+        pad_zeros = ttnn.from_torch(
+            torch.zeros(1, 1, pad_len, talker_h, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        inputs_embeds_tt = ttnn.concat([inputs_embeds_tt, pad_zeros], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(pad_zeros)
+
+    _TILE = 32
+    max_talker_seq_len = (((padded_seq_len + config.max_new_tokens + 16) + _TILE - 1) // _TILE) * _TILE
+
+    # Pre-compute RoPE tables
+    _max_rope_pos = max_talker_seq_len + config.max_new_tokens + 50
+    talker_cos_table, talker_sin_table = compute_rope_frequencies(
+        head_dim, _max_rope_pos, model.talker_config.rope_theta
+    )
+    cp_cos_table, cp_sin_table = compute_rope_frequencies(cp_head_dim, max_cp_seq_len + 5, cp_rope_theta)
+
+    # === STEP 2: Warmup — compile ALL kernels with exact shapes ===
+    t_warmup_start = time.time()
+    print(f"  Warmup: compiling kernels for padded_prefill={padded_seq_len}, decode=1 ...")
+
+    # --- Talker prefill warmup: standard prefill (no mask, attention over seq_len only) ---
+    wu_pf = ttnn.from_torch(
+        torch.zeros(1, 1, padded_seq_len, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_pf_pos = torch.arange(padded_seq_len)
+    wu_pf_cos, wu_pf_sin = get_rope_tensors(device, head_dim, padded_seq_len, wu_pf_pos, model.talker_config.rope_theta)
+    wu_talker_kv = allocate_kv_cache(
+        device=device,
+        num_layers=model.talker_config.num_hidden_layers,
+        batch_size=1,
+        num_kv_heads=model.talker_config.num_key_value_heads,
+        max_seq_len=max_talker_seq_len,
+        head_dim=head_dim,
+    )
+    wu_pf_hidden, wu_talker_kv = model.talker.forward_from_hidden(
+        wu_pf,
+        wu_pf_cos,
+        wu_pf_sin,
+        talker_trans_mat,
+        kv_caches=wu_talker_kv,
+        start_pos=0,
+        mode="prefill",
+    )
+    _ = model.talker.get_codec_logits(wu_pf_hidden)
+
+    # --- Talker decode warmup: paged_update_cache + full-cache attention ---
+    wu_dc = ttnn.from_torch(
+        torch.zeros(1, 1, 1, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_dc_pos = torch.tensor([padded_seq_len])
+    wu_dc_cos, wu_dc_sin = get_rope_tensors(device, head_dim, 1, wu_dc_pos, model.talker_config.rope_theta)
+    wu_cur_pos = ttnn.from_torch(
+        torch.tensor([padded_seq_len], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # Same bf16 single-head shape the traced decode masks use, so this warmup fills
+    # the program cache with the entries the traces actually need.
+    wu_decode_mask = ttnn.from_torch(
+        torch.full((1, 1, 1, max_talker_seq_len), float("-inf")).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_talker_hidden = model.talker.forward_from_hidden(
+        wu_dc,
+        wu_dc_cos,
+        wu_dc_sin,
+        talker_trans_mat,
+        kv_caches=wu_talker_kv,
+        start_pos=padded_seq_len,
+        mode="decode",
+        cur_pos_tensor=wu_cur_pos,
+        decode_attn_mask=wu_decode_mask,
+    )[0]
+    _ = model.talker.get_codec_logits(wu_talker_hidden)
+    deallocate_kv_cache(wu_talker_kv)
+    ttnn.deallocate(wu_cur_pos)
+    ttnn.deallocate(wu_decode_mask)
+
+    # --- CP warmups (same as before) ---
+    wu_cp2 = ttnn.from_torch(
+        torch.zeros(1, 1, 2, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_cp2_pos = torch.arange(2)
+    wu_cp2_cos, wu_cp2_sin = get_rope_tensors(device, cp_head_dim, 2, wu_cp2_pos, cp_rope_theta)
+    wu_cp_kv = allocate_kv_cache(
+        device=device,
+        num_layers=model.code_predictor_config.num_hidden_layers,
+        batch_size=1,
+        num_kv_heads=model.code_predictor_config.num_key_value_heads,
+        max_seq_len=max_cp_seq_len,
+        head_dim=cp_head_dim,
+    )
+    wu_cp_prefill_mask_host = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
+    wu_cp_prefill_mask_host[0, :, 0, 0] = 0.0
+    wu_cp_prefill_mask_host[0, :, 1, 0:2] = 0.0
+    wu_cp_prefill_mask_tt = ttnn.from_torch(
+        wu_cp_prefill_mask_host,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    model.code_predictor.forward_single_step(
+        wu_cp2,
+        wu_cp2_cos,
+        wu_cp2_sin,
+        cp_trans_mat,
+        generation_step=1,
+        kv_caches=wu_cp_kv,
+        start_pos=0,
+        mode="prefill",
+        cp_prefill_mask=wu_cp_prefill_mask_tt,
+        return_hidden_state=False,
+    )
+    wu_cp1 = ttnn.from_torch(
+        torch.zeros(1, 1, 1, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_cp1_pos = torch.tensor([2])
+    wu_cp1_cos, wu_cp1_sin = get_rope_tensors(device, cp_head_dim, 1, wu_cp1_pos, cp_rope_theta)
+    wu_cp_decode_mask = ttnn.from_torch(
+        torch.full((1, _cp_num_heads, 1, max_cp_seq_len), float("-inf")),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    model.code_predictor.forward_single_step(
+        wu_cp1,
+        wu_cp1_cos,
+        wu_cp1_sin,
+        cp_trans_mat,
+        generation_step=2,
+        kv_caches=wu_cp_kv,
+        start_pos=2,
+        mode="decode",
+        cur_pos_tensor=None,
+        decode_attn_mask=wu_cp_decode_mask,
+        return_hidden_state=False,
+    )
+    ttnn.deallocate(wu_cp_decode_mask)
+    ttnn.deallocate(wu_cp_prefill_mask_tt)
+    deallocate_kv_cache(wu_cp_kv)
+    ttnn.synchronize_device(device)
+    for t in [wu_pf, wu_dc, wu_cp2, wu_cp1]:
+        ttnn.deallocate(t)
+    print("  Warmup complete.")
+    t_warmup_end = time.time()
+
+    # === STEP 3: Allocate persistent KV caches + pre-allocated trace tensors ===
+    # The fused CP frame (see capture_fused_cp_trace) needs the 16 codec embedding
+    # tables resident on device. Upload them HERE, *before* the Talker KV cache.
+    #
+    # This ordering is load-bearing, not cosmetic. The Talker decode trace's
+    # ttnn.experimental.paged_fused_update_cache writes ~4.4 MB PAST the end of its
+    # KV cache every frame; that is the pre-existing bug the per-frame "restore CP
+    # constants" ttnn.assign hack in the decode loop works around. Anything allocated
+    # after the Talker KV cache can land in that blast radius. With the tables
+    # allocated after it, a third of the codec table was overwritten every frame,
+    # silently giving the wrong code-0 embedding on many frames, which degenerated
+    # generation so it never reached EOS.
+    # Allocating before the cache puts the tables on the same side as the model
+    # weights, which are never hit. The integrity check after the first frame
+    # (QWEN3_TTS_CP_CHECK_CORRUPT=1) is how to confirm this if the layout changes.
+    use_fused_cp = os.environ.get("QWEN3_TTS_CP_FUSED", "1") != "0"
+    if config.greedy and os.environ.get("QWEN3_TTS_CP_FUSED_FORCE", "0") == "0":
+        # --greedy keeps the per-step argmax path by default. Forcing fusion under
+        # greedy (with QWEN3_TTS_CP_NOISE=0) is the A/B gate that proves the whole
+        # device chain reproduces the host path token-for-token.
+        use_fused_cp = False
+    if use_fused_cp and use_2cq:
+        print("  NOTE: fused CP frame does not use a second command queue; falling back to per-step traces.")
+        use_fused_cp = False
+
+    codec_embed_tt = None
+    cp_embed_tts = None
+    # QWEN3_TTS_CP_TABLES_LATE=1 restores the original (broken) ordering — tables
+    # uploaded after the traces are captured — as a reliable reproducer for the
+    # corruption. Keep it: it is the only way to re-test this hazard.
+    _tables_late = os.environ.get("QWEN3_TTS_CP_TABLES_LATE", "0") == "1"
+    _tables_mid = os.environ.get("QWEN3_TTS_CP_TABLES_MID", "0") == "1"
+
+    def _upload_cp_tables():
+        print("  Uploading 16 codec embedding tables for in-trace ttnn.embedding...")
+        _cp_tables_torch = [
+            code_pred_embeds[i] if i < len(code_pred_embeds) and code_pred_embeds[i] is not None else codec_embed_torch
+            for i in range(config.num_code_groups - 1)
+        ]
+        return upload_embed_tables(device, codec_embed_torch, _cp_tables_torch)
+
+    fused_sampler = None
+    fused_tok_bufs = None
+    fused_trail_row_tt = None
+    cp_src_hidden_tt = None
+    if use_fused_cp and not _tables_late and not _tables_mid:
+        codec_embed_tt, cp_embed_tts = _upload_cp_tables()
+
+    if use_fused_cp:
+        # Everything the fused CP frame keeps across frames is allocated HERE, before
+        # any trace capture. See the note above _upload_cp_tables: a buffer allocated
+        # after a capture can be overwritten when that trace replays. These are small,
+        # but they carry the sampler's randomness and the AR chain's tokens, so a
+        # silent clobber would corrupt generation exactly as the embedding table did.
+        fused_sampler = _DeviceSampler(device, top_k=config.top_k, temperature=config.temperature)
+        fused_tok_bufs = [fused_sampler.alloc_token_buf() for _ in range(config.num_code_groups)]
+        fused_sampler.warm_ccl()
+        # Host-side only (no device buffers), so this is safe before the captures.
+        fused_sampler.prebuild_noise(config.max_new_tokens)
+        fused_trail_row_tt = ttnn.from_torch(
+            torch.zeros(1, 1, 1, talker_h, dtype=torch.float32),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_replicate_mapper(device),
+        )
+        cp_src_hidden_tt = ttnn.from_torch(
+            torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_replicate_mapper(device),
+        )
+
+    talker_kv_caches = allocate_kv_cache(
+        device=device,
+        num_layers=model.talker_config.num_hidden_layers,
+        batch_size=1,
+        num_kv_heads=model.talker_config.num_key_value_heads,
+        max_seq_len=max_talker_seq_len,
+        head_dim=head_dim,
+    )
+    print(f"  Allocated Talker KV cache ({model.talker_config.num_hidden_layers} layers, max_seq={max_talker_seq_len})")
+
+    cp_kv_caches_persistent = allocate_kv_cache(
+        device=device,
+        num_layers=model.code_predictor_config.num_hidden_layers,
+        batch_size=1,
+        num_kv_heads=model.code_predictor_config.num_key_value_heads,
+        max_seq_len=max_cp_seq_len,
+        head_dim=cp_head_dim,
+    )
+    print(f"  Allocated CP KV cache ({model.code_predictor_config.num_hidden_layers} layers, max_seq={max_cp_seq_len})")
+
+    if use_fused_cp and _tables_mid:
+        # Bisection ordering: AFTER the KV caches but still BEFORE any trace capture.
+        codec_embed_tt, cp_embed_tts = _upload_cp_tables()
+
+    # Pre-allocate zero DEVICE tensors for CP KV cache reset between frames.
+    # Keeping them on device lets us use ttnn.assign (D2D) instead of
+    # copy_host_to_device_tensor (H2D) each frame — same zeros, no PCIe transfer.
+    cp_kv_zero_hosts = []
+    for layer_kv in cp_kv_caches_persistent:
+        k_cache, v_cache = layer_kv
+        k_zero = ttnn.from_torch(
+            torch.zeros(k_cache.shape[0], k_cache.shape[1], k_cache.shape[2], k_cache.shape[3], dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_zero = ttnn.from_torch(
+            torch.zeros(v_cache.shape[0], v_cache.shape[1], v_cache.shape[2], v_cache.shape[3], dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cp_kv_zero_hosts.append((k_zero, v_zero))
+
+    # === STEP 3.5: Capture Talker prefill traces for buckets [32, 64, 128] ===
+    # Standard path inside the trace — no prefill_attn_mask, so attention uses
+    # k=freshly projected (sliced, width=bucket) + fused SDPA (is_causal=True).
+    # Numerics identical to non-traced run. Cache write goes through fill_cache
+    # (constant batch_idx=0 → trace-safe).
+    TRACE_PREFILL_BUCKETS = [32, 64, 128]
+    talker_prefill_traces = {}
+    # Two passes on purpose. A trace replay writes to whatever addresses it wrote to
+    # during capture, and the temporaries it allocated then are handed back to the
+    # allocator at end_trace_capture — so ANY buffer allocated after a capture can be
+    # silently overwritten when that trace replays (tt-metal documents this in
+    # tech_reports/.../TraceCorrestness.md, "Unsafe allocations"; run with
+    # TT_METAL_TRACE_ALLOC_TRACKING=1 to have it checked). Allocating bucket 64's
+    # input/RoPE tensors — and the CCL global semaphores the warmup creates — after
+    # bucket 32 was already captured put them squarely in that window. So: allocate
+    # and warm up every bucket first, then capture them all.
+    _pf_bufs = {}
+    print(f"  Warmup (all buckets, before any capture) for {TRACE_PREFILL_BUCKETS}...")
+    for _bucket in TRACE_PREFILL_BUCKETS:
+        # Persistent input embed buffer (zero-padded; per-call copy_h2d overwrites).
+        _pf_embed_tt = ttnn.from_torch(
+            torch.zeros(1, 1, _bucket, talker_h, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # Constant RoPE for positions [0..bucket); baked into trace.
+        _pf_cos_tt, _pf_sin_tt = get_rope_tensors(
+            device, head_dim, _bucket, torch.arange(_bucket), model.talker_config.rope_theta
+        )
+        # Untraced warmup (compiles kernels, and creates the CCL semaphores).
+        _wu_h, _ = model.talker.forward_from_hidden(
+            _pf_embed_tt,
+            _pf_cos_tt,
+            _pf_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            start_pos=0,
+            mode="prefill",
+        )
+        _ = model.talker.get_codec_logits(_wu_h)
+        _pf_bufs[_bucket] = (_pf_embed_tt, _pf_cos_tt, _pf_sin_tt)
+    ttnn.synchronize_device(device)
+
+    # STEP 4's prefill RoPE is allocated here, before any capture, for the same
+    # unsafe-allocation reason: allocated after the captures it would be a buffer the
+    # prefill traces can overwrite on replay.
+    prefill_pos = torch.arange(padded_seq_len)
+    prefill_cos_tt, prefill_sin_tt = get_rope_tensors(
+        device, head_dim, padded_seq_len, prefill_pos, model.talker_config.rope_theta
+    )
+
+    print(f"  Capturing Talker prefill traces for buckets {TRACE_PREFILL_BUCKETS}...")
+    for _bucket in TRACE_PREFILL_BUCKETS:
+        _pf_embed_tt, _pf_cos_tt, _pf_sin_tt = _pf_bufs[_bucket]
+        _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            _trace_h, _ = model.talker.forward_from_hidden(
+                _pf_embed_tt,
+                _pf_cos_tt,
+                _pf_sin_tt,
+                talker_trans_mat,
+                kv_caches=talker_kv_caches,
+                start_pos=0,
+                mode="prefill",
+            )
+            _trace_logits = model.talker.get_codec_logits(_trace_h)
+        finally:
+            ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+        # Execute once after capture to warm up trace dispatch. Without this, the timed
+        # prefill in STEP 4 runs the trace cold (dispatch-path miss), which adds real
+        # variance to the prefill measurement.
+        ttnn.execute_trace(device, _trace_id, cq_id=0, blocking=True)
+        ttnn.synchronize_device(device)
+        # These live inside this bucket's trace, so they are "unsafe" for the other
+        # buckets' traces. That is fine and intended: exactly one bucket is replayed
+        # per run and its outputs are consumed immediately afterwards. Declare it so
+        # the trace-allocation checker can be used as a gate on this demo.
+        ttnn.mark_corruptible(_trace_h)
+        ttnn.mark_corruptible(_trace_logits)
+        talker_prefill_traces[_bucket] = {
+            "trace_id": _trace_id,
+            "embed_tt": _pf_embed_tt,
+            "hidden_out": _trace_h,
+            "logits_out": _trace_logits,
+        }
+        print(f"    bucket={_bucket}: trace captured + warmed")
+
+    # === STEP 4: Run Talker prefill (non-traced, standard path) ===
+    # Standard prefill: attention over seq_len (not full cache), much faster.
+    # The standard path in attention.py fills the KV cache via to_torch/from_torch,
+    # which may reallocate cache tensors. We capture the returned updated caches
+    # and use those for trace capture (same as the reference in generator.py).
+
+    # Prefill runs exactly ONCE per process, so any device op in the timed region that
+    # is not already in the program cache pays its full JIT compile there, which for
+    # the assign + slice below is seconds. Warm them here, on the real shapes, so the
+    # timed path only dispatches cached programs.
+    if padded_seq_len in talker_prefill_traces:
+        _pf_warm = talker_prefill_traces[padded_seq_len]
+        ttnn.assign(inputs_embeds_tt, _pf_warm["embed_tt"])
+        _warm_row = ttnn.slice(
+            _pf_warm["logits_out"],
+            [0, 0, real_seq_len - 1, 0],
+            [1, 1, real_seq_len, int(_pf_warm["logits_out"].shape[-1])],
+        )
+        _ = _mesh_to_torch_chip0(_warm_row)
+        ttnn.deallocate(_warm_row)
+        ttnn.synchronize_device(device)
+
+    ttnn.synchronize_device(device)
+    t_prefill_start = time.time()
+
+    generated_code0_tokens = []
+
+    if padded_seq_len in talker_prefill_traces:
+        _pf = talker_prefill_traces[padded_seq_len]
+        # inputs_embeds_tt is ALREADY on device with the trace buffer's shape, dtype
+        # and layout ([1, 1, bucket, hidden] bf16 TILE), so feed the trace with a D2D
+        # copy. This used to round-trip through the host (D2H -> from_torch -> H2D),
+        # which is bit-identical but moves 2 x 256 KB across PCIe for nothing.
+        ttnn.assign(inputs_embeds_tt, _pf["embed_tt"])
+        ttnn.execute_trace(device, _pf["trace_id"], cq_id=0, blocking=True)
+        prefill_logits_out = _pf["logits_out"]
+        prefill_hidden_out = _pf["hidden_out"]
+        # Only the LAST real position's logits are sampled, so slice that one row on
+        # device: the full [1, 1, bucket, 3072] read was 64x the bytes for one row.
+        _last_row = ttnn.slice(
+            prefill_logits_out,
+            [0, 0, real_seq_len - 1, 0],
+            [1, 1, real_seq_len, int(prefill_logits_out.shape[-1])],
+        )
+        codec_logits_torch = _mesh_to_torch_chip0(_last_row).flatten().float()
+        ttnn.deallocate(_last_row)
+        token_0 = sample_token(
+            codec_logits_torch,
+            config.temperature,
+            config.top_k,
+            config.greedy,
+            config.repetition_penalty,
+            generated_code0_tokens,
+        )
+        generated_code0_tokens.append(token_0)
+        ttnn.synchronize_device(device)
+        t_prefill_end = time.time()
+        print(
+            f"  Talker prefill done (TRACED bucket={padded_seq_len}): {(t_prefill_end - t_prefill_start)*1000:.1f} ms, token_0={token_0}"
+        )
+    else:
+        print("  STEP 4: Running Talker prefill forward (28 layers, non-traced)...")
+        prefill_hidden_out, talker_kv_caches = model.talker.forward_from_hidden(
+            inputs_embeds_tt,
+            prefill_cos_tt,
+            prefill_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            start_pos=0,
+            mode="prefill",
+        )
+        prefill_logits_out = model.talker.get_codec_logits(prefill_hidden_out)
+        ttnn.synchronize_device(device)
+        codec_logits_full = _mesh_to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
+        token_0 = sample_token(
+            codec_logits_torch,
+            config.temperature,
+            config.top_k,
+            config.greedy,
+            config.repetition_penalty,
+            generated_code0_tokens,
+        )
+        generated_code0_tokens.append(token_0)
+        ttnn.synchronize_device(device)
+        t_prefill_end = time.time()
+        print(f"  Talker prefill done (non-traced): {(t_prefill_end - t_prefill_start)*1000:.1f} ms, token_0={token_0}")
+
+    if token_0 == config.codec_eos_id:
+        print("  EOS at prefill")
+        deallocate_kv_cache(talker_kv_caches)
+        deallocate_kv_cache(cp_kv_caches_persistent)
+        return None, {
+            "warmup": t_warmup_end - t_warmup_start,
+            "trace_capture": 0.0,
+            "avg_decode_ms": 0.0,
+            "steady_avg_decode_ms": 0.0,
+            "steady_frames_per_sec": 0.0,
+            "num_generated_frames": 0,
+            "use_2cq": use_2cq,
+        }
+
+    talker_pos = real_seq_len
+    talker_hidden_tt = prefill_hidden_out
+
+    ttnn.deallocate(prefill_cos_tt)
+    ttnn.deallocate(prefill_sin_tt)
+
+    # === STEP 5: Pre-allocate ALL trace input tensors, then capture traces ===
+    # Pre-allocate all trace input tensors BEFORE any trace capture.
+    # These are persistent buffers H2D'd per-frame and READ inside the trace; keep
+    # them in L1 so the consuming kernel skips a DRAM→L1 staging on every call.
+    trace_embed_tt = ttnn.from_torch(
+        torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    trace_cos_tt = ttnn.from_torch(
+        torch.ones(1, 1, 1, head_dim, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    trace_sin_tt = ttnn.from_torch(
+        torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    trace_cur_pos_tt = ttnn.from_torch(
+        torch.tensor([padded_seq_len], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,  # paged_fused_update_cache requires DRAM
+    )
+    # Single-head bf16: see build_talker_decode_trace_h2d_constants. Must match the
+    # host tensors copied into it every frame.
+    trace_mask_tt = ttnn.from_torch(
+        torch.full((1, 1, 1, max_talker_seq_len), float("-inf")).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    cp_prefill_pos = torch.arange(2)
+    cp_trace_prefill_cos_tt, cp_trace_prefill_sin_tt = get_rope_tensors(
+        device, cp_head_dim, 2, cp_prefill_pos, cp_rope_theta
+    )
+    # "host" tensors are used to restore constants that the Talker's
+    # paged_fused_update_cache corrupts each frame.  They hold constant values
+    # so we keep them ON DEVICE and restore via ttnn.assign (D2D) instead of
+    # copy_host_to_device_tensor (H2D), which is much faster.
+    cp_trace_prefill_cos_host = ttnn.from_torch(
+        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    cp_trace_prefill_sin_host = ttnn.from_torch(
+        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    cp_prefill_mask_host_torch = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
+    cp_prefill_mask_host_torch[0, :, 0, 0] = 0.0
+    cp_prefill_mask_host_torch[0, :, 1, 0:2] = 0.0
+    cp_trace_prefill_mask_tt = ttnn.from_torch(
+        cp_prefill_mask_host_torch,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    cp_trace_prefill_mask_host = ttnn.from_torch(
+        cp_prefill_mask_host_torch.float(),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    cp_trace_prefill_embed_tt = ttnn.from_torch(
+        torch.zeros(1, 1, 2, talker_h, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    _n_cp_decode = config.num_code_groups - 2
+    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
+        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
+    )
+
+    cp_trace_decode_embed_tts = [
+        ttnn.from_torch(
+            torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        for _ in range(2)
+    ]
+    cp_trace_decode_cos_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.L1_MEMORY_CONFIG) for h in cp_decode_cos_h2d
+    ]
+    cp_trace_decode_sin_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.L1_MEMORY_CONFIG) for h in cp_decode_sin_h2d
+    ]
+    cp_trace_decode_mask_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.L1_MEMORY_CONFIG) for h in cp_decode_mask_h2d
+    ]
+
+    # === STEP 5: Capture ALL traces (after prefill, KV cache is populated) ===
+    # Program cache must be warm before trace capture; otherwise compile uploads binaries
+    # during capture and TT_FATAL: "Writes are not supported during trace capture".
+    t_trace_start = time.time()
+
+    # --- 5a: Talker decode trace ---
+    print("  Untraced warmup: Talker decode + codec_head (same tensors as trace)...")
+    _wu_th, _ = model.talker.forward_from_hidden(
+        trace_embed_tt,
+        trace_cos_tt,
+        trace_sin_tt,
+        talker_trans_mat,
+        kv_caches=talker_kv_caches,
+        cur_pos_tensor=trace_cur_pos_tt,
+        decode_attn_mask=trace_mask_tt,
+        mode="decode",
+    )
+    _wu_codec_logits = model.talker.get_codec_logits(_wu_th)
+
+    # On-device codec0 argmax (greedy) — emit token id from the trace so the
+    # hot loop only D2H's an int (4B) instead of the full vocab logits.
+    talker_codec0_token_tt = _alloc_token_buf(device, shape=(1, 1, 1)) if config.greedy else None
+    cp_prefill_token_tt = _alloc_token_buf(device, shape=(1, 1, 2))
+    if config.greedy:
+        _argmax_into(_wu_codec_logits, talker_codec0_token_tt)
+
+    # Sampling (non-greedy): sample codec0 inside the Talker trace too, with the same
+    # Gumbel-max chain the CodePredictor's 15 codebooks already use. The host path it
+    # replaces was the single most expensive thing in the AR loop that was not a trace
+    # replay — a [1,1,1,3072] fp32 D2H plus a host top-k/softmax/multinomial — and it
+    # also forced a per-frame H2D to hand the token back for the next frame's CP trace.
+    # Writing straight into tok_bufs[0], the buffer the fused CP frame reads, removes
+    # all three for the cost of one in-trace topk. Slot 15 of the noise tile is free:
+    # the CP frame uses slots 0-14.
+    #
+    # fused_sampler and fused_tok_bufs are allocated before ANY trace capture (see the
+    # unsafe-allocation note where they are created), so both are safe to bake in here.
+    #
+    # Not when a repetition penalty is asked for: the device sampler sees only logits,
+    # top-k and Gumbel noise — it has no token history — so sampling codec0 in the
+    # trace would silently drop the penalty for every frame after prefill. Fall back to
+    # the host sampler, which applies it. The fused CP frame stays on either way; it
+    # takes code 0 through the tok_bufs[0] H2D that the non-device path already does.
+    codec0_in_talker_trace = fused_sampler is not None and not config.greedy and config.repetition_penalty == 1.0
+    if codec0_in_talker_trace:
+        fused_sampler.append_sampling(_wu_codec_logits, slot=_TALKER_NOISE_SLOT, out_tok_tt=fused_tok_bufs[0])
+    ttnn.synchronize_device(device)
+    if codec0_in_talker_trace:
+        # The loop reads codec0 from here exactly as the greedy path reads its argmax.
+        talker_codec0_token_tt = fused_tok_bufs[0]
+
+    print("  Capturing Talker decode trace (includes codec_head)...")
+    talker_decode_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        trace_hidden_out, _ = model.talker.forward_from_hidden(
+            trace_embed_tt,
+            trace_cos_tt,
+            trace_sin_tt,
+            talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            cur_pos_tensor=trace_cur_pos_tt,
+            decode_attn_mask=trace_mask_tt,
+            mode="decode",
+        )
+        trace_codec_logits_out = model.talker.get_codec_logits(trace_hidden_out)
+        if config.greedy:
+            _argmax_into(trace_codec_logits_out, talker_codec0_token_tt)
+        elif codec0_in_talker_trace:
+            fused_sampler.append_sampling(trace_codec_logits_out, slot=_TALKER_NOISE_SLOT, out_tok_tt=fused_tok_bufs[0])
+    finally:
+        ttnn.end_trace_capture(device, talker_decode_trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+    print("  Talker decode trace captured.")
+
+    # --- 5b/5c: CodePredictor traces ---
+    # Two shapes for the CP frame:
+    #   fused (default) — ONE trace for the whole frame: constant restore, prefill
+    #     input build, prefill, all decode steps, every sample, and the next Talker
+    #     embedding. Needs device sampling (_DeviceSampler) + device ttnn.embedding
+    #     so the autoregressive chain never returns to the host.
+    #   per-step (QWEN3_TTS_CP_FUSED=0) — the original 1 + 2x14 traces with a CPU
+    #     sample and an H2D between every step. Kept as the fallback.
+    # QWEN3_TTS_CP_DEVSAMP=1 (bisection): keep the ORIGINAL per-step traces but do the
+    # sampling on device inside each one, reading back only the token id. Separates
+    # "device sampling inside the model" from "the whole frame in one trace".
+    use_dev_sampler_per_step = os.environ.get("QWEN3_TTS_CP_DEVSAMP", "0") == "1" and not config.greedy
+    cp_sampler = None
+
+    fused_cp = None
+    cp_prefill_trace_id = None
+    cp_prefill_logits_tt = None
+    cp_decode_trace_ids = [[], []]
+    cp_decode_logits_tts = [[], []]
+    cp_decode_token_tts = [[], []]
+
+    if use_fused_cp:
+        # Seed the Talker hidden buffer the fused trace reads. From frame 1 on it is
+        # written by the Talker trace itself; frame 0 has to take it from prefill,
+        # which is a different (longer) tensor, and a trace bakes addresses.
+        # trace_hidden_out is an INTERNAL tensor of the Talker trace: its address is
+        # baked at capture time but the allocator does not reserve it, so a later
+        # trace's intermediates can be placed on top of it. Reading it from inside the
+        # fused CP trace is therefore unsafe. Copy it into a buffer allocated the
+        # normal way and read that instead; the copy happens between the two trace
+        # replays, which is exactly where the old code's D2H of it used to sit.
+        #
+        # Last REAL row, not the last row — see ``last_real_hidden_row``.
+        _pf_seq = int(talker_hidden_tt.shape[2])
+        _pf_row = last_real_hidden_row(_pf_seq, real_seq_len)
+        _pf_last = (
+            ttnn.slice(talker_hidden_tt, [0, 0, _pf_row, 0], [1, 1, _pf_row + 1, talker_h])
+            if _pf_seq > 1
+            else talker_hidden_tt
+        )
+        ttnn.assign(_pf_last, cp_src_hidden_tt)
+        if _pf_seq > 1:
+            ttnn.deallocate(_pf_last)
+        ttnn.synchronize_device(device)
+
+        if _tables_late:
+            codec_embed_tt, cp_embed_tts = _upload_cp_tables()
+        _tbl_dbg = os.environ.get("QWEN3_TTS_CP_CHECK_CORRUPT", "0") == "1"
+
+        def _tbl_check(tag):
+            if not _tbl_dbg:
+                return
+            _mm = _replicate_mapper(device)
+            if _mm is not None:
+                _d = ttnn.to_torch(codec_embed_tt, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+                _d = _d[: codec_embed_torch.shape[0]].float()
+            else:
+                _d = ttnn.to_torch(codec_embed_tt).float()
+            _bad = (_d != codec_embed_torch.bfloat16().float()).any(dim=-1)
+            _n = int(_bad.sum())
+            if _n:
+                _r = _bad.nonzero().flatten()
+                print(f"  [tblchk] {tag}: {_n}/{_d.shape[0]} wrong rows, {_r[0].item()}..{_r[-1].item()}")
+            else:
+                print(f"  [tblchk] {tag}: table intact")
+
+        _tbl_check("right after upload")
+        # Host-side only; safe to build at any point.
+        _trail_rows = build_trailing_row_h2d(trailing_text_hidden, tts_pad_embed, config.max_new_tokens)
+        _tbl_check("after trail-row build")
+        fused_cp = capture_fused_cp_trace(
+            device,
+            model,
+            config,
+            cp_trans_mat=cp_trans_mat,
+            cp_kv_caches_persistent=cp_kv_caches_persistent,
+            cp_kv_zero_hosts=cp_kv_zero_hosts,
+            cp_prefill_embed_tt=cp_trace_prefill_embed_tt,
+            cp_prefill_mask_tt=cp_trace_prefill_mask_tt,
+            cp_prefill_cos_tt=cp_trace_prefill_cos_tt,
+            cp_prefill_sin_tt=cp_trace_prefill_sin_tt,
+            cp_prefill_mask_src=cp_trace_prefill_mask_host,
+            cp_prefill_cos_src=cp_trace_prefill_cos_host,
+            cp_prefill_sin_src=cp_trace_prefill_sin_host,
+            cp_decode_embed_tt=cp_trace_decode_embed_tts[0],
+            cp_decode_cos_tts=cp_trace_decode_cos_tts,
+            cp_decode_sin_tts=cp_trace_decode_sin_tts,
+            cp_decode_mask_tts=cp_trace_decode_mask_tts,
+            talker_hidden_src_tt=cp_src_hidden_tt,
+            talker_embed_dst_tt=trace_embed_tt,
+            codec_embed_tt=codec_embed_tt,
+            cp_embed_tts=cp_embed_tts,
+            talker_h=talker_h,
+            sampler=fused_sampler,
+            tok_bufs=fused_tok_bufs,
+            trail_row_tt=fused_trail_row_tt,
+            trail_row_h2d=_trail_rows,
+            build_talker_embed=os.environ.get("QWEN3_TTS_CP_FUSED_HOSTEMBED", "0") == "0",
+            restore_in_trace=os.environ.get("QWEN3_TTS_CP_FUSED_HOSTRESTORE", "0") == "0",
+        )
+        _tbl_check("after fused CP trace capture")
+    else:
+        # --- 5b: CP prefill trace ---
+        if use_dev_sampler_per_step:
+            cp_sampler = _DeviceSampler(device, top_k=config.top_k, temperature=config.temperature)
+            cp_prefill_token_tt = cp_sampler.alloc_token_buf()
+            print("  Per-step traces with IN-TRACE device sampling (QWEN3_TTS_CP_DEVSAMP=1).")
+
+        print("  Untraced warmup: CP prefill (same tensors as trace)...")
+        for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
+            ttnn.assign(k_zero, k_cache)
+            ttnn.assign(v_zero, v_cache)
+        _wu_cp_pf_logits, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
+            cp_trace_prefill_embed_tt,
+            cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt,
+            cp_trans_mat,
+            generation_step=1,
+            kv_caches=cp_kv_caches_persistent,
+            start_pos=0,
+            mode="prefill",
+            cp_prefill_mask=cp_trace_prefill_mask_tt,
+            return_hidden_state=False,
+        )
+        if config.greedy:
+            _argmax_into(_wu_cp_pf_logits, cp_prefill_token_tt)
+        elif cp_sampler is not None:
+            _wu_v = int(_wu_cp_pf_logits.shape[3])
+            _wu_lg1 = ttnn.slice(_wu_cp_pf_logits, [0, 0, 1, 0], [1, 1, 2, _wu_v])
+            cp_sampler.append_sampling(_wu_lg1, 0, cp_prefill_token_tt)
+            ttnn.deallocate(_wu_lg1)
+        ttnn.synchronize_device(device)
+
+        print("  Capturing CP prefill trace (seq_len=2, includes lm_heads[0])...")
+        cp_prefill_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            cp_prefill_logits_tt, _ = model.code_predictor.forward_single_step(
+                cp_trace_prefill_embed_tt,
+                cp_trace_prefill_cos_tt,
+                cp_trace_prefill_sin_tt,
+                cp_trans_mat,
+                generation_step=1,
+                kv_caches=cp_kv_caches_persistent,
+                start_pos=0,
+                mode="prefill",
+                cp_prefill_mask=cp_trace_prefill_mask_tt,
+                return_hidden_state=False,
+            )
+            if config.greedy:
+                # cp_prefill_logits_tt is [1,1,2,vocab]; argmax over -1 yields [1,1,2]; we
+                # consume only index 1 on host (the post-code0 logits position).
+                _argmax_into(cp_prefill_logits_tt, cp_prefill_token_tt)
+            elif cp_sampler is not None:
+                _v = int(cp_prefill_logits_tt.shape[3])
+                _lg1 = ttnn.slice(cp_prefill_logits_tt, [0, 0, 1, 0], [1, 1, 2, _v])
+                cp_sampler.append_sampling(_lg1, 0, cp_prefill_token_tt)
+                ttnn.deallocate(_lg1)
+        finally:
+            ttnn.end_trace_capture(device, cp_prefill_trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+        print("  CP prefill trace captured.")
+
+        # --- 5c: CP decode traces x13 ---
+        # Step 2 on-device chain (when not greedy): each captured trace runs
+        #   forward → topk → sampling → ttnn.embedding(token, codec_pred_table[code_idx-1])
+        # with the embedding output written into ``cp_trace_decode_embed_tts[buf_out]``,
+        # i.e. the OTHER buffer that the NEXT trace will read from. This eliminates the
+        # CPU sample + F.embedding + H2D between consecutive CP decode steps.
+        # In greedy mode we keep the simpler argmax path (no sampling kernel needed).
+        print(f"  Capturing {config.num_code_groups - 2} CP decode traces (one per lm_head)...")
+        for _buf_i in range(2):
+            for _trace_i, _step_code_idx in enumerate(range(2, config.num_code_groups)):
+                _cp_cos_tt = cp_trace_decode_cos_tts[_trace_i]
+                _cp_sin_tt = cp_trace_decode_sin_tts[_trace_i]
+                _cp_mask_tt = cp_trace_decode_mask_tts[_trace_i]
+                print(f"    Untraced warmup: CP decode (buf={_buf_i}, generation_step={_step_code_idx})...")
+                _wu_cp_dc_logits, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
+                    cp_trace_decode_embed_tts[_buf_i],
+                    _cp_cos_tt,
+                    _cp_sin_tt,
+                    cp_trans_mat,
+                    generation_step=_step_code_idx,
+                    kv_caches=cp_kv_caches_persistent,
+                    start_pos=_step_code_idx,
+                    mode="decode",
+                    cur_pos_tensor=None,
+                    decode_attn_mask=_cp_mask_tt,
+                    return_hidden_state=False,
+                )
+                if config.greedy:
+                    _tok_buf = _alloc_token_buf(device, shape=(1, 1, 1))
+                    _argmax_into(_wu_cp_dc_logits, _tok_buf)
+                elif cp_sampler is not None:
+                    _tok_buf = cp_sampler.alloc_token_buf()
+                    cp_sampler.append_sampling(_wu_cp_dc_logits, _trace_i + 1, _tok_buf)
+                else:
+                    _tok_buf = None  # CPU sample path: no device token buffer needed.
+                cp_decode_token_tts[_buf_i].append(_tok_buf)
+                ttnn.synchronize_device(device)
+
+                _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+                try:
+                    _logits_tt, _ = model.code_predictor.forward_single_step(
+                        cp_trace_decode_embed_tts[_buf_i],
+                        _cp_cos_tt,
+                        _cp_sin_tt,
+                        cp_trans_mat,
+                        generation_step=_step_code_idx,
+                        kv_caches=cp_kv_caches_persistent,
+                        start_pos=_step_code_idx,
+                        mode="decode",
+                        cur_pos_tensor=None,
+                        decode_attn_mask=_cp_mask_tt,
+                        return_hidden_state=False,
+                    )
+                    if config.greedy:
+                        _argmax_into(_logits_tt, _tok_buf)
+                    elif cp_sampler is not None:
+                        cp_sampler.append_sampling(_logits_tt, _trace_i + 1, _tok_buf)
+                finally:
+                    ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+                ttnn.synchronize_device(device)
+                cp_decode_trace_ids[_buf_i].append(_trace_id)
+                cp_decode_logits_tts[_buf_i].append(_logits_tt)
+        print(f"  Captured {len(cp_decode_trace_ids[0])} CP decode traces x2 buffers.")
+    t_trace_end = time.time()
+    # Canary allocated AFTER every trace capture: this is the memory region that a
+    # trace replay was observed to clobber. Checked per frame with
+    # QWEN3_TTS_CP_CHECK_CORRUPT=1 to attribute the corruption to a specific trace.
+    _canary_tt = None
+    _canary_ref = None
+    if os.environ.get("QWEN3_TTS_CANARY", "0") == "1":
+        _canary_ref = torch.full((1, 1, 4096, 2048), 3.0, dtype=torch.bfloat16)
+        _canary_tt = ttnn.from_torch(
+            _canary_ref,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_replicate_mapper(device),
+        )
+        print(f"  [canary] 16 MB canary allocated after trace capture at {_canary_tt.buffer_address()}")
+    print("  All traces captured. Starting measured inference...")
+    print(f"  Device CQ mode: {'2 (H2D on CQ1, traces on CQ0)' if use_2cq else '1 (H2D and traces share CQ0)'}")
+
+    # === STEP 6: Measured inference (generation loop only; prefill already ran in STEP 4) ===
+    decode_step_times = []
+    talker_times_ms = []
+    cp_times_ms = []
+    t_first_decode_end = 0.0
+    trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
+    h2d_cq = 1 if use_2cq else 0
+    cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
+
+    # Preallocated host buffers (generation hot loop): avoids per-step torch/tensor churn.
+    token_id_buf = torch.zeros((1, 1), dtype=torch.long)
+    cp_prefill_embed_cpu = torch.empty(1, 1, 2, talker_h, dtype=torch.bfloat16)
+    talker_embed_cpu = torch.empty(1, 1, 1, talker_h, dtype=torch.bfloat16)
+    cp_decode_embed_cpu = torch.empty(1, 1, 1, talker_h, dtype=torch.bfloat16)
+    acc_code_embed = torch.zeros(1, 1, talker_h, dtype=torch.float32)
+    talker_cos_h2d, talker_sin_h2d, talker_mask_h2d, talker_cur_pos_h2d = build_talker_decode_trace_h2d_constants(
+        talker_cos_table, talker_sin_table, _talker_num_heads, max_talker_seq_len, real_seq_len
+    )
+
+    # NB: Do not reuse a single ttnn.from_torch(..., layout=TILE_LAYOUT) across loop iterations:
+    # tilization copies into an internal host buffer; mutating the torch tensor + copy_ does not refresh it.
+
+    frame_breakdown_sums = {
+        "cp_input_prep_ms": 0.0,
+        "cp_kv_restore_ms": 0.0,
+        "cp_prefill_ms": 0.0,
+        "cp_decode_ms": 0.0,
+        "build_acc_embed_ms": 0.0,
+        "talker_decode_ms": 0.0,
+        "codec0_sample_device_logits_ms": 0.0,
+        "codec0_sample_cpu_ms": 0.0,
+        "cp_prefill_sample_device_logits_ms": 0.0,
+        "cp_prefill_sample_cpu_ms": 0.0,
+        "cp_decode_samples_device_logits_ms": 0.0,
+        "cp_decode_samples_cpu_ms": 0.0,
+    }
+    frame_breakdown_frames = 0
+
+    try:
+        # === STEP 6: AR generation loop — delegates to the shared helper
+        # in tt/utils.py so the demo path here and the server path in
+        # run_inference run the EXACT same loop body.
+        from models.demos.qwen3_tts.tt.utils import DecodeLoopState, ar_decode_loop
+
+        loop_state = DecodeLoopState(
+            device=device,
+            cp_kv_caches_persistent=cp_kv_caches_persistent,
+            cp_kv_zero_hosts=cp_kv_zero_hosts,
+            cp_prefill_trace_id=cp_prefill_trace_id,
+            cp_prefill_logits_tt=cp_prefill_logits_tt,
+            cp_decode_trace_ids=cp_decode_trace_ids,
+            cp_decode_logits_tts=cp_decode_logits_tts,
+            cp_trace_prefill_embed_tt=cp_trace_prefill_embed_tt,
+            cp_trace_prefill_mask_tt=cp_trace_prefill_mask_tt,
+            cp_trace_prefill_cos_tt=cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt=cp_trace_prefill_sin_tt,
+            cp_trace_prefill_mask_host=cp_trace_prefill_mask_host,
+            cp_trace_prefill_cos_host=cp_trace_prefill_cos_host,
+            cp_trace_prefill_sin_host=cp_trace_prefill_sin_host,
+            cp_trace_decode_embed_tts=cp_trace_decode_embed_tts,
+            code_pred_embeds=code_pred_embeds,
+            codec_embed_torch=codec_embed_torch,
+            fused_cp=fused_cp,
+            canary_tt=_canary_tt,
+            canary_ref=_canary_ref,
+            cp_sampler=cp_sampler,
+            cp_decode_token_tts=cp_decode_token_tts,
+            cp_prefill_token_tt=cp_prefill_token_tt,
+            talker_decode_trace_id=talker_decode_trace_id,
+            trace_embed_tt=trace_embed_tt,
+            trace_cos_tt=trace_cos_tt,
+            trace_sin_tt=trace_sin_tt,
+            trace_cur_pos_tt=trace_cur_pos_tt,
+            trace_mask_tt=trace_mask_tt,
+            trace_hidden_out=trace_hidden_out,
+            trace_codec_logits_out=trace_codec_logits_out,
+            talker_codec0_token_tt=talker_codec0_token_tt,
+            talker_cos_h2d=talker_cos_h2d,
+            talker_sin_h2d=talker_sin_h2d,
+            talker_mask_h2d=talker_mask_h2d,
+            talker_cur_pos_h2d=talker_cur_pos_h2d,
+            token_id_buf=token_id_buf,
+            cp_prefill_embed_cpu=cp_prefill_embed_cpu,
+            cp_decode_embed_cpu=cp_decode_embed_cpu,
+            talker_embed_cpu=talker_embed_cpu,
+            acc_code_embed=acc_code_embed,
+            talker_hidden_tt=talker_hidden_tt,
+            talker_pos=talker_pos,
+            real_seq_len=real_seq_len,
+            trailing_text_hidden=trailing_text_hidden,
+            tts_pad_embed=tts_pad_embed,
+            token_0=token_0,
+        )
+        codes_tensor, frame_breakdown_avg_ms_helper, t_first_decode_end, _t_last = ar_decode_loop(
+            loop_state,
+            config,
+            use_2cq,
+            streaming_decoder=streaming_decoder,
+            sample_token_fn=sample_token,
+            sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
+        )
+        decode_step_times = loop_state.decode_step_times_ms
+        talker_times_ms = loop_state.talker_times_ms
+        cp_times_ms = loop_state.cp_times_ms
+        all_codes = [] if codes_tensor is None else codes_tensor.tolist()
+
+    finally:
+        ttnn.synchronize_device(device)
+        ttnn.release_trace(device, talker_decode_trace_id)
+        if fused_cp is not None:
+            ttnn.release_trace(device, fused_cp.trace_id)
+        if cp_prefill_trace_id is not None:
+            ttnn.release_trace(device, cp_prefill_trace_id)
+        for _tid_list in cp_decode_trace_ids:
+            for _tid in _tid_list:
+                ttnn.release_trace(device, _tid)
+        for t in [
+            trace_embed_tt,
+            trace_cos_tt,
+            trace_sin_tt,
+            trace_cur_pos_tt,
+            trace_mask_tt,
+            cp_trace_prefill_embed_tt,
+            cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt,
+            cp_trace_prefill_mask_tt,
+        ]:
+            if t is not None:
+                ttnn.deallocate(t)
+        for t in cp_trace_decode_embed_tts:
+            ttnn.deallocate(t)
+        for t in cp_trace_decode_cos_tts + cp_trace_decode_sin_tts + cp_trace_decode_mask_tts:
+            ttnn.deallocate(t)
+        deallocate_kv_cache(talker_kv_caches)
+        deallocate_kv_cache(cp_kv_caches_persistent)
+
+    print(f"  Generated {len(all_codes)} code frames")
+
+    if len(all_codes) == 0:
+        return None, {
+            "warmup": t_warmup_end - t_warmup_start,
+            "trace_capture": t_trace_end - t_trace_start,
+            "avg_decode_ms": 0.0,
+            "steady_avg_decode_ms": 0.0,
+            "steady_frames_per_sec": 0.0,
+            "num_generated_frames": 0,
+            "use_2cq": use_2cq,
+            "frame_breakdown_avg_ms": {},
+        }
+
+    codes = torch.tensor(all_codes, dtype=torch.long)
+    print(f"  Code 0 sample (first 5 frames): {codes[:5, 0].tolist()}")
+    print(f"  Code 0 in valid range [0,2047]: {((codes[:,0]>=0) & (codes[:,0]<=2047)).sum()}/{len(codes)}")
+    torch.save(codes, "/tmp/last_generated_codes.pt")
+
+    # === Performance metrics ===
+    prefill_ms = (t_prefill_end - t_prefill_start) * 1000
+    steady_avg_decode_ms = 0.0
+    if decode_step_times:
+        ttft_ms = prefill_ms + decode_step_times[0]
+        if len(decode_step_times) > 1:
+            steady_ms = decode_step_times[1:]
+            steady_avg_decode_ms = sum(steady_ms) / len(steady_ms)
+            tokens_per_sec = 1000.0 / steady_avg_decode_ms
+        else:
+            steady_avg_decode_ms = decode_step_times[0]
+            tokens_per_sec = 1000.0 / decode_step_times[0]
+    else:
+        ttft_ms = prefill_ms
+        tokens_per_sec = 0.0
+
+    avg_decode_ms = sum(decode_step_times) / len(decode_step_times) if decode_step_times else 0.0
+
+    print(f"\n  --- Performance (Qwen3-TTS on N150, all traced) ---")
+    print(f"  Prefill  ({real_seq_len} real / {padded_seq_len} padded tokens): {prefill_ms:.1f} ms")
+    print(f"  TTFT     (prefill + 1 decode):  {ttft_ms:.1f} ms")
+    print(f"  Decode throughput:              {tokens_per_sec:.2f} frames/sec")
+    if decode_step_times:
+        print(f"  Avg decode step:                {avg_decode_ms:.1f} ms/frame")
+    if talker_times_ms:
+        print(f"  Avg Talker decode:              {sum(talker_times_ms)/len(talker_times_ms):.1f} ms/frame")
+    if cp_times_ms:
+        print(f"  Avg CodePredictor:              {sum(cp_times_ms)/len(cp_times_ms):.1f} ms/frame")
+    # ar_decode_loop owns the per-frame timers and returns the averages; the local sums
+    # above are never written, so recomputing from them always yielded {} and the whole
+    # breakdown below silently never printed. Prefer the helper's result.
+    frame_breakdown_avg_ms = frame_breakdown_avg_ms_helper or (
+        {k: v / frame_breakdown_frames for k, v in frame_breakdown_sums.items()} if frame_breakdown_frames > 0 else {}
+    )
+    if frame_breakdown_avg_ms:
+        print("  --- Frame breakdown (avg ms/frame) ---")
+        print(f"    CP input prep (D2H talker hidden + embed): {frame_breakdown_avg_ms['cp_input_prep_ms']:.2f}")
+        print(f"    CP KV + mask restore H2D:                  {frame_breakdown_avg_ms['cp_kv_restore_ms']:.2f}")
+        print(f"    CP prefill trace + 1st sample:             {frame_breakdown_avg_ms['cp_prefill_ms']:.2f}")
+        _cp_label = (
+            "CP frame (one fused trace)      "
+            if frame_breakdown_avg_ms.get("cp_fused_trace_ms")
+            else "CP decode traces + samples:    "
+        )
+        print(f"    {_cp_label}            {frame_breakdown_avg_ms['cp_decode_ms']:.2f}")
+        print(f"    Build accumulated codec embed (CPU):       {frame_breakdown_avg_ms['build_acc_embed_ms']:.2f}")
+        print(f"    Talker decode trace (wall sub-interval):   {frame_breakdown_avg_ms['talker_decode_ms']:.2f}")
+        print(
+            f"    Codec0 sample D2H logits / CPU:           {frame_breakdown_avg_ms['codec0_sample_device_logits_ms']:.2f} / {frame_breakdown_avg_ms['codec0_sample_cpu_ms']:.2f}"
+        )
+        print(
+            f"    CP prefill sample D2H / CPU:               {frame_breakdown_avg_ms['cp_prefill_sample_device_logits_ms']:.2f} / {frame_breakdown_avg_ms['cp_prefill_sample_cpu_ms']:.2f}"
+        )
+        print(
+            f"    CP decode samples D2H / CPU (sum 14):       {frame_breakdown_avg_ms['cp_decode_samples_device_logits_ms']:.2f} / {frame_breakdown_avg_ms['cp_decode_samples_cpu_ms']:.2f}"
+        )
+        if frame_breakdown_avg_ms.get("cp_fused_trace_ms"):
+            print(
+                f"    [fused CP] H2D / trace / D2H:              "
+                f"{frame_breakdown_avg_ms['cp_fused_h2d_ms']:.2f} / "
+                f"{frame_breakdown_avg_ms['cp_fused_trace_ms']:.2f} / "
+                f"{frame_breakdown_avg_ms['cp_fused_d2h_ms']:.2f}"
+            )
+    if fused_cp is not None:
+        print(
+            f"  Traced: Talker decode, and the WHOLE CP frame as one trace "
+            f"(prefill + {config.num_code_groups - 2} decode steps + {config.num_code_groups - 1} device samples "
+            f"+ {config.num_code_groups} device embeddings) (Talker prefill: non-traced)"
+        )
+    else:
+        print(
+            f"  Traced: Talker decode, CP prefill, CP decode x{len(cp_decode_trace_ids[0])} (double-buffered) "
+            f"(Talker prefill: non-traced)"
+        )
+    print(f"  ----------------------------------------")
+
+    compile_timings = {
+        "warmup": t_warmup_end - t_warmup_start,
+        "trace_capture": t_trace_end - t_trace_start,
+        "prefill_ms": prefill_ms,
+        "avg_decode_ms": avg_decode_ms,
+        "steady_avg_decode_ms": steady_avg_decode_ms,
+        "steady_frames_per_sec": tokens_per_sec,
+        "num_generated_frames": len(all_codes),
+        "use_2cq": use_2cq,
+        "frame_breakdown_avg_ms": frame_breakdown_avg_ms,
+        "frame_breakdown_frames": frame_breakdown_frames,
+    }
+    return codes, compile_timings
+
+
+# ===========================================================================
+# Server-mode infrastructure: warmup_bucket, TTSServerContext, init_server_context, run_inference
+# ===========================================================================
+
+
+def warmup_bucket(device, model, config, padded_seq_len: int):
+    """Pre-compile all TTNN kernels for a given prefill bucket size (no output kept)."""
+    from models.demos.qwen3_tts.tt.rope import get_rope_tensors, get_transformation_mat
+
+    _TILE = 32
+    max_talker_seq_len = (((padded_seq_len + config.max_new_tokens + 16) + _TILE - 1) // _TILE) * _TILE
+
+    talker_h = model.talker_config.hidden_size
+    head_dim = model.talker_config.head_dim
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size as _get_tp
+
+    _tp = _get_tp(device) if device.__class__.__name__ == "MeshDevice" else 1
+    _talker_num_heads = model.talker_config.num_attention_heads // _tp
+    cp_head_dim = model.code_predictor_config.head_dim
+    cp_rope_theta = model.code_predictor_config.rope_theta
+    _cp_num_heads = model.code_predictor_config.num_attention_heads // _tp
+    max_cp_seq_len = 32
+
+    talker_trans_mat = get_transformation_mat(head_dim, device)
+    cp_trans_mat = get_transformation_mat(cp_head_dim, device)
+
+    print(f"  Warmup bucket={padded_seq_len} (max_talker_seq={max_talker_seq_len})...")
+
+    # --- Talker prefill warmup ---
+    wu_pf = ttnn.from_torch(
+        torch.zeros(1, 1, padded_seq_len, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_pf_cos, wu_pf_sin = get_rope_tensors(
+        device, head_dim, padded_seq_len, torch.arange(padded_seq_len), model.talker_config.rope_theta
+    )
+    wu_talker_kv = allocate_kv_cache(
+        device=device,
+        num_layers=model.talker_config.num_hidden_layers,
+        batch_size=1,
+        num_kv_heads=model.talker_config.num_key_value_heads,
+        max_seq_len=max_talker_seq_len,
+        head_dim=head_dim,
+    )
+    wu_pf_hidden, wu_talker_kv = model.talker.forward_from_hidden(
+        wu_pf,
+        wu_pf_cos,
+        wu_pf_sin,
+        talker_trans_mat,
+        kv_caches=wu_talker_kv,
+        start_pos=0,
+        mode="prefill",
+    )
+    _ = model.talker.get_codec_logits(wu_pf_hidden)
+
+    # --- Talker decode warmup ---
+    wu_dc = ttnn.from_torch(
+        torch.zeros(1, 1, 1, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_dc_cos, wu_dc_sin = get_rope_tensors(
+        device, head_dim, 1, torch.tensor([padded_seq_len]), model.talker_config.rope_theta
+    )
+    wu_cur_pos = ttnn.from_torch(
+        torch.tensor([padded_seq_len], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # Same bf16 single-head shape the traced decode masks use, so this warmup fills
+    # the program cache with the entries the traces actually need.
+    wu_decode_mask = ttnn.from_torch(
+        torch.full((1, 1, 1, max_talker_seq_len), float("-inf")).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_talker_hidden = model.talker.forward_from_hidden(
+        wu_dc,
+        wu_dc_cos,
+        wu_dc_sin,
+        talker_trans_mat,
+        kv_caches=wu_talker_kv,
+        start_pos=padded_seq_len,
+        mode="decode",
+        cur_pos_tensor=wu_cur_pos,
+        decode_attn_mask=wu_decode_mask,
+    )[0]
+    _ = model.talker.get_codec_logits(wu_talker_hidden)
+    deallocate_kv_cache(wu_talker_kv)
+    ttnn.deallocate(wu_cur_pos)
+    ttnn.deallocate(wu_decode_mask)
+
+    # --- CP prefill warmup ---
+    wu_cp2 = ttnn.from_torch(
+        torch.zeros(1, 1, 2, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_cp2_cos, wu_cp2_sin = get_rope_tensors(device, cp_head_dim, 2, torch.arange(2), cp_rope_theta)
+    wu_cp_kv = allocate_kv_cache(
+        device=device,
+        num_layers=model.code_predictor_config.num_hidden_layers,
+        batch_size=1,
+        num_kv_heads=model.code_predictor_config.num_key_value_heads,
+        max_seq_len=max_cp_seq_len,
+        head_dim=cp_head_dim,
+    )
+    wu_cp_prefill_mask_host = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
+    wu_cp_prefill_mask_host[0, :, 0, 0] = 0.0
+    wu_cp_prefill_mask_host[0, :, 1, 0:2] = 0.0
+    wu_cp_prefill_mask_tt = ttnn.from_torch(
+        wu_cp_prefill_mask_host,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    model.code_predictor.forward_single_step(
+        wu_cp2,
+        wu_cp2_cos,
+        wu_cp2_sin,
+        cp_trans_mat,
+        generation_step=1,
+        kv_caches=wu_cp_kv,
+        start_pos=0,
+        mode="prefill",
+        cp_prefill_mask=wu_cp_prefill_mask_tt,
+        return_hidden_state=False,
+    )
+
+    # --- CP decode warmup ---
+    wu_cp1 = ttnn.from_torch(
+        torch.zeros(1, 1, 1, talker_h),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    wu_cp1_cos, wu_cp1_sin = get_rope_tensors(device, cp_head_dim, 1, torch.tensor([2]), cp_rope_theta)
+    wu_cp_decode_mask = ttnn.from_torch(
+        torch.full((1, _cp_num_heads, 1, max_cp_seq_len), float("-inf")),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    model.code_predictor.forward_single_step(
+        wu_cp1,
+        wu_cp1_cos,
+        wu_cp1_sin,
+        cp_trans_mat,
+        generation_step=2,
+        kv_caches=wu_cp_kv,
+        start_pos=2,
+        mode="decode",
+        cur_pos_tensor=None,
+        decode_attn_mask=wu_cp_decode_mask,
+        return_hidden_state=False,
+    )
+    ttnn.deallocate(wu_cp_decode_mask)
+    ttnn.deallocate(wu_cp_prefill_mask_tt)
+    deallocate_kv_cache(wu_cp_kv)
+    ttnn.synchronize_device(device)
+    for t in [wu_pf, wu_dc, wu_cp2, wu_cp1]:
+        ttnn.deallocate(t)
+    print(f"  Warmup complete for bucket={padded_seq_len}.")
+
+
+def warmup_all_buckets(device, model, config):
+    """Pre-compile kernels for all supported prefill bucket sizes."""
+    print("Warming up all prefill buckets...")
+    for bucket in SUPPORTED_PREFILL_LENS:
+        warmup_bucket(device, model, config, bucket)
+    print("All buckets warmed up.")
+
+
+@dataclass
+class TTSServerContext:
+    """Persistent per-request-reusable state for the TTS web server.
+
+    Holds pre-captured CP + Talker traces and shared model helpers. ALL traces
+    captured once at init time; per-request ``run_inference`` only executes
+    cached traces — no compile, no new trace capture, no fresh KV allocation.
+
+    Call ``init_server_context()`` to populate. Call ``run_inference()`` to use.
+    """
+
+    # Shared CP state (bucket-independent, pre-captured at startup)
+    cp_kv_caches_persistent: list  # [(k_cache, v_cache), ...]
+    cp_kv_zero_hosts: list  # [(k_zero, v_zero), ...]
+    cp_prefill_trace_id: int
+    cp_decode_trace_ids: list
+    cp_prefill_logits_tt: object  # output buffer baked into CP prefill trace
+    cp_decode_logits_tts: list  # output buffers baked into CP decode traces
+    cp_trace_prefill_embed_tt: object
+    cp_trace_prefill_cos_tt: object
+    cp_trace_prefill_sin_tt: object
+    cp_trace_prefill_mask_tt: object
+    cp_trace_prefill_cos_host: object
+    cp_trace_prefill_sin_host: object
+    cp_trace_prefill_mask_host: object
+    cp_trace_decode_embed_tts: list
+    cp_trace_decode_cos_tts: list
+    cp_trace_decode_sin_tts: list
+    cp_trace_decode_mask_tts: list
+
+    # Persistent Talker decode state (bucket-keyed; one trace per prefill bucket).
+    # Eliminates per-request begin_trace_capture and KV allocation that
+    # previously stalled the worker on the second request.
+    talker_kv_caches_by_bucket: Dict[int, list]
+    talker_kv_zero_hosts_by_bucket: Dict[int, list]
+    talker_decode_trace_id_by_bucket: Dict[int, int]
+    trace_decode_embed_tt: object  # persistent input buffer (1, 1, 1, talker_h)
+    trace_decode_cos_tt: object
+    trace_decode_sin_tt: object
+    trace_decode_cur_pos_tt: object
+    trace_decode_mask_tt_by_bucket: Dict[int, object]
+    trace_decode_codec_logits_out_by_bucket: Dict[int, object]  # baked output
+    trace_decode_hidden_out_by_bucket: Dict[int, object]  # baked talker hidden output
+
+    # Shared model helpers
+    talker_trans_mat: object
+    cp_trans_mat: object
+    talker_cos_table: torch.Tensor
+    talker_sin_table: torch.Tensor
+    cp_cos_table: torch.Tensor
+    cp_sin_table: torch.Tensor
+    code_pred_embeds: list
+    codec_embed_torch: torch.Tensor
+    max_cp_seq_len: int
+    _talker_num_heads: int
+    _cp_num_heads: int
+
+    # Optional device-sampling output buffers (per-bucket) — left empty for the
+    # greedy/host-sampling paths.
+    trace_decode_codec0_token_tt_by_bucket: Dict[int, object] = field(default_factory=dict)
+
+
+def init_server_context(device, model, config, main_weights: dict) -> "TTSServerContext":
+    """
+    Pre-compile all kernels and pre-capture CP traces for web server use.
+
+    At startup:
+    - Warms all prefill buckets (compiles all TTNN kernels once)
+    - Allocates persistent CP KV caches
+    - Captures all CP traces (1 prefill + N-2 decode)
+
+    Talker KV caches and Talker decode trace are allocated per-request in run_inference()
+    because the standard prefill path reallocates KV buffers (avoids L1 overflow on large buckets).
+
+    Returns a TTSServerContext with all state needed for run_inference().
+    """
+    from models.demos.qwen3_tts.tt.rope import compute_rope_frequencies, get_rope_tensors, get_transformation_mat
+
+    print("Initializing TTS server context...")
+
+    # --- Warm up all buckets first (compiles all kernels) ---
+    warmup_all_buckets(device, model, config)
+
+    # Capture ECAPA SE/FC traces FIRST, BEFORE the heavier CP/Talker traces.
+    # Order matters: traces captured later may end up in trace_region positions
+    # adjacent to/overlapping with executed traces, causing corruption.
+    print("  Capturing SE-block ECAPA traces (early) ...")
+    model.speaker_encoder.capture_se_block_traces()
+    print(f"    captured {len(getattr(model.speaker_encoder, '_se_traces', {}))} SE-block traces")
+    print("  Capturing FC linear ECAPA trace (early) ...")
+    model.speaker_encoder.capture_fc_trace()
+    print(f"    fc_trace captured: {getattr(model.speaker_encoder, '_fc_trace', None) is not None}")
+
+    _TILE = 32
+    talker_h = model.talker_config.hidden_size
+    head_dim = model.talker_config.head_dim
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size as _get_tp
+
+    _tp = _get_tp(device) if device.__class__.__name__ == "MeshDevice" else 1
+    _talker_num_heads = model.talker_config.num_attention_heads // _tp
+    cp_head_dim = model.code_predictor_config.head_dim
+    cp_rope_theta = model.code_predictor_config.rope_theta
+    _cp_num_heads = model.code_predictor_config.num_attention_heads // _tp
+    max_cp_seq_len = 32
+
+    talker_trans_mat = get_transformation_mat(head_dim, device)
+    cp_trans_mat = get_transformation_mat(cp_head_dim, device)
+
+    # Pre-compute RoPE tables (sized for largest bucket + max_new_tokens)
+    largest_bucket = SUPPORTED_PREFILL_LENS[-1]
+    largest_max_talker_seq = (((largest_bucket + config.max_new_tokens + 16) + _TILE - 1) // _TILE) * _TILE
+    _max_rope_pos = largest_max_talker_seq + config.max_new_tokens + 50
+    talker_cos_table, talker_sin_table = compute_rope_frequencies(
+        head_dim, _max_rope_pos, model.talker_config.rope_theta
+    )
+    cp_cos_table, cp_sin_table = compute_rope_frequencies(cp_head_dim, max_cp_seq_len + 5, cp_rope_theta)
+
+    # CodePredictor embedding weights (for building next-token embeds)
+    codec_embed_torch = _mesh_to_torch(model.talker.codec_embedding).squeeze(0).squeeze(0).float()
+    code_pred_embeds = []
+    for i in range(config.num_code_groups - 1):
+        key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
+        if key in main_weights:
+            code_pred_embeds.append(main_weights[key].float())
+        else:
+            code_pred_embeds.append(None)
+
+    # === Shared CP persistent state (bucket-independent) ===
+    print("  Setting up shared CP state...")
+    cp_kv_caches_persistent = allocate_kv_cache(
+        device=device,
+        num_layers=model.code_predictor_config.num_hidden_layers,
+        batch_size=1,
+        num_kv_heads=model.code_predictor_config.num_key_value_heads,
+        max_seq_len=max_cp_seq_len,
+        head_dim=cp_head_dim,
+    )
+    cp_kv_zero_hosts = []
+    for k_cache, v_cache in cp_kv_caches_persistent:
+        k_zero = ttnn.from_torch(
+            torch.zeros(*k_cache.shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_zero = ttnn.from_torch(
+            torch.zeros(*v_cache.shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cp_kv_zero_hosts.append((k_zero, v_zero))
+
+    # Pre-allocate CP trace input tensors. seq=2 has padded_shape=[1,1,32,talker_h]
+    # (one tile). DRAM placement avoids an L1-internal shard remap that some kernel
+    # variants need to issue from host inside trace capture. Talker prefill embed
+    # already uses DRAM here for the same reason.
+    cp_trace_prefill_embed_tt = ttnn.from_torch(
+        torch.zeros(1, 1, 2, talker_h, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cp_prefill_pos = torch.arange(2)
+    cp_trace_prefill_cos_tt, cp_trace_prefill_sin_tt = get_rope_tensors(
+        device, cp_head_dim, 2, cp_prefill_pos, cp_rope_theta
+    )
+    cp_trace_prefill_cos_host = ttnn.from_torch(
+        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cp_trace_prefill_sin_host = ttnn.from_torch(
+        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cp_prefill_mask_torch = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
+    cp_prefill_mask_torch[0, :, 0, 0] = 0.0
+    cp_prefill_mask_torch[0, :, 1, 0:2] = 0.0
+    cp_trace_prefill_mask_tt = ttnn.from_torch(
+        cp_prefill_mask_torch,
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cp_trace_prefill_mask_host = ttnn.from_torch(
+        cp_prefill_mask_torch.float(),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    cp_trace_decode_embed_tts = [
+        ttnn.from_torch(
+            torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for _ in range(2)
+    ]
+    _n_cp_decode = config.num_code_groups - 2
+    cp_decode_cos_h2d, cp_decode_sin_h2d, cp_decode_mask_h2d = build_cp_decode_trace_h2d_constants(
+        cp_cos_table, cp_sin_table, _cp_num_heads, max_cp_seq_len, _n_cp_decode
+    )
+    cp_trace_decode_cos_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_cos_h2d
+    ]
+    cp_trace_decode_sin_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_sin_h2d
+    ]
+    cp_trace_decode_mask_tts = [
+        ttnn.to_device(h, device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for h in cp_decode_mask_h2d
+    ]
+
+    # Run dummy CP prefill to populate KV cache before trace capture
+    dummy_cp_input = ttnn.from_torch(
+        torch.zeros(1, 1, 2, talker_h, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    model.code_predictor.forward_single_step(
+        dummy_cp_input,
+        cp_trace_prefill_cos_tt,
+        cp_trace_prefill_sin_tt,
+        cp_trans_mat,
+        generation_step=1,
+        kv_caches=cp_kv_caches_persistent,
+        start_pos=0,
+        mode="prefill",
+        cp_prefill_mask=cp_trace_prefill_mask_tt,
+        return_hidden_state=False,
+    )
+    ttnn.deallocate(dummy_cp_input)
+    ttnn.synchronize_device(device)
+
+    # Capture CP prefill trace
+    print("  Capturing CP prefill trace...")
+    cp_prefill_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    try:
+        cp_prefill_logits_tt, _ = model.code_predictor.forward_single_step(
+            cp_trace_prefill_embed_tt,
+            cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt,
+            cp_trans_mat,
+            generation_step=1,
+            kv_caches=cp_kv_caches_persistent,
+            start_pos=0,
+            mode="prefill",
+            cp_prefill_mask=cp_trace_prefill_mask_tt,
+            return_hidden_state=False,
+        )
+    finally:
+        ttnn.end_trace_capture(device, cp_prefill_trace_id, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    # Run dummy CP decode steps to populate KV positions 2-15 before decode trace capture
+    dummy_cp_dec = ttnn.from_torch(
+        torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    for _step_code_idx in range(2, config.num_code_groups):
+        _cos, _sin = get_rope_tensors(device, cp_head_dim, 1, torch.tensor([_step_code_idx]), cp_rope_theta)
+        _mask = ttnn.from_torch(
+            torch.full((1, _cp_num_heads, 1, max_cp_seq_len), float("-inf")),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        model.code_predictor.forward_single_step(
+            dummy_cp_dec,
+            _cos,
+            _sin,
+            cp_trans_mat,
+            generation_step=_step_code_idx,
+            kv_caches=cp_kv_caches_persistent,
+            start_pos=_step_code_idx,
+            mode="decode",
+            cur_pos_tensor=None,
+            decode_attn_mask=_mask,
+            return_hidden_state=False,
+        )
+        ttnn.deallocate(_mask)
+    ttnn.deallocate(dummy_cp_dec)
+    ttnn.synchronize_device(device)
+
+    # Capture CP decode traces (x14, one per code index 2..15)
+    print(f"  Capturing {config.num_code_groups - 2} CP decode traces...")
+    cp_decode_trace_ids = [[], []]
+    cp_decode_logits_tts = [[], []]
+    for _buf_i in range(2):
+        for _trace_i, _step_code_idx in enumerate(range(2, config.num_code_groups)):
+            _cp_cos_tt = cp_trace_decode_cos_tts[_trace_i]
+            _cp_sin_tt = cp_trace_decode_sin_tts[_trace_i]
+            _cp_mask_tt = cp_trace_decode_mask_tts[_trace_i]
+            _, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
+                cp_trace_decode_embed_tts[_buf_i],
+                _cp_cos_tt,
+                _cp_sin_tt,
+                cp_trans_mat,
+                generation_step=_step_code_idx,
+                kv_caches=cp_kv_caches_persistent,
+                start_pos=_step_code_idx,
+                mode="decode",
+                cur_pos_tensor=None,
+                decode_attn_mask=_cp_mask_tt,
+                return_hidden_state=False,
+            )
+            ttnn.synchronize_device(device)
+
+            _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            try:
+                _logits_tt, _ = model.code_predictor.forward_single_step(
+                    cp_trace_decode_embed_tts[_buf_i],
+                    _cp_cos_tt,
+                    _cp_sin_tt,
+                    cp_trans_mat,
+                    generation_step=_step_code_idx,
+                    kv_caches=cp_kv_caches_persistent,
+                    start_pos=_step_code_idx,
+                    mode="decode",
+                    cur_pos_tensor=None,
+                    decode_attn_mask=_cp_mask_tt,
+                    return_hidden_state=False,
+                )
+            finally:
+                ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+            ttnn.synchronize_device(device)
+            cp_decode_trace_ids[_buf_i].append(_trace_id)
+            cp_decode_logits_tts[_buf_i].append(_logits_tt)
+    print(f"  Captured {len(cp_decode_trace_ids[0])} CP decode traces x2 buffers.")
+
+    # Zero-reset CP KV caches for first real request (D2D assign — zeros are on device)
+    for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
+        ttnn.assign(k_zero, k_cache)
+        ttnn.assign(v_zero, v_cache)
+
+    # ─── Persistent Talker decode state (one trace per prefill bucket) ──────
+    # Hoists what used to be per-request alloc + capture inside run_inference.
+    # Per-request handling now reduces to: zero-reset KV cache + execute trace.
+    # Buckets match the Talker prefill traces above.
+    TRACE_DECODE_BUCKETS = (32, 64, 96, 128, 192, 256, 384, 512, 1024)
+    print(f"  Allocating persistent Talker KV caches + decode traces for buckets {TRACE_DECODE_BUCKETS}...")
+    trace_decode_embed_tt = ttnn.from_torch(
+        torch.zeros(1, 1, 1, talker_h, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    trace_decode_cos_tt = ttnn.from_torch(
+        torch.ones(1, 1, 1, head_dim, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    trace_decode_sin_tt = ttnn.from_torch(
+        torch.zeros(1, 1, 1, head_dim, dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    trace_decode_cur_pos_tt = ttnn.from_torch(
+        torch.tensor([1], dtype=torch.int32),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    talker_kv_caches_by_bucket = {}
+    talker_kv_zero_hosts_by_bucket = {}
+    talker_decode_trace_id_by_bucket = {}
+    trace_decode_mask_tt_by_bucket = {}
+    trace_decode_codec_logits_out_by_bucket = {}
+    trace_decode_hidden_out_by_bucket = {}
+    trace_decode_codec0_token_tt_by_bucket: Dict[int, object] = {}
+
+    for _bucket in TRACE_DECODE_BUCKETS:
+        _max_talker_seq_len = (((_bucket + config.max_new_tokens + 16) + _TILE - 1) // _TILE) * _TILE
+        # Allocate KV cache for this bucket
+        _kv = allocate_kv_cache(
+            device=device,
+            num_layers=model.talker_config.num_hidden_layers,
+            batch_size=1,
+            num_kv_heads=model.talker_config.num_key_value_heads,
+            max_seq_len=_max_talker_seq_len,
+            head_dim=head_dim,
+        )
+        # Zero-fill host buffers for cheap per-request reset (mirrors cp_kv_zero_hosts pattern)
+        _kv_zero_hosts = []
+        for _kc, _vc in _kv:
+            _zk = ttnn.from_torch(
+                torch.zeros(*_kc.shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            _zv = ttnn.from_torch(
+                torch.zeros(*_vc.shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            _kv_zero_hosts.append((_zk, _zv))
+        # Per-bucket decode mask (sized to the bucket's max_talker_seq_len). bf16 and
+        # single-head to match build_talker_decode_trace_h2d_constants, which is what
+        # gets copied into it every frame.
+        _mask = ttnn.from_torch(
+            torch.full((1, 1, 1, _max_talker_seq_len), float("-inf")).bfloat16(),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Untraced warmup so program cache is hot before begin_trace_capture
+        # (writes are not allowed during trace capture).
+        _wu_h, _ = model.talker.forward_from_hidden(
+            trace_decode_embed_tt,
+            trace_decode_cos_tt,
+            trace_decode_sin_tt,
+            talker_trans_mat,
+            kv_caches=_kv,
+            cur_pos_tensor=trace_decode_cur_pos_tt,
+            decode_attn_mask=_mask,
+            mode="decode",
+        )
+        model.talker.get_codec_logits(_wu_h)
+        ttnn.synchronize_device(device)
+
+        # Capture trace.
+        _trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        try:
+            _hidden, _ = model.talker.forward_from_hidden(
+                trace_decode_embed_tt,
+                trace_decode_cos_tt,
+                trace_decode_sin_tt,
+                talker_trans_mat,
+                kv_caches=_kv,
+                cur_pos_tensor=trace_decode_cur_pos_tt,
+                decode_attn_mask=_mask,
+                mode="decode",
+            )
+            _logits_out = model.talker.get_codec_logits(_hidden)
+        finally:
+            ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+        ttnn.synchronize_device(device)
+
+        # Zero-reset KV cache for first real request that hits this bucket
+        for (_zk, _zv), (_kc, _vc) in zip(_kv_zero_hosts, _kv):
+            ttnn.copy_host_to_device_tensor(_zk, _kc)
+            ttnn.copy_host_to_device_tensor(_zv, _vc)
+
+        talker_kv_caches_by_bucket[_bucket] = _kv
+        talker_kv_zero_hosts_by_bucket[_bucket] = _kv_zero_hosts
+        talker_decode_trace_id_by_bucket[_bucket] = _trace_id
+        trace_decode_mask_tt_by_bucket[_bucket] = _mask
+        trace_decode_codec_logits_out_by_bucket[_bucket] = _logits_out
+        trace_decode_hidden_out_by_bucket[_bucket] = _hidden
+        print(f"    bucket={_bucket}: max_talker_seq={_max_talker_seq_len}, trace captured")
+
+    # Capture SE-block traces for ECAPA. Without these, on-device
+    # ``extract_speaker_embedding`` calls after run_inference's trace exec
+    # produce inf values (or hang). With these, the SE forward replays a
+    # pre-captured trace at request time and is safe.
+    print("Server context initialized. ALL traces pre-captured (ECAPA SE + CP + Talker decode).")
+
+    return TTSServerContext(
+        cp_kv_caches_persistent=cp_kv_caches_persistent,
+        cp_kv_zero_hosts=cp_kv_zero_hosts,
+        cp_prefill_trace_id=cp_prefill_trace_id,
+        cp_decode_trace_ids=cp_decode_trace_ids,
+        cp_prefill_logits_tt=cp_prefill_logits_tt,
+        cp_decode_logits_tts=cp_decode_logits_tts,
+        cp_trace_prefill_embed_tt=cp_trace_prefill_embed_tt,
+        cp_trace_prefill_cos_tt=cp_trace_prefill_cos_tt,
+        cp_trace_prefill_sin_tt=cp_trace_prefill_sin_tt,
+        cp_trace_prefill_mask_tt=cp_trace_prefill_mask_tt,
+        cp_trace_prefill_cos_host=cp_trace_prefill_cos_host,
+        cp_trace_prefill_sin_host=cp_trace_prefill_sin_host,
+        cp_trace_prefill_mask_host=cp_trace_prefill_mask_host,
+        cp_trace_decode_embed_tts=cp_trace_decode_embed_tts,
+        cp_trace_decode_cos_tts=cp_trace_decode_cos_tts,
+        cp_trace_decode_sin_tts=cp_trace_decode_sin_tts,
+        cp_trace_decode_mask_tts=cp_trace_decode_mask_tts,
+        talker_kv_caches_by_bucket=talker_kv_caches_by_bucket,
+        talker_kv_zero_hosts_by_bucket=talker_kv_zero_hosts_by_bucket,
+        talker_decode_trace_id_by_bucket=talker_decode_trace_id_by_bucket,
+        trace_decode_embed_tt=trace_decode_embed_tt,
+        trace_decode_cos_tt=trace_decode_cos_tt,
+        trace_decode_sin_tt=trace_decode_sin_tt,
+        trace_decode_cur_pos_tt=trace_decode_cur_pos_tt,
+        trace_decode_mask_tt_by_bucket=trace_decode_mask_tt_by_bucket,
+        trace_decode_codec_logits_out_by_bucket=trace_decode_codec_logits_out_by_bucket,
+        trace_decode_hidden_out_by_bucket=trace_decode_hidden_out_by_bucket,
+        trace_decode_codec0_token_tt_by_bucket=trace_decode_codec0_token_tt_by_bucket,
+        talker_trans_mat=talker_trans_mat,
+        cp_trans_mat=cp_trans_mat,
+        talker_cos_table=talker_cos_table,
+        talker_sin_table=talker_sin_table,
+        cp_cos_table=cp_cos_table,
+        cp_sin_table=cp_sin_table,
+        code_pred_embeds=code_pred_embeds,
+        codec_embed_torch=codec_embed_torch,
+        max_cp_seq_len=max_cp_seq_len,
+        _talker_num_heads=_talker_num_heads,
+        _cp_num_heads=_cp_num_heads,
+    )
+
+
+def run_inference(
+    ctx: TTSServerContext,
+    model,
+    device,
+    inputs_embeds_tt: "ttnn.Tensor",
+    trailing_text_hidden: torch.Tensor,
+    tts_pad_embed: torch.Tensor,
+    config: TTSConfig,
+    use_2cq: bool = False,
+) -> tuple:
+    """
+    Run TTS inference using server context.
+
+    Per-request cost:
+    - Zero kernel compile (pre-done at startup)
+    - Zero CP trace capture (pre-captured in ctx)
+    - One Talker KV alloc + standard prefill + Talker trace capture per request
+    - Fast decode loop (all traces executed)
+
+    use_2cq:
+        If True, device must be opened with num_command_queues=2; overlaps H2D (CQ1) with trace exec (CQ0).
+
+    Returns:
+        (codes, timings, perf_text)
+        codes: torch.Tensor [num_frames, 16]
+        timings: dict with timing breakdowns
+        perf_text: formatted string for display
+    """
+    from models.demos.qwen3_tts.tt.rope import get_rope_tensors
+
+    _TILE = 32
+    real_seq_len = inputs_embeds_tt.shape[2]
+    padded_seq_len = get_padded_prefill_len(real_seq_len)
+    max_talker_seq_len = (((padded_seq_len + config.max_new_tokens + 16) + _TILE - 1) // _TILE) * _TILE
+
+    talker_h = model.talker_config.hidden_size
+    head_dim = model.talker_config.head_dim
+
+    # Pad input to bucket size
+    if padded_seq_len > real_seq_len:
+        pad_len = padded_seq_len - real_seq_len
+        pad_zeros = ttnn.from_torch(
+            torch.zeros(1, 1, pad_len, talker_h, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        inputs_embeds_tt = ttnn.concat([inputs_embeds_tt, pad_zeros], dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(pad_zeros)
+
+    # Look up persistent Talker KV cache + decode trace for this bucket
+    # (allocated once at init_server_context time; zero-reset per request below).
+    if padded_seq_len not in ctx.talker_kv_caches_by_bucket:
+        raise RuntimeError(
+            f"No pre-allocated Talker state for bucket={padded_seq_len}. "
+            f"Available: {sorted(ctx.talker_kv_caches_by_bucket.keys())}"
+        )
+    talker_kv_caches = ctx.talker_kv_caches_by_bucket[padded_seq_len]
+    talker_kv_zero_hosts = ctx.talker_kv_zero_hosts_by_bucket[padded_seq_len]
+    talker_decode_trace_id = ctx.talker_decode_trace_id_by_bucket[padded_seq_len]
+    trace_embed_tt = ctx.trace_decode_embed_tt
+    trace_cos_tt = ctx.trace_decode_cos_tt
+    trace_sin_tt = ctx.trace_decode_sin_tt
+    trace_cur_pos_tt = ctx.trace_decode_cur_pos_tt
+    trace_mask_tt = ctx.trace_decode_mask_tt_by_bucket[padded_seq_len]
+    trace_codec_logits_out = ctx.trace_decode_codec_logits_out_by_bucket[padded_seq_len]
+    trace_hidden_out = ctx.trace_decode_hidden_out_by_bucket[padded_seq_len]
+
+    # Zero-reset Talker KV cache so prior request's prefill positions don't leak.
+    for (_zk, _zv), (_kc, _vc) in zip(talker_kv_zero_hosts, talker_kv_caches):
+        ttnn.copy_host_to_device_tensor(_zk, _kc)
+        ttnn.copy_host_to_device_tensor(_zv, _vc)
+
+    all_codes = []
+    timings = {}
+
+    try:
+        # === Talker prefill (standard path — avoids L1 overflow on large buckets) ===
+        prefill_pos = torch.arange(padded_seq_len)
+        prefill_cos_tt, prefill_sin_tt = get_rope_tensors(
+            device, head_dim, padded_seq_len, prefill_pos, model.talker_config.rope_theta
+        )
+        ttnn.synchronize_device(device)
+        t_prefill_start = time.time()
+
+        prefill_hidden_out, talker_kv_caches = model.talker.forward_from_hidden(
+            inputs_embeds_tt,
+            prefill_cos_tt,
+            prefill_sin_tt,
+            ctx.talker_trans_mat,
+            kv_caches=talker_kv_caches,
+            start_pos=0,
+            mode="prefill",
+        )
+        prefill_logits_out = model.talker.get_codec_logits(prefill_hidden_out)
+        ttnn.synchronize_device(device)
+        t_prefill_end = time.time()
+        timings["prefill"] = t_prefill_end - t_prefill_start
+
+        ttnn.deallocate(prefill_cos_tt)
+        ttnn.deallocate(prefill_sin_tt)
+
+        generated_code0_tokens = []
+        codec_logits_full = _mesh_to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
+        token_0 = sample_token(
+            codec_logits_torch,
+            config.temperature,
+            config.top_k,
+            config.greedy,
+            config.repetition_penalty,
+            generated_code0_tokens,
+        )
+        generated_code0_tokens.append(token_0)
+
+        if token_0 == config.codec_eos_id:
+            return None, timings, "EOS at prefill"
+
+        talker_pos = real_seq_len
+        talker_hidden_tt = prefill_hidden_out
+
+        talker_cos_h2d, talker_sin_h2d, talker_mask_h2d, talker_cur_pos_h2d = build_talker_decode_trace_h2d_constants(
+            ctx.talker_cos_table, ctx.talker_sin_table, ctx._talker_num_heads, max_talker_seq_len, real_seq_len
+        )
+
+        # === Generation loop ===
+        decode_step_times = []
+        talker_times_ms = []
+        cp_times_ms = []
+        trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
+        h2d_cq = 1 if use_2cq else 0
+        cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
+
+        _th = model.talker_config.hidden_size
+        token_id_buf = torch.zeros((1, 1), dtype=torch.long)
+        cp_prefill_embed_cpu = torch.empty(1, 1, 2, _th, dtype=torch.bfloat16)
+        talker_embed_cpu = torch.empty(1, 1, 1, _th, dtype=torch.bfloat16)
+        cp_decode_embed_cpu = torch.empty(1, 1, 1, _th, dtype=torch.bfloat16)
+        acc_code_embed = torch.zeros(1, 1, _th, dtype=torch.float32)
+
+        t_decode_start = time.time()
+        # Run the AR generation loop via the shared helper in tt/utils.py
+        # so this server path runs the EXACT same loop body as the demo's
+        # generate_codes_ttnn (no per-call drift between paths).
+        from models.demos.qwen3_tts.tt.utils import DecodeLoopState, ar_decode_loop
+
+        loop_state = DecodeLoopState(
+            device=device,
+            cp_kv_caches_persistent=ctx.cp_kv_caches_persistent,
+            cp_kv_zero_hosts=ctx.cp_kv_zero_hosts,
+            cp_prefill_trace_id=ctx.cp_prefill_trace_id,
+            cp_prefill_logits_tt=ctx.cp_prefill_logits_tt,
+            cp_decode_trace_ids=ctx.cp_decode_trace_ids,
+            cp_decode_logits_tts=ctx.cp_decode_logits_tts,
+            cp_trace_prefill_embed_tt=ctx.cp_trace_prefill_embed_tt,
+            cp_trace_prefill_mask_tt=ctx.cp_trace_prefill_mask_tt,
+            cp_trace_prefill_cos_tt=ctx.cp_trace_prefill_cos_tt,
+            cp_trace_prefill_sin_tt=ctx.cp_trace_prefill_sin_tt,
+            cp_trace_prefill_mask_host=ctx.cp_trace_prefill_mask_host,
+            cp_trace_prefill_cos_host=ctx.cp_trace_prefill_cos_host,
+            cp_trace_prefill_sin_host=ctx.cp_trace_prefill_sin_host,
+            cp_trace_decode_embed_tts=ctx.cp_trace_decode_embed_tts,
+            code_pred_embeds=ctx.code_pred_embeds,
+            codec_embed_torch=ctx.codec_embed_torch,
+            talker_decode_trace_id=talker_decode_trace_id,
+            trace_embed_tt=trace_embed_tt,
+            trace_cos_tt=trace_cos_tt,
+            trace_sin_tt=trace_sin_tt,
+            trace_cur_pos_tt=trace_cur_pos_tt,
+            trace_mask_tt=trace_mask_tt,
+            trace_hidden_out=trace_hidden_out,
+            trace_codec_logits_out=trace_codec_logits_out,
+            talker_codec0_token_tt=ctx.trace_decode_codec0_token_tt_by_bucket.get(padded_seq_len),
+            talker_cos_h2d=talker_cos_h2d,
+            talker_sin_h2d=talker_sin_h2d,
+            talker_mask_h2d=talker_mask_h2d,
+            talker_cur_pos_h2d=talker_cur_pos_h2d,
+            token_id_buf=token_id_buf,
+            cp_prefill_embed_cpu=cp_prefill_embed_cpu,
+            cp_decode_embed_cpu=cp_decode_embed_cpu,
+            talker_embed_cpu=talker_embed_cpu,
+            acc_code_embed=acc_code_embed,
+            talker_hidden_tt=talker_hidden_tt,
+            talker_pos=talker_pos,
+            real_seq_len=real_seq_len,
+            trailing_text_hidden=trailing_text_hidden,
+            tts_pad_embed=tts_pad_embed,
+            token_0=token_0,
+        )
+        codes_tensor, _frame_breakdown, _t_first, _t_last = ar_decode_loop(
+            loop_state,
+            config,
+            use_2cq,
+            sample_token_fn=sample_token,
+            sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
+        )
+        decode_step_times = loop_state.decode_step_times_ms
+        talker_times_ms = loop_state.talker_times_ms
+        cp_times_ms = loop_state.cp_times_ms
+        all_codes = [] if codes_tensor is None else codes_tensor.tolist()
+        t_decode_end = time.time()
+        timings["decode_loop"] = t_decode_end - t_decode_start
+
+    finally:
+        ttnn.synchronize_device(device)
+        # Persistent Talker state (KV caches, decode trace, mask, embed/cos/sin/cur_pos
+        # buffers) is owned by ctx and is NOT released here. It survives across requests;
+        # KV caches are zero-reset at the start of run_inference.
+
+    if len(all_codes) == 0:
+        return None, timings, "No frames generated"
+
+    codes = torch.tensor(all_codes, dtype=torch.long)
+    num_frames = len(codes)
+
+    # Build performance text
+    prefill_ms = timings["prefill"] * 1000
+    decode_ms = timings.get("decode_loop", 0) * 1000
+    avg_step = sum(decode_step_times) / len(decode_step_times) if decode_step_times else 0
+    avg_talker = sum(talker_times_ms) / len(talker_times_ms) if talker_times_ms else 0
+    avg_cp = sum(cp_times_ms) / len(cp_times_ms) if cp_times_ms else 0
+    inference_ms = prefill_ms + decode_ms
+    audio_duration = num_frames / 12.0
+
+    lines = [
+        f"{'Phase':<35} {'Time (ms)':>10}",
+        "-" * 48,
+        f"{'Prefill (' + str(real_seq_len) + ' / ' + str(padded_seq_len) + ' tokens)':<35} {prefill_ms:>10.1f}",
+        f"{'Decode loop (' + str(num_frames) + ' frames)':<35} {decode_ms:>10.1f}",
+        f"{'  Avg step / Talker / CP (ms)':<35} {'%.1f / %.1f / %.1f' % (avg_step, avg_talker, avg_cp):>10}",
+        "-" * 48,
+        f"{'Inference time':<35} {inference_ms:>10.1f}",
+        f"{'Audio duration':<35} {audio_duration:>10.2f}s",
+    ]
+    perf_text = "\n".join(lines)
+    print("\n" + perf_text)
+
+    timings["inference"] = timings["prefill"] + timings.get("decode_loop", 0)
+    timings["num_frames"] = num_frames
+    timings["audio_duration"] = audio_duration
+
+    return codes, timings, perf_text
+
+
+def decode_audio(codes: torch.Tensor, decoder_weights: dict) -> torch.Tensor:
+    """Decode codes to audio using reference Speech Tokenizer Decoder."""
+    from models.demos.qwen3_tts.reference.functional import (
+        SpeechTokenizerDecoderConfig,
+        speech_tokenizer_decoder_forward,
+    )
+
+    print("\nDecoding to audio...")
+
+    # Filter special tokens
+    codes_filtered = codes.clone().clamp(max=2047)
+
+    # Reshape: [seq_len, 16] -> [1, 16, seq_len]
+    codes_input = codes_filtered.T.unsqueeze(0)
+
+    config = SpeechTokenizerDecoderConfig()
+    audio = speech_tokenizer_decoder_forward(codes_input, decoder_weights, config)
+
+    print(f"  Audio duration: {audio.shape[-1] / 24000:.2f}s")
+
+    return audio
