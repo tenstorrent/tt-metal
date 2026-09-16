@@ -9,8 +9,8 @@
 # TT_LLK_DISABLE_ASSERTS is supplied by llk-perf-impl (1 when disable-llk-asserts is on).
 # {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
 # so every group below shares one identical cmd that calls a shared runner in
-# tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
-# (both use pytest-split sharding).
+# tt_metal/tt-llk/tests/. Both runners use pytest-split sharding and reset the
+# board between perf modules.
 
 - name: llk_perf_wormhole group 1/5
   split_group: 1
@@ -20,7 +20,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 90
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_wormhole group 2/5
@@ -31,7 +31,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 90
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_wormhole group 3/5
@@ -42,7 +42,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 90
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_wormhole group 4/5
@@ -53,7 +53,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 90
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_wormhole group 5/5
@@ -64,7 +64,7 @@
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
   skus:
     wh_n150_civ2:
-      timeout: 90
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 1/5
@@ -75,7 +75,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 2/5
@@ -86,7 +86,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 3/5
@@ -97,7 +97,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 4/5
@@ -108,7 +108,7 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_perf_blackhole group 5/5
@@ -119,5 +119,5 @@
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
   skus:
     bh_p150b_civ2:
-      timeout: 150
+      timeout: 300
   owner_id: U09UC143684 # Nemanja Divnic

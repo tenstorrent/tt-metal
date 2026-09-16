@@ -16,7 +16,8 @@ class PackRelevance(PerfRelevance):
     The block geometry is shared by every mode. ``RELU_CONFIG`` is a packer
     register, so only PACK and L1_CONGESTION observe it -- a ReLU sweep
     therefore reuses UNPACK. MATH is full fidelity (empty TILE_LOOP when
-    ``unpack_to_dest``) and is never stored in ``EXECUTE_CACHE``.
+    ``unpack_to_dest``) and is never stored in ``EXECUTE_CACHE``. The production
+    perf test intentionally does not attach this policy.
     """
 
     math_templates = KEEP_ALL
@@ -61,6 +62,7 @@ def test_perf_pack(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
-        relevance=PACK_RELEVANCE,
-        relevance_source=__name__,
+        # Keep this measurement full-fidelity regardless of the global
+        # LLK_DISABLE_PERF_RELEVANCE setting.
+        relevance=None,
     )

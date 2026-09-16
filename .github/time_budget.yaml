@@ -318,8 +318,8 @@ llk:
     wh_n150_civ2: 1800
     bh_p150b_civ2: 1800
   perf:
-    wh_n150_civ2: 1200
-    bh_p150b_civ2: 1200
+    wh_n150_civ2: 1500
+    bh_p150b_civ2: 1500
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180

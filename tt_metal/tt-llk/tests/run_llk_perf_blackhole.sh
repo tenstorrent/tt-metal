@@ -5,8 +5,11 @@
 # Blackhole LLK perf runner, shared by the 5 bh matrix groups in
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
+# Each perf module is sharded independently. For every non-empty module shard,
+# compile its items (producer), reset the board, then measure them in a fresh
+# consumer process. This preserves full pytest-split coverage without the
+# retired slice bin-pack, which could assign multiple slices of one module to
+# the same CI shard and overwrite part of that module's performance output.
 #
 # Usage: SPEED_OF_LIGHT=<true|false> LLK_DISABLE_PERF_RELEVANCE=<0|1> \
 #        TT_LLK_DISABLE_ASSERTS=<0|1> run_llk_perf_blackhole.sh <group> <n_groups>
@@ -57,10 +60,41 @@ mkdir -p perf_data
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-blackhole-${GROUP}-compile.xml pytest-report-blackhole-${GROUP}-run.xml pytest-report-blackhole-${GROUP}.xml
+reports=()
+for file in perf_*.py; do
+  test_name="${file%.py}"
+  compile_report="pytest-report-blackhole-${GROUP}-${test_name}-compile.xml"
+  run_report="pytest-report-blackhole-${GROUP}-${test_name}-run.xml"
+
+  echo "Compiling ${file}, group ${GROUP}/${N_GROUPS}"
+  if pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 \
+    -m "perf and not accuracy" --timeout=60 \
+    --splits "$N_GROUPS" --group "$GROUP" \
+    --junitxml="$compile_report" "$file"; then
+    reports+=("$compile_report")
+  else
+    status=$?
+    if [ "$status" -eq 5 ]; then
+      echo "No selected tests in ${file}, group ${GROUP}/${N_GROUPS}; skipping"
+      rm -f "$compile_report"
+      continue
+    fi
+    exit "$status"
+  fi
+
+  echo "Resetting the board before measuring ${file}, group ${GROUP}/${N_GROUPS}"
+  tt-smi -r 0
+
+  pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 15 -x \
+    -m "perf and not accuracy" --timeout=60 \
+    --splits "$N_GROUPS" --group "$GROUP" \
+    --junitxml="$run_report" "$file"
+  reports+=("$run_report")
+done
+
+if [ "${#reports[@]}" -eq 0 ]; then
+  echo "No Blackhole perf tests selected for group ${GROUP}/${N_GROUPS}" >&2
+  exit 5
+fi
+
+junitparser merge "${reports[@]}" "pytest-report-blackhole-${GROUP}.xml"

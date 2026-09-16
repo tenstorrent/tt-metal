@@ -16,21 +16,24 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
+UNPACK_TILIZE_RUN_TYPES = (
+    PerfRunType.L1_TO_L1,
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+)
+
 
 class UnpackTilizeRelevance(PerfRelevance):
     """``perf_unpack_tilize`` / ``unpack_tilize_perf.cpp``: no math mode.
 
     All three remaining modes key off the same dimension triple. The two
     comments below are both scars from real failures, so change either set only
-    with the kernel source open.
+    with the kernel source open. The production perf test intentionally does not
+    attach this policy.
     """
 
-    run_types = (
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    )
+    run_types = UNPACK_TILIZE_RUN_TYPES
     _DIM_RUNTIMES = frozenset({INPUT_DIMENSIONS, TILE_COUNT, LOOP_FACTOR})
     unpack_runtimes = _DIM_RUNTIMES
     pack_templates = PIN_ALL
@@ -123,7 +126,7 @@ def _perf_unpack_tilize(
     configuration = PerfConfig(
         "sources/unpack_tilize_perf.cpp",
         formats,
-        run_types=list(UNPACK_TILIZE_RELEVANCE.run_types),
+        run_types=list(UNPACK_TILIZE_RUN_TYPES),
         templates=[],
         runtimes=[
             generate_input_dim(dimensions, dimensions),
@@ -141,8 +144,9 @@ def _perf_unpack_tilize(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format == DataFormat.Int32,
-        relevance=UNPACK_TILIZE_RELEVANCE,
-        relevance_source=__name__,
+        # Keep this measurement full-fidelity regardless of the global
+        # LLK_DISABLE_PERF_RELEVANCE setting.
+        relevance=None,
     )
 
     configuration.run(perf_report)
