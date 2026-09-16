@@ -293,7 +293,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     run_bmm_single_node(mesh_device, p);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, BmmTranspose) {
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BmmTranspose) {
     auto& mesh_device = *devices_[0];
     BmmParams p;
     if (mesh_device.arch() != ARCH::QUASAR) {

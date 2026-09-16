@@ -205,19 +205,36 @@ def matmul_enable_direct_indexing(register_format_hint):
     return [False] if register_format_hint is None else [True, False]
 
 
-def matmul_transpose_modes(math_fidelity):
+def matmul_transpose_modes(math_fidelity, register_format_hint):
+    # 2x-formats do not work with transpose
+    if register_format_hint is not None:
+        return [Transpose.No]
     # The transpose feature is actually independent of fidelity
     # This is just so that the number of cases doesn't explode
     if math_fidelity != MathFidelity.LoFi:
         return [Transpose.No]
+
     return [Transpose.No, Transpose.Yes]
 
 
-def matmul_tiny_transpose_modes(input_tile_dimensions):
-    # Tiny-tiles is only tested in LoFi so the same check as regular matmul is not required
+def matmul_tiny_transpose_modes(
+    input_tile_dimensions, math_fidelity, register_format_hint
+):
     _, input_B_tile_dimensions = input_tile_dimensions
+
+    # Transpose only works with full-tiles
     if input_B_tile_dimensions != (TILE_DIM, TILE_DIM):
         return [Transpose.No]
+
+    # 2x-formats do not work with transpose
+    if register_format_hint is not None:
+        return [Transpose.No]
+
+    # The transpose feature is actually independent of fidelity
+    # This is just so that the number of cases doesn't explode
+    if math_fidelity != MathFidelity.LoFi:
+        return [Transpose.No]
+
     return [Transpose.No, Transpose.Yes]
 
 

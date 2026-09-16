@@ -9,8 +9,6 @@
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
-using std::uint32_t;
-
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
 void kernel_main() {

@@ -38,10 +38,14 @@ inline void _llk_unpack_matmul_mop_config_(
         load_replay_buf<0, NUM_FACES>(
             [buf_desc_id_1]
             {
-                TT_UNPACR0_FACE(0, 0, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id_1, 0 /*SetDatValid*/);
-                TT_UNPACR0_FACE(1, 2, 0, 0, buf_desc_id_1, 0 /*SetDatValid*/);
-                TT_UNPACR0_FACE(2, 1, 0, 0, buf_desc_id_1, 0 /*SetDatValid*/);
-                TT_UNPACR0_FACE(3, 3, 0, 0, buf_desc_id_1, 1 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id_1, 0 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id_1, 0 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id_1, 0 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id_1, 1 /*SetDatValid*/);
             });
 
         const std::uint32_t src_a_replay = TT_OP_REPLAY(0, NUM_FACES, 0, 0, 0, 0);
@@ -98,7 +102,8 @@ inline std::uint32_t _llk_unpack_matmul_src_tile_scale_(const TensorShape tensor
  * @brief Records one operand's tile-unpack sequence.
  *
  * A tiny-tile buffer descriptor has z_dim = 1, so each logical face is one hardware tile. A full-tile
- * buffer descriptor has z_dim = 4 and unpacks in one instruction. Short faces clear the current Src bank.
+ * buffer descriptor has z_dim = 4 and unpacks in one instruction when !TRANSPOSE_EN.
+ * Otherwise, the TRANSPOSE + full-tile unpacks in four instructions. Short faces clear the current Src bank.
  *
  * @tparam UNP_SEL: Destination Src register, values = <p_unpacr::UNP_A/UNP_B>.
  * @tparam TRANSPOSE_EN: Unpacks a transposed version of fully-tiled SrcA
@@ -133,10 +138,14 @@ inline std::uint32_t _llk_unpack_matmul_load_tile_replay_(
 
             if constexpr (TRANSPOSE_EN) // full-tile + transpose
             {
-                TT_UNPACR0_FACE(0, 0, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
-                TT_UNPACR0_FACE(1, 2, 0, 0, buf_desc_id, 0 /*SetDatValid*/);
-                TT_UNPACR0_FACE(2, 1, 0, 0, buf_desc_id, 0 /*SetDatValid*/);
-                TT_UNPACR0_FACE(3, 3, 0, 0, buf_desc_id, 1 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    0 /*Dst Face Idx*/, 0 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    1 /*Dst Face Idx*/, 2 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    2 /*Dst Face Idx*/, 1 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/);
+                TT_UNPACR0_FACE(
+                    3 /*Dst Face Idx*/, 3 /*Src Face Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
 
                 if (advance_to_next_tile)
                 {

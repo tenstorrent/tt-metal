@@ -15,7 +15,7 @@
 /**
 * @brief Initialize unpacker for matrix multiply
 
-* @tparam TRANSPOSE_EN: Enables transpose of a tile
+* @tparam TRANSPOSE_EN: Enables transpose of a tile. Required; no default.
 * @param operandA: The input0 operand circular buffer
 * @param operandB: The input1 operand circular buffer
 * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
@@ -30,13 +30,13 @@
 * UNPACR1 -> SrcB (Unp1) and operandB feeds UNPACR0 -> SrcA (Unp0).
 * Operand tile shapes are read from circular-buffer metadata.
 */
-template <bool TRANSPOSE_EN = false>
+template <bool TRANSPOSE_EN>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
-    const std::uint32_t ct_dim = 1,
-    const std::uint32_t rt_dim = 1,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
     // In0 -> srcB (UNPACR1)
     // In1 -> srcA (UNPACR0)
     const std::uint32_t operandA_id = get_operand_id(operandA);
@@ -46,6 +46,12 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     LLK_ASSERT(
         ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
         "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
+
+    // MxFp4 operands feeding matmul are ALWAYS unpacked as the 2x-packed src-register format
+    // (MxFp4_2x_B) on Quasar. 2x dataformats are currently unsupported with transpose.
+    LLK_ASSERT(
+        !TRANSPOSE_EN || static_cast<DataFormat>(get_operand_src_format(operandB_id)) != DataFormat::MxFp4,
+        "matmul SrcA transpose is not supported for 2x-format inputs");
 
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
@@ -127,9 +133,9 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
     if (transpose == 0) {
-        llk_unpack_AB_matmul_init<false /*TRANSPOSE_EN */>(operandA, operandB, ct_dim, rt_dim, kt_dim);
+        llk_unpack_AB_matmul_init<false /*TRANSPOSE_EN*/>(operandA, operandB, ct_dim, rt_dim, kt_dim);
     } else {
-        llk_unpack_AB_matmul_init<true /*TRANSPOSE_EN */>(operandA, operandB, ct_dim, rt_dim, kt_dim);
+        llk_unpack_AB_matmul_init<true /*TRANSPOSE_EN*/>(operandA, operandB, ct_dim, rt_dim, kt_dim);
     }
 }
 
