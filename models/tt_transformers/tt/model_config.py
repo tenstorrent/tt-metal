@@ -2899,7 +2899,9 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get(
+            "norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps"))
+        )  # layer_norm_eps: Command-R (cohere) HF key
         self.vocab_size = text_config["vocab_size"]
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
@@ -3030,6 +3032,8 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+        # Command-R (cohere): final-logit scalar applied post-linear on the LM head.
+        self.logit_scale = text_config.get("logit_scale", None)
 
         # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
         # Attn-score softcapping is not applied (see __init__ comment); only the
@@ -3555,6 +3559,15 @@ class ModelArgs:
             state_dict = standardize_hf_keys(state_dict)
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
+                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            elif self.model_type == "cohere":
+                # Command-R rotates Q/K INTERLEAVED-native (HF modeling_cohere overrides
+                # rotate_half: adjacent pairs (2i,2i+1) + repeat_interleave cache) — unlike
+                # llama's NeoX half-split. The stock NeoX->Meta reverse_permute therefore
+                # SCRAMBLES already-interleaved cohere Q/K pairs; the ttnn interleaved
+                # rotary op is correct only with the unpermuted layout. Root-caused
+                # 2026-08-28 (quality defect): layer-0 PCC 0.9324 -> 0.9998 at seq 36
+                # (served math probe 422 restored) by skipping the permute.
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
                 # Standard: convert to Meta format
