@@ -89,9 +89,20 @@ MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
 if [ ! -f "${MGD}" ] && [ "${CONFIG}" = sc2 ]; then
   MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto"
 fi
-[ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
-[ -d "${DFLASH_MODEL}" ] || { echo "drafter checkpoint not found: ${DFLASH_MODEL}" >&2; exit 2; }
-[ -d "${GOLDEN_KV_DIR}" ] || { echo "drafter golden not found: ${GOLDEN_KV_DIR}" >&2; exit 2; }
+# Report every missing input at once. Assets are staged per cluster, so a leg can be one sync away on one
+# SKU and several on another; failing on the first gap costs a whole reservation per asset to discover the
+# rest. HF_MODEL and TRACE_DIR are gated here too -- otherwise they surface deep inside the runner, after
+# weight load has begun, as a stack trace rather than a path.
+MISSING=""
+[ -f "${MGD}" ] || MISSING="${MISSING}  mesh-graph descriptor: ${MGD}\n"
+[ -d "${HF_MODEL}" ] || MISSING="${MISSING}  verifier checkpoint: ${HF_MODEL}\n"
+[ -d "${DFLASH_MODEL}" ] || MISSING="${MISSING}  drafter checkpoint: ${DFLASH_MODEL}\n"
+[ -d "${TRACE_DIR}" ] || MISSING="${MISSING}  prompt trace: ${TRACE_DIR}\n"
+[ -d "${GOLDEN_KV_DIR}" ] || MISSING="${MISSING}  drafter golden: ${GOLDEN_KV_DIR}\n"
+if [ -n "${MISSING}" ]; then
+  printf 'missing inputs for %s/%s on %s:\n%b' "${MODEL}" "${CONFIG}" "$(hostname)" "${MISSING}" >&2
+  exit 2
+fi
 
 # The table must live on storage every rank AND the device-less producer can read. prefill_producer
 # rejects a per-host path outright for world_size > 1 (_require_shared_table_path), so fail here with a
