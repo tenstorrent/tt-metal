@@ -110,8 +110,15 @@ def dispatch_inputs(sha):
     return {k: v for k, v in wanted.items() if k in declared and v != ""}
 
 
-def push_branch(sha):
-    branch = BRANCH_PREFIX + short(sha)
+def push_branch(sha, index):
+    """One branch per run, because the workflow cancels its own concurrency group.
+
+    llk-perf.yaml sets `group: <workflow>-<arch>-<github.ref>` with
+    cancel-in-progress. Two dispatches of the same commit on the same branch
+    therefore share a group, and the second kills the first. Different branch,
+    different group, and the two runs proceed in parallel.
+    """
+    branch = f"{BRANCH_PREFIX}{short(sha)}-r{index}"
     git("push", "--force", f"git@github.com:{REPO}.git", f"{sha}:refs/heads/{branch}")
     return branch
 
@@ -135,28 +142,37 @@ def runs_on(branch):
     return json.loads(out or "[]")
 
 
-def start_runs(sha, branch, count):
-    """Dispatch `count` runs and return their ids, newest last."""
-    before = {r["databaseId"] for r in runs_on(branch)}
+def start_runs(sha, count):
+    """Dispatch one run per branch and return their ids."""
     inputs = dispatch_inputs(sha)
     print(f"  dispatch inputs: {inputs}")
-    for i in range(count):
+    ids = []
+    for i in range(1, count + 1):
+        branch = push_branch(sha, i)
+        before = {r["databaseId"] for r in runs_on(branch)}
         args = ["gh", "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", branch]
         for k, v in inputs.items():
             args += ["-f", f"{k}={v}"]
         sh(*args)
-        print(f"  dispatched run {i + 1}/{count}")
-        time.sleep(10)  # so the two runs get distinct queue positions
 
-    deadline = time.time() + 600
-    while time.time() < deadline:
-        new = [r for r in runs_on(branch) if r["databaseId"] not in before]
-        if len(new) >= count:
-            ids = sorted(r["databaseId"] for r in new)
-            print(f"  run ids: {ids}")
-            return ids
-        time.sleep(15)
-    raise RuntimeError(f"only {len(new)} of {count} runs appeared for {branch}")
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            new = [r for r in runs_on(branch) if r["databaseId"] not in before]
+            if new:
+                rid = new[0]["databaseId"]
+                ids.append(rid)
+                print(f"  run {i}/{count}: {rid} on {branch}")
+                break
+            time.sleep(10)
+        else:
+            raise RuntimeError(f"no run appeared for {branch}")
+    return ids
+
+
+def run_conclusion(run_id):
+    return json.loads(
+        sh("gh", "run", "view", str(run_id), "--repo", REPO, "--json", "conclusion")
+    )["conclusion"]
 
 
 def wait_for(run_ids):
@@ -300,9 +316,18 @@ def measure(sha, args, state):
         f"\n=== {key}  {git('log', '-1', '--format=%ad', '--date=short', sha)}  {subject}"
     )
 
-    branch = push_branch(sha)
-    run_ids = start_runs(sha, branch, args.runs)
+    run_ids = [int(r) for r in args.use_runs.split(",")] if args.use_runs else None
+    if run_ids:
+        print(f"  reusing run ids: {run_ids}")
+    else:
+        run_ids = start_runs(sha, args.runs)
     wait_for(run_ids)
+
+    bad = [r for r in run_ids if run_conclusion(r) != "success"]
+    if bad:
+        raise RuntimeError(
+            f"run(s) {bad} did not succeed; a measurement needs two clean runs"
+        )
 
     work = pathlib.Path(args.work_dir) / key
     sides = []
@@ -400,6 +425,11 @@ def main(argv=None):
         "--compare-ref",
         default="nstojictt/llk-perf-gate-slack-notify",
         help="ref to take the compare module from; one fixed rule for every point",
+    )
+    ap.add_argument(
+        "--use-runs",
+        help="comma-separated run ids to use instead of dispatching, so a run "
+        "that already happened is not wasted",
     )
     ap.add_argument("--refresh", action="store_true", help="re-measure cached commits")
     a = ap.parse_args(argv)
