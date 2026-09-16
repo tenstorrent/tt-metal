@@ -65,10 +65,11 @@ class LTXAttention(Module):
     ring_sdpa_chunk_by_n = {
         (True, 8, 4, 9728): (96, 256),
         (True, 8, 4, 38912): (192, 512),
-        # BH 2x4 (sp=4 pads to 128): stage 2 gains ~0.3 s with the wider K chunk (10.51 -> 10.19 s);
-        # stage 1 (N=9728) stays on the (256, 256) default, which measured fastest there — every
-        # smaller Q chunk lost time on both stages, and K=1024 overflows L1.
-        (True, 4, 2, 38784): (256, 512),
+        # BH 2x4 (sp=4 pads to 128): stage 2 gains ~0.25 s with the wider K chunk (10.51 -> 10.29 s,
+        # pcc 0.999 vs the default; (256, 512) measured the same within noise). Stage 1 (N=9728) stays
+        # on the (256, 256) default, which measured fastest there — every smaller Q chunk lost time on
+        # both stages, and K=1024 overflows L1.
+        (True, 4, 2, 38784): (192, 512),
     }
 
     # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
