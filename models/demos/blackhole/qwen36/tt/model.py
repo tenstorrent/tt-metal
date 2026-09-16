@@ -2377,7 +2377,9 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(_h(_mt, ttnn.bfloat16, ttnn.TILE_LAYOUT, rep), self._vt_gdn_mq)
         return self._verify_staged()
 
-    def capture_verify_trace(self, page_table, bucket, warm_tokens=None, valid_len=None, narrow_head=False):
+    def capture_verify_trace(
+        self, page_table, bucket, warm_tokens=None, valid_len=None, narrow_head=False, capture_chunk_start=0
+    ):
         """Capture ONE masked verify forward + norm + LM head, for speculative block verification.
 
         This is the trace the DFlash loop wants and that no existing capture provides: decode is one
@@ -2411,7 +2413,7 @@ class Qwen36Model:
 
         def _body():
             hidden = self._forward_prefill_chunk_masked_tp(
-                toks, vl, 0, page_table, bucket, flex_sdpa=True, staged=staged
+                toks, vl, capture_chunk_start, page_table, bucket, flex_sdpa=True, staged=staged
             )
             normed = self.norm(hidden, mode=Mode.PREFILL)
             ttnn.deallocate(hidden)
@@ -2452,7 +2454,7 @@ class Qwen36Model:
         self._reset_gdn_state_for_new_sequence()
         self._build_request_rope(toks[:, :vl], None)
         self._set_vision_merge(toks, None, 0)
-        self.stage_verify_inputs(toks, vl, 0, page_table, bucket)
+        self.stage_verify_inputs(toks, vl, capture_chunk_start, page_table, bucket)
         for _ in range(2):
             ttnn.deallocate(_body())
         ttnn.synchronize_device(self.device)
@@ -2460,7 +2462,7 @@ class Qwen36Model:
         self._reset_gdn_state_for_new_sequence()
         self._build_request_rope(toks[:, :vl], None)
         self._set_vision_merge(toks, None, 0)
-        self.stage_verify_inputs(toks, vl, 0, page_table, bucket)
+        self.stage_verify_inputs(toks, vl, capture_chunk_start, page_table, bucket)
         ttnn.synchronize_device(self.device)
         tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         open_capture = True

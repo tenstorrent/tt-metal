@@ -54,7 +54,10 @@ ANCHOR = 128
 BLOCK = 16
 # Tap layers: any few mid-stack layers will do -- this file is about WHERE the rows come from, not
 # about which layers the drafter was trained on.
-TAP_LAYERS = [10, 20, 30]
+# Early layers, to find the FIRST one that diverges: the tap PCCs at 10/20/30 fall 0.979 / 0.938 /
+# 0.880, i.e. the error is introduced early and compounds with depth. Whether the first bad layer is
+# full-attention or GDN decides where the baked chunk_start lives.
+TAP_LAYERS = [0, 1, 2, 3, 4, 5, 10, 20, 30]
 
 
 def _mesh_shape():
@@ -75,14 +78,22 @@ def _to_host(taps):
 
 @pytest.mark.timeout(0)
 @torch.no_grad()
-@pytest.mark.parametrize("chunk_start", [0, ANCHOR], ids=lambda n: f"start{n}")
+# (capture_at, replay_at). The first two are the original question: one capture at 0 replayed at 0
+# and at ANCHOR. The third asks whether the trace is valid at an offset it was CAPTURED at -- if it
+# is, the capture is simply offset-specific and the fix is to stage what it bakes (or capture per
+# anchor); if it is not, something deeper than chunk_start is wrong.
+@pytest.mark.parametrize(
+    "capture_at, chunk_start",
+    [(0, 0), (0, ANCHOR), (ANCHOR, ANCHOR)],
+    ids=["cap0_run0", "cap0_run128", "cap128_run128"],
+)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-def test_traced_matches_eager_at_offset(mesh_device, device_params, chunk_start, reset_seeds, ensure_gc):
+def test_traced_matches_eager_at_offset(mesh_device, device_params, capture_at, chunk_start, reset_seeds, ensure_gc):
     """Replay vs eager at chunk_start 0 (the control) and ANCHOR (where the loop actually lives)."""
     del device_params
     if os.environ.get("DFLASH_RUN_TARGET") != "1":
@@ -120,8 +131,8 @@ def test_traced_matches_eager_at_offset(mesh_device, device_params, chunk_start,
         )
         eager_taps = _to_host(model.take_taps(BLOCK))
 
-    # ---- capture at chunk_start=0, as the shipping path does, then replay at `chunk_start`.
-    model.capture_verify_trace(page_table, ANCHOR)
+    # ---- capture at `capture_at` (0 is what the shipping path does), then replay at `chunk_start`.
+    model.capture_verify_trace(page_table, ANCHOR, capture_chunk_start=capture_at)
 
     model.restore_gdn_state(anchor_state)
     token_buf = torch.zeros(1, ANCHOR, dtype=torch.int32)
@@ -130,20 +141,21 @@ def test_traced_matches_eager_at_offset(mesh_device, device_params, chunk_start,
     traced_taps = _to_host(model.take_taps(BLOCK))
 
     lg_ok, lg_pcc = comp_pcc(eager_logits, traced_logits, 0.99)
-    logger.info(f"chunk_start={chunk_start}: LOGITS pcc {lg_pcc}")
+    logger.info(f"capture@{capture_at} replay@{chunk_start}: LOGITS pcc {lg_pcc}")
     tap_pccs = []
     for i, (e, t) in enumerate(zip(eager_taps, traced_taps)):
         ok, pcc = comp_pcc(e, t, 0.99)
-        tap_pccs.append((TAP_LAYERS[i], pcc, ok))
-        logger.info(f"chunk_start={chunk_start}: TAP layer {TAP_LAYERS[i]} pcc {pcc}")
+        kind = "attn" if model.args.is_full_attention_layer(TAP_LAYERS[i]) else "gdn "
+        tap_pccs.append((TAP_LAYERS[i], pcc, ok, kind))
+        logger.info(f"capture@{capture_at} replay@{chunk_start}: TAP L{TAP_LAYERS[i]:<2} [{kind}] pcc {pcc}")
 
     # Argmax is what the tokens depend on; taps are what the drafter depends on. Report both, since
     # the whole point is that they can diverge.
     agree = (eager_logits.argmax(-1) == traced_logits.argmax(-1)).float().mean().item()
     logger.info(f"chunk_start={chunk_start}: argmax agreement {agree:.4f}")
-    print(f"\n>>> chunk_start={chunk_start}: logits pcc {lg_pcc}, argmax agree {agree:.4f}")
-    print(">>> taps: " + ", ".join(f"L{l}={p}" for l, p, _ in tap_pccs) + "\n")
+    print(f"\n>>> capture@{capture_at} replay@{chunk_start}: logits pcc {lg_pcc}, argmax agree {agree:.4f}")
+    print(">>> taps: " + ", ".join(f"L{l}[{k.strip()}]={p:.4f}" for l, p, _, k in tap_pccs) + "\n")
 
     assert lg_ok, f"chunk_start={chunk_start}: traced logits diverge from eager, pcc {lg_pcc}"
-    for layer, pcc, ok in tap_pccs:
+    for layer, pcc, ok, _k in tap_pccs:
         assert ok, f"chunk_start={chunk_start}: tap layer {layer} diverges, pcc {pcc}"

@@ -62,13 +62,49 @@ Strictly better than both: it keeps the trace where it is valid and drops it onl
 `test_dflash_traced_throughput.py` is unchanged (7.000 / 22.17 tok/s): it never crosses an anchor,
 so it keeps the trace throughout.
 
-STILL TO DO, and it is now a well-defined task rather than a mystery: the demo runs eager past the
-first bucket, so its steps cost ~800 ms instead of ~300 ms and it is still only 0.35x production.
-Find what the capture bakes that depends on chunk_start and stage it. The staged path's only
-remaining Python-int use is `chunk_start_idx=chunk_start`, passed to `layer.forward` alongside the
-staged `chunk_start_idx_tensor` in `_forward_prefill_chunk_masked_tp`. Ruled out already:
-`needed_blocks` (tt/attention/tp.py) does not truncate, because `target_blocks` takes the max
-against the full page-table width.
+LOCALIZED FURTHER (same test, capture@0 replay@128, tapping early layers and labelling each):
+
+    L0 [gdn ] pcc 1.0        L3 [attn] pcc 0.9825   <- FIRST divergence
+    L1 [gdn ] pcc 1.0        L4 [gdn ] pcc 0.9822
+    L2 [gdn ] pcc 1.0        L30[gdn ] pcc 0.8798
+
+The GDN layers ahead of it are BIT-EXACT, which is the control: GDN never receives chunk_start. The
+error enters at the FIRST FULL-ATTENTION LAYER and every later layer merely inherits it. So the
+baked value lives in the chunked-SDPA / paged-attention path.
+
+And the capture is exact at whatever offset it was taken at:
+
+    capture@0   replay@0     logits pcc 1.0     argmax 1.0000   taps 1.0 / 1.0 / 1.0
+    capture@0   replay@128   logits pcc 0.843   argmax 0.0625   taps 0.979 / 0.938 / 0.880
+    capture@128 replay@128   logits pcc 1.0     argmax 1.0000   taps 1.0 / 1.0 / 1.0
+
+(`capture_verify_trace` now takes `capture_chunk_start` so this is testable.)
+
+WHAT IS *NOT* THE CAUSE, checked in tt/attention/tp.py's `forward_prefill_paged`: in the
+`chunk_start_idx_tensor is not None` branch the Python int is used in exactly two places, and
+neither bites. `qk_chunk` is pinned at 128 regardless of it, and `needed_blocks` cannot truncate the
+page table because `target_blocks = max(needed_blocks, page_table.shape[-1])` keeps the full width.
+The staged inputs are all correct too -- cos/sin, the chunk page table, and `_vt_csi` itself are
+re-staged per replay.
+
+That leaves the ttnn op: `chunked_scaled_dot_product_attention` appears to specialise something on
+the chunk_start it first sees, so the staged `chunk_start_idx_tensor` does not fully override it.
+Confirming that, and fixing it, is a TTNN-side change, not a model-side one -- which is why the
+model-side fix here is to restrict the trace rather than to stage harder.
+
+ROUTES TO THE REMAINING ~2.6x, in order of preference:
+
+1. Fix the ttnn op so one capture serves every offset. Ceiling: step ~300 ms at the demo's
+   acceptance 4.95 -> ~16.5 tok/s (0.92x), or ~19.8 tok/s (1.11x) with the narrow head.
+2. Capture ONE TRACE PER ANCHOR and pick by offset. Correct today (capture@128 replay@128 is
+   pcc 1.0) but costs a trace region per anchor: ~250 MB each, so ~500 MB for the demo's two
+   buckets and 8 GB for the full 4096-token capacity. Viable only for bounded generations.
+3. Re-capture on every anchor advance. Correct, but a capture is ~4.3 s against ~7.8 s of stepping
+   per 128 tokens -- roughly 55 % overhead, which gives back most of the win.
+
+NOTE the ceiling in (1) is ~1.1x, not the 1.25x this document originally claimed. The demo's
+acceptance is 4.95 where the reference prompt's is 7.000, and that gap is genuine drafter
+prompt-dependence. The original headline was measured on the prompt the drafter happens to nail.
 
 ### The anchor cliff, as originally diagnosed (cause now known to be the trace)
 
