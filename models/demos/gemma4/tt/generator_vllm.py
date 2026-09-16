@@ -3153,7 +3153,17 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         from the inherited plan, so there is ONE copy of that arithmetic.
         """
         outcome = super().spec_plan(vllm_config, 1, requested_k)
-        return outcome
+        import dataclasses
+
+        from vllm_tt_plugin.spec_decode import SpecPlan
+
+        if not isinstance(outcome, SpecPlan) or outcome.supports_narrow_decode:
+            return outcome
+        # A step where no row carries a draft is served at the plain decode's
+        # own [B, 1] width, which is exactly what a batched step on this rail
+        # is. Declaring it lets the runner keep those steps narrow instead of
+        # widening every host tensor to 1+K for columns nothing verifies.
+        return dataclasses.replace(outcome, supports_narrow_decode=True)
 
     _SPEC_CONTRACT_K = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
     # The inherited prefill/warmup paths use ``_SPEC_BLOCK > 1`` as their proxy
@@ -3224,12 +3234,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             self._spec_release_decoder()
             self._ct_drafts = None
             self._ct_posterior = None
-            return DraftOutput(draft_token_ids=torch.zeros((rows, 0), dtype=torch.int32))
+            return self._contract_no_drafts(rows, k)
         if dec is None or not self._spec_active:
-            # No session, so no real drafts. A zero-width proposal is how the
-            # contract says "nothing this step"; inventing ids would have the
-            # runner verify tokens no drafter produced.
-            return DraftOutput(draft_token_ids=torch.zeros((rows, 0), dtype=torch.int32))
+            # No session, so no real drafts for any row.
+            return self._contract_no_drafts(rows, k)
         # Commit what the runner just accepted BEFORE drafting again: the fused
         # body merges the previous replay's tap rows at the start of the next
         # replay, so the count has to be in place first. ``counts`` is this
@@ -3256,7 +3264,31 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         self._ct_posterior = [int(t) for t in posterior]
         out = torch.zeros((rows, k), dtype=torch.int32)
         out[0, : len(self._ct_drafts)] = torch.tensor(self._ct_drafts, dtype=torch.int32)
-        return DraftOutput(draft_token_ids=out)
+        # Row 0 is the session's request; every other row of the block is a
+        # padding row here (this branch is solo), and declining them keeps the
+        # runner from recording drafts against a request this drafter cannot
+        # speak for.
+        valid = torch.zeros(rows, dtype=torch.int32)
+        valid[0] = len(self._ct_drafts)
+        return DraftOutput(draft_token_ids=out, num_valid=valid)
+
+    @staticmethod
+    def _contract_no_drafts(rows, k):
+        """A proposal that declines every row.
+
+        The contract's ids are always ``[rows, K]`` and every column has to be
+        a real in-vocabulary id, so "nothing this step" cannot be said with the
+        tensor -- ``num_valid`` says it, and the runner records nothing for a
+        row whose count is 0. Token 0 fills the columns because they are never
+        read: a row the runner recorded nothing for carries
+        ``num_valid_drafts`` 0 into the next verify.
+        """
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        return DraftOutput(
+            draft_token_ids=torch.zeros((rows, int(k)), dtype=torch.int32),
+            num_valid=torch.zeros(rows, dtype=torch.int32),
+        )
 
     # -- contract: verify -----------------------------------------------------
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):

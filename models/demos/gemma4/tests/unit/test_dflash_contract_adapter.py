@@ -135,11 +135,17 @@ def test_propose_returns_int32_drafts_of_width_k():
 
 
 def test_propose_without_a_session_proposes_nothing():
-    """Zero width is the contract's "no drafts"; inventing ids would have the
-    runner verify tokens no drafter produced."""
+    """A declined row says so with num_valid, not with its ids.
+
+    The contract's ids are always [rows, K] and every column has to be a real
+    in-vocabulary id, so the shape cannot carry "nothing this step"; a count of
+    0 is what makes the runner record nothing, and the next verify then sends
+    no drafts for that row.
+    """
     m = _model([], active=False)
     out = m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
-    assert tuple(out.draft_token_ids.shape) == (1, 0)
+    assert tuple(out.draft_token_ids.shape) == (1, 5)
+    assert out.num_valid.tolist() == [0]
 
 
 def test_the_runners_accepted_count_drives_the_commit():
@@ -276,16 +282,17 @@ def test_propose_selects_the_width_for_the_new_position():
 
 def test_a_batched_step_proposes_nothing_and_drops_the_session():
     """The fused verify packs its candidate positions into ONE batch row, so it
-    cannot speculate for several requests. The contract's own "no drafts this
-    step" (a zero-width proposal) is how this rail gives up speculation, with
-    no scheduler reservation involved -- and the session goes too, because its
-    taps belong to one request's prompt."""
+    cannot speculate for several requests. Declining every row is how this rail
+    gives up speculation for the step, with no scheduler reservation involved
+    -- and the session goes too, because its taps belong to one request's
+    prompt."""
     m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
     released = {}
     m._spec_release_decoder = lambda *a, **k: released.setdefault("yes", True)
     committed = torch.zeros((4, 6), dtype=torch.int32)
     out = m.propose_draft_tokens(5, committed, _positions(4, live=3), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
-    assert tuple(out.draft_token_ids.shape) == (4, 0)  # zero width == no drafts
+    assert tuple(out.draft_token_ids.shape) == (4, 5)
+    assert out.num_valid.tolist() == [0, 0, 0, 0]  # every row declined
     assert released == {"yes": True}
     assert m._spec_decoder.replays == 0  # nothing drafted
 
@@ -444,3 +451,35 @@ def test_column_zero_narrowing_leaves_an_already_narrow_step_alone():
     args, kwargs = CT._contract_col0((), {"tokens": torch.tensor([7, 8]), "start_pos": torch.tensor([1, 2])}, 2)
     assert kwargs["tokens"].tolist() == [7, 8]
     assert kwargs["start_pos"].tolist() == [1, 2]
+
+
+def test_a_solo_proposal_declines_every_other_row():
+    """The block's rows are the wire bucket, and only row 0 has a drafter.
+
+    Without the per-row count the runner would record row 0's ids for the
+    padding rows' requests too, and the next verify would be sent drafts this
+    drafter cannot speak for.
+    """
+    m = _model([([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36])])
+    committed = torch.zeros((4, 6), dtype=torch.int32)
+    committed[0, 0] = 11
+    out = m.propose_draft_tokens(5, committed, _positions(4, live=1), torch.tensor([1, 1, 1, 1], dtype=torch.int32))
+    assert out.num_valid.tolist() == [5, 0, 0, 0]
+    assert out.draft_token_ids[0].tolist() == [21, 22, 23, 24, 25]
+
+
+def test_the_rail_declares_the_narrow_decode_it_serves():
+    """A batched step IS the plain decode's shape, so the runner may keep it
+    narrow rather than widening every host tensor to 1+K."""
+    from types import SimpleNamespace
+
+    from vllm_tt_plugin.spec_decode import SpecPlan
+
+    spec_cfg = SimpleNamespace(
+        method="custom_class",
+        model="vllm_tt_plugin.model_owned_drafter",
+        num_speculative_tokens=5,
+    )
+    plan = CT.spec_plan(SimpleNamespace(speculative_config=spec_cfg), 32, 5)
+    assert isinstance(plan, SpecPlan)
+    assert plan.supports_narrow_decode is True
