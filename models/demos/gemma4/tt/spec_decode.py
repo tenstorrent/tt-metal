@@ -1921,6 +1921,144 @@ class SpeculativeDecoder:
         anchor_hidden.deallocate(True)
         self._srv_first = True
 
+    def serving_warmup_widths(self, widths, anchor_token=1, anchor_pos=0):
+        """Capture the whole verify-width ladder in WARMUP, before any request.
+
+        This is the MTP counterpart of the dFlash warmup width set, and it
+        exists because capturing during serving does not survive concurrency:
+        on a BH Galaxy DP=4 box at max_concurrency 128, per-request capture
+        produced 48 captures and 33.7 s of capture time INSIDE decode steps, and
+        a worker missed vLLM's RPC deadline by minutes
+        (``RPC call to sample_tokens timed out``). 31B dFlash passes the same
+        sweep because its widths are captured here instead.
+
+        The taps, the anchor and the seed hidden set the CONTENT of the first
+        iteration, never a shape, so capturing against construction values is
+        sound; every request then re-points the traces with ``serving_reseed``.
+        Returns {width: seconds}.
+        """
+        import time as _time
+
+        from loguru import logger as _lg
+
+        if not self._fused_packed_enabled():
+            raise NotImplementedError("the serving width set is packed-verify only")
+        self._use_trace = True
+        self._pv_a_prev = -1
+        # A seed the captures can bind: content, not shape. The KV holds nothing
+        # yet, so this hidden is meaningless -- and never used for a real
+        # request, because serving_reseed overwrites it from that request's own
+        # prefill before its first replay.
+        anchor_hidden = self.seed(int(anchor_token), int(anchor_pos))
+        K = self.draft_len
+        v_pos = [anchor_pos + 1 + j for j in range(K)] if self._fused_reseed else [anchor_pos + j for j in range(K + 1)]
+        d_pu, d_pi = self._pos_tensors([anchor_pos])
+        v_pu, v_pi = self._pos_tensors(v_pos)
+        shared = {
+            "anchor_tok": self._tokens_tensor([int(anchor_token)]),
+            "h": ttnn.clone(anchor_hidden),
+            "d_pu": d_pu,
+            "d_pi": d_pi,
+            "d_pt": self._page_table(1),
+            "v_pu": v_pu,
+            "v_pi": v_pi,
+            "v_pt": self._page_table(K if self._fused_reseed else K + 1),
+            "d_ptl": self._page_tables_per_layer(1),
+            "v_ptl": self._page_tables_per_layer(K if self._fused_reseed else K + 1),
+        }
+        self._pv_setup()
+        self._pv_seed_staging(anchor_pos)
+        self._srv_shared = shared
+        self._srv_widths = {}
+        self._srv_ladder = sorted(int(w) for w in widths)
+        cost = {}
+        t_all = _time.time()
+        for w in self._srv_ladder:
+            t0 = _time.time()
+            self._srv_capture_width(w, anchor_pos)
+            cost[w] = round(_time.time() - t0, 2)
+        self._fused_trace = self._srv_widths[self._srv_ladder[0]]
+        self._srv_warm = True
+        self._srv_first = False  # nothing real has run: always upload + replay
+        _lg.info(
+            f"[spec-trace] MTP WARMUP width set: {self._srv_ladder} in " f"{_time.time()-t_all:.1f}s, per-width={cost}"
+        )
+        return cost
+
+    def serving_reseed(self, anchor_token, anchor_pos):
+        """Re-point the WARMUP-captured traces at a new request, no capture.
+
+        The per-request cost drops to one seed verify plus the iteration
+        uploads: the traces, their buffers and the drafter context all stay.
+        Counterpart of DFlashFusedDecoder.reseed.
+
+        The caller must have re-staged the page tables for this request first
+        (refresh_page_tables), because the seed below reads the target KV
+        through them.
+        """
+        if not getattr(self, "_srv_warm", False):
+            raise RuntimeError("serving_reseed needs serving_warmup_widths to have run")
+        self._pv_a_prev = -1
+        # This request's own seed hidden, from the KV its prefill just wrote.
+        # It replaces the meaningless one the warmup captures were bound to.
+        hidden = self.seed(int(anchor_token), int(anchor_pos))
+        ttnn.copy(hidden, self._srv_shared["h"])  # shared by every width record
+        w = self.srv_width_for(int(anchor_pos))
+        if w is None:
+            need = int(anchor_pos) + self.draft_len + 2
+            w = next((r for r in self._srv_ladder if r >= need), None)
+            if w is None:
+                raise ValueError(
+                    f"position {anchor_pos} is past the verify width ladder "
+                    f"{self._srv_ladder}; the ladder must cover max_model_len"
+                )
+            self._srv_capture_width(w, int(anchor_pos))
+        self._fused_trace = self._srv_widths[w]
+        self._pv_seed_staging(int(anchor_pos))
+        self._srv_upload_iter(int(anchor_token), int(anchor_pos))
+        self._srv_first = False
+        return w
+
+    def _srv_upload_iter(self, cur_token, cur_pos):
+        """Refresh the persistent inputs the captured trace reads for one
+        iteration at (cur_token, cur_pos).
+
+        Shared by serving_step and serving_reseed: a reseed is exactly this
+        upload plus a fresh seed hidden, which is what lets a warmup-captured
+        trace serve a new request WITHOUT capturing again.
+        """
+        tr = self._fused_trace
+        h_tok = self._host_tokens([cur_token])
+        ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
+        h_tok.deallocate(True)
+        d_hpu, d_hpi = self._host_pos([cur_pos])
+        ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
+        ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
+        d_hpu.deallocate(True)
+        d_hpi.deallocate(True)
+        v_pos = [cur_pos + 1 + j for j in range(K)] if self._fused_reseed else [cur_pos + j for j in range(K + 1)]
+        v_hpu, v_hpi = self._host_pos(v_pos)
+        ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
+        ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
+        v_hpu.deallocate(True)
+        v_hpi.deallocate(True)
+        if tr.get("pv"):
+            h2 = self._pv_host_inputs(cur_pos, K + 1, s_k=tr["pv_S_k"], h_repeat=False)
+            ttnn.copy_host_to_device_tensor(self._pv_from_torch(h2["pos"], ttnn.uint32, device=False), tr["pv_pos"])
+            ttnn.copy_host_to_device_tensor(
+                self._pv_from_torch(h2["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                tr["pv_mask_full"],
+            )
+            ttnn.copy_host_to_device_tensor(
+                self._pv_from_torch(h2["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                tr["pv_mask_slide"],
+            )
+            for lt, e in h2["embed"].items():
+                ttnn.copy_host_to_device_tensor(self._pv_from_torch(e, ttnn.uint32, device=False), tr["pv_embed"][lt])
+            for lt, t in h2["hot_t"].items():
+                ttnn.copy_host_to_device_tensor(self._pv_from_torch(t, ttnn.int32, device=False), tr["pv_hot"][lt])
+            self._pv_a_prev = cur_pos // self._pv_bs
+
     def serving_step(self, cur_token, cur_pos):
         """ONE fused draft+verify iteration. Returns (committed, accepted_m).
 
@@ -1955,38 +2093,7 @@ class SpeculativeDecoder:
                 self._fused_trace = self._srv_widths[w]
         tr = self._fused_trace
         if not self._srv_first:
-            h_tok = self._host_tokens([cur_token])
-            ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
-            h_tok.deallocate(True)
-            d_hpu, d_hpi = self._host_pos([cur_pos])
-            ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
-            ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
-            d_hpu.deallocate(True)
-            d_hpi.deallocate(True)
-            v_pos = [cur_pos + 1 + j for j in range(K)] if self._fused_reseed else [cur_pos + j for j in range(K + 1)]
-            v_hpu, v_hpi = self._host_pos(v_pos)
-            ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
-            ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
-            v_hpu.deallocate(True)
-            v_hpi.deallocate(True)
-            if tr.get("pv"):
-                h2 = self._pv_host_inputs(cur_pos, K + 1, s_k=tr["pv_S_k"], h_repeat=False)
-                ttnn.copy_host_to_device_tensor(self._pv_from_torch(h2["pos"], ttnn.uint32, device=False), tr["pv_pos"])
-                ttnn.copy_host_to_device_tensor(
-                    self._pv_from_torch(h2["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["pv_mask_full"],
-                )
-                ttnn.copy_host_to_device_tensor(
-                    self._pv_from_torch(h2["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["pv_mask_slide"],
-                )
-                for lt, e in h2["embed"].items():
-                    ttnn.copy_host_to_device_tensor(
-                        self._pv_from_torch(e, ttnn.uint32, device=False), tr["pv_embed"][lt]
-                    )
-                for lt, t in h2["hot_t"].items():
-                    ttnn.copy_host_to_device_tensor(self._pv_from_torch(t, ttnn.int32, device=False), tr["pv_hot"][lt])
-                self._pv_a_prev = cur_pos // self._pv_bs
+            self._srv_upload_iter(cur_token, cur_pos)
         self._srv_first = False
 
         ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)

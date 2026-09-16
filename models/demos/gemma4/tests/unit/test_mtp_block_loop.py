@@ -166,6 +166,7 @@ def _live_session_instance(monkeypatch, scripted, owner, baseline="baseline-out"
     h._spec_first_step = False
     h._spec_last_pt = None  # nothing staged yet -> the first step stages
     h._bounded_sliding_kv_cache = False
+    h._spec_warm = False  # this harness drives a session directly, not via warmup
     h.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
     return h
 

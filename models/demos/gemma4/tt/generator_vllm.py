@@ -3147,6 +3147,14 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         self._spec_last_pt = None
         # Verify-width ladder for the live session (see mtp_pv_width_ladder).
         self._spec_width_ladder = None
+        # Warmup-captured session: serving RESEEDS it instead of capturing per
+        # request (see warmup_model_decode).
+        self._mtp_warmup_capture = os.environ.get("GEMMA4_MTP_WARMUP_CAPTURE", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self._spec_warm = False
         self._spec_horizon = int(os.environ.get("GEMMA4_MTP_SERVE_HORIZON", "2048"))
         logger.info(
             f"Gemma4MTP serving: K={self._SPEC_K} (N={self._SPEC_N}/step), "
@@ -3154,10 +3162,97 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         )
 
     def warmup_model_decode(self, *args, **kwargs):
-        """No-op: decode is the per-session fused spec trace (see dFlash twin)."""
-        del args, kwargs
+        """Capture the verify-width ladder ONCE, here, instead of per request.
+
+        Per-request capture does not survive concurrency. On a BH Galaxy DP=4
+        box at max_concurrency 128 it produced 48 captures and 33.7 s of capture
+        time INSIDE decode steps, and a worker missed vLLM's RPC deadline by
+        minutes (``TimeoutError: RPC call to sample_tokens timed out``). The 31B
+        dFlash twin passes the same sweep with 0 serving-time captures because
+        its widths are captured in warmup; this gives MTP the same treatment.
+
+        GEMMA4_MTP_WARMUP_CAPTURE=0 restores per-request capture.
+        """
         self._decode_warmup_complete = True
-        logger.info("Gemma4MTP: decode warmup is a no-op (per-session fused spec trace)")
+        if not self._mtp_warmup_capture or not kwargs.get("enable_trace"):
+            del args
+            logger.info("Gemma4MTP: decode warmup capture disabled; sessions capture per request")
+            return None
+        try:
+            self._spec_warmup_session(kwargs.get("kv_cache"), kwargs.get("num_blocks"))
+        except Exception as e:
+            # A warmup that cannot capture must not take the server down: fall
+            # back to per-request capture and SAY which path is live, because
+            # the two have very different behaviour under concurrency.
+            logger.warning(
+                f"Gemma4MTP: warmup width-set capture failed ({e!r}); falling back "
+                "to per-request capture (expect capture stalls at concurrency)"
+            )
+            self._spec_release_session(force=True)
+        return None
+
+    def _spec_warmup_session(self, kv_cache, num_blocks):
+        """Build the assistant + one persistent SpeculativeDecoder and capture
+        every ladder width, before any request exists."""
+        import time as _time
+
+        from models.demos.gemma4.tt.common import create_assistant_model
+        from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+        if kv_cache is None:
+            raise ValueError("warmup capture needs the KV cache")
+        model0 = self.model[0]
+        max_seq_len = int(getattr(self.model_args[0], "max_seq_len", 0))
+        if not max_seq_len:
+            raise ValueError("warmup capture needs max_seq_len")
+        kv_layers = kv_cache
+        if (
+            isinstance(kv_layers, (list, tuple))
+            and kv_layers
+            and isinstance(kv_layers[0], (list, tuple))
+            and kv_layers[0]
+            and isinstance(kv_layers[0][0], (list, tuple))
+        ):
+            kv_layers = kv_layers[0]
+        if self._spec_assistant is None:
+            assistant_path = os.environ.get("GEMMA4_ASSISTANT_MODEL") or _assistant_default_snapshot(
+                os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
+            )
+            # Sized for the WHOLE context, not one request's start: the cached
+            # assistant used to be sized from the FIRST request's position, so a
+            # later, longer request ran against a drafter whose KV could not
+            # reach it.
+            _, self._spec_assistant = create_assistant_model(
+                mesh_device=self.mesh_device,
+                target_model=model0,
+                mesh_config=model0.mesh_config,
+                ccl_manager=model0.ccl_manager,
+                assistant_path=assistant_path,
+                max_seq_len=max_seq_len + 64,
+            )
+        blocks = int(num_blocks) if num_blocks else max(1, max_seq_len // 64)
+        scratch_pt = torch.zeros(1, blocks, dtype=torch.int32)
+        t0 = _time.time()
+        spec = SpeculativeDecoder(
+            target_model=model0,
+            assistant_model=self._spec_assistant,
+            mesh_device=self.mesh_device,
+            tt_kv_cache=kv_layers,
+            page_table_torch=scratch_pt,
+            stop_tokens=set(),
+            draft_len=self._SPEC_K,
+        )
+        spec._use_trace = True
+        ladder = mtp_pv_width_ladder(max_seq_len, self._SPEC_K)
+        cost = spec.serving_warmup_widths(ladder)
+        self._spec = spec
+        self._spec_warm = True
+        self._spec_width_ladder = ladder
+        self._spec_budget_end = max(ladder) - self._SPEC_K - 2
+        logger.info(
+            f"Gemma4MTP: warmup captured {len(cost)} verify widths in "
+            f"{_time.time()-t0:.1f}s (max_model_len={max_seq_len}, widths={ladder})"
+        )
 
     def prefill_forward(self, *args, **kwargs):
         tokens = kwargs.get("tokens")
@@ -3241,6 +3336,25 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         ):
             kv_layers = kv_layers[0]
         t0 = _time.time()
+        if self._spec_warm and self._spec is not None:
+            # RESEED the warmup-captured session: no capture on the serving
+            # path, which is what keeps a step inside vLLM's worker RPC deadline
+            # at concurrency (see warmup_model_decode).
+            self._spec.refresh_page_tables(page_table[:1] if page_table is not None else None)
+            w = self._spec.serving_reseed(int(anchor_id), int(start))
+            self._spec_active_owner = self._spec_pt_identity(page_table)
+            self._spec_cur = (int(anchor_id), int(start))
+            self._spec_first_step = False  # the reseed already staged this iteration
+            self._spec_last_pt = page_table[:1].clone() if page_table is not None else None
+            self._spec_budget_end = max(self._spec_width_ladder or [w]) - self._SPEC_K - 2
+            logger.info(
+                f"Gemma4MTP session: warm reseed {_time.time()-t0:.2f}s "
+                f"(anchor={int(anchor_id)}, start={start}, width={w})"
+            )
+            return
+        if self._spec is not None:
+            self._spec.serving_release()
+            self._spec = None
         spec = SpeculativeDecoder(
             target_model=model0,
             assistant_model=self._spec_assistant,
@@ -3449,7 +3563,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             return True
         return owner == cur
 
-    def _spec_release_session(self) -> None:
+    def _spec_release_session(self, force: bool = False) -> None:
         """Drop any pending/active MTP session (batched fallback and lifecycle).
 
         Also drops the bounded per-layer page tables this session installed, so a
@@ -3462,10 +3576,18 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         self._spec_pending_owner = None
         self._spec_active_owner = None
         self._spec_last_pt = None
-        self._spec_width_ladder = None
-        if self._spec is not None:
-            self._spec.serving_release()
-            self._spec = None
+        if self._spec_warm and not force:
+            # The warmup-captured traces are a warmup artifact, not a
+            # per-session capture: freeing them would leave the process with no
+            # captured widths and no way to recapture (warmup is over) -- i.e.
+            # back to the per-request capture this exists to remove. End the
+            # SESSION only; the per-layer tables still go below.
+            self._spec_cur = None
+        else:
+            self._spec_width_ladder = None
+            if self._spec is not None:
+                self._spec.serving_release()
+                self._spec = None
         try:
             if hasattr(self.model[0], "_active_page_tables_per_layer"):
                 del self.model[0]._active_page_tables_per_layer
