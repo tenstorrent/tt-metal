@@ -49,12 +49,27 @@ WHAT SURVIVES: the fix. `lo == 0` moves demo acceptance 1.138 -> 4.950 and the 2
 arm 1.118 -> 4.471, matching pure-eager exactly. Those are end-to-end measurements, so replaying
 past the anchor IN THE LOOP is genuinely broken -- the explanation was wrong, not the effect.
 
-LEADING HYPOTHESIS NOW: the anchor GDN snapshot interacting with the parked trace. The passing test
-takes a FRESH snapshot (`save_gdn_state()`), while `TtTarget.forward` re-anchors with
-`save_gdn_state(into=self._anchor_gdn)`. That reuse is independently implicated -- DFLASH_FRESH_ANCHOR=1
-moves post-anchor acceptance 1.118 -> 1.617 and removes the output corruption, and the same reuse in
-`reset()` SIGBUSed the drafter. Next experiment: re-run test_verify_traced_at_offset.py with the
-snapshot reused instead of freshly allocated, which is the one difference left between it and the loop.
+THE SNAPSHOT IS EXONERATED TOO. `DFLASH_TEST_REUSE_SNAPSHOT=1` runs the same file with the LOOP's
+snapshot discipline -- taken once up front and written through at each bucket boundary with
+`save_gdn_state(into=...)`, exactly as `TtTarget.reset()` + `forward()` do together. All three arms
+stay at logits pcc 1.0, argmax 1.0000, every tap exact.
+
+So a single traced verify at the anchor is BIT-EXACT even with the reused snapshot, after an eager
+whole-bucket forward, with the trace parked. Both isolated hypotheses are dead:
+
+    trace invalid at non-zero chunk_start   REFUTED (pcc 1.0; the 0.843 was a fixture artifact)
+    anchor GDN snapshot reuse               REFUTED (pcc 1.0 with the loop's own discipline)
+
+THE DEFECT IS NOT REPRODUCIBLE IN ONE CALL. It needs the full loop, which differs from this test in
+ways the test cannot capture: many consecutive traced replays rather than one, eager whole-bucket
+runs interleaved between them, and the drafter allocating and freeing device memory in between.
+Something cumulative, not a single bad forward.
+
+NEXT EXPERIMENT, and it should be an in-loop one rather than another isolated unit test: add a debug
+mode to `TtTarget._run` that computes BOTH the traced and the eager result for every verify and logs
+the first step at which they diverge, along with that step's `lo`, `length` and step index. That
+converts "the loop is broken somehow" into "it breaks at step N under condition X", which is what is
+actually missing. It doubles every verify, so run it on the 200-token crossing arm, not the demo.
 
 IGNORE the "routes to the remaining 2.6x" list below that is premised on a ttnn SDPA fix; the op is
 not at fault. The ~2.6x is still on the table, but the path to it runs through whatever makes a

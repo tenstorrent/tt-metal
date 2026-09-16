@@ -120,16 +120,32 @@ def test_traced_matches_eager_at_offset(mesh_device, device_params, capture_at, 
     tokens = torch.randint(1000, 2000, (1, max(total, ANCHOR)), generator=g, dtype=torch.int32)
     block = tokens[:, chunk_start : chunk_start + BLOCK]
 
-    def _prime():
+    # DFLASH_TEST_REUSE_SNAPSHOT=1 mirrors the LOOP's snapshot discipline instead of this test's.
+    # It is the one remaining difference between this file (which passes at every offset) and
+    # TtTarget.forward (which does not): the loop takes a fresh snapshot once in reset() and then
+    # REUSES those buffers at every re-anchor, `save_gdn_state(into=self._anchor_gdn)`, whereas
+    # _prime allocates a fresh one. That reuse is independently implicated -- DFLASH_FRESH_ANCHOR=1
+    # moves post-anchor acceptance 1.118 -> 1.617 and removes the output corruption, and the same
+    # reuse in reset() SIGBUSed the drafter. If this flag reproduces the degradation here, the
+    # mechanism is the snapshot and not the trace.
+    reuse = os.environ.get("DFLASH_TEST_REUSE_SNAPSHOT") == "1"
+
+    def _prime(into=None):
         """Put the model in the state the loop would be in just before this block: everything
-        before chunk_start already run, as whole ANCHOR buckets, exactly as TtTarget.forward does."""
+        before chunk_start already run, as whole ANCHOR buckets, exactly as TtTarget.forward does.
+
+        With `reuse`, the snapshot is taken up front and written THROUGH at each bucket boundary,
+        which is what TtTarget.reset() + TtTarget.forward() together do."""
         model._reset_gdn_state_for_new_sequence()
+        snap = into if (reuse and into is not None) else model.save_gdn_state() if reuse else None
         for lo in range(0, chunk_start, ANCHOR):
             model.prefill_block_all_logits(
                 tokens[:, lo : lo + ANCHOR], page_table, actual_len=ANCHOR, chunk_start=lo, bucket=ANCHOR
             )
             model.take_taps(ANCHOR)
-        return model.save_gdn_state()
+            if reuse:
+                snap = model.save_gdn_state(into=snap)
+        return snap if reuse else model.save_gdn_state()
 
     # ---- EAGER reference. Run twice: the first compiles, and compiling anything after the capture
     # below would hang the process rather than raise.
@@ -153,7 +169,7 @@ def test_traced_matches_eager_at_offset(mesh_device, device_params, capture_at, 
     #
     # The real loop does not have this problem: TtTarget.forward re-runs the whole bucket eagerly
     # when it crosses an anchor, which rewrites those pages before any traced tail replays.
-    anchor_state = _prime()
+    anchor_state = _prime(into=anchor_state)
 
     model.restore_gdn_state(anchor_state)
     token_buf = torch.zeros(1, ANCHOR, dtype=torch.int32)
@@ -174,7 +190,9 @@ def test_traced_matches_eager_at_offset(mesh_device, device_params, capture_at, 
     # the whole point is that they can diverge.
     agree = (eager_logits.argmax(-1) == traced_logits.argmax(-1)).float().mean().item()
     logger.info(f"chunk_start={chunk_start}: argmax agreement {agree:.4f}")
-    print(f"\n>>> capture@{capture_at} replay@{chunk_start}: logits pcc {lg_pcc}, argmax agree {agree:.4f}")
+    print(
+        f"\n>>> capture@{capture_at} replay@{chunk_start} {'REUSED' if reuse else 'fresh'}-snapshot: logits pcc {lg_pcc}, argmax agree {agree:.4f}"
+    )
     print(">>> taps: " + ", ".join(f"L{l}[{k.strip()}]={p:.4f}" for l, p, _, k in tap_pccs) + "\n")
 
     assert lg_ok, f"chunk_start={chunk_start}: traced logits diverge from eager, pcc {lg_pcc}"
