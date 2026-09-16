@@ -23,10 +23,13 @@ class CCLManager:
         mesh_device,
         num_links=1,
         topology=None,
+        axis_topologies=None,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        # Optional per-mesh-axis override
+        self.axis_topologies = dict(axis_topologies or {})
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -65,6 +68,12 @@ class CCLManager:
         self.barrier_idx = [0, 0]
         self.bcast_ping_pong_idx = [0, 0]
         self.barrier_fused_idx = [0, 0]
+
+    def topology_for(self, mesh_axis):
+        """Topology to use for a collective along `mesh_axis` (per-axis override, else `topology`)."""
+        if mesh_axis is None:
+            return self.topology
+        return self.axis_topologies.get(mesh_axis, self.topology)
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -191,7 +200,7 @@ class CCLManager:
             # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
             # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            if self.topology == ttnn.Topology.Linear:
+            if self.topology_for(mesh_axis) == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
@@ -939,7 +948,7 @@ class CCLManager:
             dim=dim,
             multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
-            topology=self.topology,
+            topology=self.topology_for(mesh_axis),
             cluster_axis=mesh_axis,
             **params,
         )
@@ -986,7 +995,7 @@ class CCLManager:
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=self.topology,
+            topology=self.topology_for(mesh_axis),
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )

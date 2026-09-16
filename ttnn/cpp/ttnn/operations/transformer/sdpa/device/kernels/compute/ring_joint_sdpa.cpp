@@ -163,10 +163,8 @@ void kernel_main() {
     // Per-q_chunk work bitmap: bit `ring_iter` set iff q_chunk has attended work in that (mask-
     // active) iter. Host-precomputed; compute and writer read the same. When sparse is disabled the
     // host fills every entry with active_ring_iter_mask, so dense derives identical decisions.
-    uint32_t q_work_bitmap[num_q_chunks] = {};
-    for (uint32_t q = 0; q < num_q_chunks; ++q) {
-        q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
-    }
+    const uint32_t* q_work_bitmap = (const uint32_t*)(uintptr_t)get_arg_addr(argidx);
+    argidx += num_q_chunks;
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);

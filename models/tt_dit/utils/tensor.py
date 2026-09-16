@@ -476,6 +476,7 @@ def _reassemble_2d(
     concat_dims: list[int | None],
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    crop: tuple[int | None, int | None] | None = None,
 ) -> torch.Tensor:
     """Reassemble per-device shards into a single tensor for a 2D mesh.
 
@@ -511,7 +512,7 @@ def _reassemble_2d(
             slices = [slice(None)] * len(full_shape)
             slices[d0_out] = slice(base, base + span)
             out[tuple(slices)] = shard.permute(*permute).contiguous() if permute is not None else shard
-        return out
+        return _crop_assembled(out, concat_dims, permute, crop)
 
     if d0 is not None and d1 is not None:
         s0, s1 = shard_shape[d0], shard_shape[d1]
@@ -526,14 +527,28 @@ def _reassemble_2d(
             perm_list = list(permute)
             d0_out = perm_list.index(d0)
             d1_out = perm_list.index(d1)
+            # Cropping here rather than downstream saves a full-size copy of the assembled
+            # tensor.  `keep0`/`keep1` are the retained extents of the two sharded dims.
+            keep0 = out_shape[d0_out] if crop is None or crop[0] is None else min(crop[0], out_shape[d0_out])
+            keep1 = out_shape[d1_out] if crop is None or crop[1] is None else min(crop[1], out_shape[d1_out])
+            out_shape[d0_out], out_shape[d1_out] = keep0, keep1
 
             out = torch.empty(out_shape, dtype=out_dtype)
             for coord, shard in zip(mesh_coords, shards):
                 r, c = int(coord[0]), int(coord[1])
+                lo0, lo1 = r * s0, c * s1
+                if lo0 >= keep0 or lo1 >= keep1:
+                    continue  # this shard is entirely outside the crop
+                k0, k1 = min(lo0 + s0, keep0) - lo0, min(lo1 + s1, keep1) - lo1
+                val = shard.permute(*permute)
+                if k0 != s0 or k1 != s1:
+                    trim = [slice(None)] * ndim
+                    trim[d0_out], trim[d1_out] = slice(0, k0), slice(0, k1)
+                    val = val[tuple(trim)]
                 slices = [slice(None)] * ndim
-                slices[d0_out] = slice(r * s0, (r + 1) * s0)
-                slices[d1_out] = slice(c * s1, (c + 1) * s1)
-                out[tuple(slices)] = shard.permute(*permute).contiguous()
+                slices[d0_out] = slice(lo0, lo0 + k0)
+                slices[d1_out] = slice(lo1, lo1 + k1)
+                out[tuple(slices)] = val.contiguous()
             return out
 
         out_dtype = dtype if dtype is not None else shards[0].dtype
@@ -544,7 +559,7 @@ def _reassemble_2d(
             slices[d0] = slice(r * s0, (r + 1) * s0)
             slices[d1] = slice(c * s1, (c + 1) * s1)
             out[tuple(slices)] = shard
-        return out
+        return _crop_assembled(out, concat_dims, permute, crop)
 
     def _cat_unique(axis, dim):
         first = {}
@@ -552,11 +567,37 @@ def _reassemble_2d(
             first.setdefault(int(coord[axis]), shard)
         return torch.cat([first[p] for p in sorted(first)], dim=dim)
 
+    # These branches return the shards in their ORIGINAL layout -- they ignore `permute`
+    # entirely -- so the crop must be indexed by tensor dim, not by permuted position.
     if d0 is not None:
-        return _cat_unique(0, d0)
+        return _crop_assembled(_cat_unique(0, d0), concat_dims, None, crop)
     if d1 is not None:
-        return _cat_unique(1, d1)
-    return shards[0]
+        return _crop_assembled(_cat_unique(1, d1), concat_dims, None, crop)
+    return _crop_assembled(shards[0], concat_dims, None, crop)
+
+
+def _crop_assembled(out, concat_dims, permute, crop):
+    """Slice an already-assembled tensor down to `crop` on the two concatenated dims.
+
+    Fallback for paths that cannot fuse the crop into the scatter write.  Returns `out`
+    untouched when nothing needs trimming, so the common case costs no copy.
+    """
+    if crop is None or out is None:
+        return out
+    d0, d1 = concat_dims
+    perm = list(permute) if permute is not None else None
+    idx = [slice(None)] * out.dim()
+    changed = False
+    for dim, want in ((d0, crop[0]), (d1, crop[1])):
+        if dim is None or want is None:
+            continue
+        pos = perm.index(dim) if perm is not None else dim
+        if want < out.shape[pos]:
+            idx[pos] = slice(0, want)
+            changed = True
+    if not changed:
+        return out
+    return out[tuple(idx)].contiguous()
 
 
 def fast_device_to_host(
@@ -569,6 +610,7 @@ def fast_device_to_host(
     pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    crop: tuple[int | None, int | None] | None = None,
 ) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
@@ -601,6 +643,12 @@ def fast_device_to_host(
             intermediate tensor in the original layout is ever materialised.
         dtype: Output dtype.  When combined with ``permute``, the dtype
             conversion is fused into the scatter write (single-pass copy).
+        crop: Trim the two concatenated dimensions to ``(len0, len1)`` in the
+            OUTPUT (post-``permute``) layout; either may be ``None`` to keep
+            that dimension whole.  On a single host this is fused into the
+            scatter write, so no full-size uncropped tensor is ever
+            materialised; on multi-host it is applied as a plain slice+copy of
+            the assembled tensor.
     """
     mesh_shape = tuple(mesh_device.shape)
 
@@ -703,7 +751,8 @@ def fast_device_to_host(
             coord[intra_host_axis] = intra_remap[int(c[intra_host_axis])]
             local_coords.append(tuple(coord))
 
-        return _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype)
+        out = _reassemble_2d(local_coords, shards, logical_shape, local_mesh_shape, concat_dims, permute, dtype)
+        return _crop_assembled(out, concat_dims, permute, crop)
 
     # --- Single-host: async DMA on all devices + host-side concat -----------
 
@@ -727,7 +776,7 @@ def fast_device_to_host(
     trim = tuple(slice(0, d) for d in logical_shape)
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype, crop)
 
 
 def upsample(

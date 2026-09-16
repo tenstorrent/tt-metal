@@ -502,10 +502,8 @@ void kernel_main() {
     }
 
     // Per-q_chunk work bitmap. bit set iff (q_chunk has attended k in ring_iter) && (iter is mask-active).
-    uint32_t q_work_bitmap[num_q_chunks];
-    for (uint32_t q = 0; q < num_q_chunks; ++q) {
-        q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
-    }
+    const uint32_t* q_work_bitmap = (const uint32_t*)(uintptr_t)get_arg_addr(argidx);
+    argidx += num_q_chunks;
 
     // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
