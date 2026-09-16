@@ -6,12 +6,39 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <vector>
 
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::gumbel_sample::device {
+
+// Mask-apply strategy switch, kept for A/B perf comparison between the two device implementations:
+//
+//   default (unset / "0"): copy_tile + sfpu_sub_bcast_row -- the mask tile lands in DST verbatim
+//     via the plain A2D copy and one SFPU pass broadcasts row 0 down the token rows AND subtracts.
+//     Works on every arch, including Wormhole.
+//
+//   legacy (TTML_GUMBEL_SAMPLE_LEGACY_MASK_BCAST=1): unary_bcast<ROW> + sub_binary_tile -- the
+//     pre-existing implementation, byte-for-byte: the broadcast happens as the tile is unpacked
+//     into DST, then a separate SFPU subtract. KNOWN BROKEN with a mask on WORMHOLE: under
+//     fp32_dest_acc_en (always on in this op) the 16-bit ROW broadcast is a MOVB2D MOP, and WH
+//     silicon addresses the dest as 16-bit rows unless SrcA's ALU format is TF32 (Blackhole
+//     auto-promotes under fp32 accumulation, Wormhole does not; tt-llk's test_bcast.py skips the
+//     combination on WH as broken), so the mask lands in the wrong rows and silently never
+//     applies. That silicon limitation is the reason the default path exists. Select legacy only
+//     to measure on other archs -- the perf harness's tripwire flags the corruption if run on WH.
+//
+// Read ONCE per process (a static), so the program hash and the factory can never disagree
+// mid-run; the flag is part of the program hash because it selects a different kernel binary.
+inline bool use_legacy_mask_bcast() {
+    static const bool legacy = []() {
+        const char* env = std::getenv("TTML_GUMBEL_SAMPLE_LEGACY_MASK_BCAST");
+        return env != nullptr && env[0] != '\0' && env[0] != '0';
+    }();
+    return legacy;
+}
 
 // Whether this temperature selects the Gumbel-noise kernel variant or greedy argmax.
 // Deliberately STRICTER than `temperature > 0`: the device receives 1/temperature as a runtime

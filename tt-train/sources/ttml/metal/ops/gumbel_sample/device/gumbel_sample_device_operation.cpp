@@ -148,7 +148,8 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             "reaches the kernel, and addresses are not portable across devices)");
         TT_FATAL(
             mask.dtype() == logits.dtype(),
-            "GumbelSample: mask dtype '{}' must match logits dtype '{}'",
+            "GumbelSample: mask dtype '{}' must match logits dtype '{}' (the public ttml::metal::gumbel_sample "
+            "wrapper typecasts a mismatched mask, so only direct prim callers can trip this)",
             enchantum::to_string(mask.dtype()),
             enchantum::to_string(logits.dtype()));
         // The mask spans the vocabulary and is broadcast down the token rows. Two shapes are
@@ -342,6 +343,11 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<GumbelSampleDeviceOperation>(
         position_aware,
         uses_gumbel_noise(args.temperature),
+        // The mask-apply mode (default SFPU broadcast-subtract vs the legacy unpack-time
+        // broadcast, kept for A/B perf comparison) selects a different compute-kernel binary, so
+        // it must key the cache. Process-constant, but hashing it costs nothing and keeps the key
+        // honest.
+        use_legacy_mask_bcast(),
         args.seed_axes,
         logits.dtype(),
         // The padded shape is deliberately NOT hashed alongside the logical one: check_tensor pins

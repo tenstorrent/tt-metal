@@ -10,7 +10,6 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/gumbel_sample/gumbel_sample.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -101,10 +100,8 @@ ttnn::Tensor sample(
     // Callers that need per-device sampling (e.g. GRPO, to avoid duplicate completions across data-
     // parallel ranks) MUST pass their sharded axes explicitly.
 
-    // The fused op needs mask and logits dtypes to match; No-op if dtypes are equal
-    if (logits_mask.has_value() && logits_mask->dtype() != t.dtype()) {
-        logits_mask = ttnn::typecast(logits_mask.value(), t.dtype());
-    }
+    // The fused op requires the mask to match the logits dtype; ttml::metal::gumbel_sample owns
+    // that normalization (it typecasts a mismatched mask), so the mask is passed through as built.
     return ttml::metal::gumbel_sample(
         t, temperature, seed, seed_axes.value_or(std::vector<uint32_t>{}), logits_mask, positions);
 }

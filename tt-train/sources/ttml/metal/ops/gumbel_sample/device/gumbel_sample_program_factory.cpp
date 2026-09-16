@@ -449,14 +449,28 @@ tt::tt_metal::Program build_program(
     shared_vars.writer_kernel_id =
         create_writer_kernel(program, layout.all_cores, writer_ct_args, {}, kWriterKernelPath);
 
+    // Compile-time arg 4 selects the mask-apply implementation (default SFPU broadcast-subtract vs
+    // the legacy unpack-time broadcast, kept for A/B perf comparison -- see use_legacy_mask_bcast
+    // in gumbel_sample_device_operation_types.hpp). Part of the program hash: it changes the
+    // kernel binary.
+    const uint32_t legacy_mask_bcast_arg = use_legacy_mask_bcast() ? 1U : 0U;
+
     const std::vector<uint32_t> compute_ct_args_g1{
-        layout.tiles_per_core_group_1, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U};
+        layout.tiles_per_core_group_1,
+        layout.block_size,
+        has_mask ? 1U : 0U,
+        do_gumbel_noise ? 1U : 0U,
+        legacy_mask_bcast_arg};
     shared_vars.compute_kernel_group_1_id = create_compute_kernel(
         program, layout.core_group_1, compute_ct_args_g1, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     if (!layout.core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_ct_args_g2{
-            layout.tiles_per_core_group_2, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U};
+            layout.tiles_per_core_group_2,
+            layout.block_size,
+            has_mask ? 1U : 0U,
+            do_gumbel_noise ? 1U : 0U,
+            legacy_mask_bcast_arg};
         shared_vars.compute_kernel_group_2_id = create_compute_kernel(
             program, layout.core_group_2, compute_ct_args_g2, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }

@@ -9,9 +9,11 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <umd/device/cluster.hpp>
 #include <vector>
@@ -331,6 +333,142 @@ TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
     }
 }
 
+TEST_F(TrivialTnnFixedTest, TestSamplingGreedySingleRowWithMask) {
+    // Smallest shape the masked greedy path can run on: one batch entry, one token row, one sample
+    // out. Both logits and mask are [1, 1, 1, V], so every dim except the vocabulary is degenerate
+    // and the whole result is a single index -- exact and deterministic at temperature 0.
+    constexpr uint32_t kVocab = 64U;
+    constexpr uint32_t kDecoy = 40U;   // the raw argmax; only the mask can dethrone it
+    constexpr uint32_t kWinner = 17U;  // the best column once the decoy is masked
+
+    xt::xarray<float> logits = xt::xarray<float>::from_shape({1U, 1U, 1U, kVocab});
+    logits.fill(-1.0F);
+    logits(0, 0, 0, kWinner) = -0.5F;
+    logits(0, 0, 0, kDecoy) = 0.0F;
+
+    xt::xarray<float> mask = xt::zeros<float>(xt::xarray<float>::shape_type{1U, 1U, 1U, kVocab});
+    mask(0, 0, 0, kDecoy) = 1e4F;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto tensor_logits = ttml::core::from_xtensor(logits, device);
+    auto tensor_mask = ttml::core::from_xtensor(mask, device);
+
+    // Without the mask the decoy wins, which is what makes the masked call below a real assertion
+    // rather than a restatement of the argmax.
+    auto unmasked = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 0.0F, 42));
+    ASSERT_EQ(unmasked.size(), 1U);
+    EXPECT_EQ(unmasked[0], kDecoy) << "unmasked greedy must land on the decoy";
+
+    auto masked = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 0.0F, 42, tensor_mask));
+    ASSERT_EQ(masked.size(), 1U);
+    EXPECT_EQ(masked[0], kWinner) << "masked greedy must skip the decoy and take the best real column";
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingMaskManyTilesPerCore) {
+    // Noise+mask with MANY tiles per core: ~8200 tiles over the grid gives every core ~32 blocks
+    // and ~64 mask applications per kernel run. Every other mask test in this suite hands each
+    // core a single tile, so a mask apply that only works on the FIRST DST batch still passes all
+    // of them -- per-batch state leaks (stale unpacker config, DST offsets, SFPU/replay state
+    // between the mask apply and the rand/gumbel/copy passes) are only visible here. The decoy
+    // column outranks every active column unless the mask lands, and the suppressed columns can
+    // win only if scores get corrupted, so both failure modes are separately visible.
+    constexpr uint32_t kRows = 65600;
+    constexpr uint32_t kVocab = 120;
+    constexpr uint32_t kDecoyCol = 100U;
+    xt::xarray<float>::shape_type shape = {1, 1, kRows, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-60.0F);
+    for (uint32_t r = 0; r < kRows; ++r) {
+        a(0, 0, r, 5) = std::log(8.0F);
+        a(0, 0, r, 52) = std::log(4.0F);
+        a(0, 0, r, 70) = std::log(2.0F);
+        a(0, 0, r, 115) = std::log(1.0F);
+        a(0, 0, r, kDecoyCol) = std::log(1000.0F);  // outranks every active column unless masked
+    }
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kVocab};
+    xt::xarray<float> mask = xt::zeros<float>(mask_shape);
+    mask(0, 0, 0, kDecoyCol) = 1e4F;
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto tensor_a = ttml::core::from_xtensor(a, device);
+    auto tensor_mask = ttml::core::from_xtensor(mask, device);
+    auto picks = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 1.0F, 42, tensor_mask));
+    ASSERT_EQ(picks.size(), kRows);
+    uint32_t decoys = 0U;
+    uint32_t others = 0U;
+    for (auto pick : picks) {
+        if (pick == kDecoyCol) {
+            ++decoys;
+        } else if (pick != 5U && pick != 52U && pick != 70U && pick != 115U) {
+            ++others;
+        }
+    }
+    EXPECT_EQ(decoys, 0U) << decoys << " rows sampled the masked decoy column";
+    EXPECT_EQ(others, 0U) << others << " rows sampled a suppressed column";
+}
+
+TEST_F(TrivialTnnFixedTest, DISABLED_SamplingMaskApplyPerfHarness) {
+    // A/B perf harness for the two mask-apply implementations, NOT a correctness gate (DISABLED_ so
+    // CI never times a shared machine). The implementation is selected per PROCESS by an env var
+    // read once at first dispatch, so each mode needs its own run:
+    //
+    //   ./ttml_tests --gtest_filter='*MaskApplyPerfHarness*' --gtest_also_run_disabled_tests
+    //   TTML_GUMBEL_SAMPLE_LEGACY_MASK_BCAST=1  <same command>
+    //
+    //   default (unset/0): copy_tile + sfpu_sub_bcast_row      (works on every arch)
+    //   legacy  (=1):      unary_bcast<ROW> + sub_binary_tile  (the pre-existing implementation;
+    //                      SILICON-BROKEN with a mask on Wormhole -- the tripwire below fails there
+    //                      and the timings are meaningless. A/B on Blackhole.)
+    //
+    // Prints per-dispatch wall time with and without a mask; "masked - unmasked" is the mask-apply
+    // cost the two modes trade. Decode-like shape: one 32-token tile row over a llama-vocab-sized
+    // width, so every core carries a long run of vocab tiles and the per-batch mask apply dominates
+    // any fixed overheads. Timings include host dispatch + readback, identical across modes.
+    constexpr uint32_t kTokens = 32;
+    constexpr uint32_t kVocab = 131072;  // Wt = 4096 vocab tiles spread over the core grid
+    constexpr uint32_t kWarmup = 5;      // JIT build + program-cache miss land here
+    constexpr uint32_t kIters = 50;
+
+    xt::xarray<float>::shape_type shape = {1, 1, kTokens, kVocab};
+    xt::xarray<float> logits = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 42U);
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kVocab};
+    xt::xarray<float> mask = xt::zeros<float>(mask_shape);
+    mask(0, 0, 0, kVocab - 1) = 1e4F;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto tensor_logits = ttml::core::from_xtensor(logits, device);
+    auto tensor_mask = ttml::core::from_xtensor(mask, device);
+
+    auto run = [&](const std::optional<ttnn::Tensor>& m) -> double {
+        for (uint32_t i = 0; i < kWarmup; ++i) {
+            (void)ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, i, m));
+        }
+        const auto start = std::chrono::steady_clock::now();
+        for (uint32_t i = 0; i < kIters; ++i) {
+            // to_vector forces the readback, which is what bounds each timed iteration; the seed
+            // varies to mimic decode, exercising only the runtime-arg patch path (cache hits).
+            (void)ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, 100U + i, m));
+        }
+        const auto end = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::micro>(end - start).count() / kIters;
+    };
+
+    const char* env = std::getenv("TTML_GUMBEL_SAMPLE_LEGACY_MASK_BCAST");
+    const bool legacy = env != nullptr && env[0] != '\0' && env[0] != '0';
+    const double no_mask_us = run(std::nullopt);
+    const double with_mask_us = run(tensor_mask);
+    std::cout << "[gumbel mask-apply perf] mode=" << (legacy ? "LEGACY (unary_bcast+sub)" : "DEFAULT (sfpu bcast-sub)")
+              << "  shape=[1,1," << kTokens << "," << kVocab << "]"
+              << "  no-mask: " << no_mask_us << " us/iter"
+              << "  with-mask: " << with_mask_us << " us/iter"
+              << "  mask-apply delta: " << (with_mask_us - no_mask_us) << " us/iter" << std::endl;
+
+    // Keep the harness honest as code drifts: both configurations must still sample real columns.
+    auto picks = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, 7U, tensor_mask));
+    for (auto pick : picks) {
+        EXPECT_LT(pick, kVocab - 1) << "masked column won: the timed configuration is broken, timings are meaningless";
+    }
+}
+
 namespace {
 
 // sample() draws U ~ Uniform[2^-32, 1) and applies the Gumbel transform -log(-log(U)), so the noise
@@ -473,9 +611,10 @@ TEST_F(TrivialTnnFixedTest, TestSamplingConvertsMismatchedMaskDtype) {
     // Every in-tree mask builder (build_logits_mask in utils.py, _build_logits_mask in
     // llama_completer.py, _sample_logits_mask in generate.py) emits a BFLOAT16 mask whatever the
     // logits dtype, and the composite sample() this op replaced accepted that: ttnn::subtract
-    // converted on the fly. The fused op requires matching dtypes, so sample() must typecast a
-    // mismatched mask before dispatch rather than reject it. Cover both directions and both kernel
-    // variants (greedy and sampled): a decoy column that wins unmasked must lose once the mask lands.
+    // converted on the fly. The fused op requires matching dtypes, so ttml::metal::gumbel_sample
+    // must typecast a mismatched mask before dispatch rather than reject it. Cover both directions
+    // and both kernel variants (greedy and sampled): a decoy column that wins unmasked must lose
+    // once the mask lands.
     constexpr uint32_t kRows = 32;
     constexpr uint32_t kVocab = 64;
     constexpr uint32_t kDecoy = kVocab - 1;  // the raw argmax; only the mask can dethrone it
