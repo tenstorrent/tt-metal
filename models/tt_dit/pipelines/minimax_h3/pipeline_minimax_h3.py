@@ -130,6 +130,34 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
+# Time-packed late vocoder bands ("band:k,band:k"; "0" disables). Default: the two narrowest bands on 32-wide rows,
+# measured 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
+_AUDIO_PACK_ENV = "MINIMAX_H3_AUDIO_PACK"
+_DEFAULT_AUDIO_PACK = "5:2,6:4"
+# Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
+# -72 ms point (layers/audio_pack.py).
+_AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
+# Conv split mode of the audio decoder when the caller passes none ("full" = main's accurate default).
+_AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
+
+
+def _audio_resampler_split_mode() -> str | None:
+    raw = os.environ.get(_AUDIO_RESAMPLER_SPLIT_ENV, "same").strip()
+    if raw in ("", "same"):
+        return None
+    if raw not in ("off", "weight", "act", "full"):
+        raise ValueError(f"{_AUDIO_RESAMPLER_SPLIT_ENV}={raw!r} must be same, off, weight, act or full")
+    return raw
+
+
+def _audio_pack_bands() -> dict[int, int]:
+    raw = os.environ.get(_AUDIO_PACK_ENV, _DEFAULT_AUDIO_PACK).strip()
+    if raw in ("", "0", "off"):
+        return {}
+    try:
+        return {int(b): int(k) for b, k in (item.split(":") for item in raw.split(","))}
+    except ValueError:
+        raise ValueError(f"{_AUDIO_PACK_ENV}={raw!r} must look like '5:2,6:4' or '0'") from None
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None) -> tuple[int, bool]:
@@ -288,7 +316,7 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
     ) -> None:
         self.mesh_device = mesh_device
@@ -330,8 +358,12 @@ class MiniMaxH3Pipeline:
         # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
         # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
         # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
-        if audio_split_mode not in ("off", "weight", "full"):
-            raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
+        if audio_split_mode is None:
+            audio_split_mode = os.environ.get(_AUDIO_SPLIT_ENV, "full").strip() or "full"
+        if audio_split_mode not in ("off", "weight", "act", "full", "stack"):
+            raise ValueError(
+                f"audio_split_mode must be 'off', 'weight', 'act', 'full' or 'stack', got {audio_split_mode!r}"
+            )
         self.audio_split_mode = audio_split_mode
         # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > default 8, then the
         # 8->4->1 fallback (32 opt-in); logged before decode.
@@ -406,7 +438,7 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -1269,6 +1301,13 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.ccl_manager,
                 parallel_config=audio_parallel_config,
                 split_mode=self.audio_split_mode,
+                pack_bands=_audio_pack_bands(),
+                resampler_split_mode=_audio_resampler_split_mode(),
+            )
+            logger.info(
+                f"Audio conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
+                f"({_AUDIO_PACK_ENV}); resampler split {decoder.resampler_split_mode or 'same'} "
+                f"({_AUDIO_RESAMPLER_SPLIT_ENV})"
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1288,7 +1327,10 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
+                subfolder="audio_decoder"
+                + weights_variant(
+                    decoder.split_mode, decoder.max_c_in_block, decoder.pack_bands, decoder.resampler_split_mode
+                ),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
