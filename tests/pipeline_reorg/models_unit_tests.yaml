@@ -2136,3 +2136,30 @@
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield
   budget_type: unit
+
+# Module PCC against the torch reference: MLP, attention, one CodePredictor step,
+# and the Talker chain. Opens a plain single-chip device (ttnn.open_device), so the
+# same cmd is valid on every SKU here -- no MESH_DEVICE.
+#
+# NOT on wh_n300, deliberately: with no MESH_DEVICE this opens chip 0 of whatever board
+# it lands on, so an n300 leg re-runs the n150 leg verbatim on the same WH-B0 silicon
+# and buys no coverage. It cost 3 min of a 33 min unit_tier3/wh_n300 allowance that main
+# now spends 31 of. The TP=2 path is covered where it is actually exercised: the N300
+# e2e entry (MESH_DEVICE=N300) and the full-model PCC gate.
+- name: Qwen3-TTS-1.7B unit tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    pytest --timeout 300 models/demos/qwen3_tts/tests/test_qwen3_tts_pcc.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+      release_ready: false
+    bh_p150:
+      timeout: 3
+      tier: 3
+      release_ready: false
+  team: models
+  budget_type: unit

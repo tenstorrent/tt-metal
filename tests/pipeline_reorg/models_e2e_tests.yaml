@@ -330,6 +330,113 @@
   team: models
   budget_type: e2e
 
+# The e2e leg is the demo itself plus the voice-clone quality gate. It deliberately
+# does NOT run test_qwen3_tts_perf_device.py: that asserts steady ms/frame inside a
+# +/-5% two-sided band, which is both a flake risk on shared runners and fails when
+# the model gets faster -- and Tier 3 is perf-exempt anyway. The demo gives the
+# functional signal (it exits nonzero on any exception) and the quality test gives
+# the accuracy signal (SIM > 0.80, WER < 10%), scored by models independent of the
+# pipeline under test.
+#
+# demo_full_ttnn_tts.py is an argparse script, not a pytest module, so it is invoked
+# directly. It reads --hf-id rather than $HF_MODEL; HF_MODEL is still exported for the
+# repo convention and so the trace-region coverage test sees this job.
+- name: Qwen3-TTS-1.7B e2e tests
+  cmd: |
+    set -e
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --ref-audio models/demos/qwen3_tts/demo/jim_reference.wav --ref-text "So basically you put up the high level overview slides." --text "Good morning. Today is a beautiful day for a walk in the park."
+    # Score the wav the demo just produced, and pass the SAME text: unset, the gate
+    # regenerates its own clip on the device (a second full render) and scores it
+    # against the longer DEFAULT_TEXT, so the text must be handed over with the wav or
+    # WER is measured against words nobody asked for.
+    #
+    # WER only here. Both metrics run by default (and do locally), but they are scored
+    # by two CPU HuggingFace checkpoints that are NOT the TTS weights and are read from
+    # the SHARED cache above like everything else -- no HF_HOME redirect, no
+    # HF_HUB_OFFLINE override, nothing downloaded on a runner. WER needs only
+    # openai/whisper-large-v3, which this repo's Whisper demos already pull; SIM needs
+    # microsoft/wavlm-base-plus-sv (772 MB), which is not staged yet. Asking for `wer`
+    # loads Whisper alone, so the missing WavLM costs SIM and not the whole gate. Drop
+    # QWEN3_TTS_QA_METRICS once WavLM is staged in /mnt/MLPerf/huggingface.
+    QWEN3_TTS_QA_WAV=/tmp/qwen3_tts_ci.wav \
+    QWEN3_TTS_QA_TEXT="Good morning. Today is a beautiful day for a walk in the park." \
+    QWEN3_TTS_QA_METRICS=wer \
+      pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
+    wh_n150:
+      # The pre-WER runs already spent 372 s (n150) / 435 s (n300) just reaching the
+      # scorer load, and the 8 min this used to carry was only ever seen to be enough
+      # for a job that died there. A run that actually transcribes -- whisper-large-v3
+      # is 2.9 GB off the shared mount, on CPU -- needs more, and 480 s is exactly where
+      # both SKUs were killed. Trim this once a green run reports its real duration.
+      timeout: 20
+      tier: 3
+      release_ready: false
+  team: models
+  budget_type: e2e
+
+# Blackhole runs the DEMO only, and deliberately: models/e2e_tier3/bh_p150 is a 39 min
+# allowance already spent to the minute by the other three models on that SKU, so the
+# 20 min a WER run needs is 12 min this team does not have there. The demo still exits
+# nonzero on any exception, which is the functional signal; SIM/WER are scored on the
+# two Wormhole jobs above. Raise models.e2e_tier3.bh_p150 in .github/time_budget.yaml
+# and fold this back into the entry above if the gate is wanted on Blackhole too.
+- name: Qwen3-TTS-1.7B e2e tests (demo only)
+  cmd: |
+    set -e
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --ref-audio models/demos/qwen3_tts/demo/jim_reference.wav --ref-text "So basically you put up the high level overview slides." --text "Good morning. Today is a beautiful day for a walk in the park."
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
+    bh_p150:
+      timeout: 8
+      tier: 3
+      release_ready: false
+  team: models
+  budget_type: e2e
+
+# Separate entry because MESH_DEVICE is per-cmd, not per-SKU: unset means a
+# single-chip open_device, so N300 needs it set to exercise the TP=2 path.
+- name: Qwen3-TTS-1.7B e2e tests (N300 TP=2)
+  cmd: |
+    set -e
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base MESH_DEVICE=N300
+    python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py --hf-id "$HF_MODEL" --seed 42 --output /tmp/qwen3_tts_ci.wav --ref-audio models/demos/qwen3_tts/demo/jim_reference.wav --ref-text "So basically you put up the high level overview slides." --text "Good morning. Today is a beautiful day for a walk in the park."
+    # Score the wav the demo just produced, and pass the SAME text: unset, the gate
+    # regenerates its own clip on the device (a second full render) and scores it
+    # against the longer DEFAULT_TEXT, so the text must be handed over with the wav or
+    # WER is measured against words nobody asked for.
+    #
+    # WER only here. Both metrics run by default (and do locally), but they are scored
+    # by two CPU HuggingFace checkpoints that are NOT the TTS weights and are read from
+    # the SHARED cache above like everything else -- no HF_HOME redirect, no
+    # HF_HUB_OFFLINE override, nothing downloaded on a runner. WER needs only
+    # openai/whisper-large-v3, which this repo's Whisper demos already pull; SIM needs
+    # microsoft/wavlm-base-plus-sv (772 MB), which is not staged yet. Asking for `wer`
+    # loads Whisper alone, so the missing WavLM costs SIM and not the whole gate. Drop
+    # QWEN3_TTS_QA_METRICS once WavLM is staged in /mnt/MLPerf/huggingface.
+    QWEN3_TTS_QA_WAV=/tmp/qwen3_tts_ci.wav \
+    QWEN3_TTS_QA_TEXT="Good morning. Today is a beautiful day for a walk in the park." \
+    QWEN3_TTS_QA_METRICS=wer \
+      pytest --timeout 420 models/demos/qwen3_tts/tests/test_qwen3_tts_voice_quality.py
+  model: qwen3-tts-1.7b
+  model_family: Qwen
+  skus:
+    wh_n300:
+      # A passing run measures 531 s here (run 34979553248), so 15 min is ~1.7x the
+      # observed time and leaves 3 min of the 60 min e2e_tier3/wh_n300 allowance for
+      # everyone else. The 20 min this carried briefly did not fit once main landed
+      # Gemma-2-9B on the same bucket.
+      timeout: 15
+      tier: 3
+      release_ready: false
+  team: models
+  budget_type: e2e
+
 - name: Qwen2.5-32B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
@@ -520,10 +627,10 @@
   model_family: Gemma
   skus:
     wh_n150:
-      timeout: 20
+      timeout: 8
       tier: 3
     wh_n300:
-      timeout: 20
+      timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

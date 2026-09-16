@@ -1,0 +1,546 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""
+Qwen3-TTS CLI demo — thin wrapper on top of ``models.demos.qwen3_tts.tt.server``.
+
+The reusable server-side implementation (init_server_context, run_inference,
+ICL embed builder, Mimi encode/decode, KV-cache allocation, etc.) lives in
+``tt/server.py`` so the inference-server runner and any other consumer can
+import it directly without dragging in argparse / CLI orchestration.
+
+For backwards compatibility this module re-exports the public server API,
+so existing imports of ``models.demos.qwen3_tts.demo.demo_full_ttnn_tts``
+continue to resolve to the same names.
+
+Usage:
+    python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \\
+        --text "Hello, how are you today?" \\
+        --ref-audio /path/to/reference.wav \\
+        --ref-text "Reference audio transcript" \\
+        --output /tmp/ttnn_tts_output.wav \\
+        --seed 42 \\
+        --use-2cq
+"""
+
+import argparse
+import os
+import time
+from typing import Optional
+
+import soundfile as sf
+import torch
+
+import ttnn
+
+# One codec frame is 80 ms of audio: the codec runs at 12.5 fps (see
+# TTSConfig.trim_codec_frames, "4 frames = 0.32s at 12.5fps"). The HF repo is named
+# "12Hz", which is a rounding of 12.5 — taking 12 literally would give 83.3 ms and a
+# flatteringly lower RTF, so use the exact rate.
+_MS_PER_FRAME_REALTIME = 1000.0 / 12.5
+
+# ---------------------------------------------------------------------------
+# Server-side implementation lives in tt/server.py — re-export the public API
+# so existing call sites (web_demo.py, runner, tests) keep working.
+# ---------------------------------------------------------------------------
+from models.demos.qwen3_tts.tt.server import (  # noqa: F401  (re-exported)
+    TTSConfig,
+    TTSServerContext,
+    _argmax_into,
+    _DeviceSampler,
+    allocate_kv_cache,
+    build_cp_decode_trace_h2d_constants,
+    build_prefill_attn_mask,
+    build_talker_decode_trace_h2d_constants,
+    create_icl_embedding_ttnn,
+    deallocate_kv_cache,
+    decode_audio,
+    encode_reference_audio,
+    generate_codes_ttnn,
+    get_padded_prefill_len,
+    init_server_context,
+    load_weights,
+    run_inference,
+    sample_from_tt_vocab_logits,
+    sample_token,
+    warmup_all_buckets,
+    warmup_bucket,
+)
+
+
+def run_full_ttnn_tts(
+    text: str,
+    ref_audio: str,
+    ref_text: str,
+    output_path: str = "/tmp/ttnn_tts_output.wav",
+    max_new_tokens: int = 256,
+    device_id: int = 0,
+    language: str = "english",
+    greedy: bool = False,
+    repetition_penalty: float = 1.0,
+    use_kv_cache: bool = True,
+    use_trace: bool = True,
+    use_2cq: bool = False,
+    seed: Optional[int] = None,
+    ref_cache: str = None,
+    trim_frames: int = 4,
+    load_cpu_inputs: str = None,
+    hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+):
+    """Run full TTNN TTS pipeline (CLI orchestrator)."""
+    demo_start = time.time()
+    print("=" * 80)
+    print("Full TTNN TTS Demo")
+    print("=" * 80)
+    print(f"Text: {text}")
+    print(f"Reference: {ref_audio}")
+    print(f"Max tokens: {max_new_tokens}")
+    print(f"Decoding: {'greedy' if greedy else f'sampling (temp=0.9, top_k=50, rep_penalty={repetition_penalty})'}")
+    print(f"KV cache: {'enabled' if use_kv_cache else 'disabled'}")
+    if seed is not None:
+        print(f"RNG seed: {seed} (torch.manual_seed before codec generation)")
+    else:
+        print("RNG seed: default — sampling is non-deterministic; use --seed for repeatable benchmarks")
+    print(f"HF id: {hf_id}")
+    print()
+
+    timings = {}
+
+    # Load weights
+    load_start = time.time()
+    main_weights, decoder_weights = load_weights(hf_id)
+    timings["load_weights"] = time.time() - load_start
+
+    # Load tokenizer
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(hf_id, trust_remote_code=True)
+
+    # Open device with explicit trace region.
+    # MESH_DEVICE env var follows the tt_transformers convention (see
+    # models/tt_transformers/conftest.py): N150=(1,1), N300=(1,2), T3K=(1,8).
+    # When set, open via open_mesh_device so tt-metal selects the matching
+    # core descriptor (N150 gives the 8x8 worker grid the sharded TTS layouts
+    # require). Unset → legacy single-chip open_device path.
+    _ncq = 2 if use_2cq else 1
+    _mesh_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    if _mesh_shape is not None:
+        print(f"\nOpening TT mesh device {_mesh_shape} (MESH_DEVICE={os.environ['MESH_DEVICE']})...")
+        # Multi-chip meshes need fabric initialized before open for CCL (all_reduce / all_gather).
+        # Skip for (1,1) — single chip needs no fabric and FABRIC_1D init would be wasted.
+        if _mesh_shape != (1, 1):
+            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*_mesh_shape),
+            l1_small_size=32768,
+            trace_region_size=200000000,
+            num_command_queues=_ncq,
+        )
+    else:
+        print(f"\nOpening TT device {device_id}...")
+        device = ttnn.open_device(
+            device_id=device_id,
+            l1_small_size=32768,
+            trace_region_size=200000000,
+            num_command_queues=_ncq,
+        )
+    device.enable_program_cache()
+
+    try:
+        print("\nInitializing TTNN model...")
+        init_start = time.time()
+
+        from models.demos.qwen3_tts.tt.model_config import talker_config_for_hf_id
+        from models.demos.qwen3_tts.tt.qwen3_tts import Qwen3TTS
+
+        talker_config = talker_config_for_hf_id(hf_id)
+        model = Qwen3TTS(device=device, state_dict=main_weights, talker_config=talker_config)
+        timings["model_init"] = time.time() - init_start
+        print(f"  Model initialized in {timings['model_init']:.2f}s")
+        print(f"  Talker hidden={talker_config.hidden_size}  MLP={talker_config.intermediate_size}")
+
+        config = TTSConfig()
+        config.hidden_size = talker_config.hidden_size
+        config.max_new_tokens = max_new_tokens
+        config.greedy = greedy
+        config.repetition_penalty = repetition_penalty
+        config.trim_codec_frames = trim_frames
+
+        if load_cpu_inputs:
+            print(f"\n  Loading CPU-computed ICL inputs from: {load_cpu_inputs}")
+            cpu_data = torch.load(load_cpu_inputs, map_location="cpu", weights_only=True)
+            inputs_embeds_cpu = cpu_data["inputs_embeds"].float()
+            trailing_text_hidden = cpu_data["trailing_text_hidden"].float()
+            tts_pad_embed = cpu_data["tts_pad_embed"].float()
+            if "ref_codes" in cpu_data:
+                ref_codes_original = cpu_data["ref_codes"]
+            else:
+                ref_codes_original, _ = encode_reference_audio(ref_audio, main_weights, cache_path=ref_cache)
+            ref_codes = ref_codes_original
+            inputs_embeds_tt = ttnn.from_torch(
+                inputs_embeds_cpu.unsqueeze(1),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            code_pred_embeds = []
+            for i in range(config.num_code_groups - 1):
+                key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
+                if key in main_weights:
+                    code_pred_embeds.append(main_weights[key].float())
+            print(f"  inputs_embeds: {inputs_embeds_cpu.shape}")
+            print(f"  trailing_text_hidden: {trailing_text_hidden.shape}")
+            print(f"  code_pred_embeds: {len(code_pred_embeds)}")
+            timings["encode_ref"] = 0.0
+            timings["speaker_embed"] = 0.0
+            timings["icl_embed"] = 0.0
+        else:
+            encode_start = time.time()
+            ref_codes_original, audio_data = encode_reference_audio(ref_audio, main_weights, cache_path=ref_cache)
+            ref_codes = ref_codes_original
+            timings["encode_ref"] = time.time() - encode_start
+
+            # Capture the ECAPA traces once, before the first speaker-embedding call
+            # and before the heavier CP/Talker captures — the same ordering
+            # init_server_context relies on (traces captured later can land on
+            # trace_region positions overlapping executed ones). On by default
+            # (QWEN3_TTS_SE_TRACE=0 disables): tracing makes the speaker embedding two
+            # orders of magnitude cheaper, but the capture itself is not free, so a
+            # single-request run does not amortise it -- total wall time is a wash.
+            if os.environ.get("QWEN3_TTS_SE_TRACE", "1") != "0":
+                se = model.speaker_encoder
+                cap_start = time.time()
+                se.capture_se_block_traces()
+                se.capture_fc_trace()
+                se.capture_audio_forward_trace(audio_data)
+                if not se._audio_traces:
+                    # Waveform the device mel cannot take; fall back to the mel-in trace.
+                    se.capture_forward_trace(int(se.compute_mel_spectrogram(audio_data).shape[-1]))
+                se.activate_traced_extract()
+                timings["se_trace_capture"] = time.time() - cap_start
+                print(
+                    f"  ECAPA traces captured in {timings['se_trace_capture']*1000:.1f} ms "
+                    f"(SE blocks {len(getattr(se, '_se_traces', {}))}, "
+                    f"fc {getattr(se, '_fc_trace', None) is not None}, "
+                    f"forward lengths {sorted(se._fwd_traces)}, "
+                    f"audio samples {sorted(se._audio_traces)})"
+                )
+
+            spk_start = time.time()
+            speaker_embedding = model.extract_speaker_embedding(audio_data)
+            timings["speaker_embed"] = time.time() - spk_start
+            print(f"  Speaker embedding: {speaker_embedding.shape} (extracted with TTNN)")
+
+            icl_start = time.time()
+            inputs_embeds_tt, trailing_text_hidden, tts_pad_embed, code_pred_embeds = create_icl_embedding_ttnn(
+                target_text=text,
+                ref_text=ref_text,
+                ref_codes=ref_codes,
+                speaker_embedding=speaker_embedding,
+                tokenizer=tokenizer,
+                model=model,
+                device=device,
+                config=config,
+                main_weights=main_weights,
+                language=language,
+            )
+            timings["icl_embed"] = time.time() - icl_start
+
+        from models.demos.qwen3_tts.reference.functional import (
+            SpeechTokenizerDecoderConfig,
+            speech_tokenizer_decoder_forward,
+        )
+        from models.demos.qwen3_tts.tt.generator import StreamingAudioDecoder
+
+        # Seed AFTER these imports. reference/functional.py calls
+        # torch.manual_seed(0) at module scope, so seeding before the first import
+        # of it was silently overwritten and every run used seed 0 regardless of
+        # --seed (verified: seeds 5 and 6 produced byte-identical audio).
+        if seed is not None:
+            torch.manual_seed(seed)
+
+        _decoder_cfg = SpeechTokenizerDecoderConfig()
+
+        def _streaming_decoder_fn(codes_input: torch.Tensor) -> torch.Tensor:
+            codes_filtered = codes_input.clone().clamp(max=2047)
+            return speech_tokenizer_decoder_forward(codes_filtered, decoder_weights, _decoder_cfg)
+
+        streaming_decoder = StreamingAudioDecoder(_streaming_decoder_fn, chunk_size=50, sample_rate=24000)
+        streaming_decoder.start()
+        for _ref_frame in ref_codes_original:
+            streaming_decoder.add_tokens(_ref_frame.long())
+
+        gen_start = time.time()
+        codes, compile_timings = generate_codes_ttnn(
+            model=model,
+            device=device,
+            inputs_embeds_tt=inputs_embeds_tt,
+            trailing_text_hidden=trailing_text_hidden,
+            tts_pad_embed=tts_pad_embed,
+            code_pred_embeds=code_pred_embeds,
+            config=config,
+            use_kv_cache=use_kv_cache,
+            use_trace=use_trace,
+            use_2cq=use_2cq,
+            streaming_decoder=streaming_decoder,
+        )
+        timings["generation"] = time.time() - gen_start
+        timings["warmup"] = compile_timings["warmup"]
+        timings["trace_capture"] = compile_timings["trace_capture"]
+        timings["avg_decode_ms"] = compile_timings.get("avg_decode_ms", 0.0)
+        timings["steady_avg_decode_ms"] = compile_timings.get("steady_avg_decode_ms", 0.0)
+        timings["steady_frames_per_sec"] = compile_timings.get("steady_frames_per_sec", 0.0)
+
+        if codes is None:
+            print("ERROR: Failed to generate codes")
+            return
+
+        ref_codes_len = ref_codes_original.shape[0]
+        codes_for_decode = torch.cat([ref_codes_original, codes], dim=0)
+        total_codes_len = codes_for_decode.shape[0]
+        print(f"  Decoding: {ref_codes_len} ref (original) + {len(codes)} gen = {total_codes_len} total frames")
+
+        decode_start = time.time()
+        # get_all_audio() stops the worker and waits for it, so every token submitted is
+        # decoded before it collects. An empty token_queue was never that signal: it only
+        # means the last token was dequeued, not that its chunk had been published.
+        audio = streaming_decoder.get_all_audio()
+        timings["decode"] = time.time() - decode_start
+
+        audio_np = audio.squeeze().detach().cpu().float().numpy()
+        cut_samples = int(ref_codes_len / total_codes_len * len(audio_np))
+        audio_np = audio_np[cut_samples:]
+        print(f"  HF-style trim: removed {cut_samples} samples ({cut_samples/24000:.2f}s) of reference")
+
+        sf.write(output_path, audio_np, 24000)
+
+        # Summary
+        print("\n" + "=" * 80)
+        print("PERFORMANCE SUMMARY")
+        print("=" * 80)
+        num_frames = len(codes) if codes is not None else 0
+        inference_time = (
+            timings["speaker_embed"]
+            + timings["icl_embed"]
+            + timings["generation"]
+            - timings.get("warmup", 0.0)
+            - timings.get("trace_capture", 0.0)
+        )
+
+        print(f"\n{'Phase':<30} {'Time (ms)':<15} {'Component'}")
+        print("-" * 70)
+        print(f"{'Load weights':<30} {timings['load_weights']*1000:>10.1f}   PyTorch")
+        print(f"{'Model init':<30} {timings['model_init']*1000:>10.1f}   TTNN")
+        print(f"{'Encode ref audio':<30} {timings['encode_ref']*1000:>10.1f}   Reference (Speech Tok Enc)")
+        print(f"{'  Warmup (compile)':<30} {timings.get('warmup', 0)*1000:>10.1f}   TTNN [excluded from inference]")
+        print(f"{'  Trace capture':<30} {timings.get('trace_capture', 0)*1000:>10.1f}   TTNN [excluded from inference]")
+        if "se_trace_capture" in timings:
+            print(
+                f"{'  ECAPA trace capture':<30} {timings['se_trace_capture']*1000:>10.1f}"
+                "   TTNN [excluded from inference]"
+            )
+        print(f"{'Speaker embedding':<30} {timings['speaker_embed']*1000:>10.1f}   TTNN")
+        print(f"{'ICL embedding':<30} {timings['icl_embed']*1000:>10.1f}   TTNN")
+        print(f"{'Generation (' + str(num_frames) + ' frames)':<30} {timings['generation']*1000:>10.1f}   TTNN")
+        print(f"{'Decode audio':<30} {timings['decode']*1000:>10.1f}   Reference (Speech Tok Dec)")
+        print("-" * 70)
+        print(f"{'Inference time (no compile)':<30} {inference_time*1000:>10.1f}   speaker+ICL+prefill+decode")
+        print(f"{'2 CQ (H2D / trace overlap)':<30} {('yes' if use_2cq else 'no'):>10}   device queues")
+        if timings.get("avg_decode_ms", 0) > 0:
+            print(f"{'Avg decode (all steps)':<30} {timings['avg_decode_ms']:>10.1f}   ms/frame (fair vs other runs)")
+        if timings.get("steady_avg_decode_ms", 0) > 0:
+            print(
+                f"{'Steady decode (step 2+)':<30} {timings['steady_avg_decode_ms']:>10.1f}   ms/frame (excludes 1st decode)"
+            )
+            print(
+                f"{'Steady throughput':<30} {timings['steady_frames_per_sec']:>10.2f}   frames/sec (matches line above)"
+            )
+        print(
+            "  Note: Total generation ms scales with EOS frame count when sampling; compare steady ms/sec across runs."
+        )
+        print("  (TTFT and decode throughput breakdown printed above during generation)")
+
+        total_time = time.time() - demo_start
+        audio_sec = len(audio_np) / 24000
+
+        # Real-time factor, three scopes. They differ by an order of magnitude, so
+        # each one is labelled with what it includes — quoting the steady number as
+        # "the RTF" of a one-shot run overstates it by ~6x.
+        #   decode  : the steady per-frame decode rate. What a warm, traced streaming
+        #             server sustains, and the number an AR-loop optimisation moves.
+        #   request : one request on an already-initialised process (speaker embed +
+        #             ICL + prefill + decode), i.e. warmup/trace capture amortised.
+        #   wall    : this invocation end to end, including weight load, model init,
+        #             warmup, trace capture and the host vocoder.
+        print(f"\n{'Real-time factor (RTF = compute / audio, <1 is faster than real time)'}")
+        print("-" * 70)
+        if timings.get("steady_avg_decode_ms", 0) > 0 and audio_sec > 0:
+            _rtf_decode = timings["steady_avg_decode_ms"] / _MS_PER_FRAME_REALTIME
+            print(
+                f"{'  RTF decode (steady, per frame)':<38} {_rtf_decode:>7.2f}"
+                f"   {timings['steady_avg_decode_ms']:.1f} ms vs {_MS_PER_FRAME_REALTIME:.0f} ms/frame"
+            )
+        if audio_sec > 0:
+            print(
+                f"{'  RTF request (warm, no compile)':<38} {inference_time / audio_sec:>7.2f}"
+                f"   {inference_time:.2f}s / {audio_sec:.2f}s audio"
+            )
+            print(
+                f"{'  RTF wall (this invocation)':<38} {total_time / audio_sec:>7.2f}"
+                f"   {total_time:.2f}s / {audio_sec:.2f}s audio"
+            )
+        print("-" * 70)
+        print(f"\nOutput saved to: {output_path}")
+        print(f"Audio duration: {audio_sec:.2f}s")
+        print(f"Total wall time: {total_time:.2f}s")
+        print("=" * 80)
+
+        result = {
+            "prefill_ms": float(compile_timings.get("prefill_ms", 0.0)),
+            "steady_ms_per_frame": float(compile_timings.get("steady_avg_decode_ms", 0.0)),
+            "audio_sec": float(len(audio_np) / 24000),
+            "rtf_decode": float(compile_timings.get("steady_avg_decode_ms", 0.0) / _MS_PER_FRAME_REALTIME),
+            "rtf_request": float(inference_time / (len(audio_np) / 24000)) if len(audio_np) else 0.0,
+            "rtf_wall": float(total_time / (len(audio_np) / 24000)) if len(audio_np) else 0.0,
+            "steady_frames_per_sec": float(compile_timings.get("steady_frames_per_sec", 0.0)),
+            "num_frames": int(num_frames),
+            "output_wav": output_path,
+            "arch": device.arch().name,
+        }
+    finally:
+        if _mesh_shape is not None:
+            ttnn.close_mesh_device(device)
+            if _mesh_shape != (1, 1):
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        else:
+            ttnn.close_device(device)
+        print("\nDevice closed")
+
+    return result
+
+
+def get_default_reference_path():
+    """Get path to included Jim reference audio."""
+    import os
+
+    return os.path.join(os.path.dirname(__file__), "jim_reference.wav")
+
+
+def _load_ref_text_for(ref_audio_path: str) -> str:
+    """Return the transcript stored next to a reference audio file, if present.
+
+    Looks for a sibling ``<name>.txt`` of the ref audio. Raises if neither
+    --ref-text was given nor a sibling .txt exists, so ad-hoc users supply
+    their own transcript explicitly.
+    """
+    import os
+
+    base, _ = os.path.splitext(ref_audio_path)
+    txt_path = base + ".txt"
+    if os.path.exists(txt_path):
+        with open(txt_path) as f:
+            return f.read().strip()
+    raise SystemExit(
+        f"No --ref-text provided and no sibling transcript at {txt_path}. "
+        "Pass --ref-text explicitly when using an ad-hoc reference audio."
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Full TTNN TTS Demo")
+    parser.add_argument("--text", type=str, required=True, help="Text to synthesize")
+    parser.add_argument(
+        "--ref-audio",
+        type=str,
+        default=None,
+        help="Reference audio path (default: included jim_reference.wav)",
+    )
+    parser.add_argument(
+        "--ref-text",
+        type=str,
+        default=None,
+        help=(
+            "Reference audio transcript. If unset and --ref-audio is the bundled "
+            "jim_reference.wav, falls back to jim_reference.txt next to it."
+        ),
+    )
+    parser.add_argument("--output", type=str, default="/tmp/ttnn_tts_output.wav", help="Output path")
+    parser.add_argument(
+        "--hf-id",
+        type=str,
+        default="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        help="HuggingFace repo (1.7B default, or Qwen/Qwen3-TTS-12Hz-0.6B-Base)",
+    )
+    parser.add_argument("--max-tokens", type=int, default=256, help="Max tokens to generate")
+    parser.add_argument("--device-id", type=int, default=0, help="TT device ID")
+    parser.add_argument("--language", type=str, default="english", help="Language")
+    parser.add_argument(
+        "--greedy", action="store_true", help="Use greedy decoding (causes repetitive output - not recommended)"
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.0,
+        help="Repetition penalty >1.0 discourages repetition (e.g., 1.1-1.3, default: 1.0)",
+    )
+    parser.add_argument(
+        "--trim-frames",
+        type=int,
+        default=4,
+        help="Codec frames to trim from start (removes reference echo, default: 4)",
+    )
+    # Kept so an existing command line still parses, but the generator refuses them:
+    # it has no untraced or cacheless path to fall back to.
+    parser.add_argument("--no-kv-cache", action="store_true", help="Not supported; the KV cache is always used")
+    parser.add_argument("--no-trace", action="store_true", help="Not supported; traces are always captured")
+    parser.add_argument(
+        "--use-2cq",
+        action="store_true",
+        help="Two command queues: H2D on CQ1 overlapped with Metal trace on CQ0",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="torch.manual_seed before codec generation (reproducible sampling)",
+    )
+    parser.add_argument(
+        "--ref-cache",
+        type=str,
+        default=None,
+        help="Path to cached reference encoding (.pt). Auto-derived from --ref-audio if not set.",
+    )
+    parser.add_argument(
+        "--load-cpu-inputs",
+        type=str,
+        default=None,
+        help="Load CPU-computed ICL embeddings from .pt file (skips speaker encoder & ICL construction)",
+    )
+    args = parser.parse_args()
+
+    ref_audio = args.ref_audio if args.ref_audio else get_default_reference_path()
+    ref_text = args.ref_text if args.ref_text else _load_ref_text_for(ref_audio)
+
+    run_full_ttnn_tts(
+        text=args.text,
+        ref_audio=ref_audio,
+        ref_text=ref_text,
+        output_path=args.output,
+        max_new_tokens=args.max_tokens,
+        device_id=args.device_id,
+        language=args.language,
+        greedy=args.greedy,
+        repetition_penalty=args.repetition_penalty,
+        use_kv_cache=not args.no_kv_cache,
+        use_trace=not args.no_trace,
+        use_2cq=args.use_2cq,
+        seed=args.seed,
+        ref_cache=args.ref_cache,
+        trim_frames=args.trim_frames,
+        load_cpu_inputs=args.load_cpu_inputs,
+        hf_id=args.hf_id,
+    )
+
+
+if __name__ == "__main__":
+    main()
