@@ -10,9 +10,10 @@
 # Shards (parametrize rows; math_matmul/matmul each still run 5 PerfRunTypes):
 #   1–4  perf_math_matmul.py by MATH_FIDELITY (9320 collected / 8660 run each)
 #   5    perf_matmul.py (8000 collected / 7408 run)
-#   6    remaining perf tests (not those two files; ~8512 WH / ~8895 BH configured variants)
+#   6    perf_pack.py, perf_reduce.py, perf_unpack_tilize.py
+#   7    remaining perf tests (not the files assigned to shards 1–6)
 
-- name: llk_perf_wormhole group 1/6 math_matmul LoFi
+- name: llk_perf_wormhole group 1/7 math_matmul LoFi
   split_group: 1
   team: llk
   budget_type: perf
@@ -24,7 +25,7 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 2/6 math_matmul HiFi2
+- name: llk_perf_wormhole group 2/7 math_matmul HiFi2
   split_group: 2
   team: llk
   budget_type: perf
@@ -36,7 +37,7 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 3/6 math_matmul HiFi3
+- name: llk_perf_wormhole group 3/7 math_matmul HiFi3
   split_group: 3
   team: llk
   budget_type: perf
@@ -48,7 +49,7 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 4/6 math_matmul HiFi4
+- name: llk_perf_wormhole group 4/7 math_matmul HiFi4
   split_group: 4
   team: llk
   budget_type: perf
@@ -60,7 +61,7 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 5/6 matmul
+- name: llk_perf_wormhole group 5/7 matmul
   split_group: 5
   team: llk
   budget_type: perf
@@ -72,19 +73,37 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 6/6 remaining
+- name: llk_perf_wormhole group 6/7 pack_reduce_unpack_tilize
   split_group: 6
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} --ignore=perf_math_matmul.py --ignore=perf_matmul.py .
+    ./tests/run_llk_perf_wormhole.sh {split_group} perf_pack.py perf_reduce.py perf_unpack_tilize.py
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 1/6 math_matmul LoFi
+- name: llk_perf_wormhole group 7/7 remaining
+  split_group: 7
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} \
+      --ignore=perf_math_matmul.py \
+      --ignore=perf_matmul.py \
+      --ignore=perf_pack.py \
+      --ignore=perf_reduce.py \
+      --ignore=perf_unpack_tilize.py \
+      .
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_blackhole group 1/7 math_matmul LoFi
   split_group: 1
   team: llk
   budget_type: perf
@@ -96,7 +115,7 @@
       timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 2/6 math_matmul HiFi2
+- name: llk_perf_blackhole group 2/7 math_matmul HiFi2
   split_group: 2
   team: llk
   budget_type: perf
@@ -108,7 +127,7 @@
       timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 3/6 math_matmul HiFi3
+- name: llk_perf_blackhole group 3/7 math_matmul HiFi3
   split_group: 3
   team: llk
   budget_type: perf
@@ -120,7 +139,7 @@
       timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 4/6 math_matmul HiFi4
+- name: llk_perf_blackhole group 4/7 math_matmul HiFi4
   split_group: 4
   team: llk
   budget_type: perf
@@ -132,7 +151,7 @@
       timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 5/6 matmul
+- name: llk_perf_blackhole group 5/7 matmul
   split_group: 5
   team: llk
   budget_type: perf
@@ -144,13 +163,31 @@
       timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 6/6 remaining
+- name: llk_perf_blackhole group 6/7 pack_reduce_unpack_tilize
   split_group: 6
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} --ignore=perf_math_matmul.py --ignore=perf_matmul.py .
+    ./tests/run_llk_perf_blackhole.sh {split_group} perf_pack.py perf_reduce.py perf_unpack_tilize.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 200
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_blackhole group 7/7 remaining
+  split_group: 7
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_blackhole.sh {split_group} \
+      --ignore=perf_math_matmul.py \
+      --ignore=perf_matmul.py \
+      --ignore=perf_pack.py \
+      --ignore=perf_reduce.py \
+      --ignore=perf_unpack_tilize.py \
+      .
   skus:
     bh_p150b_civ2:
       timeout: 200
