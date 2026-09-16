@@ -459,12 +459,12 @@ PerfCounterColumns computePerfCounterColumns(
     emit_grid_avg(MATH_COUNTER, "Avg Math util on full grid (%)");
 
     // 3) Unpacker / packer / math-pipeline efficiencies (with the python fallback logic).
-    sink.emit_stat("Unpacker0 Write Efficiency", " (%)", ratio_fn(SRCA_WRITE_ACTUAL, UNPACK0_BUSY_THREAD0));
+    sink.emit_stat("Unpacker0 Write Efficiency", " (%)", ratio_fn(SRCA_WRITE_NOT_BLOCKED_PORT, UNPACK0_BUSY_THREAD0));
     sink.emit_stat("Unpacker1 Write Efficiency", " (%)", ratio_fn(SRCB_WRITE_NOT_BLOCKED_PORT, UNPACK1_BUSY_THREAD0));
 
     // Unpacker Write Efficiency = per-core skipna mean of unpack0/unpack1 efficiencies.
     {
-        CoreFn u0 = ratio_fn(SRCA_WRITE_ACTUAL, UNPACK0_BUSY_THREAD0);
+        CoreFn u0 = ratio_fn(SRCA_WRITE_NOT_BLOCKED_PORT, UNPACK0_BUSY_THREAD0);
         CoreFn u1 = ratio_fn(SRCB_WRITE_NOT_BLOCKED_PORT, UNPACK1_BUSY_THREAD0);
         std::map<experimental::ProgramExecutionUID, std::vector<double>> per_op;
         for (const auto& [uid, op] : pivot) {
@@ -485,12 +485,12 @@ PerfCounterColumns computePerfCounterColumns(
 
     // Packer Efficiency: packer_dest_read / packer_busy, else dest_read_granted_0 / packer_dest_read.
     if (packer_busy_sum > 0.0) {
-        sink.emit_stat("Packer Efficiency", " (%)", ratio_fn(PACKER_DEST_READ_AVAILABLE, PACKER_BUSY));
+        sink.emit_stat("Packer Efficiency", " (%)", ratio_fn(PACKER0_DEST_READ_REQ, PACKER_BUSY));
     } else if (any_core_has(pivot, DEST_READ_GRANTED_0)) {
-        sink.emit_stat("Packer Efficiency", " (%)", ratio_fn(DEST_READ_GRANTED_0, PACKER_DEST_READ_AVAILABLE));
+        sink.emit_stat("Packer Efficiency", " (%)", ratio_fn(DEST_READ_GRANTED_0, PACKER0_DEST_READ_REQ));
     }
 
-    sink.emit_stat("FPU Execution Efficiency", " (%)", ratio_fn(FPU_COUNTER, FPU_INSTRN_AVAILABLE_1));
+    sink.emit_stat("FPU Execution Efficiency", " (%)", ratio_fn(FPU_COUNTER, MATH_INSTRN_AVAILABLE_1));
 
     // Math Pipeline Utilization only when math was issued during the run.
     if (math_started_sum > 0.0) {
@@ -499,9 +499,9 @@ PerfCounterColumns computePerfCounterColumns(
 
     // Math-to-Pack Handoff: available_math / packer_busy, else available_math / its own ref_cnt.
     if (packer_busy_sum > 0.0) {
-        sink.emit_stat("Math-to-Pack Handoff Efficiency", " (%)", ratio_fn(AVAILABLE_MATH, PACKER_BUSY));
-    } else if (any_core_has(pivot, AVAILABLE_MATH)) {
-        sink.emit_stat("Math-to-Pack Handoff Efficiency", " (%)", util_fn(AVAILABLE_MATH));
+        sink.emit_stat("Math-to-Pack Handoff Efficiency", " (%)", ratio_fn(MATH_NOT_SCOREBOARD_STALLED, PACKER_BUSY));
+    } else if (any_core_has(pivot, MATH_NOT_SCOREBOARD_STALLED)) {
+        sink.emit_stat("Math-to-Pack Handoff Efficiency", " (%)", util_fn(MATH_NOT_SCOREBOARD_STALLED));
     }
 
     // Unpacker-to-Math Data Flow = ((srca_avail + srcb_avail)/2) / ((unpack0 + unpack1)/2) * 100.
@@ -509,8 +509,8 @@ PerfCounterColumns computePerfCounterColumns(
         std::map<experimental::ProgramExecutionUID, std::vector<double>> per_op;
         for (const auto& [uid, op] : pivot) {
             for (const auto& [core, cc] : op) {
-                auto sa = get(cc, SRCA_WRITE_AVAILABLE);
-                auto sb = get(cc, SRCB_WRITE_AVAILABLE);
+                auto sa = get(cc, SRCA_WRITE_REQ);
+                auto sb = get(cc, SRCB_WRITE_REQ);
                 auto u0 = get(cc, UNPACK0_BUSY_THREAD0);
                 auto u1 = get(cc, UNPACK1_BUSY_THREAD0);
                 if (!sa || !sb || !u0 || !u1) {
@@ -557,7 +557,7 @@ PerfCounterColumns computePerfCounterColumns(
     sink.emit_stat("Semaphore Full Wait T1", " (%)", util_fn(WAITING_FOR_NONFULL_SEM_1));
     sink.emit_stat("Semaphore Full Wait T2", " (%)", util_fn(WAITING_FOR_NONFULL_SEM_2));
 
-    sink.emit_stat("Data Hazard Stall Rate", " (%)", complement_fn(DATA_HAZARD_STALLS_MOVD2A, MATH_INSTRN_AVAILABLE));
+    sink.emit_stat("Data Hazard Stall Rate", " (%)", complement_fn(MATH_NOT_D2S_STALLED, MATH_INSTRN_AVAILABLE));
     sink.emit_stat("Fidelity Stall Rate", " (%)", ratio_fn(MATH_FIDELITY_STALL, MATH_INSTRN_AVAILABLE));
 
     // HiFi Fraction + Avg HF cycles/instrn (needs all three HF cycle-grant counters).
@@ -685,14 +685,15 @@ PerfCounterColumns computePerfCounterColumns(
     }
 
     // Write-port blocked rates (complement, clipped).
-    sink.emit_stat("SrcA Write Port Blocked Rate", " (%)", complement_fn(SRCA_WRITE_ACTUAL, SRCA_WRITE_AVAILABLE));
+    sink.emit_stat("SrcA Write Port Blocked Rate", " (%)", complement_fn(SRCA_WRITE_NOT_BLOCKED_PORT, SRCA_WRITE_REQ));
     sink.emit_stat(
-        "SrcA Write Overwrite Blocked Rate", " (%)", complement_fn(SRCA_WRITE_NOT_BLOCKED_OVR, SRCA_WRITE_AVAILABLE));
-    sink.emit_stat("SrcB Write Overwrite Blocked Rate", " (%)", complement_fn(SRCB_WRITE_ACTUAL, SRCB_WRITE_AVAILABLE));
+        "SrcA Write Overwrite Blocked Rate", " (%)", complement_fn(SRCA_WRITE_NOT_BLOCKED_OVR, SRCA_WRITE_REQ));
+    sink.emit_stat(
+        "SrcB Write Overwrite Blocked Rate", " (%)", complement_fn(SRCB_WRITE_NOT_BLOCKED_OVR, SRCB_WRITE_REQ));
 
     // Dest Read Backpressure — single (req-grant)/req, NOT clipped (matches python).
     sink.emit_stat("Dest Read Backpressure", " (%)", [&](const CoreCounters& cc) -> std::optional<double> {
-        auto req = val(cc, PACKER_DEST_READ_AVAILABLE);
+        auto req = val(cc, PACKER0_DEST_READ_REQ);
         auto grant = val(cc, DEST_READ_GRANTED_0);
         if (!req || !grant || *req == 0.0) {
             return std::nullopt;
@@ -716,7 +717,7 @@ PerfCounterColumns computePerfCounterColumns(
     // Math Scoreboard Stall Rate — (avail - available_math)/avail, no clip.
     sink.emit_stat("Math Scoreboard Stall Rate", " (%)", [&](const CoreCounters& cc) -> std::optional<double> {
         auto avail = val(cc, MATH_INSTRN_AVAILABLE);
-        auto unstalled = val(cc, AVAILABLE_MATH);
+        auto unstalled = val(cc, MATH_NOT_SCOREBOARD_STALLED);
         if (!avail || !unstalled || *avail == 0.0) {
             return std::nullopt;
         }
@@ -734,14 +735,13 @@ PerfCounterColumns computePerfCounterColumns(
     sink.emit_stat("SYNC Instrn Avail Rate T0", " (%)", util_fn(SYNC_INSTRN_AVAILABLE_0));
     sink.emit_stat("THCON Instrn Avail Rate T0", " (%)", util_fn(THCON_INSTRN_AVAILABLE_0));
     sink.emit_stat("MOVE Instrn Avail Rate T0", " (%)", util_fn(MOVE_INSTRN_AVAILABLE_0));
-    sink.emit_stat("MATH Instrn Avail Rate T1", " (%)", util_fn(FPU_INSTRN_AVAILABLE_1));
+    sink.emit_stat("MATH Instrn Avail Rate T1", " (%)", util_fn(MATH_INSTRN_AVAILABLE_1));
     sink.emit_stat("UNPACK Instrn Avail Rate T0", " (%)", util_fn(UNPACK_INSTRN_AVAILABLE_0));
     sink.emit_stat("PACK Instrn Avail Rate T2", " (%)", util_fn(PACK_INSTRN_AVAILABLE_2));
 
-    sink.emit_stat(
-        "SrcB Write Port Blocked Rate", " (%)", complement_fn(SRCB_WRITE_NOT_BLOCKED_PORT, SRCB_WRITE_AVAILABLE));
-    sink.emit_stat("SrcA Write Actual Efficiency", " (%)", ratio_fn(SRCA_WRITE_ACTUAL, SRCA_WRITE_AVAILABLE));
-    sink.emit_stat("SrcB Write Actual Efficiency", " (%)", ratio_fn(SRCB_WRITE_NOT_BLOCKED_PORT, SRCB_WRITE_AVAILABLE));
+    sink.emit_stat("SrcB Write Port Blocked Rate", " (%)", complement_fn(SRCB_WRITE_NOT_BLOCKED_PORT, SRCB_WRITE_REQ));
+    sink.emit_stat("SrcA Write Actual Efficiency", " (%)", ratio_fn(SRCA_WRITE_NOT_BLOCKED_PORT, SRCA_WRITE_REQ));
+    sink.emit_stat("SrcB Write Actual Efficiency", " (%)", ratio_fn(SRCB_WRITE_NOT_BLOCKED_PORT, SRCB_WRITE_REQ));
 
     // Packer engine granularity (WH only).
     sink.emit_stat("Packer Engine 0 Util", " (%)", util_fn(PACKER_BUSY_0));
@@ -749,7 +749,7 @@ PerfCounterColumns computePerfCounterColumns(
     sink.emit_stat("Packer Engine 2 Util", " (%)", util_fn(PACKER_BUSY_2));
 
     // Low-priority idle waits + RISC-core L1.
-    sink.emit_stat("MMIO Idle Wait T0", " (%)", util_fn(WAITING_FOR_MMIO_IDLE_0));
+    sink.emit_stat("MMIO Idle Wait T0", " (%)", util_fn(WAITING_FOR_CFG_IDLE_0));
     sink.emit_stat("SFPU Idle Wait T1", " (%)", util_fn(WAITING_FOR_SFPU_IDLE_1));
     sink.emit_stat("THCON Idle Wait T0", " (%)", util_fn(WAITING_FOR_THCON_IDLE_0));
     sink.emit_stat("MOVE Idle Wait T0", " (%)", util_fn(WAITING_FOR_MOVE_IDLE_0));
@@ -889,7 +889,7 @@ PerfCounterColumns computePerfCounterColumns(
             static_cast<uint16_t>(WAITING_FOR_NONZERO_SEM_0 + t),
             static_cast<uint16_t>(WAITING_FOR_NONFULL_SEM_0 + t),
             static_cast<uint16_t>(WAITING_FOR_MOVE_IDLE_0 + t),
-            static_cast<uint16_t>(WAITING_FOR_MMIO_IDLE_0 + t),
+            static_cast<uint16_t>(WAITING_FOR_CFG_IDLE_0 + t),
             static_cast<uint16_t>(WAITING_FOR_SFPU_IDLE_0 + t)};
         bool all_reasons = any_core_has(pivot, stalls);
         for (uint16_t r : reasons) {
