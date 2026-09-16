@@ -14,6 +14,17 @@ on:
         required: false
         default: true
         type: boolean
+      pipeline:
+        description: >-
+          Value for the runs' `pipeline` column: nightly, baseline or pr. Empty
+          keeps the old behaviour, which infers "pr" from a pull_request event
+          and "nightly" from anything else. "baseline" is the post-merge run the
+          PR gate compares against — the same L1_TO_L1 non-speed-of-light
+          selection the gate measures, which must stay separable from the
+          nightly full sweep.
+        required: false
+        default: ""
+        type: string
       upload-to-warehouse:
         description: "Upload the run's Parquet to the perf warehouse over SFTP"
         required: false
@@ -130,6 +141,9 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          # Read by helpers.perf.core._pipeline. Empty falls back to the guess
+          # from the GitHub event, so a run that does not set it is unchanged.
+          PIPELINE: ${{ inputs.pipeline }}
         run: |
           ${{ matrix.test-group.cmd }}
 
