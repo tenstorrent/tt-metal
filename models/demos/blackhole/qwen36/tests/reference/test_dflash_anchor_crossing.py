@@ -82,7 +82,11 @@ PROMPT = "The capital of France is"
 #  110  -> end 115   no crossing   (long, but still inside the first bucket)
 #  130  -> end 135   ONE crossing
 #  200  -> end 205   ONE crossing, then a long tail past it
-BUDGETS = [64, 110, 130, 200]
+# 5 + budget = end. ANCHOR is 128, so 130/200 cross ONCE and 256 crosses TWICE (at 128 and
+# 256). The two-crossing arm is the one the acceptance curve flagged: it measured 1.700
+# acceptance where its neighbours managed 3.17 and 4.42, which is close to the
+# every-draft-rejected signature and worth separating from ordinary content variation.
+BUDGETS = [64, 130, 200, 256]
 
 
 def _mesh_shape():
@@ -118,13 +122,21 @@ def test_acceptance_across_the_anchor(mesh_device, device_params, max_new_tokens
     page_table = torch.arange(NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
 
     target = TtTarget(model, cfg.target_layer_ids, page_table, device_taps=True)
-    drafter = TtDrafter(TtDFlashDrafter(mesh_device, cfg, load_drafter_state_dict(drafter_path)), target)
     tokenizer = AutoTokenizer.from_pretrained(resolve_target_path())
     prompt = tokenizer(PROMPT, return_tensors="pt").input_ids
     n_in = prompt.shape[1]
+    # The SHIPPING configuration now: fixed-capacity history (stable addresses across generations),
+    # every block width compiled before the capture, and the trace serving every bucket. Without
+    # these the crossing collapse below is just the old reset-reallocation defect reappearing; with
+    # them, whatever is left is the real behaviour.
+    cap = -(-(prompt.shape[1] + max_new_tokens + 32) // 32) * 32
+    drafter = TtDrafter(
+        TtDFlashDrafter(mesh_device, cfg, load_drafter_state_dict(drafter_path), ctx_capacity=cap), target
+    )
 
     # One eager generation, at THIS arm's budget, so every shape the measured run needs is compiled
     # before the trace is parked -- otherwise the first novel width hangs the process.
+    drafter.drafter.warm_block_widths()
     dflash_generate(drafter, target, prompt, max_new_tokens=max_new_tokens)
     # DFLASH_NO_TRACE=1 leaves the verify EAGER. Every post-crossing verify runs at
     # chunk_start=ANCHOR while the trace was captured at chunk_start=0, so this separates "the
@@ -132,6 +144,7 @@ def test_acceptance_across_the_anchor(mesh_device, device_params, max_new_tokens
     traced = os.environ.get("DFLASH_NO_TRACE") != "1"
     if traced:
         target.enable_traced_verify()
+        target.allow_trace_past_anchor = True
 
     t0 = time.perf_counter()
     stats = dflash_generate(drafter, target, prompt, max_new_tokens=max_new_tokens, return_stats=True)
@@ -142,7 +155,7 @@ def test_acceptance_across_the_anchor(mesh_device, device_params, max_new_tokens
     anchor = TtTarget.ANCHOR
     start, rows, crossed_at = n_in, [], None
     for i, produced in enumerate(stats.acceptance_lengths):
-        crosses = (start + produced) > anchor >= start
+        crosses = (start // anchor) != ((start + produced) // anchor)
         if crosses and crossed_at is None:
             crossed_at = i
         rows.append((i, start, produced, crosses))

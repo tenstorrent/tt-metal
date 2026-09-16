@@ -224,9 +224,19 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
     if cap is not None:
         logger.info(f"fixed-capacity drafter ({cap} rows); warming every block width before capture")
         drafter.drafter.warm_block_widths()
-        # Safe now that the drafter's history sits at stable addresses: the trace can serve every
-        # bucket rather than only the first, which is worth 6.19 -> 14.88 tok/s on this prompt.
-        target.allow_trace_past_anchor = True
+        # NOT enabled: allow_trace_past_anchor is UNSAFE in general.
+        #
+        # It looked safe here and it is not. This demo's prompt is 128 tokens, so it crosses the
+        # anchor on the very FIRST decode step, with no drafting before the boundary -- the one
+        # benign case. With a 5-token prompt the crossing lands at step 28, after the drafter has
+        # accumulated history, and acceptance collapses exactly as before: 4.357 before the anchor,
+        # 1.090 after, with 31/865 non-ascii characters back in the output
+        # (tests/reference/test_dflash_anchor_crossing.py, gen256 arm, WITH fixed capacity and a
+        # stable reset). spec_128_long would cross three times and hit it too.
+        #
+        # So the stable-context fix repaired the generation-PARITY defect but not the anchor one;
+        # they are not the same bug after all. Leave the trace restricted to lo == 0 until the
+        # crossing case is understood. Set DFLASH_TRACE_PAST_ANCHOR=1 to measure it deliberately.
     dflash_generate(drafter, target, token_ids, max_new_tokens=max_generated_tokens)
     # DFLASH_NARROW_HEAD=1 runs the verify LM head over a 32/64-row tile-aligned window instead of
     # the whole 128-row bucket (+20.8 % on the reference prompt, tokens bit-identical -- see

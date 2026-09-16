@@ -29,6 +29,46 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
+### RETRACTION: the anchor bug is NOT the same bug, and trace-past-anchor is UNSAFE
+
+The section below claims the anchor crossing and the generation-parity collapse were one defect,
+both repaired by keeping the drafter's KV history at stable addresses. **The parity half is right.
+The anchor half is wrong**, and it was generalised from the one configuration where the bug cannot
+show.
+
+Measured with fixed capacity, a stable reset AND trace-past-anchor enabled -- i.e. the "fixed"
+configuration -- on a 5-token prompt generating 256 (crosses at 128 and 256):
+
+    before   5:3  8:2  10:16  26:4  30:16 ... 121:6  127:1*
+    cross    128:9
+    after    137:1 138:1 139:1 ... 259:1          <- 122 steps, essentially all 1s
+
+    acceptance before the anchor 4.357 (28 steps), after 1.090 (122)
+    non-ascii characters in the output: 31 / 865  <- the corruption is back too
+
+WHY IT LOOKED FIXED. The demo's prompt is 128 tokens, so it crosses the anchor on the FIRST decode
+step, with no drafting before the boundary -- the one benign case. With a 5-token prompt the
+crossing lands at step 28, after the drafter has accumulated history, and the collapse returns
+unchanged. `spec_128_long` (128 + 256 = 384) crosses three times and would hit it as well.
+
+CONSEQUENCES:
+
+* `TtTarget.allow_trace_past_anchor` stays OFF, and the demo no longer sets it. The trace is
+  restricted to `lo == 0` again. Demo on the safe defaults: 6.54 tok/s, acceptance 4.950, 0.37x.
+* The 14.88 tok/s / 0.83x figure below is REAL but only for a prompt that crosses on step 0. Do not
+  quote it as the demo's throughput.
+* PART OF THE ACCEPTANCE CURVE IS CONTAMINATED. Split it by whether the span crosses 128:
+
+      no crossing   16:5.00  32:6.20  64:6.30  100:4.95   <- genuine drafter behaviour
+      crosses      150:3.17 200:4.42 256:1.70             <- measuring this bug, not the drafter
+
+  So "acceptance decays with generation length" is not established. Below 128 tokens acceptance is
+  5.0-6.3 against a break-even of 6.4-8.0, i.e. DFlash is at best at parity and never ahead.
+
+WHAT SURVIVES: the parity fix itself, which is independently verified by the drafter
+self-comparison tests and by 2.99 -> 17.00 tok/s on the previously-broken generation. The anchor
+crossing is a SEPARATE, still-open defect.
+
 ### THE ANCHOR BUG WAS THE SAME BUG -- and the defaults now ship the fix
 
 Re-testing the anchor crossing with the stable-context fix settles it: the crossing collapse and the
