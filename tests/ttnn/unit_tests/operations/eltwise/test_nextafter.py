@@ -124,10 +124,24 @@ def test_nextafter_nan_propagates(device):
 
 
 @pytest.mark.parametrize(
-    "shape_b", [(1, 1, 32, 1), (1, 1, 1, 32), (1, 1, 1, 1)], ids=["col_bcast", "row_bcast", "scalar_bcast"]
+    "shape_a, shape_b",
+    [
+        ((1, 1, 32, 32), (1, 1, 32, 1)),
+        ((1, 1, 32, 32), (1, 1, 1, 32)),
+        ((1, 1, 32, 32), (1, 1, 1, 1)),
+        # a on the broadcast side: get_subtile_broadcast_type only reaches the A-side and the mixed
+        # row/col types when a_h or a_w is 1, so a full-shape `a` cannot select ComputeRowColBcastNg
+        # at all. That leaves eltwise_binary_sfpu_row_col_bcast.cpp -- one of the four bcast kernels
+        # this op is wired into -- with no coverage. It matters here because nextafter is not
+        # commutative and those kernels reassign CB roles per direction.
+        ((1, 1, 32, 1), (1, 1, 1, 32)),
+        ((1, 1, 1, 32), (1, 1, 32, 1)),
+        ((1, 1, 1, 1), (1, 1, 32, 32)),
+    ],
+    ids=["col_b", "row_b", "scalar_b", "row_a_col_b", "col_a_row_b", "scalar_a"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_nextafter_broadcast(device, shape_b, dtype):
+def test_nextafter_broadcast(device, shape_a, shape_b, dtype):
     """The broadcast kernels are selected purely by shape, so same-shape tests never reach them.
 
     The broadcast operand takes a pack/unpack round trip through an L1 CB before the SFPU op, and
@@ -135,17 +149,45 @@ def test_nextafter_broadcast(device, shape_b, dtype):
     """
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    a = torch.rand((1, 1, 32, 32), dtype=torch_dtype) * 200 - 100
+    a = torch.rand(shape_a, dtype=torch_dtype) * 200 - 100
     b = torch.rand(shape_b, dtype=torch_dtype) * 300 - 150
 
-    expected = torch.nextafter(a, b.expand_as(a))
+    # The ttnn operands keep their original shapes -- expanding them here would make both full and
+    # select no broadcast kernel at all. Only the golden is broadcast.
+    broadcast = torch.broadcast_shapes(shape_a, shape_b)
+    expected = torch.nextafter(a.expand(broadcast), b.expand(broadcast))
 
     ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))
 
-    in_scope = _in_scope(a, expected)
+    in_scope = _in_scope(a.expand(broadcast), expected)
     assert_with_ulp(expected_result=expected[in_scope], actual_result=actual[in_scope], ulp_threshold=0)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_nextafter_steps_finite_max_to_infinity(device, dtype):
+    """The one input where the integer step rolls the exponent into infinity.
+
+    For bfloat16 that is 0x7F7F0000 + 0x10000 == 0x7F800000. The exhaustive walk caps its target at
+    the largest finite bfloat16 and _in_scope drops non-finite lanes, so nothing else asserts the
+    overflow boundary, and the signed-zero and NaN tests are float32-only -- this is the only
+    bfloat16 lane in the file that checks a guard rather than a step.
+    """
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    max_finite = torch.finfo(torch_dtype).max
+    inf = float("inf")
+
+    a = torch.tensor([[max_finite, -max_finite, max_finite, -max_finite]], dtype=torch_dtype)
+    b = torch.tensor([[inf, -inf, -inf, inf]], dtype=torch_dtype)
+    expected = torch.nextafter(a, b)
+    assert expected[0, 0].isinf() and expected[0, 1].isinf(), "first two lanes must overflow"
+
+    ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))[:, : a.shape[1]]
+
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])

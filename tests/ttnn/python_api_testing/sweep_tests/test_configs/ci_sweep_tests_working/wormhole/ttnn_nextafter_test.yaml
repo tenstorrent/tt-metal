@@ -17,7 +17,11 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_pcc
+        # comp_equal, not comp_pcc: nextafter lands within one ULP of its first operand, so PCC
+        # against the golden stays near 1.0 even when the op returns that operand untouched. At
+        # its default 0.99 this sweep could not have caught the fixed-epsilon bug it exists to
+        # guard, and cannot catch a regression to it either.
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       sanitize-args: False
       args:
