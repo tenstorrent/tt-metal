@@ -17,6 +17,12 @@
 #include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim {
+namespace {
+// tt::datum_size throws for block-float rather than returning a size. Bfp8_b is the only
+// block-float format the op admits, so it is the only one that reaches here.
+bool block_float_format(tt::DataFormat df) { return df == tt::DataFormat::Bfp8_b; }
+}  // namespace
+
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,
@@ -49,10 +55,10 @@ RmPlan make_rm_plan(
         plan.ht_tiles_per_chunk = std::clamp(plan.Ht_rm, 1u, k_rm_max_tiles_per_chunk);
     }
 
-    // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;
-    // so the unpacked-format byte sizes are always well-defined here.
-    plan.src_datum_size = tt::datum_size(src_cb_data_format);
-    plan.dst_datum_size = tt::datum_size(dst_cb_data_format);
+    // Block-float has no per-datum size. RM staging and the writer stride never see it here:
+    // RM input is BF16/FP32, and block-float output is TILE-only.
+    plan.src_datum_size = block_float_format(src_cb_data_format) ? 0 : tt::datum_size(src_cb_data_format);
+    plan.dst_datum_size = block_float_format(dst_cb_data_format) ? 0 : tt::datum_size(dst_cb_data_format);
     plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
     // One CB page = one logical RM row (chunk-wide). The compute kernel uses
     // compute_kernel_lib::tilize, whose asymmetric mode requires one input page per row so each

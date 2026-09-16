@@ -22,16 +22,19 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     model.tt_kv_cache = [None, None]
     model._rope_prefill_positions = None
     model.rope_caches_2d = {}
-    model._ring_metadata_external = True
+    model._prefill_metadata_external = True
+    model.prefill_metadata = object()
     model._packed_global_rope_trans_mat = None
     model._prefill_trace_mode = True
     model._prefill_trace_controller = (
         SimpleNamespace(layer_ack=lambda idx: events.append(("ack", idx))) if ack_mode == "segmented_trace" else None
     )
-    model.norm = SimpleNamespace(forward=lambda x: events.append(("norm", None)) or x)
+    model.mesh_config = SimpleNamespace(cp_degree=8)
+    model._get_rope_mats = lambda idx, **kwargs: (idx, idx)
 
     def layer(idx):
         def forward(x, **kwargs):
+            assert kwargs["prefill_metadata"] is model.prefill_metadata
             assert kwargs["chunk_start_idx"] == 8192
             assert kwargs["rope_mats"] == (idx, idx)
             events.append(("write", idx))
@@ -52,7 +55,6 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     monkeypatch.setattr(ttnn.experimental.deepseek_prefill, "outbound_socket_service_sync", socket_ack)
     output = model(
         hidden,
-        rope_mats={"sliding_attention": (0, 0), "full_attention": (1, 1)},
         chunk_start_idx=8192,
         on_layer_complete=lambda idx: events.append(("ack", idx)),
         d2h_service=service if ack_mode == "socket" else None,
@@ -65,7 +67,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
         if ack_mode == "callback":
             expected.append(("sync", None))
         expected.append(("ack", idx))
-    assert events == expected + [("norm", None)]
+    assert events == expected
 
 
 @pytest.mark.parametrize("is_global", [False, True])
@@ -74,18 +76,19 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
     from models.demos.gemma4_d_p.tt import attention
 
     tensor = SimpleNamespace(shape=(1, 1, 32768, 512))
-    cache = SimpleNamespace(kv=tensor) if is_global else (tensor, tensor)
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache, SlidingRingKVCache
+
+    cache = GlobalRingKVCache(tensor) if is_global else SlidingRingKVCache(tensor, tensor)
     monkeypatch.setattr(attention, "load_attention_weights", lambda **_: SimpleNamespace(is_global=is_global))
     allocate = Mock(side_effect=AssertionError("external caches must not allocate replacements or tail pools"))
-    monkeypatch.setattr(attention, "init_ring_kv_cache", allocate)
-    monkeypatch.setattr(attention, "init_packed_ring_kv_cache", allocate)
+    monkeypatch.setattr(attention, "init_sliding_ring_kv_cache", allocate)
+    monkeypatch.setattr(attention, "init_global_ring_kv_cache", allocate)
     monkeypatch.setattr(ttnn, "zeros", allocate)
     result = attention.Gemma4Attention(
-        mesh_device=object(),
-        config=SimpleNamespace(is_sliding=not is_global, sliding_window=1024),
+        config=SimpleNamespace(is_sliding=not is_global, sliding_window_size=1024),
         state_dict={},
         ccl_manager=object(),
-        mesh_config=MeshConfig((8, 4)),
+        mesh_config=MeshConfig(SimpleNamespace(shape=(8, 4))),
         layer_idx=0,
         ring_kv_cache=cache,
     )
@@ -95,6 +98,8 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
 
 @pytest.mark.parametrize("is_global", [False, True])
 def test_projection_loads_only_required_weight(monkeypatch, is_global):
+    import torch
+
     from models.demos.gemma4_d_p.tt.attention import weights
 
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda _: None)
@@ -107,49 +112,33 @@ def test_projection_loads_only_required_weight(monkeypatch, is_global):
 
     monkeypatch.setattr(ttnn, "as_tensor", as_tensor)
     mesh_config = SimpleNamespace(
-        tp=4,
-        prefill=SimpleNamespace(sp=8),
-        column_parallel=lambda _: None,
-        row_parallel=lambda _: None,
+        device=object(),
+        tp_degree=4,
+        cp_degree=8,
+        column_parallel=lambda: None,
+        row_parallel=lambda: None,
     )
     config = SimpleNamespace(
-        use_kv_tying=is_global, num_attention_heads=32, num_key_value_heads=4, head_dim=512, hidden_size=5376
+        is_sliding=not is_global,
+        is_kv_tied=is_global,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        head_dim=512 if is_global else 256,
+        hidden_size=128,
     )
-    result = weights.load_attention_weights(object(), config, {}, mesh_config, tensor_cache_path="/tmp/weights")
+    projection_size = config.num_attention_heads * config.head_dim
+    state_dict = {
+        "q_proj.weight": torch.ones(projection_size, config.hidden_size),
+        "k_proj.weight": torch.ones(projection_size, config.hidden_size),
+        "o_proj.weight": torch.ones(config.hidden_size, projection_size),
+        "q_norm.weight": torch.ones(config.head_dim),
+        "k_norm.weight": torch.ones(config.head_dim),
+    }
+    if not is_global:
+        state_dict["v_proj.weight"] = torch.ones(projection_size, config.hidden_size)
+    result = weights.load_attention_weights(mesh_config, config, state_dict, tensor_cache_path="/tmp/weights")
     assert (result.wqk is not None) == is_global
     assert (result.wqkv is not None) != is_global
-    assert len([name for name in loaded if "/wqk" in name]) == 1
-
-
-def test_last_token_projection_gathers_cp_before_slicing(monkeypatch):
-    events = []
-    hidden = SimpleNamespace(shape=(1, 1, 1024, 64), deallocate=Mock())
-    gathered = SimpleNamespace(shape=(1, 1, 8192, 64), deallocate=Mock())
-    token_tile = object()
-    logits = object()
-    model = object.__new__(Gemma4Model)
-
-    def gather(actual):
-        assert actual is hidden
-        events.append("gather")
-        return gathered
-
-    def slice_tile(actual, start, end):
-        assert actual is gathered
-        assert start == (0, 0, 8160, 0)
-        assert end == (1, 1, 8192, 64)
-        events.append("slice")
-        return token_tile
-
-    def project(actual):
-        assert actual is token_tile
-        events.append("project")
-        return logits
-
-    model._cp_gather_prefill_sequence = gather
-    model._apply_lm_head = project
-    monkeypatch.setattr(ttnn, "slice", slice_tile)
-    assert model.process_logits_after_prefill_trace(hidden, 8191) is logits
-    assert events == ["gather", "slice", "project"]
-    hidden.deallocate.assert_not_called()
-    gathered.deallocate.assert_called_once_with(True)
+    projection_names = [name for name in loaded if "/wqk" in name]
+    expected_name = "/tmp/weights/wqk_packed640_tp4_bf16" if is_global else "/tmp/weights/wqkv_decode_order_tp4_bf16"
+    assert projection_names == [expected_name]

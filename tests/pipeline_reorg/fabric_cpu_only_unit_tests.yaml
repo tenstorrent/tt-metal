@@ -132,6 +132,17 @@
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
+- id: fabric-cpu-pipeline-placement-sc20
+  name: fabric cpu pipeline placement (SC20)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "TT_PIPELINE_TEST_STAGES=20"
+  skus:
+    cpu_medium:
+      timeout: 10
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
 - id: fabric-cpu-bh-ring-stress
   name: fabric cpu unit tests (bh-ring-stress)
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
