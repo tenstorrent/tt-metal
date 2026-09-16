@@ -18,8 +18,7 @@ from PIL import Image
 
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
-from ....utils.test import ring_params_req_exact_devices
-from .common import create_fractal_image
+from .common import GALAXY_MESHES, create_fractal_image
 from .common_av import (
     artifact_dir,
     check_audio_sanity,
@@ -53,12 +52,12 @@ REF2VA_VBENCH_THRESHOLDS = {
 _L1_SMALL = 16384
 
 # Ring collectives require FABRIC_1D_RING; only `l1_small_size` differs from the other gates.
-MESH_4X8 = [
-    pytest.param(
-        (4, 8),
-        {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL},
-        id="4x8",
-    )
+# The shared shapes, but this suite runs a smaller L1_SMALL pool than they carry and reports it in
+# the measurement line, so the size is overridden rather than inherited.
+MESHES = [
+    pytest.param(shape, {**params, "l1_small_size": _L1_SMALL}, id=param.id)
+    for param in GALAXY_MESHES
+    for shape, params in [param.values]
 ]
 
 
@@ -161,7 +160,7 @@ EXPECTED_PADDED_LEN = (
 
 
 @pytest.mark.timeout(10800)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_end_to_end(mesh_device, reset_seeds):
     """Full ``mixed`` generation: geometry agreement across every reference path, plus warm latency."""
     case = CASE
@@ -215,7 +214,7 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
 
 
 @pytest.mark.timeout(9000)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     """Discriminator: a same-size inverted reference keeps the noise bit-identical, so any output
     divergence above the measured run-to-run floor is attributable to reference content alone."""

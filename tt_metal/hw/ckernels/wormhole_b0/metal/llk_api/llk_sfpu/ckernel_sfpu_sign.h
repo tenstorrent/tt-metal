@@ -20,14 +20,16 @@ namespace sfpu {
 inline void sign_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_sign(const uint /*exponent_size_8*/) {
+inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
 // All params are in FP16 format
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat res = 1.0f;
-        v_if(v < 0.0F) { res = -1.0f; }
-        v_elseif(_sfpu_is_fp16_zero_(v)) { res = 0.0f; }
+        // copysgn stamps v's sign bit onto 1.0, which is exactly the v < 0 arm (and, as
+        // before, sends -0 to -1). Only the zero case is left for a branch, so the
+        // v_elseif and its predicate-complement disappear.
+        sfpi::vFloat res = sfpi::copysgn(sfpi::vFloat(1.0f), v);
+        v_if(_sfpu_is_fp16_zero_(v)) { res = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;

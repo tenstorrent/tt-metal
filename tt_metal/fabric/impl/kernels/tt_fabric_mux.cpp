@@ -270,8 +270,8 @@ void kernel_main() {
     }
 
     fabric_connection.close();
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_async_full_barrier();
+    noc_clear_packet_tags(noc_index);
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();

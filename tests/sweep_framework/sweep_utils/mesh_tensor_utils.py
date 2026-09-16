@@ -1377,6 +1377,43 @@ def vector_axis_matches(device, op_kwargs, named_mcs=None):
     return required == actual
 
 
+def scatter_uses_replicate_topology(tensor_placement, mesh_device) -> bool:
+    """Whether create_tensor_on_mesh would build this placement via replicate_with_topology.
+
+    A pure function of the traced placement and the actual mesh -- no device data involved -- and
+    the SINGLE source of truth for that branch: create_tensor_on_mesh calls it to decide, and
+    mesh_tensor_to_torch calls it to know how the input was built, so the two can never drift.
+
+    This matters because replicate_with_topology puts IDENTICAL data on every chip while stamping a
+    Shard topology, so a gathered output has to be collapsed to one copy to match a golden computed
+    from the per-chip shape. Deciding that from the tensor alone is ambiguous (identical per-device
+    shapes occur both here and for a genuine even shard), and _replicated_single_copy resolves it by
+    comparing per-device CONTENTS -- which makes the returned SHAPE data-dependent: a single
+    differing byte flips a [1,1,128,2048] chunk to [1,1,128,8192] on a mesh whose shard axis is 4.
+    """
+    if not tensor_placement:
+        return False
+    if "PlacementShard" not in str(tensor_placement.get("placement", "")):
+        return False
+    try:
+        actual_mesh = mesh_device.shape
+        actual_rows, actual_cols = actual_mesh[0], actual_mesh[1]
+    except Exception:
+        actual_rows, actual_cols = 1, 1
+
+    traced = tensor_placement.get("mesh_device_shape", "[1, 1]")
+    if isinstance(traced, str):
+        try:
+            traced = ast.literal_eval(traced)
+        except (ValueError, SyntaxError):
+            traced = [1, 1]
+    if not isinstance(traced, (list, tuple)):
+        traced = [1, 1]
+    traced_rows = traced[0] if len(traced) > 0 else 1
+    traced_cols = traced[1] if len(traced) > 1 else 1
+    return actual_rows >= traced_rows and actual_cols >= traced_cols
+
+
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -1408,28 +1445,8 @@ def create_tensor_on_mesh(
     # ShardTensor2dMesh would re-shard the input and produce a smaller per-chip
     # shape, so delegate to replicate_with_topology, which keeps .shape =
     # input shape and stamps the correct sharded topology metadata.
-    if tensor_placement:
-        _placement_str = str(tensor_placement.get("placement", ""))
-        if "PlacementShard" in _placement_str:
-            try:
-                actual_mesh = mesh_device.shape
-                _ar, _ac = actual_mesh[0], actual_mesh[1]
-            except Exception:
-                _ar, _ac = 1, 1
-            import ast as _ast0
-
-            _ms_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
-            if isinstance(_ms_raw, str):
-                try:
-                    _ms_raw = _ast0.literal_eval(_ms_raw)
-                except Exception:
-                    _ms_raw = [1, 1]
-            _tr = _ms_raw[0] if len(_ms_raw) > 0 else 1
-            _tc = _ms_raw[1] if len(_ms_raw) > 1 else 1
-            if _ar >= _tr and _ac >= _tc:
-                return replicate_with_topology(
-                    torch_tensor, mesh_device, dtype, layout, memory_config, tensor_placement
-                )
+    if scatter_uses_replicate_topology(tensor_placement, mesh_device):
+        return replicate_with_topology(torch_tensor, mesh_device, dtype, layout, memory_config, tensor_placement)
 
     # Determine mesh mapper based on placement
     if tensor_placement:
@@ -1818,7 +1835,9 @@ def _replicated_single_copy(device_tensors, to_torch_fn):
     return ref
 
 
-def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, force_single_device=False) -> torch.Tensor:
+def mesh_tensor_to_torch(
+    ttnn_tensor, mesh_device=None, mesh_composer=None, force_single_device=False, scatter_placement=None
+) -> torch.Tensor:
     """Convert a TTNN mesh tensor back to torch, reassembling shards by topology.
 
     Replicated tensors return device 0. Sharded tensors are reassembled
@@ -1836,7 +1855,21 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
             via replicate_with_topology and the golden was computed from a
             single copy — comparing against the full gathered output would
             produce shape mismatches.
+        scatter_placement: The traced ``input_*_tensor_placement`` the INPUT was built from. When
+            it implies the replicate_with_topology path (see
+            scatter_uses_replicate_topology), the golden is per-chip, so the gather collapses to a
+            single copy deterministically instead of asking _replicated_single_copy whether the
+            per-device bytes happen to match. Prefer this over force_single_device: it is derived
+            from the vector rather than asserted by the caller, so it stays correct for a genuine
+            shard (where it is False and the normal gather runs).
     """
+    if scatter_placement is not None and not force_single_device:
+        try:
+            force_single_device = scatter_uses_replicate_topology(
+                scatter_placement, mesh_device or ttnn_tensor.device()
+            )
+        except Exception:
+            force_single_device = False
 
     def _get_torch_dtype(t):
         try:
@@ -1897,6 +1930,17 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
                         single = _replicated_single_copy(dt, _to_torch_safe)
                         if single is not None:
                             return single
+                        # Contents differ, so this is treated as a real shard and the gather is
+                        # about to multiply the shape by the mesh factor. Logged because that used
+                        # to happen silently: one lead-models split vector passed on one Galaxy box
+                        # and returned a 4x-wide chunk on another, from this branch alone. A caller
+                        # that knows the input's placement should pass scatter_placement and never
+                        # reach here.
+                        logger.warning(
+                            f"SWEEPS: gather -- Shard topology with identical per-device shapes "
+                            f"{shapes[0]} but DIFFERING data; concatenating {len(dt)} shards. If the "
+                            f"golden is per-chip, pass scatter_placement to keep the shape stable."
+                        )
         except Exception:
             # Best-effort fast path; on any error fall back to the normal
             # topology-driven gather below.

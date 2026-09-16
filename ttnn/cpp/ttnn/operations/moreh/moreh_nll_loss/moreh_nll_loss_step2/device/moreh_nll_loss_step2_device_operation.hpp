@@ -5,9 +5,9 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_helper.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
@@ -32,7 +32,7 @@ struct MorehNllLossStep2DeviceOperation {
     using tensor_return_value_t = ttnn::Tensor;
 
     struct Factory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

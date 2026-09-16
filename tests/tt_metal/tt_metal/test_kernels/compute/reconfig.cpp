@@ -42,9 +42,10 @@ void kernel_main() {
         // Tests both inits, 1st one inits UNPACK for Bfp8_b
         // data inside CB_0, 2nd one inits it to Bfp16_b
         // which is inside CB_2
-        copy_tile_init(cb_in0);
-        // This call will test copy_tile_to_dst_init_short as well
-        copy_tile_to_dst_init_short_with_dt(cb_in0, cb_in2);
+        copy_init(cb_in0);
+        // This call will test copy_init as well
+        reconfig_data_format_srca(cb_in0, cb_in2);
+        copy_init(cb_in2);
 
         cbin2.wait_front(ublock_size_tiles);
 #if (BLOCK_COPY == 1)

@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 import torch
 from loguru import logger
@@ -9,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, get_cos_sin_matrix
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -19,7 +21,19 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 PCC_REQUIRED = 0.99
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    is_balanced = params["is_balanced"]
+
+    if not on_ci:
+        return False
+    if is_balanced:
+        return True
+    return False
+
+
 # sp x tp
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device",
     [(4, 2), (2, 4)],
@@ -28,11 +42,7 @@ PCC_REQUIRED = 0.99
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [fabric2d_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq128k"])

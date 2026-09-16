@@ -85,11 +85,9 @@ class MiniMaxH3ViTAttention(Module):
         # follows them -- HiFi2 with fp32 accumulation off is the standard SDPA setting
         # there, and it roughly doubles matmul throughput against the HiFi4 default.
         # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a single-op
-        # min-of-20 benchmark, which is measurable where whole-decoder wall clock is not
-        # (wall clock jitters 0.34-0.99 s/wave on identical code): default 1.448 ms
-        # (602 TF/s) -> q=k=192 + HiFi2 0.491 ms (1777 TF/s), **2.95x**. 128 gives 0.502 ms;
-        # 256 and above hang the sweep and remain unmeasured. SDPA is 40 % of layer device
-        # time, so this is the largest single decoder win available.
+        # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
+        # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
+        # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=192,

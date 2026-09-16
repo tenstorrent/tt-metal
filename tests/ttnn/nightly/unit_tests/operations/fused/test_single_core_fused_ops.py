@@ -12,6 +12,8 @@ from models.common.utility_functions import torch2tt_tensor
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_softmax_in_place, ttnn_layer_norm
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 

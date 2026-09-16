@@ -33,6 +33,7 @@ The `do_restore` toggle makes this a controlled experiment:
 
 from dataclasses import dataclass
 
+import pytest
 import torch
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
@@ -102,6 +103,9 @@ def test_tilize_polluter_matmul(
     polluter_face_r_dim,
     do_restore,
 ):
+    if not do_restore and formats.input_format != formats.output_format:
+        pytest.skip("negative control requires matching input/output formats")
+
     torch_format = format_dict[formats.output_format]
     mm_dimensions = [32, 32]
 

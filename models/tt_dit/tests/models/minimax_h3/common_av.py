@@ -17,6 +17,8 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
+
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
 
 
@@ -451,6 +453,10 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
             logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({share:4.1f} %)")
         logger.info(f"  {'Total (warmup)':<18} {cold_total:8.1f} s")
 
+    ttnn.synchronize_device(pipeline.mesh_device)
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+
     output = pipeline(prompt, seed=seed, **gen_kwargs)
 
     assert pipeline.last_padded_len == warm_padded_len, (
@@ -464,8 +470,11 @@ def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: flo
     """The MEASUREMENT block; `expected_total_s`, when given, asserts the total. Returns the total."""
     rows = pipeline.last_timings
     total = sum(seconds for _, seconds in rows)
+    shape = tuple(pipeline.mesh_device.shape)
     logger.info(
-        f"MEASUREMENT {label} fully warm | mesh 4x8 Blackhole, TP=4 axis 0 / SP=8 axis 1, ring, 2 links{extra} "
+        f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
+        f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
+        f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links{extra} "
         f"| warm window: one full warmup generation at this shape, prepares and export excluded"
     )
     for row_label, seconds in rows:

@@ -1233,17 +1233,7 @@ def test_all_gather_page_indexing(
         # --- composite AG, since non-integral in:out page ratio (192B vs 256B)
         ([1, 1, 32, 768], -1, ttnn.ROW_MAJOR_LAYOUT, ttnn.L1_MEMORY_CONFIG, _l1_nd_sharded([1, 1, 32, 128])),
         # --- composite AG, since padding on the gather dim
-        pytest.param(
-            [1, 1, 32, 384],
-            -1,
-            ttnn.ROW_MAJOR_LAYOUT,
-            _l1_nd_sharded([1, 1, 8, 64]),
-            _l1_nd_sharded([1, 1, 8, 64]),
-            marks=pytest.mark.xfail(
-                reason="composite all_broadcast/concat ops are buggy for a row-major input padded on the gather dim",
-                strict=True,
-            ),
-        ),
+        ([1, 1, 32, 384], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 8, 64]), _l1_nd_sharded([1, 1, 8, 64])),
         ([1, 1, 32, 256], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_nd_sharded([1, 1, 32, 32]), _l1_nd_sharded([1, 1, 32, 96])),
     ],
     ids=[

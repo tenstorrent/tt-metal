@@ -43,6 +43,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import LayerNorm
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils.tensor import local_device_to_torch
 from ..vocoder_ltx import DilatedConv1d
 from .blockings_minimax_h3_audio import register_h3_audio_blockings
 
@@ -71,12 +72,11 @@ class MiniMaxH3AudioResidualUnit(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
         # Conv-only levers: Snake takes neither, so they ride a separate dict from `shared`.
-        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
+        levers = dict(split_mode=split_mode)
         self.block = ModuleList(
             [
                 Snake(dim, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
@@ -110,11 +110,10 @@ class MiniMaxH3AudioEncoderBlock(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
-        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
+        levers = dict(split_mode=split_mode)
         inner = dim // 2
         self.stride = stride
         self.block = ModuleList(
@@ -161,12 +160,11 @@ class MiniMaxH3AudioDACEncoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
         no_ccl = {k: v for k, v in shared.items() if k != "ccl_manager"}
-        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
+        levers = dict(split_mode=split_mode)
 
         layers: list[Module] = [_AlignedOutConv1d(1, encoder_dim, kernel_size=7, **shared, **levers)]
         dim = encoder_dim
@@ -329,8 +327,6 @@ class MiniMaxH3AudioEncoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
-        tap_matmul: bool = True,
-        prefer_mac: bool = True,
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     ) -> None:
         super().__init__()
@@ -342,11 +338,8 @@ class MiniMaxH3AudioEncoder(Module):
         # The precision levers default to accurate, same rationale as the decoder. H3-only: LTX
         # constructs the same conv classes with its own fast defaults. Kept as attributes so the
         # pipeline's device-weight cache key (`weights_variant`) reads the exact values this module
-        # was built with. `prefer_mac` is accepted for symmetry with the decoder; the DAC trunk has
-        # no depthwise resamplers, so nothing here consumes it.
+        # was built with.
         self.split_mode = split_mode
-        self.tap_matmul = tap_matmul
-        self.prefer_mac = prefer_mac
         self.max_c_in_block = max_c_in_block
 
         # Every H3 audio conv shape misses _FP32_BLOCKINGS; seed stubs before any conv is built.
@@ -361,7 +354,6 @@ class MiniMaxH3AudioEncoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         self.pre_block = MiniMaxH3AudioAttnProjection(
             latent_dim, latent_channels, num_attention_heads, mesh_device=mesh_device, dtype=dtype
@@ -373,7 +365,6 @@ class MiniMaxH3AudioEncoder(Module):
             mesh_device=mesh_device,
             dtype=dtype,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
         self.logs_proj = _AlignedOutConv1d(
             latent_channels,
@@ -382,7 +373,6 @@ class MiniMaxH3AudioEncoder(Module):
             mesh_device=mesh_device,
             dtype=dtype,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def forward(self, waveform_BCT: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -405,9 +395,10 @@ class MiniMaxH3AudioEncoder(Module):
         # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and so
         # only works on a single-device mesh. Same fix as ``MiniMaxH3AudioDecoder.__call__``.
         def read(tensor: ttnn.Tensor) -> torch.Tensor:
-            if self.mesh_device.get_num_devices() > 1:
-                tensor = ttnn.get_device_tensors(tensor)[0]
-            return ttnn.to_torch(tensor).float()
+            # See `MiniMaxH3AudioDecoder.__call__`: a storage slice keeps the parent's distribution
+            # metadata and the converter rejects it on a multi-host mesh. The helper reads a shard this
+            # host owns instead, which for a replicated tensor is the whole answer.
+            return local_device_to_torch(tensor).float()
 
         mean = read(self.mean_proj(projected))
         logs = read(self.logs_proj(projected))

@@ -95,7 +95,7 @@ void kernel_main() {
                 // Packer narrows the fp32 scale to bf16 so the multiply's SrcB matches SrcA.
                 reconfig_data_format_srca(cb_scale_bcast_fp32_id);
                 pack_reconfig_data_format(cb_scale_bcast_bf16_id);
-                copy_tile_init(cb_scale_bcast_fp32_id);
+                copy_init(cb_scale_bcast_fp32_id);
                 cb_scale_bcast_fp32.wait_front(block_ht);
                 cb_scale_bcast_bf16.reserve_back(block_ht);
                 tile_regs_acquire();
@@ -111,7 +111,7 @@ void kernel_main() {
                 // tilize cannot cast e4m3 into a fp32 rm as done for bf16 datapath
                 reconfig_data_format_srca(cb_input_e4m3_id);
                 pack_reconfig_data_format(cb_in_rm_fp32_id);
-                copy_tile_init(cb_input_e4m3_id);
+                copy_init(cb_input_e4m3_id);
                 // One input_e4m3 page is one 32x32 row-major tile. A 128-wide block contains
                 // tiles_per_block such pages.
                 for (uint32_t s = 0; s < tiles_per_block; ++s) {

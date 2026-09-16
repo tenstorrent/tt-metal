@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
+from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
     apply_allreduce,
@@ -113,6 +114,7 @@ def decode_forward(
     else:
         tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
         tt_v = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
+        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True)
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False)
 
@@ -447,9 +449,9 @@ def _packed_verify_sdpa(
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi2),
             math_approx_mode=True,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
         )
         if _num_dev == 1

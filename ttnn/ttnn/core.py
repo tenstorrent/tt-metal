@@ -359,6 +359,22 @@ def create_sharded_memory_config_(
     return memory_config
 
 
+def ttnn_dtype_to_torch_dtype(dtype):
+    import torch
+
+    return {
+        ttnn.uint8: torch.uint8,
+        ttnn.uint16: torch.uint16,
+        ttnn.uint32: torch.uint32,
+        ttnn.int8: torch.int8,
+        ttnn.int32: torch.int32,
+        ttnn.float32: torch.float32,
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.bfloat8_b: torch.float32,
+        ttnn.bfloat4_b: torch.float32,
+    }[dtype]
+
+
 get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
 
 __all__ = []

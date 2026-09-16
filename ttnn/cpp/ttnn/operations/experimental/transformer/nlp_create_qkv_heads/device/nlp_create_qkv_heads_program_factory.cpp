@@ -212,6 +212,9 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     if (read_from_input_tensor_kv) {
         reader_defines.emplace_back("READ_FROM_INPUT_TENSOR_KV", "1");
     }
+    if (operation_attributes.kv_tied) {
+        reader_defines.emplace_back("KV_TIED", "1");
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -390,7 +393,11 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
     } else {
         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
     }
-    uint32_t v_base_addr = k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
+    // Tied: V is K's own columns, so the writer reads from K's base rather than the section after
+    // it. v_start_addr below is derived from this, so the per-core offsets follow automatically.
+    uint32_t v_base_addr = operation_attributes.kv_tied
+                               ? k_base_addr
+                               : k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
 
     uint32_t num_cores = std::max(q_cores.num_cores(), k_cores.num_cores());
     auto core_grid = q_cores.bounding_box();
@@ -592,7 +599,11 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
     return desc;
 }
 
-void NlpCreateHeadsDeviceOperation::override_runtime_arguments(
+// Only per-dispatch state is re-applied: buffer addresses (override supersedes resolve_bindings, so
+// nothing else re-points them) and the globally-allocated output CBs.  Every other slot derives from
+// the operation attributes or the input/output TensorSpecs, which the program hash covers, so a cache
+// hit means they are identical by construction.
+void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -600,41 +611,40 @@ void NlpCreateHeadsDeviceOperation::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     auto& output = tensor_return_value;
 
-    // Mirror select_program_factory() so the patched slots belong to the factory that actually built
-    // this cached program.  Only per-dispatch state is re-applied: buffer addresses (override
-    // supersedes resolve_bindings, so nothing else re-points them) and the globally-allocated output
-    // CBs.  Every other slot derives from the operation attributes or the input/output TensorSpecs,
-    // which the program hash covers, so a cache hit means they are identical by construction.
-    if (std::holds_alternative<Sharded>(select_program_factory(operation_attributes, tensor_args))) {
-        // Kernel push order in Sharded::create_descriptor(): reader 0, writer 1.
-        constexpr uint32_t kReaderKernelIdx = 0;
-        constexpr uint32_t kWriterKernelIdx = 1;
-        constexpr uint32_t kAddrIdxs[] = {
-            kShardedQBaseAddrIdx, kShardedQStartAddrIdx, kShardedKVBaseAddrIdx, kShardedKVStartAddrIdx};
+    // Kernel push order in Sharded::create_descriptor(): reader 0, writer 1.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kAddrIdxs[] = {
+        kShardedQBaseAddrIdx, kShardedQStartAddrIdx, kShardedKVBaseAddrIdx, kShardedKVStartAddrIdx};
 
-        // The active core set is fixed by the (hashed) shard specs, so it never grows across hits:
-        // every core the miss emplaced args for is covered here.
-        for (const auto& e : build_sharded_core_args(operation_attributes, tensor_args, output)) {
-            auto& reader_args = GetRuntimeArgs(program, kReaderKernelIdx, e.core);
-            auto& writer_args = GetRuntimeArgs(program, kWriterKernelIdx, e.core);
-            for (const uint32_t idx : kAddrIdxs) {
-                reader_args[idx] = e.reader_args[idx];
-                writer_args[idx] = e.writer_args[idx];
-            }
+    // The active core set is fixed by the (hashed) shard specs, so it never grows across hits:
+    // every core the miss emplaced args for is covered here.
+    for (const auto& e : build_sharded_core_args(operation_attributes, tensor_args, output)) {
+        auto& reader_args = GetRuntimeArgs(program, kReaderKernelIdx, e.core);
+        auto& writer_args = GetRuntimeArgs(program, kWriterKernelIdx, e.core);
+        for (const uint32_t idx : kAddrIdxs) {
+            reader_args[idx] = e.reader_args[idx];
+            writer_args[idx] = e.writer_args[idx];
         }
-
-        // CB push order in Sharded::create_descriptor(): q 0, k 1, v 2 — each globally allocated on
-        // the matching output shard buffer, whose address moves on every re-allocation.
-        const auto cbs = program.circular_buffers();
-        UpdateDynamicCircularBufferAddress(program, cbs[0]->id(), *std::get<0>(output).buffer());
-        UpdateDynamicCircularBufferAddress(program, cbs[1]->id(), *std::get<1>(output).buffer());
-        UpdateDynamicCircularBufferAddress(program, cbs[2]->id(), *std::get<2>(output).buffer());
-        return;
     }
 
-    // Interleaved: the reader takes the input (and optional KV input) addresses, the writer the three
-    // output addresses; the Interleaved CBs are not globally allocated, so there is nothing to
-    // re-point there.
+    // CB push order in Sharded::create_descriptor(): q 0, k 1, v 2 — each globally allocated on
+    // the matching output shard buffer, whose address moves on every re-allocation.
+    const auto cbs = program.circular_buffers();
+    UpdateDynamicCircularBufferAddress(program, cbs[0]->id(), *std::get<0>(output).buffer());
+    UpdateDynamicCircularBufferAddress(program, cbs[1]->id(), *std::get<1>(output).buffer());
+    UpdateDynamicCircularBufferAddress(program, cbs[2]->id(), *std::get<2>(output).buffer());
+}
+
+// The reader takes the input (and optional KV input) addresses, the writer the three output
+// addresses; the Interleaved CBs are not globally allocated, so there is nothing to re-point there.
+void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    auto& output = tensor_return_value;
     const Tensor& input_tensor = tensor_args.input_tensor_q;
     const auto split = build_interleaved_work_split(operation_attributes, input_tensor);
 

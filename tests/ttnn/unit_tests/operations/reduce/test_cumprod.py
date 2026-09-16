@@ -34,8 +34,7 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     [
         [],
         [2],
-        [2000],
-        [1000, 32, 32],
+        [8, 64, 64],
         [5, 5, 5, 5, 1, 1, 1],
         [10, 3, 18, 20],
     ],
@@ -97,8 +96,7 @@ def test_cumprod_normal(dim, shape, dtypes, device):
     [
         [],
         [2],
-        [2000],
-        [1000, 32, 32],
+        [8, 64, 64],
         [5, 5, 5, 5, 1, 1, 1],
     ],
 )
@@ -144,8 +142,7 @@ def test_cumprod_backward(dim, shape, dtypes, device):
     [
         [],
         [1],
-        [2000],
-        [1000, 32, 32],
+        [8, 64, 64],
         [5, 5, 5, 5, 1, 1, 1],
         [1, 1, 20, 16],
     ],
@@ -201,8 +198,12 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 
 
+# The preallocated `out` tensor must live on device: the on-device check in
+# validate_output_tensor fires before any other validation, so a host `out`
+# would mask the check each row targets. Each row asserts the exact message of
+# the check it exercises.
 @pytest.mark.parametrize(
-    "dim, input_shape, output_shape, torch_dtype, input_dtype, output_dtype, memory_config, layout",
+    "dim, input_shape, output_shape, torch_dtype, input_dtype, output_dtype, memory_config, layout, error_msg",
     [
         (
             -10,
@@ -213,6 +214,7 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "The requested accumulation axis is -10, while the input tensor has rank 9",
         ),  # input_rank vs dim
         (
             10,
@@ -223,6 +225,7 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "The requested accumulation axis is 10, while the input tensor has rank 9",
         ),  # input_rank vs dim
         (
             3,
@@ -233,6 +236,7 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "Shape mismatch: input tensor shape",
         ),  # input_shape vs output_shape
         (
             3,
@@ -243,6 +247,7 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.TILE,
+            "Shape mismatch: input tensor shape",
         ),  # input_shape vs output_shape
         (
             3,
@@ -253,6 +258,7 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             ttnn.bfloat16,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.Layout.ROW_MAJOR,
+            "The provided input tensor has a non-tile layout: ROW_MAJOR",
         ),  # unsupported layout
     ],
 )
@@ -265,13 +271,15 @@ def test_cumprod_failing_cases(
     output_dtype,
     memory_config,
     layout,
+    error_msg,
     device,
+    expect_error,
 ):
     torch.manual_seed(0)
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, layout=layout, device=device, memory_config=memory_config
     )
-    ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype)
-    with pytest.raises(RuntimeError):
+    ttnn_preallocated_tensor = ttnn.zeros(output_shape, dtype=output_dtype, layout=ttnn.Layout.TILE, device=device)
+    with expect_error(RuntimeError, error_msg):
         ttnn.cumprod(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)

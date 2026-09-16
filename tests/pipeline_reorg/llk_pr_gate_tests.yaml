@@ -2,7 +2,10 @@
 #
 # Merge-gate gtest coverage lives in llk_merge_gate_tests.yaml.
 # PYTEST_MARKERS is set by llk-smoke-impl.yaml / workflow_call inputs.
-# For max allowed timeout refer to .github/time_budget.yaml (llk -> pr_gate).
+# For max allowed timeout refer to .github/time_budget.yaml (llk -> pr_gate and
+# llk -> sanity). Two allowances, because two pipelines run this list: the PR gate
+# charges llk.pr_gate and sanity-tests charges llk.sanity.
+#
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 # Blackhole uses bh_p150b_civ2_viommu (same logical SKU as merge-gate); previously
 # non-prio PR runs used bh_p150b_civ2.
@@ -12,6 +15,7 @@
 - name: llk_smoke_wormhole
   split_group: 1
   team: llk
+  budget_type: [pr_gate, sanity]
   coverage: false
   cmd: |
     set -euo pipefail
@@ -28,6 +32,7 @@
 - name: llk_smoke_blackhole group 1/2
   split_group: 1
   team: llk
+  budget_type: [pr_gate, sanity]
   coverage: false
   cmd: |
     set -euo pipefail
@@ -45,6 +50,7 @@
 - name: llk_smoke_blackhole group 2/2
   split_group: 2
   team: llk
+  budget_type: [pr_gate, sanity]
   coverage: false
   cmd: |
     set -euo pipefail

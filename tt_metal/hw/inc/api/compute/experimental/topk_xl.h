@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -47,10 +48,35 @@ namespace ckernel {
  * ascending  | Sort direction: true for ascending, false for descending                   | bool     | true, false |
  * True     |
  */
-template <uint32_t K>
-ALWI void topk_xl_local_sort(uint32_t idst, bool ascending) {
+template <std::uint32_t K>
+ALWI void topk_xl_local_sort(std::uint32_t idst, bool ascending) {
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_local_sort<K, APPROX>(idst, ascending)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_local_sort<K>(idst, ascending)));
+}
+
+/**
+ * Per-column-isolated local sort. Runs the same bitonic network as
+ * topk_xl_local_sort up to the length-64 build, then (with early_exit_K64)
+ * returns before the cross-column merge phases, leaving each 64-row column
+ * sorted in isolation — used by the sparse-K reader to sink all-zero packed
+ * mask words to the bottom of each column.
+ *
+ * With early_exit_K64 = true this does NOT issue llk_unpack_set_srcb_dummy_valid:
+ * the early-exit column sort never consumes a real SrcB operand, so the dummy
+ * valid is dead config, and dropping it saves one UNPACK-thread issue per call.
+ * The default (full-sort) instantiation runs the same network as
+ * topk_xl_local_sort and does issue it.
+ *
+ * early_exit_K64 requires K >= 1024, and the full sort K = 512 or K = 1024: the
+ * generic network does not converge at K = 2048, so that size has to go through
+ * topk_xl_local_sort and its fast path. Both are enforced by static_assert.
+ */
+template <std::uint32_t K, bool early_exit_K64 = false>
+ALWI void topk_xl_local_sort_generic(std::uint32_t idst, bool ascending) {
+    if constexpr (!early_exit_K64) {
+        UNPACK((llk_unpack_set_srcb_dummy_valid()));
+    }
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_local_sort_generic<K, early_exit_K64>(idst, ascending)));
 }
 
 /**
@@ -77,9 +103,9 @@ ALWI void topk_xl_local_sort(uint32_t idst, bool ascending) {
  * perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | | fused |
  * Whether values + indices are fused as single FP32 datum in DST             | bool     | true, false | False    |
  */
-template <uint32_t K, bool fused = true>
-ALWI void topk_xl_merge(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_merge<K, APPROX, fused>(idst)));
+template <std::uint32_t K, bool fused = true>
+ALWI void topk_xl_merge(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_merge<K, fused>(idst)));
 }
 
 /**
@@ -106,10 +132,10 @@ ALWI void topk_xl_merge(uint32_t idst) {
  * True     | | fused      | Whether values + indices are fused as single FP32 datum in DST             | bool     |
  * true, false                                           | False    |
  */
-template <uint32_t K, bool fused = true>
-ALWI void topk_xl_rebuild(uint32_t idst, bool ascending) {
+template <std::uint32_t K, bool fused = true>
+ALWI void topk_xl_rebuild(std::uint32_t idst, bool ascending) {
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_rebuild<K, APPROX, fused>(idst, ascending)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_rebuild<K, fused>(idst, ascending)));
 }
 
 /**
@@ -119,8 +145,9 @@ ALWI void topk_xl_rebuild(uint32_t idst, bool ascending) {
  * Programs all of:
  *   * ADDR_MOD_1..7 for the bitonic load/store strides (incl. the +24 / +40 /
  *     +48 stride-folding slots that the inner loops depend on),
- *   * the math-thread MOP Expander with the merge body template (`fused`
- *     selects the body length: 16 for fused, 18 for unfused),
+ *   * the math-thread MOP Expander with the merge body template (16-issue
+ *     body for fused AND for the default macro-scheduled unfused path;
+ *     18 for unfused only when built with -DDISABLE_TOPK_XL_SFPLOADMACRO),
  *   * the SFPU index-tracking config in unfused mode.
  *
  * Because every merge/rebuild/local_sort relies on the ADDR_MOD programming
@@ -128,21 +155,22 @@ ALWI void topk_xl_rebuild(uint32_t idst, bool ascending) {
  * once again at the fused → unfused mode switch in the extended 256K path.
  * The hot loop must not re-call this per stage.
  */
-template <uint32_t K, bool fused = true>
+template <std::uint32_t K, bool fused = true>
 ALWI void topk_xl_init() {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_init<K, APPROX, fused>()));
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_init<K, fused>()));
 }
 
 /**
  * Initialize unpack/math state for topk_xl_copy_tile.
  */
-ALWI void topk_xl_copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void topk_xl_copy_tile_init(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
     // TOPK_LARGE_INDICES ADDITION: the low-level copy wrapper only initializes
     // the TopK XL copy LLKs. This TTNN op enters through the standard compute
     // API, so it must also configure SRCA unpack/math state for the input CB.
     state_configure<Operand::SRCA>(cbid, call_line);
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(cbid)));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(cbid, cbid)));
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(cbid)));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(cbid, cbid)));
     UNPACK((llk_unpack_topk_xl_copy_init(cbid)));
     MATH((llk_math_topk_xl_copy_init(cbid)));
 }
@@ -173,16 +201,19 @@ ALWI void topk_xl_copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_L
  * | | num_elements           | Number of elements to copy (partial-tile unpack)                   | uint32_t | 1 .. K
  * | True     |
  */
-template <uint32_t K>
+template <std::uint32_t K>
 ALWI void topk_xl_copy_tile(
-    uint32_t in_cb_id, uint32_t dst_start_tile_index, uint32_t in_tile_index_base, uint32_t num_elements) {
-    constexpr uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
+    std::uint32_t in_cb_id,
+    std::uint32_t dst_start_tile_index,
+    std::uint32_t in_tile_index_base,
+    std::uint32_t num_elements) {
+    constexpr std::uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
     if constexpr (K <= elements_per_tile) {
         UNPACK((llk_unpack_topk_xl_copy_one_tile_unpack(in_cb_id, in_tile_index_base, num_elements)));
         MATH((llk_math_topk_xl_copy_one_tile_math(in_cb_id, dst_start_tile_index, num_elements)));
     } else {
-        const uint32_t n1 = num_elements < elements_per_tile ? num_elements : elements_per_tile;
-        const uint32_t n2 = num_elements > elements_per_tile ? (num_elements - elements_per_tile) : 0;
+        const std::uint32_t n1 = num_elements < elements_per_tile ? num_elements : elements_per_tile;
+        const std::uint32_t n2 = num_elements > elements_per_tile ? (num_elements - elements_per_tile) : 0;
 
         UNPACK((llk_unpack_topk_xl_copy_one_tile_unpack(in_cb_id, in_tile_index_base, n1)));
         MATH((llk_math_topk_xl_copy_one_tile_math(in_cb_id, dst_start_tile_index, n1)));
@@ -195,7 +226,7 @@ ALWI void topk_xl_copy_tile(
 /**
  * Initializes the state for adding LSB indices to the topk_xl_copy_tile output.
  */
-ALWI void topk_xl_add_lsb_indices_init() { MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init<APPROX>())); }
+ALWI void topk_xl_add_lsb_indices_init() { MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init())); }
 
 /**
  * Adds LSB indices to the topk_xl_copy_tile output.
@@ -210,9 +241,50 @@ ALWI void topk_xl_add_lsb_indices_init() { MATH((llk_math_eltwise_unary_sfpu_top
  * | idst       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less
  than the size of the DST register buffer | True     |
  */
-template <uint32_t K, uint32_t core_id>
-ALWI void topk_xl_add_lsb_indices(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices<K, APPROX, core_id>(idst)));
+template <std::uint32_t K, std::uint32_t core_id, bool row_major = false>
+ALWI void topk_xl_add_lsb_indices(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices<K, core_id, row_major>(idst)));
+}
+
+/**
+ * Reprogram only the MOP Expander after topk_xl_copy_tile_init, instead of a
+ * full topk_xl_init. copy init clobbers ADDR_MOD_0/3 and the MOP; the fused
+ * merge/rebuild kernels use ADDR_MOD_1/5/6/7, so for fused = true only the MOP
+ * needs reinstalling — saving the CFG/ADDR_MOD writes a full init would issue
+ * per merge stage on the recv path.
+ */
+template <bool fused = true>
+ALWI void topk_xl_reinit_mop_after_copy() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_reinit_mop_after_copy<fused>()));
+}
+
+/**
+ * Restore the subset of unfused TopK state clobbered by copy_tile_init.
+ *
+ * In addition to the shared MOP Expander, unfused rebuild consumes ADDR_MOD_3,
+ * which copy init rewrites, and ADDR_MOD_2, which is (re)established for the
+ * unfused stride in case the preceding phase was fused. The remaining TopK
+ * ADDR_MODs and SFPU index-tracking state stay live.
+ *
+ * NOT restored: ADDR_MOD_4. copy init does not touch it, but
+ * topk_xl_add_lsb_indices_init reprograms it to +16 while unfused rebuild
+ * needs +8 — so if add_lsb_indices_init has run since the last full
+ * topk_xl_init<fused=false>, run that full init instead of this helper.
+ * (tt-blaze's callers always follow add_lsb with a full init, so this
+ * sequence does not arise there.)
+ */
+ALWI void topk_xl_reinit_unfused_rebuild_after_copy() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_reinit_unfused_rebuild_after_copy()));
+}
+
+/**
+ * Runtime-chunk-id variant of topk_xl_add_lsb_indices: the 5-bit id in index
+ * bits [15:11] is a runtime argument, so one instantiation stamps every chunk
+ * of a fused end-to-end row (chunk_id in 0..31). Same init.
+ */
+template <std::uint32_t K>
+ALWI void topk_xl_add_lsb_indices_rt(std::uint32_t idst, std::uint32_t chunk_id) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_rt<K>(idst, chunk_id)));
 }
 
 /**
@@ -226,9 +298,7 @@ ALWI void topk_xl_add_lsb_indices(uint32_t idst) {
  * The kernel static_asserts DstSync::SyncFull as MATH and PACK would contend
  * on LRegs otherwise.
  */
-ALWI void topk_xl_remove_msb_values_init() {
-    PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init<false>()));
-}
+ALWI void topk_xl_remove_msb_values_init() { PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init())); }
 
 /**
  * Removes MSB values from the topk_xl data, leaving only the indices.
@@ -246,9 +316,9 @@ ALWI void topk_xl_remove_msb_values_init() {
  * 2048                                    | True     | | idst       | The index of the tile in DST register buffer to
  * perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-template <uint32_t K>
-ALWI void topk_xl_remove_msb_values(uint32_t idst) {
-    PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values<K, false, DST_SYNC_MODE>(idst)));
+template <std::uint32_t K>
+ALWI void topk_xl_remove_msb_values(std::uint32_t idst) {
+    PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values<K, DST_SYNC_MODE>(idst)));
 }
 
 /**
@@ -266,8 +336,8 @@ ALWI void topk_xl_remove_msb_values(uint32_t idst) {
  * | group_id_bit_shift   | Bit position at which group_id is placed in the indices                    | uint32_t | 0 ..
  * 31                                               | True     |
  */
-ALWI void topk_xl_separate_indices_init(uint32_t group_id_bit_shift) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_init<false>(group_id_bit_shift)));
+ALWI void topk_xl_separate_indices_init(std::uint32_t group_id_bit_shift) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_init(group_id_bit_shift)));
 }
 
 // TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split compute API.
@@ -279,26 +349,25 @@ ALWI void topk_xl_separate_indices_init(uint32_t group_id_bit_shift) {
  * indices. The chunk_base is ORed into each decoded within-chunk position and
  * must be aligned to K.
  */
-ALWI void topk_xl_separate_indices_row_major_init(uint32_t chunk_base) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init<false>(chunk_base)));
+ALWI void topk_xl_separate_indices_row_major_init(std::uint32_t chunk_base) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init(chunk_base)));
 }
 
-template <uint32_t chunk_base_upper16>
-ALWI void topk_xl_separate_indices_row_major_init_upper(uint32_t chunk_base_low16) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_upper<false, chunk_base_upper16>(
+template <std::uint32_t chunk_base_upper16>
+ALWI void topk_xl_separate_indices_row_major_init_upper(std::uint32_t chunk_base_low16) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_upper<chunk_base_upper16>(
         chunk_base_low16)));
 }
 
-template <uint32_t chunk_base_upper16, uint32_t chunk_base_lower16>
+template <std::uint32_t chunk_base_upper16, std::uint32_t chunk_base_lower16>
 ALWI void topk_xl_separate_indices_row_major_init_static() {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_init_static<
-          false,
           chunk_base_upper16,
           chunk_base_lower16>()));
 }
 
 ALWI void topk_xl_separate_indices_row_major_reinit() {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_reinit<false>()));
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_reinit()));
 }
 
 /**
@@ -319,9 +388,9 @@ ALWI void topk_xl_separate_indices_row_major_reinit() {
  * | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size
  * of the DST register buffer | True     |
  */
-template <uint32_t K, uint32_t group_id>
-ALWI void topk_xl_separate_indices(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices<K, false, group_id>(idst)));
+template <std::uint32_t K, std::uint32_t group_id>
+ALWI void topk_xl_separate_indices(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices<K, group_id>(idst)));
 }
 
 /**
@@ -330,14 +399,41 @@ ALWI void topk_xl_separate_indices(uint32_t idst) {
  * within-chunk position, then ORed with the chunk base configured by
  * topk_xl_separate_indices_row_major_init.
  */
-template <uint32_t K>
-ALWI void topk_xl_separate_indices_row_major(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major<K, false>(idst)));
+template <std::uint32_t K>
+ALWI void topk_xl_separate_indices_row_major(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major<K>(idst)));
 }
 
-template <uint32_t K>
+// Loads the chunk-field mask constants for the global splits below; call
+// once before topk_xl_separate_indices_row_major_global / _global_base.
+ALWI void topk_xl_separate_indices_row_major_global_init() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_init()));
+}
+
+/**
+ * Fused end-to-end split: runs ONCE per row on the final fused survivor.
+ * Each u16 payload carries [chunk_id 15:11 | within-chunk 10:0]; the global
+ * index chunk_id * K + row-major(within-chunk) is recovered from the stamp
+ * itself — no chunk-base bookkeeping. Requires
+ * topk_xl_separate_indices_row_major_global_init. Sound only for rows of
+ * <= 32 chunks (the FUSED_E2E factory gate).
+ */
+template <std::uint32_t K>
+ALWI void topk_xl_separate_indices_row_major_global(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global<K>(idst)));
+}
+
+// Segmented fusion: split one fused segment survivor in place, adding
+// seg_base (= segment_index * 32 * K, power-of-two aligned) to every decoded
+// index. Same init as the plain global split.
+template <std::uint32_t K>
+ALWI void topk_xl_separate_indices_row_major_global_base(std::uint32_t idst, std::uint32_t seg_base) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_global_base<K>(idst, seg_base)));
+}
+
+template <std::uint32_t K>
 ALWI void topk_xl_separate_indices_row_major_advance_chunk_base() {
-    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_advance_chunk_base<K, false>()));
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_advance_chunk_base<K>()));
 }
 // END TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split compute API.
 

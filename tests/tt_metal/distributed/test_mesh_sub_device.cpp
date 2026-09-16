@@ -43,6 +43,14 @@ namespace {
 namespace tt::tt_metal {
 using MeshSubDeviceTestSuite = GenericMeshDeviceFixture;
 
+// Two hardware CQs plus a trace region, so a trace replay can be left running on one CQ while the
+// host keeps issuing on the other.
+class MeshSubDeviceMultiCQTraceTestSuite : public MeshDeviceFixtureBase {
+protected:
+    MeshSubDeviceMultiCQTraceTestSuite() :
+        MeshDeviceFixtureBase(Config{.num_cqs = 2, .trace_region_size = (16 << 20)}) {}
+};
+
 TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
@@ -100,7 +108,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto datacopy_core_phys = mesh_device_->worker_core_from_logical_core(datacopy_coord);
 
     auto all_cores = syncer_core.merge(datacopy_core);
-    auto global_sem = CreateGlobalSemaphore(mesh_device_.get(), all_cores, 0);
+    auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
     Program sync_and_incr_program = CreateProgram();
     auto sync_kernel = CreateKernel(
@@ -214,6 +222,59 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
+}
+
+// Switching sub device managers resets the worker GO mailboxes and remaps each core's go message index,
+// state that is shared by every hardware CQ. Both managers below cover the same cores in the opposite
+// order, so the switch flips the go message index of every core the trace runs on. A switch that lands
+// while the trace is still replaying on the other CQ leaves those cores polling a mailbox slot the trace
+// never signals: the workers stop launching and the replay never completes. Regressions here hang rather
+// than fail.
+TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplaysTrace) {
+    constexpr uint32_t k_local_l1_size = 3200;
+    // Enough device side work that the host reaches the manager switch below mid replay.
+    constexpr uint32_t k_delay_iters = 4000000;
+    constexpr uint32_t k_workloads_in_trace = 8;
+
+    CoreRangeSet cores_0(CoreRange({0, 0}, {1, 1}));
+    CoreRangeSet cores_1(CoreRange({2, 2}, {3, 3}));
+    auto sub_device_manager_0 = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{cores_0}), SubDevice(std::array{cores_1})}, k_local_l1_size);
+    auto sub_device_manager_1 = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{cores_1}), SubDevice(std::array{cores_0})}, k_local_l1_size);
+    mesh_device_->load_sub_device_manager(sub_device_manager_0);
+
+    Program delay_program = CreateProgram();
+    auto delay_kernel = CreateKernel(
+        delay_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",
+        cores_0,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    std::array<uint32_t, 1> delay_rt_args = {k_delay_iters};
+    SetRuntimeArgs(delay_program, delay_kernel, cores_0, delay_rt_args);
+
+    MeshCoordinateRange devices(mesh_device_->shape());
+    auto delay_mesh_workload = MeshWorkload();
+    delay_mesh_workload.add_program(devices, std::move(delay_program));
+
+    // Compile the workload before capturing it.
+    auto& trace_cq = mesh_device_->mesh_command_queue(1);
+    EnqueueMeshWorkload(trace_cq, delay_mesh_workload, true);
+
+    auto trace_id = BeginTraceCapture(mesh_device_.get(), 1);
+    for (uint32_t i = 0; i < k_workloads_in_trace; i++) {
+        EnqueueMeshWorkload(trace_cq, delay_mesh_workload, false);
+    }
+    mesh_device_->end_mesh_trace(1, trace_id);
+
+    mesh_device_->replay_mesh_trace(1, trace_id, false);
+    mesh_device_->load_sub_device_manager(sub_device_manager_1);
+    Finish(mesh_device_->mesh_command_queue(0));
+    Finish(trace_cq);
+
+    // The trace belongs to the manager it was captured under, so switch back to release it.
+    mesh_device_->load_sub_device_manager(sub_device_manager_0);
+    mesh_device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {

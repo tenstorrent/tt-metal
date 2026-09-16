@@ -45,7 +45,20 @@ extern thread_local uint8_t my_logical_y_;
 
 namespace tt::tt_metal::emule_fiber {
 
-namespace {
+// Empty single-rank, so the quiescence branch below keeps its exact pre-multi-rank behaviour.
+// Installed once at fabric bring-up; never called concurrently with installation.
+static std::function<bool()> g_peer_progress_probe;
+
+void set_peer_progress_probe(std::function<bool()> probe) { g_peer_progress_probe = std::move(probe); }
+
+static inline bool peer_progress_probe() { return g_peer_progress_probe && g_peer_progress_probe(); }
+
+// Read-only; safe from the watchdog thread, unlike the probe above (which publishes quiescence).
+static std::function<bool()> g_peer_liveness_probe;
+
+void set_peer_liveness_probe(std::function<bool()> probe) { g_peer_liveness_probe = std::move(probe); }
+
+static inline bool peer_liveness_probe() { return g_peer_liveness_probe && g_peer_liveness_probe(); }
 
 enum class FiberState : uint8_t { Ready, Running, Parked, QuiescenceDeferred, Done };
 
@@ -83,6 +96,8 @@ struct Fiber {
         }
     }
 };
+
+namespace {
 
 // Per-worker state. Fibers are pinned (Fiber::home), so a fiber always runs on the
 // same worker — these are read/written only by that worker.
@@ -137,10 +152,11 @@ struct FiberSchedulerImpl {
     bool abort_flag_ = false;
     bool persistent_ = false;  // run_persistent/pump in flight: a host-fed socket wait quiescing is
                                // a resumable HostWait, not a tier-1 deadlock. See run_persistent().
+    bool peer_wait_ = false;   // set by inner_loop when it broke out for a peer RANK's delivery
     bool host_wait_ = false;   // set by inner_loop when it broke out for host I/O (vs Done/deadlock)
-    unsigned socket_poll_waiters_ = 0;  // fibers TAGGED spin-polling (under mu_). Sticky gate; freshness decides
+    unsigned socket_poll_waiters_ = 0;   // fibers TAGGED spin-polling (under mu_). Sticky gate; freshness decides
     uint64_t poll_wait_staleness_ = 64;  // resumes a tag stays credible unrefreshed; per-fiber, so peers can't age it
-    unsigned cb_poll_waiters_ = 0;  // as socket_poll_waiters_, but for CB probes (peer-fed)
+    unsigned cb_poll_waiters_ = 0;       // as socket_poll_waiters_, but for CB probes (peer-fed)
     std::exception_ptr first_eptr_;
 
     std::atomic<uint64_t> progress_{0};      // fiber completions + published pages (tier 2)
@@ -170,7 +186,7 @@ struct FiberSchedulerImpl {
     // See tt-emule docs/socket-emulation.md.
     uint64_t host_wait_no_progress_pumps_ = 0;
 
-    // Tier-2 watchdog. A HostWait return leaves it RUNNING (the gap's only guard); launch/teardown reaps.
+    // Tier-2 watchdog. A suspended return leaves it RUNNING (the gap's only guard); launch/teardown reaps.
     std::thread wd_;
     // Parked between pumps: HOST latency, so the watchdog swaps bounds and re-clocks at the park.
     std::atomic<bool> host_wait_parked_{false};
@@ -228,6 +244,26 @@ struct FiberSchedulerImpl {
         return false;
     }
     bool any_waiting_on_host() const { return any_fresh_socket_poll_waiter() || any_parked_is_socket_wait(); }
+    // The peer-fed twin of any_fresh_socket_poll_waiter: a d2d socket poll whose publisher is another
+    // RANK. Such a fiber is Ready and spinning, never parked, so quiescence is never reached and the
+    // tier-2 watchdog would report a livelock for a run that is merely waiting on another process.
+    bool any_fresh_peer_socket_poll_waiter() const {
+        if (socket_poll_waiters_ == 0) {
+            return false;
+        }
+        for (const auto& up : all_) {
+            const Fiber* f = up.get();
+            if (f->socket_poll_waiting.load(std::memory_order_relaxed) &&
+                !f->poll_is_host_fed.load(std::memory_order_relaxed) && f->state != FiberState::Done &&
+                poll_tag_is_fresh(
+                    f->own_resumes.load(std::memory_order_relaxed),
+                    f->poll_wait_stamp.load(std::memory_order_relaxed),
+                    poll_wait_staleness_)) {
+                return true;
+            }
+        }
+        return false;
+    }
     // Waker is a peer, not the host: a raw-NOC d2d publish runs no __emule_fiber_wake, hence the release.
     bool any_parked_non_socket() const {
         for (const auto& kv : parked_) {
@@ -322,6 +358,18 @@ static void fiber_trampoline() {
     impl->retire_poll_tags(f);               // a fiber that exits mid-poll must not leak its tally
     f->state = FiberState::Done;
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (never returns here)
+    // Falling off a makecontext entry whose uc_link is null makes POSIX exit the whole
+    // PROCESS with status 0 — a green run that silently ran nothing. Never let that be
+    // the failure mode: if the swap back ever fails, say so and abort.
+    fprintf(
+        stderr,
+        "[EMULE_FIBER] FATAL: swapcontext back to the worker loop failed (errno=%d) on fiber "
+        "core (%u,%u) processor %u — aborting instead of exiting silently\n",
+        errno,
+        f->id.logical_x,
+        f->id.logical_y,
+        f->id.proc_id);
+    std::abort();
 }
 
 void FiberSchedulerImpl::install_fiber(Fiber* f) {
@@ -398,10 +446,26 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                 }
                 last_parked_sig_ = sig;
                 last_parked_sig_valid_ = true;
-                // Yield-spin HostWait trigger: all waits host-fed, or peer-parked but N releases moved nothing.
+                // Yield-spin HostWait trigger: a host-fed root may have downstream peer work, but
+                // quiescence-deferred fibers are runnable internal work and must get at least one
+                // release first. Otherwise a next-page H2D poll can suspend the run while the
+                // current page's deferred producer is still waiting to publish to a d2d consumer.
+                const bool internal_work_needs_repoll =
+                    !quiescence_deferred_.empty() || any_parked_non_socket();
                 if (persistent_ && any_waiting_on_host() &&
-                    (!any_parked_non_socket() || barren_releases_ >= barren_release_limit)) {
+                    (!internal_work_needs_repoll || barren_releases_ >= barren_release_limit)) {
                     host_wait_ = true;
+                    abort_flag_ = true;
+                    cv_.notify_all();
+                    break;
+                }
+                // A peer-fed spinner cannot reach quiescence. A false probe is not terminal here: a
+                // shared fixed-point snapshot says every rank is parked at this scheduling boundary,
+                // not that another local release cannot let a sender publish. Keep releasing work until
+                // a peer-capable snapshot is observed or the normal watchdog proves no progress.
+                if (persistent_ && !any_waiting_on_host() && any_fresh_peer_socket_poll_waiter() &&
+                    peer_progress_probe()) {
+                    peer_wait_ = true;
                     abort_flag_ = true;
                     cv_.notify_all();
                     break;
@@ -457,6 +521,16 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     // With no socket wait parked, it is a real deadlock (diagnostics unchanged).
                     if (persistent_ && any_waiting_on_host()) {
                         host_wait_ = true;
+                        abort_flag_ = true;
+                        --idle_;
+                        break;
+                    }
+                    // Multi-rank: locally stuck is not globally stuck while a peer can still write
+                    // into our L1. Yield on the HostWait contract instead of tearing the run down;
+                    // the caller re-pumps when a delivery lands. A genuine global deadlock still
+                    // falls through here, because the probe goes false once every rank is parked.
+                    if (peer_progress_probe()) {
+                        peer_wait_ = true;
                         abort_flag_ = true;
                         --idle_;
                         break;
@@ -943,7 +1017,10 @@ void FiberSchedulerImpl::watchdog() {
             continue;
         }
         // Fast livelock trip: many resumptions, zero progress. Never while parked (counters are frozen).
-        bool livelock = !parked && (r - last_resump) > window;
+        // A rank resuming a peer-fed spin-poll racks up resumptions with no local progress, which is
+        // indistinguishable from a livelock by counting alone. It is not one while a peer can still
+        // act — ranks reach a wave at different times. Read-only probe: the watchdog runs off-thread.
+        bool livelock = !parked && (r - last_resump) > window && !peer_liveness_probe();
         bool wall = (std::chrono::steady_clock::now() - last_advance) > (parked ? host_backstop : backstop);
         if (livelock || wall) {
             std::fprintf(
@@ -998,6 +1075,7 @@ void FiberScheduler::launch_and_wait(bool initial) {
         p_->deadlock_ = false;
         p_->abort_flag_ = false;
         p_->host_wait_ = false;
+        p_->peer_wait_ = false;
         if (initial && !resuming) {
             p_->active_ = static_cast<unsigned>(p_->all_.size());
             if (p_->active_ == 0) {
@@ -1096,17 +1174,20 @@ void FiberScheduler::launch_and_wait(bool initial) {
         p_->done_cv_.wait(lk, [&] { return p_->workers_done_ == W; });
     }
 
-    bool host_wait = false;
+    bool suspended = false;
     {  // A captured kernel fault outranks a host wait: HostWait would defer the rethrow indefinitely.
         std::lock_guard<std::mutex> g(p_->mu_);
         if (p_->first_eptr_ && p_->host_wait_) {
             p_->host_wait_ = false;
         }
-        host_wait = p_->host_wait_;
+        if (p_->first_eptr_ && p_->peer_wait_) {
+            p_->peer_wait_ = false;
+        }
+        suspended = p_->host_wait_ || p_->peer_wait_;
     }
-    // A HostWait return leaves the watchdog RUNNING (the gap's only guard); anything else ends the run.
-    p_->host_wait_parked_.store(host_wait, std::memory_order_release);
-    if (!host_wait) {
+    // Either suspension leaves the watchdog RUNNING; anything else ends the run.
+    p_->host_wait_parked_.store(suspended, std::memory_order_release);
+    if (!suspended) {
         p_->stop_watchdog();
     }
     if (std::getenv("TT_EMULE_FIBER_LOG_N")) {
@@ -1154,6 +1235,7 @@ void FiberScheduler::teardown_and_throw() {
         p_->all_.clear();   // frees Fiber stacks via ~Fiber
         p_->launched_watermark_ = 0;  // registry is empty again: the next launch is a fresh one
         p_->host_wait_ = false;       // per-registry, and the registry is gone
+        p_->peer_wait_ = false;
     }
 
     // A real kernel exception is the root cause; report it before any deadlock symptom.
@@ -1179,6 +1261,11 @@ static uint64_t host_wait_no_progress_limit() {
 
 uint64_t FiberScheduler::host_wait_stall_limit() { return host_wait_no_progress_limit(); }
 
+bool FiberScheduler::has_peer_fed_waiter() const {
+    std::lock_guard<std::mutex> g(p_->mu_);
+    return p_->any_fresh_peer_socket_poll_waiter();
+}
+
 RunOutcome FiberScheduler::run_persistent() {
     p_->persistent_ = true;
     // Reset only for a FRESH sequence: re-arming per dispatch means a wedged run never escalates.
@@ -1194,6 +1281,10 @@ RunOutcome FiberScheduler::run_persistent() {
 RunOutcome FiberScheduler::finish_or_host_wait() {
     if (p_->host_wait_) {
         return RunOutcome::HostWait;   // fibers parked awaiting host socket I/O — ALIVE, no teardown
+    }
+    if (p_->peer_wait_) {
+        p_->peer_wait_ = false;       // consumed; the next quiescence re-decides
+        return RunOutcome::PeerWait;  // same ALIVE contract, resolved by a peer rank rather than the host
     }
     teardown_and_throw();
     return RunOutcome::Completed;

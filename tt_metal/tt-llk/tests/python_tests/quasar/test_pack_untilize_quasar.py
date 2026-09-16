@@ -15,15 +15,16 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -31,7 +32,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -55,8 +55,10 @@ def pack_untilize_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def pack_untilize_perf_input_dimensions():
-    return [32, 32]
+def pack_untilize_perf_input_dimensions(dest_acc, dest_sync, tile_shape):
+    return generate_perf_input_dimensions(
+        dest_acc, dest_sync, tile_shape, use_largest_fallback=True
+    )
 
 
 def generate_pack_untilize_combinations(
@@ -94,7 +96,6 @@ def generate_pack_untilize_combinations(
         return (DestAccumulation.No, DestAccumulation.Yes)
 
     dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
-    perf_dimensions = pack_untilize_perf_input_dimensions()
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -108,7 +109,11 @@ def generate_pack_untilize_combinations(
 
         for dest_acc in get_dest_acc_modes(in_fmt):
             for dest_sync in dest_sync_modes:
-                tile_sizes = [(32, 32)] if is_perf else PACK_UNTILIZE_TILE_SIZES
+                tile_sizes = (
+                    select_perf_tile_sizes(PACK_UNTILIZE_TILE_SIZES)
+                    if is_perf
+                    else PACK_UNTILIZE_TILE_SIZES
+                )
                 for tile_dims in tile_sizes:
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                         continue
@@ -120,7 +125,9 @@ def generate_pack_untilize_combinations(
                         continue
                     tile_shape = construct_tile_shape(tile_dims)
                     dimensions_list = (
-                        [perf_dimensions]
+                        pack_untilize_perf_input_dimensions(
+                            dest_acc, dest_sync, tile_shape
+                        )
                         if is_perf
                         else generate_unary_input_dimensions(
                             dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
@@ -132,7 +139,7 @@ def generate_pack_untilize_combinations(
                                 fmt,
                                 dest_acc,
                                 dest_sync,
-                                runtime(dimensions),
+                                dimensions,
                                 runtime(tile_dims),
                             )
                         )
@@ -250,18 +257,14 @@ def test_pack_untilize_quasar(
         ),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
-
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
 
     res_from_L1 = configuration.run().result
 

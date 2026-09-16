@@ -31,7 +31,10 @@ on:
           - mixtral-8x7b
           - gpt-oss-20b
           - sdxl
+          - qwenimage
           - vit
+          - motif
+          - bge_m3
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -116,6 +119,7 @@ jobs:
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -129,6 +133,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
     # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
     permissions:

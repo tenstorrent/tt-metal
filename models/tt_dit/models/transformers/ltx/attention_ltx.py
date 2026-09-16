@@ -456,7 +456,7 @@ class LTXAttention(Module):
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
             # Known shapes route the addcmul to_out to the strided AG-matmul (out = a + scalar*matmul*b)
-            fabric_cfg = get_fabric_agmm_config(K, N_out, 1, full_grid)
+            fabric_cfg = get_fabric_agmm_config(M, K, N_out, 1, full_grid)
             if fabric_cfg is not None:
                 tp_axis = parallel_config.tensor_parallel.mesh_axis
                 dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)

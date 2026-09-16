@@ -15,7 +15,7 @@ from pathlib import Path
 from resolve_host_ring_order import (
     _build_adjacency_from_cabling,
     _build_adjacency_from_fsd,
-    _safe_read_text,
+    read_descriptor_text,
     _walk_ring,
     main,
     parse_textproto,
@@ -258,7 +258,7 @@ class TestCLI(unittest.TestCase):
 
     def test_safe_read_rejects_path_outside_allowed_roots(self):
         with self.assertRaises(ValueError) as ctx:
-            _safe_read_text("/etc/passwd")
+            read_descriptor_text("/etc/passwd")
         self.assertIn("outside allowed descriptor roots", str(ctx.exception))
 
     def test_safe_read_allows_temp_descriptor(self):
@@ -266,7 +266,7 @@ class TestCLI(unittest.TestCase):
             f.write('name: "ok"')
             path = f.name
         try:
-            self.assertEqual(_safe_read_text(path), 'name: "ok"')
+            self.assertEqual(read_descriptor_text(path), 'name: "ok"')
         finally:
             os.unlink(path)
 

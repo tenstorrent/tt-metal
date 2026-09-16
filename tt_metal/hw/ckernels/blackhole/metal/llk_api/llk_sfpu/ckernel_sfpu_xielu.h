@@ -82,8 +82,21 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Add k_int to get the new exponent
     sfpi::vInt new_exp = p_exp + k_int;
 
-    // Set the new exponent
-    result = sfpi::setexp(p, new_exp);
+    // Set the new exponent.
+    //
+    // Guard against exponent underflow.  The clamp on z above stops the Cody-Waite
+    // range reduction short for very negative inputs, so p keeps a small exponent
+    // while k_int stays pinned near the clamp, which leaves new_exp <= 0.  setexp
+    // writes only the low bits of new_exp into the exponent field, so a negative
+    // new_exp wraps to a large positive exponent and this helper returns a huge
+    // value or Inf where the true result underflows to zero.  result is already
+    // initialised to 0.0f, which is the correct underflow answer.
+    //
+    // This mirrors the guard in _sfpu_exp_fp32_accurate_ (ckernel_sfpu_exp.h).
+    // Only the underflow half is needed here: this helper is called exclusively
+    // with negative inputs, so exp(val) < 1 and the exponent cannot overflow.
+    v_if(new_exp >= 1) { result = sfpi::setexp(p, new_exp); }
+    v_endif;
 
     return result;
 }
@@ -115,7 +128,7 @@ sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloa
  * if x < 0 : alpha_n * expm1(minimum(x, eps)) - alpha_n * x + beta * x
  *        --> alpha_n * (expm1(minimum(x, eps)) - x) + beta * x
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
     sfpi::vFloat alpha_p = Converter::as_float(param0);
     sfpi::vFloat alpha_n = Converter::as_float(param1);

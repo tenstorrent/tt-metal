@@ -1,10 +1,7 @@
-# Datacopy followed by Elwmul that reuses dest as src_b.
+# Datacopy followed by Elwmul that reuses dest as in1.
 
 operands:
   - name: "input_A"
-    dims: [256, 256]
-    format: "Float16_b"
-  - name: "input_B"
     dims: [256, 256]
     format: "Float16_b"
   - name: "output"
@@ -17,18 +14,15 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCB"
         math_fidelity: "LoFi"
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
         operation: "Elwmul"
         unpacker: "UnpackerA"
         reuse_dest: "DEST_TO_SRCA"

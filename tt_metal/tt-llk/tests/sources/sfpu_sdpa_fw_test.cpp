@@ -99,11 +99,13 @@ inline void sdpa_fw_op(const std::uint32_t dst_index)
 {
     if constexpr (SDPA_FW_OP == OP_FW_RECIP)
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_recip_first_column, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::calculate_recip_first_column<is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
     else
     {
-        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_exponential_first_column<EXP_SCALE_BF16>, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::calculate_exponential_first_column<EXP_SCALE_BF16, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
 }
 

@@ -25,6 +25,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/program/program_impl.hpp"
 
 #include <umd/device/types/arch.hpp>
 
@@ -521,6 +522,11 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
     MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
     auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto context_id = mesh_device->impl().get_context_id();
+
+    EXPECT_EQ(
+        MetalContext::instance(context_id).get_dispatch_core_config().get_dispatch_core_axis(), DispatchCoreAxis::COL);
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
     experimental::ProgramSpec spec = MakeMinimalNoOpProgramSpec();
     distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
@@ -537,8 +543,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
     auto mesh_b = env_b.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
 
     Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
-    IDevice* foreign_device = mesh_b->get_devices().at(0);
-    EXPECT_THROW(detail::CompileProgram(foreign_device, program), std::runtime_error);
+    EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {

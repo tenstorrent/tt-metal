@@ -20,6 +20,7 @@ jobs:
   build:
     name: Build release-models image
     needs: check-harbor
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       packages: write

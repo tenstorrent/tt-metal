@@ -20,6 +20,16 @@ void MoeGroupDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "moe_group: {} must be on device", name);
             TT_FATAL(t.buffer() != nullptr, "moe_group: {} buffer is null", name);
             TT_FATAL(
+                t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "moe_group: {} must be in DRAM, got {}",
+                name,
+                enchantum::to_string(t.buffer()->buffer_type()));
+            TT_FATAL(
+                t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+                "moe_group: {} must be INTERLEAVED, got {}",
+                name,
+                enchantum::to_string(t.memory_config().memory_layout()));
+            TT_FATAL(
                 t.layout() == layout,
                 "moe_group: {} must be {} layout, got {}",
                 name,

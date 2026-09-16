@@ -52,8 +52,8 @@ operations:
   # Step 1: QKT = Q[32,64] × KT[64,64] → [32,64]
   - math:
       - type: "Fpu"
-        src_a: "Q"
-        src_b: "KT"
+        in0: "Q"
+        in1: "KT"
         operation: "MatmulNoMop"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
@@ -65,8 +65,8 @@ operations:
   # Step 2: row_max = reduce_block_max_row(qkt)
   - math:
       - type: "Fpu"
-        src_a: "qkt"
-        src_b: "identity_scale"
+        in0: "qkt"
+        in1: "identity_scale"
         operation: "ReduceBlockMaxRuntime"
         unpacker: "ReduceBlockMaxRuntimeUnpacker"
         math_fidelity: "HiFi2"
@@ -80,8 +80,8 @@ operations:
   # Models the real kernel's inline row sum during sub+exp
   - math:
       - type: "Fpu"
-        src_a: "qkt"
-        src_b: "row_max"
+        in0: "qkt"
+        in1: "row_max"
         operation: "SubBcastColCustom"
         unpacker: "SubBcastColCustomUnpacker"
         broadcast_type: "COL"
@@ -102,8 +102,8 @@ operations:
   # Step 4: attn_v = sub_exp_out[32,64] × V[64,64] → [32,64]
   - math:
       - type: "Fpu"
-        src_a: "sub_exp_out"
-        src_b: "V"
+        in0: "sub_exp_out"
+        in1: "V"
         operation: "MatmulNoMop"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
@@ -119,8 +119,7 @@ operations:
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-        src_a: "sub_exp_sum"
-        src_b: "identity_scale"
+        in0: "sub_exp_sum"
       - type: "UnarySfpu"
         operation: "Reciprocal"
         iterations: 8
@@ -132,8 +131,8 @@ operations:
   # Step 6: output = attn_v * bcast_col(sum_recip) — normalize
   - math:
       - type: "Fpu"
-        src_a: "attn_v"
-        src_b: "sum_recip"
+        in0: "attn_v"
+        in1: "sum_recip"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"

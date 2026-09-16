@@ -76,6 +76,18 @@ void kernel_main() {
         }
 
         // V
+#ifdef KV_TIED
+        // K and V come from the same columns (one projection, tied), so step back over the K tiles
+        // just read instead of walking past them. The V loop below advances by the same count,
+        // leaving the running id exactly one block width ahead, which is what the next block
+        // expects. Rewind whichever cursor the V loop actually reads from: rewinding the other one
+        // ties nothing and leaves it short by kv_num_tiles every block.
+#ifdef READ_FROM_INPUT_TENSOR_KV
+        in1_tensor_tile_id -= kv_num_tiles;
+#else
+        in0_tensor_tile_id -= kv_num_tiles;
+#endif
+#endif
         for (uint32_t i = 0; i < kv_num_tiles; i++) {
             cb_qv.reserve_back(onetile);
             uint32_t l1_write_addr = cb_qv.get_write_ptr();

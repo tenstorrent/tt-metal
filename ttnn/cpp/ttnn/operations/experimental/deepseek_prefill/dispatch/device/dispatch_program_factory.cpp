@@ -6,6 +6,7 @@
 #include "kernels/dataflow/dispatch_plan.hpp"  // PlanHeader / PlanEntry layout (host sizes the plan CB from these)
 #include <algorithm>
 #include <array>
+#include <unordered_set>
 #include <utility>
 #include <limits>
 #include <tt-metalium/core_coord.hpp>
@@ -394,12 +395,75 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         /*buffering_factor=*/(read_batch_size * operation_attributes.num_experts_per_tok) + 1,
         /*cb_id=*/tt::CBIndex::c_13,
         "worker_metadata_scratch");
-    // c_15: route_info scratch (16B = l1_alignment). Worker writer builds the 4-u32
-    // route_info entry [route, distance, page_idx, dst_chip] here, then NOC-writes the whole
-    // block as a single noc_async_write to the sender's c_4 slot (replaces 4× inline_dw).
-    // dst_chip is the linearized dest device index used by the sender's 2D fabric route.
+    // Per-page sparse-multicast grouping (1D Ring, any top-k): widen the sender ring's route_info slot
+    // to carry a grouped record — [dir, num_dests, token_idx, page[4], dist[4], k[4]] = 15 u32 — so a
+    // token's co-directional destinations become sparse-multicast payload writes, each covering up to 4
+    // destinations (writer_worker spills wider groups into extra slots). The payload/metadata rings are
+    // unchanged; the sender builds each destination's metadata from this record (fields kept unpacked so
+    // the sender needs no unpack helpers). Only the three documented routing fields ([src chip, token
+    // idx, top-k slot]) are carried, because that is the whole of the metadata contract below — the
+    // routed expert and routing weight are NOT metadata fields and are therefore not grouped. Every
+    // other config keeps the per-expert path.
+    // Sparse multicast (hop-bitmask along one forwarding direction) requires FABRIC_1D: the dispatch
+    // routes along a single cluster axis as a 1D line, and FABRIC_1D exposes the per-direction array
+    // connection the grouped writer indexes (fabric_connections[direction]). Enabled for ALL FABRIC_1D
+    // configs and topologies (any mesh shape) with fabric present. FABRIC_2D uses a portable
+    // RoutingPlaneConnectionManager (not array-indexable) and is excluded; this is_2d_fabric gate mirrors
+    // the kernel's FABRIC_2D #ifdef (same INVARIANT as the is_2d_fabric derivation further below).
+    const bool is_1d_fabric = !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool sparse_has_fabric = (operation_attributes.num_links > 0);
+    // fp8_scaled_input is supported: it extends metadata to 3 routing fields + one word per
+    // per-128-block scale, and because a group is one token fanned out to several chips, that scale tail
+    // is a per-token constant. The grouped producer stages the page (tail included) once per slot and
+    // the sender overwrites only the three routing fields per destination — see writer_worker_dispatch.
+    // Hop-mask bound. The sender addresses each writing chip by bit (distance - 1) of a 16-bit hop
+    // mask, and 16 is a hard fabric limit: the 1D low-latency routing word packs 2 bits per hop into a
+    // single u32 (SparseMulticastRoutingCommandHeader::HopMaskType is uint16_t, and
+    // encode_1d_sparse_multicast asserts that width). The distance is discovered at runtime inside the
+    // kernel from the routing plan, so nothing there can reject an over-long hop before it is used —
+    // bit (distance - 1) would simply shift out of the mask and that destination would be dropped
+    // silently. So bound the mesh here, where the shape is known: exotic 1D shapes do exceed it (a
+    // 32x1 line on a Galaxy reaches 31 hops). The kernel's distance is manhattan_distance over both
+    // mesh dims, so bound the sum of the two; ring/torus wrap-around halves a dim's reach.
+    constexpr uint32_t sparse_mcast_max_hops = 16;
+    const bool topology_wraps =
+        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus);
+    const auto max_hops_in_dim = [topology_wraps](uint32_t dim) -> uint32_t {
+        return topology_wraps ? dim / 2 : (dim > 0 ? dim - 1 : 0);
+    };
+    const uint32_t max_dispatch_hops = max_hops_in_dim(mesh_view.num_rows()) + max_hops_in_dim(mesh_view.num_cols());
+    const bool sparse_hops_fit = max_dispatch_hops <= sparse_mcast_max_hops;
+    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric && sparse_hops_fit;
+    // Report sparse-mcast selection for BOTH layouts (this factory is unified via is_row_major). When
+    // disabled, print each gate so the reason is obvious (2D fabric / no fabric / mesh too long).
+    log_warning(
+        tt::LogOp,
+        "[dispatch] sparse_mcast {} for {} input (topology={}, mesh={}x{}, num_links={}) "
+        "[gates: fabric_1d={}, has_fabric={}, hops_fit={} (max_hops={} <= {})]",
+        enable_sparse_mcast ? "ENABLED" : "DISABLED",
+        is_row_major ? "row-major" : "tile",
+        (int)topology,
+        mesh_view.num_rows(),
+        mesh_view.num_cols(),
+        operation_attributes.num_links,
+        is_1d_fabric,
+        sparse_has_fabric,
+        sparse_hops_fit,
+        max_dispatch_hops,
+        sparse_mcast_max_hops);
+    // Single source of truth for the route_info ring slot stride: sized here from the record layout
+    // and handed to both the producer (worker writer arg 10) and the consumer (sender writer arg
+    // writer_extra_args_base + 2) so neither kernel can re-derive it and drift.
+    const uint32_t route_info_slot_stride_bytes =
+        enable_sparse_mcast ? tt::round_up(static_cast<uint32_t>(sizeof(GroupedRouteInfo)), l1_alignment)
+                            : l1_alignment;
+
+    // c_15: route_info scratch. Worker writer builds the route_info entry here, then NOC-writes the
+    // whole block as a single noc_async_write to the sender's c_4 slot (replaces 4× inline_dw). Per-
+    // expert path: 4 u32 [route, distance, page_idx, dst_chip]. Sparse-mcast path: the widened grouped
+    // record. dst_chip is the linearized dest device index used by the sender's 2D fabric route.
     {
-        uint32_t route_info_scratch_size = l1_alignment;
+        uint32_t route_info_scratch_size = route_info_slot_stride_bytes;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = route_info_scratch_size,
             .core_ranges = worker_core_grid,
@@ -441,7 +505,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // and CB creation asserts — that is the intended "breaks if too many" behaviour.
     std::vector<std::array<uint32_t, 3>> writer_cb_ids(num_workers);  // {route, payload, metadata}
     {
-        uint32_t route_info_page_size = l1_alignment;
+        uint32_t route_info_page_size = route_info_slot_stride_bytes;
         uint32_t next_free_cb = static_cast<uint32_t>(tt::CBIndex::c_19);
         for (uint32_t s = 0; s < num_workers; s++) {
             std::array<uint32_t, 3> ids;
@@ -491,14 +555,18 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
-    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
-    // multicast handshake) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
+    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
+    // first-hop direction) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
     // per-direction array connection. INVARIANT: this is_2d_fabric gate (derived from GetFabricConfig())
     // must agree with the kernel's FABRIC_2D #ifdef, which append_routing_plane_connection_manager_rt_args
     // injects based on the control plane's is_2D_routing_enabled(). If the two ever diverge, the host
     // pushes 2D-shaped args while the kernel compiles the 1D #else branch (or vice-versa) and arg
     // parsing corrupts.
     const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    TT_FATAL(
+        !is_2d_fabric || (operation_attributes.axis.has_value() && operation_attributes.axis.value() < 2),
+        "FABRIC_2D dispatch requires cluster_axis 0 or 1; got {}",
+        operation_attributes.axis.value_or(2));
 
     // c_8: packet header CB for fabric sends (sender-only)
     if (operation_attributes.num_links > 0) {
@@ -619,6 +687,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
     }
+    // Toggles the grouped sparse-multicast path in both writer_worker (ring producer) and
+    // writer_sender (ring consumer / sender). Gated on the widened route_info slot above.
+    if (enable_sparse_mcast) {
+        fabric_defines["SPARSE_MCAST_DISPATCH"] = "1";
+    }
 
     // ==================== Sender writer kernel ====================
     // Drains the worker baton-ring CBs and writes tokens and metadata via fabric
@@ -628,6 +701,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     std::vector<uint32_t> writer_compile_time_args = compile_time_args;
     writer_compile_time_args.push_back(writer_cb_size);  // sender writer CB depth
     writer_compile_time_args.push_back(num_workers);     // N: sizes the kernel's per-ring arrays
+    // Same value the producer gets as worker writer arg 10 — one host source for both ends of the ring.
+    writer_compile_time_args.push_back(route_info_slot_stride_bytes);
 
     tt::tt_metal::KernelDescriptor writer_kd;
     writer_kd.kernel_source =
@@ -776,7 +851,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
             detail::get_aligned_page_size(metadata_tensor),              // 7: aligned_metadata_page_size
             static_cast<uint32_t>(tt::CBIndex::c_14),                    // 8: cb_plan_id
             linearized_mesh_coord,                                       // 9
-            l1_alignment,                                                // 10: route_info slot stride
+            route_info_slot_stride_bytes,                                // 10: route_info slot stride
             writer_cb_size,                                              // 11: sender writer CB size
             static_cast<uint32_t>(tt::CBIndex::c_15),                    // 12: cb_route_info_scratch_id
             read_batch_size * operation_attributes.num_experts_per_tok,  // 13: meta_scratch_slots
@@ -961,22 +1036,49 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         }
 
         if (operation_attributes.num_links > 0) {
-            // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
+            // Fabric nodes used to open sender connections. The 1D fabric path follows the two
+            // logical dispatch-axis neighbors. Under Fabric2D, however, routing to every peer in a
+            // logical dispatch group may use additional physical first-hop directions when that group
+            // turns through the physical mesh (for example, logical 8x1 on a 2x4 LoudBox). Open one
+            // connection per physical direction needed by any peer in this dispatch group.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
-            dst_nodes.reserve(neighbors.size());
-            for (const auto& neighbor_coordinate : neighbors) {
-                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
-                    continue;
+            if (is_2d_fabric) {
+                std::unordered_set<tt::tt_fabric::eth_chan_directions> used_directions;
+                for (const auto& peer_coordinate : ttnn::MeshCoordinateRange(mesh_view.shape())) {
+                    if (peer_coordinate == mesh_coordinate) {
+                        continue;
+                    }
+                    const bool same_dispatch_group = operation_attributes.axis.value() == 0
+                                                         ? peer_coordinate[1] == mesh_coordinate[1]
+                                                         : peer_coordinate[0] == mesh_coordinate[0];
+                    if (!same_dispatch_group) {
+                        continue;
+                    }
+                    const auto peer_node = mesh_device->get_fabric_node_id(peer_coordinate);
+                    const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+                    TT_FATAL(
+                        direction.has_value(),
+                        "No Fabric2D forwarding direction from dispatch source {} to peer {}",
+                        src_fabric_node_id,
+                        peer_node);
+                    if (used_directions.insert(direction.value()).second) {
+                        dst_nodes.push_back(peer_node);
+                    }
                 }
-                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            } else {
+                dst_nodes.reserve(neighbors.size());
+                for (const auto& neighbor_coordinate : neighbors) {
+                    if (neighbor_coordinate == mesh_coordinate) {
+                        continue;
+                    }
+                    dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+                }
             }
             const uint32_t core_link = core_idx % num_links;
             if (is_2d_fabric) {
-                // Portable RoutingPlaneConnectionManager path: one connection per dispatch-axis neighbor
-                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
-                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
-                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args.
+                // Portable RoutingPlaneConnectionManager path: one connection per physical first-hop
+                // direction used by the dispatch group, so traffic forwards across MULTIPLE hops. The
+                // writer reads num_connections first, then builds the manager from the appended args.
                 //
                 // Pick a forwarding link valid for each neighbor's own direction (see
                 // compute_per_neighbor_forwarding_links above for why a single broadcast {core_link} hangs).

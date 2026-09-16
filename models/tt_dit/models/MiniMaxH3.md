@@ -268,17 +268,69 @@ is ~134 s; without it every run re-reads 62 GB of transformer and 50 GB of text 
 
 ## Working point
 
-The gates run at one shape:
+The perf log is tuned for 768P/5s, and that is the shape every *component* gate runs at. The e2e
+`t2va` gate sweeps six aspect ratios x 5/10/15 s (`test_pipeline_minimax_h3.py`'s `SWEEP`), which is
+the only thing covering a long request end to end.
 
-| | |
-|---|---|
-| canvas | 1344x768 (16:9, the widest 768P canvas `resolve_canvas_size` yields) |
-| frames | 124 @ 24 fps (5.17 s) -> 37 video latent frames, 207 audio latents |
-| packed sequence | 37749 rows for a 39-token prompt (38222 at 512 tokens), padded to a multiple of SP x TILE |
-| mesh | 4x8 Blackhole Galaxy, TP=4 axis 0, SP=8 axis 1, ring, 2 links |
+| | 5 s | 15 s |
+|---|---|---|
+| canvas | 1344x768 (16:9, the widest 768P canvas `resolve_canvas_size` yields) | same |
+| frames | 124 @ 24 fps (5.17 s) -> 37 video latent frames, 207 audio latents | 362 (15.08 s) -> 107 latent frames, 603 audio latents |
+| packed sequence | 37749 rows for a 39-token prompt (38222 at 512 tokens) | 109101 rows (109574 at 512 tokens) |
+
+Audio latents occupy **two rows each**, one per channel, so a row count is `2 x latents`. Padding is
+to a multiple of `SP x TILE`, which is 256 at SP=8 but **1024 at SP=32** — so the padded length, and
+therefore every program in the 50-layer stack, is keyed differently on the two meshes.
 
 The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), matching
 `test_performance_vae_minimax_h3.py`'s `WORK_UNITS` table and the wave math below.
+
+### Meshes
+
+Measured warm (the MEASUREMENT block in `test_pipeline_minimax_h3.py`), 768P/15s, 362 frames,
+49 forwards:
+
+| | 4x8 Galaxy | 4x32 quad (traced) | speedup |
+|---|---|---|---|
+| denoise | 252.3 s (5149 ms/fwd) | **92.9 s (1896 ms/fwd)** | 2.72x |
+| VAE decode | 11.5 s | 11.7 s | 0.98x |
+| audio decode | 4.7 s | 18.5 s | see below |
+| **total** | **268.5 s** | **125.0 s** | **2.15x** |
+
+Run-to-run variance at fixed shape and seed is around 8 %: a second quad run of the same case
+measured denoise 85.3 s / total 118.0 s. One run does not establish a direction.
+
+The audio row is **not** a like-for-like comparison and the total inherits that. The 4x8 column was
+taken with the audio precision levers off, which was their default when it was measured; they are now
+on by default (`split_mode="full"` on `MiniMaxH3AudioDecoder`),
+which is an accuracy choice, not a regression -- the same levers cost the same on a single Galaxy.
+Denoise, the row the mesh actually changes, is 2.7-3.0x.
+
+At 768P/5s the quad is 41.5 s against 72.7 s, i.e. 1.75x -- both taken before the audio levers
+flipped on, so both totals are understated by roughly the same amount. Two things the numbers
+say plainly:
+
+* **Tracing is what makes the quad pay at 5s; at 15s it only buys the first step.** Untraced,
+  4x32/5s was *slower* than one Galaxy (134.0 s), because at 1184 rows/device a step is
+  dispatch-bound; tracing took it to 41.5 s. At 15s each device holds 3424 rows, the loop is
+  compute-bound, and the traced steady state (1835 ms/step) matches the untraced one (1745 ms/step) --
+  but the first step still collapses 79.0 s -> 5.4 s, since capture allocates the CCL persistent
+  buffers once instead of on the first step of every generation.
+* **VAE and audio do not scale.** They are data-parallel over a fixed 28-tile work set, so they cost
+  the same on 128 chips as on 32 and are now 26 % of the quad's total -- audio most of all, since the
+  precision levers above tripled it. Reaching 4x end to end needs denoise at ~50 s *and* something
+  done about those 31 s.
+
+### Running on the quad
+
+`tt-run` with `32x4_quad_bh_galaxy_rank_bindings.yaml` and the four hosts in physical ring order
+(the wrong order fails as "Graph specified in MGD could not fit in the discovered physical topology").
+
+`MINIMAX_H3_MODEL_PATH` and `TT_DIT_CACHE_DIR` have to be set in the rank binding's `global_env`, not
+via `-x` in `--mpi-args`: tt-run builds a fixed per-rank environment, and `-x` lands in the first MPMD
+app context only, so it reaches rank 0 and no one else. Anything the model branches on must be
+identical on every rank -- a rank that takes a cache hit its peers miss skips collectives they are
+still waiting in, and the run deadlocks rather than failing.
 
 ## Fully-warm latency
 
@@ -321,6 +373,15 @@ Where the time goes, from Tracy captures:
 Op-to-op gap is 32.1 % of window wall for the video unit and 25.5 % for audio. No tuning has been done
 on either.
 
+**The decode stage is device-bound, not dispatch-bound.** Tracing the device-stitched per-chunk graph
+(which removes per-op host dispatch entirely) measured 6.887 s against 6.934 s untraced at 768P/15s.
+Replay costs 223 ms/chunk and issues no per-op host work, so that is real device execution, and the
+~144 ms/chunk of eager dispatch was already hiding underneath it. `MINIMAX_H3_TIME_DISPATCH` reports
+enqueue and post-synchronize time separately, but note the second number is only the tail the
+synchronize still waits for -- reading it as total device time understates device work and makes the
+stage look dispatch-bound when it is not. Do not re-derive this; the tracing experiment is not worth
+repeating.
+
 **Always warm up before quoting a number.** A first call reports ~1.4x the total (denoise 104.7 s
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
 rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
@@ -350,37 +411,27 @@ conditioner fidelity rather than output quality.
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
-`MiniMaxH3AudioEncoder` take `split_mode="full"`, `tap_matmul=True`, `prefer_mac=True`
-(and `max_c_in_block=128`) as constructor defaults, and register the H3 conv blockings themselves.
-That takes the decode from 10.5 % to **0.45 %** relative RMSE against the diffusers reference, for
-~3x the stage time. The three constructor levers are independent and each targets a different one of
-the three error sources the 10.5 % is made of. They are strongly complementary — the chain error is
-set by whichever source is worst, so enabling one moves the total far less than enabling all three:
+`MiniMaxH3AudioEncoder` take `split_mode="full"` (and `max_c_in_block=128`) as constructor
+defaults, and register the H3 conv blockings themselves. The one remaining lever answers a
+hardware fact: an fp32 **multiply** through SrcA/SrcB keeps only ~11 significand bits (the FPU
+takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is the ceiling), so the error is
+*flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher fidelity can help.
 
-| `split_mode` | `prefer_mac` | `tap_matmul` | rel RMSE | PCC | PSNR | warm |
-|---|---|---|---|---|---|---|
-| `off` | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
-| `full` | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
-| `off` | 1 | 0 | 0.0920 | 99.6111 % | 41.41 dB | 8.72 s |
-| `full` | 1 | 0 | 0.0320 | 99.9522 % | 50.58 dB | 9.50 s |
-| `full` | 0 | 1 | 0.0371 | 99.9526 % | 49.31 dB | 9.97 s |
-| **`full`** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** (default) |
-
-Why each exists — all three answer the same hardware fact, that an fp32 **multiply** on this hardware
-keeps only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is
-the ceiling), so the error is *flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher
-fidelity can help. Elementwise fp32 ops, by contrast, are exact.
-
-- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
-  residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
+- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits a conv3d operand into `bf16 hi` plus its
+  exact residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
-- **`prefer_mac`** runs the anti-aliased resample filters as shift-multiply-add instead of
-  `ttnn.conv1d`. This targets the single largest source: one `Activation1d` injects 1.54e-03, *all* of
-  it from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
-  exact — 1.5e-03 → 5.3e-08.
-- **`tap_matmul`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
-  splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
-  conv.
+
+The retired `tap_matmul` lever reformulated stride-1 convs as per-tap matmuls to dodge conv3d's
+partial-sum and output-path roundings; those are now fixed in the conv3d kernel itself (fp32
+partials reduced on the SFPU, bias/untilize reading `UnpackToDestFp32` CBs — see
+`conv3d/device/kernels/compute.cpp`), so conv3d+split matches the old tap+split accuracy in one
+op with none of the per-tap weights or layout traffic.
+
+The depthwise resample filters (`depthwise_tap_filter`) need no lever: their `ttnn.conv1d` kernel
+accumulates on the SFPU for fp32 operands (`compute_depthwise_conv1d.cpp`) and measures bit-equal to
+the exact shift-multiply-add form at every production shape, 2.1–4.1x faster. The retired
+`prefer_mac` lever selected that MAC form as a precision workaround; MAC survives only as the
+fallback for shapes conv1d cannot configure.
 
 Two things that look like levers and are not: widening `C_in_block` helps an isolated conv (1.48x) but
 **not** end to end, because the chain is dominated by the 126 narrow-channel AMP convs where it cannot

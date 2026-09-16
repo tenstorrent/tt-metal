@@ -69,7 +69,7 @@ void kernel_main() {
         reconfig_data_format(dfb_inp_id, dfb_inp_id);
         pack_reconfig_data_format(dfb::x2);
         if constexpr (unpack_fp32_active) {
-            copy_tile_to_dst_init_short(dfb_inp_id);
+            copy_init(dfb_inp_id);
             square_tile_init();
         } else {
             mul_init(dfb_inp_id, dfb_inp_id);

@@ -25,7 +25,7 @@ namespace ckernel {
  * Return value: None
  */
 // clang-format on
-ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_tile_to_dst_init_short(icb); }
+ALWI void sum_reduce_scalar_init(uint32_t icb) { copy_init(icb); }
 
 // clang-format off
 /**

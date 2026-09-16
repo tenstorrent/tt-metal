@@ -18,13 +18,23 @@ SLURM_TELEMETRY_PORT = 8080
 ORCHESTRATION_TELEMETRY_PORT = 18080
 
 
-def telemetry_port_for_launch_mode(launch_mode: str) -> int:
-    """Return the Prometheus endpoint port for the given launch mode."""
+def telemetry_port_for_launch_mode(launch_mode: str, override: int | None = None) -> int:
+    """Return the Prometheus endpoint port to scrape.
+
+    Each deployment has its own default (tt-telemetry listens on a different
+    port under Kubernetes to avoid host-port clashes), but ``override`` — the
+    runner's ``--telemetry-port`` — wins so a deployment that moves the endpoint
+    doesn't need a code change.
+    """
+    if override is not None:
+        return override
     return ORCHESTRATION_TELEMETRY_PORT if launch_mode == "orchestration" else SLURM_TELEMETRY_PORT
 
 
 TELEMETRY_METRICS = frozenset(
     {
+        "tt_ai_clock_mhz",
+        "tt_ai_clock_limit_mhz",
         "tt_cable_present",
         "tt_chip_count",
         "tt_dram_trained",
@@ -64,6 +74,8 @@ _COUNTER_METRICS = frozenset(
 
 _VALUE_METRICS = frozenset(
     {
+        "tt_ai_clock_limit_mhz",
+        "tt_ai_clock_mhz",
         "tt_chip_count",
     }
 )
@@ -89,11 +101,8 @@ def collect_prometheus_metrics(port: int = SLURM_TELEMETRY_PORT) -> dict[str, li
     for family in text_string_to_metric_families(resp.text):
         if family.name not in TELEMETRY_METRICS:
             continue
-        samples = []
         for sample in family.samples:
-            samples.append({"labels": dict(sample.labels), "value": sample.value})
-        if samples:
-            metrics[family.name] = samples
+            metrics.setdefault(family.name, []).append({"labels": dict(sample.labels), "value": sample.value})
 
     return metrics if metrics else None
 
@@ -165,19 +174,26 @@ def aggregate_telemetry_for_csv(metrics: dict[str, list[dict]] | None) -> dict:
 
     ``format_prometheus_metrics`` only builds the human-readable log block; the
     CSV verdict needs a separate flat dict whose keys mirror the ones consumed by
-    ``analyze_health_check_results.runs_row`` (``available`` + per-metric totals).
-    Returns ``{"available": False}`` when nothing was collected so the run row
-    records ``telemetry_available=0`` rather than silently claiming a value.
+    ``analyze_health_check_results.runs_row`` (``available``, the minimum AI clock
+    and the summed Ethernet error totals). Returns ``{"available": False}`` when
+    nothing was collected so the run row records ``telemetry_available=0`` rather
+    than silently claiming a value. A metric that wasn't collected stays *None*
+    so its column is blank instead of a fabricated 0.
     """
     if not metrics:
         return {"available": False}
 
-    def _total(name: str) -> int:
-        return int(sum(s["value"] for s in metrics.get(name, [])))
+    def _values(name: str) -> list[float]:
+        return [s["value"] for s in metrics.get(name, [])]
 
+    aiclk = _values("tt_ai_clock_mhz")
+    retrain = _values("tt_ethernet_retrain_count")
+    crc = _values("tt_ethernet_crc_error_count")
+    uncorr = _values("tt_ethernet_uncorrected_codeword_count")
     return {
         "available": True,
-        "eth_retrain_total": _total("tt_ethernet_retrain_count"),
-        "eth_crc_total": _total("tt_ethernet_crc_error_count"),
-        "eth_uncorr_cw_total": _total("tt_ethernet_uncorrected_codeword_count"),
+        "min_aiclk_mhz": min(aiclk) if aiclk else None,
+        "eth_retrain_total": int(sum(retrain)) if retrain else None,
+        "eth_crc_total": int(sum(crc)) if crc else None,
+        "eth_uncorr_cw_total": int(sum(uncorr)) if uncorr else None,
     }

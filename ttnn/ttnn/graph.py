@@ -4,6 +4,7 @@
 
 import contextlib
 import json
+import threading
 import traceback
 from typing import Callable, Union
 from loguru import logger
@@ -28,8 +29,9 @@ from ttnn._ttnn.graph import (
     disable_detailed_buffer_tracing,
     is_detailed_buffer_tracing_enabled,
     is_graph_capture_active,
-    track_function_start,
-    track_function_end,
+    track_function_start as _cpp_track_function_start,
+    track_function_end as _cpp_track_function_end,
+    unwind_open_functions as _cpp_unwind_open_functions,
 )
 
 from ttnn.graph_report import (
@@ -37,7 +39,6 @@ from ttnn.graph_report import (
     extract_total_duration_from_graph,
     extract_operation_durations,
 )
-
 
 # ---------------------------------------------------------------------------
 # Python-level I/O tracking
@@ -109,6 +110,51 @@ def disable_python_io_recording():
 def is_python_io_recording_enabled() -> bool:
     """Return whether Python I/O recording is currently enabled."""
     return _python_io_recording_enabled
+
+
+# ---------------------------------------------------------------------------
+# Python-level operation scopes
+# ---------------------------------------------------------------------------
+# The operation decorators wrap every ttnn operation in a function scope so that the C++
+# sub-operations it dispatches are nested under the name the user called.  The depth of those
+# scopes is what tells the next operation whether it is a top-level one; see
+# :func:`track_function_start`.  It is kept per thread to match the graph processor stack,
+# which is thread-local in C++: a capture only ever observes the thread that began it.
+
+
+class _OperationScopeDepth(threading.local):
+    value = 0
+
+
+_operation_scope_depth = _OperationScopeDepth()
+
+
+def track_function_start(function_name):
+    """Open a function scope for a Python-level operation in the active graph capture.
+
+    A top-level operation first unwinds whatever scopes the capture still holds open.  An
+    operation that raised from a call site with no scope guard never emitted its
+    ``function_end``, and leaving its scope open would record this operation — and every one
+    after it — as a child of an operation that is already dead, hiding them from the report.
+    Nothing can legitimately be open at this point: the decorators close
+    their scope in a ``finally``, so a depth of zero means no operation is in flight.
+
+    Args:
+        function_name: The operation name (e.g. ``"ttnn.conv2d"``)
+    """
+    if _operation_scope_depth.value == 0:
+        _cpp_unwind_open_functions(
+            f"Operation did not complete: its graph scope was still open when '{function_name}' started"
+        )
+    _cpp_track_function_start(function_name)
+    _operation_scope_depth.value += 1
+
+
+def track_function_end():
+    """Close the function scope opened by the matching :func:`track_function_start`."""
+    if _operation_scope_depth.value > 0:
+        _operation_scope_depth.value -= 1
+    _cpp_track_function_end()
 
 
 def _configure_python_stack_traces_for_outer_graph_capture(ttnn_mod) -> None:
@@ -340,7 +386,51 @@ def _ttnn_tensor_summary(t) -> str:
     return f"ttnn.Tensor({', '.join(parts)})"
 
 
-def _safe_arg_str(v):
+# Cap on how many elements of a sequence argument are summarized individually. A captured
+# ttnn.concat takes as many operands as the model splits into -- 6 for a Qwen3-VL LM head -- so 32
+# records every sequence seen so far with room to spare, while bounding the cost of an argument
+# repr on a pathological call.
+_MAX_SEQUENCE_ELEMENTS = 32
+# How deep the element-wise walk goes. Every sequence argument observed in a capture so far is a
+# flat list of tensors (depth 1: ttnn.concat, the CCL ops); the limit exists to bound recursion on
+# an unexpected or self-referential structure, not to describe a shape we expect, so it is set a
+# few levels above the observed maximum. Crossing it is safe by construction: the walk elides
+# rather than falling back to str(), and _holds_tensor treats "too deep to search" as "assume a
+# tensor is in there".
+_MAX_SEQUENCE_DEPTH = 4
+
+
+def _tensor_types():
+    """(ttnn.Tensor, torch.Tensor) -- or just ttnn's when torch is not installed."""
+    import ttnn
+
+    try:
+        import torch
+
+        return (ttnn.Tensor, torch.Tensor)
+    except ImportError:
+        return (ttnn.Tensor,)
+
+
+def _holds_tensor(v, _depth=0):
+    """Is ``v`` a tensor, or a sequence holding one at any depth?
+
+    Mirrors ``_collect_tensor_ids``' recursive treatment: a tensor nested inside
+    ``[[tensor]]`` reaches ``str()`` just as readily as a top-level one.
+
+    The depth limit answers "maybe" as True: a sequence too deep to search cannot be
+    shown tensor-free, and summarizing one that turns out to hold only scalars is
+    harmless, where str()-ing one that holds a tensor is the device read this exists to
+    prevent.
+    """
+    if isinstance(v, _tensor_types()):
+        return True
+    if isinstance(v, (list, tuple)):
+        return True if _depth >= _MAX_SEQUENCE_DEPTH else any(_holds_tensor(e, _depth + 1) for e in v)
+    return False
+
+
+def _safe_arg_str(v, _depth=0):
     """Stringify a function argument without triggering graph-tracked operations."""
     import ttnn
 
@@ -353,29 +443,69 @@ def _safe_arg_str(v):
             return f"torch.Tensor(shape={list(v.shape)}, dtype={v.dtype})"
     except ImportError:
         pass
-    return str(v)
+    # A sequence holding tensors -- at any nesting depth -- must be summarized element-wise. str()
+    # on a list of ttnn.Tensors calls repr() on each one, which reads the whole tensor back to host
+    # (ttnn::to_string -> Tensor::cpu). That is expensive everywhere, dumps tensor contents into the
+    # report, and is outright fatal inside a device trace capture ("Reads are not supported during
+    # trace capture") -- which is how ttnn.concat, the one op taking a tensor list, killed capture
+    # runs. torch tensors in a sequence are summarized for the same no-dump reason (host-side, so
+    # noise rather than a fault).
+    if isinstance(v, (list, tuple)) and _holds_tensor(v):
+        open_, close = ("(", ")") if isinstance(v, tuple) else ("[", "]")
+        # Past the depth limit, elide rather than fall through to str(): the whole point is that a
+        # tensor below here must never be repr()'d.
+        if _depth >= _MAX_SEQUENCE_DEPTH:
+            return f"{open_}... {len(v)} element(s) below the summary depth limit{close}"
+        head = [_safe_arg_str(e, _depth + 1) for e in v[:_MAX_SEQUENCE_ELEMENTS]]
+        if len(v) > _MAX_SEQUENCE_ELEMENTS:
+            head.append(f"... +{len(v) - _MAX_SEQUENCE_ELEMENTS} more")
+        return f"{open_}{', '.join(head)}{close}"
+
+    # Recording arguments is diagnostic, so a value whose repr misbehaves (e.g. a binding whose
+    # std::string-returning __repr__ has no registered caster) must not take down the operation.
+    try:
+        return str(v)
+    except Exception as e:
+        return f"<unprintable {type(v).__name__}: {type(e).__name__}: {e}>"
 
 
-def record_python_operation(name, function_args, function_kwargs):
+def append_python_io_record(name):
+    """Reserve a ``python_io`` slot for this operation before argument capture.
+
+    The importer pairs records to ``function_start`` nodes by name, in order.
+    Appending first keeps that queue aligned if later setup raises: the failed
+    start consumes this slot instead of a later same-name operation's record.
+    """
+    record = {
+        "name": name,
+        "arguments": {},
+        "input_tensor_ids": [],
+    }
+    _python_io_data.append(record)
+    return record
+
+
+def record_python_operation(name, function_args, function_kwargs, *, record=None):
     """Record a Python-level operation's arguments and I/O tensor ids.
 
     Called from ``FastOperation.__call__`` and ``runtime_decorator.call_wrapper``
     to capture the Python-visible arguments (named kwargs + positional args)
     that the C++ graph trace does not see.
+
+    Decorators pass ``record`` from :func:`append_python_io_record` so the slot
+    exists even if argument capture raises. Direct callers may omit it.
     """
+    if record is None:
+        record = append_python_io_record(name)
+
     args_dict = {}
     for k, v in function_kwargs.items():
         args_dict[k] = _safe_arg_str(v)
     for idx, v in enumerate(function_args):
         args_dict[str(idx)] = _safe_arg_str(v)
 
-    input_tensor_ids = _collect_tensor_ids((*function_args, *function_kwargs.values()))
-
-    record = {
-        "name": name,
-        "arguments": args_dict,
-        "input_tensor_ids": input_tensor_ids,
-    }
+    record["arguments"] = args_dict
+    record["input_tensor_ids"] = _collect_tensor_ids((*function_args, *function_kwargs.values()))
 
     if _python_stack_traces_enabled:
         try:
@@ -383,7 +513,19 @@ def record_python_operation(name, function_args, function_kwargs):
         except Exception:
             record["python_stack_trace"] = []
 
-    _python_io_data.append(record)
+    return record
+
+
+def record_python_operation_error(record, error_type, error_message):
+    """Attach the exception to the python_io record created for this call.
+
+    ``record`` is the object returned by :func:`append_python_io_record` or
+    :func:`record_python_operation`. If no slot was reserved for this call, pass
+    ``None``; do not search older records by name.
+    """
+    if record is None or "error" in record:
+        return
+    record["error"] = {"type": error_type, "message": error_message}
 
 
 def store_output_tensor_ids(output_tensor_ids):
@@ -400,7 +542,7 @@ def store_captured_graph(captured_graph_json):
 
     Called from ``runtime_decorator.call_wrapper`` (slow dispatch) right after
     ``end_graph_capture()``.  ``[-1]`` is always the correct entry since
-    ``record_python_operation`` is called first for the same operation.
+    ``append_python_io_record`` is called first for the same operation.
     """
     if _python_io_data:
         _python_io_data[-1]["captured_graph"] = captured_graph_json

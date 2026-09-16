@@ -15,6 +15,7 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 struct HighBwAllGatherUnicastFactory {
     struct shared_variables_t {
         std::vector<tt::tt_metal::CoreCoord> worker_cores;
+        CoreRangeSet worker_core_range;
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore ready_sem;
@@ -25,8 +26,10 @@ struct HighBwAllGatherUnicastFactory {
         uint32_t device_idx{};
         uint32_t forward_iterations{};
         uint32_t backward_iterations{};
+        uint32_t num_dram_banks{};
         bool is_ring{};
         bool ring_even_split{};
+        bool output_bank_owned_schedule{};
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;

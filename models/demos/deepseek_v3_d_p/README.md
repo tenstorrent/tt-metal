@@ -13,7 +13,7 @@ model, see
 
 ## Environment Variables
 
-- **`PREFILL_MODEL`** — Which model adapter the runner / producers use (`deepseek_v3_d_p` | `kimi_k2_6` | `kimi_k2_7` | …). Defaults to `kimi_k2_7`. Replaces the former `PREFILL_MODEL_VARIANT`.
+- **`PREFILL_MODEL`** — Which model adapter the runner / producers use (`deepseek_v3_d_p` | `deepseek_v32` | `glm_5_1` | `glm_5_2` | `kimi_k2_6` | `kimi_k2_7` | `minimax_m3` | `gpt_oss_d_p` | `mistral_small_4`). Defaults to `kimi_k2_7`. Replaces the former `PREFILL_MODEL_VARIANT`.
 
 - **`DEEPSEEK_V3_HF_MODEL`** — Path to DeepSeek-R1-0528 weights directory. Falls back to `models/demos/deepseek_v3/reference/` then `/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528`.
 - **`TT_DS_PREFILL_TTNN_CACHE`** — Directory for cached TTNN weight tensors (`.tensorbin` files). First run writes cache, subsequent runs load directly. Defaults to `{model_path}/tensor_cache_{arch}_{num_devices}dev/`.

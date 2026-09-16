@@ -229,7 +229,6 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     )
 
 
-@pytest.mark.skip(reason="Skipping std test due to issue #32830")
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -255,18 +254,19 @@ def test_std_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
+    # Tolerances taken from test_reduction.py::test_std: an RM input is tilized and dispatched
+    # to the same welford_reduce primitive as a TILE input (generic_reductions.cpp), so the TILE
+    # bounds apply. check_ulp keeps its default (False) like the TILE version.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-        check_ulp=True,
+        rtol=0.01,
+        atol=0.01,
+        frobenius_threshold=0.005,
     )
 
 
-@pytest.mark.skip(reason="Skipping var test due to issue #32830")
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -292,14 +292,17 @@ def test_var_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
+    # Tolerances lifted from test_reduction.py::test_var: an RM input is tilized and dispatched
+    # to the same welford_reduce primitive as a TILE input (generic_reductions.cpp), so the TILE
+    # bounds apply. check_ulp keeps its default (False) like the sibling; bf16 outputs cannot
+    # meet the previous 1e-06/1e-09 (sub-ULP) bounds.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-        check_ulp=True,
+        rtol=0.01,
+        atol=0.01,
+        frobenius_threshold=0.007,
     )
 
 
@@ -715,8 +718,6 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
 )
 def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
-    if fast_and_approximate_mode and reduce_op != "mean":
-        pytest.skip("fast_and_approximate_mode only affects mean")
     torch.manual_seed(0)
     torch_input = torch.rand(shape, dtype=torch.float32)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
@@ -725,26 +726,84 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
     assert tt_input.layout == ttnn.ROW_MAJOR_LAYOUT
 
     ttnn_op = _OPS[reduce_op][1]
-    op_kwargs = {"dim": -2, "keepdim": False, "output_layout": output_layout}
-    if reduce_op == "mean":
-        op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    op_kwargs = {
+        "dim": -2,
+        "keepdim": False,
+        "output_layout": output_layout,
+        "fast_and_approximate_mode": fast_and_approximate_mode,
+    }
     tt_output = ttnn_op(tt_input, **op_kwargs)
     # None keeps the dense RM path's natural ROW_MAJOR output.
     assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(tt_output)
 
-    # Only mean has an accurate fp32 SFPU reduce; the FPU path truncates to TF32, roughly doubling
-    # the relative error at these depths.
-    rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
+    # Accurate FP32 uses SFPU; fast mode and Quasar use the tf32 FPU bound.
+    fpu = fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR
+    rtol, atol = (0.004, 1e-3) if fpu else (1e-5, 1e-5)
     assert_numeric_metrics(
         torch_ref,
         output,
         pcc_threshold=0.999,
         rtol=rtol,
-        atol=1e-3,
+        atol=atol,
         frobenius_threshold=0.003,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+# Engine selection applies only to FLOAT32.
+@pytest.mark.parametrize(
+    "dtype, fast_and_approximate_mode",
+    [(ttnn.bfloat16, False), (ttnn.float32, False), (ttnn.float32, True)],
+    ids=["bf16", "fp32_sfpu", "fp32_fpu"],
+)
+@pytest.mark.parametrize(
+    "output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["default", "rm", "tile"]
+)
+# Shapes that take the split: Ht above k_min_ht_for_split_tile with NC*Wt below the core count.
+# All also have num_h_slices * slice_Ht > Ht, exercising the reader's past-the-end slices.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 3136, 144),  # EfficientNetB0 global-pool; Ht=98, Wt=5
+        (1, 1, 3216, 128),  # Ht=101, non-aligned H
+        (1, 1, 1064, 256),  # Ht=34, wide Wt=8, near the threshold, non-aligned H
+        (2, 3, 1024, 40),  # NC=6, Ht=32
+        (1, 1, 3136, 145),  # non-aligned W → the RM writer's last-tile clamp
+    ],
+)
+def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate_mode, output_layout, shape):
+    """H reduce on tall TILE input — tiled stage 1, RM stage 2. TILE input defaults to TILE output."""
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert tt_input.layout == ttnn.TILE_LAYOUT
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, -42.0)
+
+    ttnn_op = _OPS[reduce_op][1]
+    op_kwargs = {
+        "dim": -2,
+        "keepdim": False,
+        "output_layout": output_layout,
+        "fast_and_approximate_mode": fast_and_approximate_mode,
+    }
+    tt_output = ttnn_op(tt_input, **op_kwargs)
+    # A TILE input defaults to TILE output: stage 1's ROW_MAJOR partials must not leak out as the
+    # op's natural layout the way they do on the RM path.
+    assert tt_output.layout == (output_layout or ttnn.TILE_LAYOUT)
+    output = ttnn.to_torch(tt_output)
+
+    if dtype == ttnn.float32:
+        # Accurate FP32 uses SFPU; fast mode and Quasar use the tf32 FPU bound.
+        fpu = fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR
+        rtol, atol = (0.004, 1e-3) if fpu else (1e-5, 1e-5)
+        metrics = dict(pcc_threshold=0.999, rtol=rtol, atol=atol, frobenius_threshold=0.003)
+    else:
+        metrics = dict(pcc_threshold=0.97, rtol=0.01, atol=0.01, frobenius_threshold=0.004)
+    assert_numeric_metrics(torch_ref, output, check_ulp=False, **metrics)
 
 
 # Block-float formats only exist in TILE layout: an RM output would have to widen to BFLOAT16, so
@@ -763,3 +822,28 @@ def test_rm_reduce_row_major_output_rejected_for_block_float(device, reduce_op, 
 
     with expect_error(RuntimeError, "block-float formats only exist in TILE layout"):
         ttnn_op(tt_input, dim=dim, output_layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+# A padded ROW_MAJOR tensor keeps its dim-1 slices H_padded rows apart, but the dense readers and the
+# tilize into the tile path both step by H_logical, so every slice after the first reads pad rows.
+# reduce refuses instead of returning a plausible wrong answer.
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 7, 7, 2048),  # resnet50 global pool: H 7 -> 32, 7 slices
+        (1, 3, 3, 45),  # partial channel tile as well: W 45 -> 64
+        (2, 5, 5, 128),  # batch > 1
+        (1, 4, 40, 64),  # H_logical > tile height: 40 -> 64
+    ],
+)
+def test_rm_reduce_padded_h_slices_rejected(device, reduce_op, dim, shape, expect_error):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16).float()
+
+    tt_input = ttnn.Tensor(torch_input, ttnn.bfloat16).pad_to_tile(0.0).to(device)
+    assert list(tt_input.padded_shape)[-2] != list(tt_input.shape)[-2], "shape has no padded-H coverage"
+
+    with expect_error(RuntimeError, "only supported when N and C fold to a single"):
+        _OPS[reduce_op][1](tt_input, dim=dim, keepdim=True)

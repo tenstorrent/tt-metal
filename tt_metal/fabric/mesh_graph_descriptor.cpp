@@ -1862,15 +1862,22 @@ void MeshGraphDescriptor::populate_pinnings() {
             expand_physical_asic_positions(pinning.physical_asic_position(), expand_error);
         TT_FATAL(expand_error.empty(), "Failed to expand physical ASIC positions: {}", expand_error);
 
-        // Fast path: no regex fields anywhere in this entry -> preserve the original single-group behavior.
+        // Fast path: no regex fields. Still emit one group PER MESH so downstream can look up pins by
+        // mesh id (same shape as the regex path) instead of filtering mixed-mesh groups later.
         if (!pinning_entry_uses_regex(pinning)) {
-            AsicPinningGroup group;
-            group.fabric_nodes.reserve(pinning.logical_fabric_node_id().size());
+            std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;
             for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
-                group.fabric_nodes.emplace_back(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+                mesh_to_chips[logical_node_id.mesh_id()].push_back(logical_node_id.chip_id());
             }
-            group.asic_positions = positions;
-            pinnings_.push_back(std::move(group));
+            for (const auto& [m, chips] : mesh_to_chips) {
+                AsicPinningGroup group;
+                group.fabric_nodes.reserve(chips.size());
+                for (uint32_t c : chips) {
+                    group.fabric_nodes.emplace_back(MeshId{m}, c);
+                }
+                group.asic_positions = positions;
+                pinnings_[MeshId{m}].push_back(std::move(group));
+            }
             continue;
         }
 
@@ -1925,7 +1932,7 @@ void MeshGraphDescriptor::populate_pinnings() {
                 group.fabric_nodes.emplace_back(MeshId{m}, c);
             }
             group.asic_positions = positions;
-            pinnings_.push_back(std::move(group));
+            pinnings_[MeshId{m}].push_back(std::move(group));
         }
     }
 

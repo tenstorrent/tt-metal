@@ -8,10 +8,11 @@ GeGLU activation: gelu(gate) * up (different from GPT-OSS SwiGLU).
 """
 
 import ttnn
+from models.demos.gemma4.tt.compute_config import gelu_variant
 
 
 def apply_geglu(gate, up):
-    """GeGLU activation: gelu(gate) * up. Gemma4 uses gelu_pytorch_tanh."""
-    activated = ttnn.gelu(gate, fast_and_approximate_mode=True)
+    """GeGLU activation: gelu(gate) * up (Accurate variant; see compute_config)."""
+    activated = ttnn.gelu(gate, variant=gelu_variant())
     result = ttnn.mul(activated, up)
     return result

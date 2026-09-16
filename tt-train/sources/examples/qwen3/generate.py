@@ -48,6 +48,7 @@ from tqdm.auto import tqdm
 import ttml
 import ttnn
 
+from ttml.common.utils import no_grad
 from ttml.models.qwen3.kv_cache import KVCache
 from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
@@ -254,6 +255,7 @@ def generate_hf(hf_model, tokenizer, all_prompt_tokens, max_tokens, temperature=
 # =====================================================================
 
 
+@no_grad()
 def generate_ttml(
     model,
     config,
@@ -277,7 +279,6 @@ def generate_ttml(
     them to full vocab before sampling or collection — this is simpler and
     avoids the distributed argmax+Gumbel approximation.
     """
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
     model.eval()
 
     if isinstance(all_prompt_tokens[0], int):

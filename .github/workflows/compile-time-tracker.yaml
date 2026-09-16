@@ -15,6 +15,7 @@ jobs:
 
   track-compile-time:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     name: "⏱️ Track Compile Time"
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: 120
@@ -115,18 +116,30 @@ jobs:
             exit 1
           fi
 
-      - name: ⬇️ Checkout metrics repo (gh-pages)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-        with:
-          repository: tenstorrent/tt-metal-compile-time-tracker
-          token: ${{ secrets.CLANGSA_RESULTS_PAT }}
-          ref: gh-pages
-          path: metrics-repo
-
       - name: 📊 Append compile time to CSV and push
+        env:
+          METRICS_PAT: ${{ secrets.CLANGSA_RESULTS_PAT }}
         run: |
-          cd metrics-repo
+          # Clone the metrics repo with the PAT embedded in the remote URL, into
+          # /tmp (a tmpfs, see `options: --tmpfs /tmp`) rather than into the
+          # bind-mounted workspace. Do not rely on actions/checkout's persisted
+          # credentials here: since v6 it authenticates later steps via
+          # `includeIf.gitdir:` entries written only for $GITHUB_WORKSPACE and
+          # /github/workspace. This job mounts the workspace at /work, so the
+          # gitdir git resolves (/work/metrics-repo/.git) matches neither entry,
+          # the conditional include never fires, and push/pull fall back to
+          # anonymous HTTPS ("could not read Username for 'https://github.com'").
+          # An authenticated remote URL also covers the `git pull --rebase` in the
+          # retry loop below. Same approach as code-coverage.yaml. --depth 1 is
+          # safe here: a shallow clone fetches new remote commits incrementally
+          # just like a full clone when `git pull --rebase` needs them, so it
+          # doesn't affect the retry path, and keeps this daily job from
+          # re-downloading an ever-growing branch history on every run.
+          git clone --branch gh-pages --single-branch --depth 1 \
+            "https://x-access-token:${METRICS_PAT}@github.com/tenstorrent/tt-metal-compile-time-tracker.git" \
+            /tmp/metrics-repo
+
+          cd /tmp/metrics-repo
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 

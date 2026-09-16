@@ -16,7 +16,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 # Production chunk_size_global only (chunk_local = 5120/8 = 640). At this csg a 128-pad window never
@@ -40,17 +46,22 @@ _FORMATS = [
 ]
 _FORMAT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
 
-# SP=8 meshes for the block-cyclic cases below (they set sp_axis=0, so sp = mesh_shape[0] = 8, and
-# the _CASES/_MULTI_CASES expected boundary chips 0..7 assume an 8-way SP split). The TP axis (dim 1)
-# only replicates the cache in this op, so it is not what these cases exercise:
-#   * linear-8  (8, 1): the CI-gated Blackhole LoudBox coverage (8xP150, all chips on the SP axis).
-#   * mesh-8x4  (8, 4): the original BH Galaxy coverage; auto-skips on smaller boxes (needs 32 chips).
-# requires_mesh_topology gives a clean collection-time skip on boxes whose chip count doesn't match.
+# The block-cyclic cases require SP=8. Preserve both existing execution environments: the LoudBox
+# proxy uses TorusY and the production Galaxy uses TorusXY.
 _MESHES = [
-    pytest.param((8, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear")),
-    pytest.param((8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")),
+    pytest.param(
+        (8, 1),
+        torus_y_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+        id="torus-y-8x1",
+    ),
+    pytest.param(
+        (8, 4),
+        torus_xy_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-xy-8x4",
+    ),
 ]
-_MESH_IDS = ["linear-8", "8x4"]
 
 
 def _init_cache_filled_with_ones(
@@ -153,7 +164,18 @@ def _assert_cache_windows(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        )
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
 @pytest.mark.timeout(0)
 def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layout):
@@ -213,7 +235,7 @@ def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layou
     assert mesh_device.num_program_cache_entries() == cache_entries_before + 1
 
 
-@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
 @pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
 @pytest.mark.parametrize("chunk_size_global,seq_len_cache,valid_global,expected_chip", _CASES, ids=_IDS)
 @pytest.mark.timeout(0)
@@ -275,7 +297,7 @@ _MULTI_CASES = [
 _MULTI_IDS = [f"L{nl}_U{nu}_slot{s}_layer{ly}_v{v}" for (nl, nu, s, ly, v, _ch) in _MULTI_CASES]
 
 
-@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
 @pytest.mark.parametrize(
     "num_layers,num_users,slot_idx,layer_idx,valid_global,expected_chip", _MULTI_CASES, ids=_MULTI_IDS
 )
@@ -291,8 +313,8 @@ def test_zero_padded_kv_cache_layers_users(
     sp = mesh_shape[sp_axis]
     tp = mesh_shape[1]
     kvpe = 64
-    chunk_size_global = 5120
-    seq_len_cache = 5120
+    chunk_size_global = PREFILL_CHUNK_TOKENS
+    seq_len_cache = chunk_size_global
     seq_len_local = seq_len_cache // sp
     num_batches = num_users * num_layers
     target_batch = slot_idx * num_layers + layer_idx
@@ -381,7 +403,7 @@ def _make_scalar_tensor(mesh_device, value):
     )
 
 
-@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
 @pytest.mark.parametrize("slot_idx,valid_global", _EQUIV_CASES, ids=_EQUIV_IDS)
 @pytest.mark.timeout(0)
 def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid_global):
@@ -394,8 +416,8 @@ def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid
     sp_axis = 0
     sp = mesh_shape[sp_axis]
     kvpe = 64
-    chunk_size_global = 5120
-    seq_len_cache = 5120
+    chunk_size_global = PREFILL_CHUNK_TOKENS
+    seq_len_cache = chunk_size_global
     seq_len_local = seq_len_cache // sp
     num_users, num_layers = 2, 1
 
@@ -445,7 +467,7 @@ def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid
     ttnn.deallocate(tt_valid_global)
 
 
-@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
 @pytest.mark.timeout(0)
 def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
     """Cache-HIT coverage of the tensor path: two successive tensor-overload calls with DIFFERENT
@@ -455,8 +477,8 @@ def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
     tensor path is TILE-only, so this uses a TILE cache.)"""
     sp_axis = 0
     kvpe = 64
-    chunk_size_global = 5120
-    seq_len_cache = 5120
+    chunk_size_global = PREFILL_CHUNK_TOKENS
+    seq_len_cache = chunk_size_global
     num_users, num_layers = 2, 1
 
     cache = _init_cache_filled_with_ones(

@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/types.hpp"
 
@@ -23,7 +24,7 @@ std::mt19937 rng(std::time(nullptr));
 std::uniform_int_distribution<uint32_t> dist(1, 1 << 20);
 uint32_t get_random_seed() { return dist(rng); }
 
-// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit).
+// Work split used by create_descriptor (cache miss) and override_runtime_arguments (cache hit).
 struct BernoulliWorkSplit {
     uint32_t num_cores = 0;
     CoreRangeSet all_cores;
@@ -49,17 +50,48 @@ BernoulliWorkSplit bernoulli_work_split(const Tensor& output) {
         units_per_core_group_2,
         std::move(cores)};
 }
+
+// Per-core work assignment, single-sourced so create_descriptor and override_runtime_arguments can
+// never drift on core-group selection or tile_offset accumulation.
+struct BernoulliCoreWork {
+    CoreCoord core;
+    uint32_t units_per_core;
+    uint32_t tile_offset;
+};
+std::vector<BernoulliCoreWork> bernoulli_core_layout(const BernoulliWorkSplit& ws) {
+    std::vector<BernoulliCoreWork> layout;
+    layout.reserve(ws.cores.size());
+    uint32_t tile_offset = 0;
+    for (const auto& core : ws.cores) {
+        uint32_t units_per_core;
+        if (ws.core_group_1.contains(core)) {
+            units_per_core = ws.units_per_core_group_1;
+        } else if (ws.core_group_2.contains(core)) {
+            units_per_core = ws.units_per_core_group_2;
+        } else {
+            TT_THROW("Core not in specified core ranges");
+        }
+        layout.push_back({core, units_per_core, tile_offset});
+        tile_offset += units_per_core;
+    }
+    return layout;
+}
+
+// Per-core seed; shared so the miss-build and the hit-patch produce identical values.
+uint32_t bernoulli_seed_for_core(const BernoulliDeviceOperation::operation_attributes_t& attrs, uint32_t i) {
+    return attrs.seed != 0 ? attrs.seed + i : get_random_seed();
+}
 }  // namespace
 
-ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
+ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const Tensor& input = tensor_args.input;
 
     IDevice* device = output.device();
-    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2, cores] =
-        bernoulli_work_split(output);
+    const auto ws = bernoulli_work_split(output);
+    const auto& all_cores = ws.all_cores;
 
     // ---- Circular buffers ----
 
@@ -166,31 +198,21 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
 
     // ---- Runtime args per core ----
 
-    uint32_t tile_offset = 0;
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const auto& core = cores[i];
-        uint32_t units_per_core;
-        if (core_group_1.contains(core)) {
-            units_per_core = units_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            units_per_core = units_per_core_group_2;
-        } else {
-            TT_THROW("Core not in specified core ranges");
-        }
+    const auto layout = bernoulli_core_layout(ws);
+    for (uint32_t i = 0; i < layout.size(); ++i) {
+        const auto& [core, units_per_core, tile_offset] = layout[i];
 
-        // Register input/output addresses as Buffer* bindings so bernoulli takes the fast
-        // cache-hit path (the framework patches their addresses each dispatch).
+        // Register input/output addresses as Buffer* bindings for the cache-miss build; both are
+        // re-applied on every cache hit via override_runtime_arguments().
         reader_desc.emplace_runtime_args(core, {input.buffer(), tile_offset, units_per_core});
 
         // seed is DYNAMIC (excluded from compute_program_hash): baked here for the cache-miss
-        // build, re-applied on every cache hit via get_dynamic_runtime_args().
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        // build, re-applied on every cache hit via override_runtime_arguments().
+        const uint32_t seed = bernoulli_seed_for_core(operation_attributes, i);
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
 
         writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
-
-        tile_offset += units_per_core;
     }
 
     desc.kernels.push_back(std::move(reader_desc));
@@ -200,23 +222,44 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
+void BernoulliDeviceOperation::BernoulliProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
-    const tensor_args_t& /*tensor_args*/,
+    const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // compute is kernel 2 (reader 0, writer 1); its args are {seed, tile_offset, units_per_core}.
-    // Only the per-call seed is re-applied.
-    constexpr uint32_t kComputeKernelIdx = 2;
-    auto cores = bernoulli_work_split(output).cores;
+    // Re-derive every per-dispatch arg on each cache hit from the same builder create_descriptor uses:
+    // the compute seed and the reader/writer buffer addresses. override replaces resolve_bindings, so
+    // the addresses are ours to re-apply too. Push order in create_descriptor: reader 0, writer 1,
+    // compute 2.
+    constexpr uint32_t reader_kernel_idx = 0;
+    constexpr uint32_t writer_kernel_idx = 1;
+    constexpr uint32_t compute_kernel_idx = 2;
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size());
-    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
-        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
-        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
+    const auto ws = bernoulli_work_split(output);
+    const uint32_t in_addr = tensor_args.input.buffer()->address();
+    const uint32_t out_addr = output.buffer()->address();
+
+    const auto layout = bernoulli_core_layout(ws);
+    for (uint32_t i = 0; i < layout.size(); ++i) {
+        const auto& [core, units_per_core, tile_offset] = layout[i];
+        const uint32_t seed = bernoulli_seed_for_core(operation_attributes, i);
+
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_idx, core);
+        reader_args[0] = in_addr;
+        reader_args[1] = tile_offset;
+        reader_args[2] = units_per_core;
+
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx, core);
+        writer_args[0] = out_addr;
+        writer_args[1] = tile_offset;
+        writer_args[2] = units_per_core;
+
+        auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, compute_kernel_idx, core);
+        compute_args[0] = seed;
+        compute_args[1] = tile_offset;
+        compute_args[2] = units_per_core;
     }
-    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::bernoulli

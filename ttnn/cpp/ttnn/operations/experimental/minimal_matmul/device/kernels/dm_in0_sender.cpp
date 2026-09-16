@@ -293,7 +293,7 @@ void kernel_main() {
                     if constexpr (is_output_writer) {
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
-                        uint32_t out_read_ptr_swiglu = get_read_ptr(cb_out_id);
+                        uint32_t out_read_ptr_swiglu = cb_out.get_read_ptr();
                         if constexpr (N_chunks == 1) {
                             write_block_sync<M_block_tiles, out_N_block_tiles>(
                                 std::get<0>(outputs_tuple),

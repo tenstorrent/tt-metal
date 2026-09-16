@@ -124,7 +124,7 @@ inline void dbg_thread_halt()
         // Wait for previous packs to finish
         while (semaphore_read(semaphore::MATH_PACK) > 0)
         {
-        };
+        }
     }
 }
 

@@ -105,7 +105,8 @@ strided_all_gather_minimal_matmul_async_program(
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
-    const std::optional<const Tensor>& fused_ternary_input_b) {
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    bool fuse_swiglu) {
     tt::tt_metal::Program program{};
 
     // Create a matmul signal info object that gets populated by the matmul kernel
@@ -138,7 +139,8 @@ strided_all_gather_minimal_matmul_async_program(
         fused_ternary_scalar,
         fused_ternary_input_a,
         fused_ternary_input_b,
-        empty_srs_fused_op_signaler);
+        empty_srs_fused_op_signaler,
+        fuse_swiglu);
 
     // Create the all gather fused op signaler
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler> all_gather_fused_op_signaler =
@@ -236,7 +238,8 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.matmul_struct.compute_kernel_config,
         attributes.matmul_struct.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_b);
+        tensor_args.fused_ternary_input_b,
+        attributes.matmul_struct.fuse_swiglu);
 }
 
 }  // namespace ttnn::experimental::prim

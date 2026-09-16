@@ -57,3 +57,7 @@ def math_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> 
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value
     return f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+
+
+def math_dest_remap_config(required: bool) -> str:
+    return ""

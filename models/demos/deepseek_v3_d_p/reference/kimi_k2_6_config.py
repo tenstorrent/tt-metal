@@ -17,6 +17,14 @@ class KimiK26Config:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross twice on the
+    # 7168x2048 routed-expert shape: the composite's cost is flat inside an M chunk while the
+    # fused op's rises with the count, so the composite wins 320-512, loses 576-768 where the
+    # tail per_core_M rounds 18 tile-rows up to 32, and wins outright from 896. 768 is the
+    # aggregate-optimal cut over that sawtooth (+0.13% against a per-count oracle, worst cell
+    # +21% at 512), not a single crossing -- there is none.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 768
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
@@ -26,6 +34,13 @@ class KimiK26Config:
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 2.827
+
+    # Gate-test device-mode scores bar, relaxing the shared 0.93. 384 experts under sigmoid near-tie
+    # the top-8 boundary at 640 tokens/chip: every device/reference disagreement sits at an fp64
+    # selection-score margin below the bf16 matmul's own logit error, so the two sides order tied
+    # slots differently. The weights themselves are right (0.8% relative L2 vs an fp64 golden); it is
+    # the position-wise PCC that lands at 0.926-0.941 across the 8 SP chips of a Blackhole Galaxy 8x4.
+    GATE_SCORES_PCC_DEVICE = 0.92
 
     # Model architecture
     NUM_LAYERS = 61
