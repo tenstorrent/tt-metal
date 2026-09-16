@@ -40,10 +40,10 @@ FORCE_INLINE void process_sfpu_tiles(
     DataflowBuffer cb_post_rhs(cb_post_rhs_id);
     DataflowBuffer cb_out(cb_out_id);
 
-    PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, cb_post_lhs, n);
     cb_post_lhs.wait_front(n);
 
-    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
+    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, cb_post_lhs, n);
     cb_post_rhs.wait_front(n);
 
     cb_out.reserve_back(n);

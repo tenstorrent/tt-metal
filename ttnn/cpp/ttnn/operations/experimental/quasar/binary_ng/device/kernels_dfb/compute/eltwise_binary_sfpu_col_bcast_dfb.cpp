@@ -125,12 +125,12 @@ ALWI void process_tile(
 #endif
 
     // Broadcast operand's activation chain runs ONCE (its expanded tile is reused across the row).
-    PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, dfb_post_lhs_id, num_tiles_per_cycle);
     dfb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // OTHER operand streams one tile per iteration.
-        PREPROCESS(OTHER_OP, dfb_pre_other_id, dfb_post_other_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, dfb_pre_other_id, dfb_post_other_id, dfb_out_id, dfb_post_lhs_id, num_tiles_per_cycle);
         dfb_post_other.wait_front(num_tiles_per_cycle);
 
         dfb_out.reserve_back(num_tiles_per_cycle);

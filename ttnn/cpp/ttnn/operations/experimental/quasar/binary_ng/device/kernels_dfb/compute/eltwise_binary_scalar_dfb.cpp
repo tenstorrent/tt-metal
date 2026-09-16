@@ -63,12 +63,12 @@ void kernel_main() {
 
     // The scalar RHS tile is filled ONCE by writer_scalar_dfb.cpp: preprocess + wait it a single time
     // here (outside the chunk loop), then reuse tile index 0 on every binary op below.
-    PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, 1);
+    PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, dfb_post_lhs_id, 1);
     dfb_post_rhs.wait_front(1);
 
     // Inline helper to process n tiles (LHS only; RHS is the single reused scalar tile)
     auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, n);
+        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, dfb_post_lhs_id, n);
         dfb_post_lhs.wait_front(n);
 
         dfb_out.reserve_back(n);

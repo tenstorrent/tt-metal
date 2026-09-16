@@ -133,6 +133,15 @@ ALWI void reconfig_ts_srcb(const uint32_t srcb_old_operand, const uint32_t srcb_
 // (SrcOrder::Reverse maps icb0 -> SrcB and icb1 -> SrcA, so matmul can pass its operands unswapped, matching
 // compute_kernel_hw_startup). The srcA-only / srcB-only overloads reconfigure a single source and take no SrcOrder.
 //
+// PRECONDITION on every conditional (old, new) overload: `old` must name the operand the register is *currently
+// programmed for* -- it is a claim by the caller, not a query of the hardware. The guard compares
+// unpack_src_format[old] against unpack_src_format[new] (see llk_unpack_common_api.h, should_reconfigure_cbs), so
+// naming an operand the register does not hold makes the guard answer the wrong question and silently skip the
+// write. Because CB ids and the format tables are both compile-time constants, that skip is a compile-time fold:
+// no instruction is emitted and nothing fails loudly. Track what each source holds (see e.g.
+// sort/device/kernels/compute/sort_common.hpp copy_tile_to_dst_init_with_cb_update, or the
+// batch_norm compute kernels' `last_srca_dfb`) and pass that; if you cannot, use the unconditional overload.
+//
 // NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed into the unpack MOP at op init. reconfig_data_format
 // only reprograms THCON data formats (gasket), not the MOP. When operands or buffer descriptors change, call the op
 // init again for the new operand pair before the next unpack operation. Because tile geometry lives in the MOP,

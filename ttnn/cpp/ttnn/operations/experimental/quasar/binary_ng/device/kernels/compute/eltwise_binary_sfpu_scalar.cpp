@@ -35,7 +35,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     DataflowBuffer cb_post_rhs(cb_post_rhs_id);
     DataflowBuffer cb_out(cb_out_id);
 
-    PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, cb_post_lhs, n);
     cb_post_lhs.wait_front(n);
 
     cb_out.reserve_back(n);
@@ -103,7 +103,7 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
-    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, DataflowBuffer(cb_out_id), 1);
+    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, DataflowBuffer(cb_out_id), cb_post_lhs, 1);
     cb_post_rhs.wait_front(1);
 
     // Process full chunks

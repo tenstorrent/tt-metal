@@ -12,18 +12,27 @@
 // on each tile in DST, and writes the results into cb_post — i.e. produces the
 // "activated" input that the downstream binary op consumes. cb_out is passed in only
 // so we can briefly retarget the packer at cb_post and then restore it to cb_out's
-// data format on the way out. SFPU variant: no unpacker srca reconfigure is needed —
-// the downstream binary SFPU op uses copy_tile_to_dst_init_short_with_dt to switch
-// formats itself.
+// data format on the way out.
+//
+// cb_srca is the operand srcA is programmed for on entry, and is restored before
+// returning — see the matching note on preprocess_fpu_impl for why `old` must name the
+// operand actually programmed. This pass previously did no srca reconfigure at all, on
+// the rationale that the downstream binary SFPU op switches formats itself. It does, but
+// only *after* this helper's own copy_tile(cb_pre) has already run, so with srcA still
+// pointing at the binary op's LHS operand the activation input was unpacked through the
+// wrong format whenever the two operand dtypes differed.
 template <typename ActivationFn>
 ALWI void preprocess_sfpu_impl(
     CircularBuffer cb_pre,
     CircularBuffer cb_post,
     CircularBuffer cb_out,
+    CircularBuffer cb_srca,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
+    // Must precede copy_init — see preprocess_fpu_impl.
+    reconfig_data_format_srca(/*old*/ cb_srca.get_cb_id(), /*new*/ cb_pre.get_cb_id());
     pack_reconfig_data_format(/*old*/ cb_out.get_cb_id(), /*new*/ cb_post.get_cb_id());
 
     cb_pre.wait_front(per_core_block_size);
@@ -46,6 +55,7 @@ ALWI void preprocess_sfpu_impl(
     cb_pre.pop_front(per_core_block_size);
     cb_post.push_back(per_core_block_size);
 
+    reconfig_data_format_srca(/*old*/ cb_pre.get_cb_id(), /*new*/ cb_srca.get_cb_id());
     pack_reconfig_data_format(/*old*/ cb_post.get_cb_id(), /*new*/ cb_out.get_cb_id());
 }
 
@@ -66,6 +76,7 @@ ALWI void preprocess_sfpu_impl(
 // via preprocessor concatenation — that part can't be a function template, since `op`
 // is a token, not a value. The lambda then hands the resolved activation sequence to
 // the (real, always-inline) helper.
-#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, per_core_block_size) \
-    preprocess_sfpu_impl(                                              \
-        (cb_pre), (cb_post), (cb_out), (per_core_block_size), [&](uint32_t i) { PROCESS_ACTIVATIONS(op, i); })
+#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, cb_srca, per_core_block_size)                             \
+    preprocess_sfpu_impl((cb_pre), (cb_post), (cb_out), (cb_srca), (per_core_block_size), [&](uint32_t i) { \
+        PROCESS_ACTIVATIONS(op, i);                                                                         \
+    })

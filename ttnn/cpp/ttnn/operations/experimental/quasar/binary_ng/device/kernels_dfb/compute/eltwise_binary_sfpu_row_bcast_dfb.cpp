@@ -144,10 +144,10 @@ void kernel_main() {
 #endif
 
         // --- Binary op (SFPU path; mirrors eltwise_binary_sfpu_no_bcast_dfb.cpp's body, single tile). ---
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, dfb_post_lhs_id, num_tiles_per_cycle);
         dfb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, dfb_post_lhs_id, num_tiles_per_cycle);
         dfb_post_rhs.wait_front(num_tiles_per_cycle);
 
         dfb_out.reserve_back(num_tiles_per_cycle);

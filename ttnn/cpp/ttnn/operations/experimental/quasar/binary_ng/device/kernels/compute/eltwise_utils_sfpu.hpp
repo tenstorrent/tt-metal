@@ -16,15 +16,23 @@
 // data format on the way out. SFPU variant: no unpacker srca reconfigure is needed —
 // the downstream binary SFPU op uses copy_tile_to_dst_init_short_with_dt to switch
 // formats itself.
+// srca_cb names the operand srcA is programmed for on entry, and is restored before
+// returning. This pass previously did no srca reconfigure at all, relying on the downstream
+// binary SFPU op to switch formats — but that happens only *after* this helper's own
+// copy_tile(pre) has run, so the activation input was unpacked through the other operand's
+// format whenever the two operand dtypes differed. Mirrors the fix in
+// ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp.
 template <typename ActivationFn>
 ALWI void preprocess_sfpu_impl(
     DataflowBuffer cb_pre,
     DataflowBuffer cb_post,
     DataflowBuffer cb_out,
+    DataflowBuffer cb_srca,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
+    reconfig_data_format_srca(/*old*/ cb_srca.get_id(), /*new*/ cb_pre.get_id());
     pack_reconfig_data_format(/*old*/ cb_out.get_id(), /*new*/ cb_post.get_id());
 
     cb_pre.wait_front(per_core_block_size);
@@ -47,6 +55,7 @@ ALWI void preprocess_sfpu_impl(
     cb_pre.pop_front(per_core_block_size);
     cb_post.push_back(per_core_block_size);
 
+    reconfig_data_format_srca(/*old*/ cb_pre.get_id(), /*new*/ cb_srca.get_id());
     pack_reconfig_data_format(/*old*/ cb_post.get_id(), /*new*/ cb_out.get_id());
 }
 
@@ -67,6 +76,7 @@ ALWI void preprocess_sfpu_impl(
 // via preprocessor concatenation — that part can't be a function template, since `op`
 // is a token, not a value. The lambda then hands the resolved activation sequence to
 // the (real, always-inline) helper.
-#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, per_core_block_size) \
-    preprocess_sfpu_impl(                                              \
-        (cb_pre), (cb_post), (cb_out), (per_core_block_size), [&](uint32_t i) { PROCESS_ACTIVATIONS(op, i); })
+#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, cb_srca, per_core_block_size)                             \
+    preprocess_sfpu_impl((cb_pre), (cb_post), (cb_out), (cb_srca), (per_core_block_size), [&](uint32_t i) { \
+        PROCESS_ACTIVATIONS(op, i);                                                                         \
+    })

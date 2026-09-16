@@ -20,6 +20,7 @@ ALWI void preprocess_sfpu_impl_dfb(
     uint32_t dfb_pre_id,
     uint32_t dfb_post_id,
     uint32_t dfb_out_id,
+    uint32_t dfb_srca_id,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
@@ -27,6 +28,7 @@ ALWI void preprocess_sfpu_impl_dfb(
     DataflowBuffer dfb_pre(dfb_pre_id);
     DataflowBuffer dfb_post(dfb_post_id);
 
+    reconfig_data_format_srca(/*old*/ dfb_srca_id, /*new*/ dfb_pre_id);
     pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_post_id);
 #ifdef ARCH_QUASAR
     // On Quasar pack_reconfig_data_format only reprograms the packer format gasket, not the packer
@@ -55,6 +57,7 @@ ALWI void preprocess_sfpu_impl_dfb(
     dfb_pre.pop_front(per_core_block_size);
     dfb_post.push_back(per_core_block_size);
 
+    reconfig_data_format_srca(/*old*/ dfb_pre_id, /*new*/ dfb_srca_id);
     pack_reconfig_data_format(/*old*/ dfb_post_id, /*new*/ dfb_out_id);
 #ifdef ARCH_QUASAR
     pack_init(dfb_out_id);  // restore the packer destination ring to dfb_out (see above)
@@ -65,6 +68,7 @@ ALWI void preprocess_sfpu_impl_dfb(
 
 #define PREPROCESS_0(...)
 
-#define PREPROCESS_1(op, dfb_pre, dfb_post, dfb_out, per_core_block_size) \
-    preprocess_sfpu_impl_dfb(                                             \
-        (dfb_pre), (dfb_post), (dfb_out), (per_core_block_size), [&](uint32_t i) { PROCESS_ACTIVATIONS(op, i); })
+#define PREPROCESS_1(op, dfb_pre, dfb_post, dfb_out, dfb_srca, per_core_block_size)                                 \
+    preprocess_sfpu_impl_dfb((dfb_pre), (dfb_post), (dfb_out), (dfb_srca), (per_core_block_size), [&](uint32_t i) { \
+        PROCESS_ACTIVATIONS(op, i);                                                                                 \
+    })

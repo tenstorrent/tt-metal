@@ -87,6 +87,7 @@ ALWI void process_tile(
         CircularBuffer(CB_PRE_BCAST),
         CircularBuffer(CB_POST_BCAST),
         CircularBuffer(cb_out),
+        DataflowBuffer(cb_post_lhs),
         num_tiles_per_cycle);
     EXP_CB_POST_BCAST.wait_front(num_tiles_per_cycle);
 
@@ -96,6 +97,7 @@ ALWI void process_tile(
             CircularBuffer(CB_PRE_OTHER),
             CircularBuffer(CB_POST_OTHER),
             CircularBuffer(cb_out),
+            DataflowBuffer(cb_post_lhs),
             num_tiles_per_cycle);
         EXP_CB_POST_OTHER.wait_front(num_tiles_per_cycle);
 

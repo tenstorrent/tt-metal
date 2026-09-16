@@ -68,7 +68,13 @@ ALWI void process_tile(
     // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
     // exactly once); process_tile is called per iteration, so it only re-inits the copy op here.
     copy_init(cb_left);
-    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
+    PREPROCESS(
+        BCAST_OP,
+        CircularBuffer(CB_PRE_BCAST),
+        exp_cb_post_bcast,
+        exp_cb_out,
+        CircularBuffer(cb_post_lhs),
+        num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
@@ -90,7 +96,13 @@ ALWI void process_tile(
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 
-        PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(
+            OTHER_OP,
+            CircularBuffer(cb_llk_post),
+            exp_cb_post_other,
+            exp_cb_out,
+            CircularBuffer(cb_post_lhs),
+            num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);

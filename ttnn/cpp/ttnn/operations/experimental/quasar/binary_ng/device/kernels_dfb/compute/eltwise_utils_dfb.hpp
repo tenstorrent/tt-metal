@@ -20,11 +20,18 @@
 // in DST, writes the results into dfb_post. dfb_out's id is used only to briefly retarget the packer
 // at dfb_post and then restore it to dfb_out's data format. FPU variant: also reconfigures the
 // unpacker srca format for the pre/post switch.
+// srca_cb names the operand srcA is programmed for on entry, and is restored before
+// returning. The two-argument reconfig_data_format_srca is conditional on the *named*
+// operands' formats, so `old` must be the operand actually programmed — passing the post
+// buffer named an operand srcA never holds, which silently dropped the reconfigure and
+// unpacked the activation input through the other operand's format. Mirrors the fix in
+// ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp.
 template <typename ActivationFn>
 ALWI void preprocess_fpu_impl_dfb(
     uint32_t dfb_pre_id,
     uint32_t dfb_post_id,
     uint32_t dfb_out_id,
+    uint32_t dfb_srca_id,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
@@ -32,7 +39,7 @@ ALWI void preprocess_fpu_impl_dfb(
     DataflowBuffer dfb_pre(dfb_pre_id);
     DataflowBuffer dfb_post(dfb_post_id);
 
-    reconfig_data_format_srca(/*old*/ dfb_post_id, /*new*/ dfb_pre_id);
+    reconfig_data_format_srca(/*old*/ dfb_srca_id, /*new*/ dfb_pre_id);
     pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_post_id);
 #ifdef ARCH_QUASAR
     // On Quasar pack_reconfig_data_format only reprograms the packer format gasket, not the packer
@@ -61,7 +68,7 @@ ALWI void preprocess_fpu_impl_dfb(
     dfb_pre.pop_front(per_core_block_size);
     dfb_post.push_back(per_core_block_size);
 
-    reconfig_data_format_srca(/*old*/ dfb_pre_id, /*new*/ dfb_post_id);
+    reconfig_data_format_srca(/*old*/ dfb_pre_id, /*new*/ dfb_srca_id);
     pack_reconfig_data_format(/*old*/ dfb_post_id, /*new*/ dfb_out_id);
 #ifdef ARCH_QUASAR
     pack_init(dfb_out_id);  // restore the packer destination ring to dfb_out (see above)
@@ -75,6 +82,7 @@ ALWI void preprocess_fpu_impl_dfb(
 
 #define PREPROCESS_0(...)
 
-#define PREPROCESS_1(op, dfb_pre, dfb_post, dfb_out, per_core_block_size) \
-    preprocess_fpu_impl_dfb(                                              \
-        (dfb_pre), (dfb_post), (dfb_out), (per_core_block_size), [&](uint32_t i) { PROCESS_ACTIVATIONS(op, i); })
+#define PREPROCESS_1(op, dfb_pre, dfb_post, dfb_out, dfb_srca, per_core_block_size)                                \
+    preprocess_fpu_impl_dfb((dfb_pre), (dfb_post), (dfb_out), (dfb_srca), (per_core_block_size), [&](uint32_t i) { \
+        PROCESS_ACTIVATIONS(op, i);                                                                                \
+    })

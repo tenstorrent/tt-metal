@@ -15,16 +15,23 @@
 // so we can briefly retarget the packer at cb_post and then restore it to cb_out's
 // data format on the way out. FPU variant: also reconfigures the unpacker srca format
 // for the pre/post switch, since the FPU binary op will read from a different CB next.
+// srca_cb names the operand srcA is programmed for on entry, and is restored before
+// returning. The two-argument reconfig_data_format_srca is conditional on the *named*
+// operands' formats, so `old` must be the operand actually programmed — passing the post
+// buffer named an operand srcA never holds, which silently dropped the reconfigure and
+// unpacked the activation input through the other operand's format. Mirrors the fix in
+// ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp.
 template <typename ActivationFn>
 ALWI void preprocess_fpu_impl(
     DataflowBuffer cb_pre,
     DataflowBuffer cb_post,
     DataflowBuffer cb_out,
+    DataflowBuffer cb_srca,
     uint32_t per_core_block_size,
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
-    reconfig_data_format_srca(/*old*/ cb_post.get_id(), /*new*/ cb_pre.get_id());
+    reconfig_data_format_srca(/*old*/ cb_srca.get_id(), /*new*/ cb_pre.get_id());
     pack_reconfig_data_format(/*old*/ cb_out.get_id(), /*new*/ cb_post.get_id());
 
     cb_pre.wait_front(per_core_block_size);
@@ -47,7 +54,7 @@ ALWI void preprocess_fpu_impl(
     cb_pre.pop_front(per_core_block_size);
     cb_post.push_back(per_core_block_size);
 
-    reconfig_data_format_srca(/*old*/ cb_pre.get_id(), /*new*/ cb_post.get_id());
+    reconfig_data_format_srca(/*old*/ cb_pre.get_id(), /*new*/ cb_srca.get_id());
     pack_reconfig_data_format(/*old*/ cb_post.get_id(), /*new*/ cb_out.get_id());
 }
 
@@ -68,6 +75,7 @@ ALWI void preprocess_fpu_impl(
 // so PROCESS_##op##_ACTIVATIONS resolves via preprocessor concatenation — that part
 // can't be a function template, since `op` is a token, not a value. The lambda then
 // hands the resolved activation sequence to the (real, always-inline) helper.
-#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, per_core_block_size) \
-    preprocess_fpu_impl(                                               \
-        (cb_pre), (cb_post), (cb_out), (per_core_block_size), [&](uint32_t i) { PROCESS_ACTIVATIONS(op, i); })
+#define PREPROCESS_1(op, cb_pre, cb_post, cb_out, cb_srca, per_core_block_size)                            \
+    preprocess_fpu_impl((cb_pre), (cb_post), (cb_out), (cb_srca), (per_core_block_size), [&](uint32_t i) { \
+        PROCESS_ACTIVATIONS(op, i);                                                                        \
+    })

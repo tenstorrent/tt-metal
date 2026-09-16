@@ -73,7 +73,7 @@ ALWI void process_tile(
     // COL operand's activation chain runs ONCE (the reader software-filled the full tile; it is reused
     // across the row). COL is NOT expanded by a compute unary_bcast -- the reader fill is the broadcast
     // (deliberate reader/compute load-balance keeping compute at 2 LLK passes).
-    PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, dfb_post_lhs_id, num_tiles_per_cycle);
     dfb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
@@ -113,7 +113,7 @@ ALWI void process_tile(
 
         // ROW operand's activation chain (reads the expanded llk_post tile). No-op (post aliases llk_post)
         // when the ROW operand has no activation, in which case the binary op reads llk_post directly.
-        PREPROCESS(OTHER_OP, dfb_llk_post_id, dfb_post_other_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, dfb_llk_post_id, dfb_post_other_id, dfb_out_id, dfb_post_lhs_id, num_tiles_per_cycle);
         dfb_post_other.wait_front(num_tiles_per_cycle);
 
         // unary_bcast_init above clobbered the binary-op unpacker config, so re-init the binary op EVERY

@@ -39,10 +39,10 @@ FORCE_INLINE void process_sfpu_tiles(
     CircularBuffer cb_post_rhs(cb_post_rhs_id);
     CircularBuffer cb_out(cb_out_id);
 
-    PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, cb_post_lhs, n);
     cb_post_lhs.wait_front(n);
 
-    PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
+    PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, cb_post_lhs, n);
     cb_post_rhs.wait_front(n);
 
     cb_out.reserve_back(n);
@@ -52,7 +52,9 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+    // srcA already holds cb_post_lhs here: compute_kernel_hw_startup seeded it, and every
+    // PREPROCESS restores it. The reconfigure to cb_post_rhs below is undone at the end of
+    // the sequence so that invariant survives into the next chunk.
     copy_init(cb_post_lhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
@@ -71,6 +73,7 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+    reconfig_data_format_srca(/*old*/ cb_post_rhs.get_cb_id(), /*new*/ cb_post_lhs.get_cb_id());
     tile_regs_commit();
 
     tile_regs_wait();

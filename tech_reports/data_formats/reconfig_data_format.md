@@ -59,7 +59,17 @@ The following DataFormat reconfigurations are currently supported:
 
 - `reconfig_data_format` API should be used to reconfigure the hardware between calls to operations that use CBs of different DataFormats.
 - `pack_reconfig_data_format` API is called independently of `reconfig_data_format`, when the output CB changes DataFormats
-- Programmers should always use the API calls providing both the old and the new operand CB index, as this enables faster reconfiguration and dynamic checks for eligible conversions.
+- Programmers should prefer the API calls providing both the old and the new operand CB index, as this enables faster reconfiguration and dynamic checks for eligible conversions.
+- **`old` must be the operand the register is currently programmed for.** It is a claim by the caller, not a query of
+  the hardware: the guard compares `unpack_src_format[old]` against `unpack_src_format[new]`, so naming an operand the
+  register does not hold makes the guard answer the wrong question and skip the write. CB ids and the format tables are
+  both compile-time constants, so that skip folds away at build time — no instruction is emitted, nothing asserts, and
+  the next unpack silently reads its tile through the previous operand's format. This is only observable when the two
+  formats differ, so it typically hides until someone uses mixed input dtypes.
+- Keep an explicit record of what each source register holds if the answer is not obvious at the call site (see
+  `sort_common.hpp::copy_tile_to_dst_init_with_cb_update`, or `last_srca_dfb` in the batch_norm compute kernels), and
+  pass that. When you genuinely cannot know, use the single-argument unconditional overload — it always writes, at a
+  cost of roughly two pipeline drains plus a handful of config RMWs.
 
 ## Examples:
 TO DO

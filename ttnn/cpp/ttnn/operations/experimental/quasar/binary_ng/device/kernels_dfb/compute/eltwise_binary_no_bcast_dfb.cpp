@@ -62,10 +62,10 @@ void kernel_main() {
 
     // Inline helper to process n tiles
     auto process_tiles = [&](uint32_t n) {
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, n);
+        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, dfb_post_lhs_id, n);
         dfb_post_lhs.wait_front(n);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, n);
+        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, dfb_post_lhs_id, n);
         dfb_post_rhs.wait_front(n);
 
         dfb_out.reserve_back(n);

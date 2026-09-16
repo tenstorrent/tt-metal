@@ -37,11 +37,11 @@ ALWI void process_tile(
     CircularBuffer& cb_post_other = cb_post_rhs;
 #endif
 
-    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), cb_post_bcast, cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), cb_post_bcast, cb_out, cb_post_lhs, num_tiles_per_cycle);
     cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        PREPROCESS(OTHER_OP, CircularBuffer(CB_PRE_OTHER), cb_post_other, cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, CircularBuffer(CB_PRE_OTHER), cb_post_other, cb_out, cb_post_lhs, num_tiles_per_cycle);
         cb_post_other.wait_front(num_tiles_per_cycle);
 
         cb_out.reserve_back(num_tiles_per_cycle);

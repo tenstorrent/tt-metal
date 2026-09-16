@@ -65,10 +65,22 @@ void kernel_main() {
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 
-        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(
+            LHS,
+            CircularBuffer(cb_pre_lhs),
+            exp_cb_post_lhs,
+            exp_cb_out,
+            CircularBuffer(cb_post_lhs),
+            num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, CircularBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(
+            RHS,
+            CircularBuffer(cb_pre_rhs),
+            exp_cb_post_rhs,
+            exp_cb_out,
+            CircularBuffer(cb_post_lhs),
+            num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
