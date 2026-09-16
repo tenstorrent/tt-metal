@@ -214,13 +214,13 @@ CB_PARTIAL = 8
 CB_GATHER = 9
 CB_TOTALS_SRC = 10
 CB_TOTALS_RECV = 11
-CB_STATS_G_FULL = 12
+# 12: (Perf 2) freed — cb_stats_g_full: the expansion matmul consumes the row-form stats (CB_STATS_ROW) directly
 CB_GAMMA_ROW = 13
 CB_BETA_ROW = 14
 CB_STATS_T = 15
-CB_BETA_FULL = 16  # transient beta_T broadcast to all rows (beta path)
-CB_A_FULL = 17
-CB_B_FULL = 18
+# 16: (Perf 2) freed — cb_beta_full: b_T is built from beta's row-0 tile directly
+CB_A_ROW = 17  # row-0-form a_T per channel tile of the column group (Perf 2; was a full tile)
+CB_B_ROW = 18  # row-0-form b_T per channel tile of the column group (Perf 2; was a full tile)
 CB_OUT = 19
 CB_STATS_ROW = 20
 
@@ -518,17 +518,18 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         add(CB_TOTALS_RECV, 2 * Kg, f32_tile_bytes, ttnn.float32)
     if combine == COMBINE_ROOT:
         add(CB_TOTALS_SRC, 2 * Kg, f32_tile_bytes, ttnn.float32)  # the root's multicast source
-    add(CB_STATS_ROW, 2 * Kg, stat_tile_bytes, stat_dtype)
-    add(CB_STATS_G_FULL, 2 * Kg, stat_tile_bytes, stat_dtype)
+    add(
+        CB_STATS_ROW, 2 * Kg, stat_tile_bytes, stat_dtype
+    )  # row-0 form; also the pass-2 expansion matmul's in0 (Perf 2)
     if has_gamma:
         add(CB_GAMMA_ROW, cols, g_tile_bytes, g_dtype)
     if has_beta:
         add(CB_BETA_ROW, cols, g_tile_bytes, g_dtype)
-        add(CB_BETA_FULL, cols, stat_tile_bytes, stat_dtype)  # Perf 1: beta_T of the whole column group at once
-    # Perf 1 (batched affine build): [mean_T..; rstd_T..] for every channel tile of the column group in ONE matmul
+    # Perf 1 (batched affine build): [mean_T..; rstd_T..] for every channel tile of the column group in ONE matmul;
+    # Perf 2 (lane form): stats_T / a / b are row-0-form tiles (same page count, no full-tile broadcasts)
     add(CB_STATS_T, 2 * cols, stat_tile_bytes, stat_dtype)
-    add(CB_A_FULL, cols, stat_tile_bytes, stat_dtype)
-    add(CB_B_FULL, cols, stat_tile_bytes, stat_dtype)
+    add(CB_A_ROW, cols, stat_tile_bytes, stat_dtype)
+    add(CB_B_ROW, cols, stat_tile_bytes, stat_dtype)
     add(CB_OUT, OUT_DEPTH_FACTOR * out_block, y_tile_bytes, output_tensor.dtype)
 
     # ---- regime: resident_2d vs streaming_2d (host-side, exact) -----------------------------
@@ -655,13 +656,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         CB_GATHER,
         CB_TOTALS_SRC,
         CB_TOTALS_RECV,
-        CB_STATS_G_FULL,
         CB_GAMMA_ROW,
         CB_BETA_ROW,
         CB_STATS_T,
-        CB_BETA_FULL,
-        CB_A_FULL,
-        CB_B_FULL,
+        CB_A_ROW,
+        CB_B_ROW,
         CB_OUT,
         CB_STATS_ROW,
         int(is_rm),

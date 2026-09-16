@@ -4,9 +4,17 @@
 // groupnorm_sc_N_1_HW_C — reader (data movement).
 //
 // Per image owned by this core:
-//   pass 1: for each column group cg: for each row chunk rc: load the chunk_rows x cols tile block of x
-//           (TILE input: DRAM tiles -> cb_x_pass1 [+ cb_x_pass2 credit when resident];
-//            RM input:   sticks -> cb_x_rm, compute tilizes), then generate E^T for cg -> cb_membership.
+//   pass 1: for each column group cg (Perf 2 schedule): TILE input — issue chunk 0's DRAM tile reads FIRST, then,
+//           in the shadow of their DRAM latency, generate the pass-1 constants on the RISC (the reduce scaler once per
+//           kernel, and E^T for cg -> cb_membership: one tagged NoC zero-fill of all their pages, a zeros-only
+//           barrier, then the RISC lane / row-0 writes), then barrier + push chunk 0 and load the remaining chunks
+//           (resident: one chunk of read lookahead — chunk rc+1 is in flight while chunk rc is barriered + pushed;
+//           streaming: one chunk per barrier, the ring is X_DEPTH deep). RM input has no read shadow
+//           (read_sticks_for_tilize barriers internally) and keeps the pre-Perf-2 ORDER with the same code: scaler
+//           at kernel start, stick blocks -> cb_x_rm, then E^T — "constants before the sticks" was measured as a
+//           material regression there (rm-no_affine-streaming +5.9 %, rm resident +2.1..2.6 %, 4-run medians).
+//           Measured (perf_experiments/reader_pass1_shadow, focus (1,1,1024,640) on 110 cores): the slowest core's
+//           "pass-1 reader done" 5.75 -> 4.00 us, and that core's pass 1 sets the whole image's combine rendezvous.
 //   pass 2: for each column group cg: generate E for cg -> cb_membership and the gamma/beta row-0 tiles for cg in
 //           one batch (one NoC zero-fill barrier, DRAM reads in flight while the RISC writes the E lanes, one read
 //           barrier — Refinement 5), then (streaming regime only) re-stream the x chunks of cg into cb_x_pass2 /
@@ -15,6 +23,14 @@
 // Constant tiles: the reduce scaler (once per kernel; a [full, partial] REDUCE_COL pair when HW % 32 != 0, so
 // the image's padded last tile-row never enters the statistics). Membership / affine-row pages are zeroed over
 // the NoC (DM engine) before the few real lanes are written by the RISC.
+//
+// Helper bypass (Perf 2, measured): the scaler tiles are filled by hand (with the helper library's own
+// fill_each_face_row0 / fill_each_face_row0_partial primitives, so the bytes are identical to
+// calculate_and_prepare_[partial_]reduce_scaler[s]) instead of calling those helpers: on Wormhole / Blackhole a NoC
+// zero-fill is a loopback READ and the helpers' write_zeros_l1_barrier is the FULL noc_async_read_barrier — called
+// while chunk 0's x reads are in flight it would wait for them and destroy the shadow (r_scaler 0.32 us back on the
+// critical path). The zero-fills here are tagged with a transaction id (noc_async_read_set_trid) and barriered with
+// noc_async_read_barrier_with_trid, so only the zeros are awaited; the x reads carry their own ids.
 //
 // Padding independence (RM input): a stick block whose last tile-row is short (HW % 32 != 0) or whose last
 // channel tile is short (C % 32 != 0) is zero-filled over the NoC before only the valid sticks / lanes are read
@@ -25,6 +41,7 @@
 // valid tiles are laid out densely (row-major valid_rows x valid_cols) and only they are read from DRAM.
 
 #include <stdint.h>
+#include <type_traits>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -37,6 +54,9 @@
 // Per-stage zones (MaybeDeviceZoneScope, PERMANENT — free when the profiler is off; perf_instrumentation.hpp):
 // CB reserves (back-pressure from compute), NoC issue loops (RISC-serial transaction cost) and NoC barriers
 // (fabric / DRAM latency) are zoned separately — a barrier of ~0 only says the transfers had landed by then.
+// Pass 1 (Perf 2): r_x_issue (chunk reads issued), r_memb_reserve, r_zero_fill (tagged zero-fill + zeros barrier),
+// r_scaler (row-0 fill, first column group only), r_memb_fill (E^T lanes) all run INSIDE chunk 0's DRAM shadow;
+// r_x_barrier is the residual wait after that work (resident: per chunk, one chunk of lookahead in flight).
 //
 // Ablation switches (perf measurement only, host env GROUPNORM_SC_N_1_HW_C_KERNEL_DEFINES; output wrong by design):
 //   GN_ABLATE_READ_X        skip the x tile / stick NoC reads (address math, barriers and CB traffic kept)
@@ -63,10 +83,10 @@ namespace {
 constexpr uint32_t ONE_F32_BITS = 0x3F800000u;
 constexpr uint16_t ONE_BF16_BITS = 0x3F80u;
 
-// Byte offset of element (r, c) inside a 32x32 tile made of four 16x16 faces of `elem_bytes` elements.
-constexpr uint32_t tile_elem_offset(uint32_t r, uint32_t c, uint32_t elem_bytes) {
-    return (((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15)) * elem_bytes;
-}
+// NoC read transaction ids (Perf 2): the zero-fill loopback reads and the x DRAM reads are barriered independently.
+constexpr uint32_t TRID_ZERO = 1;  // zero-fill loopback reads
+constexpr uint32_t TRID_X0 = 2;    // x chunk reads (even chunk index in the resident lookahead)
+constexpr uint32_t TRID_X1 = 3;    // x chunk reads (odd chunk index in the resident lookahead)
 
 }  // namespace
 
@@ -142,22 +162,22 @@ void kernel_main() {
     // ---------------- constants ----------------
     constexpr uint32_t hw_tail = HW % 32;  // valid rows of the image's last tile-row (0 = tile-aligned)
     constexpr uint32_t c_tail = C % 32;    // valid lanes of the last channel tile (0 = tile-aligned)
-    {
-        MaybeDeviceZoneScope("r_scaler");
+    // Reduce scaler: SUM -> 1.0 in row 0 of every face; a [full, partial] pair when hw_tail != 0 (compute selects
+    // tile 1 for the last row tile of the chunk holding row Ht - 1). Filled in the first column group's shadow below.
+    constexpr uint32_t scaler_tiles = (hw_tail != 0) ? 2u : 1u;
+    constexpr DataFormat scaler_format = get_dataformat(cb_scaler);
+    constexpr uint32_t scaler_tile_bytes = get_tile_size(cb_scaler);
+    CircularBuffer scaler_cb(cb_scaler);
+    auto fill_scaler_tiles = [&]() {  // pages already zeroed (and the zeros landed)
+        const uint32_t one = dataflow_kernel_lib::float_to_scaler_bits<scaler_format>(1.0f);
+        const uint32_t addr = get_write_ptr(cb_scaler);
+        dataflow_kernel_lib::fill_each_face_row0<scaler_format, 4>(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr), one);
         if constexpr (hw_tail != 0) {
-            // [full, partial] pair: compute selects tile 1 for the last row tile of the chunk holding row Ht - 1
-            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
-                cb_scaler,
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_COL,
-                hw_tail>();
-        } else {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_scaler,
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_COL>();
+            dataflow_kernel_lib::fill_each_face_row0_partial<scaler_format, ckernel::ReduceDim::REDUCE_COL, 2, 2>(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr + scaler_tile_bytes), one, hw_tail);
         }
-    }
+    };
     const bool owns_last_row = (row_begin + Ht_core == Ht);  // this core's rows end at the image's last tile-row
 
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
@@ -170,84 +190,205 @@ void kernel_main() {
     //   pass 2  in1 = E,   K = Kg, N = cols (Perf 1: ONE expansion matmul over the NOMINAL column group) -> index
     //           kg * cols + tl; the zero pad tiles tl >= valid_cols yield a_T = b_T = 0, never read by the apply.
     // (Identical orders when Kg == 1, i.e. every shape with num_groups <= 32.)
-    // The RISC part: the 0/1 lanes into the (already zeroed, reserved) membership pages.
+    // The RISC part: the 0/1 lanes into the (already zeroed, reserved) membership pages, written as RUNS (Perf 2):
+    // the channels of one tile that belong to one group are consecutive, so a run of `run` channels of group g is a
+    // stride-16-element column segment (E^T: rows c..c+run-1 of column gl) or a contiguous row segment (E: row gl,
+    // columns c..c+run-1) of tile (kg, tl) — one `ch / Cg` per column group, then an in-group counter (measured
+    // r_memb_fill 0.94 -> 0.53 us on the focus; a per-lane divide version was 0.83-0.97x of this).
     auto write_membership_lanes = [&](uint32_t cg, bool transposed) {
+        using elem_t = std::conditional_t<e_elem_size == 4, uint32_t, uint16_t>;
+        constexpr elem_t ONE =
+            (e_elem_size == 4) ? static_cast<elem_t>(ONE_F32_BITS) : static_cast<elem_t>(ONE_BF16_BITS);
+        constexpr uint32_t FACE_ELEMS = 256;
         const uint32_t valid_cols = col_axis.valid(cg, cols);
         const uint32_t base = get_write_ptr(cb_membership);
+        uint32_t ch = (col_begin + cg * cols) * 32;
+        uint32_t g = ch / Cg;
+        uint32_t k = ch - g * Cg;  // position of ch inside group g
         for (uint32_t tl = 0; tl < valid_cols; ++tl) {
-            const uint32_t T = col_begin + cg * cols + tl;
-            for (uint32_t c = 0; c < 32; ++c) {
-                const uint32_t ch = T * 32 + c;
-                if (ch >= C) {
-                    break;  // padded lanes of a ragged last channel tile stay zero
+            const uint32_t c_end = (ch + 32 <= C) ? 32u : (C - ch);  // padded lanes of a ragged last tile stay zero
+            uint32_t c = 0;
+            while (c < c_end) {
+                uint32_t run = Cg - k;
+                if (run > c_end - c) {
+                    run = c_end - c;
                 }
-                const uint32_t g = ch / Cg;
                 const uint32_t kg = g >> 5;
                 const uint32_t gl = g & 31;
-                const uint32_t r = transposed ? c : gl;
-                const uint32_t cc = transposed ? gl : c;
                 const uint32_t tile = transposed ? (tl * Kg + kg) : (kg * cols + tl);
-                const uint32_t addr = base + tile * e_tile_bytes + tile_elem_offset(r, cc, e_elem_size);
-                if constexpr (e_elem_size == 4) {
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = ONE_F32_BITS;
+                volatile tt_l1_ptr elem_t* t = reinterpret_cast<volatile tt_l1_ptr elem_t*>(base + tile * e_tile_bytes);
+                const uint32_t c1 = c + run;
+                if (transposed) {
+                    // element (r = c', col = gl): face (c' >> 4) * 2 + (gl >> 4), offset (c' & 15) * 16 + (gl & 15)
+                    volatile tt_l1_ptr elem_t* p = t + (gl >> 4) * FACE_ELEMS + (gl & 15);
+                    uint32_t r = c;
+                    for (; r < c1 && r < 16; ++r) {
+                        p[r * 16] = ONE;
+                    }
+                    for (; r < c1; ++r) {
+                        p[2 * FACE_ELEMS + (r - 16) * 16] = ONE;
+                    }
                 } else {
-                    *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = ONE_BF16_BITS;
+                    // element (r = gl, col = c'): face (gl >> 4) * 2 + (c' >> 4), offset (gl & 15) * 16 + (c' & 15)
+                    volatile tt_l1_ptr elem_t* p = t + (gl >> 4) * 2 * FACE_ELEMS + (gl & 15) * 16;
+                    uint32_t cc = c;
+                    for (; cc < c1 && cc < 16; ++cc) {
+                        p[cc] = ONE;
+                    }
+                    for (; cc < c1; ++cc) {
+                        p[FACE_ELEMS + (cc - 16)] = ONE;
+                    }
+                }
+                c = c1;
+                ch += run;
+                k += run;
+                if (k == Cg) {
+                    k = 0;
+                    ++g;
                 }
             }
         }
     };
-    auto fill_membership = [&](uint32_t cg, bool transposed) {
+    // Pass-1 constants of column group cg (Perf 2: called while chunk 0's x reads are in flight): reserve E^T (+ the
+    // scaler tiles on the kernel's first call), zero them all with ONE tagged NoC zero-fill, await the zeros only,
+    // then the RISC writes (scaler row-0 fill + push, E^T lanes + push). MEMBERSHIP_DEPTH >= 2 blocks give the reserve
+    // room while compute still holds the previous group's E^T.
+    // `with_membership = false` fills only the scaler (RM input: the scaler alone goes first, E^T after the sticks).
+    bool scaler_pending = true;
+    auto fill_pass1_constants = [&](uint32_t cg, bool with_membership) {
+        const bool with_scaler = scaler_pending;
+        scaler_pending = false;
         {
-            MaybeDeviceZoneScope("r_memb_reserve");  // back-pressure: compute still holds the previous E block
-            cb_reserve_back(cb_membership, membership_tiles);
+            MaybeDeviceZoneScope("r_memb_reserve");  // back-pressure: compute still holds the previous E block(s)
+            if (with_membership) {
+                cb_reserve_back(cb_membership, membership_tiles);
+            }
+            if (with_scaler) {
+                cb_reserve_back(cb_scaler, scaler_tiles);
+            }
         }
-        MaybeDeviceZoneScope("r_memb_fill");  // NoC zero-fill + barrier + RISC lane writes
-        if constexpr (!ablate_membership) {
-            noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
-            noc.write_zeros_l1_barrier();
-            write_membership_lanes(cg, transposed);
+        {
+            MaybeDeviceZoneScope("r_zero_fill");  // tagged NoC zero-fill of E^T (+ scaler) pages + zeros-only barrier
+            noc_async_read_set_trid(TRID_ZERO);
+            bool issued = false;
+            if constexpr (!ablate_membership) {
+                if (with_membership) {
+                    noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
+                    issued = true;
+                }
+            }
+            if (with_scaler) {
+                noc.async_write_zeros(scaler_cb, scaler_tiles * scaler_tile_bytes);
+                issued = true;
+            }
+            if (issued) {
+                noc_async_read_barrier_with_trid(TRID_ZERO);
+                NOC_ZERO_MODE_EXIT();  // zeros landed (the debug-build guard write_zeros_l1_barrier would clear)
+            }
         }
-        cb_push_back(cb_membership, membership_tiles);
+        if (with_scaler) {
+            MaybeDeviceZoneScope("r_scaler");  // row-0 fill of the [full(, partial)] scaler tile(s) + push
+            fill_scaler_tiles();
+            cb_push_back(cb_scaler, scaler_tiles);
+        }
+        if (with_membership) {
+            {
+                MaybeDeviceZoneScope("r_memb_fill");  // RISC lane writes of E^T
+                if constexpr (!ablate_membership) {
+                    write_membership_lanes(cg, /*transposed=*/true);
+                }
+            }
+            cb_push_back(cb_membership, membership_tiles);
+        }
     };
 
     // TILE input: the valid_rows x valid_cols tiles of image n, block (cg, rc), dense row-major from the block's
-    // first page; the push stays the nominal `chunk`.
-    auto load_x_chunk_tiles = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {
-        const uint32_t cb_id = pass2 ? cb_x_pass2 : cb_x_pass1;
+    // first page; the push stays the nominal `chunk`. Split into reserve / issue / push so the pass-1 schedule can
+    // put RISC work and the next chunk's reads between a chunk's issue and its barrier.
+    auto reserve_chunk = [&](uint32_t cb_id) {
+        MaybeDeviceZoneScope("r_x_reserve");  // back-pressure from compute (streaming ring) / none (resident)
+        cb_reserve_back(cb_id, chunk);
+        if constexpr (resident) {
+            cb_reserve_back(cb_x_pass2, chunk);  // aliased region: pass-2 credits move in lockstep
+        }
+    };
+    auto push_chunk = [&](uint32_t cb_id) {
+        cb_push_back(cb_id, chunk);
+        if constexpr (resident) {
+            cb_push_back(cb_x_pass2, chunk);
+        }
+    };
+    auto issue_chunk = [&](uint32_t n, uint32_t cg, uint32_t rc, uint32_t l1) {
+        MaybeDeviceZoneScope("r_x_issue");  // RISC-serial: one TensorAccessor address + NoC command per tile
         const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
         const uint32_t valid_cols = col_axis.valid(cg, cols);
-        {
-            MaybeDeviceZoneScope("r_x_reserve");  // back-pressure from compute (streaming ring) / none (resident)
-            cb_reserve_back(cb_id, chunk);
-            if constexpr (resident) {
-                cb_reserve_back(cb_x_pass2, chunk);  // aliased region: pass-2 credits move in lockstep
-            }
-        }
-        uint32_t l1 = get_write_ptr(cb_id);
-        {
-            MaybeDeviceZoneScope("r_x_issue");  // RISC-serial: one TensorAccessor address + NoC command per tile
-            for (uint32_t i = 0; i < valid_rows; ++i) {
-                const uint32_t r = row_begin + rc * chunk_rows + i;
-                for (uint32_t j = 0; j < valid_cols; ++j) {
-                    const uint32_t t = col_begin + cg * cols + j;
-                    const uint32_t page = n * Ht * Ct + r * Ct + t;
-                    const uint64_t src = x_acc.get_noc_addr(page);
-                    if constexpr (ablate_read_x) {
-                        asm volatile("" ::"r"(static_cast<uint32_t>(src)), "r"(l1));  // keep the address math
-                    } else {
-                        noc_async_read(src, l1, x_tile_bytes);
-                    }
-                    l1 += x_tile_bytes;
+        for (uint32_t i = 0; i < valid_rows; ++i) {
+            const uint32_t r = row_begin + rc * chunk_rows + i;
+            for (uint32_t j = 0; j < valid_cols; ++j) {
+                const uint32_t t = col_begin + cg * cols + j;
+                const uint32_t page = n * Ht * Ct + r * Ct + t;
+                const uint64_t src = x_acc.get_noc_addr(page);
+                if constexpr (ablate_read_x) {
+                    asm volatile("" ::"r"(static_cast<uint32_t>(src)), "r"(l1));  // keep the address math
+                } else {
+                    noc_async_read(src, l1, x_tile_bytes);
                 }
+                l1 += x_tile_bytes;
             }
         }
+    };
+    // one chunk per full barrier (the pass-2 re-stream of the streaming regime, and pass-1 chunks rc >= 1 there)
+    auto load_x_chunk_tiles = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {
+        const uint32_t cb_id = pass2 ? cb_x_pass2 : cb_x_pass1;
+        reserve_chunk(cb_id);
+        issue_chunk(n, cg, rc, get_write_ptr(cb_id));
         {
             MaybeDeviceZoneScope("r_x_barrier");  // DRAM / fabric latency of the chunk's reads
             noc_async_read_barrier();
         }
-        cb_push_back(cb_id, chunk);
+        push_chunk(cb_id);
+    };
+    // Resident ring geometry for the lookahead: chunk rc+1 lands `chunk` pages after chunk rc, wrapping at the ring's
+    // limit (a multi-image core's ring is RESIDENT_IMAGE_DEPTH blocks deep and an image block may start anywhere in
+    // it; every quantum is a whole chunk, so a chunk never straddles the limit — it jumps to the base).
+    [[maybe_unused]] const uint32_t x1_limit = get_local_cb_interface(cb_x_pass1).fifo_limit;
+    [[maybe_unused]] const uint32_t x1_size = get_local_cb_interface(cb_x_pass1).fifo_size;
+    auto next_chunk_slot = [&](uint32_t l1) {
+        const uint32_t next = l1 + chunk * x_tile_bytes;
+        return (next >= x1_limit) ? (next - x1_size) : next;
+    };
+    // Pass-1 x of column group cg, TILE input (Perf 2 schedule — see the kernel head).
+    auto load_pass1_column_group_tiles = [&](uint32_t n, uint32_t cg) {
+        reserve_chunk(cb_x_pass1);
+        uint32_t l1 = get_write_ptr(cb_x_pass1);
+        noc_async_read_set_trid(TRID_X0);
+        issue_chunk(n, cg, 0, l1);
+        fill_pass1_constants(cg, /*with_membership=*/true);  // RISC work in the shadow of chunk 0's DRAM latency
         if constexpr (resident) {
-            cb_push_back(cb_x_pass2, chunk);
+            // one chunk of lookahead: chunk rc+1 in flight while chunk rc is barriered + pushed
+            for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
+                const uint32_t l1_next = next_chunk_slot(l1);
+                if (rc + 1 < num_row_chunks) {
+                    reserve_chunk(cb_x_pass1);
+                    noc_async_read_set_trid(((rc + 1) & 1) ? TRID_X1 : TRID_X0);
+                    issue_chunk(n, cg, rc + 1, l1_next);
+                }
+                {
+                    MaybeDeviceZoneScope("r_x_barrier");  // DRAM / fabric latency of chunk rc's reads
+                    noc_async_read_barrier_with_trid((rc & 1) ? TRID_X1 : TRID_X0);
+                }
+                push_chunk(cb_x_pass1);
+                l1 = l1_next;
+            }
+        } else {
+            {
+                MaybeDeviceZoneScope("r_x_barrier");
+                noc_async_read_barrier();
+            }
+            push_chunk(cb_x_pass1);
+            for (uint32_t rc = 1; rc < num_row_chunks; ++rc) {
+                load_x_chunk_tiles(n, cg, rc, /*pass2=*/false);
+            }
         }
     };
 
@@ -304,7 +445,7 @@ void kernel_main() {
         }
     };
 
-    auto load_x_chunk = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {
+    auto load_x_chunk = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {  // pass-2 re-stream (streaming)
         if constexpr (is_rm) {
             load_x_chunk_sticks(n, cg, rc, pass2);
         } else {
@@ -449,11 +590,24 @@ void kernel_main() {
 
         // ---------------- pass 1: statistics ----------------
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
-            for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
-                load_x_chunk(n, cg, rc, /*pass2=*/false);
+            if constexpr (is_rm) {
+                // No read shadow (read_sticks_for_tilize barriers internally): scaler first (kernel start), the
+                // stick blocks, then E^T — measured: E^T before the sticks delays compute's first tilize (+2..6 %).
+                if (scaler_pending) {
+                    fill_pass1_constants(cg, /*with_membership=*/false);
+                    noc_async_read_set_trid(0);
+                }
+                for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
+                    load_x_chunk_sticks(n, cg, rc, /*pass2=*/false);
+                }
+                fill_pass1_constants(cg, /*with_membership=*/true);
+                noc_async_read_set_trid(0);
+            } else {
+                load_pass1_column_group_tiles(n, cg);
             }
-            fill_membership(cg, /*transposed=*/true);
         }
+        noc_async_read_barrier();  // hygiene: nothing outstanding on any transaction id before pass 2's reads
+        noc_async_read_set_trid(0);
 
         // ---------------- pass 2: apply ----------------
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {

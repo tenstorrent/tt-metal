@@ -13,17 +13,32 @@
 //                     writer multicasts them -> cb_totals_recv on every core;
 //          ALL_GATHER every core holds every record (the writer multicasts its own) and reduces its own gather
 //                     -> cb_totals_recv, so no core waits on a root's serial reduce + broadcast.
-//          then every core: mean/rstd lane form -> broadcast to full tiles (cb_stats_g_full)
+//          then every core: mean/rstd lane form (cb_stats_row; consumed in lane form by pass 2 — Perf 2)
 //
 // Helper bypass (documented, Refinement 5): finalize_stats runs on LANE-FORM tiles (row 0 valid). With
 // FINALIZE_LANE_MODE the chain uses the row-0-only SFPU elements of groupnorm_sc_N_1_HW_C_lane_sfpu.hpp instead of
 // the kernel_lib MulUnary/AddUnary/Relu/Rsqrt/MulBinary/SubBinary, which have no vector-mode knob and process all 32
 // rows (2.5-3 us of the 7 us latency floor, measured). The chain framework (DEST window, CB ops, reconfig) is
 // unchanged; see that header for the contract.
-// pass 2 (per column group): ONE expansion matmul [mean; rstd]_full x [E_T..] -> [mean_T..; rstd_T..] for all the
-//          group's channel tiles, ONE chain a_T = rstd_T*gamma_T, ONE bcast + chain b_T = beta_T - mean_T*a_T
-//          (Perf 1: batched per column group instead of per channel tile — 4 helper inits per group, not per tile);
-//          then y = x*a_T + b_T over every row chunk -> cb_out.
+// pass 2 (per column group, Perf 2: LANE FORM throughout): ONE expansion matmul on the row-0-form stats
+//          [mean_row; rstd_row] x [E_T..] -> row-0-form [mean_T..; rstd_T..] for all the group's channel tiles (row 0
+//          of the product depends only on row 0 of in0), ONE chain a_row = rstd_T_row * gamma_row (plain eltwise of
+//          two row-0 tiles), ONE chain b_row = beta_row - mean_T_row * a_row (plain dest-reuse Sub) — no full-tile
+//          broadcast of the stats (c_stats_bcast deleted), of beta (cb_beta_full deleted) or of a / b; then
+//          y = x * bcast_row(a_row) + bcast_row(b_row) over every row chunk -> cb_out, one tile-row per DEST window.
+//          Perf 1 batched the build per column group (4 helper inits per group); Perf 2 measured the region
+//          (stats bcast + affine + apply, focus cols = 2) 2986 -> 2456 ns (1.22x), 1.09-1.30x over cols 1-8, Kg 1-2,
+//          bit-identical output (perf_experiments/affine_lane_form, variant lane_d2a).
+//
+// Helper bypass (documented, Perf 2): the apply's "+ bcast_row(b)" step is raw LLK. The kernel_lib chain cannot
+// express an FPU add of a ROW-BROADCAST operand against DEST: ckl::DestReuseBinary takes a plain InputSpec and calls
+// {add,sub,mul}_reuse_dest_tiles, which are BroadcastType::NONE only, while the LLK dest-reuse MOP and the unpack_A
+// MOP both support ROW + DEST_TO_SRCA. The apply therefore does mul_tiles_bcast_rows (public API) for x * bcast(a)
+// into DEST and then llk_unpack_A<ROW, acc_to_dest, DEST_TO_SRCA> + llk_math_eltwise_binary<ELWADD, ROW, ...,
+// DEST_TO_SRCA> per tile, with srcA reconfigured to the fp32 b_row CB so the DEST -> srcA move is tf32-class (a bf16
+// srcA — x's format — would round the product to 8 mantissa bits). Measured against the best helper-only
+// alternative (x * bcast(a) -> L1 -> + bcast(b), `lane_l1`): 2456 vs 2529 ns on the focus, 12738 vs 15450 ns on a
+// 4x8 apply block. Precision: bit-identical to the previous full-tile DestReuse<Add> path on every tested cell.
 //
 // Helper policy notes (caller-owned lifecycles the headers hand out):
 //  * REDUCE_COL uses ReduceInputPolicy::WaitUpfrontNoPop + caller pop: the BulkWaitBulkPop path asserts the
@@ -40,13 +55,18 @@
 //  * colsum ring [S(cols) ; Q(cols)]: the reduce writes valid_cols tiles per statistic; the cols - valid_cols pad
 //    slots are ZERO-filled (FillScalar chain) so the K = cols membership matmul (whose E^T pad rows are zero)
 //    never multiplies 0 by uninitialised L1.
-//  * membership / affine rows / a_full / b_full: valid_cols consumed or produced, the rest pad-popped / -pushed.
+//  * membership / affine rows / a_row / b_row: valid_cols consumed or produced, the rest pad-popped / -pushed.
 //  * RM input, ragged column group: tilize one tile-row at a time with the valid width, pad-pop the rest.
 
 #include <stdint.h>
 #include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/pack.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -66,7 +86,8 @@
 // Per-stage zones (MaybeDeviceZoneScope, PERMANENT — free when the profiler is off; see perf_instrumentation.hpp).
 // The zones wrap the helper calls, so they are OCCUPANCY (the helper's internal cb_wait_front is inside): c_square
 // carries the wait for the reader's x chunk, c_gather_reduce the wait for the records, c_affine the wait for the
-// pass-2 constants. Do NOT hoist those waits into separate zones to split wait from work: a duplicate cb_wait_front
+// pass-2 constants (c_stats_bcast was deleted in Perf 2: the affine build consumes the row-form stats directly).
+// Do NOT hoist those waits into separate zones to split wait from work: a duplicate cb_wait_front
 // on the unpack thread is not free — four hoisted waits measured +0.1..0.45 us per op (Perf 1 bisect, 3-run medians),
 // i.e. the attribution split cost more than several of the stages it attributed. Pin a starvation verdict with the
 // reader's r_x_barrier / r_p2_fill zones or an ablation instead.
@@ -134,29 +155,28 @@ void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(9);
     constexpr uint32_t cb_totals_src = get_compile_time_arg_val(10);
     constexpr uint32_t cb_totals_recv = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_stats_g_full = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_gamma_row = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_beta_row = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_stats_T = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_beta_full = get_compile_time_arg_val(16);  // transient beta_T broadcast to all rows
-    constexpr uint32_t cb_a_full = get_compile_time_arg_val(17);
-    constexpr uint32_t cb_b_full = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(19);
-    constexpr uint32_t cb_stats_row = get_compile_time_arg_val(20);
-    constexpr bool is_rm = get_compile_time_arg_val(21) != 0;
-    constexpr bool resident = get_compile_time_arg_val(22) != 0;
-    constexpr bool has_gamma = get_compile_time_arg_val(23) != 0;
-    constexpr bool has_beta = get_compile_time_arg_val(24) != 0;
-    constexpr uint32_t chunk_rows = get_compile_time_arg_val(25);
-    constexpr uint32_t cols = get_compile_time_arg_val(26);
-    constexpr uint32_t Kg = get_compile_time_arg_val(27);
-    constexpr uint32_t gather_rows = get_compile_time_arg_val(28);
-    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(29);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(30);
-    constexpr uint32_t out_block = get_compile_time_arg_val(31);  // writer store block (divides chunk)
-    constexpr uint32_t hw_tail = get_compile_time_arg_val(32);  // valid rows of the image's last tile-row (0 = aligned)
-    constexpr uint32_t combine = get_compile_time_arg_val(33);  // COMBINE_LOCAL / COMBINE_ROOT / COMBINE_ALL_GATHER
-    constexpr bool finalize_lane_mode = get_compile_time_arg_val(34) != 0;  // row-0-only SFPU finalize
+    constexpr uint32_t cb_gamma_row = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_beta_row = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_stats_T = get_compile_time_arg_val(14);  // row-0-form [mean_T..; rstd_T..] (Perf 2)
+    constexpr uint32_t cb_a_row = get_compile_time_arg_val(15);    // row-0-form a_T per channel tile (Perf 2)
+    constexpr uint32_t cb_b_row = get_compile_time_arg_val(16);    // row-0-form b_T per channel tile (Perf 2)
+    constexpr uint32_t cb_out = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_stats_row = get_compile_time_arg_val(18);
+    constexpr bool is_rm = get_compile_time_arg_val(19) != 0;
+    constexpr bool resident = get_compile_time_arg_val(20) != 0;
+    constexpr bool has_gamma = get_compile_time_arg_val(21) != 0;
+    constexpr bool has_beta = get_compile_time_arg_val(22) != 0;
+    constexpr uint32_t chunk_rows = get_compile_time_arg_val(23);
+    constexpr uint32_t cols = get_compile_time_arg_val(24);
+    constexpr uint32_t Kg = get_compile_time_arg_val(25);
+    constexpr uint32_t gather_rows = get_compile_time_arg_val(26);
+    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(27);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(28);
+    constexpr uint32_t out_block = get_compile_time_arg_val(29);  // writer store block (divides chunk)
+    constexpr uint32_t hw_tail = get_compile_time_arg_val(30);  // valid rows of the image's last tile-row (0 = aligned)
+    constexpr uint32_t combine = get_compile_time_arg_val(31);  // COMBINE_LOCAL / COMBINE_ROOT / COMBINE_ALL_GATHER
+    constexpr bool finalize_lane_mode = get_compile_time_arg_val(32) != 0;  // row-0-only SFPU finalize
+    static_assert(cols <= ckl::DEST_AUTO_LIMIT, "the apply holds one tile-row of cols tiles in DEST");
     static_assert(combine <= COMBINE_ALL_GATHER, "unknown combine scheme");
     // finalize input: the image totals — this core's own partial (LOCAL) or the reduced gather (ROOT / ALL_GATHER)
     constexpr uint32_t cb_totals_in = (combine == COMBINE_LOCAL) ? cb_partial : cb_totals_recv;
@@ -207,7 +227,7 @@ void kernel_main() {
     CircularBuffer membership_buf(cb_membership);
     CircularBuffer partial_buf(cb_partial);
     CircularBuffer agg_interm_buf(cb_agg_interm);
-    CircularBuffer stats_g_full_buf(cb_stats_g_full);
+    CircularBuffer stats_row_buf(cb_stats_row);
     CircularBuffer stats_T_buf(cb_stats_T);
 
     // Ragged column group: keep the colsum ring at its nominal [S(cols) ; Q(cols)] layout. After a statistic's
@@ -431,13 +451,6 @@ void kernel_main() {
             cb_push_back(cb_stats_row, num_stats);
             cb_pop_front(cb_totals_in, num_stats);
         }
-        {
-            MaybeDeviceZoneScope("c_stats_bcast");
-            ckl::unary_bcast<
-                BroadcastDim::Row,
-                input(cb_stats_row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                output(cb_stats_g_full)>(IterationShape::tiles(num_stats));
-        }
 
         // ================= pass 2: apply =================
         if constexpr (resident) {
@@ -448,22 +461,19 @@ void kernel_main() {
             const uint32_t valid_cols = col_axis.valid(cg, cols);
             MaybeDeviceZoneScope("c_pass2_cg");  // affine build + apply of one column group (per-chunk zones inside)
             {
-                MaybeDeviceZoneScope(
-                    "c_affine");  // batched: ONE expansion matmul + ONE a chain + ONE b chain per group
-                // ---- build_affine_block (Perf 1, batched per column group) ----
-                // Was one matmul_block + a_T chain + beta bcast + b_T chain PER CHANNEL TILE (4 helper inits per tile,
-                // ~1.0 us/tile measured); now each stage runs once over the NOMINAL cols tiles of the column group
-                // (measured 1964 -> 1574 ns per 2-tile group, 1.54x at 8 tiles; bit-identical math —
-                // perf_experiments/affine_batch). [mean_full; rstd_full] (2 x Kg) x [E_T0 .. E_T{cols-1}] (Kg x cols)
-                // -> cb_stats_T = [mean_T0..mean_T{cols-1} ; rstd_T0..rstd_T{cols-1}] (SubblockMajor, out subblock 1 x
-                // cols). The reader lays pass-2 E tiles out k-major (kg * cols + tl) = the helper's row-major K x N
-                // in1. N = cols is a compile-time constant on purpose: the same block with a runtime N measured +0.27
-                // us per core at cols = 1 (lost constant folding across the matmul + three chains) and a second,
-                // compile-time instantiation for the full-width group overflowed the RM + streaming + gamma + beta
-                // kernel's text budget. Ragged last group: the reader pads E / gamma / beta to the nominal cols with
-                // exact zeros, so the pad channel tiles come out as a_T = b_T = 0 (finite) in cb_a_full / cb_b_full and
-                // the apply never reads them (it indexes columns < valid_cols) — no pad pop / pad push is needed for
-                // this block any more.
+                MaybeDeviceZoneScope("c_affine");  // batched (Perf 1) + lane form (Perf 2): matmul + a chain + b chain
+                // ---- build_affine_block ----
+                // [mean_row; rstd_row] (2 x Kg row-0-form tiles from the finalize) x [E_T0 .. E_T{cols-1}] (Kg x cols)
+                // -> cb_stats_T = [mean_T0..mean_T{cols-1} ; rstd_T0..rstd_T{cols-1}] in row-0 form (SubblockMajor,
+                // out subblock 1 x cols): row 0 of the product is row 0 of in0 times E — exactly the per-channel
+                // stats; rows 1..31 are never read by anything downstream (the a / b chains use row-0 tiles as plain
+                // operands and the apply broadcasts row 0), so the finalize's rows 1..31 need not be zero. The reader
+                // lays pass-2 E tiles out k-major (kg * cols + tl) = the helper's row-major K x N in1. N = cols is a
+                // compile-time constant on purpose: the same block with a runtime N measured +0.27 us per core at
+                // cols = 1 (lost constant folding across the matmul + chains) and a second compile-time instantiation
+                // for the full-width group overflowed the RM + streaming + gamma + beta kernel's text budget. Ragged
+                // last group: the reader pads E / gamma / beta to the nominal cols with exact zeros, so the pad channel
+                // tiles come out as a_T = b_T = 0 (finite) and the apply never reads them (columns < valid_cols).
                 ckl::matmul_block<
                     false,
                     false,
@@ -472,15 +482,15 @@ void kernel_main() {
                     ckl::matmul_config::InitMode::Short,
                     ckl::InputPolicy::WaitAndRetainOnLastBlock,
                     ckl::InputPolicy::WaitAndPopPerKBlock>(
-                    stats_g_full_buf,
+                    stats_row_buf,
                     membership_buf,
                     stats_T_buf,
                     stats_T_buf,
                     ckl::MatmulBlockShape::of(2, 1, 1, cols, Kg, 1));
                 cb_wait_front(cb_stats_T, 2 * cols);
 
-                // a_T = rstd_T * gamma_T (gamma row 0 broadcast down the tile), or rstd_T without gamma; rstd tiles sit
-                // at offset cols of cb_stats_T.
+                // a_row = rstd_T_row * gamma_row (two row-0 tiles, plain eltwise; rows 1..31 are don't-care), or
+                // rstd_T_row without gamma; rstd tiles sit at offset cols of cb_stats_T.
                 if constexpr (has_gamma) {
                     ckl::eltwise_chain(
                         IterationShape::tiles(cols),
@@ -493,9 +503,9 @@ void kernel_main() {
                                 InputTileMapping::Block,
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
-                            input(cb_gamma_row, BroadcastDim::Row, WaitPolicy::PerTile, PopPolicy::PerTile),
+                            input(cb_gamma_row, BroadcastDim::None, WaitPolicy::PerTile, PopPolicy::PerTile),
                             Dst::D0>{cols},
-                        ckl::PackTile<output(cb_a_full), Dst::D0>{});
+                        ckl::PackTile<output(cb_a_row), Dst::D0>{});
                 } else {
                     ckl::eltwise_chain(
                         IterationShape::tiles(cols),
@@ -508,24 +518,20 @@ void kernel_main() {
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
                             Dst::D0>{cols},
-                        ckl::PackTile<output(cb_a_full), Dst::D0>{});
+                        ckl::PackTile<output(cb_a_row), Dst::D0>{});
                 }
 
-                // b_T = beta_T - mean_T * a_T  (or -mean_T * a_T without beta): beta rows broadcast to full tiles, then
-                // DEST = mean_T_full * a_T and b_T = beta_full - DEST (dest-reuse Sub, DEST_TO_SRCB).
+                // b_row = beta_row - mean_T_row * a_row (or -mean_T_row * a_row without beta): DEST = mean_T * a, then
+                // b = beta_row - DEST (dest-reuse Sub, DEST_TO_SRCB) — beta's row-0 tile is the plain srcA operand.
                 // Precision note: b and x*a are both ~|mean|*rstd*gamma and cancel in y = x*a + b; the FPU
                 // evaluates them at tf32-class precision, so a |mean| >> std input loses ~ulp_tf32(|mean|*a)
                 // absolute accuracy (the design's deferred shifted_two_pass_variance row would remove this).
                 //
-                // Ordering: the chain below reads the a_T tiles the chain above packed. Unpack, math and pack are
-                // separate threads; the ONLY thing that orders "pack wrote a_T to L1" against "unpack reads a_T" is CB
+                // Ordering: the chain below reads the a tiles the chain above packed. Unpack, math and pack are
+                // separate threads; the ONLY thing that orders "pack wrote a to L1" against "unpack reads a" is CB
                 // credit, so wait for all n tiles here (stale-L1 reads were seen without it).
-                cb_wait_front(cb_a_full, cols);
+                cb_wait_front(cb_a_row, cols);
                 if constexpr (has_beta) {
-                    ckl::unary_bcast<
-                        BroadcastDim::Row,
-                        input(cb_beta_row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                        output(cb_beta_full)>(IterationShape::tiles(cols));
                     ckl::eltwise_chain(
                         IterationShape::tiles(cols),
                         ckl::BinaryFpu<
@@ -538,7 +544,7 @@ void kernel_main() {
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
                             input(
-                                cb_a_full,
+                                cb_a_row,
                                 BroadcastDim::None,
                                 WaitPolicy::None,
                                 PopPolicy::None,
@@ -548,10 +554,10 @@ void kernel_main() {
                             Dst::D0>{0u, 0u},
                         ckl::DestReuseBinary<
                             BinaryFpuOp::Sub,
-                            input(cb_beta_full, WaitPolicy::PerTile, PopPolicy::PerTile),
+                            input(cb_beta_row, WaitPolicy::PerTile, PopPolicy::PerTile),
                             DestReuseType::DEST_TO_SRCB,
                             Dst::D0>{},
-                        ckl::PackTile<output(cb_b_full), Dst::D0>{});
+                        ckl::PackTile<output(cb_b_row), Dst::D0>{});
                 } else {
                     ckl::eltwise_chain(
                         IterationShape::tiles(cols),
@@ -565,7 +571,7 @@ void kernel_main() {
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
                             input(
-                                cb_a_full,
+                                cb_a_row,
                                 BroadcastDim::None,
                                 WaitPolicy::None,
                                 PopPolicy::None,
@@ -574,9 +580,11 @@ void kernel_main() {
                                 TileAddressing::Offset),
                             Dst::D0>{0u, 0u},
                         ckl::Negative<Dst::D0>{},
-                        ckl::PackTile<output(cb_b_full), Dst::D0>{});
+                        ckl::PackTile<output(cb_b_row), Dst::D0>{});
                 }
                 cb_pop_front(cb_stats_T, 2 * cols);
+                // pack -> unpack ordering of b (see a above); the apply below reads both as broadcast operands
+                cb_wait_front(cb_b_row, cols);
             }  // c_affine
 
             // ---- apply_block: y = x * a_T + b_T over every row chunk of this column group ----
@@ -592,31 +600,55 @@ void kernel_main() {
                     cb_wait_front(cb_x_pass2, chunk);
                 }
                 MaybeDeviceZoneScope("c_apply");  // y = x*a + b for one chunk (pack thread: cb_out back-pressure)
+                // One tile-row (valid_cols <= cols <= DEST limit tiles) per DEST window, x dense at
+                // x_base + r * valid_cols + c (the ragged block layout). Raw LLK for the "+ bcast_row(b)" step — see
+                // the kernel head (helper bypass).
                 const uint32_t x_base = resident ? (cg * num_row_chunks + rc) * chunk : 0u;
-                ckl::eltwise_chain(
-                    IterationShape::grid(valid_rows, valid_cols),
-                    ckl::BinaryFpu<
-                        BinaryFpuOp::Mul,
-                        input(
-                            cb_x_pass2,
-                            WaitPolicy::None,
-                            PopPolicy::None,
-                            InputTileMapping::Block,
-                            DataFormatReconfig::Enabled,
-                            TileAddressing::Offset),
-                        input(
-                            cb_a_full, BroadcastDim::None, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-                        Dst::D0>{x_base},
-                    // DEST_TO_SRCB (b -> srcA, DEST -> srcB): the LLK dest-reuse init unpacks the CB operand through
-                    // unpacker A regardless of the reuse side, and the chain only re-programs srcA's format for
-                    // DEST_TO_SRCB — with DEST_TO_SRCA a Float32 b_T after a bf16 x on srcA trips the format check.
-                    // Add is commutative, so b + (x*a) is the same result.
-                    ckl::DestReuseBinary<
-                        BinaryFpuOp::Add,
-                        input(cb_b_full, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-                        DestReuseType::DEST_TO_SRCB,
-                        Dst::D0>{},
-                    ckl::PackTile<output(cb_out), Dst::D0>{});
+                pack_reconfig_data_format(cb_out);
+                for (uint32_t r = 0; r < valid_rows; ++r) {
+                    tile_regs_acquire();
+                    // D[c] = x[r, c] * bcast_row(a_row[c])  (srcA <- x, srcB <- a_row broadcast down the tile)
+                    reconfig_data_format(cb_x_pass2, cb_a_row);
+                    mul_bcast_rows_init(cb_x_pass2, cb_a_row);
+                    for (uint32_t c = 0; c < valid_cols; ++c) {
+                        mul_tiles_bcast_rows(cb_x_pass2, cb_a_row, x_base + r * valid_cols + c, c, c);
+                    }
+                    // D[c] = D[c] + bcast_row(b_row[c]): dest-reuse ELWADD with a ROW-broadcast srcB (DEST -> srcA).
+                    // srcA's format is switched to b_row's (fp32 under fp32 DEST) so the MOVD2A conversion keeps the
+                    // product's precision. Fidelity is irrelevant to an add; the kernel's MATH_FIDELITY is passed.
+                    reconfig_data_format_srca(cb_x_pass2, cb_b_row);
+                    reconfig_data_format_srcb(cb_a_row, cb_b_row);
+                    UNPACK((llk_unpack_A_init<
+                            ckernel::BroadcastType::ROW,
+                            true /*acc_to_dest: dest-reuse handshake*/,
+                            ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA>(false, false, cb_b_row)));
+                    MATH((llk_math_eltwise_binary_init<
+                          ckernel::EltwiseBinaryType::ELWADD,
+                          ckernel::BroadcastType::ROW,
+                          MATH_FIDELITY,
+                          ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_b_row, cb_b_row, 0 /*acc_to_dest*/)));
+                    for (uint32_t c = 0; c < valid_cols; ++c) {
+                        UNPACK((llk_unpack_A<
+                                ckernel::BroadcastType::ROW,
+                                true,
+                                ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_b_row, c)));
+                        MATH((llk_math_eltwise_binary<
+                              ckernel::EltwiseBinaryType::ELWADD,
+                              ckernel::BroadcastType::ROW,
+                              DST_ACCUM_MODE,
+                              MATH_FIDELITY,
+                              ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                            cb_b_row, cb_b_row, c, false /*clear_fp32_dst_acc*/)));
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    cb_reserve_back(cb_out, valid_cols);
+                    for (uint32_t c = 0; c < valid_cols; ++c) {
+                        pack_tile(c, cb_out, c);
+                    }
+                    cb_push_back(cb_out, valid_cols);
+                    tile_regs_release();
+                }
                 // the writer drains the nominal chunk per block in out_block groups; pad the unused pages
                 groupnorm_ragged::pad_push(cb_out, chunk - valid, out_block);
                 if constexpr (!resident) {
@@ -626,12 +658,12 @@ void kernel_main() {
             for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
                 apply_chunk(row_axis.valid(rc, chunk_rows), rc);
             }
-            cb_pop_front(cb_a_full, cols);
-            cb_pop_front(cb_b_full, cols);
+            cb_pop_front(cb_a_row, cols);
+            cb_pop_front(cb_b_row, cols);
         }
         if constexpr (resident) {
             cb_pop_front(cb_x_pass2, blk);
         }
-        cb_pop_front(cb_stats_g_full, num_stats);
+        cb_pop_front(cb_stats_row, num_stats);  // the expansion matmul retained its in0 across the column groups
     }
 }
