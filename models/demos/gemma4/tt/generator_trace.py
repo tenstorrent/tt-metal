@@ -119,6 +119,13 @@ def maybe_auto_enable_chunked_prefill_trace(
     a default. Still restricted to unbounded: bounded sliding caps the prefix at
     the window, so the replayed buckets stop matching.
 
+    Capped at the trace ceiling. Above it the prompt outgrows the captured
+    buckets, so the tail still prefills eagerly while the capture's persistent
+    buffers stay resident in L1; the global (head_dim=512) prefill SDPA then
+    cannot place its static CBs, which already need ~1.25 MB of the ~1.34 MB
+    pool, and the program dies with "circular buffers ... clash with L1
+    buffers". Do not widen this bound without re-checking that SDPA.
+
     Batch is NOT restricted. Prefill here is microbatched per user and
     ``_record_trace_prefill`` is keyed on the per-call batch
     (``{seq_len}_{model_id}_{batch_size}_{use_start_pos}``), so a capture is
@@ -128,11 +135,13 @@ def maybe_auto_enable_chunked_prefill_trace(
     """
     if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
         return chunked_prefill_trace_enabled()
-    if not bounded_sliding and max_seq_len > int(prefill_chunk):
+    trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN))
+    if not bounded_sliding and int(prefill_chunk) < max_seq_len <= trace_max:
         os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
         logger.info(
             "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
-            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded, batch={batch_size})"
+            f"(chunk={prefill_chunk} < max_seq_len={max_seq_len} <= ceiling={trace_max}, "
+            f"unbounded, batch={batch_size})"
         )
         return True
     return False
