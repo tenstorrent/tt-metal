@@ -29,7 +29,7 @@ class GLM52Config:
     # measured separately: the crossover is a function of the routed-expert matmul shape, expert
     # count and activation, and this model matches 5.1 on all of them (6144x2048, 256 experts,
     # top-8, no pre-projection, SiLU). Re-measure if any of those diverge.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 1792
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
@@ -38,6 +38,11 @@ class GLM52Config:
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at
+    # 0.9941 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.984
 
     # Model architecture
     NUM_LAYERS = 78
