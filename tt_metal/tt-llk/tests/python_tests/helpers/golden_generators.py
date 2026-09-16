@@ -215,6 +215,23 @@ def truncate_to_dest_width(
     return masked.view(torch.float32)
 
 
+def sfpu_dest_format(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: DestAccumulation,
+) -> DataFormat:
+    """The format Dest holds, which is what an SFPU golden's precision follows.
+
+    One derivation for all three families and for sfpu_domains.nan_survives_to_l1(), pinned
+    together by test_sfpu_domains: disagreement would put a golden's NaN substitution on
+    different cells than the gate deciding where a probe is assertable."""
+    if dest_acc == DestAccumulation.Yes:
+        return DataFormat.Float32
+    if DataFormat.Float16 in (input_format, output_format):
+        return DataFormat.Float16
+    return DataFormat.Float16_b
+
+
 def _bfp_zero_nonfinite_blocks(operand):
     """Zero every finite element sharing a block with a non-finite one, in place.
 
@@ -729,6 +746,54 @@ def quantize_input_to_unpack_format(
             return quantize_mx_tensor_chunked(operand, input_format)
         return operand
     return operand
+
+
+# The B-exponent block-floats, and the round trip that quantizes a datum onto one of them.
+# Keyed rather than branched so a caller cannot half-support the family; Bfp8 (A-exponent) is
+# deliberately absent, having no converter here, so is_block_float() is not the test to use.
+_BFP_B_PACK_QUANTIZERS = {
+    DataFormat.Bfp2_b: _bfp2b_to_float16b,
+    DataFormat.Bfp4_b: _bfp4b_to_float16b,
+    DataFormat.Bfp8_b: _bfp8b_to_float16b,
+}
+
+
+def quantize_output_to_pack_format(
+    result: torch.Tensor, output_format: DataFormat
+) -> torch.Tensor:
+    """*result* as the packer writes it to L1 for a block-float *output_format*.
+
+    The counterpart of quantize_input_to_unpack_format() at the other end of the datapath,
+    and the same 16-datum shared exponent: a block spanning several decades loses its low
+    end on the way out, not just on the way in. A no-op on every other format.
+
+    Per block, and only where there is a shared exponent to quantize onto:
+
+      * a block holding a non-finite has none -- the non-finite takes the exponent and every
+        finite neighbour with it, which is _bfp_zero_nonfinite_blocks' job, and the
+        non-finite lanes themselves are then carried through rather than decoded as a
+        magnitude;
+      * an all-zero block is already exactly representable, and feeding one to the shared
+        helper answers 2^-127 on every lane (it decodes the leading 1 that a zero does not
+        have) -- a golden the packer never writes.
+
+    Cloned rather than quantized in place, and handed back in the dtype it arrived in: every
+    value on the block-float grid is exact in bfloat16, so that round trip loses nothing.
+    """
+    quantizer = _BFP_B_PACK_QUANTIZERS.get(output_format)
+    if quantizer is None:
+        return result
+
+    zeroed = _bfp_zero_nonfinite_blocks(result.float().clone())
+    blocks = zeroed.reshape(-1, BFP_BLOCK_ELEMENTS)
+    quantizable = torch.isfinite(blocks).all(dim=1) & (blocks != 0.0).any(dim=1)
+
+    packed = blocks.clone()
+    if bool(quantizable.any()):
+        packed[quantizable] = (
+            quantizer(blocks[quantizable]).float().reshape(-1, BFP_BLOCK_ELEMENTS)
+        )
+    return packed.reshape(result.shape).to(result.dtype)
 
 
 class SrcFormatModel:
@@ -2489,7 +2554,8 @@ class UnarySFPUGolden:
                 reduced, input_format, data_format, self.dest_acc, reduce_pool
             )
 
-        # determine the data format for dst
+        # determine the data format for dst: two unary-only exceptions (an MX leg and a SrcS
+        # leg the other goldens have no equivalent of), then the shared rule.
         if input_format.is_mx_format():
             # MX in L1 always unpacks to Float16_b even if dest_acc=Yes.
             dst_format = DataFormat.Float16_b
@@ -2499,12 +2565,8 @@ class UnarySFPUGolden:
         ):
             # SrcS: fp16 stays 16-bit; dest_acc does not widen.
             dst_format = input_format
-        elif self.dest_acc == DestAccumulation.Yes:
-            dst_format = DataFormat.Float32
-        elif DataFormat.Float16 in (input_format, data_format):
-            dst_format = DataFormat.Float16
         else:
-            dst_format = DataFormat.Float16_b
+            dst_format = sfpu_dest_format(input_format, data_format, self.dest_acc)
 
         self.dst_format = dst_format
 
@@ -3336,15 +3398,7 @@ class UnarySFPUGolden:
         if reduce_pool in cls._SFPMAD_REDUCE_POOLS:
             reduced = torch.where(torch.isnan(reduced), reduced.abs(), reduced)
 
-        dst_format = (
-            DataFormat.Float32
-            if dest_acc == DestAccumulation.Yes
-            else (
-                DataFormat.Float16
-                if DataFormat.Float16 in (input_format, output_format)
-                else DataFormat.Float16_b
-            )
-        )
+        dst_format = sfpu_dest_format(input_format, output_format, dest_acc)
         result = cast_to_dest_dtype(
             reduced.to(torch.float32), format_dict[dst_format]
         ).float()
@@ -4035,15 +4089,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     ) -> DataFormat:
         """The format Dest holds, which is what the SFPU's precision actually follows.
 
-        Same derivation as UnarySFPUGolden.__call__ and the one nan_survives_to_l1() applies
-        internally; test_sfpu_domains pins the three to each other so a change to any one fails
-        rather than drifting.
+        Delegates to the module-level sfpu_dest_format() so the three goldens cannot come to
+        disagree. Kept as a method because test_sfpu_domains pins *this* name.
         """
-        if dest_acc == DestAccumulation.Yes:
-            return DataFormat.Float32
-        if DataFormat.Float16 in (data_format, output_format):
-            return DataFormat.Float16
-        return DataFormat.Float16_b
+        return sfpu_dest_format(data_format, output_format, dest_acc)
 
     # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
@@ -4241,12 +4290,33 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         )
         return 1.0 if bool(close) else 0.0
 
+    # The threshold `calculate_logsigmoid` switches to its exp branch at. Written here rather
+    # than imported from sfpu_dispatch_constants because it is not a dispatch constant -- it
+    # is a literal inside the kernel's own `v_if`, with no host-side counterpart to import.
+    _LOGSIGMOID_EXP_BRANCH = 4.0
+
     def _logsigmoid(self, t1, t2):
-        # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes
-        # exp(-x) as its second operand (t2), which the test bakes into the paired
-        # stimuli; the golden only needs x. It is a piecewise (poly + exp) approximation,
-        # so it is matched under the PCC tolerance. Evaluated in fp32.
-        return torch.nn.functional.logsigmoid(t1.to(torch.float32))
+        """logsigmoid(x) = -softplus(-x), with x = t1 and exp(-x) = t2.
+
+        Of the kernel's three branches the golden models only x > 4, where it returns `-t2`:
+        the only branch whose result depends on operand B, so torch there cannot tell a kernel
+        that used the operand from one that ignored it -- and torch's -log1p(exp(-x)) differs
+        from -exp(-x) by up to 0.9% just above the threshold. test_sfpu_domains pins the
+        approximation separately, so modelling the branch does not stop asserting that
+        -exp(-x) is a logsigmoid.
+
+        Per element, not per row: ``__call__`` walks the two rows in a Python loop, so the
+        branch below is a scalar test. Asserted rather than left implicit -- a refactor that
+        vectorized the call the way `_div` and `_pow` are vectorized would keep working until
+        the first row that straddles the threshold, and then raise from ``float(x)``.
+        """
+        x = t1.to(torch.float32)
+        assert (
+            x.numel() == 1
+        ), "per-element golden; vectorize the exp-branch test before batching rows"
+        if float(x) > self._LOGSIGMOID_EXP_BRANCH:
+            return -t2.to(torch.float32)
+        return torch.nn.functional.logsigmoid(x)
 
     def _add_top_row(
         self,
@@ -5279,12 +5349,45 @@ class Top32RmGolden:
 
 @register_golden
 class WhereGolden:
-    def __call__(self, operand1, true_value, false_value):
+    """Golden for the TTNNWhere kernel: an element-wise select, not an arithmetic op.
+
+    The result is an input datum verbatim, so there is nothing to evaluate and no NaN this op
+    could invent. The *pack* still needs modelling -- a pipeline too narrow to hold a NaN gets
+    a signed infinity substituted -- so supply the three format arguments; without them a
+    cat-B probe reads that as a kernel defect.
+    """
+
+    def __call__(
+        self,
+        operand1,
+        true_value,
+        false_value,
+        input_format: DataFormat = None,
+        output_format: DataFormat = None,
+        dest_acc: DestAccumulation = None,
+    ):
         # Element-wise select matching the C++ sfpu_ternary_function:
         #   result[i] = (cond[i] == 0) ? false_value[i] : true_value[i]
         cond = operand1.flatten().to(torch.float32)
         mask = cond != 0.0
-        return torch.where(mask, true_value.flatten(), false_value.flatten())
+        result = torch.where(mask, true_value.flatten(), false_value.flatten())
+
+        supplied = (input_format, output_format, dest_acc)
+        if any(x is None for x in supplied) and any(x is not None for x in supplied):
+            raise ValueError(
+                "input_format, output_format and dest_acc must be supplied together: all "
+                "three decide whether a NaN survives the pack, so modelling the substitution "
+                "from a subset gives a golden that is wrong in a different way than the one "
+                "it replaces"
+            )
+        if input_format is None or output_format.is_integer():
+            return result
+        if not nan_survives_to_l1(input_format, output_format, dest_acc):
+            # Asked of sfpu_domains, not restated, so this golden and the gate deciding where
+            # the probe is sent cannot disagree about which cells narrow. The substituted
+            # infinity keeps the NaN's own sign, which for `where` is the selected datum's.
+            result = convert_nan_to_inf(result)
+        return result
 
 
 @register_golden
@@ -5302,15 +5405,27 @@ class TernarySFPUGolden:
         lerp:       out = a + c * (b - a)
         snake_beta: out = a + sin(b * a)^2 / c    (a=x, b=alpha, c=beta)
 
-    Known limitation: this reference computes in fp32 with a single final cast,
-    while the kernels branch on is_fp32_dest_acc_en for their intermediate rounding
-    (addcmul emits an SFP_STOCH_RND fp32->fp16b before the store; addcdiv/lerp
-    round via float32_to_bf16_rne; snake_beta drops to a lower-degree sin
-    polynomial when it is off). Both dest_acc arms are therefore checked against
-    this one golden, distinguished only by the (looser, for Bfp8_b) PCC/atol
-    tolerance rather than by a bit-exact reference. A dest_acc-aware golden
-    modelling that rounding is tracked as follow-up.
+    Known limitation: not bit-exact about *intermediate rounding*, which the kernels branch
+    on is_fp32_dest_acc_en for (addcmul emits an SFP_STOCH_RND fp32->fp16b before the store;
+    addcdiv/lerp round via float32_to_bf16_rne; snake_beta drops to a lower-degree sin
+    polynomial when it is off). Both dest_acc arms are checked against one fp32 evaluation and
+    are distinguished only by tolerance. Tightening that is tracked as follow-up.
+
+    Given *input_format* and *dest_acc* it does model the three steps that are sub-ULP on a
+    finite value and decisive on a non-finite one: the block-float unpack quantization, the
+    store into a Dest whose width dest_acc selects, and the pack out of it, where a NaN too
+    wide becomes a signed infinity. Without them a cat-B probe reads that substitution as a
+    computed infinity -- the defect behind the binary suite's retracted "0/0 returns inf" xfails.
+
+    The pack also carries the *output* shared exponent where the output is block-float
+    (quantize_output_to_pack_format), which is not sub-ULP at all: on a block spanning
+    several decades it flushes the low lanes, and that block is the whole stimulus of
+    test_sfpu_ternary_block_spread.
     """
+
+    # No ternary op selects among its operands, so every NaN they return is built through the
+    # datapath rather than being "the operand's" the way SFPSWAP max/min is, and `SFPMAD.md`
+    # leaves that sign open on Wormhole. So the golden exports no sign at all.
 
     def __call__(
         self,
@@ -5320,14 +5435,62 @@ class TernarySFPUGolden:
         operand_c,
         value_bits: int,
         data_format: DataFormat,
+        input_format: DataFormat = None,
+        dest_acc: DestAccumulation = None,
+        collect_generated_nan: bool = False,
     ):
+        """*input_format* and *dest_acc* enable the unpack/Dest/pack modelling.
+
+        Both default to None, reproducing the pre-cat-B behaviour: sound only while every
+        operand is finite, and supplying one without the other raises. *collect_generated_nan*
+        also returns a per-lane mask of the lanes that held a NaN before the pack substituted
+        an infinity, the last point one is legible.
+        """
         # value is passed to the kernel as a raw fp32 bit pattern; decode it the
         # same way (Converter::as_float / SFPLOADI) so the reference agrees.
         value = struct.unpack("<f", struct.pack("<I", value_bits & 0xFFFFFFFF))[0]
 
-        a = operand_a.flatten().to(torch.float32)
-        b = operand_b.flatten().to(torch.float32)
-        c = operand_c.flatten().to(torch.float32)
+        if (input_format is None) != (dest_acc is None):
+            raise ValueError(
+                "input_format and dest_acc must be supplied together: the Dest width comes "
+                "from dest_acc and whether a NaN survives the pack depends on the input "
+                "format too, so modelling one without the other gives a golden that is wrong "
+                "in a different way than the one it replaces"
+            )
+
+        # Integer formats have no Dest narrowing to model and no NaN to substitute, so they
+        # keep the unmodelled path even when the caller asks for it.
+        model_dest = dest_acc is not None and not data_format.is_integer()
+        if collect_generated_nan and not model_dest:
+            raise ValueError(
+                "collect_generated_nan needs the Dest modelling, and this call does not have "
+                "it: either input_format/dest_acc were omitted, or the output format is an "
+                "integer one where no NaN is ever substituted. Either way the mask would "
+                "point at lanes nothing downstream reads."
+            )
+        dst_format = (
+            sfpu_dest_format(input_format, data_format, dest_acc)
+            if model_dest
+            else None
+        )
+
+        # What the unpacker hands the SFPU, not what the test drew: a block-float operand's 16
+        # datums share one exponent, so a spread of magnitudes loses its low end on the way in.
+        # Without this the device computes on quantized values and the reference on the
+        # unrounded originals. A no-op on every non-block-float format, None included.
+        a, b, c = (
+            quantize_input_to_unpack_format(operand, input_format)
+            .flatten()
+            .to(torch.float32)
+            for operand in (operand_a, operand_b, operand_c)
+        )
+
+        if model_dest and dest_acc == DestAccumulation.No and input_format.is_32_bit():
+            # A 32-bit operand loses its low mantissa bits landing in a 16-bit Dest, before
+            # the op sees it: the kernel copies all three into Dest tiles first. Unreachable
+            # while the suite skips fp32 at dest_acc=No, kept so lifting that skip does not
+            # make the model wrong. Same helper the unary and binary goldens use.
+            a, b, c = (truncate_to_dest_width(t, dst_format) for t in (a, b, c))
 
         if operation == MathOperation.SfpuAddcmul:
             result = a + (value * b * c)
@@ -5340,7 +5503,41 @@ class TernarySFPUGolden:
         else:
             raise ValueError(f"Unsupported ternary SFPU operation: {operation}")
 
-        return result.to(format_dict[data_format]).flatten()
+        if not model_dest:
+            return result.to(format_dict[data_format]).flatten()
+
+        # abs() clears the sign bit without disturbing the payload, as the unary and binary
+        # goldens do at the same point. See the class comment for why it is unconditional.
+        emitted_nan = torch.isnan(result)
+        result = torch.where(emitted_nan, result.abs(), result)
+
+        # Two casts, both NaN-sign preserving: the Dest write's narrowing, then the store out
+        # to the output format, which is not always the Dest format. Plain .to() would use
+        # torch's canonicalising bf16 cast, forcing every NaN's sign bit to 1 and deciding the
+        # substituted infinity's sign by accident.
+        result = cast_to_dest_dtype(result, format_dict[dst_format]).float()
+        result = cast_to_dest_dtype(result, format_dict[data_format]).flatten()
+
+        # The store's dtype is only the storage bfloat16 of a block-float output; the pack
+        # itself is the shared exponent, which test_sfpu_ternary_block_spread drives a block
+        # across on purpose. Without this the golden compares unquantized values there and
+        # the assertion rests on passed_test()'s block-aware fallback excusing the difference
+        # rather than on the golden having modelled the datapath. On the same flat 16-datum
+        # grouping the input side above quantizes on: the kernel is layout-preserving, so
+        # golden and device agree about where a block starts.
+        result = quantize_output_to_pack_format(result, data_format)
+
+        if not nan_survives_to_l1(input_format, data_format, dest_acc):
+            # The packer cannot write a NaN through this pipeline, so it substitutes an
+            # infinity of the NaN's own sign. Asked of sfpu_domains, not restated, so the
+            # golden and the gate that sends the probe cannot disagree about which cells
+            # narrow.
+            result = convert_nan_to_inf(result)
+
+        if collect_generated_nan:
+            return result, emitted_nan.flatten()
+
+        return result
 
 
 @register_golden
