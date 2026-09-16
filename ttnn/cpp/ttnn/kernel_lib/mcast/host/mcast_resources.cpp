@@ -14,11 +14,11 @@ using namespace tt::tt_metal;
 
 void McastFamily::require_program_bound_() const {
     require_arguments_prepared_();
-    TT_FATAL(bound_program_ != nullptr, "Call append_semaphores(program) before appending multicast arguments");
+    TT_FATAL(program_bound_, "Call append_semaphores(program) before appending multicast arguments");
 }
 
 void McastFamily::require_unbound_() const {
-    TT_FATAL(!bound_program_, "A Program-bound multicast family cannot use another attachment or legacy query path");
+    TT_FATAL(!program_bound_, "A Program-bound multicast family cannot use another attachment or legacy query path");
 }
 
 void McastFamily::validate_semaphores_present_and_zeroed_(
@@ -77,13 +77,7 @@ std::array<uint32_t, 3> McastFamily::resolve_semaphore_ids_(std::span<const Sema
 void McastFamily::append_semaphores(Program& program) {
     require_arguments_prepared_();
     TT_FATAL(!program.is_compiled(), "Cannot bind multicast semaphores to a compiled Program");
-    // Compare opaque identities only: this preserves binding across Program moves without
-    // including ProgramImpl or inspecting its resources.
-    const auto* identity = &program.impl();
-    TT_FATAL(!bound_program_ || bound_program_ == identity, "Multicast family is bound to another Program");
-    if (bound_program_) {
-        return;
-    }
+    TT_FATAL(!program_bound_, "Multicast semaphores have already been appended");
 
     std::array<uint32_t, 3> ids{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
     const auto count = required_semaphores_();
@@ -114,7 +108,7 @@ void McastFamily::append_semaphores(Program& program) {
         }
     }
     program_semaphore_ids_ = ids;
-    bound_program_ = identity;
+    program_bound_ = true;
 }
 
 void Mcast1D::append_semaphores(Program& program) { family_->append_semaphores(program); }

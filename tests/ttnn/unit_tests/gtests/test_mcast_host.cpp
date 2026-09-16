@@ -1636,7 +1636,7 @@ TEST_F(McastHostFixture, SpecDeviceMatrix) {
         }
     }
 }
-TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
+TEST_F(McastHostFixture, ProgramBindingRejectsRepeatedAppendAndPreservesResolvedIds) {
     using namespace tt::tt_metal;
     const auto participants = grid({0, 0}, {1, 0});
     auto family = make_family(device_, {{participants, {{0, 0}}}});
@@ -1657,16 +1657,20 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     EXPECT_GT(rt.size(), 1u);
     ASSERT_EQ(program.impl().semaphores().size(), 4u);
     EXPECT_EQ(program.impl().semaphores()[0].initial_value(), 7u);
-    family.append_semaphores(program);
+    EXPECT_ANY_THROW(family.append_semaphores(program));
     auto copy = family;
-    copy.append_semaphores(program);
+    EXPECT_ANY_THROW(copy.append_semaphores(program));
     EXPECT_EQ(program.impl().semaphores().size(), 4u);
     Program other;
     EXPECT_ANY_THROW(copy.append_semaphores(other));
     EXPECT_TRUE(other.impl().semaphores().empty());
     Program moved = std::move(program);
-    family.append_semaphores(moved);
+    EXPECT_ANY_THROW(family.append_semaphores(moved));
     EXPECT_EQ(moved.impl().semaphores().size(), 4u);
+    std::vector<uint32_t> copied_ct;
+    copy.append_compile_time_args_to(copied_ct);
+    EXPECT_EQ(copied_ct[wire::DATA_READY], 1u);
+    EXPECT_EQ(copied_ct[wire::CONSUMER_READY], 3u);
     ProgramDescriptor descriptor;
     KernelDescriptor kernel;
     kernel.core_ranges = participants;

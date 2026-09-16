@@ -174,6 +174,7 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
+    // One successful append per helper; subsequent calls fail, including on copies of a bound helper.
     // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
     // existing zero-initialized semaphores covering every participating core.
     // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
@@ -263,7 +264,7 @@ private:
     // Preparation is the last use of the borrowed device; attachment uses these snapshots.
     tt::ARCH prepared_arch_{};
     tt::tt_metal::CoreCoord prepared_device_grid_;
-    const tt::tt_metal::detail::ProgramImpl* bound_program_ = nullptr;
+    bool program_bound_ = false;
     std::array<uint32_t, 3> program_semaphore_ids_{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
     const Group* group_for_core_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<Group> groups_;
@@ -344,6 +345,7 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
+    // One successful append per helper; subsequent calls fail, including on copies of a bound helper.
     // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
     // existing zero-initialized semaphores covering every participating core.
     // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
@@ -435,6 +437,7 @@ public:
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
 
     // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
+    // One successful append per helper; subsequent calls fail, including on copies of a bound helper.
     // Uses CreateSemaphore and records its returned IDs. For sem_ids, the caller must provide
     // existing zero-initialized semaphores covering every participating core.
     // Allocation failures (including a base_sem_id mismatch) can leave earlier allocations in
