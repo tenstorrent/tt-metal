@@ -148,7 +148,7 @@
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       "${FABRIC_BIN}" \
       --test_config "${FABRIC_CFG}" \
-      --filter topology.TorusXY
+      --filter topology.TorusX
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
