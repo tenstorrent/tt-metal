@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # DeepSeek 671B RMSNorm dimensions
 EMB_DIM = 7168
@@ -154,6 +155,7 @@ class TtDistributedRmsNorm(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         output_memcfg: ttnn.MemoryConfig = None,
+        use_fused: bool = False,
     ):
         """
         Initialize TtDistributedRmsNorm module.
@@ -188,6 +190,9 @@ class TtDistributedRmsNorm(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self._gathered_stats = None
+        self.use_fused = use_fused
+        self.fused_weight = None
+        self.tt_ccl = None
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -210,6 +215,13 @@ class TtDistributedRmsNorm(LightweightModule):
         else:
             logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight()
+
+        if use_fused:
+            # Preserve the existing on-disk weight cache. Convert once at model
+            # setup; the fused operator broadcasts a tiled row of affine weights.
+            local_width = self.emb_dim // self.mesh_device.shape[self.cluster_axis]
+            self.fused_weight = ttnn.to_layout(ttnn.reshape(self.weight, (1, 1, 1, local_width)), ttnn.TILE_LAYOUT)
+            self.tt_ccl = get_tt_ccl(self.mesh_device)
 
     def _create_sharded_weight_from_torch(self, torch_weight: torch.Tensor) -> ttnn.Tensor:
         """
@@ -277,6 +289,34 @@ class TtDistributedRmsNorm(LightweightModule):
                 weight=self.weight,
                 program_config=self.sharded_progcfg,
                 memory_config=self.output_memcfg,
+            )
+
+        # Initially enable only the measured Kimi prefill geometry; other shapes
+        # and sharded/L1 configurations retain the existing implementation.
+        if (
+            self.use_fused
+            and tuple(x.shape) == (1, 1, 640, 1792)
+            and x.dtype == ttnn.bfloat16
+            and x.layout == ttnn.TILE_LAYOUT
+            and x.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            and self.output_memcfg in (None, ttnn.DRAM_MEMORY_CONFIG)
+            and self.sharded_progcfg is None
+        ):
+            semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
+                x, self.fused_weight, self.cluster_axis, self.num_links
+            )
+            return ttnn.experimental.dit_fused_distributed_rmsnorm(
+                x,
+                self.cluster_axis,
+                self.mesh_device,
+                semaphores,
+                topology=self.topology,
+                epsilon=self.epsilon,
+                weight=self.fused_weight,
+                persistent_output_buffer=stats,
+                num_preferred_links=self.num_links,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         # Step 1: Pre-all-gather - each device computes local sum(x^2)
