@@ -9,21 +9,21 @@
 
 #include "access_types.h"
 #include "ckernel.h" // RDCFG, SETC16
-#include "composition.h"
 #include "detail/gpr_operand.h"
 #include "detail/mmio_read.h"
 #include "detail/state_bank.h"
 #include "detail/write_backend.h"
+#include "detail/write_operands.h"
 #include "registers.h"
 
 namespace hal::cfg
 {
 
-// Public hardware-access entry points. Field/word construction lives in
-// composition.h; implementation helpers live under cfg/detail/.
+// Public operand factories and hardware-access entry points.
+// Operand types and implementation helpers live under cfg/detail/.
 
 // -------------------------------------------------------------------------------------------------
-// GPR operands and transfer policy
+// Write operands and transfer policy
 // -------------------------------------------------------------------------------------------------
 
 /**
@@ -42,6 +42,24 @@ template <GprTransferSize Size = GprTransferSize::Bits32, WrcfgCompletion Comple
 inline constexpr auto gpr(const std::uint32_t index)
 {
     return detail::with_cfg_policy<Size, Completion>(hal::gpr(index));
+}
+
+/**
+ * @brief Associate a runtime value with a generated CFG field.
+ */
+template <const Field& F, Sec S>
+inline constexpr FieldAssignment<F, S> set(const std::uint32_t value)
+{
+    return {value};
+}
+
+/**
+ * @brief Associate a compile-time value with a generated CFG field.
+ */
+template <const Field& F, Sec S, std::uint32_t Value>
+inline constexpr ConstantFieldAssignment<F, S, Value> set()
+{
+    return {};
 }
 
 /**
@@ -245,7 +263,7 @@ template <
 inline __attribute__((always_inline)) void write(volatile std::uint32_t* tt_reg_ptr cfg, const First& first, const Rest&... rest)
 {
     static_assert(A == Access::MMIO, "an already-resolved CFG pointer requires Access::MMIO");
-    detail::write_assignments_mmio(cfg, first, rest...);
+    detail::write_assignments_to<A>(cfg, first, rest...);
 }
 
 /**
@@ -300,14 +318,7 @@ public:
     template <typename First, typename... Rest, std::enable_if_t<detail::is_field_assignment_v<First> && (detail::is_field_assignment_v<Rest> && ...), int> = 0>
     inline __attribute__((always_inline)) void operator()(const First& first, const Rest&... rest) const
     {
-        if constexpr (A == Access::MMIO)
-        {
-            detail::write_assignments_mmio(cfg_, first, rest...);
-        }
-        else
-        {
-            detail::write_assignments<A>(first, rest...);
-        }
+        detail::write_assignments_to<A>(cfg_, first, rest...);
     }
 
     template <
@@ -528,16 +539,7 @@ inline __attribute__((always_inline)) void write()
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
     static_assert(Value <= ((std::uint64_t {1} << F.width) - 1u), "value exceeds field width");
 
-    if constexpr (F.scope == RegisterScope::Thread)
-    {
-        TTI_SETC16(F.addr32(S), (Value << F.shamt(S)) & 0xffffu);
-    }
-    else
-    {
-        constexpr std::uint32_t wr = Value << F.shamt(S);
-        constexpr std::uint32_t m  = F.mask(S);
-        detail::write_constant_word<F.scope, F.addr32(S), m, wr>();
-    }
+    detail::write_constant_word<F.scope, F.addr32(S), F.mask(S), Value << F.shamt(S)>();
 }
 
 } // namespace hal::cfg
