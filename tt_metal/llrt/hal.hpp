@@ -522,7 +522,10 @@ private:
         bool enable_blackhole_dram_programmable_cores,
         bool enable_aerisc_ptp_trace);
     void initialize_qa(
-        uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant);
+        uint32_t profiler_dram_bank_size_per_risc_bytes,
+        bool enable_dram_backed_cq,
+        IpVariant quasar_arch_variant,
+        bool enable_cce_programmable_cores);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -552,7 +555,8 @@ public:
         bool is_simulator = false,
         bool enable_blackhole_dram_programmable_cores = false,
         bool enable_aerisc_ptp_trace = false,
-        IpVariant quasar_arch_variant = IpVariant::GRENDEL);
+        IpVariant quasar_arch_variant = IpVariant::GRENDEL,
+        bool enable_cce_programmable_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
 
