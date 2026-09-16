@@ -1108,6 +1108,69 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
 
 namespace tt::tt_fabric {
 
+void PhysicalGroupingDescriptor::assign_pgd_host_groups(
+    GroupingInfo& flattened_mesh, const std::vector<GroupingInfo>& flattened_declared_hosts) const {
+    flattened_mesh.mesh_node_to_pgd_host_group.clear();
+
+    // A grouping's chips in node order, each with the slot it names. A slot left unspecified names no chip,
+    // so it is dropped: there is nothing there to attribute to a host.
+    auto named_slots_of = [](const GroupingInfo& grouping) {
+        std::vector<std::pair<GroupingChipId, tt::tt_metal::ASICPosition>> named_slots;
+        std::vector<GroupingChipId> node_ids = grouping.adjacency_graph.get_nodes();
+        std::sort(node_ids.begin(), node_ids.end());
+        for (GroupingChipId node_id : node_ids) {
+            if (node_id >= grouping.items.size()) {
+                continue;
+            }
+            const GroupingItemInfo& item = grouping.items[node_id];
+            if (*item.tray_id == 0 || *item.asic_location == 0) {
+                continue;
+            }
+            named_slots.emplace_back(node_id, tt::tt_metal::ASICPosition{item.tray_id, item.asic_location});
+        }
+        return named_slots;
+    };
+
+    // Topology variants of one declared host hold the same chips, differing only in how they are wired,
+    // so the distinct slot sets are the hosts.
+    std::vector<std::set<tt::tt_metal::ASICPosition>> host_slots;
+    for (const GroupingInfo& declared_host : flattened_declared_hosts) {
+        std::set<tt::tt_metal::ASICPosition> slots;
+        for (const auto& [_, slot] : named_slots_of(declared_host)) {
+            slots.insert(slot);
+        }
+        if (!slots.empty() && std::find(host_slots.begin(), host_slots.end(), slots) == host_slots.end()) {
+            host_slots.push_back(std::move(slots));
+        }
+    }
+    if (host_slots.empty()) {
+        return;
+    }
+
+    // Two hosts of one machine carry the same tray labels, since a descriptor describes a host once and the
+    // machine repeats it, so the slots alone cannot tell them apart. What does tell them apart is repetition:
+    // a host holds each of its slots once, so the nth time a slot comes round it belongs to that host's nth
+    // copy. Counting rounds is what separates a mesh spanning two hosts into two groups.
+    std::map<std::pair<std::size_t, tt::tt_metal::ASICPosition>, std::size_t> rounds_seen;
+    std::map<std::pair<std::size_t, std::size_t>, uint32_t> group_of_host_round;
+    for (const auto& [node_id, slot] : named_slots_of(flattened_mesh)) {
+        std::vector<std::size_t> holders;
+        for (std::size_t host = 0; host < host_slots.size(); ++host) {
+            if (host_slots[host].contains(slot)) {
+                holders.push_back(host);
+            }
+        }
+        // A slot no declared host holds, or one several of them claim, cannot be attributed to a host.
+        if (holders.size() != 1) {
+            continue;
+        }
+        const std::size_t round = rounds_seen[{holders.front(), slot}]++;
+        flattened_mesh.mesh_node_to_pgd_host_group[node_id] =
+            group_of_host_round.try_emplace({holders.front(), round}, static_cast<uint32_t>(group_of_host_round.size()))
+                .first->second;
+    }
+}
+
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_mesh(
     const GroupingInfo& grouping) const {
     return build_flattened_adjacency_mesh(

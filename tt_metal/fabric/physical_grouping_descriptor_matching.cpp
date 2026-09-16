@@ -22,6 +22,7 @@
 #include <optional>
 #include <string_view>
 #include <tuple>
+#include <span>
 #include <vector>
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
@@ -42,6 +43,15 @@
 #include <google/protobuf/text_format.h>
 
 using namespace tt::tt_fabric;
+
+// Split of candidate-enumeration wall time within one placement solve (file scope so both the enumerate
+// helper and start_sat_placement, which live in separate anonymous-namespace blocks, share it). Reset at
+// the top of start_sat_placement and logged after enumeration: "host match" is the one-time per-variant
+// constraint build (trait pinning + PSD host alignment / host-split acceptance); "candidate finding" is
+// the topology-solver session loop that actually produces footprints. Single-threaded per rank's
+// placement, so plain counters suffice.
+static std::chrono::microseconds g_enum_host_match_elapsed{};
+static std::chrono::microseconds g_enum_candidate_find_elapsed{};
 
 namespace {
 
@@ -857,11 +867,11 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
 // footprint discovery and the rank-bound path can settle on different matches out of the same candidate set, the
 // two can disagree about the same descriptor.
 //
-// Fix: give the PGD a first-class host level and match against it. The galaxy PGDs already define a
-// `galaxy_hosts` grouping, but the split MESH groupings are composed straight from HALFTRAY refs and never
-// reference it, and physical_grouping_descriptor.proto has no host semantics (only nS / MESH presets plus
-// free-form custom types). Once the PGD carries hosts, constrain the MGD<->PGD match so the MGD's host partition
-// maps onto the PGD's host partition, instead of applying the split after the match is already chosen.
+// Fix, and where it now stands: configure_mgd_pgd_host_alignment_constraints below ties the declared split to the
+// host division the PGD variant sits on, so for a descriptor that declares its hosts the isomorphism can only
+// return an orientation this stamping is sound for. What is still unconstrained is descriptors that say nothing
+// for it to match against -- no HOSTS groupings, or hosts that leave their chips unspecified -- and there the
+// split lands in whatever orientation the match happened to choose, exactly as described above.
 std::map<LogicalChipId, uint32_t> compose_mesh_node_to_host_group_from_mgd_match(
     const std::optional<MgdDeviceTopology>& mgd_topo,
     const std::map<LogicalChipId, GroupingChipId>& mgd_node_to_grouping_node) {
@@ -880,6 +890,62 @@ std::map<LogicalChipId, uint32_t> compose_mesh_node_to_host_group_from_mgd_match
                 static_cast<uint32_t>(mgd_node), mgd_topo->dims, mgd_topo->host_dims));
     }
     return node_to_host_group;
+}
+
+// The MGD<->PGD half of the host contract: the MGD's declared host ranks held against the host division this PGD
+// variant sits on, before the match is chosen. Hard, and only in this direction -- each declared rank must be
+// carvable inside one of the descriptor's hosts, while ranks are free to share one, so a host_topology finer than
+// the descriptor's hosts stays legal and what is refused is a rank whose chips would come from two hosts. That is
+// the same rule configure_pgd_psd_host_alignment_constraints applies against the PSD's hosts, moved to where the
+// orientation is still open, so a rank straddling a boundary is steered away from rather than found afterwards.
+//
+// Returns false when no orientation can satisfy it, which retires this variant. Inert unless both sides have
+// spoken: a variant with no declared hosts under it, or an MGD with no declared split, constrains nothing.
+bool configure_mgd_pgd_host_alignment_constraints(
+    const GroupingInfo& mgd_grouping_info,
+    const GroupingInfo& grouping_info,
+    const std::optional<MgdDeviceTopology>& mgd_topo,
+    MappingConstraints<LogicalChipId, GroupingChipId>& constraints) {
+    const bool nothing_declared = grouping_info.mesh_node_to_pgd_host_group.empty() || !mgd_topo.has_value() ||
+                                  mgd_topo->dims.empty() || mgd_topo->host_dims.empty();
+    if (nothing_declared) {
+        return true;
+    }
+
+    std::map<uint32_t, std::set<LogicalChipId>> mgd_nodes_by_rank;
+    for (LogicalChipId mgd_node : mgd_grouping_info.adjacency_graph.get_nodes()) {
+        mgd_nodes_by_rank[host_partition_index_for_row_major_chip(
+                              static_cast<uint32_t>(mgd_node), mgd_topo->dims, mgd_topo->host_dims)]
+            .insert(mgd_node);
+    }
+    std::map<uint32_t, std::set<GroupingChipId>> pgd_nodes_by_host;
+    for (const auto& [pgd_node, pgd_host] : grouping_info.mesh_node_to_pgd_host_group) {
+        pgd_nodes_by_host[pgd_host].insert(pgd_node);
+    }
+
+    std::vector<std::set<LogicalChipId>> target_groups;
+    target_groups.reserve(mgd_nodes_by_rank.size());
+    for (auto& [_, rank_nodes] : mgd_nodes_by_rank) {
+        target_groups.push_back(std::move(rank_nodes));
+    }
+    std::vector<std::set<GroupingChipId>> global_groups;
+    global_groups.reserve(pgd_nodes_by_host.size());
+    for (auto& [_, host_nodes] : pgd_nodes_by_host) {
+        global_groups.push_back(std::move(host_nodes));
+    }
+
+    if (!constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
+        log_debug(
+            tt::LogFabric,
+            "Host alignment retires '{}' for '{}': its {} declared rank(s) do not fit the {} host(s) this variant "
+            "sits on",
+            grouping_info.name,
+            mgd_grouping_info.name,
+            target_groups.size(),
+            global_groups.size());
+        return false;
+    }
+    return true;
 }
 
 // Applies MGD pinning groups as required constraints. `resolve_globals_at_position` maps each
@@ -994,7 +1060,15 @@ bool configure_pgd_psd_host_alignment_constraints(
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<LogicalChipId, AsicID>& constraints) {
-    const std::set<LogicalChipId> all_targets = collect_pgd_asic_targets(grouping_info);
+    // The chips this grouping names. The MGD fallback names none, being the MGD's own topology rather than a
+    // PGD layout, so its declared split names them instead: the nodes the split covers are exactly the ones it
+    // has to hold together, and without this the fallback would be the one variant exempt from the rule.
+    std::set<LogicalChipId> all_targets = collect_pgd_asic_targets(grouping_info);
+    if (all_targets.empty()) {
+        for (const auto& [node_id, _] : grouping_info.mesh_node_to_host_group) {
+            all_targets.insert(node_id);
+        }
+    }
     if (all_targets.empty()) {
         return true;
     }
@@ -1283,9 +1357,13 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
             state.variant = &grouping_info;
         }
         // Encode the grouping's trait / host-alignment constraints once; the session snapshots them on its
-        // first next() and must not see them change afterward.
-        if (!add_pgd_to_psd_constraints(
-                grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr)) {
+        // first next() and must not see them change afterward. This is the "host match" phase.
+        const auto host_match_start = std::chrono::steady_clock::now();
+        const bool encoded =
+            add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr);
+        g_enum_host_match_elapsed +=
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - host_match_start);
+        if (!encoded) {
             log_debug(
                 tt::LogFabric,
                 "DIAG enumerate '{}': CONSTRAINT-ENCODE-FAILED (trait or host alignment)",
@@ -1331,6 +1409,8 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
         state.excluded.push_back(mapping.target_to_global);
         mappings.push_back(std::move(mapping));
     }
+    g_enum_candidate_find_elapsed +=
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - solve_start);
 
     // Aggregate per-call stats for the non-resuming callers. Inner per-solve counts are deliberately not
     // threaded through: a resuming caller passes stats=nullptr and tracks candidates its own way.
@@ -1381,7 +1461,7 @@ std::string PlacementSolveStats::to_string() const {
         "  candidates generated: {}  inner solutions: {}\n"
         "  slowest inner: {} {}x{} in {} us\n"
         "  master (SAT joint placement): attempted {}  success {}  candidates {}  growth rounds {}  attempts {}  "
-        "lists complete {}  closest partial {} meshes\n"
+        "lists complete {}\n"
         "  master SAT: {} vars  {} clauses  enumerate {} us  encode {} us  solve {} us\n"
         "  total: {} us ({:.3f} ms)",
         success,
@@ -1409,7 +1489,6 @@ std::string PlacementSolveStats::to_string() const {
         master_growth_rounds,
         master_sat_attempts,
         candidate_lists_complete,
-        master_closest_meshes_placed,
         master_sat_vars,
         master_sat_clauses,
         master_enumeration_elapsed.count(),
@@ -1418,6 +1497,60 @@ std::string PlacementSolveStats::to_string() const {
         total_elapsed.count(),
         static_cast<double>(total_elapsed.count()) / 1000.0);
 }
+
+namespace {
+
+// Whether the machine has this host: some host of it must hold every chip the flattened host names. The
+// chips are read through the flattening's own nodes, since one grouping flattens to a host per place it sits
+// and each holds only its share of the chips the grouping names, and a node that says no tray or ASIC
+// location names no chip so it claims nothing.
+//
+// Containment rather than equality, so a descriptor may divide the machine more finely than the machine
+// divides itself; what this turns away is a host whose chips are spread over two machine hosts, which no
+// process could ever own. The flattening cannot answer this on its own: the only test it applies is
+// can_map_to_psd, which asks whether the machine has enough chips at each slot, and on a machine built of
+// identical hosts the tray labels repeat host to host, so a host claiming chips from two of them passes
+// that and fails this.
+// The machine's own hosts, as the placement stages partition them, read back as the slots each one holds.
+// Collected once per call: the host level is checked against this for every way each of its hosts could sit,
+// and the machine does not change while that happens.
+std::vector<std::set<tt::tt_metal::ASICPosition>> collect_machine_host_slots(
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
+    std::vector<std::set<tt::tt_metal::ASICPosition>> machine_host_slots;
+    for (const std::set<AsicID>& machine_host : collect_psd_host_groups(physical_graph, physical_system_descriptor)) {
+        std::set<tt::tt_metal::ASICPosition> slots;
+        for (const AsicID& asic_id : machine_host) {
+            const auto& descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+            slots.emplace(descriptor.tray_id, descriptor.asic_location);
+        }
+        machine_host_slots.push_back(std::move(slots));
+    }
+    return machine_host_slots;
+}
+
+bool machine_has_this_host(
+    const GroupingInfo& flattened_host, const std::vector<std::set<tt::tt_metal::ASICPosition>>& machine_host_slots) {
+    std::set<tt::tt_metal::ASICPosition> claimed_slots;
+    for (GroupingChipId node_id : flattened_host.adjacency_graph.get_nodes()) {
+        if (node_id >= flattened_host.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = flattened_host.items[node_id];
+        if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION && *item.tray_id != 0 && *item.asic_location != 0) {
+            claimed_slots.emplace(item.tray_id, item.asic_location);
+        }
+    }
+    if (claimed_slots.empty()) {
+        return false;  // names no chips, so it holds none of the machine and speaks for no mesh.
+    }
+    return std::any_of(machine_host_slots.begin(), machine_host_slots.end(), [&](const auto& one_machine_host) {
+        return std::includes(
+            one_machine_host.begin(), one_machine_host.end(), claimed_slots.begin(), claimed_slots.end());
+    });
+}
+
+}  // namespace
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
@@ -1434,27 +1567,64 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     bool require_placement) const {
     ValidGroupingsMap result;
 
+    // Times the whole matcher call regardless of entry path (placement builder, multi-MGD, or the
+    // rank-bound pinning enrichment fast path), logging on exit. require_placement separates the
+    // placement call (true) from the pinning-only enrichment call (false).
+    struct GvfmTimer {
+        std::chrono::steady_clock::time_point start;
+        bool require_placement;
+        ~GvfmTimer() {
+            log_info(
+                tt::LogFabric,
+                "TIMING get_valid_groupings_for_mgd (require_placement={}): {} ms",
+                require_placement,
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                    .count());
+        }
+    } gvfm_timer{std::chrono::steady_clock::now(), require_placement};
+
     std::optional<AdjacencyGraph<tt::tt_metal::AsicID>> psd_physical_graph;
     if (physical_system_descriptor != nullptr) {
         psd_physical_graph.emplace(
             tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(*physical_system_descriptor));
     }
 
-    // TODO: validate this PGD's own host level against the PSD's hosts here, before any matching runs. A
-    // PGD describes a machine, so if it declares hosts that machine does not have, every answer built on
-    // it is built on a false picture and the descriptor should be refused rather than quietly used.
+    // 1-3. The descriptor's own host level: every way each HOSTS grouping can sit, flattened against the
+    // machine the same way the meshes are, keeping the ones the machine actually has. This has to come after
+    // the flattening, since a host is usually assembled from references to other groupings and names no chips
+    // of its own until those are resolved, and one grouping flattens to a host per place it sits -- so there
+    // is nothing to hold against the machine before the flattening, and one thing per place after it.
     //
-    // The check: flatten each declared HOSTS grouping to the set of chips it holds, and require that for
-    // at least one of this PGD's variants every flattened host lands inside a single PSD host. One
-    // matching variant is enough -- a PGD legitimately offers several orientations and only has to have
-    // one that fits the machine it was handed -- but if no variant does, throw. Covered by
-    // PhysicalGroupingDescriptorTests.GetValidGroupingsForMGD_PgdHostsThatContradictThePsdAreRejected,
-    // which is a FIXME until this lands.
-    //
-    // This is the PGD<->PSD half of the host contract. The MGD<->PGD half is still missing too: see the
-    // TODO on compose_mesh_node_to_host_group_from_mgd_match, where the MGD's declared split is stamped
-    // onto whichever orientation the isomorphism returned instead of being matched against these hosts.
-    // Both halves want the same thing -- a PGD host level the matcher actually reads.
+    // A way of sitting that the machine does not have is skipped rather than fatal: the descriptor is
+    // offering possibilities, and the answer to one the machine cannot hold is that it is not among the hosts
+    // the meshes are held against. That leaves the hosts below exactly the ones some host of the machine
+    // holds whole, which is what step 4 attributes each mesh's chips to and step 5 holds the declared ranks
+    // against. Declaring hosts stays optional: a descriptor with no HOSTS grouping claims nothing, and when
+    // none survive everything below runs as it did.
+    const std::vector<std::set<tt::tt_metal::ASICPosition>> machine_host_slots =
+        physical_system_descriptor != nullptr
+            ? collect_machine_host_slots(*psd_physical_graph, *physical_system_descriptor)
+            : std::vector<std::set<tt::tt_metal::ASICPosition>>{};
+    std::vector<GroupingInfo> flattened_declared_hosts;
+    for (const auto& [name, type_map] : resolved_groupings_cache_) {
+        const auto hosts_it = type_map.find("HOSTS");
+        if (hosts_it == type_map.end()) {
+            continue;
+        }
+        for (const GroupingInfo& declared_host : hosts_it->second) {
+            // A host wired in a way no mesh layout describes cannot be flattened into one, so it is left
+            // alone rather than flattened and rejected.
+            if (declared_host.items.size() > 1 && declared_host.instance_tile_layout_dims.empty()) {
+                continue;
+            }
+            for (auto& variant : build_flattened_adjacency_mesh(declared_host, physical_system_descriptor)) {
+                if (!machine_host_slots.empty() && !machine_has_this_host(variant, machine_host_slots)) {
+                    continue;
+                }
+                flattened_declared_hosts.push_back(std::move(variant));
+            }
+        }
+    }
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
@@ -1477,6 +1647,13 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             for (const auto& mesh_group_info : mesh_it->second) {
                 auto meshes = build_flattened_adjacency_mesh(mesh_group_info, physical_system_descriptor);
                 for (auto& meshe : meshes) {
+                    // 4. The host each of this variant's chips sits on, by comparing its slots with the
+                    // declared hosts above. Done once per variant here rather than per MGD instance
+                    // below, since it says something about the variant alone.
+                    // A mesh no declared host holds gets no groups, and step 5 then has nothing to hold its
+                    // ranks against and leaves it to the PSD's own hosts further down.
+                    assign_pgd_host_groups(meshe, flattened_declared_hosts);
+
                     mesh_flat_groupings[mesh_group_info.name].push_back(std::move(meshe));
                 }
             }
@@ -1599,11 +1776,15 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                                 }) == 0) {
                             continue;
                         }
-                    } else {
-                        // No pinning for this MGD instance: keep the (0,0) anchor so the solve stays constrained
-                        // instead of running unconstrained.
-                        constraints.add_required_constraint(0, 0);
                     }
+
+                    // 5. The declared host split against the host division this variant sits on, so the match
+                    // comes back in an orientation whose ranks each fall inside one of the descriptor's hosts.
+                    if (!configure_mgd_pgd_host_alignment_constraints(
+                            mgd_grouping_info, grouping_info, device_topo, constraints)) {
+                        continue;
+                    }
+
                     auto mapping_result = solve_topology_mapping<LogicalChipId, GroupingChipId>(
                         mgd_grouping_info.adjacency_graph,
                         grouping_info.adjacency_graph,
@@ -1723,6 +1904,20 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         GroupingInfo mgd_fallback = device_topo.has_value()
                                         ? finalize_mesh_grouping_with_device_topology(mgd_grouping_info, *device_topo)
                                         : mgd_grouping_info;
+
+        // The fallback is the MGD's own topology, so its nodes are the MGD's own chips and the declared split
+        // applies to it directly, with no match to compose through -- the identity pairing below is what
+        // "directly" means. Stamping it here puts the fallback under the same host containment rule as a
+        // committed PGD grouping: held against the machine's hosts, since a fallback has no descriptor hosts
+        // to be held against. Without it the split reaches the placement solve empty and decays to the soft
+        // same-host preference, which lets a rank be seated across two hosts of the machine.
+        std::map<LogicalChipId, GroupingChipId> fallback_nodes_are_mgd_chips;
+        for (LogicalChipId node_id : mgd_fallback.adjacency_graph.get_nodes()) {
+            fallback_nodes_are_mgd_chips.emplace(node_id, node_id);
+        }
+        mgd_fallback.mesh_node_to_host_group =
+            compose_mesh_node_to_host_group_from_mgd_match(device_topo, fallback_nodes_are_mgd_chips);
+
         bool mgd_places = true;
         if (physical_system_descriptor != nullptr) {
             mgd_places = false;
@@ -2956,30 +3151,44 @@ AssignedMeshes start_adjacency_guided_dfs(
 // (CandidatePool::complete() on every mesh).
 // =====================================================================================================
 
+// Dense 0..N-1 numbering for the machine's physical graph (deterministic node order). Shared by every
+// CandidatePool on the same graph so footprints and seam caches agree on bit indices.
+struct DenseAsicIndex {
+    explicit DenseAsicIndex(const AdjacencyGraph<AsicID>& physical_graph) {
+        const auto& nodes = physical_graph.get_nodes();
+        dense_to_asic_.reserve(nodes.size());
+        asic_to_dense_.reserve(nodes.size());
+        for (const AsicID& asic : nodes) {
+            asic_to_dense_.emplace(asic, dense_to_asic_.size());
+            dense_to_asic_.push_back(asic);
+        }
+    }
+
+    std::size_t size() const { return dense_to_asic_.size(); }
+    std::size_t dense(const AsicID& asic) const { return asic_to_dense_.at(asic); }
+
+private:
+    std::unordered_map<AsicID, std::size_t> asic_to_dense_;
+    std::vector<AsicID> dense_to_asic_;
+};
+
 // One legal seating of one grouping variant. Footprint-only: the per-node mapping from the inner solve is
 // deliberately dropped, matching what next_step_pool keeps today -- downstream reconstructs positions
 // from the variant's pinning map, not from the embedding.
 //
-// Construction (AsicID -> dense) is private to CandidatePool. The SAT layer only reads the already-dense
-// footprint, the AsicID list for decode, and seam queries.
+// Seam geometry between two seatings is fabric_links_to (link count). Disjointness in the master SAT
+// uses by_dense_asic on dense_asics(), not footprint bitsets. boundary_bitset_ / internal_footprint_bitset_
+// gate and count links via the private Bitset helpers.
 class Candidate {
 public:
-    const std::vector<uint64_t>& internal_footprint_words() const { return internal_footprint_bitset_.words(); }
-
     const std::vector<uint32_t>& dense_asics() const { return dense_asics_; }
 
     const std::vector<AsicID>& asics() const { return asics_; }
 
     const GroupingInfo* variant() const { return variant_; }
 
-    bool adjacent_to(const Candidate& other) const {
-        return boundary_bitset_.intersects(other.internal_footprint_bitset_) ||
-               other.boundary_bitset_.intersects(internal_footprint_bitset_);
-    }
-
-    // Fabric links crossing from this seating into `other`. Symmetric when the physical graph lists both
-    // ends of every link.
-    std::size_t seam_link_count(const Candidate& other) const {
+    // Fabric links from this seating into `other`'s chips (parallel eth links counted separately).
+    std::size_t fabric_links_to(const Candidate& other) const {
         if (!boundary_bitset_.intersects(other.internal_footprint_bitset_)) {
             return 0;
         }
@@ -2992,24 +3201,19 @@ public:
         return links;
     }
 
-private:
-    friend class CandidatePool;
-
-    Candidate(std::size_t asic_count, const GroupingInfo* variant) :
-        internal_footprint_bitset_(asic_count), boundary_bitset_(asic_count), variant_(variant) {}
-
-    void add_asic(std::size_t dense, AsicID asic) {
-        internal_footprint_bitset_.set(dense);
-        dense_asics_.push_back(static_cast<uint32_t>(dense));
-        asics_.push_back(asic);
-    }
-
-    // Build boundary_link_dense_ (one entry per fabric link leaving the footprint) and boundary_bitset_
-    // (deduped exterior shell for fast adjacency tests). `neighbors_of_dense[i]` is the dense-id neighbor
-    // list of ASIC i. Call once the footprint is complete.
-    void build_boundary(const std::vector<std::vector<uint32_t>>& neighbors_of_dense) {
-        boundary_link_dense_.clear();
-        boundary_bitset_.clear();
+    Candidate(
+        const GroupingInfo* variant,
+        std::size_t machine_asic_count,
+        const std::map<LogicalChipId, AsicID>& placement,
+        const DenseAsicIndex& asic_index,
+        const std::vector<std::vector<uint32_t>>& neighbors_of_dense) :
+        internal_footprint_bitset_(machine_asic_count), boundary_bitset_(machine_asic_count), variant_(variant) {
+        for (const auto& [_, asic] : placement) {
+            const std::size_t dense = asic_index.dense(asic);
+            internal_footprint_bitset_.set(dense);
+            dense_asics_.push_back(static_cast<uint32_t>(dense));
+            asics_.push_back(asic);
+        }
         for (const uint32_t chip : dense_asics_) {
             for (const uint32_t neighbor : neighbors_of_dense[chip]) {
                 if (!internal_footprint_bitset_.test(neighbor)) {
@@ -3020,14 +3224,14 @@ private:
         }
     }
 
+private:
     // Dense ASIC membership set. Each candidate footprint is keyed by 0..N-1 for the whole physical
     // fabric, not by AsicID, so disjointness and seam checks are word-wise ANDs instead of set lookups
     // over variable chip ids. The numbering lives on CandidatePool and is applied only at construction.
     //
     // std::bitset is not used because N is runtime (system size). Two instances per candidate:
     //   internal_footprint_bitset_ — chips occupied by this seating;
-    //   boundary_bitset_ — exterior shell (neighbors not in the footprint); intersects() answers
-    //     "does this seating touch that one?" in O(N/64) and gates seam_link_count.
+    //   boundary_bitset_ — exterior shell (neighbors not in the footprint); gates fabric_links_to().
     //
     // boundary_link_dense_ (outside Bitset) keeps per-link multiplicity for seam SAT clauses; the bitset
     // alone would collapse parallel links between the same chip pair.
@@ -3065,40 +3269,8 @@ private:
     const GroupingInfo* variant_;
 };
 
-// Split `amount` across `slots` by weights (front_loaded: n..1, else uniform). Shares sum to `amount`.
-std::vector<std::size_t> distribute_grow_shares(std::size_t amount, std::size_t slots, bool front_loaded) {
-    std::vector<std::size_t> shares(slots, 0);
-    if (amount == 0 || slots == 0) {
-        return shares;
-    }
-    std::vector<std::size_t> weights(slots);
-    std::size_t weight_sum = 0;
-    for (std::size_t i = 0; i < slots; ++i) {
-        weights[i] = front_loaded ? (slots - i) : 1;
-        weight_sum += weights[i];
-    }
-    struct Remainder {
-        std::size_t rem;
-        std::size_t index;
-    };
-    std::vector<Remainder> remainders;
-    remainders.reserve(slots);
-    std::size_t distributed = 0;
-    for (std::size_t i = 0; i < slots; ++i) {
-        const std::size_t numer = amount * weights[i];
-        shares[i] = numer / weight_sum;
-        distributed += shares[i];
-        remainders.push_back({numer % weight_sum, i});
-    }
-    std::sort(remainders.begin(), remainders.end(), [](const Remainder& a, const Remainder& b) {
-        return a.rem > b.rem || (a.rem == b.rem && a.index < b.index);
-    });
-    for (std::size_t i = 0; distributed < amount && i < remainders.size(); ++i) {
-        ++shares[remainders[i].index];
-        ++distributed;
-    }
-    return shares;
-}
+class AdjacencyMatrix;
+class AdjacencyMatrixCache;
 
 // All grouping variants and enumerated candidates for one global mesh instance.
 class CandidatePool {
@@ -3127,116 +3299,56 @@ public:
             variant.grouping = &grouping;
             variant.enumeration.variant = &grouping;
             variants_.emplace(&grouping, std::move(variant));
-            variant_order_.push_back(&grouping);
         }
     }
 
     std::size_t asic_count() const { return asic_index_.size(); }
 
-    // Pull up to `total_amount` more candidates for this pool. May return less when variants exhaust.
-    std::size_t grow(std::size_t total_amount) {
-        const auto allocations = allocate_grow_budget(total_amount);
-        if (allocations.empty()) {
+    // Seat order matches master SAT variables (SeatVars.by_mesh) and AdjacencyMatrix row/column indices.
+    const std::vector<Candidate>& candidates() const { return candidates_; }
+
+    // Index of `candidate` in candidates(); invalid if `candidate` is not an element of this pool.
+    std::optional<std::size_t> seat_index(const Candidate& candidate) const {
+        if (candidates_.empty()) {
+            return std::nullopt;
+        }
+        const Candidate* begin = candidates_.data();
+        const Candidate* end = begin + candidates_.size();
+        const Candidate* seat = &candidate;
+        if (seat < begin || seat >= end) {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(seat - begin);
+    }
+
+    // Pull up to `batch_per_variant` more candidates from every non-exhausted variant in this pool.
+    std::size_t grow(std::size_t batch_per_variant) {
+        if (batch_per_variant == 0) {
             return 0;
         }
-
         std::size_t added = 0;
-        for (const auto& [grouping, batch] : allocations) {
-            added += grow_variant(variants_.at(grouping), batch);
-        }
-        if (added != 0) {
-            rebuild_flat();
+        for (auto& [_, variant] : variants_) {
+            added += grow_variant(variant, batch_per_variant);
         }
         return added;
     }
 
-    const std::vector<const Candidate*>& candidates() const { return flat_; }
-
     bool variants_exhausted() const {
-        for (const GroupingInfo* grouping : variant_order_) {
-            if (!variants_.at(grouping).enumeration.exhausted) {
+        for (const auto& [_, variant] : variants_) {
+            if (!variant.enumeration.exhausted) {
                 return false;
             }
         }
         return true;
     }
 
-    // PGD_DFS_DEBUG — delete after candidate-pool enumeration investigation.
-    // Per-variant counts: "name[count found, solves solves, exhausted?] ...".
-    std::string format_variant_breakdown() const {  // PGD_DFS_DEBUG
-        std::string breakdown;
-        for (const GroupingInfo* grouping : variant_order_) {
-            const GroupingVariant& variant = variants_.at(grouping);
-            if (!breakdown.empty()) {
-                breakdown += ' ';
-            }
-            breakdown += fmt::format(
-                "{}[{} found, {} solves{}]",
-                grouping->name,
-                variant.candidates.size(),
-                variant.enumeration.solves,
-                variant.enumeration.exhausted ? ", exhausted" : "");
-        }
-        return breakdown;
-    }
-
-    std::map<std::string, std::size_t> candidate_counts_by_grouping_name() const {  // PGD_DFS_DEBUG
-        std::map<std::string, std::size_t> counts;
-        for (const GroupingInfo* grouping : variant_order_) {
-            counts[grouping->name] += variants_.at(grouping).candidates.size();
-        }
-        return counts;
-    }
-
 private:
-    // Split `total_amount` across non-exhausted variants: front-loaded by grouping name (variant_order_
-    // first appearance), then evenly within each name. Returns only entries with batch > 0.
-    std::vector<std::pair<const GroupingInfo*, std::size_t>> allocate_grow_budget(std::size_t total_amount) const {
-        std::vector<std::pair<const GroupingInfo*, std::size_t>> allocations;
-        if (total_amount == 0) {
-            return allocations;
-        }
-
-        std::vector<std::vector<const GroupingInfo*>> active_by_name;
-        std::unordered_map<std::string, std::size_t> name_to_group;
-        active_by_name.reserve(variant_order_.size());
-        for (const GroupingInfo* grouping : variant_order_) {
-            if (variants_.at(grouping).enumeration.exhausted) {
-                continue;
-            }
-            const auto [it, inserted] = name_to_group.emplace(grouping->name, active_by_name.size());
-            if (inserted) {
-                active_by_name.push_back({grouping});
-            } else {
-                active_by_name[it->second].push_back(grouping);
-            }
-        }
-        if (active_by_name.empty()) {
-            return allocations;
-        }
-
-        const std::vector<std::size_t> group_shares =
-            distribute_grow_shares(total_amount, active_by_name.size(), /*front_loaded=*/true);
-        allocations.reserve(variant_order_.size());
-        for (std::size_t group = 0; group < active_by_name.size(); ++group) {
-            const std::vector<std::size_t> variant_shares =
-                distribute_grow_shares(group_shares[group], active_by_name[group].size(), /*front_loaded=*/false);
-            for (std::size_t slot = 0; slot < active_by_name[group].size(); ++slot) {
-                if (variant_shares[slot] != 0) {
-                    allocations.emplace_back(active_by_name[group][slot], variant_shares[slot]);
-                }
-            }
-        }
-        return allocations;
-    }
-
-    // One grouping variant: the grouping definition, resumable enumeration state, and the candidates
-    // discovered so far. Stored in a map node and never moved -- the DFS engine keeps pointers into the
-    // session's own graph/constraint snapshots.
+    // Resumable enumeration state for one grouping variant. Map nodes are never moved -- the session keeps
+    // pointers into its own graph/constraint snapshots. Seatings live in candidates_ on the pool.
     struct GroupingVariant {
         const GroupingInfo* grouping = nullptr;
         GroupingVariantEnumeration enumeration;
-        std::vector<Candidate> candidates;  // stable: only ever appended to
+        std::size_t candidates_found = 0;
     };
 
     // Pull up to `batch` more distinct placements from one variant. Returns how many were added. The
@@ -3267,12 +3379,9 @@ private:
                 if (!mapping.success) {
                     continue;
                 }
-                Candidate candidate(asic_index_.size(), variant.grouping);
-                for (const auto& [node, asic] : mapping.target_to_global) {
-                    candidate.add_asic(asic_index_.dense(asic), asic);
-                }
-                candidate.build_boundary(neighbors_of_dense_);
-                variant.candidates.push_back(std::move(candidate));
+                candidates_.emplace_back(
+                    variant.grouping, asic_index_.size(), mapping.target_to_global, asic_index_, neighbors_of_dense_);
+                ++variant.candidates_found;
                 ++added;
                 if (added >= batch) {
                     break;
@@ -3282,89 +3391,91 @@ private:
         return added;
     }
 
-    void rebuild_flat() {
-        flat_.clear();
-        for (const GroupingInfo* grouping : variant_order_) {
-            for (const Candidate& candidate : variants_.at(grouping).candidates) {
-                flat_.push_back(&candidate);
-            }
-        }
-    }
-
-    std::size_t total_found() const {
-        std::size_t total = 0;
-        for (const GroupingInfo* grouping : variant_order_) {
-            total += variants_.at(grouping).candidates.size();
-        }
-        return total;
-    }
-
-    // Dense 0..N-1 numbering of this pool's physical graph. Node order is deterministic (AdjacencyMap
-    // is a std::map), so every pool built from the same graph agrees. Not visible outside CandidatePool:
-    // callers see asic_count() and Candidate::dense_asics() only.
-    struct AsicIndex {
-        explicit AsicIndex(const AdjacencyGraph<AsicID>& physical_graph) {
-            const auto& nodes = physical_graph.get_nodes();
-            dense_to_asic_.reserve(nodes.size());
-            asic_to_dense_.reserve(nodes.size());
-            for (const AsicID& asic : nodes) {
-                asic_to_dense_.emplace(asic, dense_to_asic_.size());
-                dense_to_asic_.push_back(asic);
-            }
-        }
-
-        std::size_t size() const { return dense_to_asic_.size(); }
-        std::size_t dense(const AsicID& asic) const { return asic_to_dense_.at(asic); }
-
-    private:
-        std::unordered_map<AsicID, std::size_t> asic_to_dense_;
-        std::vector<AsicID> dense_to_asic_;
-    };
-
     const AdjacencyGraph<AsicID>& physical_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& psd_;
     ConnectionValidationMode validation_mode_;
-    AsicIndex asic_index_;
+    DenseAsicIndex asic_index_;
     std::vector<std::vector<uint32_t>> neighbors_of_dense_;
     std::map<const GroupingInfo*, GroupingVariant> variants_;
-    std::vector<const GroupingInfo*> variant_order_;  // PGD-first order from get_valid_groupings
-    std::vector<const Candidate*> flat_;              // rebuilt after each grow(); variant order, then discovery
+    std::vector<Candidate> candidates_;  // append-only; each Candidate points at its GroupingInfo variant
 };
 
-// Link-count matrices between the candidate lists of two meshes, computed once per mesh pair.
-class SeamLinkMatrices {
+// Saturated fabric link counts between two mesh instances' candidate pools. Row `from_seat` is
+// pools.at(from_mesh).candidates()[from_seat]; column `to_seat` is the peer mesh's candidate at that index.
+class AdjacencyMatrix {
 public:
-    // Entry (i, j) is the number of fabric links between candidate i of `m1` and candidate j of `m2`,
-    // saturated at 255. The row/column roles follow the argument order, so callers may pass either order.
-    const std::vector<uint8_t>& matrix(
-        GlobalMeshId m1,
-        GlobalMeshId m2,
+    std::size_t rows() const { return rows_; }
+    std::size_t cols() const { return cols_; }
+
+    std::size_t saturated_link_count(std::size_t from_seat, std::size_t to_seat) const {
+        return data_[from_seat * cols_ + to_seat];
+    }
+
+    bool satisfies_channel(std::size_t from_seat, std::size_t to_seat, std::size_t required_links) const {
+        return saturated_link_count(from_seat, to_seat) >= required_links;
+    }
+
+    std::span<const uint8_t> row(std::size_t from_seat) const { return {data_.data() + from_seat * cols_, cols_}; }
+
+    std::size_t saturated_link_count(
+        const CandidatePool& from_pool,
+        const Candidate& from_seat,
+        const CandidatePool& to_pool,
+        const Candidate& to_seat) const {
+        const std::optional<std::size_t> from_index = from_pool.seat_index(from_seat);
+        const std::optional<std::size_t> to_index = to_pool.seat_index(to_seat);
+        TT_ASSERT(from_index.has_value() && to_index.has_value());
+        return saturated_link_count(*from_index, *to_index);
+    }
+
+private:
+    friend class AdjacencyMatrixCache;
+
+    static AdjacencyMatrix build(const std::vector<Candidate>& from_seats, const std::vector<Candidate>& to_seats) {
+        AdjacencyMatrix table;
+        table.rows_ = from_seats.size();
+        table.cols_ = to_seats.size();
+        table.data_.assign(table.rows_ * table.cols_, 0);
+        for (std::size_t from_seat = 0; from_seat < table.rows_; ++from_seat) {
+            for (std::size_t to_seat = 0; to_seat < table.cols_; ++to_seat) {
+                const std::size_t links = from_seats[from_seat].fabric_links_to(to_seats[to_seat]);
+                table.data_[from_seat * table.cols_ + to_seat] =
+                    static_cast<uint8_t>(std::min(links, std::size_t{255}));
+            }
+        }
+        return table;
+    }
+
+    std::size_t rows_ = 0;
+    std::size_t cols_ = 0;
+    std::vector<uint8_t> data_;
+};
+
+// Lazy cache of AdjacencyMatrix tables keyed by (from_mesh, to_mesh), invalidated when the candidate pool grows.
+class AdjacencyMatrixCache {
+public:
+    // Rows = from_mesh candidates; columns = to_mesh candidates (same order as SeatVars.by_mesh).
+    const AdjacencyMatrix& adjacency_matrix(
+        GlobalMeshId from_mesh,
+        GlobalMeshId to_mesh,
         const std::map<GlobalMeshId, CandidatePool>& pools,
-        std::size_t pools_generation,
-        std::size_t& cols_out) {
+        std::size_t pools_generation) {
         if (pools_generation != generation_) {
             cache_.clear();
             generation_ = pools_generation;
         }
-        const auto& c1 = pools.at(m1).candidates();
-        const auto& c2 = pools.at(m2).candidates();
-        cols_out = c2.size();
-        auto it = cache_.find({m1, m2});
+        const auto key = std::make_pair(from_mesh, to_mesh);
+        auto it = cache_.find(key);
         if (it != cache_.end()) {
             return it->second;
         }
-        std::vector<uint8_t> m(c1.size() * c2.size(), 0);
-        for (std::size_t i = 0; i < c1.size(); ++i) {
-            for (std::size_t j = 0; j < c2.size(); ++j) {
-                const std::size_t links = c1[i]->seam_link_count(*c2[j]);
-                m[i * c2.size() + j] = static_cast<uint8_t>(std::min<std::size_t>(links, 255));
-            }
-        }
-        return cache_.emplace(std::make_pair(m1, m2), std::move(m)).first->second;
+        const AdjacencyMatrix built =
+            AdjacencyMatrix::build(pools.at(from_mesh).candidates(), pools.at(to_mesh).candidates());
+        return cache_.emplace(key, std::move(built)).first->second;
     }
 
 private:
-    std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::vector<uint8_t>> cache_;
+    std::map<std::pair<GlobalMeshId, GlobalMeshId>, AdjacencyMatrix> cache_;
     std::size_t generation_ = static_cast<std::size_t>(-1);
 };
 
@@ -3462,7 +3573,7 @@ bool encode_master_problem(
     const std::map<GlobalMeshId, CandidatePool>& pools,
     std::size_t pools_generation,
     const std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::size_t>& mesh_edges,
-    SeamLinkMatrices& seams,
+    AdjacencyMatrixCache& adjacency_cache,
     bool relaxed_tier) {
     const std::size_t asic_count = pools.empty() ? 0 : pools.begin()->second.asic_count();
     vars.by_dense_asic.assign(asic_count, {});
@@ -3475,11 +3586,11 @@ bool encode_master_problem(
         }
         std::vector<int>& lits = vars.by_mesh[mesh_id];
         lits.reserve(candidates.size());
-        for (const Candidate* cand : candidates) {
+        for (const Candidate& cand : candidates) {
             const int var = sat.declare_one_more_variable();
             ++size.vars;
             lits.push_back(var);
-            for (const uint32_t dense : cand->dense_asics()) {
+            for (const uint32_t dense : cand.dense_asics()) {
                 vars.by_dense_asic[dense].push_back(var);
             }
         }
@@ -3502,26 +3613,24 @@ bool encode_master_problem(
         const std::size_t need = std::min<std::size_t>(relaxed_tier ? 1 : channels, 255);
         const std::vector<int>& l1 = vars.by_mesh.at(m1);
         const std::vector<int>& l2 = vars.by_mesh.at(m2);
-        std::size_t cols = 0;
-        const std::vector<uint8_t>& m = seams.matrix(m1, m2, pools, pools_generation, cols);
-        TT_ASSERT(cols == l2.size() && m.size() == l1.size() * l2.size());
+        const AdjacencyMatrix& adjacency = adjacency_cache.adjacency_matrix(m1, m2, pools, pools_generation);
+        TT_ASSERT(adjacency.rows() == l1.size() && adjacency.cols() == l2.size());
 
-        for (std::size_t i = 0; i < l1.size(); ++i) {
-            sat.add(-l1[i]);
-            const uint8_t* row = m.data() + i * cols;
-            for (std::size_t j = 0; j < cols; ++j) {
-                if (row[j] >= need) {
-                    sat.add(l2[j]);
+        for (std::size_t from_seat = 0; from_seat < l1.size(); ++from_seat) {
+            sat.add(-l1[from_seat]);
+            for (std::size_t to_seat = 0; to_seat < adjacency.cols(); ++to_seat) {
+                if (adjacency.satisfies_channel(from_seat, to_seat, need)) {
+                    sat.add(l2[to_seat]);
                 }
             }
             sat.add(0);
             ++size.clauses;
         }
-        for (std::size_t j = 0; j < l2.size(); ++j) {
-            sat.add(-l2[j]);
-            for (std::size_t i = 0; i < l1.size(); ++i) {
-                if (m[i * cols + j] >= need) {
-                    sat.add(l1[i]);
+        for (std::size_t to_seat = 0; to_seat < l2.size(); ++to_seat) {
+            sat.add(-l2[to_seat]);
+            for (std::size_t from_seat = 0; from_seat < adjacency.rows(); ++from_seat) {
+                if (adjacency.satisfies_channel(from_seat, to_seat, need)) {
+                    sat.add(l1[from_seat]);
                 }
             }
             sat.add(0);
@@ -3547,164 +3656,23 @@ AssignedMeshes decode_master_model(
             }
             PsdPlacement placement;
             // The pinning map belongs to the variant and cannot be recovered from the footprint.
-            placement.mesh_node_to_asic_position = candidates[i]->variant()->mesh_node_to_asic_position;
-            placement.asics.insert(candidates[i]->asics().begin(), candidates[i]->asics().end());
+            placement.mesh_node_to_asic_position = candidates[i].variant()->mesh_node_to_asic_position;
+            placement.asics.insert(candidates[i].asics().begin(), candidates[i].asics().end());
             assignment.push_back(PlacedMesh{
                 mesh_id,
                 std::move(placement),
-                candidates[i]->variant()->name,    // PGD_DFS_DEBUG
-                candidates[i]->variant()->type});  // PGD_DFS_DEBUG
+                candidates[i].variant()->name,    // PGD_DFS_DEBUG
+                candidates[i].variant()->type});  // PGD_DFS_DEBUG
             break;                               // exactly-one guarantees no second true literal
         }
     }
     return assignment;
 }
 
-// Diagnostic for an UNSAT master problem: how many meshes CAN be seated together, and which cannot join.
-//
-// Re-encodes the problem with one relaxation literal per mesh appended to its at-least-one clause, so a
-// mesh whose relaxation literal is true is allowed to go unplaced. Meshes are then admitted greedily under
-// assumptions (assume the relaxation literal false = "this mesh must be placed"): each mesh is kept if the
-// instance stays SAT with it, dropped otherwise. The result is a maximal placeable subset -- not the
-// maximum, but a real partial placement -- plus the list of meshes that could not be added to it. Every
-// solve here is incremental on one solver, so this costs one solve per mesh. Budgeted, purely
-// informational, and only run when the caller asked for stats or the log would otherwise be silent.
-constexpr int kDiagnosisConflictBudgetPerMesh = 20000;
-
-// Returns the decoded partial placement of the maximal subset (empty if even one mesh could not be seated).
-AssignedMeshes diagnose_unsat_master(
-    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
-    const std::map<GlobalMeshId, CandidatePool>& pools,
-    std::size_t pools_generation,
-    const std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::size_t>& mesh_edges,
-    SeamLinkMatrices& seams,
-    bool relaxed_tier,
-    const std::map<GlobalMeshId, std::string>& mesh_id_to_label) {
-    using tt::tt_fabric::detail::TopologySatSolver;
-    const auto start = std::chrono::steady_clock::now();
-
-    // Same encoding as the real attempt, except the at-least-one clause of every mesh gains its relaxation
-    // literal. Re-implemented inline rather than through encode_master_problem so that the production
-    // encoding stays exactly what it is.
-    TopologySatSolver sat;
-    MasterEncodingSize size;
-    SeatVars vars;
-    const std::size_t asic_count = pools.empty() ? 0 : pools.begin()->second.asic_count();
-    vars.by_dense_asic.assign(asic_count, {});
-    std::map<GlobalMeshId, int> relax_of;
-    for (const auto& [mesh_id, _] : global_mesh_groupings) {
-        const auto& candidates = pools.at(mesh_id).candidates();
-        std::vector<int>& lits = vars.by_mesh[mesh_id];
-        for (const Candidate* cand : candidates) {
-            const int var = sat.declare_one_more_variable();
-            lits.push_back(var);
-            for (const uint32_t dense : cand->dense_asics()) {
-                vars.by_dense_asic[dense].push_back(var);
-            }
-        }
-        const int relax = sat.declare_one_more_variable();
-        relax_of.emplace(mesh_id, relax);
-        for (const int lit : lits) {
-            sat.add(lit);
-        }
-        sat.add(relax);
-        sat.add(0);
-        add_at_most_one(sat, lits, size);
-    }
-    for (const std::vector<int>& users : vars.by_dense_asic) {
-        add_at_most_one(sat, users, size);
-    }
-    for (const auto& [edge, channels] : mesh_edges) {
-        const auto& [m1, m2] = edge;
-        const std::size_t need = std::min<std::size_t>(relaxed_tier ? 1 : channels, 255);
-        const std::vector<int>& l1 = vars.by_mesh.at(m1);
-        const std::vector<int>& l2 = vars.by_mesh.at(m2);
-        std::size_t cols = 0;
-        const std::vector<uint8_t>& m = seams.matrix(m1, m2, pools, pools_generation, cols);
-        // A seam only binds when BOTH meshes are placed: a placed m1 seat forces a compatible m2 seat
-        // unless m2 is relaxed away, and vice versa.
-        for (std::size_t i = 0; i < l1.size(); ++i) {
-            sat.add(-l1[i]);
-            sat.add(relax_of.at(m2));
-            for (std::size_t j = 0; j < cols; ++j) {
-                if (m[i * cols + j] >= need) {
-                    sat.add(l2[j]);
-                }
-            }
-            sat.add(0);
-        }
-        for (std::size_t j = 0; j < l2.size(); ++j) {
-            sat.add(-l2[j]);
-            sat.add(relax_of.at(m1));
-            for (std::size_t i = 0; i < l1.size(); ++i) {
-                if (m[i * cols + j] >= need) {
-                    sat.add(l1[i]);
-                }
-            }
-            sat.add(0);
-        }
-    }
-
-    // Greedy maximal placeable subset. Mesh order is mesh id order, which for a pipeline descriptor walks
-    // the chain, so the report reads as "how far along the pipeline the placement gets".
-    std::vector<GlobalMeshId> placed;
-    std::vector<GlobalMeshId> rejected;
-    std::vector<GlobalMeshId> undecided;  // budget exhausted before a verdict
-    AssignedMeshes closest;               // decoded from the last SAT model, so it seats exactly `placed`
-    for (const auto& [mesh_id, relax] : relax_of) {
-        for (const GlobalMeshId& kept : placed) {
-            sat.assume(-relax_of.at(kept));
-        }
-        sat.assume(-relax);
-        const int verdict = sat.solve_limited(kDiagnosisConflictBudgetPerMesh);
-        if (verdict == TopologySatSolver::kSat) {
-            placed.push_back(mesh_id);
-            // The model seats every assumed mesh and possibly more; keep only the assumed ones so the
-            // reported subset is exactly what was proven co-placeable.
-            AssignedMeshes model = decode_master_model(sat, vars, global_mesh_groupings, pools);
-            closest.clear();
-            for (PlacedMesh& seated : model) {
-                if (std::find(placed.begin(), placed.end(), seated.mesh_id) != placed.end()) {
-                    closest.push_back(std::move(seated));
-                }
-            }
-        } else if (verdict == TopologySatSolver::kUnsat) {
-            rejected.push_back(mesh_id);
-        } else {
-            undecided.push_back(mesh_id);
-        }
-    }
-
-    auto describe = [&](const std::vector<GlobalMeshId>& meshes) {
-        std::string text;
-        for (const GlobalMeshId& mesh_id : meshes) {
-            if (!text.empty()) {
-                text += ", ";
-            }
-            text += fmt::format("{}#{}", mesh_label_for_id(mesh_id, mesh_id_to_label), *mesh_id);
-        }
-        return text.empty() ? std::string("(none)") : text;
-    };
-    log_warning(
-        tt::LogFabric,
-        "SAT joint placement diagnosis ({} seams, {} ms): a maximal co-placeable subset seats {} of {} mesh(es); "
-        "{} cannot be added to it{}. Rejected: {}. Undecided: {}",
-        relaxed_tier ? "relaxed" : "strict",
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
-        placed.size(),
-        relax_of.size(),
-        rejected.size(),
-        undecided.empty() ? "" : fmt::format(" and {} ran out of conflict budget", undecided.size()),
-        describe(rejected),
-        describe(undecided));
-    return closest;
-}
-
-// Pool-level grow budget for column generation (initial enumeration and each UNSAT growth round).
-// CandidatePool::grow(total_amount) front-loads this across grouping names in variant_order_ (PGD-first),
-// then splits each name's share evenly across same-named variants. Sized for ~64 candidates per name tier
-// on typical pools (~4 tiers); growth rounds add more if the first solve is UNSAT.
-constexpr std::size_t kGrowBudgetPerPool = 256;
+// Per-variant grow batch for column generation (initial enumeration and each UNSAT growth round).
+// CandidatePool::grow passes this directly to enumerate_distinct_placements_for_grouping on every
+// non-exhausted variant; growth rounds add more if the first solve is UNSAT.
+constexpr std::size_t kGrowBudgetPerVariant = 32;
 // Conflict budget for the strict-seam tier under a RELAXED policy. That tier is a preference (the mapper
 // accepts a narrower seam and warns), so it is not worth an unbounded UNSAT proof; the relaxed tier that
 // follows is solved without a cap. 0 = unbounded.
@@ -3729,13 +3697,15 @@ AssignedMeshes start_sat_placement(
     bool relaxed_inter_mesh_policy,
     const std::map<GlobalMeshId, ConnectionValidationMode>& sat_intra_mesh_mode_by_mesh,
     PlacementSolveStats* stats,
-    const std::map<GlobalMeshId, std::string>& mesh_id_to_label,  // PGD_DFS_DEBUG
-    AssignedMeshes* closest_out) {                                // PGD_DFS_DEBUG
+    const std::map<GlobalMeshId, std::string>& mesh_id_to_label) {
     using tt::tt_fabric::detail::TopologySatSolver;
 
     if (stats != nullptr) {
         stats->master_solve_attempted = true;
     }
+    // Reset the enumerate-phase split (host match vs candidate finding) for this solve.
+    g_enum_host_match_elapsed = std::chrono::microseconds{};
+    g_enum_candidate_find_elapsed = std::chrono::microseconds{};
 
     std::map<GlobalMeshId, CandidatePool> pools;
     for (const auto& [mesh_id, groupings] : global_mesh_groupings) {
@@ -3756,11 +3726,11 @@ AssignedMeshes start_sat_placement(
     }
     const auto mesh_edges = collect_mesh_edges(mesh_level_graph);
 
-    auto grow_all = [&](std::size_t budget_per_pool) {
+    auto grow_all = [&](std::size_t batch_per_variant) {
         const auto start = std::chrono::steady_clock::now();
         std::size_t grown = 0;
         for (const auto& [mesh_id, _] : global_mesh_groupings) {
-            grown += pools.at(mesh_id).grow(budget_per_pool);
+            grown += pools.at(mesh_id).grow(batch_per_variant);
         }
         if (grown != 0) {
             ++pools_generation;
@@ -3772,7 +3742,7 @@ AssignedMeshes start_sat_placement(
         return grown;
     };
 
-    grow_all(kGrowBudgetPerPool);
+    grow_all(kGrowBudgetPerVariant);
     for (const auto& [mesh_id, pool] : pools) {
         log_info(
             tt::LogFabric,
@@ -3781,45 +3751,23 @@ AssignedMeshes start_sat_placement(
             *mesh_id,
             pool.candidates().size());
     }
-    // PGD_DFS_DEBUG — delete after candidate-pool enumeration investigation.
+    // Attribute the enumerate phase: the one-time per-variant constraint build (trait + PSD host
+    // alignment / host-split acceptance) versus the topology-solver session loop that finds footprints.
     {
-        std::map<std::string, std::size_t> global_counts_by_grouping_name;
-        for (const auto& [mesh_id, pool] : pools) {
-            for (const auto& [name, count] : pool.candidate_counts_by_grouping_name()) {
-                global_counts_by_grouping_name[name] += count;
-            }
-            log_info(
-                tt::LogFabric,
-                "SAT joint placement DEBUG initial enumeration: {} (global mesh {}): {}",
-                mesh_label_for_id(mesh_id, mesh_id_to_label),
-                *mesh_id,
-                pool.format_variant_breakdown());
-        }
-        std::vector<std::pair<std::string, std::size_t>> sorted_global(
-            global_counts_by_grouping_name.begin(), global_counts_by_grouping_name.end());
-        std::sort(sorted_global.begin(), sorted_global.end(), [](const auto& a, const auto& b) {
-            return a.second > b.second || (a.second == b.second && a.first < b.first);
-        });
-        std::string summary;
-        for (const auto& [name, count] : sorted_global) {
-            if (!summary.empty()) {
-                summary += ' ';
-            }
-            summary += fmt::format("{}={}", name, count);
-        }
-        std::size_t total_candidates = 0;
-        for (const auto& [_, count] : global_counts_by_grouping_name) {
-            total_candidates += count;
-        }
+        const double host_match_ms = static_cast<double>(g_enum_host_match_elapsed.count()) / 1000.0;
+        const double candidate_find_ms = static_cast<double>(g_enum_candidate_find_elapsed.count()) / 1000.0;
+        const double split_total_ms = host_match_ms + candidate_find_ms;
         log_info(
             tt::LogFabric,
-            "SAT joint placement DEBUG initial enumeration summary: {} candidate(s) across {} mesh(es): {}",
-            total_candidates,
-            pools.size(),
-            summary);
+            "SAT joint placement enumerate phase split: host match {:.1f} ms ({:.1f}%), candidate finding {:.1f} ms "
+            "({:.1f}%), measured total {:.1f} ms",
+            host_match_ms,
+            split_total_ms > 0 ? 100.0 * host_match_ms / split_total_ms : 0.0,
+            candidate_find_ms,
+            split_total_ms > 0 ? 100.0 * candidate_find_ms / split_total_ms : 0.0,
+            split_total_ms);
     }
-
-    SeamLinkMatrices seams;
+    AdjacencyMatrixCache adjacency_cache;
     std::size_t growth_rounds = 0;
     std::size_t attempts = 0;
     auto count_candidates = [&]() {
@@ -3854,7 +3802,15 @@ AssignedMeshes start_sat_placement(
             SeatVars vars;
             MasterEncodingSize size;
             const bool encoded = encode_master_problem(
-                sat, vars, size, global_mesh_groupings, pools, pools_generation, mesh_edges, seams, relaxed_tier);
+                sat,
+                vars,
+                size,
+                global_mesh_groupings,
+                pools,
+                pools_generation,
+                mesh_edges,
+                adjacency_cache,
+                relaxed_tier);
             const auto encode_end = std::chrono::steady_clock::now();
             if (stats != nullptr) {
                 stats->master_encode_elapsed +=
@@ -3899,14 +3855,11 @@ AssignedMeshes start_sat_placement(
                     stats->master_candidates_enumerated = count_candidates();
                     stats->candidate_lists_complete = pools_enumeration_complete();
                 }
-                AssignedMeshes assignment = decode_master_model(sat, vars, global_mesh_groupings, pools);
-                log_adjacency_guided_placement_assignment(
-                    assignment, mesh_id_to_label, "complete (SAT joint placement)");  // PGD_DFS_DEBUG
-                return assignment;
+                return decode_master_model(sat, vars, global_mesh_groupings, pools);
             }
         }
         ++growth_rounds;
-        std::size_t grown = grow_all(kGrowBudgetPerPool);
+        std::size_t grown = grow_all(kGrowBudgetPerVariant);
         log_info(tt::LogFabric, "SAT joint placement: growth round {} added {} candidate(s)", growth_rounds, grown);
         if (grown == 0) {
             break;
@@ -3928,17 +3881,6 @@ AssignedMeshes start_sat_placement(
         count_candidates(),
         complete ? "COMPLETE" : "TRUNCATED",
         complete ? "trustworthy" : "NOT trustworthy");
-
-    // The closest thing to an answer: a maximal set of meshes that CAN be seated together, under the most
-    // permissive seam tier the policy allows, with every enumerated candidate in play.
-    AssignedMeshes closest = diagnose_unsat_master(
-        global_mesh_groupings, pools, pools_generation, mesh_edges, seams, relaxed_inter_mesh_policy, mesh_id_to_label);
-    if (stats != nullptr) {
-        stats->master_closest_meshes_placed = closest.size();
-    }
-    if (closest_out != nullptr) {
-        *closest_out = std::move(closest);
-    }
     return {};
 }
 
@@ -4094,7 +4036,6 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
     // explicitly via TT_METAL_PLACEMENT_SOLVER=dfs.
     const PlacementSolverChoice solver_choice = placement_solver_choice_from_env();
     AssignedMeshes mesh_placements;
-    AssignedMeshes closest_partial;  // SAT path's maximal co-placeable subset when it fails
     if (solver_choice != PlacementSolverChoice::Dfs) {
         mesh_placements = start_sat_placement(
             global_mesh_groupings,
@@ -4104,36 +4045,7 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
             relaxed_inter_mesh_policy,
             sat_intra_mesh_mode_by_mesh,
             stats,
-            mesh_id_to_label,  // PGD_DFS_DEBUG
-            &closest_partial);
-    }
-    if (mesh_placements.empty() && !closest_partial.empty()) {
-        // Reported, not returned: the caller keys placements by vector position, so a partial vector
-        // would silently seat the wrong meshes. This is the "closest result" for a human to read.
-        log_adjacency_guided_placement_assignment(
-            closest_partial,
-            mesh_id_to_label,
-            fmt::format(
-                "closest partial (SAT joint placement, {} of {} meshes)",
-                closest_partial.size(),
-                merged.mesh_level_graph_.get_nodes().size()));
-        for (const PlacedMesh& placed : closest_partial) {
-            std::map<std::string, std::size_t> chips_per_host;
-            for (const AsicID& asic : placed.placement.asics) {
-                ++chips_per_host[physical_system_descriptor.get_host_name_for_asic(asic)];
-            }
-            std::string hosts;
-            for (const auto& [host, chips] : chips_per_host) {
-                hosts += fmt::format("{}{}({} chips)", hosts.empty() ? "" : ", ", host, chips);
-            }
-            log_info(
-                tt::LogFabric,
-                "  closest partial: {} (global mesh {}) -> {} on {}",
-                mesh_label_for_id(placed.mesh_id, mesh_id_to_label),
-                *placed.mesh_id,
-                placed.grouping_name,
-                hosts);
-        }
+            mesh_id_to_label);
     }
     const bool sat_verdict_trustworthy = stats->candidate_lists_complete;
     const bool run_dfs =
