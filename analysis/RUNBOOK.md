@@ -282,8 +282,9 @@ grep -n "define MEM_BRISC_FIRMWARE_SIZE" tt_metal/hw/inc/internal/tt-1xx/blackho
 ls analysis/sparse_sweep_fresh.py
 ```
 
-The expected firmware constant is `(6 * 1024 + 3072)`; `origin/main` still carries
-`(6 * 1024 + 2560)`, which is 4 bytes too small for a profiler-enabled `brisc.elf` (section 11.2).
+The firmware constant must read `(6 * 1024 + 2560)`, the same as `origin/main`. An earlier revision of
+this branch carried `(6 * 1024 + 3072)`; that bump is no longer needed and breaks device init on a
+profiler build, so if a workspace still shows the larger value, revert it (section 11.2).
 
 Finally, confirm the three checkouts before anything touches the card:
 
@@ -462,22 +463,22 @@ both measurement branches (`b2c7f9de8d2` on `mvlahovic/analyze_sdpa_fresh` and t
 `b781c4ef94e` on `mvlahovic/sdpa_topk_harness`) and present in `origin/main` on neither:
 
 ```bash
-cd $TTM        # or $TTM_FRESH, both branches carry it
+cd $TTM        # and $TTM_FRESH
 grep -n "define MEM_BRISC_FIRMWARE_SIZE" tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h
 ```
 
-The patched value is `(6 * 1024 + 3072)`; the unpatched value on main is `(6 * 1024 + 2560)`. A
-checkout of the branch already has it. To recreate it on a different base, for example a newer main
-tip:
+It must read `(6 * 1024 + 2560)`, the stock value. Nothing has to be patched here, and nothing should
+be: the host HAL under `tt_metal/llrt/hal/tt-1xx/blackhole/` derives the NCRISC and TRISC bases from
+this constant, so a header edit without a matching host rebuild leaves the two disagreeing and every
+worker core times out in firmware init on a profiler run (section 11.2). An earlier revision of these
+branches carried `(6 * 1024 + 3072)` and that is what the symptom looks like when it survives a
+workspace copy. If you see the larger value:
 
 ```bash
-cd $TTM_FRESH
-sed -i 's/(6 \* 1024 + 2560)/(6 * 1024 + 3072)/' tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h
-./build_metal.sh
+sed -i 's/(6 \* 1024 + 3072)/(6 * 1024 + 2560)/' tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h
 ```
 
-The rebuild is needed because the host HAL under `tt_metal/llrt/hal/tt-1xx/blackhole/` must agree with
-the shifted NCRISC and TRISC firmware bases. The incremental rebuild after the edit was 209 ninja steps
+No rebuild is needed for the revert: the prebuilt host library already expects the stock bases
 (`bh/fresh_build_rebuild_memmap.log`). The July note recorded in `bh/fresh_build.md` is that the bump
 does not change compute-kernel cycle counts. The calibration checkout `tt-metal` does not need the
 patch: its kernels and firmware predate the firmware growth on main.
@@ -2365,17 +2366,31 @@ The related trap is leaving `SDPA_ZONES` at 1 after a zones-on run. The next zon
 silently inflated by the gross zone tax. Every campaign script ends with
 `./set_zone_config.sh 0 0 0 0 0`.
 
-### 11.2 The BRISC firmware region overflows on a profiler build
+### 11.2 Do not resize the BRISC firmware region
 
-Symptom: the first device run of a profiler-enabled build on Blackhole main tip fails to link BRISC
-firmware, because `brisc.elf` is 0x2204 bytes against the 0x2200 region.
+Symptom, July 2026: a profiler-enabled build on Blackhole failed to link BRISC firmware, `brisc.elf`
+coming out at 0x2204 bytes against the 0x2200 region, when all counter groups were asked for in one
+pass. The response at the time was to bump `MEM_BRISC_FIRMWARE_SIZE` from `(6 * 1024 + 2560)` to
+`(6 * 1024 + 3072)` in `tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h`.
 
-Fix: bump `MEM_BRISC_FIRMWARE_SIZE` from `(6 * 1024 + 2560)` to `(6 * 1024 + 3072)` in
-`tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h` and rebuild, so the host HAL agrees with the
-shifted NCRISC and TRISC bases (section 1.6). The fix is not upstream; `origin/main` and the
-calibration tree both still carry the smaller value. Record the edit in PROVENANCE;
-`topk_campaign.py` greps the constant at run time and puts it in its PROVENANCE line automatically.
-The July note is that the bump does not change compute-kernel cycle counts.
+Do not carry that bump. It is no longer needed and it breaks profiler runs. Two measurements, 2026-09-16:
+
+- The overflow is gone. With the profiler on, `brisc.elf` builds to 6,904 bytes against the stock
+  8,704 region, 1,800 bytes of headroom, and NCRISC and the three TRISCs are all under 2,560. PR 55166
+  removed the cause by capping a pass at three counter groups, so nothing asks for the large image any
+  more.
+- The bump breaks device init. `MEM_NCRISC_FIRMWARE_BASE` and the TRISC bases are derived from
+  `MEM_BRISC_FIRMWARE_SIZE`, so changing the header moves every downstream base for JIT-built
+  firmware while a host library built before the change still expects the old ones. With the bump in
+  place and a cold JIT cache, a profiler run dies in
+  `RiscFirmwareInitializer::initialize_and_launch_firmware` with a 10 s timeout on all 119 worker
+  cores and `Device 0 init: failed to initialize FW! Try resetting the board.`; a board reset does not
+  help, and the same op with the profiler off runs fine. Reverting the header to `(6 * 1024 + 2560)`
+  fixes it immediately.
+
+The bump was inert for most of the campaign because the firmware objects were cached from before the
+edit; it only bites once `~/.cache/tt-metal-cache` is cleared. If you inherit a workspace that still
+carries it and see that init timeout, revert the header first.
 
 A second, independent firmware constraint lives in the perf-counter path: at most three counter groups
 fit in one BRISC firmware image (four overflow `.text` by 4 bytes, five by 16), which is why
