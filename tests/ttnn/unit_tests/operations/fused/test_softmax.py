@@ -868,6 +868,203 @@ def test_softmax_4096x4096_fp32(device):
     )
 
 
+ATTENTION_MASK_DROP_VALUE = -1e9
+
+
+def _make_additive_attention_mask(batch_size, w):
+    """Random keep/drop additive attention mask [batch, 1, 1, w] (0 = keep, -1e9 = drop),
+    with position 0 always kept so every row has at least one unmasked element."""
+    torch.manual_seed(1)
+    keep = torch.rand(batch_size, 1, 1, w) > 0.5
+    keep[..., 0] = True
+    return torch.where(
+        keep, torch.zeros(batch_size, 1, 1, w), torch.full((batch_size, 1, 1, w), ATTENTION_MASK_DROP_VALUE)
+    )
+
+
+def _make_causal_mask(h, w):
+    """Additive causal mask [1, 1, h, w]: 0 on and below the diagonal, -1e9 above (future)."""
+    future = torch.ones(h, w, dtype=torch.bool).triu(diagonal=1)
+    return torch.zeros(1, 1, h, w).masked_fill(future, ATTENTION_MASK_DROP_VALUE)
+
+
+@pytest.mark.parametrize("w", [32, 128])
+@pytest.mark.parametrize("magnitude", [84.5, 100.0])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_scale_mask_softmax_in_place_default_numeric_stable(device, w, magnitude, in_dtype):
+    """Issue #52131: scale_mask_softmax_in_place must be numerically stable BY DEFAULT.
+
+    Logits centered past the exp() overflow cliff (88.72 - ln(w)) made the legacy
+    numeric_stable=False default produce all-zero rows (row sums 0.0). With the default
+    flipped to True, default-argument calls must match torch and sum to ~1 per row.
+    """
+    torch.manual_seed(0)
+
+    scale = 1.0
+    torch_mask = _make_additive_attention_mask(1, w)
+    torch_input_tensor = torch.randn(1, 1, 32, w, dtype=torch.float32) + magnitude
+    torch_output_tensor = F.softmax(scale * torch_input_tensor + torch_mask, dim=-1)
+
+    mask_t = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Deliberately no numeric_stable argument: this asserts the DEFAULT behavior.
+    output_tensor = ttnn.scale_mask_softmax_in_place(input_tensor, scale, mask_t)
+    output_tensor = ttnn.to_torch(output_tensor).to(torch.float32)
+
+    # The crisp signature of the defect: rows collapse to sum 0.0 without the fix.
+    row_sums = output_tensor.sum(dim=-1)
+    assert row_sums.min().item() > 0.90, f"row sums collapsed (min {row_sums.min().item()})"
+    assert row_sums.max().item() < 1.10, f"row sums overshot (max {row_sums.max().item()})"
+
+    if in_dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.99,
+            rtol=0.40,
+            atol=0.080,
+            frobenius_threshold=0.10,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.99,
+            rtol=0.20,
+            atol=0.030,
+            frobenius_threshold=0.05,
+        )
+
+
+def test_scale_mask_softmax_in_place_explicit_numeric_stable_false(device):
+    """Issue #52131 companion: the explicit numeric_stable=False opt-out must keep working
+    for in-range inputs after the default flip."""
+    torch.manual_seed(0)
+
+    w = 64
+    scale = 1.0
+    torch_mask = _make_additive_attention_mask(1, w)
+    torch_input_tensor = torch.randn(1, 1, 32, w, dtype=torch.float32)
+    torch_output_tensor = F.softmax(scale * torch_input_tensor + torch_mask, dim=-1)
+
+    mask_t = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.scale_mask_softmax_in_place(input_tensor, scale, mask_t, numeric_stable=False)
+    output_tensor = ttnn.to_torch(output_tensor).to(torch.float32)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.99,
+        rtol=0.40,
+        atol=0.080,
+        frobenius_threshold=0.10,
+    )
+
+
+def _run_scale_causal_mask_hw_dims_softmax_in_place(device, w, magnitude, in_dtype, numeric_stable=None):
+    """Shared rig for scale_causal_mask_hw_dims_softmax_in_place (issue #52131).
+
+    Op requirements: HEIGHT_SHARDED TILE input (ROW_MAJOR orientation) with
+    SoftmaxShardedMultiCoreProgramConfig, mandatory scale, and an INTERLEAVED TILE
+    causal mask shaped [1, 1, H, W]. One head per core; mask height equals the
+    per-head H, so the op's hw-dims mask tiling equals a plain broadcast over heads.
+    """
+    torch.manual_seed(0)
+
+    num_heads = 2
+    h = 32
+    scale = 1.0
+    torch_mask = _make_causal_mask(h, w)
+    torch_input_tensor = torch.randn(1, num_heads, h, w, dtype=torch.float32) + magnitude
+    torch_output_tensor = F.softmax(scale * torch_input_tensor + torch_mask, dim=-1)
+
+    mask_t = ttnn.from_torch(
+        torch_mask,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    memory_config = ttnn.create_sharded_memory_config(
+        (1, num_heads, h, w),
+        core_grid=ttnn.CoreGrid(y=1, x=num_heads),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(num_heads, 1),
+        subblock_w=1,
+        block_h=h // 32,
+        block_w=w // 32,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    kwargs = {"program_config": program_config}
+    if numeric_stable is not None:
+        kwargs["numeric_stable"] = numeric_stable
+    output_tensor = ttnn.scale_causal_mask_hw_dims_softmax_in_place(input_tensor, scale, mask_t, **kwargs)
+    output_tensor = ttnn.to_torch(output_tensor).to(torch.float32)
+
+    return torch_output_tensor, output_tensor
+
+
+@pytest.mark.parametrize("w", [32, 64, 128])
+@pytest.mark.parametrize("magnitude", [84.5, 100.0])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_scale_causal_mask_hw_dims_softmax_in_place_default_numeric_stable(device, w, magnitude, in_dtype):
+    """Issue #52131: scale_causal_mask_hw_dims_softmax_in_place must be numerically stable
+    BY DEFAULT. Same overflow-cliff construction as the scale_mask_softmax_in_place test;
+    without the fix every row past the cliff sums to 0.0."""
+    torch_output_tensor, output_tensor = _run_scale_causal_mask_hw_dims_softmax_in_place(
+        device, w, magnitude, in_dtype  # deliberately no numeric_stable argument
+    )
+
+    row_sums = output_tensor.sum(dim=-1)
+    assert row_sums.min().item() > 0.90, f"row sums collapsed (min {row_sums.min().item()})"
+    assert row_sums.max().item() < 1.10, f"row sums overshot (max {row_sums.max().item()})"
+
+    if in_dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.99,
+            rtol=0.50,
+            atol=0.15,
+            frobenius_threshold=0.15,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.99,
+            rtol=0.20,
+            atol=0.050,
+            frobenius_threshold=0.06,
+        )
+
+
+def test_scale_causal_mask_hw_dims_softmax_in_place_explicit_numeric_stable_false(device):
+    """Issue #52131 companion: the explicit numeric_stable=False opt-out must keep working
+    for in-range inputs after the default flip."""
+    torch_output_tensor, output_tensor = _run_scale_causal_mask_hw_dims_softmax_in_place(
+        device, w=64, magnitude=0.0, in_dtype=ttnn.bfloat16, numeric_stable=False
+    )
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.99,
+        rtol=0.50,
+        atol=0.15,
+        frobenius_threshold=0.15,
+    )
+
+
 @pytest.mark.parametrize(
     "shape, dim",
     [
