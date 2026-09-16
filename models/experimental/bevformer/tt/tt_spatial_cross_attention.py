@@ -232,7 +232,7 @@ class TTSpatialCrossAttention:
         )
 
         self.deformable_attention = TTMSDeformableAttention(
-            deform_config, device, params, spatial_shapes=spatial_shapes
+            deform_config, device, params.deformable_attention, spatial_shapes=spatial_shapes
         )
 
     def forward(
