@@ -21,7 +21,8 @@ namespace ttnn::prim {
 
 namespace {
 
-// One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
+// One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result. Mirrors the
+// num_cols line in create_program_artifacts, for the override, which has no locals to reuse.
 uint32_t reduce_h_num_cols(
     const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
     using namespace tt::tt_metal;
@@ -49,9 +50,7 @@ uint32_t reduce_h_num_cols(
 // The core-group split. create_program_artifacts and the cache-hit override both call this, so
 // they cannot disagree about how many core groups the split leaves. Note the grid-size CoreCoord
 // overload: a grid size is not an inclusive end coordinate, so a CoreRange built from it is wrong.
-auto reduce_h_split_work(
-    const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, const tt::tt_metal::MeshTensor& output) {
-    const uint32_t num_cols = reduce_h_num_cols(attrs, a, output);
+auto reduce_h_split_work(const ReduceParams& attrs, const tt::tt_metal::MeshTensor& a, uint32_t num_cols) {
     return attrs.sub_core_grids.has_value()
                ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_cols)
                : tt::tt_metal::split_work_to_cores(a.mutable_device().compute_with_storage_grid_size(), num_cols);
@@ -65,10 +64,11 @@ bool reduce_h_has_second_core_group(
     // Width sharding pins the workers to the shard grid, so there is only ever one group. Mirrors
     // the use_width_sharding override in create_program_artifacts.
     if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-        output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && a.memory_config().is_l1() &&
+        output.memory_config().is_l1()) {
         return false;
     }
-    return !std::get<3>(reduce_h_split_work(attrs, a, output)).ranges().empty();
+    return !std::get<3>(reduce_h_split_work(attrs, a, reduce_h_num_cols(attrs, a, output))).ranges().empty();
 }
 
 }  // namespace
@@ -163,12 +163,13 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cols = reduce_h_num_cols(operation_attributes, a, output);
+    // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
+    auto num_cols = NC * num_h_slices * Wt;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cols_per_core_group_1, num_cols_per_core_group_2;
     std::tie(num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
-        reduce_h_split_work(operation_attributes, a, output);
+        reduce_h_split_work(operation_attributes, a, num_cols);
     TT_FATAL(num_cores > 0, "Reduce H requires at least one worker core");
 
     // Current sharding only supports width, and that input and output are sharded

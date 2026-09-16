@@ -80,9 +80,7 @@ inline bool use_sfpu_reduce_path(
 // Which slot carries the scalar. This is structural, so it is hashed; the value itself is not.
 enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
 
-// PostMul whenever the scaler CB cannot apply the value exactly: REDUCE_SCALAR (HW) applies the
-// tile once per reduced dimension, squaring it; GMPOOL keeps only the exponent for MAX/MIN; and
-// the Int32 and accurate-fp32 SFPU paths ignore the CB.
+// PostMul is required when the scaler CB cannot apply the scalar correctly.
 inline ScalerMode derive_scaler_mode(
     tt::tt_metal::ReduceOpMath math_op,
     tt::tt_metal::DataType dtype,

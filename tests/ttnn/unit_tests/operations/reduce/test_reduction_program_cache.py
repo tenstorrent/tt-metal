@@ -350,10 +350,8 @@ def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache
 def test_welford_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
     """Welford std/var: distinct scalars share one program, per correction setting.
 
-    compute_program_hash excludes `scalar`, which the kernels read as a runtime arg (#54180), but
-    keeps `correction`: it selects a compile-time-folded divisor (1/N vs 1/(N-1)) and that constant
-    measurably changes codegen, so the two settings stay separate programs. Six configurations
-    therefore cost 2 entries instead of 6. Numerics are covered by
+    compute_program_hash excludes `scalar`, which the kernels read as a runtime arg (#54180).
+    Six configurations therefore cost 2 entries instead of 6. Numerics are covered by
     tests/ttnn/nightly/.../test_generic_ops_w_scalar.py.
     """
     torch.manual_seed(0)

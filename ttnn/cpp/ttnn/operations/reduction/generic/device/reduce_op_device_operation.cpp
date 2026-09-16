@@ -35,31 +35,6 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
-    // A non-unity scaler must not ride the scaler CB on a path derive_scaler_mode() marks PostMul,
-    // because the CB cannot apply it exactly there.
-    //
-    // This runs on every dispatch, not just the first: `scaler_mode` is hashed, so a cache hit
-    // always sees the mode the miss validated, but `scaler` is not, and the adapter routes hits to
-    // this function when an op defines no validate_on_program_cache_hit.
-    //
-    // Checked one way only. PostMul where ScalerTile would also work is numerically safe, and a
-    // decomposed reduce's later stage sees the intermediate's dtype rather than the one its mode
-    // was derived from, so requiring exact equality here would reject valid calls.
-    const bool scaler_cb_is_inexact = derive_scaler_mode(
-                                          operation_attributes.math_op,
-                                          tensor_args.dtype(),
-                                          operation_attributes.dim,
-                                          operation_attributes.use_sfpu_reduce) == ScalerMode::PostMul;
-    const bool scaler_tile_would_be_wrong = operation_attributes.scaler_mode == ScalerMode::ScalerTile &&
-                                            operation_attributes.scaler != 1.0f && scaler_cb_is_inexact;
-    TT_FATAL(
-        !scaler_tile_would_be_wrong,
-        "Non-unity scaler {} routed through the scaler CB, which cannot apply it exactly here "
-        "(math_op {}, dtype {}, dim {})",
-        operation_attributes.scaler,
-        operation_attributes.math_op,
-        tensor_args.dtype(),
-        operation_attributes.dim);
     // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
     // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(

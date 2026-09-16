@@ -18,9 +18,9 @@ namespace ttnn::prim {
 
 namespace {
 
-// Shared by create_program_artifacts and override_runtime_arguments: the cache-hit hook has to know
-// whether the second compute kernel exists before addressing common runtime args to it.
-bool welford_has_second_core_group(const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input) {
+// One work unit per reduction the op performs. Mirrors the num_work_units line in
+// create_program_artifacts, for the override, which has no locals to reuse.
+uint32_t welford_num_work_units(const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input) {
     using namespace tt::tt_metal;
     const auto& padded_shape = input.padded_shape();
     const uint32_t H_padded = padded_shape[-2];
@@ -28,15 +28,26 @@ bool welford_has_second_core_group(const WelfordReduceParams& attrs, const tt::t
     const uint32_t NC = input.physical_volume() / (H_padded * W_padded);
     const uint32_t Wt = W_padded / input.tensor_spec().tile().get_width();
     const uint32_t Ht = H_padded / input.tensor_spec().tile().get_height();
-    const uint32_t num_work_units = attrs.reduce_dim == ReduceOpDim::W    ? (NC * Ht)
-                                    : attrs.reduce_dim == ReduceOpDim::HW ? (NC / attrs.reduce_batch_size)
-                                                                          : (NC * Wt);
-    const auto split =
-        attrs.sub_core_grids.has_value()
-            ? split_work_to_cores(*attrs.sub_core_grids, num_work_units)
-            : split_work_to_cores(
-                  const_cast<MeshTensor&>(input).mutable_device().compute_with_storage_grid_size(), num_work_units);
-    return !std::get<3>(split).ranges().empty();
+    return attrs.reduce_dim == ReduceOpDim::W    ? (NC * Ht)
+           : attrs.reduce_dim == ReduceOpDim::HW ? (NC / attrs.reduce_batch_size)
+                                                 : (NC * Wt);
+}
+
+// The core-group split. create_program_artifacts and the cache-hit override both call this, so
+// they cannot disagree about how many core groups the split leaves. Note the grid-size CoreCoord
+// overload: a grid size is not an inclusive end coordinate, so a CoreRange built from it is wrong.
+auto welford_split_work(
+    const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input, uint32_t num_work_units) {
+    return attrs.sub_core_grids.has_value()
+               ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_work_units)
+               : tt::tt_metal::split_work_to_cores(
+                     input.mutable_device().compute_with_storage_grid_size(), num_work_units);
+}
+
+// Whether the second compute kernel exists. override_runtime_arguments cannot see the built
+// Program, and naming a kernel it lacks is fatal, so it asks the shared split instead.
+bool welford_has_second_core_group(const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input) {
+    return !std::get<3>(welford_split_work(attrs, input, welford_num_work_units(attrs, input))).ranges().empty();
 }
 
 }  // namespace
@@ -178,25 +189,13 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_work_units_per_core_group_1, num_work_units_per_core_group_2;
-    if (operation_attributes.sub_core_grids.has_value()) {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_work_units_per_core_group_1,
-            num_work_units_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_work_units);
-    } else {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_work_units_per_core_group_1,
-            num_work_units_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_work_units);
-    }
+    std::tie(
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_work_units_per_core_group_1,
+        num_work_units_per_core_group_2) = welford_split_work(operation_attributes, input, num_work_units);
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: this factory shares a unity-build translation unit with the reduce
@@ -484,6 +483,14 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
         compute_rta_name = "NC_per_core";
     } else {
+        if (operation_attributes.correction) {
+            uint32_t reduce_size = reduce_w ? W : H;
+            TT_FATAL(
+                reduce_size >= 2,
+                "Bessel's correction requires at least 2 elements along the reduction dimension, got {}",
+                reduce_size);
+        }
+
         compute_ct_args = {
             {reduce_w ? "Wt" : "Ht", reduce_w ? Wt : Ht},
             {reduce_w ? "W" : "H", reduce_w ? W : H},
