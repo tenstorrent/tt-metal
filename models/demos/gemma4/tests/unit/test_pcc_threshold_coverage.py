@@ -27,12 +27,19 @@ _MESHES = ["1x2", "1x4", "1x8"]
 # kept to show what the fix moved.
 # The branch column covers HiFi3 + fp32 dest-accumulation on the m<=32
 # projections, plus the bf16 weight promotions in precision_overrides.json
-# ("_comment_wh_bf16"). 1x8 went all-bf16 and 1x2 took shared_mlp + lm_head;
-# 1x4 stays all-bfp8 and still gains 0.021, because the dest-accumulator width
-# is a property of the sum rather than of how the weight is stored.
+# ("_comment_wh_bf16"). 1x8 takes attention only -- walking all 8 module
+# combinations showed lm_head bf16 is worth +2.4e-5 and shared_mlp's +0.0256 is
+# not needed once attention (+0.0394) is bf16, so 1x8 gives up 0.0008 of PCC for
+# 13.7% of decode. 1x2 took shared_mlp + lm_head; 1x4 stays all-bfp8 and still
+# gains 0.021, because the dest-accumulator width is a property of the sum
+# rather than of how the weight is stored.
+# 1x2 test_full_model measured 0.9912 on one run and 0.9920 on another with the
+# tree unchanged between them (1x2 decode was bit-identical on both), so treat
+# ~8e-4 as ITS run-to-run spread. Against a 0.99 gate that leaves little room --
+# compare a 1x2 red against both values before calling it a regression.
 _WH_MEASURED = {
-    "test_full_model": {"1x2": (0.9550, 0.9920), "1x4": (0.9613, 0.9803), "1x8": (0.9514, 0.9896)},
-    "test_full_model_decode": {"1x2": (0.9610, 0.9907), "1x4": (0.9737, 0.9848), "1x8": (0.9735, 0.9835)},
+    "test_full_model": {"1x2": (0.9550, 0.9920), "1x4": (0.9613, 0.9803), "1x8": (0.9514, 0.9888)},
+    "test_full_model_decode": {"1x2": (0.9610, 0.9907), "1x4": (0.9737, 0.9848), "1x8": (0.9735, 0.9831)},
 }
 # The regression this coverage exists to catch: prefill island ON.
 _REGRESSED = {
