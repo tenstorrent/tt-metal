@@ -39,6 +39,7 @@ add_subdirectory(examples)
 add_subdirectory(full)
 add_subdirectory(full_like)
 add_subdirectory(index_fill)
+add_subdirectory(index_fill_new)
 add_subdirectory(kv_cache)
 add_subdirectory(loss)
 add_subdirectory(prefetcher)
@@ -68,6 +69,7 @@ target_link_libraries(
         TTNN::Ops::Full
         TTNN::Ops::FullLike
         TTNN::Ops::IndexFill
+        TTNN::Ops::IndexFillNew
         TTNN::Ops::KvCache
         TTNN::Ops::Loss
         TTNN::Ops::Matmul
@@ -109,6 +111,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Full>
         $<TARGET_OBJECTS:TTNN::Ops::FullLike>
         $<TARGET_OBJECTS:TTNN::Ops::IndexFill>
+        $<TARGET_OBJECTS:TTNN::Ops::IndexFillNew>
         $<TARGET_OBJECTS:TTNN::Ops::KvCache>
         $<TARGET_OBJECTS:TTNN::Ops::Loss>
         $<TARGET_OBJECTS:TTNN::Ops::Matmul>
