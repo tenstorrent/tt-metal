@@ -48,6 +48,12 @@ def profile_realtime_program(
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
                     "duration_ns": (end_timestamp - start_timestamp) / frequency,
+                    # Start/end in ns on the recording chip's own clock, comparable only within that
+                    # chip. Enough to place a program on its chip's timeline -- which is how a program
+                    # whose record closes before its work lands gets caught, since the duration alone
+                    # cannot show that the time went into the following gap.
+                    "start_ns": start_timestamp / frequency,
+                    "end_ns": end_timestamp / frequency,
                     "kernel_sources": tuple(str(source) for source in record.kernel_sources),
                 }
             )
