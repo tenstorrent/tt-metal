@@ -588,6 +588,22 @@ bool DPrintServer::Impl::poll_print_buffer(
         // Clear stall bit to get actual wpos value
         wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
 
+        // Both pointers are word offsets into the data ring; skip anything else instead of issuing a
+        // wrapped or sub-word read, and back off so a permanently corrupt header (seen on the Quasar
+        // simulator) does not starve the device link.
+        if (wpos > print_buffer_size || rpos > print_buffer_size || ((wpos | rpos) & 3) != 0) {
+            log_warning(
+                tt::LogMetal,
+                "DPRINT buffer header out of range on device {} virtual core {}: wpos={} rpos={} size={}; skipping",
+                device_id,
+                virtual_core.str(),
+                wpos,
+                rpos,
+                print_buffer_size);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            return false;
+        }
+
         if (rpos > wpos) {
             // Read until end of buffer and then from beginning until wpos
             auto data =
