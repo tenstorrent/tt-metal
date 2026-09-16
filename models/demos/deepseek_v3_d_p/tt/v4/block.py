@@ -23,10 +23,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.tt.v4.residual import MhcResidual
 
-# V4 attention, keyed by ``config.layer_types[layer_idx]``. Both classes share one contract --
-# ``from_reference`` / ``alloc_state`` / ``forward(hidden, seq_len_actual, state=...)`` -- so the block
-# holds a single attribute and the layer's config entry picks the class. Compressed sliding attention
-# joins the table under the same contract.
 _ATTENTION = {
     "sliding_attention": TtSWA,
     "heavily_compressed_attention": TtHCA,

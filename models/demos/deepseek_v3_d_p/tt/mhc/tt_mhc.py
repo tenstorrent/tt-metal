@@ -209,14 +209,8 @@ class TtMHCWrap(LightweightModule):
         self.tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
         self.tt_ccl = get_tt_ccl(device) if self.tp_factor > 1 else None
         # transposed so mixes = xnorm @ fn_T, matching the reference F.linear(xf, fn).
-        #
-        # Under TP the rows are kept in their natural (stream, hidden, out) shape until after the
-        # shard: hidden is the axis TP splits, and a chip's packed streams are its OWN hidden slice of
-        # every stream. Sharding the 3D form on hidden hands each chip exactly those rows, in the
-        # right order, and the reshape then flattens (stream, local hidden) to match how _streams
-        # slices the activation. Flattening before the shard instead would give chip c stream c's
-        # whole set of rows -- still the right shape, paired with the wrong columns, and the sigmoids
-        # downstream stay plausible so nothing complains.
+        # Sharded in the 3D (stream, hidden, out) form so fn's rows land in the order x is split
+        # across chips: each chip's own hidden slice of every stream, not one whole stream.
         if self.tp_factor > 1:
             assert cfg.dim % self.tp_factor == 0, (
                 f"the mHC projection splits hidden {cfg.dim} across the TP axis, which the factor "
@@ -237,13 +231,7 @@ class TtMHCWrap(LightweightModule):
         self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
 
     def _tp_sum(self, t):
-        """Sum ``t`` across the TP axis, leaving the result on every chip.
-
-        all_reduce rather than reduce_scatter because the 24 numbers feed per-token scalars that
-        every chip applies to its own slice of every stream. ttnn's all_reduce_async is itself
-        reduce_scatter + all_gather; the persistent semaphores come from TT_CCL because allocating
-        them per call leaks them in L1.
-        """
+        """Sum ``t`` across the TP axis, leaving the result on every chip."""
         return ttnn.experimental.all_reduce_async(
             t,
             cluster_axis=self.tp_axis,
