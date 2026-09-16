@@ -263,13 +263,9 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
-# 3.4 - normalized sub-device topology and operation/program execution associations
-# 3.5 - sub-device topology snapshotted per manager (covers sub-devices that ran no operation);
-#       sub_device_managers / sub_devices lose physical_device_id, which a mesh-wide manager
-#       partition does not have (it stays on operation_executions, where the chip is meaningful)
-# 3.6 - drop operation_executions.program_id; runtime_id and global_call_count are the correlation
-#       keys into profiler data, and program_id joined to nothing in the report
-DATABASE_SCHEMA_VERSION = "3.6"
+# 3.4 - sub-device topology and operation/program execution placement: sub_device_managers,
+#       sub_devices, operation_executions, execution_sub_devices
+DATABASE_SCHEMA_VERSION = "3.4"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"

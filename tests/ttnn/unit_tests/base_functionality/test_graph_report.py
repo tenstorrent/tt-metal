@@ -341,7 +341,7 @@ class TestSubDeviceExecutionImport:
             ):
                 assert cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
             assert cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone() == (
-                "3.6",
+                "3.4",
             )
         finally:
             conn.close()
