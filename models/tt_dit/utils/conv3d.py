@@ -420,6 +420,9 @@ _BLOCKINGS = {
     (2, 4, 128, 1024, (3, 3, 3), 21, 17, 15): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 778us
     (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 15): (128, 64, 5, 2, 16),  # ltx_s0_res — 7956us
     (2, 4, 1024, 4096, (3, 3, 3), 21, 17, 15): (128, 64, 5, 4, 8),  # ltx_s0_up — 22149us
+    # Not in the sweep; without an entry it collapses to the (256,32,1,1,1) H=W=1 fallback.
+    # Transplanted from ltx_s1_res below (same mesh/spatial/kernel, adjacent Cin) — identical L1 footprint.
+    (2, 4, 1024, 1024, (3, 3, 3), 3, 34, 30): (64, 256, 1, 4, 8),  # ltx untuned 34x30 T=3
     (2, 4, 512, 512, (3, 3, 3), 39, 34, 30): (64, 256, 1, 4, 8),  # ltx_s1_res — 8966us
     (2, 4, 512, 4096, (3, 3, 3), 39, 34, 30): (128, 64, 5, 2, 16),  # ltx_s1_up — 89486us
     (2, 4, 512, 512, (3, 3, 3), 75, 68, 60): (64, 256, 1, 8, 4),  # ltx_s2_res — 60810us
