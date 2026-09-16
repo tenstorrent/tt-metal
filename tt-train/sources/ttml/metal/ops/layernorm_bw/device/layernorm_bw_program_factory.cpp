@@ -351,7 +351,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
         [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row] = work;
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             // Reader kernel runtime args
             SetRuntimeArgs(
                 program,

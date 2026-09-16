@@ -159,7 +159,7 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
         [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row] = work;
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             SetRuntimeArgs(
                 program,
                 kernels.reader,
@@ -172,10 +172,7 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
                  scaler_fp32_bits});
             SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows, start_row});
             SetRuntimeArgs(
-                program,
-                core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2,
-                core,
-                {eps_fp32_bits});
+                program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {eps_fp32_bits});
         });
 
     return cached_program_t{

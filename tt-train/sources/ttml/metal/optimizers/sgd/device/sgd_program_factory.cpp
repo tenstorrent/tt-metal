@@ -278,7 +278,7 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2,
         [&](const CoreWork& work) {
-            const auto& [core, core_index, num_tiles, start_tile] = work;
+            const auto& [core, core_index, num_tiles, start_tile, in_group_1] = work;
             SetRuntimeArgs(
                 program,
                 kernels.reader,
@@ -294,7 +294,7 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
                  start_tile});
             SetRuntimeArgs(
                 program,
-                core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2,
+                in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2,
                 core,
                 {use_weight_decay, use_dampening});
             SetRuntimeArgs(
