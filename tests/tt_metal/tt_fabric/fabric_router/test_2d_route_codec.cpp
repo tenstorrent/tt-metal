@@ -207,31 +207,27 @@ TEST(Routing2DCodec, EastWestFacingRoutersReadTheXMapOnly) {
         Codec::decode_action<eth_chan_directions::WEST>(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
 }
 
-// The E/W shortcut above is only sound mid-mesh, where Y-before-X guarantees the Y leg is already
-// spent by the time an E/W router sees the packet. An intermesh landing voids that: the boundary
-// router installs a fresh map for its own mesh and the Y leg restarts under it. Decoding such a
-// packet on the facing would drop the owed N/S hop and blackhole every destination off the landing
-// row, so the landing path reads Y-first no matter which way the boundary router faces.
+// An intermesh landing rebuilds the map and restarts the Y leg, so the E/W shortcut above would
+// drop the owed N/S hop and strand every destination off the landing row.
 TEST(Routing2DCodec, IntermeshLandingDecodesYFirstOnEveryFacing) {
     constexpr uint32_t kY = 4, kX = 4;
     std::array<std::uint8_t, kY + kX> route_buffer = {};
     constexpr uint32_t kLocalY = 2, kLocalX = 1;
 
-    // A freshly landed map owing a N/S hop, with the X row already holding the post-turn action.
+    // A freshly landed map owing a N/S hop, X row already holding the post-turn action.
     route_buffer[kLocalY] = Codec::ACTION_NORTH;
     route_buffer[kY + kLocalX] = Codec::ACTION_EAST;
 
     EXPECT_EQ(Codec::decode_action_y_first(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_NORTH);
 
-    // Same reads the facing-keyed decode would make, to show the two disagree precisely on E/W --
-    // which is why the landing site must not route through decode_action.
+    // The facing-keyed decode disagrees precisely on E/W, which is what the landing must avoid.
     EXPECT_EQ(
         Codec::decode_action<eth_chan_directions::NORTH>(route_buffer.data(), kLocalY, kLocalX, kY),
         Codec::ACTION_NORTH);
     EXPECT_EQ(
         Codec::decode_action<eth_chan_directions::EAST>(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
 
-    // Once the Y leg is spent, Y-first agrees with every facing again.
+    // Y leg spent: Y-first agrees with every facing again.
     route_buffer[kLocalY] = 0;
     EXPECT_EQ(Codec::decode_action_y_first(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
 }
