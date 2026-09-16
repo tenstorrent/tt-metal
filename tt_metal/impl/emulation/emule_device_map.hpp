@@ -3,7 +3,10 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include <tt-metalium/device.hpp>  // IDevice, ChipId, CoreCoord, CoreType, BufferType
 
@@ -43,5 +46,20 @@ void populate_bank_mapping(
 
 // Build the logical->virtual worker column/row CSV maps (JIT defines) for a device.
 void build_worker_coord_maps(IDevice* device, std::string& worker_col_map_str, std::string& worker_row_map_str);
+
+// Resolve the emulated chip backend for a device (via the MetalContext cluster). Used by the
+// extern-C NOC bridge and the fabric resolver in the runner.
+tt::umd::SWEmuleChip* get_sw_emulated_chip(tt::ChipId device_id);
+
+// Cached host-facing/PCIe address threshold per device (pre-filter for on-chip vs host NOC addr).
+uint64_t get_pcie_base_cached(uint32_t device_id);
+
+// Build (cached) the physical {x,y}->Core* map for a device's NOC resolution. The cache globals
+// are exposed below because the fabric resolver reads them directly to resolve a peer chip's map.
+std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
+    tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id);
+
+extern std::mutex g_core_map_mutex;
+extern std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>> g_core_map_cache;
 
 }  // namespace tt::tt_metal::emule
