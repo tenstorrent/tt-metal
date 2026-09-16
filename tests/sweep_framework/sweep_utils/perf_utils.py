@@ -6,6 +6,7 @@ import os
 import inspect
 import subprocess
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, Tuple, Dict
 
@@ -406,6 +407,357 @@ def run_with_cache_comparison(
         return status, message, e2e_perf, DEVICE_PERF_SKIPPED, peak_memory
     else:
         return status, message, e2e_perf, None, peak_memory
+
+
+# ---------------------------------------------------------------------------------------
+# Determinism checking (--determinism-runs N)
+#
+# Sweep modules return only (pass, message) and the results DB keeps no tensors, so
+# run-to-run diffing of exported results cannot see bit-level variation -- for eltwise the
+# PCC is ~1.0 on every run and would hide it. Instead the same vector is executed N times
+# in-process and the raw outputs are compared bit-exactly.
+#
+# Outputs are captured without touching any sweep module: a ttnn post-operation hook fires
+# once per TOP-LEVEL ttnn op (ttnn/decorators.py, POST_OPERATION_HOOKS) with the op and its
+# return value, so every ttnn.Tensor produced by the module's run() is recorded in call
+# order. Input-creation ops (from_torch etc.) are captured too: if THEY differ between runs
+# the module's inputs are not reproducible (unseeded RNG), which is reported as an
+# inconclusive check rather than as op non-determinism.
+# ---------------------------------------------------------------------------------------
+
+# Top-level ops whose outputs are the module's INPUTS rather than the op under test. A
+# difference here means the module regenerated different inputs between runs.
+_INPUT_CREATION_OPS = frozenset(
+    {
+        "ttnn.from_torch",
+        "ttnn.to_device",
+        "ttnn.from_device",
+        "ttnn.copy_host_to_device_tensor",
+        "ttnn.allocate_tensor_on_device",
+        "ttnn.as_tensor",
+        "ttnn.rand",
+        "ttnn.uniform",
+    }
+)
+
+# Module-level opt-out, same convention as _SKIP_DEVICE_PERF: a sweep module sets this
+# when the op is non-deterministic by definition (e.g. dropout / random-fill ops).
+NON_DETERMINISTIC_BY_DESIGN_ATTR = "_NON_DETERMINISTIC_BY_DESIGN"
+
+
+def _reseed_host_rngs(seed: int = 0) -> None:
+    """Put every host RNG in the same state before each run of a vector.
+
+    ~250 classic eltwise sweeps draw `data_seed = random.randint(...)` inside run() and
+    seed torch from it, so without this every run would see different inputs and the
+    check could only report "inputs not reproducible". Reseeding here makes those
+    modules reproducible run-to-run with no per-module edits. Modules that already seed
+    themselves (model-traced: torch.manual_seed(0)) are unaffected.
+    """
+    import random
+
+    import torch
+
+    random.seed(seed)
+    torch.manual_seed(seed)
+    try:
+        import numpy as np
+
+        np.random.seed(seed)
+    except Exception:
+        pass
+
+
+def _iter_ttnn_tensors(value):
+    import ttnn
+
+    if isinstance(value, ttnn.Tensor):
+        yield value
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _iter_ttnn_tensors(v)
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _iter_ttnn_tensors(v)
+
+
+def _tensor_to_host_shards(tensor):
+    """Return the tensor's data as a list of torch tensors, one per device shard.
+
+    Reading shard-by-shard sidesteps mesh composers, so a multi-device tensor is compared
+    shard-for-shard without knowing how the module would have composed it.
+    """
+    import ttnn
+
+    try:
+        shards = ttnn.get_device_tensors(tensor)
+    except Exception:
+        shards = [tensor]
+    return [ttnn.to_torch(s) for s in shards]
+
+
+@contextmanager
+def _capture_outputs(reference=None, run_index: int = 1):
+    """Yield an _OutputRecorder that sees every top-level ttnn op executed in the block.
+
+    With reference=None (run 1) the recorder snapshots every output. With a reference
+    (runs 2..N) it compares each output against the same-position run-1 snapshot as it is
+    produced and drops it, so at most ONE run's outputs are ever resident on the host.
+    Holding all N runs before comparing OOM-killed the process on large model-traced
+    shapes (41 GB RSS for add).
+
+    ttnn's default FastOperation path skips the pre/post-op hooks entirely
+    (decorators.py: FastOperation.__call__ only routes to Operation when
+    _requires_slow_runtime()). Flipping CONFIG.enable_fast_runtime_mode off for the
+    duration is what ttnn.graph's own capture helper does for the same reason; the op
+    itself is unchanged, only the Python wrapper around it.
+    """
+    import ttnn
+
+    recorder = _OutputRecorder(reference=reference, run_index=run_index)
+    prev_fast_runtime = ttnn.CONFIG.enable_fast_runtime_mode
+    ttnn.CONFIG.enable_fast_runtime_mode = False
+    try:
+        with ttnn.register_post_operation_hook(recorder):
+            yield recorder
+    finally:
+        ttnn.CONFIG.enable_fast_runtime_mode = prev_fast_runtime
+
+
+class _OutputRecorder:
+    """Post-op hook that snapshots (run 1) or compares-and-discards (runs 2..N) every
+    ttnn.Tensor produced by top-level ttnn ops."""
+
+    def __init__(self, reference=None, run_index: int = 1):
+        self.reference = reference  # run-1 records, or None when this IS run 1
+        self.run_index = run_index
+        self.records = []  # run 1: list of (op_name, [torch shard, ...] | None if unreadable)
+        self.count = 0  # tensors seen this run (for op-sequence comparison)
+        self.mismatch = None  # first difference found (runs 2..N)
+        self.capture_errors = 0
+
+    def _snapshot(self, op_name, tensor):
+        try:
+            return _tensor_to_host_shards(tensor)
+        except Exception as exc:  # a snapshot failure must not break the op under test
+            self.capture_errors += 1
+            logger.debug(f"determinism: could not read output of {op_name}: {exc}")
+            return None
+
+    def __call__(self, operation, function_args, function_kwargs, output):
+        op_name = getattr(operation, "python_fully_qualified_name", None) or str(operation)
+        for tensor in _iter_ttnn_tensors(output):
+            idx = self.count
+            self.count += 1
+            if self.reference is None:
+                self.records.append((op_name, self._snapshot(op_name, tensor)))
+                continue
+            if self.mismatch is not None:
+                continue  # already diverged; skip the readback cost for the rest of this run
+            if idx >= len(self.reference):
+                continue  # extra tensors are reported as an op-sequence mismatch afterwards
+            ref_op, ref_shards = self.reference[idx]
+            if ref_op != op_name:
+                self.mismatch = _sequence_mismatch(
+                    op_name,
+                    self.run_index,
+                    f"tensor #{idx}: run 1 came from {ref_op}, run {self.run_index} from {op_name}",
+                )
+                continue
+            if ref_shards is None:
+                continue  # unreadable on run 1; nothing to compare
+            shards = self._snapshot(op_name, tensor)
+            if shards is None:
+                continue
+            self.mismatch = _compare_shards(op_name, idx, ref_shards, shards, self.run_index)
+            del shards
+        return None
+
+
+def _sequence_mismatch(op, run_index: int, detail: str) -> Dict[str, Any]:
+    return {
+        "kind": "op_sequence",
+        "op": op,
+        "divergent_run": run_index,
+        "mismatch_elems": None,
+        "max_abs_delta": None,
+        "detail": detail,
+    }
+
+
+def _compare_shards(op, idx, ref_shards, shards, run_index: int) -> Optional[Dict[str, Any]]:
+    """Compare one tensor's shards against its run-1 snapshot; mismatch dict or None."""
+    kind = "input" if op in _INPUT_CREATION_OPS else "output"
+    if len(ref_shards) != len(shards):
+        return {
+            "kind": kind,
+            "op": op,
+            "divergent_run": run_index,
+            "mismatch_elems": None,
+            "max_abs_delta": None,
+            "detail": f"{op} tensor #{idx}: shard count {len(ref_shards)} vs {len(shards)}",
+        }
+    for shard_i, (ra, rb) in enumerate(zip(ref_shards, shards)):
+        if not _bit_identical(ra, rb):
+            info = _describe_mismatch(ra, rb)
+            shard_txt = f" shard {shard_i}" if len(shards) > 1 else ""
+            return {
+                "kind": kind,
+                "op": op,
+                "divergent_run": run_index,
+                "mismatch_elems": info["mismatch_elems"],
+                "max_abs_delta": info["max_abs_delta"],
+                "detail": f"{op} tensor #{idx}{shard_txt} on run {run_index}: {info['detail']}",
+            }
+    return None
+
+
+def _bit_identical(a, b) -> bool:
+    import torch
+
+    if a.shape != b.shape or a.dtype != b.dtype:
+        return False
+    # Byte-level compare so NaN payloads and -0.0 vs 0.0 count as differences.
+    return torch.equal(
+        a.contiguous().flatten().view(torch.uint8),
+        b.contiguous().flatten().view(torch.uint8),
+    )
+
+
+def _describe_mismatch(a, b) -> Dict[str, Any]:
+    import torch
+
+    if a.shape != b.shape or a.dtype != b.dtype:
+        return {
+            "mismatch_elems": max(a.numel(), b.numel()),
+            "max_abs_delta": None,
+            "detail": f"shape/dtype differ: {tuple(a.shape)}/{a.dtype} vs {tuple(b.shape)}/{b.dtype}",
+        }
+    af, bf = a.to(torch.float32), b.to(torch.float32)
+    both_nan = torch.isnan(af) & torch.isnan(bf)
+    differs = (af != bf) & ~both_nan
+    n_diff = int(differs.sum())
+    finite = torch.isfinite(af) & torch.isfinite(bf) & differs
+    max_delta = float((af - bf).abs()[finite].max()) if bool(finite.any()) else 0.0
+    if n_diff == 0:
+        # _bit_identical said the bytes differ but no element compares unequal: the
+        # difference is in NaN payloads or the sign of zero.
+        detail = f"0 of {a.numel()} elements compare unequal but bytes differ (NaN payload / signed zero)"
+    else:
+        detail = f"{n_diff} of {a.numel()} elements differ, max|delta|={max_delta:.6g}"
+    return {"mismatch_elems": n_diff, "max_abs_delta": max_delta, "detail": detail}
+
+
+def run_with_determinism_check(
+    test_module, test_vector: dict, device, config: Any
+) -> Tuple[bool, Any, Optional[float], Optional[dict], Optional[Dict], Dict[str, Any]]:
+    """Execute a vector config.determinism_runs times and require bit-identical outputs.
+
+    Returns the usual (status, message, e2e_ms, device_perf, peak_memory) plus a
+    `determinism` dict:
+        verdict        "deterministic" | "non_deterministic" | "inputs_not_reproducible"
+                       | "skipped_by_design" | "not_checked"
+        runs           executions performed
+        divergent_run  1-based run that first differed (non-deterministic only)
+        mismatch_elems / max_abs_delta / detail   description of the first difference
+
+    Run 1 is uncached and runs 2..N hit the program cache, so a cache-path divergence is
+    caught as well and reported with divergent_run == 2.
+
+    Only the verdict is folded into status/message: a vector that PASSES its own PCC on
+    every run but differs between runs is returned with status=False and a message that
+    starts with NON_DETERMINISTIC so the runner can classify it FAIL_NON_DETERMINISTIC.
+    A run that fails its own PCC (or raises) is reported as that failure instead.
+    """
+    runs = max(int(getattr(config, "determinism_runs", 0) or 0), 2)
+    base_info: Dict[str, Any] = {"runs": runs, "verdict": "not_checked"}
+
+    if getattr(test_module, NON_DETERMINISTIC_BY_DESIGN_ATTR, False):
+        status, message, e2e_ms, device_perf, peak_memory = run_single(test_module, test_vector, device, config)
+        base_info["verdict"] = "skipped_by_design"
+        if status:
+            message = f"{message} | determinism check skipped: op is non-deterministic by design"
+        return status, message, e2e_ms, device_perf, peak_memory, base_info
+
+    # Only the program cache is cleared (not the disk kernel cache, which would force a
+    # kernel recompile per vector): run 1 then takes the uncached path, runs 2..N the
+    # cached one, so a cache-only divergence is covered.
+    try:
+        device.clear_program_cache()
+    except Exception as exc:
+        logger.debug(f"determinism: could not clear program cache: {exc}")
+
+    reference = None  # run-1 snapshots; runs 2..N stream-compare against these
+    mismatch = None
+    first_status = first_message = first_e2e = first_device_perf = first_peak = None
+    for i in range(runs):
+        _reseed_host_rngs()
+        with _capture_outputs(reference=reference, run_index=i + 1) as recorder:
+            if i == 0:
+                # First run carries the perf / device-perf / memory measurements exactly as
+                # run_single would, so --determinism-runs composes with those flags.
+                status, message, e2e_ms, device_perf, peak_memory = run_single(test_module, test_vector, device, config)
+                first_status, first_message, first_e2e, first_device_perf, first_peak = (
+                    status,
+                    message,
+                    e2e_ms,
+                    device_perf,
+                    peak_memory,
+                )
+            else:
+                status, message, _ = execute_test(test_module, test_vector, device)
+        if not status:
+            # The vector itself failed on this run: that is the finding, not determinism.
+            fail_msg = message if i == 0 else f"RUN {i + 1}/{runs} FAILED: {message} (run 1: {first_message})"
+            base_info["verdict"] = "not_checked"
+            base_info["detail"] = f"run {i + 1} failed its own check"
+            return False, fail_msg, first_e2e, first_device_perf, first_peak, base_info
+        if i == 0:
+            reference = recorder.records
+            continue
+        mismatch = recorder.mismatch
+        if mismatch is None and recorder.count != len(reference):
+            mismatch = _sequence_mismatch(
+                None, i + 1, f"run 1 produced {len(reference)} tensors, run {i + 1} produced {recorder.count}"
+            )
+        if mismatch is not None:
+            break  # first divergence is the finding; later runs add nothing
+
+    # Every run passed its own check; the streamed comparison decides the verdict.
+    n_tensors = len(reference)
+    if mismatch is None:
+        base_info["verdict"] = "deterministic"
+        base_info["mismatch_elems"] = 0
+        base_info["compared_tensors"] = n_tensors
+        if n_tensors == 0:
+            base_info["verdict"] = "not_checked"
+            base_info["detail"] = "no ttnn tensor outputs were captured"
+            message = f"{first_message} | determinism NOT CHECKED: no ttnn outputs captured"
+        else:
+            message = f"{first_message} | deterministic: {n_tensors} tensor(s) bit-identical over {runs} runs"
+        return True, message, first_e2e, first_device_perf, first_peak, base_info
+
+    base_info.update(
+        {
+            "divergent_run": mismatch["divergent_run"],
+            "mismatch_elems": mismatch["mismatch_elems"],
+            "max_abs_delta": mismatch["max_abs_delta"],
+            "op": mismatch["op"],
+            "detail": mismatch["detail"],
+        }
+    )
+    if mismatch["kind"] == "input":
+        # The module fed different inputs to the op on this run, so the outputs cannot be
+        # compared. Not a failure of the op; flag the module for seeding.
+        base_info["verdict"] = "inputs_not_reproducible"
+        logger.warning(f"determinism: inputs differ between runs, module needs a fixed seed: {mismatch['detail']}")
+        message = f"{first_message} | determinism INCONCLUSIVE (inputs not reproducible): {mismatch['detail']}"
+        return True, message, first_e2e, first_device_perf, first_peak, base_info
+
+    base_info["verdict"] = "non_deterministic"
+    logger.error(f"determinism: {mismatch['detail']}")
+    message = f"NON_DETERMINISTIC: {mismatch['detail']} (every run passed PCC: {first_message})"
+    return False, message, first_e2e, first_device_perf, first_peak, base_info
 
 
 def run_single(

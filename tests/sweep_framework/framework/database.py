@@ -275,6 +275,7 @@ def map_test_status_to_run_status(statuses):
         "fail_watcher",
         "fail_crash_hang",
         "fail_unsupported_device_perf",
+        "fail_non_deterministic",
     ]
     if any(s in failure_statuses or s.startswith("fail") for s in statuses):
         return "failure"

@@ -35,6 +35,11 @@ on:
       measure-memory:
         type: string
         default: "false"
+      determinism-runs:
+        # "0" = off; N >= 2 runs each vector N times and requires bit-identical outputs
+        # (sweeps_runner.py --determinism-runs). Incompatible with measure-e2e-perf.
+        type: string
+        default: "0"
       fail-on-test-failure:
         type: string
         default: "false"
@@ -125,6 +130,7 @@ jobs:
           echo "│ Measure Device Perf:  ${{ inputs.measure-device-perf }}"
           echo "│ Measure E2E Perf:     ${{ inputs.measure-e2e-perf }}"
           echo "│ Measure Memory:       ${{ inputs.measure-memory }}"
+          echo "│ Determinism Runs:     ${{ inputs.determinism-runs || '0' }}"
           echo "│ Use Database:         ${{ inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)' }}"
           echo "│ Mesh Shape Filter:    ${{ inputs.mesh-shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
@@ -187,6 +193,9 @@ jobs:
             MEMORY_FLAG="--measure-memory"
           fi
 
+          # Determinism check: run each vector N times, require bit-identical outputs
+          DETERMINISM_RUNS="${{ inputs.determinism-runs || '0' }}"
+
           CMD=(
             python3 tests/sweep_framework/sweeps_runner.py
             --module-name "$MODULE_SELECTOR"
@@ -210,6 +219,10 @@ jobs:
 
           if [[ -n "$MEMORY_FLAG" ]]; then
             CMD+=("$MEMORY_FLAG")
+          fi
+
+          if [[ "$DETERMINISM_RUNS" != "0" ]]; then
+            CMD+=(--determinism-runs "$DETERMINISM_RUNS")
           fi
 
           if [[ -n "$SUITE_NAME" ]]; then
