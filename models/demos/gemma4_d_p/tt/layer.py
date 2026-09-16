@@ -122,12 +122,16 @@ class Gemma4DecoderLayer:
 
         hidden_states = mlp_output
 
-        # post_feedforward_layernorm -> residual add
+        # post_feedforward_layernorm -> residual add, scaled by the learned layer scalar.
+        # The scalar rides on the add as an output activation: on its own it is a full
+        # read and write of the 1024x5376 hidden state for one SFPU multiply per tile.
         normed = self.post_feedforward_layernorm.forward(hidden_states)
-        hidden_states = ttnn.add(residual, normed)
+        hidden_states = ttnn.add(
+            residual,
+            normed,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
+        )
         residual.deallocate(True)
         normed.deallocate(True)
-
-        hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
 
         return hidden_states
