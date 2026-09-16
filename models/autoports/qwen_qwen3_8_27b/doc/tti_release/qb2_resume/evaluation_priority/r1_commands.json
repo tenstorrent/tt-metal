@@ -1,0 +1,140 @@
+{
+  "control2": {
+    "status": "prepared_blocked_device_ownership",
+    "N": 2,
+    "C": 8,
+    "BS": 8,
+    "cwd": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/tt-inference-server",
+    "argv": [
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python",
+      "run.py",
+      "--model",
+      "Qwen3.8-27B",
+      "--tt-device",
+      "p300x2",
+      "--workflow",
+      "evals",
+      "--runtime-model-spec-json",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-full64/r1/control2-spec.json",
+      "--service-port",
+      "8000",
+      "--no-auth",
+      "--skip-system-sw-validation",
+      "--eval-samples",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-candidate-v2/r1/control2-doc-ids.json"
+    ],
+    "environment_overrides": {
+      "CACHE_ROOT": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/r1-final-source-20260916/control2/tti_cache",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "spec": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-full64/r1/control2-spec.json",
+      "sha256": "2a81661ecb269a935c4e3b5b6c1adb607bf4e51f649308d8439ba131093bb2d0"
+    },
+    "ids": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-candidate-v2/r1/control2-doc-ids.json",
+      "sha256": "fb09ec3b75d4fe98d50169f264824a73fc343e8f7470e910cc327dc931718a0a"
+    },
+    "output": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/r1-final-source-20260916/control2",
+    "source_binding": "Must wrap exact argv in observed-server-run/run_observed.py against an actual qualified final-source APC-off server with native_runtime_binding.json. No performance traffic concurrently.",
+    "acceptance": "Full198 only, all IDs and saved samples reconciled by existing qb2_r1_results.py; control2 is diagnostic only. Ownership errors invalidate acceptance.",
+    "server_dir": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/apc-runtime-fp8-native2/server-apc-off",
+    "observed_argv": [
+      "/usr/bin/python3",
+      "-B",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/observed-server-run/run_observed.py",
+      "--server-dir",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/apc-runtime-fp8-native2/server-apc-off",
+      "--output",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/r1-final-source-20260916/control2/owner_observation.json",
+      "--",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python",
+      "run.py",
+      "--model",
+      "Qwen3.8-27B",
+      "--tt-device",
+      "p300x2",
+      "--workflow",
+      "evals",
+      "--runtime-model-spec-json",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-full64/r1/control2-spec.json",
+      "--service-port",
+      "8000",
+      "--no-auth",
+      "--skip-system-sw-validation",
+      "--eval-samples",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-candidate-v2/r1/control2-doc-ids.json"
+    ],
+    "performance_gate_required": false,
+    "prior_spec_metadata": "Legacy top-level commits and historical source labels are retained; mandatory actual final-source/native/server evidence is supplied by qualifier plus observer, never inferred from these labels."
+  },
+  "full198": {
+    "status": "prepared_blocked_device_ownership",
+    "N": 198,
+    "C": 8,
+    "BS": 8,
+    "cwd": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/tt-inference-server",
+    "argv": [
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python",
+      "run.py",
+      "--model",
+      "Qwen3.8-27B",
+      "--tt-device",
+      "p300x2",
+      "--workflow",
+      "evals",
+      "--runtime-model-spec-json",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-full64/r1/full198-spec.json",
+      "--service-port",
+      "8000",
+      "--no-auth",
+      "--skip-system-sw-validation",
+      "--eval-samples",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-candidate-v2/r1/full198-doc-ids.json"
+    ],
+    "environment_overrides": {
+      "CACHE_ROOT": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/r1-final-source-20260916/full198/tti_cache",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "spec": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-full64/r1/full198-spec.json",
+      "sha256": "00de541a8d9f943f1795cdbb9a2192628043f4132135d4e3a6e3ac3846744698"
+    },
+    "ids": {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-candidate-v2/r1/full198-doc-ids.json",
+      "sha256": "44b71129b93a66930ffcc2f7db46e80454cd9341d1f23faa75b4d4c75f427fe2"
+    },
+    "output": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/r1-final-source-20260916/full198",
+    "source_binding": "Must wrap exact argv in observed-server-run/run_observed.py against an actual qualified final-source APC-off server with native_runtime_binding.json. No performance traffic concurrently.",
+    "acceptance": "Full198 only, all IDs and saved samples reconciled by existing qb2_r1_results.py; control2 is diagnostic only. Ownership errors invalidate acceptance.",
+    "server_dir": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/apc-runtime-fp8-native2/server-apc-off",
+    "observed_argv": [
+      "/usr/bin/python3",
+      "-B",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/observed-server-run/run_observed.py",
+      "--server-dir",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/apc-runtime-fp8-native2/server-apc-off",
+      "--output",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/r1-final-source-20260916/full198/owner_observation.json",
+      "--",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/tt-inference-server/.workflow_venvs/.venv_workflow_run_script/bin/python",
+      "run.py",
+      "--model",
+      "Qwen3.8-27B",
+      "--tt-device",
+      "p300x2",
+      "--workflow",
+      "evals",
+      "--runtime-model-spec-json",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-full64/r1/full198-spec.json",
+      "--service-port",
+      "8000",
+      "--no-auth",
+      "--skip-system-sw-validation",
+      "--eval-samples",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/combined-candidate-v2/r1/full198-doc-ids.json"
+    ],
+    "performance_gate_required": false,
+    "prior_spec_metadata": "Legacy top-level commits and historical source labels are retained; mandatory actual final-source/native/server evidence is supplied by qualifier plus observer, never inferred from these labels."
+  }
+}

@@ -1,0 +1,449 @@
+{
+  "utc": "2026-09-16T08:53:56.083112+00:00",
+  "policy": "User-directed provisional evaluation-practicality criteria; throughput >=50% strict target and TTFT <=2x strict target. Both per-user and aggregate throughput retained.",
+  "objective": "Run/debug R1 GPQA Diamond, Terminal-Bench2.1, SWE-bench; full performance target attainment/APC/fairness/MTP speedup not prerequisites.",
+  "input_matrix_sha256": "a9c29a7afded1af6698e9ec461678c920373cd98cb26348c180789fd33f1ec15",
+  "rows": [
+    {
+      "id": "cold_s128_g252_b1",
+      "nominal_isl": 128,
+      "actual_isl": 128,
+      "osl": 252,
+      "C": 1,
+      "N": 16,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 60.0,
+      "strict_user_decode_min_tps": 50.0,
+      "strict_aggregate_decode_min_tps": 50.0,
+      "metrics": {
+        "mean_ttft_ms": 66.17092550732195,
+        "per_user_decode_tps": 41.478224163108194,
+        "aggregate_decode_tps": 41.4782241631082
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 120.0,
+        "per_user_decode_tps": 25.0,
+        "aggregate_decode_tps": 25.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s128_g252_b1/measured/summary.json",
+      "summary_sha256": "cc630b83617ec3df17a88bb4288639fb381480ab64da32886040f73ed0de26e7",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s1024_g252_b1",
+      "nominal_isl": 1024,
+      "actual_isl": 1024,
+      "osl": 252,
+      "C": 1,
+      "N": 16,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 150.0,
+      "strict_user_decode_min_tps": 50.0,
+      "strict_aggregate_decode_min_tps": 50.0,
+      "metrics": {
+        "mean_ttft_ms": 185.74602412991226,
+        "per_user_decode_tps": 41.14204639999733,
+        "aggregate_decode_tps": 41.14204639999733
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 300.0,
+        "per_user_decode_tps": 25.0,
+        "aggregate_decode_tps": 25.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s1024_g252_b1/measured/summary.json",
+      "summary_sha256": "8bdc2b0296a53d3490cb7546911ebe2c77adcb8e7c73e7b81965073e74087d91",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s4096_g252_b1",
+      "nominal_isl": 4096,
+      "actual_isl": 4096,
+      "osl": 252,
+      "C": 1,
+      "N": 16,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 500.0,
+      "strict_user_decode_min_tps": 49.0,
+      "strict_aggregate_decode_min_tps": 49.0,
+      "metrics": {
+        "mean_ttft_ms": 634.3895570607856,
+        "per_user_decode_tps": 40.7381669217353,
+        "aggregate_decode_tps": 40.7381669217353
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 1000.0,
+        "per_user_decode_tps": 24.5,
+        "aggregate_decode_tps": 24.5
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s4096_g252_b1/measured/summary.json",
+      "summary_sha256": "d708814a65e8acb3d073b604242637e8f6134e2d411afaf7091ec2b04a039e76",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s16384_g252_b1",
+      "nominal_isl": 16384,
+      "actual_isl": 16384,
+      "osl": 252,
+      "C": 1,
+      "N": 16,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 1800.0,
+      "strict_user_decode_min_tps": 47.0,
+      "strict_aggregate_decode_min_tps": 47.0,
+      "metrics": {
+        "mean_ttft_ms": 2634.3687336193398,
+        "per_user_decode_tps": 39.914721848015,
+        "aggregate_decode_tps": 39.914721848015
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 3600.0,
+        "per_user_decode_tps": 23.5,
+        "aggregate_decode_tps": 23.5
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s16384_g252_b1/measured/summary.json",
+      "summary_sha256": "9ada871a68d760243861433e1e8406b61d199fbbf91a72e367d45e52c17fc132",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s32768_g252_b1",
+      "nominal_isl": 32768,
+      "actual_isl": 32768,
+      "osl": 252,
+      "C": 1,
+      "N": 16,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 3500.0,
+      "strict_user_decode_min_tps": 46.0,
+      "strict_aggregate_decode_min_tps": 46.0,
+      "metrics": {
+        "mean_ttft_ms": 5606.900884537026,
+        "per_user_decode_tps": 38.87393410795934,
+        "aggregate_decode_tps": 38.87393410795934
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 7000.0,
+        "per_user_decode_tps": 23.0,
+        "aggregate_decode_tps": 23.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s32768_g252_b1/measured/summary.json",
+      "summary_sha256": "86a4ee38036add2014672316d665123414dd328c1e5f013b9e17b1ff90ae08a7",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s65536_g252_b1",
+      "nominal_isl": 65536,
+      "actual_isl": 65536,
+      "osl": 252,
+      "C": 1,
+      "N": 16,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 8000.0,
+      "strict_user_decode_min_tps": 43.0,
+      "strict_aggregate_decode_min_tps": 43.0,
+      "metrics": {
+        "mean_ttft_ms": 12565.47752325423,
+        "per_user_decode_tps": 36.944744605315,
+        "aggregate_decode_tps": 36.944744605315
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 16000.0,
+        "per_user_decode_tps": 21.5,
+        "aggregate_decode_tps": 21.5
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s65536_g252_b1/measured/summary.json",
+      "summary_sha256": "1e294bcc2c0019e34b4392e0401b7e0c2c02bc1c4b723098b900fed2ecaeaafe",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s131072_g252_b1",
+      "nominal_isl": 131072,
+      "actual_isl": 131072,
+      "osl": 252,
+      "C": 1,
+      "N": 16,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 22000.0,
+      "strict_user_decode_min_tps": 40.0,
+      "strict_aggregate_decode_min_tps": 40.0,
+      "metrics": {
+        "mean_ttft_ms": 33672.846183064394,
+        "per_user_decode_tps": 33.323340938873265,
+        "aggregate_decode_tps": 33.323340938873265
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 44000.0,
+        "per_user_decode_tps": 20.0,
+        "aggregate_decode_tps": 20.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s131072_g252_b1/measured/summary.json",
+      "summary_sha256": "80259011c03ef42a7269a18407388fcd80fa5f9b6ec5f230c3eef6d7dd858e3f",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s262144_g252_b1",
+      "nominal_isl": 262144,
+      "actual_isl": 261892,
+      "osl": 252,
+      "C": 1,
+      "N": 2,
+      "user_authorized_262k_substitution": true,
+      "historical_strict_status": "unverified",
+      "strict_ttft_max_ms": 60000.0,
+      "strict_user_decode_min_tps": 34.0,
+      "strict_aggregate_decode_min_tps": 34.0,
+      "metrics": {
+        "mean_ttft_ms": 95943.05215589702,
+        "per_user_decode_tps": 28.285493034198133,
+        "aggregate_decode_tps": 28.285493034198133
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 120000.0,
+        "per_user_decode_tps": 17.0,
+        "aggregate_decode_tps": 17.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": true,
+        "per_user_decode_tps": true,
+        "aggregate_decode_tps": true
+      },
+      "execution_integrity": true,
+      "relaxed_status": "pass",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/capacity/largest-valid-252/summary.json",
+      "summary_sha256": "7c5961c662d5c47bd0ddc8a7aac6eae7275669def51c84baa2d03c7c96a0f138",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s4096_g252_b8",
+      "nominal_isl": 4096,
+      "actual_isl": 4096,
+      "osl": 252,
+      "C": 8,
+      "N": 32,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 500.0,
+      "strict_user_decode_min_tps": 34.0,
+      "strict_aggregate_decode_min_tps": 272.0,
+      "metrics": {
+        "mean_ttft_ms": 4538.714550144505,
+        "per_user_decode_tps": 15.889783320792947,
+        "aggregate_decode_tps": 102.40487207255845
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 1000.0,
+        "per_user_decode_tps": 17.0,
+        "aggregate_decode_tps": 136.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": false,
+        "per_user_decode_tps": false,
+        "aggregate_decode_tps": false
+      },
+      "execution_integrity": true,
+      "relaxed_status": "fail",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s4096_g252_b8/measured/summary.json",
+      "summary_sha256": "537f136fda00acc044200259d33e78b15948b074d1f1ec54f14e0cecff5c52e5",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s32768_g252_b8",
+      "nominal_isl": 32768,
+      "actual_isl": 32768,
+      "osl": 252,
+      "C": 8,
+      "N": 32,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 3500.0,
+      "strict_user_decode_min_tps": 28.0,
+      "strict_aggregate_decode_min_tps": 224.0,
+      "metrics": {
+        "mean_ttft_ms": 40191.05187332025,
+        "per_user_decode_tps": 11.699992692698236,
+        "aggregate_decode_tps": 36.199212209455375
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 7000.0,
+        "per_user_decode_tps": 14.0,
+        "aggregate_decode_tps": 112.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": false,
+        "per_user_decode_tps": false,
+        "aggregate_decode_tps": false
+      },
+      "execution_integrity": true,
+      "relaxed_status": "fail",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s32768_g252_b8/measured/summary.json",
+      "summary_sha256": "b3bf42a0f7dde5370afbeb05802c765d67e6778ea6c2ec629c707bf32d2e2b8c",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s131072_g252_b8",
+      "nominal_isl": 131072,
+      "actual_isl": 131072,
+      "osl": 252,
+      "C": 8,
+      "N": 32,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 22000.0,
+      "strict_user_decode_min_tps": 22.0,
+      "strict_aggregate_decode_min_tps": 176.0,
+      "metrics": {
+        "mean_ttft_ms": 171964.95128958486,
+        "per_user_decode_tps": 1.9143117716386922,
+        "aggregate_decode_tps": 7.718410186149451
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 44000.0,
+        "per_user_decode_tps": 11.0,
+        "aggregate_decode_tps": 88.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": false,
+        "per_user_decode_tps": false,
+        "aggregate_decode_tps": false
+      },
+      "execution_integrity": true,
+      "relaxed_status": "fail",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s131072_g252_b8/measured/summary.json",
+      "summary_sha256": "4ff0439929580df4cc1e42fe27300cd713c69ecf3e6dd746c3be519f46ec8792",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s4096_g252_b16",
+      "nominal_isl": 4096,
+      "actual_isl": 4096,
+      "osl": 252,
+      "C": 16,
+      "N": 64,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 500.0,
+      "strict_user_decode_min_tps": 32.0,
+      "strict_aggregate_decode_min_tps": 512.0,
+      "metrics": {
+        "mean_ttft_ms": 9423.718967387686,
+        "per_user_decode_tps": 8.879278645259426,
+        "aggregate_decode_tps": 109.86133292178943
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 1000.0,
+        "per_user_decode_tps": 16.0,
+        "aggregate_decode_tps": 256.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": false,
+        "per_user_decode_tps": false,
+        "aggregate_decode_tps": false
+      },
+      "execution_integrity": true,
+      "relaxed_status": "fail",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s4096_g252_b16/measured/summary.json",
+      "summary_sha256": "7e018afd2715109526f276d2ef531fe9346f127968ac237e5654e4df2b809581",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    },
+    {
+      "id": "cold_s32768_g252_b16",
+      "nominal_isl": 32768,
+      "actual_isl": 32768,
+      "osl": 252,
+      "C": 16,
+      "N": 64,
+      "user_authorized_262k_substitution": false,
+      "historical_strict_status": "fail",
+      "strict_ttft_max_ms": 3500.0,
+      "strict_user_decode_min_tps": 24.0,
+      "strict_aggregate_decode_min_tps": 384.0,
+      "metrics": {
+        "mean_ttft_ms": 66860.47190558747,
+        "per_user_decode_tps": 4.495626082299341,
+        "aggregate_decode_tps": 34.681247458045924
+      },
+      "relaxed_limits": {
+        "mean_ttft_ms": 7000.0,
+        "per_user_decode_tps": 12.0,
+        "aggregate_decode_tps": 192.0
+      },
+      "relaxed_gates": {
+        "mean_ttft_ms": false,
+        "per_user_decode_tps": false,
+        "aggregate_decode_tps": false
+      },
+      "execution_integrity": true,
+      "relaxed_status": "fail",
+      "summary_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/performance/cold_s32768_g252_b16/measured/summary.json",
+      "summary_sha256": "9b22c55da2732cd9aa48dc6b53543dfca6b98cd9d2e4e821bfe35d0b43a7c351",
+      "precision_scope": "Previously measured base mixed precision; not a new final FP8 measurement"
+    }
+  ],
+  "relaxed_pass_count": 8,
+  "relaxed_fail_count": 5,
+  "strict_historical_failures": 12,
+  "strict_historical_passes": 0,
+  "exact_262144_plus252_historical_contract": "Still exceeds original262144 total budget; preserved historical unresolved row. Current run uses measured261892+252 as instructed.",
+  "decision": "Performance sufficient to begin evaluation debugging. Keep prepared BS8/C8 R1 configuration initially; adapt concurrency only if actual evaluation latency/progress requires it. No performance optimization gate before R1.",
+  "remaining_launch_prerequisites": [
+    "No unknown device owners and active host telemetry guard; actual source/native/server qualification",
+    "Whole-client ownership observer; reject interference and preserve diagnostics",
+    "Docker/sandbox plus verified endpoint/host/network/provenance for Terminal/SWE",
+    "Resolve SWE variant before comparing score with Pro threshold; unmatched full Verified remains separately labeled"
+  ]
+}

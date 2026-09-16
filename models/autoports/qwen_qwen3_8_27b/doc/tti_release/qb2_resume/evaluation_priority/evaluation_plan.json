@@ -1,0 +1,31 @@
+{
+  "utc": "2026-09-16T08:56:34.846578+00:00",
+  "primary_objective": "Run and debug selected full-cohort evaluations",
+  "performance_is_not_launch_gate": true,
+  "priority_order": [
+    "r1_control2",
+    "r1_full198",
+    "terminal_bench_2_1_full89",
+    "swe_bench_verified_full500"
+  ],
+  "server_profile": "Promoted full64 FP8, context262144, BS8, initial C8 forR1, APCoff, chunkon4096/2048, MTPoff; actualsource/nativequalification mandatory",
+  "r1_commands": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/eval-priority-20260916/r1_commands.json",
+  "terminal_cohort": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/agentic/terminal21_cohort.json",
+  "terminal_config_template": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/agentic/terminal21_harbor.template.json",
+  "swe_execution_variant": "SWE-bench Verified",
+  "swe_execution_count": 500,
+  "swe_execution_cohort": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/agentic/swe_verified_diagnostic_cohort.json",
+  "swe_reporting": "Full Verified score, no Pro58.6% comparison. Original matched-Pro CSV acceptance remains unresolved. Verified execution/debugging does not wait for unavailable refinedPro reference.",
+  "full_cohort_acceptance": "Reconcile exact IDs, retain errors/timeouts and all outcomes; no successful-subset scoring or shard-percent averaging.",
+  "accuracy_thresholds_unchanged": true,
+  "ownership_gates_unchanged": true,
+  "source_and_context_gates_unchanged": true,
+  "performance_tasks_deferred": [
+    "APC off/on pair and warm rows",
+    "chunked fairness",
+    "full-model MTP speedup",
+    "strict CSV target optimization"
+  ],
+  "return_to_performance_when": "Only if actual selected eval progress, memory, latency or stability makes completion impractical",
+  "execution_blockers": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/eval-priority-20260916/access_preflight.json"
+}
