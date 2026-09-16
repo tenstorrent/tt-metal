@@ -13,10 +13,9 @@ test_perf_header_gate.py re-derives each test's columns and fails on any drift
 from this catalog.
 """
 
-
 PERF_TEST_SCHEMAS = {
     "perf_bcast": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "broadcast_type",
             "dest_acc",
@@ -25,7 +24,8 @@ PERF_TEST_SCHEMAS = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
-            "formats.sfpu_math",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
             "loop_factor",
             "marker",
             "num_faces",
@@ -36,7 +36,8 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
         ],
-        "aliases": {},
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_bcast": "perf_bcast"},
     },
     "perf_eltwise_bcast_col_custom": {
         "version": 3,
