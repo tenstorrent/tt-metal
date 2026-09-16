@@ -964,7 +964,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -991,7 +991,7 @@
       timeout: 44
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1018,7 +1018,7 @@
       timeout: 40
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1039,7 +1039,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1066,7 +1066,7 @@
       timeout: 28
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1102,7 +1102,7 @@
       timeout: 52
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
@@ -1134,7 +1134,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08GEEEEC75 # ssalice
+  owner_id: U0AQ3FGS9MG # Alina Khan
   team: models
   budget_type: demo
   sp_config: sc1
