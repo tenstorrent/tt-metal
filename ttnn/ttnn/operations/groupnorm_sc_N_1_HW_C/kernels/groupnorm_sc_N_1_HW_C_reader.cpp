@@ -34,6 +34,7 @@
 namespace {
 
 constexpr uint32_t ONE_F32_BITS = 0x3F800000u;
+constexpr uint16_t ONE_BF16_BITS = 0x3F80u;
 
 // Byte offset of element (r, c) inside a 32x32 tile made of four 16x16 faces of `elem_bytes` elements.
 constexpr uint32_t tile_elem_offset(uint32_t r, uint32_t c, uint32_t elem_bytes) {
@@ -70,7 +71,11 @@ void kernel_main() {
     constexpr uint32_t HW = get_compile_time_arg_val(23);
     constexpr uint32_t Ht = get_compile_time_arg_val(24);
     constexpr uint32_t Ct = get_compile_time_arg_val(25);
-    constexpr uint32_t TA_BASE = 26;
+    // Membership (E) element width: 4 = Float32 pages (fp32 DEST), 2 = Float16_b pages (16-bit DEST) — the host's
+    // _statistic_page_dtype; the 0/1 entries are exact in both.
+    constexpr uint32_t e_elem_size = get_compile_time_arg_val(26);
+    static_assert(e_elem_size == 4 || e_elem_size == 2, "membership pages are Float32 or Float16_b");
+    constexpr uint32_t TA_BASE = 27;
 
     constexpr auto x_args = TensorAccessorArgs<TA_BASE>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -102,7 +107,7 @@ void kernel_main() {
     constexpr uint32_t Cg = C / G;
     constexpr uint32_t chunk = chunk_rows * cols;
     constexpr uint32_t membership_tiles = cols * Kg;
-    constexpr uint32_t f32_tile_bytes = get_tile_size(cb_membership);
+    constexpr uint32_t e_tile_bytes = get_tile_size(cb_membership);
 
     Noc noc;
     CircularBuffer membership_cb(cb_membership);
@@ -125,13 +130,13 @@ void kernel_main() {
 
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
 
-    // E^T (pass 1, transposed = true) or E (pass 2) for column group cg: cols x Kg Float32 0/1 tiles,
-    // tile index T_local * Kg + kg. E_T[g', c] = 1 iff channel 32T + c belongs to group 32kg + g'.
+    // E^T (pass 1, transposed = true) or E (pass 2) for column group cg: cols x Kg 0/1 tiles (Float32 or Float16_b
+    // per e_elem_size), tile index T_local * Kg + kg. E_T[g', c] = 1 iff channel 32T + c belongs to group 32kg + g'.
     // Tiles tl >= valid_cols of a ragged last group stay zero (they are the K pad of the membership matmul).
     auto fill_membership = [&](uint32_t cg, bool transposed) {
         const uint32_t valid_cols = col_axis.valid(cg, cols);
         cb_reserve_back(cb_membership, membership_tiles);
-        noc.async_write_zeros(membership_cb, membership_tiles * f32_tile_bytes);
+        noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
         noc.write_zeros_l1_barrier();
         const uint32_t base = get_write_ptr(cb_membership);
         for (uint32_t tl = 0; tl < valid_cols; ++tl) {
@@ -146,8 +151,12 @@ void kernel_main() {
                 const uint32_t gl = g & 31;
                 const uint32_t r = transposed ? c : gl;
                 const uint32_t cc = transposed ? gl : c;
-                const uint32_t addr = base + (tl * Kg + kg) * f32_tile_bytes + tile_elem_offset(r, cc, 4);
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = ONE_F32_BITS;
+                const uint32_t addr = base + (tl * Kg + kg) * e_tile_bytes + tile_elem_offset(r, cc, e_elem_size);
+                if constexpr (e_elem_size == 4) {
+                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = ONE_F32_BITS;
+                } else {
+                    *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = ONE_BF16_BITS;
+                }
             }
         }
         cb_push_back(cb_membership, membership_tiles);

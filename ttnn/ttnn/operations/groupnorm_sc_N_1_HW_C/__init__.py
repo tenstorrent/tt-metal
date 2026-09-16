@@ -12,6 +12,8 @@ from .groupnorm_sc_N_1_HW_C import (
     INPUT_TAGGERS,
     SUPPORTED,
     EXCLUSIONS,
+    SUPPORTED_COMPUTE_CONFIG,
+    EXCLUSIONS_COMPUTE_CONFIG,
 )
 
 __all__ = [
@@ -23,4 +25,6 @@ __all__ = [
     "INPUT_TAGGERS",
     "SUPPORTED",
     "EXCLUSIONS",
+    "SUPPORTED_COMPUTE_CONFIG",
+    "EXCLUSIONS_COMPUTE_CONFIG",
 ]

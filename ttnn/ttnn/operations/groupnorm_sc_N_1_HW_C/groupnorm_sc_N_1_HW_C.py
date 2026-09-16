@@ -37,6 +37,8 @@ __all__ = [
     "INPUT_TAGGERS",
     "SUPPORTED",
     "EXCLUSIONS",
+    "SUPPORTED_COMPUTE_CONFIG",
+    "EXCLUSIONS_COMPUTE_CONFIG",
 ]
 
 
@@ -111,6 +113,26 @@ EXCLUSIONS = []  # Refinement 2 lifted {layout: ROW_MAJOR, alignment: hw_non_ali
 
 
 # ---------------------------------------------------------------------------
+# 3a. Compute-config surface (Refinement 3; .claude/references/precision_convention.md)
+# ---------------------------------------------------------------------------
+#
+# `fp32_dest_acc_en` is gated EXACTLY like a SUPPORTED axis (per-axis membership, then cell-level exclusion; tagged
+# from the caller's config via default_compute_kernel_config()). It is declared in these two siblings rather than
+# inside SUPPORTED / EXCLUSIONS only because feature_spec.TARGET / AXES do not carry the axis yet:
+# eval/registry.unsupported_reason() xfails ANY golden cell that lacks a SUPPORTED key ("axis missing from cell"),
+# so a literal SUPPORTED["fp32_dest_acc_en"] would xfail — then XPASS-strict-fail — the whole golden suite until
+# /golden-tests adds the axis (TOLERANCES keyed by (dtype, fp32_dest_acc_en)). When it does, move these two entries
+# into SUPPORTED / EXCLUSIONS verbatim; validate() already merges them.
+#
+# 16-bit DEST (fp32_dest_acc_en=False): every compute-produced intermediate page follows the DEST width (Float16_b
+# for cb_xsq / cb_colsum / cb_membership / the statistics CBs; Float32 stays only on the cross-core record CBs and
+# the matmul K-spill that must match them), DEST_AUTO_LIMIT becomes 16 / 8 (dst_full_sync_en on / off). fp32 input
+# + 16-bit DEST is the convention's mandatory refusal (lossy for a maxed-precision input).
+SUPPORTED_COMPUTE_CONFIG = {"fp32_dest_acc_en": [True, False]}
+EXCLUSIONS_COMPUTE_CONFIG = [{"dtype": ttnn.float32, "fp32_dest_acc_en": False}]
+
+
+# ---------------------------------------------------------------------------
 # 3b. PROPERTIES
 # ---------------------------------------------------------------------------
 
@@ -140,19 +162,10 @@ def _affine_axes(gamma, beta):
 
 
 def validate(input_tensor, num_groups, *, gamma=None, beta=None, compute_kernel_config=None):
-    # Precision convention (.claude/references/precision_convention.md): `fp32_dest_acc_en` is read
-    # from the caller's config, never silently overridden. `fp32_dest_acc_en` is not a feature_spec
-    # axis for this op, so the refusal below is the runtime form of the convention's EXCLUSIONS
-    # entry: the statistics path is a Float32-page matmul (`[S;Q] x E^T`, `[mean;rstd] x E_T`) whose
-    # correctness contract is HiFi4 + fp32 DEST (matmul_block_helpers.hpp -> Precision), so a 16-bit
-    # DEST is refused for EVERY input dtype (fp32 + False is the convention's mandatory refusal;
-    # bf16/bf8b + False is a refinement candidate: intermediate CB formats must follow DEST width).
+    # Precision convention (.claude/references/precision_convention.md): `fp32_dest_acc_en` is read from the
+    # caller's config (None -> default_compute_kernel_config()), never silently overridden, and gated as an axis
+    # (SUPPORTED_COMPUTE_CONFIG / EXCLUSIONS_COMPUTE_CONFIG). math_fidelity / math_approx_mode are honoured, never gated.
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
-    if not bool(getattr(cfg, "fp32_dest_acc_en", True)):
-        raise ExcludedCell(
-            "groupnorm_sc_N_1_HW_C: compute_kernel_config.fp32_dest_acc_en=False is not supported "
-            "(statistics are Float32-page matmuls that require fp32 DEST accumulation; refinement candidate)"
-        )
     affine, affine_dtype, affine_layout = _affine_axes(gamma, beta)
     axes = {
         "dtype": input_tensor.dtype,
@@ -161,18 +174,19 @@ def validate(input_tensor, num_groups, *, gamma=None, beta=None, compute_kernel_
         "affine": affine,
         "affine_dtype": affine_dtype,
         "affine_layout": affine_layout,
+        "fp32_dest_acc_en": bool(getattr(cfg, "fp32_dest_acc_en", True)),
     }
     shape = tuple(input_tensor.shape)
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((shape,), axes)
 
-    # 1. SUPPORTED — per axis
-    for axis, allowed in SUPPORTED.items():
+    # 1. SUPPORTED — per axis (+ the compute-config axis, see 3a)
+    for axis, allowed in {**SUPPORTED, **SUPPORTED_COMPUTE_CONFIG}.items():
         if axes[axis] not in allowed:
             raise UnsupportedAxisValue(f"groupnorm_sc_N_1_HW_C: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
 
     # 2. EXCLUSIONS — cell-level inside SUPPORTED
-    for exc in EXCLUSIONS:
+    for exc in EXCLUSIONS + EXCLUSIONS_COMPUTE_CONFIG:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"groupnorm_sc_N_1_HW_C: unsupported combination (refinement candidate): {exc}")
 

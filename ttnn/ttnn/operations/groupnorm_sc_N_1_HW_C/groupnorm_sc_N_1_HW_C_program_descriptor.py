@@ -59,12 +59,37 @@ MATH_FIDELITY = ttnn.MathFidelity.HiFi4
 FP32_DEST_ACC_EN = True
 DST_FULL_SYNC_EN = True
 MATH_APPROX_MODE = False
+# Design lamp (op_design.md -> cb_xsq "Float16_b pages for bf16/bf8b inputs"): x^2 pages at the INPUT's 16-bit width
+# even under fp32 DEST (one extra bf16 rounding of x^2 before the column sum; halves the bytes through the packer /
+# unpacker of the square + colsum pair). Off = the ledger rule (page follows DEST width). Under a 16-bit DEST the
+# pages are Float16_b regardless. Measured in Refinement 3 (see op_requirements.md -> Outcome).
+XSQ_16BIT_FOR_16BIT_INPUT = False
 
 TILE = 32
 
 # Bytes per element for the RM-stick arithmetic (host `element_size()` raises for block formats).
 # bfloat8_b never takes the RM path (feature_spec INVALID), so its entry only keeps the expressions finite.
 _ELEM_SIZE = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.bfloat8_b: 1}
+
+
+def _statistic_page_dtype(cfg):
+    """Page format of every compute-produced intermediate (numeric-formats-metal §4: it follows the DEST width, not
+    the input dtype). fp32 DEST -> Float32 pages; 16-bit DEST -> Float16_b (the value is already rounded to bf16 in
+    DEST, so a Float32 page would only double the packer / unpacker bytes). Exceptions, Float32 whatever the DEST:
+      * cb_partial / cb_gather / cb_totals_src / cb_totals_recv — the cross-core record format (writer face-row
+        shuffle + multicast landing; both ends must change together);
+      * cb_agg_interm — matmul_block re-targets the packer from interm to out only under fp32 DEST
+        (matmul_block_helpers.inl), so with a 16-bit DEST the K-spill region must carry cb_partial's format."""
+    return ttnn.float32 if bool(cfg.fp32_dest_acc_en) else ttnn.bfloat16
+
+
+def _xsq_page_dtype(cfg, input_dtype):
+    if not bool(cfg.fp32_dest_acc_en):
+        return ttnn.bfloat16
+    if XSQ_16BIT_FOR_16BIT_INPUT and input_dtype != ttnn.float32:
+        return ttnn.bfloat16
+    return ttnn.float32
+
 
 # Regime-pin contract (acceptance test): module-level overrides of the two host knobs.
 _l1_budget_bytes_override = None
@@ -342,7 +367,14 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     # ---- byte sizes ------------------------------------------------------------------------
     x_tile_bytes = ttnn.tile_size(input_tensor.dtype)
     y_tile_bytes = output_tensor.buffer_page_size()
-    f32_tile_bytes = ttnn.tile_size(ttnn.float32)
+    f32_tile_bytes = ttnn.tile_size(
+        ttnn.float32
+    )  # cross-core record pages + matmul K-spill (see _statistic_page_dtype)
+    stat_dtype = _statistic_page_dtype(cfg)
+    stat_tile_bytes = ttnn.tile_size(stat_dtype)
+    stat_elem_size = _ELEM_SIZE[stat_dtype]  # membership 0/1 element width the reader writes
+    xsq_dtype = _xsq_page_dtype(cfg, input_tensor.dtype)
+    xsq_tile_bytes = ttnn.tile_size(xsq_dtype)
     scaler_tile_bytes = ttnn.tile_size(ttnn.bfloat16)
     x_elem_size = _ELEM_SIZE[input_tensor.dtype]
     x_page_bytes = input_tensor.buffer_page_size()  # tile (TILE input) or stick (RM input)
@@ -369,25 +401,25 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
 
     if is_rm:
         add(CB_X_RM, X_RM_DEPTH * cols, x_tile_bytes, input_tensor.dtype)
-    add(CB_XSQ, chunk, f32_tile_bytes, ttnn.float32)
+    add(CB_XSQ, chunk, xsq_tile_bytes, xsq_dtype)
     add(CB_SCALER, scaler_tiles, scaler_tile_bytes, ttnn.bfloat16)
-    add(CB_COLSUM, 2 * cols, f32_tile_bytes, ttnn.float32)
-    add(CB_MEMBERSHIP, MEMBERSHIP_DEPTH * cols * Kg, f32_tile_bytes, ttnn.float32)
-    add(CB_AGG_INTERM, 2 * Kg, f32_tile_bytes, ttnn.float32)
-    add(CB_PARTIAL, 2 * Kg, f32_tile_bytes, ttnn.float32)
+    add(CB_COLSUM, 2 * cols, stat_tile_bytes, stat_dtype)
+    add(CB_MEMBERSHIP, MEMBERSHIP_DEPTH * cols * Kg, stat_tile_bytes, stat_dtype)
+    add(CB_AGG_INTERM, 2 * Kg, f32_tile_bytes, ttnn.float32)  # must match cb_partial (16-bit DEST: no interm->out swap)
+    add(CB_PARTIAL, 2 * Kg, f32_tile_bytes, ttnn.float32)  # cross-core record format (Float32 face rows)
     add(CB_GATHER, 2 * Kg * gather_tiles_per_stat, f32_tile_bytes, ttnn.float32)
     add(CB_TOTALS_SRC, 2 * Kg, f32_tile_bytes, ttnn.float32)
     add(CB_TOTALS_RECV, 2 * Kg, f32_tile_bytes, ttnn.float32)
-    add(CB_STATS_ROW, 2 * Kg, f32_tile_bytes, ttnn.float32)
-    add(CB_STATS_G_FULL, 2 * Kg, f32_tile_bytes, ttnn.float32)
+    add(CB_STATS_ROW, 2 * Kg, stat_tile_bytes, stat_dtype)
+    add(CB_STATS_G_FULL, 2 * Kg, stat_tile_bytes, stat_dtype)
     if has_gamma:
         add(CB_GAMMA_ROW, cols, g_tile_bytes, g_dtype)
     if has_beta:
         add(CB_BETA_ROW, cols, g_tile_bytes, g_dtype)
-        add(CB_BETA_FULL, 1, f32_tile_bytes, ttnn.float32)
-    add(CB_STATS_T, 2, f32_tile_bytes, ttnn.float32)
-    add(CB_A_FULL, cols, f32_tile_bytes, ttnn.float32)
-    add(CB_B_FULL, cols, f32_tile_bytes, ttnn.float32)
+        add(CB_BETA_FULL, 1, stat_tile_bytes, stat_dtype)
+    add(CB_STATS_T, 2, stat_tile_bytes, stat_dtype)
+    add(CB_A_FULL, cols, stat_tile_bytes, stat_dtype)
+    add(CB_B_FULL, cols, stat_tile_bytes, stat_dtype)
     add(CB_OUT, OUT_DEPTH_FACTOR * out_block, y_tile_bytes, output_tensor.dtype)
 
     # ---- regime: resident_2d vs streaming_2d (host-side, exact) -----------------------------
@@ -456,8 +488,9 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         HW,
         Ht,
         Ct,
-    ]  # 26 scalars, then the accessors (TA_BASE = 26 in the reader)
-    assert len(reader_ct) == 26
+        stat_elem_size,
+    ]  # 27 scalars, then the accessors (TA_BASE = 27 in the reader)
+    assert len(reader_ct) == 27
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
