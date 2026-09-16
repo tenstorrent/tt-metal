@@ -79,3 +79,16 @@ def test_quasar_slice_row_major_height_sharded_nontile_aligned(shape, begins, en
     imc = _explicit_height_shard_config(device, *in_shard)
     omc = _explicit_height_shard_config(device, *out_shard) if out_shard is not None else L1_INTERLEAVED
     _run_quasar_slice(shape, begins, ends, step, imc, omc, device)
+
+
+def test_quasar_reshard_same_width_row_major_local_stride(device):
+    in_cores, out_cores = 4, 2
+    width = 3
+    imc = _explicit_height_shard_config(device, in_cores, 32, width)
+    omc = _explicit_height_shard_config(device, out_cores, 64, width)
+    torch.manual_seed(12345)
+    x = torch.rand((1, 1, 128, width), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=imc)
+    result = ttnn.experimental.quasar.reshard(ttnn_in, omc)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=x, actual_result=got, ulp_threshold=0)
