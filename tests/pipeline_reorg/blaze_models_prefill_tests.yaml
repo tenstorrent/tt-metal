@@ -1287,83 +1287,85 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
-  test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_2, runner, kv_cache]
-  test_group: disagg_prefill
-  skus:
-    bh_sc4:
-      # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
-      # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
-      # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
-      # Counts against the shield/demo budget together with the Kimi entry.
-      timeout: 60
-      tier: 1
-      release_ready: true
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc4
-
-
-
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1
-  test_type: prefill_runner_kv_pcc
-  test_tags: [kimi_k2_7, runner, kv_cache]
-  test_group: disagg_prefill
-  skus:
-    bh_sc1:
-      timeout: 70
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc1
-
-
-- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52 sc1
-  test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_2, runner, kv_cache]
-  test_group: disagg_prefill
-  skus:
-    bh_sc1:
-      timeout: 80
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc1
-
-
-# ===== Op-level, no model under test ===================================================================
-
-# Ring joint SDPA gates, over ModelConfig shape presets on random tensors (not model runs):
-#   joint-attention perf -> wan2_2_1xGLX and mla_100k
-#   ring_mla chunked     -> kimi50k and kimi_k3 for perf; kimi_k3 for accuracy and determinism
-# Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
-# sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
+# --- CI PROBE: temporarily disabled so `test-type=prefill_runner_kv_pcc` selects ONLY
+# --- the Kimi-K2.7 SC4 entry above. Do not merge this file.
+#- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+#  cmd: |
+#    set -euo pipefail
+#    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+#    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+#      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+#    fi
+#    cd "${TT_METAL_HOME}"
+#    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
+#  test_type: prefill_runner_kv_pcc
+#  test_tags: [glm_5_2, runner, kv_cache]
+#  test_group: disagg_prefill
+#  skus:
+#    bh_sc4:
+#      # 1M at 28 users reaches a PCC verdict in ~16.5 min -- 215 chunks at ~2.3s each, since the
+#      # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
+#      # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
+#      # Counts against the shield/demo budget together with the Kimi entry.
+#      timeout: 60
+#      tier: 1
+#      release_ready: true
+#  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+#  team: shield
+#  budget_type: demo
+#  sp_config: sc4
+#
+#
+#
+#- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+#  cmd: |
+#    set -euo pipefail
+#    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+#    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+#      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+#    fi
+#    cd "${TT_METAL_HOME}"
+#    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1
+#  test_type: prefill_runner_kv_pcc
+#  test_tags: [kimi_k2_7, runner, kv_cache]
+#  test_group: disagg_prefill
+#  skus:
+#    bh_sc1:
+#      timeout: 70
+#  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+#  team: shield
+#  budget_type: demo
+#  sp_config: sc1
+#
+#
+#- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+#  cmd: |
+#    set -euo pipefail
+#    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+#    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+#      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+#    fi
+#    cd "${TT_METAL_HOME}"
+#    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52 sc1
+#  test_type: prefill_runner_kv_pcc
+#  test_tags: [glm_5_2, runner, kv_cache]
+#  test_group: disagg_prefill
+#  skus:
+#    bh_sc1:
+#      timeout: 80
+#  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+#  team: shield
+#  budget_type: demo
+#  sp_config: sc1
+#
+#
+## ===== Op-level, no model under test ===================================================================
+#
+## Ring joint SDPA gates, over ModelConfig shape presets on random tensors (not model runs):
+##   joint-attention perf -> wan2_2_1xGLX and mla_100k
+##   ring_mla chunked     -> kimi50k and kimi_k3 for perf; kimi_k3 for accuracy and determinism
+## Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
+## sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
 - name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
