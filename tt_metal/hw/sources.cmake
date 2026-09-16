@@ -133,6 +133,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/add_rsqrt.h
     inc/api/compute/experimental/compressed_custom_mm.h
     inc/api/compute/experimental/compute_kernel_hw_cleanup.h
+    inc/api/compute/experimental/csa_index_remap.h
     inc/api/compute/experimental/custom_mm.h
     inc/api/compute/experimental/custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/deepseek_compute_kernel_hw_startup.h
