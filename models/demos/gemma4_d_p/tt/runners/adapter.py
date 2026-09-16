@@ -4,7 +4,6 @@
 """Gemma4-31B-it integration with the shared prefill service."""
 
 import os
-from pathlib import Path
 
 from models.demos.common.prefill.adapter import PrefillModelAdapter
 
@@ -49,26 +48,32 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     pipeline_activation_emb_tp_sharded = False
 
     @property
-    def model_path(self):
+    def hf_model_id(self):
         return os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL") or self.hf_model_default
 
     def load_hf_config(self):
         from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, validate_31b_config
 
-        config = Gemma4ModelArgs.load_hf_config(self.model_path)
+        config = Gemma4ModelArgs.load_hf_config(self.hf_model_id)
         config = getattr(config, "text_config", config)
         validate_31b_config(config)
         return config
 
+    @property
+    def tt_cache_path(self):
+        return os.getenv("PREFILL_TTNN_CACHE") or os.getenv("TT_CACHE_PATH")
+
     def weight_cache_path(self, mesh_shape):
         if tuple(mesh_shape) != Gemma4ServiceConfig.MESH_SHAPE:
             raise ValueError("Gemma4 prefill requires an 8x4 mesh")
-        cache_root = os.environ.get("PREFILL_TTNN_CACHE") or os.environ.get("TT_CACHE_PATH")
-        if not cache_root:
-            from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+        import ttnn
+        from models.demos.gemma4_d_p.tt.model_config import resolve_cache_dir_from_tt_cache_path
 
-            cache_root = Gemma4ModelArgs.resolve_model_cache_path(self.model_path)
-        return Path(cache_root) / "tensor_cache_bf16_mesh8x4"
+        return resolve_cache_dir_from_tt_cache_path(
+            self.tt_cache_path,
+            dtype=ttnn.bfloat16,
+            mesh_shape=mesh_shape,
+        )
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         validate_params(params)
@@ -88,4 +93,6 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
         validate_params(params)
         from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
-        return Gemma4PrefillRuntime(mesh_device=mesh_device, model_path=self.model_path, config=params)
+        return Gemma4PrefillRuntime(
+            mesh_device=mesh_device, hf_model_id=self.hf_model_id, tt_cache_path=self.tt_cache_path, config=params
+        )

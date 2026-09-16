@@ -21,7 +21,7 @@ BOOK_IDS = (135, 2600, 1184, 996, 1023, 1399)
 def load_prompts(text_paths, num_slots, num_tokens, cache_dir):
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(Gemma4PrefillAdapter().model_path)
+    tokenizer = AutoTokenizer.from_pretrained(Gemma4PrefillAdapter().hf_model_id)
     prompts = []
     for slot in range(num_slots):
         if text_paths:
