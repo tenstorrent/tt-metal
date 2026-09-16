@@ -767,7 +767,7 @@ def test_demo_text(
     logger.info("Prefill finished")
 
     prefilled_flat = prefilled_token.view(batch_size, -1).squeeze(-1)
-    all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
+    all_outputs = [encoded_prompts[b][: decoding_pos[b]] for b in range(batch_size)]
     for user in range(batch_size):
         all_outputs[user].append(int(prefilled_flat[user].item()))
 
@@ -808,7 +808,9 @@ def test_demo_text(
 
         if not is_ci_env:
             for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
+                # Log generation-only: decoding the full prompt each step makes
+                # long-context runs look like garbage (tail of a 32k book + 1 tok).
+                text = tokenizer.decode(all_outputs[user][decoding_pos[user] :])
                 text = ("..." + text[-97:]) if len(text) > 100 else text
                 logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
 
@@ -825,7 +827,7 @@ def test_demo_text(
     # echoing the prompt). Slice off the prompt to judge generation quality.
     logger.info("Finished decoding. Final outputs:")
     for i, (output, prompt) in enumerate(zip(all_outputs, prompts)):
-        gen_text = tokenizer.decode(output[prefill_lens[i] :])
+        gen_text = tokenizer.decode(output[decoding_pos[i] :])
         short_prompt = (prompt[:100] + "\n<...>\n" + prompt[-100:]) if len(prompt) > 200 else prompt
         logger.info(f"\n==USER {i} - PROMPT\n{short_prompt}\n==USER {i} - GENERATION ONLY\n{gen_text.strip()}\n")
 
@@ -841,7 +843,7 @@ def test_demo_text(
 
     logger.info("")
     logger.info("=== Performance metrics ===")
-    logger.info(f"Prompt tokens: {prefill_lens[0]}, generated tokens: {iteration}")
+    logger.info(f"Prompt tokens: {decoding_pos[0]}, generated tokens: {iteration}")
     logger.info(f"Time to First Token (TTFT): {ttft_ms:.1f} ms")
     if batch_size > 1:
         logger.info(f"Amortized prefill/user: {amortized_prefill_ms:.1f} ms")
@@ -878,13 +880,11 @@ def test_demo_text(
             num_layers=num_layers or model_args.num_hidden_layers,
             batch_size=batch_size,
             config_params={},
-            input_sequence_length=prefill_lens[0],
+            input_sequence_length=decoding_pos[0],
             output_sequence_length=iteration,
         )
 
     assert iteration > 0, "decode produced no tokens"
-
-
 
 
 # ══════════════════════════════════════════════════════════════════════════
