@@ -82,7 +82,8 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 #
 # Phase 0: every TARGET dtype for activations and weights (the pipeline is dtype-agnostic: page
-# formats come from the tensors, all statistics are Float32 pages accumulated in fp32 DEST), both
+# formats come from the tensors; statistic pages follow the DEST width — Float32 under fp32 DEST, Float16_b under
+# the 16-bit DEST Refinement 3 added, see 3a), both
 # input layouts, tile-aligned HW and C, BOTH group alignments (the membership-matrix path is
 # alignment-agnostic), all three affine call patterns with weights in either layout. "none" is
 # the canonical no-weight sentinel and is always legal. bfloat8_b + ROW_MAJOR (activation or

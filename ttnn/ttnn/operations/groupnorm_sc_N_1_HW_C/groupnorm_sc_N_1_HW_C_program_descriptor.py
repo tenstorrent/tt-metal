@@ -62,8 +62,10 @@ MATH_APPROX_MODE = False
 # Design lamp (op_design.md -> cb_xsq "Float16_b pages for bf16/bf8b inputs"): x^2 pages at the INPUT's 16-bit width
 # even under fp32 DEST (one extra bf16 rounding of x^2 before the column sum; halves the bytes through the packer /
 # unpacker of the square + colsum pair). Off = the ledger rule (page follows DEST width). Under a 16-bit DEST the
-# pages are Float16_b regardless. Measured in Refinement 3 (see op_requirements.md -> Outcome).
-XSQ_16BIT_FOR_16BIT_INPUT = False
+# pages are Float16_b regardless. Measured in Refinement 3 (11x10 BH grid, bf16, one fresh-cache --profile run per
+# variant): neutral-to-better on the whole guard set — sdxl_4096x640 47.7 -> 46.7 us, sdxl_16384x320 78.6 -> 77.8 us,
+# every other case within the +-2 % noise band; precision baseline / acceptance / layout matrix unchanged.
+XSQ_16BIT_FOR_16BIT_INPUT = True
 
 TILE = 32
 
