@@ -5,20 +5,14 @@
 
 # run-reset-isolation-test.sh
 #
-# Orchestrate an ETH isolation test:
-#   1. Start one long workload per container except container-0 (pytest --count,
-#      so the device is opened once and the run spans the reset).
-#   2. Run a short workload in container-0 and let it finish, releasing its
-#      devices cleanly -- resetting a device that was never closed fails.
-#   3. Reset container-0's devices, then run in it again to confirm they came back.
-#   4. Every other container must have run through the reset undisturbed.
+# Every container but container-0 holds one long run spanning the reset; a device
+# that was never closed cannot be reset, so container-0 finishes a short run first.
 #
 # Usage:
 #   bash run-reset-isolation-test.sh <NUM_CONTAINERS> <CONTAINER_PREFIX> \
 #       <TEST_PATH> <TEST_ARGS> <RESET_DEVICE_IDS> <REPEAT_COUNT>
 #
-# Exit code: always 0 — pass/fail determined by per-container .status files
-# written to RESULTS_DIR, consumed by the caller's "Check test results" step.
+# Always exits 0; per-container .status files carry the result.
 
 set -euo pipefail
 
@@ -81,12 +75,8 @@ for i in $(seq 1 $(( NUM_CONTAINERS - 1 ))); do
 done
 
 # --- Step 2: Let container-0 finish a run, so its devices are closed cleanly ---
-# Signals are deliberately not used here. Interrupting pytest needs SIGINT (no
-# SIGTERM handler in CPython means no fixture teardown, so no device close), and
-# SIGINT does not reliably reach it: in run 34928391619's WH tray_reset the CCL
-# suite kept running tests for the full 300s wait and had to be SIGKILLed, which
-# then reset an unclosed device and failed for that reason. Letting a short run
-# finish gives the same precondition -- devices released -- without the signal.
+# Not interrupted with a signal: SIGINT is the only one that tears pytest down
+# cleanly, and it did not reach the CCL suite at all in run 34928391619.
 echo ">>> Running a short workload in ${container0} to completion..."
 reset_ok=1
 if ! run_in_container "$container0" 1 "$C0_RUN_TIMEOUT_SECS"; then
@@ -95,9 +85,8 @@ if ! run_in_container "$container0" 1 "$C0_RUN_TIMEOUT_SECS"; then
 fi
 
 if [ "$reset_ok" = "1" ]; then
-    # Reset from the host, not via docker exec: the host tt-smi is newer than the
-    # dev image's, and it sees all 32 boards, so device-node targets are
-    # unambiguous (in-container, ids are relative to that container's view).
+    # From the host: its tt-smi is newer than the dev image's and sees all 32
+    # boards, so device-node targets mean what the tray mapping says.
     declare -a reset_targets=()
     for id in ${RESET_DEVICE_IDS//,/ }; do
         reset_targets+=("/dev/tenstorrent/${id}")

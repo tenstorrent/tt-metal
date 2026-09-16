@@ -120,12 +120,8 @@ jobs:
             # not a tt-metal issue. Since this CI only needs one representative test to verify
             # inter-container isolation, we narrow down to a single test combination to avoid the problem.
             test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
-          # ETH isolation reset tests (tray_reset / asic_reset): reset one tray/ASIC and
-          # check the other containers keep running. Implemented and verified working, but
-          # commented out until the hardware is stable enough to run it nightly: BH
-          # tray_reset reproducibly takes the reset tray's eth link to tray 2 down for
-          # ~30-50s afterwards (runs 34928391619 and 34932567826, identical down to the
-          # retrain count). Re-enable by uncommenting these entries.
+          # ETH isolation reset tests. Implemented and working, but held until the
+          # hardware is stable: BH tray_reset reproducibly drops tray 2's eth link.
           # - arch: wormhole_b0
           #   scenario: tray_reset
           #   repeat_count: 2
@@ -192,12 +188,9 @@ jobs:
       - name: Install Wheel
         run: |
           python3 -m pip install --force-reinstall ttnn-*.whl
-      - name: Reset and health-check Blackhole cluster
-        # Blackhole clusters can come up cold/degraded at the start of a nightly
-        # run (SYS-1634 / BH-84). The resulting inconsistent cluster descriptor
-        # makes serialize_cluster_descriptor() crash in the next step. Reset the
-        # cards and verify links are online before opening the cluster.
-        if: ${{ matrix.arch == 'blackhole' }}
+      - name: Reset and health-check cluster
+        # A cold/degraded cluster yields an inconsistent descriptor that crashes
+        # serialize_cluster_descriptor() in the next step (SYS-1634 / BH-84).
         timeout-minutes: 25
         env:
           DEV_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -388,10 +381,7 @@ jobs:
 
       - name: Run reset isolation test
         if: matrix.scenario == 'tray_reset' || matrix.scenario == 'asic_reset'
-        # Two suite passes per survivor, not one: the reset_done flag is only
-        # checked between pytest invocations, so a survivor caught mid-run
-        # finishes that run before its confirming run. 2x the 15min of "Run the
-        # tests", plus the pre-reset wait and the reset itself.
+        # Survivors hold one long run each; ~20min at the repeat_counts above.
         timeout-minutes: 35
         run: |
           if [ "${{ matrix.scenario }}" = "tray_reset" ]; then

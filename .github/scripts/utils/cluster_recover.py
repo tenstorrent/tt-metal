@@ -3,24 +3,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover a Galaxy (6U) cluster on the runner host. Two subcommands:
+"""Recover a Galaxy (6U) cluster on the runner host.
 
-free   SIGKILL stray processes still holding a /dev/tenstorrent handle. A
-       leftover process from a previous CI run keeps the device's sysmem/TLB
-       windows claimed, which a board reset does not release, so the next
-       cluster open fails with "tt_tlb_alloc failed with error code -12". Needs
-       root (via sudo) to read other users' /proc/<pid>/fd, e.g. a leftover
-       privileged container.
+free   SIGKILL stray processes still holding a /dev/tenstorrent handle; a board
+       reset does not release them, so the next cluster open fails with
+       "tt_tlb_alloc failed with error code -12". Needs root to read other
+       users' /proc/<pid>/fd.
+reset  tt-smi -glx_reset_auto; the per-board -r is invalid on topology-6u.
 
-reset  Reset the cluster with tt-smi. The per-board PCIe reset (-r) is invalid
-       on topology-6u runners and fails instantly, so this uses -glx_reset_auto
-       (matching the topology-6u branch of TT_SMI_RESET_COMMAND in
-       ttnn-run-sweeps.yaml).
-
-The sweeps runner does the same cleanup in-process; see ResetUtil._free_device in
-tests/sweep_framework/framework/tt_smi_util.py. This stays a standalone copy
-rather than an import because sudo runs outside the job's setup-python env, so it
-must have no third-party dependencies.
+Mirrors ResetUtil._free_device in tests/sweep_framework/framework/tt_smi_util.py,
+copied rather than imported because sudo runs outside the setup-python env.
 """
 
 import os
