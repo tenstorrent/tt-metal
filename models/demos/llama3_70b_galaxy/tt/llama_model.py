@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 import torch
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
@@ -971,7 +972,7 @@ class TtTransformer(LightweightModule):
                     # the program is prepared for this buffer, it does not stop a replay writing
                     # it. No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
                     # Re-create global CB for decode (if it was not already created)
-                    with ttnn.corruptible_allocation_scope(self.mesh_device):
+                    with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
                         self.prefetcher_setup.create_global_cb()
                 else:
                     # No-prefetcher path reuses the cached decode CCL; clear its semaphore drift.
@@ -1014,7 +1015,7 @@ class TtTransformer(LightweightModule):
     ):
         if mode == "decode" and self.use_prefetcher:
             # Same rebuild-per-switch as in switch_mode; see the note there.
-            with ttnn.corruptible_allocation_scope(self.mesh_device):
+            with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
                 self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
