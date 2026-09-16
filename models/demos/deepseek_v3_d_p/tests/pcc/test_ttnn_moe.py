@@ -1464,13 +1464,20 @@ def test_dsv4_moe(
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[DeepSeekV4ProConfig.ROUTED_EXPERT_ACTIVATION],
         shared_activation=DeepSeekV4ProConfig.SHARED_EXPERT_ACTIVATION,
         clamped_silu_glu_limit=DeepSeekV4ProConfig.SWIGLU_LIMIT,
-        # Measured window at gate_up_scale 4.5 is (0.958, 0.984), the lower bound with the up
-        # clamp dropped.
-        final_output_pcc=0.975,
-        # This path is fed the golden-trace activation rather than synthetic noise, because it is
-        # a PCC run at DeepSeekV3Config.EMB_SIZE. Trace rows are ~9x shorter than randn rows, so
-        # reaching the clamp needs ~9x the multiplier the randn-based clamped tests use.
-        gate_up_scale=40.0,
+        # Measured on this row at the gate_up_scale below: shared 0.999253, routed 0.968570,
+        # final 0.976015, and identical across the 4x2 and 8x1 topologies to within 2e-5. The
+        # generic run_model defaults (0.997 / 0.96 / 0.982) were never measured for the routed
+        # path's bfloat4_b weights, so they are replaced here rather than inherited.
+        shared_output_pcc=0.998,
+        routed_output_pcc=0.966,
+        final_output_pcc=0.974,
+        # The scale is bounded on both sides. Below it, the projections never reach
+        # SWIGLU_LIMIT and assert_clamp_coverage trips: the clamp would be dead code and the
+        # grade vacuous. Above it, the routed experts' bfloat4_b weights and bfloat8_b
+        # activations lose the signal -- at 13.5 final_output is 0.973 and at 40.0 the expert
+        # outputs quantize to whole numbers. 11.25 is the largest scale that still passes,
+        # giving 29.8%/14.9% coverage on the gate/up tails against the 2% floor.
+        gate_up_scale=11.25,
         score_func=score_func,
         skip_upstream_reference=True,
     )
