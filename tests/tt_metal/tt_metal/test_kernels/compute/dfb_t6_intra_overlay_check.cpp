@@ -120,6 +120,12 @@ void kernel_main() {
 
     DataflowBuffer dfb(dfb::out);
 
+    // dummy_pack's PACR_STRIDE validates a pack-partition bd_table entry; compute_kernel_hw_startup
+    // is what runs llk_pack_init and programs that entry. dummy_unpack is UNPACR_NOP and does not
+    // need a descriptor, but startup is a call-once API that all three TRISC threads must enter
+    // together.
+    compute_kernel_hw_startup(dfb::out, dfb::out);
+
 #ifdef UCK_CHLKC_PACK
     // Firmware already programmed ClientL capacity + remapper alias. Snapshot mirrored DM TCs before
     // any INTRA push so a leaked capacity/credit write would already show up here.

@@ -4,14 +4,21 @@ This directory implements Tenstorrent Blackhole inference for the hybrid
 **Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6/3.8 family. The same code
 path serves every checkpoint below:
 
-| Model       | `HF_MODEL`         | Mesh / `MESH_DEVICE` | Parallelism           |
-| ----------- | ------------------ | -------------------- | --------------------- |
-| Qwen3.5-9B  | `Qwen/Qwen3.5-9B`  | single P150 — `P150` | single device         |
-| Qwen3.5-27B | `Qwen/Qwen3.5-27B` | P150x4 — `P150x4`    | 4-way tensor parallel |
-| Qwen3.6-27B | `Qwen/Qwen3.6-27B` | P150x4 — `P150x4`    | 4-way tensor parallel |
-| Qwen3.6-27B | `Qwen/Qwen3.6-27B` | P150x8 — `P150x8`    | 8-way tensor parallel |
-| Qwen3.8-27B | `Qwen/Qwen3.8-27B` | P150x4 — `P150x4`    | 4-way tensor parallel |
-| Qwen3.8-27B | `Qwen/Qwen3.8-27B` | P150x8 — `P150x8`    | 8-way tensor parallel |
+| Model           | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism           |
+| --------------- | ---------------------- | -------------------- | --------------------- |
+| Qwen3.5-9B      | `Qwen/Qwen3.5-9B`      | single P150 — `P150` | single device         |
+| Qwen3.5-27B     | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel |
+| Qwen3.6-27B     | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel |
+| Qwen3.6-27B     | `Qwen/Qwen3.6-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel |
+| Qwen3.8-27B     | `Qwen/Qwen3.8-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel |
+| Qwen3.8-27B     | `Qwen/Qwen3.8-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel |
+| Qwen3.6-35B-A3B | `Qwen/Qwen3.6-35B-A3B` | P150x4 — `P150x4`    | 4-way TP + sparse MoE |
+
+The **35B-A3B** is the sparse Mixture-of-Experts member of the family (`qwen3_5_moe`:
+256 routed experts, top-8, plus a gated shared expert on every layer). Every layer's
+dense SwiGLU MLP is replaced by the sparse MoE block in `tt/moe/`; dispatch is
+config-driven (`args.is_moe_layer`), so on the dense 9B/27B `num_experts == 0` and the
+dense MLP path is byte-for-byte unchanged.
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
@@ -91,6 +98,13 @@ export HF_MODEL=Qwen/Qwen3.5-9B
 export MESH_DEVICE=P150
 ```
 
+**35B-A3B (P150x4, sparse MoE):**
+
+```bash
+export HF_MODEL=Qwen/Qwen3.6-35B-A3B
+export MESH_DEVICE=P150x4
+```
+
 `HF_MODEL` is the single source of truth for the checkpoint — it may be a Hugging
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 `MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`,
@@ -139,7 +153,8 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_64k"
 The **same command works for every checkpoint** — only the exported `HF_MODEL` /
 `MESH_DEVICE` differ. On a single device the test takes the validated 9B path; on
 the `(1,4)` or `(1,8)` mesh it routes through the TP chunk-outer traced prefill +
-paged traced decode path automatically. On Galaxy, prefix each command with
+paged traced decode path automatically (the sparse MoE block is selected per layer
+from the config, transparent to the demo). On Galaxy, prefix each command with
 `TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8`.
 
 > Long-context cases (64k+) download a public-domain corpus (Frankenstein, War
@@ -164,6 +179,7 @@ per-test thresholds.
 | `test_rms_norm.py`         | zero-centered RMSNorm (the "+1" fold)                |
 | `test_rope.py`             | partial-rotary RoPE (host freqs + on-device lookup)  |
 | `test_mlp.py`              | single-device SwiGLU MLP (layer 0)                   |
+| `test_moe.py`              | single-device sparse MoE MLP (MoE checkpoint only; decode + prefill) |
 | `test_attention.py`        | single-device gated full attention (layer 3)         |
 | `test_gdn.py`              | single-device Gated DeltaNet (layer 0)               |
 | `test_lm_head.py`          | LM head logits (bf8 vs bf16)                          |
@@ -199,6 +215,7 @@ thresholds are in `tests/pcc_thresholds.json`.
 | Test                  | Validates                                                            |
 | --------------------- | ------------------------------------------------------------------- |
 | `test_mlp_tp.py`      | TP SwiGLU MLP (column/row-parallel + reduce-scatter)                |
+| `test_moe_tp.py`      | TP sparse MoE MLP (router + experts + shared; MoE checkpoint only; decode + prefill) |
 | `test_attention_tp.py`| TP gated full attention: decode / prefill / paged-KV contract       |
 | `test_gdn_tp.py`      | TP Gated DeltaNet: decode + chunk-prefill                           |
 | `test_model_tp.py`    | full-model TP contract: paged+traced path matches the bespoke oracle |
@@ -220,6 +237,12 @@ On Galaxy (`MESH_DEVICE=P150x8`), prefix each command with `TT_VISIBLE_DEVICES`:
 ```bash
 TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8 pytest models/demos/blackhole/qwen36/tests/test_model_tp.py -svq
 ```
+
+> The MoE-specific tests (`test_moe_tp.py`, and the MoE path in `test_model_tp.py` /
+> `test_generate_tp.py`) require the sparse checkpoint — run them with
+> `HF_MODEL=Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4`. On the dense 27B they are inert
+> (`num_experts == 0`), and the dense/MoE checkpoints must not be mixed in one run
+> (each test file `setdefault`s or expects a single `HF_MODEL`).
 
 > `test_substate.py` and `test_weight_mapping.py` are pure-CPU and need no device.
 > `test_weight_mapping.py`'s shape constants assume the 9B checkpoint.
