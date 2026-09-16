@@ -998,12 +998,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
         const auto subtest_start = std::chrono::steady_clock::now();
 
         DramMultiInstanceSummary run = run_dram_persistent_jobs_test_verbose(
-            static_cast<MeshDispatchFixture*>(this),
-            mesh_device,
-            worker_cores,
-            jobs_per_core,
-            chunk_bytes,
-            DataMovementProcessor::RISCV_0);
+            mesh_device, worker_cores, jobs_per_core, chunk_bytes, DataMovementProcessor::RISCV_0);
 
         const auto subtest_end = std::chrono::steady_clock::now();
 
@@ -1296,12 +1291,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
             const auto bank_start = std::chrono::steady_clock::now();
 
             DramMultiInstanceSummary run = run_dram_persistent_jobs_test_verbose(
-                static_cast<MeshDispatchFixture*>(this),
-                mesh_device,
-                worker_cores,
-                jobs_per_core,
-                chunk_bytes,
-                DataMovementProcessor::RISCV_0);
+                mesh_device, worker_cores, jobs_per_core, chunk_bytes, DataMovementProcessor::RISCV_0);
 
             const auto bank_end = std::chrono::steady_clock::now();
 
@@ -1658,12 +1648,7 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBa
         const auto start = std::chrono::steady_clock::now();
 
         DramMultiInstanceSummary run = run_dram_persistent_jobs_test_verbose(
-            static_cast<MeshDispatchFixture*>(this),
-            mesh_device,
-            worker_cores,
-            jobs_per_core,
-            chunk_bytes,
-            DataMovementProcessor::RISCV_0);
+            mesh_device, worker_cores, jobs_per_core, chunk_bytes, DataMovementProcessor::RISCV_0);
 
         const auto end = std::chrono::steady_clock::now();
 
