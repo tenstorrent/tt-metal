@@ -397,6 +397,12 @@ and Q pre-scaled; the return is `(B, T, H, W, heads * head_dim)` ROW_MAJOR.
   gather address the resident one, `to_natural` unless `already_bricked`, then the head all-gather
   over `tp_axis`. `_compute_kernel_config` is HiFi2 with an exact exp, matching the general SDPA op
   the oracle runs; `_tp_trace` is the hang locator.
+- `NAKernel` / `NA_KERNELS` / `resolve_na_kernel` -- the backend registry: a name
+  (`linear_order`, `bricked`, `bricked_sp_w_sharded`) and the layout decisions that follow from it
+  (`w_sharded`, `bricked`, `keep_bricked`). Both the deterministic stages and stage 5 resolve their
+  `DiffVAEOptions` backend string here, once, and hand the record down.
+- `neighborhood_attention_3d` -- the dispatcher: runs whichever executor the `NAKernel` names, with
+  the arguments that executor understands. The only call site of the three executors in the model.
 
 ### 2.6 Tests
 

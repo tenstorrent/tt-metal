@@ -25,11 +25,15 @@ ROW_MAJOR. Their plans (everything that depends on the geometry and nothing on t
 
   With ``already_bricked=True`` (the keep-bricked path) Q/K/V arrive in bricked site order, this
   call only halo-exchanges K/V on the ``W_br`` axis, and the return stays bricked.
+
+Callers select one by name through :class:`NAKernel` (``resolve_na_kernel``) and run it through
+:func:`neighborhood_attention_3d`, which routes to the executor the record names.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 import ttnn
 
@@ -48,6 +52,98 @@ from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_b
 # Cap on the elements gathered for one attention call's K and V together, per chip. Bounds peak
 # device memory independently of the grid.
 DEFAULT_CHUNK_BUDGET = 2**29
+
+
+@dataclass(frozen=True)
+class NAKernel:
+    """Which NA3D executor a stage runs, and the layout decisions that follow from it."""
+
+    #: The backend string callers select with (``DiffVAEOptions.stage5_backend`` / ``stages_backend``).
+    name: str
+    #: Keep this chip's W-shard of the sequence through the whole stage.
+    w_sharded: bool = False
+    #: Sites in bricked order, one tile row per 3D brick.
+    bricked: bool = False
+    #: Convert to bricked order once at stage entry and back at exit instead of per block.
+    keep_bricked: bool = False
+
+
+NA_KERNELS: dict[str, NAKernel] = {
+    kernel.name: kernel
+    for kernel in (
+        NAKernel("linear_order"),
+        NAKernel("bricked", bricked=True),
+        NAKernel("bricked_sp_w_sharded", w_sharded=True, bricked=True, keep_bricked=True),
+    )
+}
+
+
+def resolve_na_kernel(backend: str | NAKernel) -> NAKernel:
+    """The kernel record for a backend name. Rejects an unknown one at construction."""
+    if isinstance(backend, NAKernel):
+        return backend
+    try:
+        return NA_KERNELS[backend]
+    except KeyError:
+        msg = f"unknown NA3D backend {backend!r}; expected one of {sorted(NA_KERNELS)}"
+        raise ValueError(msg) from None
+
+
+def neighborhood_attention_3d(
+    q: ttnn.Tensor,
+    k: ttnn.Tensor,
+    v: ttnn.Tensor,
+    *,
+    kernel: str | NAKernel,
+    kernel_size: tuple[int, int, int],
+    scale: float = 1.0,
+    dims: tuple[int, int, int] | None = None,
+    ccl_manager=None,
+    sp_axis: int | None = None,
+    tp_axis: int | None = None,
+    heads_presharded: bool = False,
+    brick: tuple[int, int, int] | None = None,
+    stride: tuple[int, int, int] | None = None,
+    device_plan: NA3DDevicePlan | None = None,
+) -> ttnn.Tensor:
+    """Run the executor ``kernel`` names, with the arguments that executor understands.
+
+    Q/K/V arrive already RMS-normed, RoPE'd and (for Q) pre-scaled, so ``scale`` is 1.0. The
+    replicated kernels return the full volume on every chip; the W-sharded one returns this chip's
+    band and needs ``dims`` (the FULL grid), ``sp_axis`` and ``ccl_manager``. ``brick`` set means
+    the sites are already in bricked order (keep-bricked). ``device_plan`` is the linear-order
+    executor's precomputed plan; ``stride`` is the GNA query-group stride, physical ``(t, h, w)``.
+    """
+    kernel = resolve_na_kernel(kernel)
+    if kernel.w_sharded:
+        assert dims is not None, f"{kernel.name} needs the full dims"
+        return neighborhood_attention_3d_bricked_w_sharded(
+            q,
+            k,
+            v,
+            dims=dims,
+            kernel_size=kernel_size,
+            sp_axis=sp_axis,
+            ccl_manager=ccl_manager,
+            scale=scale,
+            tp_axis=tp_axis,
+            heads_presharded=heads_presharded,
+            already_bricked=brick is not None,
+            brick=brick,
+            stride=stride,
+        )
+    if kernel.bricked:
+        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=stride)
+    return neighborhood_attention_3d_linear_order(
+        q,
+        k,
+        v,
+        kernel_size=kernel_size,
+        scale=scale,
+        device_plan=device_plan,
+        ccl_manager=ccl_manager,
+        gna_stride=stride,
+    )
 
 
 def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:

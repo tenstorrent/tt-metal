@@ -21,10 +21,7 @@ import ttnn
 
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
-from ...layers.neighborhood_attention import (
-    neighborhood_attention_3d_bricked_w_sharded,
-    neighborhood_attention_3d_linear_order,
-)
+from ...layers.neighborhood_attention import NAKernel, neighborhood_attention_3d, resolve_na_kernel
 from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
 from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
@@ -33,10 +30,6 @@ from ...utils.tracing import traced_function
 from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
 from .diffvae_ops import TILE, consume, consume_all, mesh_axis_size, retile, to_row_major, wshard
 from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
-
-#: Executors that take this chip's W-band and reassemble the window across the shard seam.
-#: Membership here is what W-shards a deterministic stage.
-W_SHARDED_BACKENDS = frozenset({"bricked_sp_w_sharded"})
 
 
 @dataclass(frozen=True)
@@ -255,7 +248,7 @@ class NeighborhoodAttention(Module):
         *,
         head_dim: int = 64,
         mesh_device=None,
-        na3d_backend: str = "linear_order",
+        na3d_backend: str | NAKernel = "linear_order",
         ccl_manager=None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
@@ -272,7 +265,8 @@ class NeighborhoodAttention(Module):
         # "linear_order": grouped gather + dense masked attention with the passed-in device_plan.
         # "bricked_sp_w_sharded": this chip's W-shard through the bricked executor (halo exchange
         # over sp_axis via ccl_manager).
-        self.na3d_backend = na3d_backend
+        self.kernel = resolve_na_kernel(na3d_backend)
+        self.na3d_backend = self.kernel.name
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
         # TP-over-heads on the orthogonal mesh axis, only under the W-sharded backend.
@@ -294,9 +288,9 @@ class NeighborhoodAttention(Module):
         self.tp = mesh_axis_size(mesh_device, tp_axis) if tp_axis is not None else 1
         if self.fused_qkv:
             assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
-        # The bricked executor never slices heads itself under TP, so on that backend this block
+        # The W-sharded executor never slices heads itself under TP, so on that backend this block
         # partitions the heads in every projection form.
-        self.bricked = self.na3d_backend == "bricked_sp_w_sharded"
+        self.bricked = self.kernel.w_sharded
         self.heads_local = self.num_heads // self.tp if (self.fused_qkv or self.bricked) else self.num_heads
 
         if self.fused_qkv:
@@ -443,30 +437,22 @@ class NeighborhoodAttention(Module):
     )
     def _attend(self, q, k, v, *, dims: tuple[int, int, int], device_plan: NA3DDevicePlan) -> ttnn.Tensor:
         t, h, w = dims
-        if self.na3d_backend == "bricked_sp_w_sharded":
+        if self.kernel.w_sharded:
             # q/k/v are this chip's W-slice, so `dims` here is local; the executor is told the full W.
-            sp = mesh_axis_size(q.device(), self.sp_axis)
-            return neighborhood_attention_3d_bricked_w_sharded(
-                q,
-                k,
-                v,
-                dims=(t, h, w * sp),
-                kernel_size=self.kernel_size,
-                sp_axis=self.sp_axis,
-                ccl_manager=self.ccl_manager,
-                scale=1.0,
-                tp_axis=self.tp_axis,
-                heads_presharded=True,
-                stride=(1, 1, 1),
-            )
-        return neighborhood_attention_3d_linear_order(
+            dims = (t, h, w * mesh_axis_size(q.device(), self.sp_axis))
+        return neighborhood_attention_3d(
             q,
             k,
             v,
+            kernel=self.kernel,
             kernel_size=self.kernel_size,
             scale=1.0,
-            device_plan=device_plan,
+            dims=dims,
             ccl_manager=self.ccl_manager,
+            sp_axis=self.sp_axis,
+            tp_axis=self.tp_axis,
+            heads_presharded=True,
+            device_plan=device_plan,
         )
 
     @timing_tree.span("mesh_device", "out-proj", category=timing_tree.PROJ, deep=True)
@@ -579,7 +565,7 @@ class NABlock(Module):
         *,
         head_dim: int = 64,
         mesh_device=None,
-        na3d_backend: str = "linear_order",
+        na3d_backend: str | NAKernel = "linear_order",
         ccl_manager=None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
@@ -747,7 +733,7 @@ class DeterministicStages(Module):
         head_dim: int = 64,
         mesh_device=None,
         ccl_manager=None,
-        na3d_backend: str | None = None,
+        na3d_backend: str | NAKernel | None = None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
         block_options: DetBlockOptions = DetBlockOptions(),
@@ -761,23 +747,26 @@ class DeterministicStages(Module):
         # Under a W-sharded backend the activation is W-sharded from stage 1 on (stage 0's W is not
         # divisible by the mesh axis, so it stays replicated). This backend reaches stages 1-4 only;
         # stage 5 has its own.
-        self.na3d_backend = na3d_backend or "linear_order"
-        assert self.na3d_backend in {"linear_order"} | W_SHARDED_BACKENDS, (
-            f"unknown NA3D backend {self.na3d_backend!r}; expected one of "
-            f"{sorted({'linear_order'} | W_SHARDED_BACKENDS)}"
+        self.kernel = resolve_na_kernel(na3d_backend or "linear_order")
+        self.na3d_backend = self.kernel.name
+        # The replicated bricked kernel is stage 5's; here a block is either replicated linear-order
+        # or W-sharded.
+        assert self.kernel.name == "linear_order" or self.kernel.w_sharded, (
+            f"NA3D backend {self.kernel.name!r} is not a deterministic-stage backend; "
+            "expected 'linear_order' or a W-sharded kernel"
         )
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
-        self._w_sharded = self.na3d_backend in W_SHARDED_BACKENDS
+        self._w_sharded = self.kernel.w_sharded
         self.sp = mesh_axis_size(mesh_device, sp_axis) if self._w_sharded else 1
         if self._w_sharded:
             assert sp_axis is not None and ccl_manager is not None, f"{self.na3d_backend} needs sp_axis + ccl_manager"
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
-        def block_backend(stage: int) -> str:
+        def block_backend(stage: int) -> NAKernel:
             if self._w_sharded and stage == 0:
-                return "linear_order"
-            return self.na3d_backend
+                return resolve_na_kernel("linear_order")
+            return self.kernel
 
         self.block_backend = block_backend
 

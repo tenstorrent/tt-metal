@@ -25,7 +25,7 @@ import ttnn
 from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked, neighborhood_attention_3d_linear_order
+from ...layers.neighborhood_attention import NAKernel, neighborhood_attention_3d, resolve_na_kernel
 from ...layers.neighborhood_attention_plan import window_bounds
 from ...layers.neighborhood_permute import (
     SITES_PER_BRICK,
@@ -64,7 +64,6 @@ __all__ = [
     "DiffVAEStage5",
     "DiffVAEStage5Config",
     "Grid",
-    "neighborhood_attention_3d",
     "patchify",
     "unpatchify",
 ]
@@ -132,73 +131,6 @@ class DiffVAEStage5Config:
             msg = f"rope_dim_split={split} must sum to head_dim={self.head_dim}"
             raise ValueError(msg)
         return split
-
-
-# ---------------------------------------------------------------------------
-# 3D neighborhood attention boundary
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class NAKernel:
-    """Which NA3D executor stage 5 runs, and the layout decisions that follow from it."""
-
-    #: The backend string callers select with (DiffVAEOptions.stage5_backend, or the ctor kwarg).
-    name: str
-    #: Keep this chip's W-shard of the sequence through the whole stage.
-    w_sharded: bool = False
-    #: Sites in bricked order, one tile row per 3D brick.
-    bricked: bool = False
-    #: Convert to bricked order once at stage entry and back at exit instead of per block.
-    keep_bricked: bool = False
-
-
-_NA_KERNELS: dict[str, NAKernel] = {
-    kernel.name: kernel
-    for kernel in (
-        NAKernel("linear_order"),
-        NAKernel("bricked", bricked=True),
-        NAKernel("bricked_sp_w_sharded", w_sharded=True, bricked=True, keep_bricked=True),
-    )
-}
-
-
-def resolve_na_kernel(backend: str | NAKernel) -> NAKernel:
-    """The kernel record for a backend name. Rejects an unknown one at construction."""
-    if isinstance(backend, NAKernel):
-        return backend
-    try:
-        return _NA_KERNELS[backend]
-    except KeyError:
-        msg = f"unknown NA3D backend {backend!r}; expected one of {sorted(_NA_KERNELS)}"
-        raise ValueError(msg) from None
-
-
-def neighborhood_attention_3d(
-    q: ttnn.Tensor,
-    k: ttnn.Tensor,
-    v: ttnn.Tensor,
-    *,
-    kernel_size: tuple[int, int, int],
-    scale: float = 1.0,
-    ccl_manager=None,
-    backend: str = "linear_order",
-    gna_stride: tuple[int, int, int] | None = None,
-) -> ttnn.Tensor:
-    """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors, replicated.
-
-    Q/K/V arrive already RMS-normed, RoPE'd and (for Q) pre-scaled, so ``scale`` is 1.0.
-    Returns ``(B, T, H, W, num_heads * head_dim)``, the full volume on every chip.
-
-    ``"linear_order"`` keeps tokens in natural order and splits the attention across the mesh
-    when given a ``ccl_manager``; ``"bricked"`` runs the bricked op over the whole volume and
-    ignores ``ccl_manager``.
-    """
-    if backend == "bricked":
-        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=gna_stride)
-    return neighborhood_attention_3d_linear_order(
-        q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager, gna_stride=gna_stride
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -757,38 +689,23 @@ class _NeighborhoodAttention3D(Module):
             k = lane_unfused(self.to_k, self.k_norm)
             v = lane_unfused(self.to_v, None)
 
-        match self.kernel.name:
-            case "bricked_sp_w_sharded":
-                # This chip's W-shard plus the halo its windows reach into. Window placement stays
-                # global, so a query near a shard seam still sees a full window.
-                from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
-
-                out = neighborhood_attention_3d_bricked_w_sharded(
-                    q,
-                    k,
-                    v,
-                    dims=(grid.t, grid.h, grid.w),
-                    kernel_size=cfg.kernel_size,
-                    sp_axis=self.sp_axis,
-                    ccl_manager=self.ccl_manager,
-                    scale=1.0,
-                    tp_axis=self.tp_axis,
-                    heads_presharded=self.tp_proj,
-                    already_bricked=brick is not None,
-                    brick=brick,
-                    stride=cfg.gna_stride,
-                )
-            case _:
-                out = neighborhood_attention_3d(
-                    q,
-                    k,
-                    v,
-                    kernel_size=cfg.kernel_size,
-                    scale=1.0,
-                    ccl_manager=self.ccl_manager,
-                    backend=self.kernel.name,
-                    gna_stride=cfg.gna_stride,
-                )
+        # Under the W-sharded kernel this is this chip's W-shard plus the halo its windows reach
+        # into; window placement stays global, so a query near a shard seam still sees a full window.
+        out = neighborhood_attention_3d(
+            q,
+            k,
+            v,
+            kernel=self.kernel,
+            kernel_size=cfg.kernel_size,
+            scale=1.0,
+            dims=(grid.t, grid.h, grid.w),
+            ccl_manager=self.ccl_manager,
+            sp_axis=self.sp_axis,
+            tp_axis=self.tp_axis,
+            heads_presharded=self.tp_proj,
+            brick=brick,
+            stride=cfg.gna_stride,
+        )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
 
