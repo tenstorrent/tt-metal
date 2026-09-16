@@ -12,9 +12,9 @@ sliding/full layer alternation, YaRN RoPE, MXFP4 experts, a plain top-k router) 
 
 ## Status (September 2026)
 
-GPT-OSS prefill and prefill/decode disaggregation are **paused**; the decode-side K2.7 work comes
-first. What is here is complete and validated for single-user chunked prefill; the plan for the
-next steps is recorded in issues so the work can resume as-is.
+GPT-OSS prefill and prefill/decode disaggregation are **paused**. What is here is complete and
+validated for single-user chunked prefill; the plan for the next steps is recorded in issues so the
+work can resume as-is.
 
 | Area | State |
 |---|---|
