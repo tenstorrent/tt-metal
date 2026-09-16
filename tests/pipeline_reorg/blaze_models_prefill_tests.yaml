@@ -1430,3 +1430,27 @@
   team: ttnn
   budget_type: demo
   sp_config: sc1
+
+# DO NOT MERGE -- fault-injection leg. Wedges the moe_padding_config writer kernel so the
+# operation-timeout watchdog fires, tt-triage runs and the hang report reaches the dashboards.
+# Unique tag so `test-type: hang_injection` dispatches this leg and nothing else.
+- name: "(hang injection) moe_padding_config device hang"
+  fabric_profile: torus_xy
+  cmd: |
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export TT_INJECT_MOE_HANG=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_padding_config.py -k "torus-xy-8x4" -vvv --tb=short
+    '
+  test_type: hang_injection
+  test_tags: [hang_injection]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1

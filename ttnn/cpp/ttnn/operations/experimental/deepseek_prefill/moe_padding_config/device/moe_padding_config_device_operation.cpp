@@ -5,7 +5,10 @@
 #include "moe_padding_config_device_operation.hpp"
 
 #include <cstdint>
+#include <cstdlib>
 #include <utility>
+
+#include <tt-logger/tt-logger.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -215,6 +218,12 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
     // The config buffer is passed as a Buffer* binding (not a raw address) so cache hits take the fast
     // path that patches its address and skips create_descriptor.
     writer_kernel.emplace_runtime_args(core, {config.buffer()});
+
+    // DO NOT MERGE -- fault injection for CI hang-report validation.
+    if (std::getenv("TT_INJECT_MOE_HANG") != nullptr) {
+        writer_kernel.defines.emplace_back("TT_INJECT_MOE_HANG", "1");
+        log_warning(tt::LogOp, "moe_padding_config HANG INJECTION ARMED: writer kernel will wedge");
+    }
 
     desc.kernels.push_back(std::move(writer_kernel));
     return desc;

@@ -43,6 +43,12 @@ inline uint32_t prefix_count(uint32_t valid_end, uint32_t base, uint32_t len) {
 }  // namespace
 
 void kernel_main() {
+#if defined(TT_INJECT_MOE_HANG)
+    // DO NOT MERGE -- fault injection, armed host-side from TT_INJECT_MOE_HANG.
+    while (true) {
+        invalidate_l1_cache();
+    }
+#endif
     const uint32_t config_addr = get_arg_val<uint32_t>(0);
 
     const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(0);
