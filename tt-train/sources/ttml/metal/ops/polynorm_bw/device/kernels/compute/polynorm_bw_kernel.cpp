@@ -74,6 +74,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/first_column_compute_utils.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -192,10 +193,12 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     binop_with_scalar_tile_init();
     add_unary_tile(reg_acc, get_eps_fp32_bits());
 
+    // REDUCE_ROW output: only column 0 carries data, so use the first-column SFPU
+    // variants (8 iterations instead of 32 per tile).
     sqrt_tile_init();
-    sqrt_tile(reg_acc);
+    sqrt_tile_first_column(reg_acc);
     recip_tile_init<false>();
-    recip_tile<false>(reg_acc);
+    recip_tile_first_column(reg_acc);
 
     tile_regs_commit();
     pack_and_push(reg_acc, cb_inv_rms);

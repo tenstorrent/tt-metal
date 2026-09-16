@@ -18,6 +18,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/first_column_compute_utils.hpp"
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -76,15 +77,17 @@ void reduce_sum_pows_to_inv_rms_triplet() {
     add_unary_tile(reg_a2, eps_fp32_bits);
 
     // sqrt then reciprocal to produce inv_rms.
+    // These are REDUCE_ROW outputs, so only column 0 carries data: use the first-column
+    // SFPU variants (8 iterations instead of 32 per tile).
     sqrt_tile_init();
-    sqrt_tile(reg_a0);
-    sqrt_tile(reg_a1);
-    sqrt_tile(reg_a2);
+    sqrt_tile_first_column(reg_a0);
+    sqrt_tile_first_column(reg_a1);
+    sqrt_tile_first_column(reg_a2);
 
     recip_tile_init<false>();
-    recip_tile<false>(reg_a0);
-    recip_tile<false>(reg_a1);
-    recip_tile<false>(reg_a2);
+    recip_tile_first_column(reg_a0);
+    recip_tile_first_column(reg_a1);
+    recip_tile_first_column(reg_a2);
 
     tile_regs_commit();
     pack_l1_acc_block(cb_inv_rms, /*first_block=*/true, /*num_tiles=*/3U, /*dst_start_index=*/0U);
