@@ -156,8 +156,9 @@ void kernel_main() {
 
         dfb_dy_obj.pop_front(onetile);
 
-        // multiply abs sign
-        mul_tiles_to_cb(dfb_sign_obj, dfb_tmp4_obj, dfb_dx_obj, 0, 0);
+        // multiply abs sign and mask zeros
+        mul_tiles_and_mask_tile_to_cb(
+            dfb_sign_obj, dfb_tmp4_obj, dfb_sign_obj, dfb_dx_obj, 0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
     }
 
     dfb_decimal_obj.pop_front(onetile);
