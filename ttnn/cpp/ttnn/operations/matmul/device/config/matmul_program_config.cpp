@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
+#include <algorithm>
 #include <ranges>
 
 namespace ttnn::operations::matmul {
@@ -1153,8 +1154,10 @@ MatmulProgramConfig create_simple_matmul_program_config(
         compute_kernel_config,
         output_dtype);
     per_core_N = per_core_M;
-    per_core_M = std::min(per_core_M, Mt);
-    per_core_N = std::min(per_core_N, Nt);
+    // Clamp to [1, Mt]/[1, Nt]: get_per_core_factor() can return 0 for a sub-tile M (Mt < 1 tile),
+    // and dividing by a zero per_core_M/N below would fault the host process with SIGFPE.
+    per_core_M = std::clamp(per_core_M, 1u, Mt);
+    per_core_N = std::clamp(per_core_N, 1u, Nt);
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     num_blocks_y = (Mt - 1) / per_core_M + 1;
