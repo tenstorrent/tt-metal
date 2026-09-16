@@ -178,8 +178,8 @@ def shift(input_tensor, shift_amount, torch_function):
 
 
 def right_shift(input_tensor, shift_amount):
-    """Model unary SFPU right-shift behavior for unsigned tensors.
-    Clamps nonnegative counts to 31.
+    """Model bitwise SFPU right-shift behavior for unsigned tensors.
+    Clamps counts >= 32 to 31 for both scalar and tensor shift amounts.
     """
 
     import torch

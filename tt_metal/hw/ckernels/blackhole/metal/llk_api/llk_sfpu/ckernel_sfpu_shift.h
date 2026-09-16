@@ -112,5 +112,29 @@ inline void calculate_logical_right_shift(
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
+inline void calculate_clamped_logical_right_shift(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(
+        INSTRUCTION_MODE == InstrModLoadStore::INT32,
+        "Clamped logical right shift is only used for UInt32 operands in INT32 mode.");
+
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vInt shift = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
+
+        v_if(shift < 0 || shift >= 32) { shift = 31; }
+        v_endif;
+
+        sfpi::vUInt result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = sfpi::as<sfpi::vInt>(result);
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

@@ -415,6 +415,42 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
     assert torch.equal(tt_out, z_torch)
 
 
+def test_bitwise_right_shift_uint32_out_of_range(device):
+    x_torch = torch.tensor(
+        [[0x80000000, 0xFFFFFFFF, 0x80000001, 0xDEADBEEF, 0x80000000, 0xFFFFFFFF]],
+        dtype=torch.uint32,
+    )
+    y_torch = torch.tensor([[31, 32, 33, 66, 0x80000000, 0xFFFFFFFF]], dtype=torch.uint32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.bitwise_right_shift)
+    expected = golden_fn(x_torch, y_torch)
+    assert torch.equal(expected, torch.ones_like(expected))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.bitwise_right_shift(x_tt, y_tt), dtype=torch.uint32)
+
+    assert torch.equal(actual, expected)
+
+
+def test_logical_right_shift_uint32_out_of_range(device):
+    x_torch = torch.tensor(
+        [[0x80000000, 0xFFFFFFFF, 0x80000001, 0xDEADBEEF, 0x80000000, 0xFFFFFFFF]],
+        dtype=torch.uint32,
+    )
+    y_torch = torch.tensor([[31, 32, 33, 66, 0x80000000, 0xFFFFFFFF]], dtype=torch.uint32)
+
+    golden_fn = ttnn.get_golden_function(ttnn.logical_right_shift)
+    expected = golden_fn(x_torch, y_torch)
+    assert torch.equal(expected, torch.tensor([[1, 0, 0, 0, 0, 0]], dtype=torch.uint32))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.logical_right_shift(x_tt, y_tt), dtype=torch.uint32)
+
+    assert torch.equal(actual, expected)
+
+
 @pytest.mark.parametrize(
     "ttnn_function",
     [
@@ -429,7 +465,7 @@ def test_bitwise_right_shift(device, ttnn_function, ttnn_dtype):
     ],
 )
 def test_logical_right_shift(device, ttnn_function, ttnn_dtype):
-    x_torch = torch.tensor(
+    x_bits = torch.tensor(
         [
             [
                 19,
@@ -454,25 +490,25 @@ def test_logical_right_shift(device, ttnn_function, ttnn_dtype):
         ],
         dtype=torch.int32,
     )
+    y_bits = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
 
-    y_torch = torch.tensor([[5, 31, 4, 5, 0, 1, 4, 1, 32, 66, 1, 14, 0, 1, 31, 31, 1, 5]], dtype=torch.int32)
-    if ttnn_dtype == ttnn.uint32:  # Stimulate uint32 input
-        x_torch = x_torch.to(torch.int64) & 0xFFFFFFFF
-        y_torch = y_torch.to(torch.int64) & 0xFFFFFFFF
+    if ttnn_dtype == ttnn.uint32:
+        torch_dtype = torch.uint32
+        x_torch = (x_bits.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
+        y_torch = (y_bits.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
+    else:
+        torch_dtype = torch.int32
+        x_torch = x_bits
+        y_torch = y_bits
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch_dtype)
 
-    if ttnn_dtype == ttnn.uint32:  # Simulate the uint32 output
-        tt_out = tt_out.to(torch.int64)
-        z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
-        assert torch.equal(tt_out, z_torch_uint64)
-    else:
-        assert torch.equal(tt_out, z_torch)
+    assert torch.equal(tt_out, z_torch)
 
 
 @pytest.mark.parametrize(
@@ -750,9 +786,9 @@ def test_binary_div_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -836,9 +872,9 @@ def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, ro
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(input_shapes)
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -1189,9 +1225,9 @@ def test_binary_divide_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn.divide)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -1530,9 +1566,7 @@ def test_binary_remainder_fmod_int32_sign_adjustment(ttnn_op, layout, device):
 def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, layout, divisor, device):
     # Reuse the INT32 endpoints, +/-2**30 large-value controls, and empirical
     # -2140947629 / -1 low-bit counterexample documented in the tensor test above.
-    torch_input_tensor = torch.tensor(
-        [-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32
-    )
+    torch_input_tensor = torch.tensor([-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.int32,
@@ -1890,9 +1924,9 @@ def test_binary_remainder_fmod_int32_range_1e15(input_shapes, ttnn_op, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[
-        torch_input_tensor_b == 0
-    ] = 1  # avoid division by zero since nan and inf are not representable in int32
+    torch_input_tensor_b[torch_input_tensor_b == 0] = (
+        1  # avoid division by zero since nan and inf are not representable in int32
+    )
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
