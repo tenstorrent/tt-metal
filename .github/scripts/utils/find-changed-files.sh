@@ -115,6 +115,13 @@ while IFS= read -r FILE; do
             LLK_QUASAR_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
+        # The LLK perf helpers import this metal module, so a change to it must run the LLK suites too.
+        tools/tracy/perf_metrics_common.py)
+            LLK_QUASAR_CHANGED=true
+            LLK_TESTS_CHANGED=true
+            TOOLS_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         tt_metal/tt-llk/tests/python_tests/fuser/**)
             LLK_QUASAR_CHANGED=true
             LLK_TESTS_CHANGED=true
