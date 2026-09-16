@@ -317,11 +317,14 @@ bool MetalEnvImpl::set_fabric_config(
     this->fabric_router_config_ = router_config;
 
     if (control_plane_ != nullptr) {
-        log_info(
-            tt::LogMetal,
-            "Fabric config changed from {} to {}, reinitializing control plane",
-            this->get_control_plane().get_fabric_config(),
-            this->fabric_config_);
+        const auto prev_fabric_config = this->get_control_plane().get_fabric_config();
+        if (prev_fabric_config != this->fabric_config_) {
+            log_info(
+                tt::LogMetal,
+                "Fabric config changed from {} to {}, reinitializing control plane",
+                prev_fabric_config,
+                this->fabric_config_);
+        }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
