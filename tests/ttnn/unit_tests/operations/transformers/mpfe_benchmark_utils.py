@@ -21,9 +21,9 @@ class MpfeBenchmarkWeights:
 
 
 def _weight(name: str, default: int) -> int:
-    value = int(os.environ.get(f"{_PREFIX}{name}", str(default)))
-    assert 0 <= value <= 7, f"{name} must be in [0, 7], got {value}"
-    return value
+    value = os.environ.get(f"{_PREFIX}{name}", str(default))
+    assert len(value) == 1 and "0" <= value <= "7", f"{name} must be one digit in [0, 7], got {value!r}"
+    return int(value)
 
 
 def resolve_mpfe_benchmark_weights() -> MpfeBenchmarkWeights:
