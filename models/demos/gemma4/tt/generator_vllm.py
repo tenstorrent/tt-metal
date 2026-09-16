@@ -2526,7 +2526,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         page table this is. Unknown identity on either side (no page table)
         falls back to True: that is the pre-existing single-session behaviour,
         and the scheduler's mirror still owns the width contract."""
-        owner = self._spec_pending_owner
+        owner = getattr(self, "_spec_pending_owner", None)
         cur = self._spec_pt_identity(page_table)
         if owner is None or cur is None:
             return True
@@ -2537,7 +2537,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         this is. Unknown identity on either side falls back to True, matching
         _spec_pending_is_mine: the scheduler's mirror still owns the width
         contract, and a missing page table is not evidence of a hand-off."""
-        owner = self._spec_active_owner
+        owner = getattr(self, "_spec_active_owner", None)
         cur = self._spec_pt_identity(page_table)
         if owner is None or cur is None:
             return True
@@ -3131,11 +3131,29 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
     this model proposed, and a mismatch raises rather than answering for tokens
     the device never evaluated.
 
-    ``spec_plan`` is INHERITED deliberately: it is already contract-shaped
-    (accept_modes ``argmax_ids``, one lane, K pinned to GEMMA4_DFLASH_VERIFY)
-    and it carries the per-session byte accounting the review asks to validate
-    jointly. Duplicating that arithmetic here is how the two copies drift.
+    ``spec_plan`` is inherited for its accounting but OVERRIDDEN for the
+    concurrency gate: see below.
     """
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
+        """Admit concurrency: speculation is decided per STEP, not per launch.
+
+        The inherited plan refuses ``max_num_seqs > 1`` because the fused verify
+        packs its candidate positions into one batch row -- true, but that is a
+        statement about a SOLO step, not about the server. A batched step here
+        proposes nothing and commits one token per row (see decode_forward), so
+        a launch at higher concurrency is serviceable: conc-1 requests get the
+        drafter, conc>1 steps get plain decode. Refusing the launch instead
+        would make this rail unable to replace the adaptive block-output entry,
+        which serves exactly that mix.
+
+        Everything else -- effective_k, the lane count, accept_modes and the
+        per-session byte accounting the review asks to validate jointly -- comes
+        from the inherited plan, so there is ONE copy of that arithmetic.
+        """
+        outcome = super().spec_plan(vllm_config, 1, requested_k)
+        return outcome
 
     _SPEC_CONTRACT_K = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
     # The inherited prefill/warmup paths use ``_SPEC_BLOCK > 1`` as their proxy
@@ -3157,6 +3175,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         "supports_sample_on_device": False,  # the host accept walk owns it
         "supports_async_decode": False,  # first adapter is synchronous
         "supports_spec_decode": True,
+        # NOT tt_adaptive_block_output: that key is the BLOCK rail's, and this
+        # rail commits 1..1+K tokens through the runner's accept walk rather
+        # than a reserved block. The adaptivity here needs no scheduler
+        # cooperation at all -- see decode_forward and propose_draft_tokens.
         # Drafts on device from the target's hidden; the hidden never leaves the
         # device, so the runner holds no handle for it.
         "spec_requirements": ("device_propose", "hidden_feed"),
@@ -3183,14 +3205,26 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         """
         from vllm_tt_plugin.spec_decode import DraftOutput
 
-        del positions, hidden  # on-device handoff: taps are already in place
+        del hidden  # on-device handoff: the taps are already in place
         k = int(num_drafts)
         # The contract is [rows, K]: one row per row the VERIFY answered for,
         # padding rows included -- the runner checks this shape and drops the
         # padding rows only after its accept walk. B=1 means only row 0 carries
         # drafts, but the shape follows the block, not the session.
         rows = int(committed.shape[0]) if committed is not None and committed.dim() > 1 else 1
+        live = self._contract_live_rows(positions, rows)
         dec = self._spec_decoder
+        if live > 1:
+            # BATCHED step: the fused verify packs its candidate positions into
+            # ONE batch row, so it cannot speculate for several requests. Offer
+            # no drafts and let every row commit a single token -- the same
+            # trade the block rail makes, expressed with the contract's own
+            # "no drafts this step" instead of a scheduler reservation. The
+            # session goes with it: its taps belong to one request's prompt.
+            self._spec_release_decoder()
+            self._ct_drafts = None
+            self._ct_posterior = None
+            return DraftOutput(draft_token_ids=torch.zeros((rows, 0), dtype=torch.int32))
         if dec is None or not self._spec_active:
             # No session, so no real drafts. A zero-width proposal is how the
             # contract says "nothing this step"; inventing ids would have the
@@ -3206,6 +3240,16 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         row = row.reshape(-1) if row is not None else None
         anchor = int(row[max(0, min(n, int(row.numel())) - 1)]) if row is not None else dec.anchor
         dec.contract_commit(n, anchor)
+        # Select the narrowest captured width that covers the new position, the
+        # way the block loop does every iteration. Without this a session stays
+        # on the width its prompt selected and eventually replays a trace whose
+        # mask and page table stop short of the live top -- the block rail calls
+        # this per iteration precisely because the position moves.
+        if self._spec_width_set and dec.select_width(dec.start) is None:
+            raise RuntimeError(
+                f"Gemma4DFlash contract propose: position {dec.start} is past the "
+                "widest captured verify width; the ladder must cover max_model_len"
+            )
         drafts, posterior = dec.contract_replay(first=self._spec_first_step)
         self._spec_first_step = False
         self._ct_drafts = [int(t) for t in drafts[:k]]
@@ -3238,13 +3282,60 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         start_pos = kwargs.get("start_pos")
         if start_pos is None and len(args) > 1:
             start_pos = args[1]
-        # The contract's step order is verify then propose, so the FIRST step of
-        # a request is a verify with no prior proposal: the runner has nothing
-        # to draft with yet and sends a block whose only real column is the last
-        # committed token. Arm the session here (prefill left the taps pending)
-        # and answer that one column from the capture's own first iteration --
-        # the compile pass already produced it, so this costs no replay.
+        rows_in = int(tokens.shape[0]) if tokens is not None and tokens.dim() > 1 else 1
+        live_in = self._contract_live_rows(start_pos, rows_in)
+        valid_in = int(num_valid.reshape(-1)[0]) if num_valid is not None else 0
+        width0 = self._SPEC_CONTRACT_K + 1
+        if live_in != 1:
+            # BATCHED step: the fused verify speaks for ONE row, so a batch is
+            # served as plain baseline decode -- the same adaptive fallback the
+            # block rail takes at batch>1, and what lets this rail serve
+            # concurrency at all. Pending taps carry no outstanding drafts, so
+            # drop them here; a LIVE session is left for the next propose to
+            # release, because row 0 may still be owed the posterior for drafts
+            # the device has already evaluated.
+            if self._spec_pending is not None:
+                self._spec_pending = None
+                self._spec_pending_owner = None
+            try:
+                self.model[0].dflash_capture_taps(None)
+            except Exception:
+                pass
+            ids0 = torch.full((rows_in, width0), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+            ids0[:, 0] = self._contract_plain_argmax(args, kwargs, page_tables_per_layer, rows_in)
+            if valid_in and self._contract_drafts_match(tokens, valid_in):
+                # STRADDLE: row 0's drafts were proposed while it was solo and a
+                # peer joined before this verify. The device has already
+                # evaluated exactly those drafts, so report that posterior --
+                # answering column 0 alone would let the walk accept draft 0
+                # (it may well be right) and then read its bonus out of a
+                # PLACEHOLDER column nothing answered.
+                post = self._ct_posterior[:width0]
+                ids0[0, : len(post)] = torch.tensor(post, dtype=torch.int32)
+            elif self._spec_active:
+                self._spec_release_decoder()
+            self._ct_drafts = None
+            self._ct_posterior = None
+            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids0, hidden=None)
+        if self._spec_pending is not None and not self._spec_pending_is_mine(kwargs.get("page_table")):
+            # Taps captured for a DIFFERENT request (its owner finished or was
+            # aborted before it ever decoded). Bootstrapping them here would
+            # speculate from another prompt's residuals and another prompt's
+            # length -- wrong tokens, not just a wrong width.
+            logger.warning(
+                "Gemma4DFlash contract: pending spec session belongs to another "
+                "request; serving this one as plain baseline"
+            )
+            self._spec_pending = None
+            self._spec_pending_owner = None
         if self._spec_pending is not None:
+            # The contract's step order is verify then propose, so the FIRST step
+            # of a request is a verify with no prior proposal: the runner has
+            # nothing to draft with yet and sends a block whose only real column
+            # is the last committed token. Arm the session here (prefill left the
+            # taps pending) and answer that one column from the capture's own
+            # first iteration -- the compile pass already produced it, so this
+            # costs no replay.
             self._spec_bootstrap(
                 int(tokens.reshape(-1)[0]),
                 int(start_pos.reshape(-1)[0]) if start_pos is not None else None,
@@ -3252,23 +3343,38 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
                 kwargs.get("kv_cache"),
                 page_tables_per_layer=page_tables_per_layer,
             )
-        rows_in = int(tokens.shape[0]) if tokens is not None and tokens.dim() > 1 else 1
-        valid_in = int(num_valid.reshape(-1)[0]) if num_valid is not None else 0
+        if self._spec_active and not self._spec_active_is_mine(kwargs.get("page_table")):
+            # Solo step for a request that does NOT own the live session
+            # (reachable under async scheduling when the owner is skipped by
+            # upstream's placeholder guard). Speculating here would re-point the
+            # fused decoder at this page table and draft from the OWNER's taps.
+            logger.warning(
+                "Gemma4DFlash contract: live spec session belongs to another "
+                "request; releasing it and serving this one as plain baseline"
+            )
+            self._spec_release_decoder()
+            self._ct_drafts = None
+            self._ct_posterior = None
+            valid_in = 0
         if valid_in == 0:
-            # Draft-less step. Answer ONLY column 0, so the walk commits exactly
-            # one token: handing it a full posterior would let it "accept" a
-            # draft column whose token the runner has already committed.
+            # DRAFT-LESS step: answer column 0 only, so the walk commits exactly
+            # one token per row. Handing it a full posterior would let it
+            # "accept" a draft column whose token the runner has already
+            # committed -- a duplicated token, invisible in prose.
+            ids0 = torch.full((rows_in, width0), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
             if not self._spec_active:
-                raise RuntimeError(
-                    "Gemma4DFlash contract verify has no session to answer from; "
-                    "the prefill must arm one before the first decode step"
-                )
+                # Solo with no session (e.g. prefilled inside a batch, so no
+                # taps were captured): plain decode, one argmax per row.
+                try:
+                    self.model[0].dflash_capture_taps(None)
+                except Exception:
+                    pass
+                ids0[:, 0] = self._contract_plain_argmax(args, kwargs, page_tables_per_layer, rows_in)
+                return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids0, hidden=None)
             drafts, posterior = self._spec_decoder.contract_replay(first=self._spec_first_step)
             self._spec_first_step = False
             self._ct_drafts = None  # nothing proposed yet; the next propose replays
             self._ct_posterior = None
-            width0 = self._SPEC_CONTRACT_K + 1
-            ids0 = torch.full((rows_in, width0), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
             ids0[0, 0] = int(posterior[0])
             return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids0, hidden=None)
         if self._ct_posterior is None:
@@ -3303,6 +3409,99 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         post = self._ct_posterior[:width]
         ids[0, : len(post)] = torch.tensor(post, dtype=torch.int32)
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids, hidden=None)
+
+    def _contract_drafts_match(self, tokens, valid):
+        """True when the kept posterior answers for the block's OWN draft ids.
+
+        The device verified the drafts THIS model proposed. If the runner's
+        block carries anything else -- a different request's row 0, or a
+        truncation the proposal never saw -- reporting the kept posterior would
+        answer for tokens the device never evaluated. Truncation to fewer
+        drafts is fine; a differing token is not.
+        """
+        if self._ct_posterior is None or not self._ct_drafts:
+            return False
+        try:
+            row0 = tokens[0] if tokens.dim() > 1 else tokens
+            block = row0.reshape(-1).tolist()
+            n = max(0, min(int(valid), len(self._ct_drafts), max(0, len(block) - 1)))
+            return n > 0 and [int(t) for t in block[1 : 1 + n]] == self._ct_drafts[:n]
+        except Exception:
+            return False
+
+    @staticmethod
+    def _contract_live_rows(positions, rows):
+        """Rows that belong to REAL requests, from the runner's own -1 padding.
+
+        The runner pads a decode batch up to a wire bucket and marks the added
+        rows' positions with -1. Counting the tensors' row dimension instead
+        makes a PADDED SOLO step look batched, which would hand the drafter's
+        own request a plain decode and give up speculation entirely -- the same
+        trap that made a solo request look batched on the block rail.
+        """
+        if positions is None:
+            return int(rows)
+        try:
+            p = positions.reshape(int(rows), -1) if int(rows) > 0 else positions
+            return max(1, int((p[:, 0] >= 0).sum()))
+        except Exception:
+            return int(rows)
+
+    @staticmethod
+    def _contract_col0(args, kwargs, rows):
+        """The candidate block narrowed to its committed column, as the plain
+        decode expects it.
+
+        Verify is handed a ``[rows, 1+K]`` block and matching positions, but an
+        ordinary decode reads its batch as ``tokens.reshape(-1).shape[0]`` --
+        forwarding the block whole makes a 32-row step look like a 192-row one
+        and trips the token-feedback width. Column 0 is each row's last
+        committed token at its own position, which is exactly the plain
+        decode's input; padding rows keep their -1 position, as on any other
+        baseline step.
+        """
+        args = list(args)
+        kwargs = dict(kwargs)
+
+        def col0(t):
+            if t is None:
+                return None
+            v = t if isinstance(t, torch.Tensor) else torch.as_tensor(t)
+            if int(rows) <= 0 or v.numel() % int(rows):
+                return v
+            return v.reshape(int(rows), -1)[:, 0].contiguous()
+
+        if kwargs.get("tokens") is not None:
+            kwargs["tokens"] = col0(kwargs["tokens"])
+        elif args:
+            args[0] = col0(args[0])
+        if kwargs.get("start_pos") is not None:
+            kwargs["start_pos"] = col0(kwargs["start_pos"])
+        elif len(args) > 1:
+            args[1] = col0(args[1])
+        return tuple(args), kwargs
+
+    def _contract_plain_argmax(self, args, kwargs, page_tables_per_layer, rows):
+        """Each row's next-token argmax from an ordinary decode, as int32 [rows].
+
+        The contract wants ``argmax_ids``, so the model owns the argmax on any
+        step it does not speculate on. The base decode returns whatever the
+        launch's sampling mode produces, so both shapes are handled rather than
+        assumed: full logits get an argmax over the vocabulary, already-sampled
+        ids are used as they are (greedy sampling IS the argmax, and this rail
+        is greedy).
+        """
+        args, kwargs = self._contract_col0(args, kwargs, rows)
+        tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        host = Gemma4ForCausalLM.read_decode_output(self, tt_out, async_read=False)
+        if not isinstance(host, torch.Tensor):
+            host = torch.as_tensor(host)
+        flat = host.reshape(rows, -1) if host.numel() >= rows else host.reshape(1, -1)
+        ids = flat.argmax(dim=-1) if flat.shape[-1] > 1 else flat[:, 0]
+        out = torch.zeros(rows, dtype=torch.int32)
+        n = min(rows, int(ids.numel()))
+        out[:n] = ids.reshape(-1)[:n].to(torch.int32)
+        return out
 
     def release_request(self, row: int) -> None:
         super().release_request(row)
@@ -3751,7 +3950,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         """True when the pending session was captured for the request whose page
         table this is. Unknown identity on either side falls back to True (the
         pre-existing single-session behaviour)."""
-        owner = self._spec_pending_owner
+        owner = getattr(self, "_spec_pending_owner", None)
         cur = self._spec_pt_identity(page_table)
         if owner is None or cur is None:
             return True
@@ -3761,7 +3960,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         """True when the LIVE session belongs to the request whose page table
         this is. Unknown identity on either side falls back to True, matching
         _spec_pending_is_mine."""
-        owner = self._spec_active_owner
+        owner = getattr(self, "_spec_active_owner", None)
         cur = self._spec_pt_identity(page_table)
         if owner is None or cur is None:
             return True
