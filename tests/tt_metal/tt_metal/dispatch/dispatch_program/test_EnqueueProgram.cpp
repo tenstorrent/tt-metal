@@ -2684,7 +2684,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        workload.add_program(device_range_, this->create_program_with_simple_kernel(CoreType::WORKER));
+        workload.add_program(device_range_, this->create_program_with_kernel(CoreType::WORKER, true));
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
@@ -2794,10 +2794,6 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms)
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        workload.add_program(device_range_, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range_);
-
         KernelProperties kernel_properties;
         if (i % 2 == 0) {
             kernel_properties = this->get_large_kernel_properties();
@@ -2805,7 +2801,8 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms)
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
+        workload.add_program(
+            device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
@@ -2819,10 +2816,6 @@ TEST_F(UnitMeshRandomProgramFixture, NIGHTLY_TensixTestLargeProgramFollowedBySma
         }
         distributed::MeshWorkload workload;
         ;
-        Program program = CreateProgram();
-        workload.add_program(device_range_, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range_);
-
         KernelProperties kernel_properties;
         if (i == 0) {
             kernel_properties = this->get_large_kernel_properties();
@@ -2830,7 +2823,8 @@ TEST_F(UnitMeshRandomProgramFixture, NIGHTLY_TensixTestLargeProgramFollowedBySma
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
+        workload.add_program(
+            device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
@@ -2843,9 +2837,6 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPro
             log_info(tt::LogTest, "Creating Program {}", i);
         }
         distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        workload.add_program(device_range_, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range_);
         KernelProperties kernel_properties;
         if (i % 6 == 0) {
             kernel_properties = this->get_large_kernel_properties();
@@ -2853,7 +2844,8 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPro
             kernel_properties = this->get_small_kernel_properties();
         }
 
-        this->create_kernel(program_, CoreType::WORKER, false, kernel_properties);
+        workload.add_program(
+            device_range_, this->create_program_with_kernel(CoreType::WORKER, false, kernel_properties));
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
