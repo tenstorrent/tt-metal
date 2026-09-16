@@ -61,6 +61,7 @@ it is classified differently on different systems.
 | Llama3.3-70B | WH Galaxy |
 | Qwen3-32B | WH Galaxy, BH Galaxy |
 | Qwen3.6-27B | BH QuietBox 2 |
+| Qwen3.6-35B-A3B | BH QuietBox 2 |
 | GPT-OSS 120B | WH LLMBox, WH Galaxy, BH QuietBox 2, BH Galaxy |
 | MiniMax-M3 | BH P150, BH Galaxy |
 | Gemma-4-12B | BH QuietBox 2 |
@@ -124,6 +125,7 @@ it is classified differently on different systems.
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
 | Janus-Pro-7B | BH P150 |
+| HunyuanImage-3.0 | BH QuietBox 2 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
@@ -133,6 +135,7 @@ it is classified differently on different systems.
 | VGGNet | WH N150 |
 | BERT-Tiny | WH N150 |
 | BERT-Large | WH N150 |
+| ModernBERT-base | WH N300 |
 | DistilBERT | WH N150 |
 | SqueezeBERT | WH N150 |
 | MNIST MLP classifier | WH N150 |

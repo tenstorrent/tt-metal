@@ -67,7 +67,7 @@ void print_tile_rows(
 }
 
 // Compute kernel for tilizing incoming tokens from the reader.
-// Waits for writer to pass total_chunks via CB, then processes each chunk:
+// Waits for the reader to pass total_chunks via CB, then processes each chunk:
 // - Wait for reader to push tokens_per_chunk tokens
 // - Tilize the block
 // - Push tilized output to writer
@@ -95,7 +95,7 @@ void kernel_main() {
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
     fast_tilize_init(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
 
-    // Wait for writer to push total_chunks via CB
+    // Wait for the reader to push total_chunks via CB
     cb_total_chunks.wait_front(one_page);
 
     // Read total_chunks from the CB
