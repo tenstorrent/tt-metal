@@ -48,7 +48,7 @@ TEST(AgmmRegistry, EveryBh32EntryRoundTripsAndMaterializes) {
             EXPECT_TRUE(registry::materialize_recipe(entry).has_value());
         }
     }
-    EXPECT_EQ(entry_count, 44U);
+    EXPECT_EQ(entry_count, 48U);
 }
 
 TEST(AgmmRegistry, LiveGridIsCheckedAsCapabilityNotIdentity) {
