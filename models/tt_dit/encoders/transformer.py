@@ -22,6 +22,7 @@ from models.tt_dit.layers.normalization import RMSNorm
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
+from models.tt_dit.utils.padding import torch_pad
 from models.tt_dit.utils.tracing import Tracer, traced_function
 
 MAX_CHUNK_SIZE = 128
@@ -898,7 +899,7 @@ class Attention(Module):
             v = v.unflatten(0, [self._group_count, 1, self._head_size])
 
             # pad group size
-            q = _pad(q, self._group_size_padding, dim=1)
+            q = torch_pad(q, self._group_size_padding, dim=1)
 
             # split groups
             s = self._split_factor
@@ -907,9 +908,9 @@ class Attention(Module):
             v = v.repeat_interleave(s, dim=0)
 
             # pad group count
-            q = _pad(q, self._group_count_padding, dim=0)
-            k = _pad(k, self._group_count_padding, dim=0)
-            v = _pad(v, self._group_count_padding, dim=0)
+            q = torch_pad(q, self._group_count_padding, dim=0)
+            k = torch_pad(k, self._group_count_padding, dim=0)
+            v = torch_pad(v, self._group_count_padding, dim=0)
 
             # fuse
             q = q.flatten(0, 1).unflatten(0, [self._tp_factor, self._num_local_heads])
@@ -934,13 +935,13 @@ class Attention(Module):
             o = o.unflatten(1, [self._group_count, self._group_size, self._head_size])
 
             # pad group size
-            o = _pad(o, self._group_size_padding, dim=2)
+            o = torch_pad(o, self._group_size_padding, dim=2)
 
             # split groups
             o = o.flatten(1, 2).unflatten(1, [self._group_count * self._split_factor, -1])
 
             # pad group count
-            o = _pad(o, self._group_count_padding, dim=1)
+            o = torch_pad(o, self._group_count_padding, dim=1)
 
             state["o_proj.weight"] = o.flatten(1, 3)
 
@@ -1457,13 +1458,6 @@ def _optimal_groups(group_count: int, group_size: int, device_count: int) -> tup
             best_group_size = new_group_size
 
     return best_group_count, best_group_size, best_split_factor
-
-
-def _pad(t: torch.Tensor, amount: int, *, dim: int) -> torch.Tensor:
-    """Pad tensor with `amount` zeros on the end of dimension `dim`."""
-    padding = [0] * (2 * t.ndim)
-    padding[-(dim * 2 + 1)] = amount
-    return torch.nn.functional.pad(t, padding)
 
 
 @dataclass
