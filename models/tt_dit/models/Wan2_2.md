@@ -168,6 +168,11 @@ Measured on Blackhole Galaxy (4x8, sp=8, tp=4, ring), 832x480, 81 frames, 40 ste
 | DBCache default preset (threshold 0.05) | 37.2s (1.22x) | 8 | 23.3 dB | 0.974 |
 | DBCache, cache-dit's threshold 0.08 | 32.7s (1.38x) | 12 | 15.7 dB | 0.849 |
 
+Same mesh at 1280x720 (81 frames, 40 steps): baseline 142.4s, split path bit-exact (PCC 1.0), default preset
+129.9s (1.10x) with 4 cached steps per branch, PSNR 26.7 dB / PCC 0.991. At 720p most high-noise residual
+diffs sit just above the 0.05 threshold (0.05-0.07), so fewer steps cache than at 480p; a per-resolution
+threshold (e.g. 0.06 at 720p) is a natural follow-up.
+
 The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
 bit-exact as well.
