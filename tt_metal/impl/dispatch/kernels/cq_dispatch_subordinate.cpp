@@ -586,6 +586,9 @@ void merge_dispatch_d_noc_counter_deltas() {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
     DPRINT("dispatch_s : start\n");
     // Initialize customized command buffers.

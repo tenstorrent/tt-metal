@@ -933,16 +933,32 @@ enum CQNocSend {
     CQ_NOC_SEND = 1,
 };
 
-// Software mirror of V2's per-command-buffer destination and source register
-// pairs. base = the latched coordinate half (offset-field-zero operand, or an
-// offset-free multicast descriptor); local = the latched offset half.
+// The remembered halves of each command buffer's destination and source.
+// "base" is the coordinate half: a full address with a zero offset, or for
+// multicast a rectangle descriptor with a zero offset. "local" is the offset
+// half. The hardware receives base | local.
 inline uint64_t noc_v3_cq_dest_base[NOC_V3_STATE_CMD_BUFS] = {};
 inline uint64_t noc_v3_cq_dest_local[NOC_V3_STATE_CMD_BUFS] = {};
 inline uint64_t noc_v3_cq_src_base[NOC_V3_STATE_CMD_BUFS] = {};
 inline uint64_t noc_v3_cq_src_local[NOC_V3_STATE_CMD_BUFS] = {};
-// Latched at init from the cmd_flags MCAST bit: selects the descriptor
-// interpretation of the dest state (and the resolve at issue time).
+// Set by the write init call from its multicast flag. When true, the
+// destination halves form a multicast rectangle that is resolved through the
+// map when the transfer is issued.
 inline bool noc_v3_cq_dest_mcast[NOC_V3_STATE_CMD_BUFS] = {};
+
+// These arrays are kernel globals in L1, and the DM kernel runtime zeroes only
+// its local-memory bss, so they start with whatever the previous kernel left
+// behind. A stale multicast flag would send a unicast through the multicast
+// path. Every CQ kernel calls this once at entry.
+inline __attribute__((always_inline)) void noc_v3_cq_state_reset() {
+    for (uint32_t i = 0; i < NOC_V3_STATE_CMD_BUFS; ++i) {
+        noc_v3_cq_dest_base[i] = 0;
+        noc_v3_cq_dest_local[i] = 0;
+        noc_v3_cq_src_base[i] = 0;
+        noc_v3_cq_src_local[i] = 0;
+        noc_v3_cq_dest_mcast[i] = false;
+    }
+}
 
 // A multicast descriptor holds the offset in its low bits and the rectangle
 // corners above them, so its two halves combine with OR just like a unicast

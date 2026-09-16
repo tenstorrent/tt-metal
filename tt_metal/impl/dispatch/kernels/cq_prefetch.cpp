@@ -3149,6 +3149,9 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
