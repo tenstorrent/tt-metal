@@ -2503,8 +2503,20 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_BenchRelay) {
         const auto ref = make_reference_inputs_only(N, s.d);
         double seconds = 0.0;
         run_relay(s.C, ref, s.w, s.h, /* endpoint_sync */ true, &seconds, s.Bt, s.groups);
+        // Work and traffic, for utilisation: five matmuls of 2 B^2 d flops per
+        // causal block pair (T = 2C row blocks of B = 32 Bt rows), per group;
+        // DRAM traffic at least the operands once (Q, K, V, dO bf16; L, D
+        // fp32) and the three fp32 gradients read and written once -- the
+        // relay's spills and reloads at streak ends come on top.
+        const double B = 32.0 * s.Bt;
+        const double T = 2.0 * s.C;
+        const double flops = s.groups * (T * (T + 1.0) / 2.0) * 10.0 * B * B * s.d;
+        const double bytes = s.groups * (4.0 * N * s.d * 2.0 + 2.0 * N * 4.0 + 2.0 * 3.0 * N * s.d * 4.0);
+        const double cores = static_cast<double>(s.w) * s.h * s.groups;
         std::cout << "  C=" << s.C << " Bt=" << s.Bt << " d=" << s.d << " N=" << N << " x" << s.groups
-                  << " groups on " << s.w << "x" << s.h << ": " << seconds * 1e6 << " us\n";
+                  << " groups on " << s.w << "x" << s.h << ": " << seconds * 1e6 << " us"
+                  << "  [" << flops / seconds / 1e12 << " TFLOP/s, " << flops / seconds / 1e12 / cores
+                  << " per core; >= " << bytes / seconds / 1e9 << " GB/s DRAM]\n";
     }
 }
 
