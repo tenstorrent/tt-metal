@@ -15,35 +15,37 @@ reference model to validate the inference pipeline end-to-end.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
 import torch
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_CKPT = _DATA_DIR / "diffusiondrive_navsim.pth"
-_ANCHORS = _DATA_DIR / "kmeans_navsim_traj_20.npy"
 
-
-def _require_assets():
-    if not _CKPT.exists() or not _ANCHORS.exists():
-        pytest.skip("Assets not found — run scripts/prepare_assets.py first")
-
-
-def _load_ref_model():
+def _load_ref_model(ckpt: str, anchors: str):
     from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, load_model
 
-    cfg = DiffusionDriveConfig(plan_anchor_path=str(_ANCHORS), latent=True)
-    m = load_model(str(_CKPT), cfg, device=torch.device("cpu"))
+    cfg = DiffusionDriveConfig(plan_anchor_path=anchors, latent=True)
+    m = load_model(ckpt, cfg, device=torch.device("cpu"))
     m.eval()
     return m
 
 
-def test_no_nan_inf_output():
+def _assets(model_config, checkpoint_path, missing_asset):
+    """Resolve both assets through the shared fixtures.
+
+    Skips locally, fails under DD_REQUIRE_ASSETS=1 — the documented CI contract
+    (README 7). Resolving repo-local paths directly would skip even when CI has
+    staged assets via DD_CHECKPOINT_PATH / DD_ANCHOR_PATH.
+    """
+    if model_config.plan_anchor_path is None:
+        missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")
+    if checkpoint_path is None:
+        missing_asset("real checkpoint not found — run scripts/prepare_assets.py or set DD_CHECKPOINT_PATH")
+    return checkpoint_path, model_config.plan_anchor_path
+
+
+def test_no_nan_inf_output(model_config, checkpoint_path, missing_asset):
     """Forward pass output contains no NaN or Inf."""
-    _require_assets()
+    ckpt, anchors = _assets(model_config, checkpoint_path, missing_asset)
     torch.manual_seed(42)
-    model = _load_ref_model()
+    model = _load_ref_model(ckpt, anchors)
     features = {
         "camera_feature": torch.randn(1, 3, 256, 1024),
         "lidar_feature": torch.zeros(1, 1, 256, 256),
@@ -61,11 +63,11 @@ def test_no_nan_inf_output():
     assert not torch.isinf(scores).any(), "Inf in scores"
 
 
-def test_score_distribution():
+def test_score_distribution(model_config, checkpoint_path, missing_asset):
     """Scores have non-trivial spread — model is not collapsed to uniform."""
-    _require_assets()
+    ckpt, anchors = _assets(model_config, checkpoint_path, missing_asset)
     torch.manual_seed(42)
-    model = _load_ref_model()
+    model = _load_ref_model(ckpt, anchors)
     features = {
         "camera_feature": torch.randn(1, 3, 256, 1024),
         "lidar_feature": torch.zeros(1, 1, 256, 256),
@@ -78,11 +80,11 @@ def test_score_distribution():
     assert std > 1e-3, f"Score std {std:.2e} ≤ 1e-3 — model output collapsed"
 
 
-def test_trajectory_plausible_range():
+def test_trajectory_plausible_range(model_config, checkpoint_path, missing_asset):
     """Trajectory (x, y) positions are within ±100 m (physically plausible)."""
-    _require_assets()
+    ckpt, anchors = _assets(model_config, checkpoint_path, missing_asset)
     torch.manual_seed(42)
-    model = _load_ref_model()
+    model = _load_ref_model(ckpt, anchors)
     features = {
         "camera_feature": torch.randn(1, 3, 256, 1024),
         "lidar_feature": torch.zeros(1, 1, 256, 256),

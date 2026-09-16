@@ -16,21 +16,16 @@ This test fails if that regression is reintroduced.
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, DiffusionDriveModel
 
-_ANCHORS = "models/experimental/diffusion_drive/data/kmeans_navsim_traj_20.npy"
 
+def test_diffusion_noise_is_two_channels(monkeypatch, model_config, missing_asset) -> None:
+    if model_config.plan_anchor_path is None:
+        missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")
 
-def test_diffusion_noise_is_two_channels(monkeypatch) -> None:
-    import os
-
-    if not os.path.exists(_ANCHORS):
-        pytest.skip("anchor file not found — run scripts/prepare_assets.py first")
-
-    cfg = DiffusionDriveConfig(plan_anchor_path=_ANCHORS, latent=True)
+    cfg = DiffusionDriveConfig(plan_anchor_path=model_config.plan_anchor_path, latent=True)
     torch.manual_seed(0)
     model = DiffusionDriveModel(cfg).eval()
 

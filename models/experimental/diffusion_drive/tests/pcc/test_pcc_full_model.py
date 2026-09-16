@@ -2,48 +2,50 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-Stage 1 end-to-end PCC test for the full DiffusionDrive model.
+End-to-end PCC test for the full DiffusionDrive model on random inputs.
 
-Loads the pretrained checkpoint, runs the reference PyTorch model, then runs
-the TTNN wrapper, and asserts PCC ≥ 0.99 for trajectory and scores.
+Loads the pretrained checkpoint, runs the reference PyTorch model, then runs the
+**fully built** TTNN model (``build_all``) and asserts PCC >= 0.99 for trajectory
+and scores.
 
-Requires:
-  - models/experimental/diffusion_drive/data/diffusiondrive_navsim.pth
-  - models/experimental/diffusion_drive/data/kmeans_navsim_traj_20.npy
-  Both are downloaded by scripts/prepare_assets.py.
+Building the stack matters: an unbuilt ``TtnnDiffusionDriveModel`` leaves
+``_perception`` as None and ``__call__`` falls through to the CPU reference, so the
+comparison would be the reference against itself — PCC 1.0 that proves nothing
+about TTNN. Complements test_pcc_checkpoint_accuracy (real-checkpoint accuracy)
+and test_pcc_stage4 (per-stage outputs) by covering the whole graph at once.
+
+Assets resolve through the shared ``checkpoint_path`` / ``model_config`` fixtures;
+a missing one skips locally but fails under ``DD_REQUIRE_ASSETS=1`` (README 7).
 
 Tests:
-  test_full_model_pcc_random    — random inputs, fixed seed
-  test_full_model_output_shapes — verify output shapes
+  test_full_model_pcc_random    — random inputs, fixed seed, full TTNN stack
+  test_full_model_output_shapes — verify reference output shapes
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 import torch
 
 from models.common.utility_functions import comp_pcc
 
-_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_CKPT = _DATA_DIR / "diffusiondrive_navsim.pth"
-_ANCHORS = _DATA_DIR / "kmeans_navsim_traj_20.npy"
+
+def _assets(model_config, checkpoint_path, missing_asset):
+    if model_config.plan_anchor_path is None:
+        missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")
+    if checkpoint_path is None:
+        missing_asset("real checkpoint not found — run scripts/prepare_assets.py or set DD_CHECKPOINT_PATH")
+    return checkpoint_path, model_config.plan_anchor_path
 
 
-def _require_assets():
-    if not _CKPT.exists() or not _ANCHORS.exists():
-        pytest.skip("Assets not found — run scripts/prepare_assets.py first")
-
-
-def _load_ref_model():
+def _load_ref_model(ckpt: str, anchors: str):
     from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, load_model
 
     cfg = DiffusionDriveConfig(
-        plan_anchor_path=str(_ANCHORS),
+        plan_anchor_path=anchors,
         latent=True,  # avoid needing real LiDAR sensor data
     )
-    model = load_model(str(_CKPT), cfg, device=torch.device("cpu"))
+    model = load_model(ckpt, cfg, device=torch.device("cpu"))
     model.eval()
     return model
 
@@ -62,10 +64,10 @@ def _random_features(batch: int = 1) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_full_model_output_shapes():
+def test_full_model_output_shapes(model_config, checkpoint_path, missing_asset):
     """Verify model produces (B,8,3) trajectory and (B,20) scores."""
-    _require_assets()
-    model = _load_ref_model()
+    ckpt, anchors = _assets(model_config, checkpoint_path, missing_asset)
+    model = _load_ref_model(ckpt, anchors)
     features = _random_features(batch=1)
     with torch.no_grad():
         out = model(features)
@@ -78,32 +80,31 @@ def test_full_model_output_shapes():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.timeout(300)
 @pytest.mark.parametrize("batch", [1])
-def test_full_model_pcc_random(device, model_config, batch):
-    """
-    Stage 1: TTNN wrapper PCC vs PyTorch reference on random inputs.
-
-    Stage 1 uses TorchModuleFallback (full PyTorch forward), so PCC == 1.0.
-    The test gates on ≥ 0.99 to be robust to future TTNN op replacements.
-    """
-    _require_assets()
+def test_full_model_pcc_random(device, model_config, checkpoint_path, missing_asset, batch):
+    """Fully built TTNN model vs the PyTorch reference, random inputs."""
+    ckpt, anchors = _assets(model_config, checkpoint_path, missing_asset)
 
     from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
 
-    ref_model = _load_ref_model()
+    ref_model = _load_ref_model(ckpt, anchors)
     ttnn_model = TtnnDiffusionDriveModel(ref_model, model_config, device)
+    ttnn_model.build_all(device)
+    assert ttnn_model._perception is not None, "build_all did not install the TTNN perception path"
 
     features = _random_features(batch=batch)
 
-    # Reference
+    torch.manual_seed(1234)  # pin DDIM noise (README 3.5)
     with torch.no_grad():
         ref_out = ref_model(features)
 
-    # TTNN wrapper
+    torch.manual_seed(1234)  # same noise stream
     ttnn_out = ttnn_model(features)
 
     traj_pcc = comp_pcc(ref_out["trajectory"], ttnn_out["trajectory"])[1]
     scores_pcc = comp_pcc(ref_out["scores"], ttnn_out["scores"])[1]
+    print(f"full-model trajectory PCC = {traj_pcc:.6f}, scores PCC = {scores_pcc:.6f}")
 
     assert traj_pcc >= 0.99, f"trajectory PCC {traj_pcc:.6f} < 0.99"
     assert scores_pcc >= 0.99, f"scores PCC {scores_pcc:.6f} < 0.99"
