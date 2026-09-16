@@ -1482,15 +1482,16 @@ std::vector<Tensor> polygamma_bw(
         t_nan,
         grad_a,
         output_mem_config);
+    Tensor input_is_zero = ttnn::eqz(input, output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         (-std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            input_is_zero, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         (std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);
