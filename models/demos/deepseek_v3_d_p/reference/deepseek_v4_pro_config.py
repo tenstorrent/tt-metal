@@ -73,7 +73,8 @@ class DeepSeekV4ProConfig:
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
     ROPE_THETA = 10000
-    # Both expert kinds clamp at SWIGLU_LIMIT below.
+    # Only the shared expert and dense FFN read SWIGLU_LIMIT; the routed kernel bakes the same
+    # value at compile time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
     SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
     SWIGLU_LIMIT = 10.0

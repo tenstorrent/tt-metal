@@ -557,3 +557,7 @@ def test_dsv4_config_selects_clamped_activation(config):
     assert config.SHARED_EXPERT_ACTIVATION in SUPPORTED_ACTIVATIONS
     # Every layer is MoE, so the block never builds a dense FFN for V4.
     assert config.NUM_DENSE_LAYERS == 0
+    # The shared expert takes this limit at runtime while the routed kernel and the torch golden
+    # bake it, so a config-only change would split the model across two clamps and grade against
+    # a third.
+    assert config.SWIGLU_LIMIT == CLAMPED_SILU_GLU_LIMIT

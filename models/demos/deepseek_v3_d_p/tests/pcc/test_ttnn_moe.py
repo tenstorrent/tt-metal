@@ -632,7 +632,11 @@ def run_model(
         dtype=torch.int32,
     )
 
-    if gate_fallback_mode == GateComputeMode.HOST_ALL:
+    if gate_fallback_mode in _HASH_GATE_MODES:
+        # Golden and device index the same tid2eid with the same ids, so the route is exact. The
+        # slacker bars below absorb top-k tie swaps, which hash routing has none of.
+        target_recall = 1.0
+    elif gate_fallback_mode == GateComputeMode.HOST_ALL:
         target_recall = 0.99
     else:
         target_recall = 0.977
@@ -1379,14 +1383,16 @@ def test_mistral4_moe(
 # DeepSeek-V4 at MoE level, on both of its layer kinds: the first NUM_HASH_LAYERS route by
 # hash_moe, the rest by top-k (mlp_layer_types in configuration_deepseek_v4.py).
 @pytest.mark.parametrize(
-    "gate_fallback_mode, score_func",
+    "gate_fallback_mode, score_func, adapter_gate_mode",
     [
         # A host gate, not DEVICE_FP32: moe_grouped_topk's grouped path TT_FATALs unless
         # experts == 256, n_groups == 8, topk_groups == 4 and n_activated == 8, and n_groups here
         # comes from the deepseek_v3 variant config, so 64 experts cannot reach a device gate.
-        pytest.param(GateComputeMode.HOST_ALL, None, id="clamped-host"),
-        pytest.param(GateComputeMode.HASH_HOST, DeepSeekV4ProConfig.SCORE_FUNC, id="clamped-hash_host"),
-        pytest.param(GateComputeMode.HASH_DEVICE, DeepSeekV4ProConfig.SCORE_FUNC, id="clamped-hash_device"),
+        pytest.param(GateComputeMode.HOST_ALL, None, None, id="clamped-host"),
+        pytest.param(GateComputeMode.HASH_HOST, DeepSeekV4ProConfig.SCORE_FUNC, "HASH_HOST", id="clamped-hash_host"),
+        pytest.param(
+            GateComputeMode.HASH_DEVICE, DeepSeekV4ProConfig.SCORE_FUNC, "HASH_DEVICE", id="clamped-hash_device"
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -1428,7 +1434,9 @@ def test_dsv4_moe(
     num_links,
     gate_fallback_mode,
     score_func,
+    adapter_gate_mode,
     request,
+    monkeypatch,
 ):
     """DeepSeek-V4 MoE: the clamped activation on both expert kinds, over both of V4's routers.
 
@@ -1444,6 +1452,14 @@ def test_dsv4_moe(
       * No upstream cross-check: the vendored DeepseekV3MoE cannot express the clamp, so grading
         is against TorchMoe alone. A deepseek_v4 variant would close that.
     """
+    # Declared per row, not derived from gate_fallback_mode, so moving a row to another routing
+    # family still trips the adapter cross-check.
+    if adapter_gate_mode is not None:
+        monkeypatch.setattr(variant, "default_gate_mode", adapter_gate_mode)
+    # gate_up_scale and the bars are calibrated to synthetic noise; the golden trace is a different
+    # distribution behind an unversioned host path.
+    monkeypatch.setattr(f"{__name__}.load_trace_gate_input", lambda *_, **__: None)
+
     topology = per_axis_topology(device_params["fabric_config"])
     run_model(
         variant,
