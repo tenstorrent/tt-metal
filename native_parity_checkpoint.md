@@ -2183,3 +2183,146 @@ largest absolute cost +1,048 ns" was read as signal against an uncalibrated inst
 **Rule: before attributing a per-case perf delta to a change, measure the harness against
 itself** — re-run an untouched side and publish its spread next to the claim. It is free: it is
 the run you are already doing.
+
+---
+
+## 4l. Plan of action — the shape agreed 2026-09-16
+
+*A soft plan. It records the spirit of the changes and the reasoning behind each, not a
+specification. Nothing here is built. Where a claim is measured it says so; the rest is
+design intent that the first run against it will correct.*
+
+### 4l.1 Branch topology — stop porting, start merging
+
+Today: `llk_helper_library` → `agent_eval` (forked/rebased from it, **ops nuked**) → generate
+there → port the op into a tree that has the target.
+
+Proposed: keep generating on the nuked branch, but **fork `llk_helper_library` separately and
+merge the generated op into that fork.** Same metal revision on both sides, so the merge is a
+merge rather than a port.
+
+What this retires, all measured (4k.6 and the port's §2):
+
+* the port is a **directory copy** — `diff -rq` empty, kernels included; 416/416 reproduced;
+  per-case device times matched the source clone to 0.2% median; registration was *nothing*,
+  because the op is a self-contained Python package and native is C++ behind nanobind;
+* the reference suite's **restore direction becomes a no-op** — `RESTORED_HELPERS` came out
+  byte-identical to the tree's own copy;
+* the **`ALIASED_TYPES` shim is redundant** — 416/416 with it emptied, and 147 cases construct
+  native's config object directly;
+* **no test discovery** — the target's tests are already in the tree;
+* and the seed-parity cases stop being skipped. The port branch carries `e758b349342`, *"Skip
+  the seed-parity cases where the seed op is absent"*, purely because the generation tree had
+  the seed nuked.
+
+**Integrity is preserved by the direction of travel, and this must be stated explicitly in the
+design.** Generation happens on the nuked branch and never sees the target; the merge target
+has the target present, and only *verification* runs there. "Just fork `llk_helper_library`",
+read literally, breaks requirement 13.
+
+### 4l.2 Integrity is staged, not binary
+
+Strict from Phase 0 until the golden axes are met. After that the run switches to the merge
+branch and the relaxation is deliberate.
+
+Two different permissions, and they should be named separately:
+
+* **The target's TESTS may be read directly** in the late stage. Every one of the nine
+  counterpart-only defects in the fixes report is reachable this way, and the blind reference
+  suite already does exactly this.
+* **The target's SOURCE is read outside the pipeline**, as it already is. `/analyze-native-gap`
+  reads source and call sites freely — the interface inconsistencies cannot be seen any other
+  way, since the discriminator is *how a parameter is used, never what the signature says* —
+  and emits a **specification a human ratifies** (requirement 18). The rule is not "never read
+  the source"; it is **reading the source produces a ratified spec, never code**. The boundary
+  is the artifact, not the agent.
+
+### 4l.3 Parity before perf — the real run had it backwards
+
+Perf 1/2/3 ran, *then* the reference suite found ten defects. Several changed compiled paths —
+column-major shards reading the wrong data (73 cases), intermediates held in the input's
+block-float format, a mask written 16-bit and read 32-bit. **Every perf number measured before
+those was stale.** The L1 read-cadence fix and both exit fences landed later still.
+
+New order: golden axes → merge to the parity branch → build the seam → parity pass → perf
+tournament.
+
+### 4l.4 The parity pass, and why "make the same number pass" is the wrong goal
+
+The pass-count target is satisfiable by widening `EXCLUSIONS`. `REFUSED` is a third outcome
+that *"gates nothing, moves neither side of the pass rate, and is excluded from `golden_total`
+so a declared refusal cannot score the op down"* (7918c82). That design is right, and it means
+an implementer told to make N cases pass can get there by declining the hard cells.
+
+So the deliverable is **three buckets, every case in exactly one**: passes, a **ratified**
+refusal, or a recorded harness defect. 416/416 is a real result *because its refusals were
+ratified*. And the third bucket is not hypothetical — 11 of the 24 post-tournament fixes were
+tooling, and harness artifacts were ~40% of the effort while producing zero op changes.
+
+### 4l.5 Guardrails for the parity pass — four, not one
+
+The risk is not "copying the seed": requirement 16 *wants* that. The risk is converging on the
+**target**.
+
+1. **Do not adopt the target's implementation mechanism** (requirement 3).
+2. **Do not change the Blocking Model.** The planner fixes it; the parity pass may turn knobs
+   and fix contracts. A parity fix that needs a scheme change is an escalation back to the
+   planner, not a silent rewrite. This is the guardrail with teeth — it is mechanically
+   checkable, and convergence would show up here first.
+3. **Do not inherit the target's interface bugs.** A drop-in must *accept* the 14
+   inconsistencies across 10 classes (§4h); it must never *reproduce* them. The run already
+   made this call twice: rank-0 is computed correctly rather than copying the target's
+   four-op chain that drops the floor term, and the reference function was written fresh
+   because the target's discards two operands and cannot detect a fault in either.
+4. **Do not adopt the target's golden function**, for the same reason.
+
+### 4l.6 The seam — emitted, and selected in exactly one place
+
+4k.5 has the mechanism and its five load-bearing details. Two changes to how it exists today:
+
+* **The pipeline emits it.** It is the same six lines every op, and every one of the five
+  details (constant in the packaged tree not an env var; idempotent bind; lazy import; golden
+  carried onto the wrapper; a retained `_native_` handle) is a silent failure if missed. The
+  port step should write it; the implementer should only consume it.
+* **Selection lives in exactly one place.** Today two layers rebind `ttnn.<op>` — the ship
+  switch and `perf_shim.py` — and they raced: plugin fixtures run before directory-scoped
+  ones, a conftest silently won, and `PERF_SIDE=native` measured the replacement. The perf
+  harness must **read** the seam, not rebind independently.
+
+### 4l.7 How this lands — three PRs plus a generic one
+
+Scope agreed, ordering and rebase still open.
+
+| PR | contents | note |
+|---|---|---|
+| **1 — seeded generation, through golden + perf** | `c86abd4` (seed designation, the core enabler), `e61fbf8` + `4423661` + `abf8967` (the analysis skills), `15c857a` + `b4294a3` (counterpart-agnosticism), `0b13d59`, `812c68f`, plus the successor's spec/suite/provenance as the worked example | no dependency on the rebase; can go first |
+| **2 — porting, parity, seam** | `7918c82` + `4650fba` (blind reference suite, `refusals.py`), the emitted seam (**does not exist yet**), agent changes for the parity pass (**not written**), `10ca301` + `aada63b` | **blocked on the rebase** — `op_window` lives only on `tt_ops_code_gen` main, 24 commits ahead, and the `perf_shim`/`op_window` overlap must be resolved there |
+| **3 — incidental** | `0a8a442` and `4d5dbe1` (which shapes the perf tournament runs on), `1ee07b4`, and `buffer_type` in the golden axes (4k.3, not written) | found along the way, out of scope for the effort itself |
+| **generic** | `2ed265d` — the precision convention (fp32 with a 16-bit accumulator) applies to **any** op, not to this effort | lift out of PR 1 |
+
+**Three generic rules currently live inside one op's files and must be lifted before PR 1.**
+`0b13d59` landed in `eval/prompts/rms_norm_ttnn.txt` but is a rule about seeded generation and
+belongs in `seed.txt` or the planner prompt. `510bc66`'s lesson — **`TARGET` says what we
+TEST, `SUPPORTED` says what WORKS**; letting the first silently answer the second turns a
+budget decision into a capability decision — should be a gate, not a doc line. And `ba0b374`'s
+convention — every perf target has a runnable provenance script the spec points at — applies
+to every op.
+
+**`/analyze-op` is not a pipeline stage.** `analyze-native-gap/SKILL.md:54` states outright
+that it *"does not consume `/analyze-op`"*, deliberately, and nothing anywhere reads
+`op_as_shipped.*`. It is a human onboarding tool. Its value in this run was as the audit target
+that surfaced twelve first-run defects and the "159 of 212 source references pointed at the
+wrong line" finding. Ship it on those terms or hold it back; do not ship it as machinery.
+
+### 4l.8 Open at the time of writing
+
+* **One real CI regression.** Gemma-4-12B `test_full_model` on `bh_quietbox_2` gives PCC
+  **0.897** with the generated op and **passes** with native — same commit, one word apart,
+  matched control run. The only genuine finding in a 12-job sweep. Gemma-4-E2B passes on both
+  e2e and unit through the same code path (`gemma4/tt/rms_norm.py`), so it is size-dependent,
+  not path-dependent. Not yet diagnosed.
+* Two other CI reds (MiniMax-M3 on BH Galaxy, Qwen3.6 on `bh_quietbox_2`) **reproduce on the
+  control** and are pre-existing.
+* The rebase of the eval submodule onto its main, and with it the `perf_shim` / `op_window`
+  reconciliation.
+* Naming for the successor op — deferred.
