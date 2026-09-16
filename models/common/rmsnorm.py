@@ -58,7 +58,7 @@ class RMSNorm(LightweightModule):
     ):
         super().__init__()
         self.device = device
-        self.eps = eps
+        self.eps: float  = 1e-05 if eps is None else eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
