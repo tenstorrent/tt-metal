@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 
+#include <algorithm>
 #include <tt_stl/span.hpp>
 #include <tt_align.hpp>
 #include <utility>
@@ -36,7 +37,10 @@ namespace tt::tt_metal::event_dispatch {
 
 namespace {
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
-    return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    // Event records fan out to one dispatch core per CQ, so never size below num_hw_cqs.
+    const uint32_t num_workers =
+        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    return std::max<uint32_t>(num_workers, device->num_hw_cqs());
 }
 }  // namespace
 
