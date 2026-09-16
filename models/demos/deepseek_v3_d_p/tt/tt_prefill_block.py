@@ -306,9 +306,7 @@ class TtPrefillBlock(LightweightModule):
             getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
             and is_blackhole()
             and is_chunked
-            and tuple(mesh_device.shape) == (8, 4)
-            and tp_axis == 1
-            and seq_len == 5120
+            and TtDistributedRmsNorm.supports_fused_prefill(mesh_device, emb_dim, tp_axis, seq_len)
         )
 
         self._fused_rmsnorm_enabled = use_fused_rmsnorm
@@ -544,7 +542,7 @@ class TtPrefillBlock(LightweightModule):
         # the existing norm path, including when toggling capture on/off.
         for norm in (self.attn_norm, getattr(self, "ffn_norm", None)):
             if norm is not None:
-                norm.use_fused = self._fused_rmsnorm_enabled and controller is None
+                norm.set_fused_enabled(self._fused_rmsnorm_enabled and controller is None)
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "set_trace_controller"):
             ffn.set_trace_controller(controller)

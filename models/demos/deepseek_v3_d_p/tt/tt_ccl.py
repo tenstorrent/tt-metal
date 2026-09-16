@@ -145,6 +145,9 @@ class TT_CCL:
 
         # Shared across sequential norm layers. Semaphore and stats scratch must
         # alternate together to absorb inter-device skew at collective completion.
+        # A model uses one guarded geometry and link count, so sequential layers
+        # share one entry (two semaphore/stats pairs). Supporting variable configs
+        # requires an explicit lifetime policy; in-flight resources cannot be evicted.
         self.fused_rmsnorm_resources: dict[tuple, dict] = {}
 
     def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):

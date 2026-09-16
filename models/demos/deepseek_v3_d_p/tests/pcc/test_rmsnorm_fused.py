@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_kimi_fused_rmsnorm(mesh_device, device_params, topology):
+def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, expect_error):
     assert_requested_tp_wrap_was_realized(mesh_device)
     clear_tt_ccl_cache()
     torch.manual_seed(50932)
@@ -71,6 +71,39 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology):
     # Hold outputs until the whole mixed sequence is enqueued. This catches stale
     # stats, missed semaphore resets and cache-hit weight-address mistakes.
     outputs = [norms[i % 2](xs[i % 2]) for i in range(16)]
+    ccl = norms[0].tt_ccl
+    assert norms[1].tt_ccl is ccl
+    assert len(ccl.fused_rmsnorm_resources) == 1
+    resources = next(iter(ccl.fused_rmsnorm_resources.values()))
+    assert len(resources["pairs"]) == 2
+    pair_ids = [(id(semaphores), id(stats)) for semaphores, stats in resources["pairs"]]
+    # Trace setup disables fusion; restoring eager mode must reuse its resources.
+    for enabled in (False, True):
+        for norm, x in zip(norms, xs):
+            norm.set_fused_enabled(enabled)
+            assert norm.use_fused is enabled
+            outputs.append(norm(x))
+    assert len(ccl.fused_rmsnorm_resources) == 1
+    assert next(iter(ccl.fused_rmsnorm_resources.values())) is resources
+    assert [(id(semaphores), id(stats)) for semaphores, stats in resources["pairs"]] == pair_ids
+
+    unfused_norms = [
+        TtDistributedRmsNorm(
+            mesh_device,
+            emb_dim=7168,
+            epsilon=1e-5,
+            torch_weight=weight,
+            cluster_axis=1,
+            num_links=2,
+            topology=topology,
+            use_fused=False,
+        )
+        for weight in weights
+    ]
+    with expect_error(ValueError, "initialized with use_fused=True"):
+        unfused_norms[0].set_fused_enabled(True)
+    assert not unfused_norms[0].use_fused
+    unfused_outputs = [norm(x) for norm, x in zip(unfused_norms, xs)]
     composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(2, 3))
     try:
         for i, output in enumerate(outputs):
@@ -79,8 +112,16 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology):
             actual = ttnn.to_torch(output, mesh_composer=composer).float()
             assert actual.shape == reference.shape
             assert torch.isfinite(actual).all()
-            relative_error = ((actual - reference).square().mean() / reference.square().mean()).sqrt().item()
-            assert relative_error < 0.01, (i, relative_error)
+            if i in (16, 17):
+                # The shifted input stresses BF16 statistics in the existing path.
+                # Disabling fusion must match an independently initialized fallback
+                # exactly; the fused results retain their stricter CPU accuracy gate.
+                baseline = ttnn.to_torch(unfused_outputs[i - 16], mesh_composer=composer).float()
+                assert torch.equal(actual, baseline)
+                ttnn.deallocate(unfused_outputs[i - 16])
+            else:
+                relative_error = ((actual - reference).square().mean() / reference.square().mean()).sqrt().item()
+                assert relative_error < 0.01, (i, relative_error)
             ttnn.deallocate(output)
     finally:
         clear_tt_ccl_cache()

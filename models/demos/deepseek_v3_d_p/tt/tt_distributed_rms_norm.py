@@ -52,6 +52,19 @@ class TtDistributedRmsNorm(LightweightModule):
           mesh_mapper dims=(None, 2)
     """
 
+    FUSED_PREFILL_SEQ_LEN = 5120
+    FUSED_PREFILL_EMB_DIM = 7168
+
+    @classmethod
+    def supports_fused_prefill(cls, mesh_device, emb_dim, cluster_axis, seq_len):
+        """Restrict fusion to the measured Kimi SP8/TP4 prefill geometry."""
+        return (
+            tuple(mesh_device.shape) == (8, 4)
+            and cluster_axis == 1
+            and emb_dim == cls.FUSED_PREFILL_EMB_DIM
+            and seq_len == cls.FUSED_PREFILL_SEQ_LEN
+        )
+
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if norm weight cache files exist."""
@@ -190,7 +203,15 @@ class TtDistributedRmsNorm(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self._gathered_stats = None
-        self.use_fused = use_fused
+        self._use_fused = False
+        self._fused_input_shape = None
+        if self.supports_fused_prefill(mesh_device, emb_dim, cluster_axis, self.FUSED_PREFILL_SEQ_LEN):
+            self._fused_input_shape = (
+                1,
+                1,
+                self.FUSED_PREFILL_SEQ_LEN // mesh_device.shape[0],
+                emb_dim // mesh_device.shape[cluster_axis],
+            )
         self.fused_weight = None
         self.tt_ccl = None
 
@@ -222,6 +243,17 @@ class TtDistributedRmsNorm(LightweightModule):
             local_width = self.emb_dim // self.mesh_device.shape[self.cluster_axis]
             self.fused_weight = ttnn.to_layout(ttnn.reshape(self.weight, (1, 1, 1, local_width)), ttnn.TILE_LAYOUT)
             self.tt_ccl = get_tt_ccl(self.mesh_device)
+        self.set_fused_enabled(use_fused)
+
+    @property
+    def use_fused(self):
+        return self._use_fused
+
+    def set_fused_enabled(self, enabled: bool):
+        """Toggle eager fusion without allocating resources during trace setup."""
+        if enabled and (self.fused_weight is None or self.tt_ccl is None):
+            raise ValueError("Fused RMSNorm must be initialized with use_fused=True before enabling it")
+        self._use_fused = enabled
 
     def _create_sharded_weight_from_torch(self, torch_weight: torch.Tensor) -> ttnn.Tensor:
         """
@@ -295,7 +327,7 @@ class TtDistributedRmsNorm(LightweightModule):
         # and sharded/L1 configurations retain the existing implementation.
         if (
             self.use_fused
-            and tuple(x.shape) == (1, 1, 640, 1792)
+            and tuple(x.shape) == self._fused_input_shape
             and x.dtype == ttnn.bfloat16
             and x.layout == ttnn.TILE_LAYOUT
             and x.memory_config() == ttnn.DRAM_MEMORY_CONFIG
