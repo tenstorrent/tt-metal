@@ -817,9 +817,10 @@ def packed_decode_forward(
     l1 = ttnn.L1_MEMORY_CONFIG
 
     # ── ① QKV projection (one call on the full B*P, output kept on L1) ──────
-    qkv_rows = int(hidden_states.shape[2])
-    use_decode_qkv = _packed_decode_qkv_enabled() and qkv_rows <= ttnn.TILE_SIZE
-    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1, decode=use_decode_qkv)
+    # _packed_decode_qkv_enabled's tuned decode program config path needs
+    # weights.qkv_decode_config / apply_qkv_projection(decode=...), neither of
+    # which is ported to this branch -- falls back to the auto-selected config.
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1)
     qkv_dim = xqkv.shape[-1]
 
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
