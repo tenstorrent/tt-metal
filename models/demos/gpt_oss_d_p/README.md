@@ -22,10 +22,10 @@ work can resume as-is.
 | Variable chunk sizes (one runtime serving several sizes) | merged |
 | Bounded sliding-window KV cache (circular window for the 18 sliding layers) | merged, opt-in (`GPT_OSS_BOUNDED_SLIDING_KV=1`) |
 | Per-layer KV-PCC validation vs a CPU golden, three galaxy CI stages | merged |
-| GPT-OSS through the common prefill runner (producer/runner e2e) | in review, #56519 |
-| Trace capture of the prefill chunk | planned, #56661 (stage one #56660, stage two #56115) |
-| Bounded sliding cache as the default, KV migration of a bounded cache | planned, #55646 |
-| Hoisting shared prefill scaffolding into `common/prefill` | open, #55647 |
+| GPT-OSS through the common prefill runner (producer/runner e2e), with its galaxy CI stage | merged, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
+| Trace capture of the prefill chunk | planned, [#56661](https://github.com/tenstorrent/tt-metal/issues/56661) (stage one [#56660](https://github.com/tenstorrent/tt-metal/issues/56660), stage two [#56115](https://github.com/tenstorrent/tt-metal/issues/56115)) |
+| Bounded sliding cache as the default, KV migration of a bounded cache | planned, [#55646](https://github.com/tenstorrent/tt-metal/issues/55646) |
+| Hoisting shared prefill scaffolding into `common/prefill` | open, [#55647](https://github.com/tenstorrent/tt-metal/issues/55647) |
 
 ## The machine
 
@@ -110,7 +110,7 @@ host `on_layer_complete` callback (`set_layer_completion_sink`), not through D2H
 The KV chunk address table for migration is built by `tt/runners/kv_chunk_table.py` from the packed
 caches. The producer/runner e2e scenario (`models/demos/common/prefill/tests/test_producer_runner_e2e.py`,
 `single_user_full_depth`, 11 × 5120-token chunks) runs GPT-OSS end to end and checks the producer's
-KV PCC over the 5k golden prefix; the CI stage for it lands with #56519.
+KV PCC over the 5k golden prefix; it is the runner-path CI stage below.
 
 ## The KV cache
 
@@ -134,8 +134,8 @@ modulo that capacity (`bounded_blockcyclic_positions`), and the ring SDPA reads 
 (`circular_kv_cache=True`, an op-level feature of RingJointSDPA). At 128k context with 8k chunks the
 18 sliding layers drop from full-length to two-chunk slots: **153 → 86 MiB of KV per user per chip**,
 with unchanged PCC. Two limits, both recorded: the circular read is not available on the trace
-metadata path (#56115), and KV migration cannot consume a bounded cache yet, which is why the flag is
-off by default (#55646).
+metadata path ([#56115](https://github.com/tenstorrent/tt-metal/issues/56115)), and KV migration cannot consume a bounded cache yet, which is why the flag is
+off by default ([#55646](https://github.com/tenstorrent/tt-metal/issues/55646)).
 
 ## MoE
 
@@ -168,9 +168,9 @@ bf8 experts (the V minimum sits on a full-attention layer, bounded cache on or o
 | `tests/variable_chunk_smoke.py` | galaxy | one runtime prefilling the same tokens as a 1k and an 8k chunk |
 
 Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests"):
-`(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k`, `... 5k@1k`, and
-`(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k`; the runner-path stage
-`(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix` comes with #56519.
+`(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k`, `... 5k@1k`,
+`(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k`, and the runner-path stage
+`(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix`.
 Op-level coverage for the sliding ring read lives in `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py`
 (production and circular-cache accuracy, metadata-path rejection) and the header gtest
 `tests/ttnn/unit_tests/gtests/sdpa/test_sliding_window_work_plan.cpp`.
@@ -186,7 +186,7 @@ Op-level coverage for the sliding ring read lives in `tests/nightly/blackhole/sd
 Device time is ~410 ms per 8k chunk, 60–70 % of it in communication (MoE combine, reduce and
 dispatch dominate). The spread between 1k and 8k chunks is host-side dispatch overhead: the device
 could sustain roughly 18k tok/s at every chunk size. Trace capture of the chunk program is the fix
-(#56661); a 4-layer measurement on the `mdragula/gpt-oss-trace-baseline` branch put ~35 % of the
+([#56661](https://github.com/tenstorrent/tt-metal/issues/56661)); a 4-layer measurement on the `mdragula/gpt-oss-trace-baseline` branch put ~35 % of the
 per-layer wall time in host dispatch.
 
 ## File map
