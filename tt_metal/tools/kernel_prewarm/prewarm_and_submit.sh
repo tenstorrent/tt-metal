@@ -70,7 +70,9 @@ if [[ "$FORCE_CAPTURE" == "1" || -z "$MANIFEST" || ! -s "$MANIFEST" ]]; then
   # `export VAR=1; $CMD`, not a `VAR=1 $CMD` prefix: $CMD may be a compound command (pipeline or
   # multiple statements) and a prefix assignment binds only to the first simple command, silently
   # disabling capture-only for the rest of the pipeline.
-  tt-device-mcp run "export TT_METAL_KERNEL_CAPTURE_ONLY=1; $CMD" -w "$WORKSPACE" -t "$TIMEOUT" ${ENV_FILE:+-e "$ENV_FILE"} || true
+  # TT_METAL_KERNEL_PREWARM arms capture. It defaults off in the upstream-facing build, so without it
+  # the pass runs to completion and records nothing, and the manifest check below aborts the submit.
+  tt-device-mcp run "export TT_METAL_KERNEL_PREWARM=1 TT_METAL_KERNEL_CAPTURE_ONLY=1; $CMD" -w "$WORKSPACE" -t "$TIMEOUT" ${ENV_FILE:+-e "$ENV_FILE"} || true
   MANIFEST_AFTER=0; [[ -n "$MANIFEST" && -s "$MANIFEST" ]] && MANIFEST_AFTER=$(stat -c %s "$MANIFEST" 2>/dev/null || echo 0)
   if [[ "$MANIFEST_AFTER" -le "$MANIFEST_BEFORE" ]]; then
     echo "prewarm_and_submit.sh: capture pass produced no manifest growth ($MANIFEST) -- aborting" >&2
@@ -83,7 +85,7 @@ fi
 # Stage 2: off-device compile (device free). Builds every manifest recipe, incl. device-init kernels.
 if [[ -x "$TOOL" ]]; then
   echo "== stage 2/3: off-device compile (device free; cache=${CACHE:-default}) =="
-  env TT_METAL_CACHE="$CACHE" TT_METAL_HOME="$HOME_DIR" "$TOOL"
+  env TT_METAL_KERNEL_PREWARM=1 TT_METAL_CACHE="$CACHE" TT_METAL_HOME="$HOME_DIR" "$TOOL"
 else
   echo "prewarm_and_submit.sh: kernel_prewarm tool not found under build_Release/tools; submitting without compile" >&2
 fi
