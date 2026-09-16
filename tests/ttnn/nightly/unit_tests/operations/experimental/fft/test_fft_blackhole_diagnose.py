@@ -33,13 +33,9 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_blackhole
 
-
-def _is_blackhole(device):
-    arch = getattr(device, "arch", None)
-    if callable(arch):
-        arch = arch()
-    return str(arch).lower().endswith("blackhole")
+pytestmark = [run_for_blackhole()]
 
 
 def _rel(a, b):
@@ -69,9 +65,6 @@ def _run_fft(device, N):
 def test_diag_bisect_n(device, N):
     """Run a sweep of pow2 + non-pow2 N values. Print rel err per N.
     Skips assertion — run with -s to read the output table."""
-    if not _is_blackhole(device):
-        pytest.skip("Blackhole-only diagnostic")
-
     P = max(1, N // 1024)
     log2p = max(0, (P - 1).bit_length())  # log2 round-up
     got, ref = _run_fft(device, N)
@@ -89,8 +82,6 @@ def test_diag_per_core_error(device, N):
        * even-indexed cores bad only       → bit-0 partner exchange (stage 0)
        * cores in {0,1,2,3} bad            → bit-2 partner exchange (stage 2)
     """
-    if not _is_blackhole(device):
-        pytest.skip("Blackhole-only diagnostic")
     if N <= 1024:
         pytest.skip(f"N={N} uses P=1, no cross-core stages to bisect")
 
@@ -113,9 +104,6 @@ def test_diag_repeatability(device, N):
     the kernel has a non-determinism bug (race-on-data, not just
     race-on-correctness). Critical signal — non-determinism narrows the
     fix dramatically."""
-    if not _is_blackhole(device):
-        pytest.skip("Blackhole-only diagnostic")
-
     torch.manual_seed(42)
     torch_in = torch.randn(N, dtype=torch.float32)
     tt_in = ttnn.from_torch(
