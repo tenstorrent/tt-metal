@@ -10,11 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
-from models.demos.gemma4.tt.compute_config import (
-    decode_sdpa_compute_kernel_config,
-    sdpa_fp32_dest_acc_en,
-    sdpa_math_fidelity,
-)
+from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
     _fused_qkv_norm_supported,
@@ -998,7 +994,10 @@ def packed_decode_forward(
             k_chunk_size=64,
             exp_approx_mode=False,
         )
-        sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
+        # decode_sdpa_compute_kernel_config isn't ported to this branch (Dflash-only
+        # tuning); None lets the op fall back to its own built-in default rather
+        # than guessing at a fidelity config here.
+        sdpa_compute_kernel_config = None
         sliding_window = config.sliding_window if config.is_sliding else None
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q_decode,
