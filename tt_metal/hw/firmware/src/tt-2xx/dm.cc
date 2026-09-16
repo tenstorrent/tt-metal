@@ -347,11 +347,7 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-#ifdef FDS_SIGNALLING
-    DPRINT("DM0-FW: initialized (worker signalling FDS)\n");
-#else
-    DPRINT("DM0-FW: initialized (worker signalling NOC)\n");
-#endif
+    DPRINT("DM0-FW: initialized\n");
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
