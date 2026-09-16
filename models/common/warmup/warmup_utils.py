@@ -94,6 +94,10 @@ class WarmupForwardMixin:
         page_table = torch.zeros(max_batch_size, num_blocks, dtype=torch.int32)
         return tokens, start_pos, page_table
 
+    def _decode_forward_for_warmup(self, **decode_kwargs):
+        """Run one warmup configuration, allowing generators to reset state if needed."""
+        return self.decode_forward(**decode_kwargs)
+
     def warmup_model_decode(
         self,
         kv_cache,
@@ -141,6 +145,6 @@ class WarmupForwardMixin:
                 # Run through decode_forward so model-specific page-table routing
                 # is active while staging.
                 decode_kwargs["prepare_trace"] = True
-            self.decode_forward(**decode_kwargs)
+            self._decode_forward_for_warmup(**decode_kwargs)
 
         logger.info("Decode warmup completed")
