@@ -95,7 +95,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push'
-       && contains(github.event.head_commit.message, '[gate-trial]')) ||
+       && startsWith(github.event.head_commit.message, '[gate-trial]')) ||
       (
         github.event.pull_request.head.repo.full_name == github.repository &&
         (
