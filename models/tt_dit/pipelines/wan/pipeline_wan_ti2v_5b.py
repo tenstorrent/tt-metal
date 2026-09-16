@@ -119,6 +119,27 @@ class WanTI2V5BPipeline(WanPipeline):
             # for long clips (e.g. 121f needs a ~14GB VAE activation). Chunk the temporal
             # VAE decode (feat_cache carries causal-conv state across chunks).
             "vae_t_chunk_size": 7,
+            # Retune ring SDPA for the 5B's geometry without moving the 14B, which shares
+            # WanAttention.sdpa_chunk_size_map at the same (is_blackhole, sp, tp) key.
+            #
+            # Per device the 5B self-attention is M=2336 over 6 local heads (24/TP4), and
+            # work items (B*NH*ceil(M/q)) are spread flat over the SDPA worker grid. The
+            # inherited q=128 gives ceil(2336/128)=19 chunks x 6 = 114 items, just over the
+            # grid, so it pays a second scheduling round for a 3.6% overshoot; q=160 gives
+            # 15 x 6 = 90 in a single round. Measured on a 4x8 BH Galaxy with Tracy
+            # (DEVICE KERNEL DURATION, mean of 32 device instances per config):
+            #
+            #   q\k        128      256      512
+            #   128     1954.4   1619.2   1480.0   <- inherited
+            #   160     1579.0   1174.8   1068.4   <- -27.8%
+            #   192     1480.7   1248.9   1183.6
+            #   224     2028.6   1457.4   1260.9
+            #   256     1837.0   1537.4   1433.0
+            #
+            # k=512 wins at every q, so the larger k chunk is worth more than the K-padding
+            # it wastes. Note this key is not resolution-aware: 480p (M=1024) already fits
+            # one round at either value, so it is along for the ride -- gate both resolutions.
+            "sdpa_chunk_size_overrides": {(True, 8, 4): (160, 512)},
             # NOTE: TI2V-5B uses per-token (expanded) timesteps for true image
             # conditioning, but the tt _step path only plumbs a scalar timestep and
             # this base pipeline runs T2V with an all-ones mask (per-token == scalar).
