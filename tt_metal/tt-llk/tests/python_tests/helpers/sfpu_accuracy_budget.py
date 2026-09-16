@@ -509,6 +509,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     # without an input format would extend a budget to a much coarser path that was never
     # measured. Those variants fall back to the tolerance metric on their own.
     #
+    # A budget of 1 against a comment reading "max 0 ULP" is not a typo: a measured zero
+    # is floored to MIN_MEASURED_BUDGET, because "no error observed on this stimulus" is
+    # not "no error possible" and a finite sample cannot assert exactness. Each such entry
+    # now says so in its own comment too. An op that is exact by *construction* is a
+    # different claim, and those budgets are hand-written above.
+    #
     # near_zero_atol appears where the sweep found the hardware returning exactly 0
     # against a small non-zero reference -- gelu(-4.18), erfinv(0.0005) and approximate
     # exp(-9.68) all do it -- a five-figure step count that describes nothing about the
@@ -537,7 +543,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -565,7 +571,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -618,7 +624,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -646,7 +652,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -699,7 +705,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=3),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -727,7 +733,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=3),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -751,7 +757,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     (
         MathOperation.Celu,
         {
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -765,13 +771,13 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=12),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -785,7 +791,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40628),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -816,7 +822,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     (
         MathOperation.Cos,
         {
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -830,7 +836,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -844,11 +850,11 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32, output_format=DataFormat.Float16_b
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -862,7 +868,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40925),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -876,7 +882,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40925),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
             ): AccuracyContract(max_ulp=1),
@@ -917,7 +923,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     (
         MathOperation.Elu,
         {
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -931,13 +937,13 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=12),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -951,7 +957,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40628),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -1069,20 +1075,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 393216 ULP, p99.9 393216.0, 9% exact, ~4 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 393216 ULP, p99.9 393216.0, 0% exact, ~4 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=491520),
-            #   wh: max 373887 ULP, p99.9 371890.8, 0% exact, ~4 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float32,
-                output_format=DataFormat.Float32,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=464864),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float32,
@@ -1097,12 +1095,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 6 ULP, p99.9 6.0, 7% exact, ~4 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 6 ULP, p99.9 6.0, 7% exact, ~4 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-            ): AccuracyContract(max_ulp=8),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 65536 ULP, p99.9 65536.0, 89% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16_b,
@@ -1117,12 +1115,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40940),
-            #   wh: max 393216 ULP, p99.9 393216.0, 0% exact, ~4 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 393216 ULP, p99.9 393216.0, 0% exact, ~4 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-            ): AccuracyContract(max_ulp=491520),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 1 ULP, p99.9 1.0, 89% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16_b,
@@ -1130,19 +1128,19 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 6 ULP, p99.9 6.0, 4% exact, ~4 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 6 ULP, p99.9 6.0, 4% exact, ~4 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-            ): AccuracyContract(max_ulp=8),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 57344 ULP, p99.9 57344.0, 14% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16,
@@ -1157,40 +1155,24 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=8813),
-            #   wh: max 939728897 ULP, p99.9 939594744.8, 0% exact, ~-7 mantissa bits, 2048 pts, 2026-09-16; past 8388608-step ceiling for this format, so tolerance
+            #   wh: max 939728897 ULP, p99.9 939594744.8, 0% exact, ~-7 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
             ): AccuracyContract(metric=Metric.TOLERANCE),
-            #   wh: max 376832 ULP, p99.9 368640.0, 0% exact, ~4 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float16,
-                output_format=DataFormat.Float32,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=460800),
             #   wh: max 1 ULP, p99.9 1.0, 81% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 14340 ULP, p99.9 14338.0, 7% exact, ~-7 mantissa bits, 2048 pts, 2026-09-16; past 128-step ceiling for this format, so tolerance
+            #   wh: max 14340 ULP, p99.9 14338.0, 7% exact, ~-7 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
             ): AccuracyContract(metric=Metric.TOLERANCE),
-            #   wh: max 6 ULP, p99.9 6.0, 7% exact, ~4 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float16,
-                output_format=DataFormat.Float16_b,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=8),
         },
     ),
     (
@@ -1217,7 +1199,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -1245,7 +1227,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -1295,20 +1277,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=1, near_zero_atol=0.000153),
-            #   wh: max 79 ULP, p99.9 77.0, 50% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 665 near-zero pts reach 29549 steps and are held by the atol floor instead
+            #   wh: max 29865 ULP, p99.9 29669.1, 50% exact, ~-8 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=97, near_zero_atol=0.0198),
-            #   wh: max 78 ULP, p99.9 77.0, 59% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 29865 steps and are held by the atol floor instead
-            BudgetKey(
-                input_format=DataFormat.Float32,
-                output_format=DataFormat.Float16_b,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=97, near_zero_atol=0.0195),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 65536 ULP, p99.9 65536.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16_b,
@@ -1323,20 +1297,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40775, near_zero_atol=0.000151),
-            #   wh: max 5111808 ULP, p99.9 5021302.8, 50% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 1936392194 steps and are held by the atol floor instead
+            #   wh: max 1936392194 ULP, p99.9 1936392194.0, 30% exact, ~-8 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=6276629, near_zero_atol=0.0198),
-            #   wh: max 5100320 ULP, p99.9 5007552.8, 30% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 1936392194 steps and are held by the atol floor instead
-            BudgetKey(
-                input_format=DataFormat.Float16_b,
-                output_format=DataFormat.Float32,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=6259442, near_zero_atol=0.0197),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 1 ULP, p99.9 1.0, 99% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16_b,
@@ -1351,20 +1317,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=1, near_zero_atol=1.91e-05),
-            #   wh: max 78 ULP, p99.9 76.6, 50% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 29549 steps and are held by the atol floor instead
+            #   wh: max 29549 ULP, p99.9 29549.0, 50% exact, ~-8 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=96, near_zero_atol=0.0198),
-            #   wh: max 78 ULP, p99.9 76.6, 60% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 29549 steps and are held by the atol floor instead
-            BudgetKey(
-                input_format=DataFormat.Float16_b,
-                output_format=DataFormat.Float16_b,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=96, near_zero_atol=0.0195),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 57344 ULP, p99.9 57344.0, 12% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 939524097 steps and are held by the atol floor instead
             BudgetKey(
                 input_format=DataFormat.Float16,
@@ -1379,40 +1337,24 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=5115, near_zero_atol=1.9e-05),
-            #   wh: max 5111808 ULP, p99.9 5030666.2, 30% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 1956462594 steps and are held by the atol floor instead
+            #   wh: max 1956462594 ULP, p99.9 1941721278.4, 23% exact, ~-8 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=6288333, near_zero_atol=0.0197),
-            #   wh: max 5105948 ULP, p99.9 5024494.0, 23% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 1956462594 steps and are held by the atol floor instead
-            BudgetKey(
-                input_format=DataFormat.Float16,
-                output_format=DataFormat.Float32,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=6280618, near_zero_atol=0.0197),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 1 ULP, p99.9 1.0, 91% exact, ~7 mantissa bits, 4096 pts, 2026-09-16; 1332 near-zero pts reach 14337 steps and are held by the atol floor instead
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
             ): AccuracyContract(max_ulp=2, near_zero_atol=0.000305),
-            #   wh: max 79 ULP, p99.9 77.6, 37% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 29855 steps and are held by the atol floor instead
+            #   wh: max 29855 ULP, p99.9 29630.2, 37% exact, ~-8 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=98, near_zero_atol=0.0198),
-            #   wh: max 78 ULP, p99.9 76.6, 57% exact, ~1 mantissa bits, 2048 pts, 2026-09-16; 666 near-zero pts reach 29855 steps and are held by the atol floor instead
-            BudgetKey(
-                input_format=DataFormat.Float16,
-                output_format=DataFormat.Float16_b,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=96, near_zero_atol=0.0195),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
         },
     ),
     (
@@ -1439,7 +1381,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -1497,7 +1439,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.No,
             ): AccuracyContract(metric=Metric.TOLERANCE),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -1509,7 +1451,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.No,
             ): AccuracyContract(metric=Metric.TOLERANCE),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -1553,7 +1495,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -1581,17 +1523,25 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=1),
-            #   wh: not enrolled -- near-zero tail: functional reaches 14324 steps (8192 pts, 2026-09-16)
-            BudgetKey(input_format=DataFormat.Float16): AccuracyContract(
-                metric=Metric.TOLERANCE
-            ),
+            #   wh: not enrolled -- near-zero tail: functional reaches 938,672,129 steps (4096 pts, 2026-09-16)
+            BudgetKey(
+                input_format=DataFormat.Float16,
+                output_format=DataFormat.Float32,
+                approx_mode=ApproximationMode.No,
+            ): AccuracyContract(metric=Metric.TOLERANCE),
+            #   wh: not enrolled -- near-zero tail: functional reaches 14324 steps (4096 pts, 2026-09-16)
+            BudgetKey(
+                input_format=DataFormat.Float16,
+                output_format=DataFormat.Float16_b,
+                approx_mode=ApproximationMode.No,
+            ): AccuracyContract(metric=Metric.TOLERANCE),
         },
     ),
     (
@@ -1680,7 +1630,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -1730,7 +1680,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     (
         MathOperation.Rsqrt,
         {
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -1758,7 +1708,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=18409),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -1770,7 +1720,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -1798,7 +1748,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=54068),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -1868,7 +1818,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -1896,7 +1846,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -1928,7 +1878,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     (
         MathOperation.Sin,
         {
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -1942,7 +1892,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -1956,11 +1906,11 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32, output_format=DataFormat.Float16_b
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -1974,7 +1924,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40885),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -1988,7 +1938,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40885),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
             ): AccuracyContract(max_ulp=1),
@@ -2029,7 +1979,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
     (
         MathOperation.Sqrt,
         {
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
@@ -2057,7 +2007,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=18415),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
@@ -2069,7 +2019,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~23 mantissa bits, 4096 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
@@ -2097,7 +2047,7 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.Yes,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=59334),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 8192 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
@@ -2160,20 +2110,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 2424832 ULP, p99.9 2359296.0, 31% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 2424832 ULP, p99.9 2405616.0, 0% exact, ~2 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=2949120),
-            #   wh: max 2418955 ULP, p99.9 2405616.0, 0% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float32,
-                output_format=DataFormat.Float32,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=3007020),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float32,
@@ -2181,27 +2123,19 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 37 ULP, p99.9 36.0, 31% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 37 ULP, p99.9 37.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float32,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=45),
-            #   wh: max 37 ULP, p99.9 37.0, 32% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float32,
-                output_format=DataFormat.Float16_b,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=47),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 65536 ULP, p99.9 65536.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16_b,
@@ -2216,20 +2150,12 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=40675),
-            #   wh: max 2424832 ULP, p99.9 2359296.0, 31% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 2424832 ULP, p99.9 2371584.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=2949120),
-            #   wh: max 2424832 ULP, p99.9 2371584.0, 31% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float16_b,
-                output_format=DataFormat.Float32,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=2964480),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 1 ULP, p99.9 1.0, 86% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16_b,
@@ -2237,19 +2163,19 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 0 ULP, p99.9 0.0, 100% exact, ~7 mantissa bits, 2048 pts, 2026-09-16; measured 0, floored to 1 (a finite sample cannot assert exactness)
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=1),
-            #   wh: max 37 ULP, p99.9 36.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-16
+            #   wh: max 37 ULP, p99.9 36.0, 31% exact, ~2 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16_b,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-            ): AccuracyContract(max_ulp=45),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 49152 ULP, p99.9 49152.0, 19% exact, ~7 mantissa bits, 2048 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16,
@@ -2264,40 +2190,24 @@ _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = 
                 approx_mode=ApproximationMode.No,
                 dest_acc=DestAccumulation.Yes,
             ): AccuracyContract(max_ulp=5110),
-            #   wh: max 2416640 ULP, p99.9 2400256.0, 10% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 2418176 ULP, p99.9 2406400.0, 10% exact, ~2 mantissa bits, 4096 pts, 2026-09-16; past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float32,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=3000320),
-            #   wh: max 2418176 ULP, p99.9 2406400.0, 10% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float16,
-                output_format=DataFormat.Float32,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=3008000),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
             #   wh: max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 4096 pts, 2026-09-16
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.No,
             ): AccuracyContract(max_ulp=2),
-            #   wh: max 37 ULP, p99.9 36.0, 32% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
+            #   wh: max 37 ULP, p99.9 37.0, 32% exact, ~2 mantissa bits, 4096 pts, 2026-09-16; past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
             BudgetKey(
                 input_format=DataFormat.Float16,
                 output_format=DataFormat.Float16_b,
                 approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.No,
-            ): AccuracyContract(max_ulp=45),
-            #   wh: max 37 ULP, p99.9 37.0, 33% exact, ~2 mantissa bits, 2048 pts, 2026-09-16
-            BudgetKey(
-                input_format=DataFormat.Float16,
-                output_format=DataFormat.Float16_b,
-                approx_mode=ApproximationMode.Yes,
-                dest_acc=DestAccumulation.Yes,
-            ): AccuracyContract(max_ulp=47),
+            ): AccuracyContract(metric=Metric.TOLERANCE),
         },
     ),
 )
@@ -2467,8 +2377,9 @@ def validate_registry() -> None:
     """Raise if any op in the table can resolve ambiguously, or has an empty entry.
 
     Exhaustive over the variant space rather than a review convention: it is small
-    (approximation mode × ULP-capable output format × Dest accumulation × architecture)
-    and an ambiguity that only shows up for one format is exactly what a reader misses.
+    (approximation mode × ULP-capable input format × output format × Dest accumulation ×
+    architecture) and an ambiguity that shows up for one format only is exactly what a
+    reader misses.
     """
     from .ulp import _ULP_PROXY_DTYPES, ULP_FORMATS
 

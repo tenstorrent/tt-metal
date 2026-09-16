@@ -65,12 +65,14 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp import (
+    MANTISSA_BITS_FOR_ULP,
     MAX_MEANINGFUL_ULP,
     NEAR_ZERO_FRACTION,
     nonfinite_mismatches,
     ulp_distance,
     ulp_dtype,
 )
+from helpers.utils import tolerances
 
 _THIS_DIR = Path(__file__).resolve().parent
 DEFAULT_SOURCE = _THIS_DIR / "_csv_output"
@@ -205,8 +207,7 @@ class CellMeasurement:
         else:
             budget = self._budget(self.max_ulp, self.percentile_ulp, headroom)
 
-        ceiling = MAX_MEANINGFUL_ULP[ulp_dtype(self.output_format)]
-        if budget > ceiling:
+        if budget > usable_budget_ceiling(self.output_format):
             return None, None
         return budget, floor
 
@@ -256,6 +257,28 @@ class CellMeasurement:
             return None
         floor = self.near_zero_max_abs_err * headroom
         return float(f"{floor:.3g}") if floor > 0 else None
+
+
+def usable_budget_ceiling(output_format: DataFormat) -> float:
+    """The largest budget that is still *stronger* than the gate it replaces.
+
+    ``MAX_MEANINGFUL_ULP`` is the wrong ceiling to emit against: ``2**mantissa_bits`` is
+    roughly 100% relative error, so it admits budgets that gate nothing. Because
+    ``passed_test`` returns on the ULP verdict and skips both ``isclose`` and PCC, such a
+    budget *is* the whole gate — measured on this sweep, approximate tanh on an fp32
+    output came out at 2,949,120 steps, about 35% relative error, and tanh is bounded in
+    (-1, 1), so a kernel returning 1.35 against a golden of 1.0 would have passed where
+    the tolerance gate failed it.
+
+    The real bound is the ``rtol`` half of the ``isclose`` this replaces, which is itself a
+    step budget at large magnitude: ``rtol * 2**mantissa_bits`` — about 419,430 steps for
+    fp32, 51 for fp16, 6 for bf16. Past it the budget is looser than what it displaced
+    with no PCC behind it, and the op belongs on the tolerance metric. ``passed_test``
+    warns on the same line at runtime; this refuses to *emit* past it.
+    """
+    dtype = ulp_dtype(output_format)
+    by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
+    return min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))
 
 
 def agreement_bits(max_ulp: int, output_format: DataFormat) -> float:
@@ -506,18 +529,39 @@ class EmittedKey:
         note = ""
         if self.budget is None:
             abbr = {v: k for k, v in FORMAT_BY_ABBR.items()}
-            marker = (
-                self.cells[0].op.name,
-                abbr.get(self.cells[0].input_format),
-                abbr.get(self.cells[0].output_format),
+            # Every cell the key covers, not cells[0] -- that is whichever group came
+            # first out of a sort=False groupby, so a key spanning two output formats
+            # printed one reason and silently dropped the other. Shipped once as a merged
+            # Log1p key reporting 14324 steps while hiding 938,672,129.
+            reasons = []
+            for cell in self.cells:
+                marker = (
+                    cell.op.name,
+                    abbr.get(cell.input_format),
+                    abbr.get(cell.output_format),
+                )
+                reason = _NOT_PREDICTED_BY_SWEEP.get(marker)
+                if reason is not None and reason not in reasons:
+                    reasons.append(reason)
+            if reasons:
+                return (
+                    f"#   {arch}: not enrolled -- {'; '.join(reasons)} "
+                    f"({points} pts, {stamp})"
+                )
+            # Report against the bound that actually rejected it: the point past which a
+            # budget stops being tighter than the tolerance it replaces.
+            worst_format = max(
+                (c.output_format for c in self.cells),
+                key=lambda f: MAX_MEANINGFUL_ULP[ulp_dtype(f)],
             )
-            reason = _NOT_PREDICTED_BY_SWEEP.get(marker)
-            if reason is not None:
-                return f"#   {arch}: not enrolled -- {reason} ({points} pts, {stamp})"
-            dtype = ulp_dtype(self.cells[0].output_format)
             note = (
-                f"; past {MAX_MEANINGFUL_ULP[dtype]}-step ceiling for this format, so "
-                "tolerance"
+                f"; past the {usable_budget_ceiling(worst_format):.0f}-step point where a "
+                "budget stops being tighter than the tolerance it replaces, so tolerance"
+            )
+        if self.budget == MIN_MEASURED_BUDGET and worst == 0:
+            note = (
+                "; measured 0, floored to "
+                f"{MIN_MEASURED_BUDGET} (a finite sample cannot assert exactness)"
             )
         if self.near_zero_atol is not None:
             edge_points = sum(c.near_zero_points for c in self.cells)
@@ -585,7 +629,11 @@ def _collapse(
     ] = {}
     for (fmt, approx), group in by_format_approx.items():
         budgets = {c.dest_acc: budget_of(c) for c in group}
-        if len(set(budgets.values())) == 1:
+        # `len(budgets) > 1` matters: a single-dest_acc group makes the set trivially
+        # one-valued, and groups *are* single-dest -- main() passes only gateable cells to
+        # render, and a sweep can skip a dest_acc for some input format -- so collapsing on
+        # that would drop a pin the sweep never justified removing.
+        if len(budgets) > 1 and len(set(budgets.values())) == 1:
             stage.setdefault(fmt, []).append(
                 (approx, next(iter(budgets.values())), tuple(group), None)
             )
@@ -604,7 +652,15 @@ def _collapse(
             merged = tuple(c for _, _, group, _ in entries for c in group)
             budget, floor = next(iter(budgets.values()))
             per_format[fmt] = [
-                EmittedKey(input_format, fmt, None, None, budget, floor, merged)
+                EmittedKey(
+                    input_format=input_format,
+                    output_format=fmt,
+                    approx_mode=None,
+                    dest_acc=None,
+                    budget=budget,
+                    near_zero_atol=floor,
+                    cells=merged,
+                )
             ]
         else:
             per_format[fmt] = [
@@ -613,7 +669,15 @@ def _collapse(
             ]
 
     # Collapse output_format only when every format agrees on a single key.
-    single = all(len(keys) == 1 for keys in per_format.values())
+    # Only collapse the output format away when each format resolved to exactly one key
+    # *and* that key still has no approx_mode/dest_acc pin of its own. Checking only the
+    # count drops a pin the approximation stage deliberately kept, and the result would
+    # gate approx=Yes and the unswept output formats on a number measured for neither --
+    # the same argument that stops input_format being collapsed.
+    single = all(
+        len(keys) == 1 and keys[0].approx_mode is None and keys[0].dest_acc is None
+        for keys in per_format.values()
+    )
     if single and len(per_format) > 1:
         budgets = {
             fmt: (keys[0].budget, keys[0].near_zero_atol)

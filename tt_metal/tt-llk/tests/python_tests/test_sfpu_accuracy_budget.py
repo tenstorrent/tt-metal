@@ -3,14 +3,14 @@
 
 """Host-side guards for the SFPU accuracy budget registry.
 
-No kernel, no device: a table and a resolution rule. Both need guarding, because the rule
-reduces a four-dimensional lookup to "most specific key wins" and a budget resolved from
-the wrong key is a silently wrong gate, not an error -- and because a *widened* budget is
-invisible to every device test, which it makes pass.
+No kernel, no device: this is a table and a resolution rule. Both need guarding for the
+same reason ``sfpu_domains`` does — the rule reduces a five-dimensional lookup to "most
+specific key wins", and a budget resolved from the wrong key is a silently wrong gate, not
+an error. A test that reads a budget is worth more than one that reviews the table.
 
 The resolution tests build their own small tables through :func:`resolve_contract` rather
-than querying the live registry, so enrolling an op does not break them; only the tests
-about enrolment touch the real one.
+than querying the live registry, so enrolling an op does not break them. Only the tests
+that are *about* enrolment touch the real table.
 """
 
 import math
@@ -58,11 +58,21 @@ from helpers.utils import passed_test
 def _integer_only_ops() -> set:
     """Every SFPU op whose operands and result are integers, from canonical sources.
 
-    Four of them, because the harness has no single classification covering all: the
-    typed ``SFPU_BINARY_INT`` binaries; the unary driver's ``_INT_UNARY_OPS`` (less
-    ``ReluMin``, whose ``vInt`` branch is picked only on ``math_format == Int32``); the
-    binary driver's ``_INT_DRIVEN_BINARY_OPS``, typed plain ``SFPU_BINARY`` so
-    ``MathOpType`` misses them; and ``SfpuGcd``, which is in neither.
+    Three of them, because the harness has no single classification that covers all:
+
+    * ``MathOpType.SFPU_BINARY_INT`` — the typed integer binaries (``SfpuGtInt`` and its
+      siblings).
+    * ``test_eltwise_unary_sfpu._INT_UNARY_OPS`` — the driver list for the integer unary
+      kernels, which is the canonical statement of which unaries take the integer path.
+      ``ReluMin`` is removed again: it is the one entry there that is not integer-only,
+      and ``sfpu_operations.h`` picks its ``vInt`` branch only on ``math_format ==
+      Int32``.
+    * ``test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS`` — the binary driver's own
+      integer set, which is where ``SfpuDivInt32``, ``SfpuLcm``, the bitwise ops and the
+      ``*Int32``/``*Uint32`` min/max/remainder family live. Typed ``SFPU_BINARY``, so
+      ``MathOpType`` alone misses all of them.
+    * ``SfpuGcd`` — in neither driver set nor typed ``SFPU_BINARY_INT``, and its operands
+      are integers.
     """
     from test_eltwise_binary_sfpu import _INT_DRIVEN_BINARY_OPS
     from test_eltwise_unary_sfpu import _INT_UNARY_OPS
@@ -92,28 +102,38 @@ BLOCK_FORMATS_WITHOUT_ULP = sorted(
 )
 
 
-# ── The contract's own coherence ──────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# The contract's own coherence
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_a_ulp_contract_needs_a_budget():
-    with _refuses("needs max_ulp"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="needs max_ulp"
+    ):
         AccuracyContract(metric=Metric.ULP)
 
 
 def test_a_ulp_contract_rejects_a_tolerance():
     """Both cannot apply, and an entry carrying both is a half-finished conversion that
     would read as deliberate."""
-    with _refuses("silently ignored"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="silently ignored"
+    ):
         AccuracyContract(max_ulp=1, atol=0.13)
 
 
 def test_a_tolerance_contract_rejects_a_budget():
-    with _refuses("belong to the ulp metric"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="belong to the ulp metric"
+    ):
         AccuracyContract(metric=Metric.TOLERANCE, max_ulp=1)
 
 
 def test_a_negative_budget_is_rejected():
-    with _refuses("must not be negative"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="must not be negative"
+    ):
         AccuracyContract(max_ulp=-1)
 
 
@@ -176,7 +196,9 @@ def torch_ones():
     return torch.ones(TILE_SIZE, dtype=torch.bfloat16)
 
 
-# ── Key resolution ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Key resolution
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_the_default_key_matches_every_variant():
@@ -273,7 +295,9 @@ def test_equally_specific_keys_are_an_error_not_a_tie_break():
         BudgetKey(approx_mode=ApproximationMode.No): AccuracyContract(max_ulp=4),
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=64),
     }
-    with _refuses("equally specific"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="equally specific"
+    ):
         resolve_contract(
             table,
             label="Ambiguous",
@@ -297,7 +321,9 @@ def test_a_key_describes_itself_for_an_error_message():
     assert "output_format" in described and "dest_acc" in described
 
 
-# ── The live registry ─────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# The live registry
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_the_registry_resolves_unambiguously_for_every_variant():
@@ -346,9 +372,15 @@ def test_an_enrolled_op_keeps_todays_gate_on_a_format_without_a_per_element_ulp(
     "op", [MathOperation.SigmoidAppx, MathOperation.GeluAppx], ids=lambda o: o.name
 )
 def test_a_declared_tolerance_survives_an_unswept_architecture(op, arch):
-    """A declared *tolerance* is not a Wormhole measurement, so the arch gate must not
-    take it: downgrading before the lookup dropped SigmoidAppx's and GeluAppx's atol=0.13
-    everywhere but Wormhole, back to the 0.05 default those numbers exist to widen."""
+    """The arch gate exists to stop *WH-measured step budgets* binding elsewhere. It must
+    not take a declared tolerance with it.
+
+    These two carry ``atol=0.13`` because a coarse 3-segment LUT peaks near its knees --
+    the number they had as ``CUSTOM_TOLERANCES``, which applied on every architecture.
+    Returning the tolerance contract before the registry lookup dropped them back to the
+    default ``atol=0.05`` on Blackhole and Quasar, which is the gate that number exists to
+    widen. Resolving first and downgrading only a ULP contract is what keeps both true.
+    """
     contract = accuracy_contract(
         op,
         output_format=DataFormat.Float16_b,
@@ -382,14 +414,20 @@ def test_arch_must_be_passed_explicitly():
     """``arch`` is the one dimension where the numbers do not transfer, so unlike the
     other three it cannot be left unset and quietly resolved against the Wormhole table.
     A second enroller that forgets the keyword fails at the call."""
-    with _refuses("arch", TypeError):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        TypeError, match="arch"
+    ):
         accuracy_contract(MathOperation.Abs, output_format=DataFormat.Float32)
 
 
 def test_a_variant_specific_tolerance_needs_no_driver_override():
     """Why removing ``custom_atol``/``custom_rtol`` from the driver loses nothing: a
-    tolerance narrower than the op's default is a more specific :class:`BudgetKey`, so it
-    need not move the op's other variants."""
+    tolerance narrower than the op's default is expressible as a more specific
+    :class:`BudgetKey`, so it does not have to move the op's other variants.
+
+    The registry is the single source of truth for a number; the alternative is the
+    per-test magic number this whole mechanism removes.
+    """
     table = {
         DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(
@@ -477,9 +515,14 @@ _EXPECTED_FLOAT32_BUDGET = {
 
 
 def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_every_format():
-    """The Float32 column alone bounds one format per op, which left Square's DEFAULT 4
-    and its Float16_b 1 held only by MAX_MEANINGFUL_ULP -- widening either to 100 passed
-    the whole suite. That is the "raise the budget until it stops failing" drift."""
+    """The Float32 column below bounds only one format per op. This pins all three.
+
+    Without it, ``Square``'s ``DEFAULT`` ``max_ulp=4`` and its ``Float16_b`` 1 -- the two
+    numeric entries no other test reaches -- were bounded only by ``MAX_MEANINGFUL_ULP``,
+    so widening either to 100 passed the whole suite. That is the "raise the budget until
+    it stops failing" drift the registry's docstrings warn against, on exactly the
+    entries nothing else held.
+    """
     assert set(_EXPECTED_BUDGET) == set(
         enrolled_ops()
     ), "an op was enrolled or removed without updating the expected budgets"
@@ -502,9 +545,13 @@ def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_every_format():
 
 
 def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
-    """``metric in (ULP, TOLERANCE)`` and ``max_ulp >= 0`` are guaranteed the instant a
-    contract exists, so asserting them pinned nothing. This asserts the resolved
-    number."""
+    """``metric in (ULP, TOLERANCE)`` and ``max_ulp is not None and >= 0`` are both
+    guaranteed the instant an ``AccuracyContract`` exists -- ``Metric`` is a closed
+    two-member enum and ``__post_init__`` raises on a missing or negative ``max_ulp`` --
+    so asserting them pinned nothing, and ``validate_registry()`` already covers a
+    superset of "no exception raised".
+
+    So this asserts the resolved number instead, which is the property worth holding."""
     assert set(_EXPECTED_FLOAT32_BUDGET) == set(
         enrolled_ops()
     ), "an op was enrolled or removed without updating the expected budgets"
@@ -558,32 +605,31 @@ EXACT_BY_CONSTRUCTION = (
 )
 
 
-def _refuses(match, kind=ValueError):
-    """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
-    return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
-
-
 def _every_variant(op):
     """Every contract an op can resolve to, across the whole keyed variant space.
 
     Passing only ``output_format`` is not enough: by the ``matches()`` rule an unset
-    caller dimension cannot match a key that sets one, so any ``BudgetKey(arch=...)`` or
-    ``BudgetKey(dest_acc=...)`` entry is invisible to such a query — which is exactly the
-    growth path this file advertises, and would hide a wide budget from the guards below.
+    caller dimension cannot match a key that sets one, so any ``BudgetKey(arch=...)``,
+    ``BudgetKey(dest_acc=...)`` or ``BudgetKey(input_format=...)`` entry is invisible to
+    such a query. The last one is not hypothetical — every one of the enrolled
+    transcendental entries pins ``input_format``, so a query without it dropped all 19 of
+    those ops out of the guards below and left
+    ``test_no_budget_exceeds_its_formats_meaningful_ceiling`` covering 9 ops instead of 28.
     """
     for fmt in ULP_CAPABLE_FORMATS:
-        for approx_mode in list(ApproximationMode) + [None]:
-            for dest_acc in list(DestAccumulation) + [None]:
-                for (
-                    arch
-                ) in ChipArchitecture:  # arch is required; None is unrepresentable
-                    yield fmt, accuracy_contract(
-                        op,
-                        output_format=fmt,
-                        approx_mode=approx_mode,
-                        dest_acc=dest_acc,
-                        arch=arch,
-                    )
+        for input_format in list(ULP_CAPABLE_FORMATS) + [None]:
+            for approx_mode in list(ApproximationMode) + [None]:
+                for dest_acc in list(DestAccumulation) + [None]:
+                    # arch is required; None is unrepresentable.
+                    for arch in ChipArchitecture:
+                        yield fmt, accuracy_contract(
+                            op,
+                            output_format=fmt,
+                            input_format=input_format,
+                            approx_mode=approx_mode,
+                            dest_acc=dest_acc,
+                            arch=arch,
+                        )
 
 
 @pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
@@ -601,9 +647,13 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
 
 
 def test_no_budget_exceeds_its_formats_meaningful_ceiling():
-    """Past ``2**mantissa_bits`` the two values differ by more than a binade and the op
-    belongs on tolerance, as Square on Float32 and the Bfp8_b entries are. The guard
-    against "the sweep reported 15616, so the budget is 15616"."""
+    """ttnn's ``2**mantissa_bits`` line, applied to the table rather than to one call.
+
+    Past it the two values differ by more than an order of magnitude and ULP has stopped
+    being the right metric — the op belongs on the tolerance metric, as Square on Float32
+    and the Bfp8_b entries are. This is the guard against "the sweep reported 15616, so
+    the budget is 15616".
+    """
     for op in enrolled_ops():
         for fmt, contract in _every_variant(op):
             if contract.metric != Metric.ULP:
@@ -618,9 +668,14 @@ def test_no_budget_exceeds_its_formats_meaningful_ceiling():
 
 def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
     """Bfp8_b's bf16 step space is a real criterion only where the block exponent is the
-    one bf16 would have used. Abs and Neg -- which cannot be wrong -- reach 15616 steps
-    there; Floor/Ceil/Trunc escape by producing integers. If this fails because an op was
-    added, the question is whether that op produces block-exponent-friendly values."""
+    one bf16 would have used. Measured: Abs and Neg — which cannot be wrong — reach 15616
+    steps there, because a small element in a wide block is quantized to zero by design.
+    Floor/Ceil/Trunc escape it by producing integers, which a shared exponent represents
+    exactly.
+
+    If this test fails because an op was added, the question to answer is whether that op
+    produces block-exponent-friendly values, not whether the budget can be raised.
+    """
     enrolled_on_bfp8 = {
         op
         for op in enrolled_ops()
@@ -635,9 +690,14 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
 
 
 def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format():
-    """A shared exponent does not represent integers exactly in general: the in-block step
-    scales with the block maximum, so it is exact only while every maximum stays under
-    ``2**7``. That is a property of the *stimulus*, so it is asserted, not assumed."""
+    """A shared exponent does not represent integers exactly in general — the in-block
+    step scales with the block maximum, so an integer is exact only while every block
+    maximum stays under ``2**7``. Floor/Ceil/Trunc qualify because
+    ``_OP_DOMAIN_REGISTRY`` bounds them to ``uniform(-10, 10)``, which is a property of
+    the *stimulus*, not of the format — the same mechanism takes Abs and Neg to 15616
+    steps. Widen the domain and the 0-step Bfp8_b budget stops being legitimate, so the
+    dependency is asserted rather than left in a comment.
+    """
     for op in (MathOperation.Floor, MathOperation.Ceil, MathOperation.Trunc):
         # Resolved at Bfp8_b, the format the invariant is about: identical to the default
         # Float16_b for these three today, but wrong the moment a format-sensitive spec is
@@ -658,7 +718,9 @@ def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format():
         )
 
 
-# ── Integers never reach the ULP metric through the registry ──────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Integers never reach the ULP metric through the registry
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
@@ -700,9 +762,18 @@ def test_no_table_entry_can_gate_an_integer_format():
 
 
 def test_the_integer_ops_are_not_enrolled():
-    """Enrolling one would be meaningless rather than merely loose, and the driver would
-    raise at the call. Derived from the canonical classification and driver sets rather
-    than from name patterns, so a new integer op is covered without an edit here."""
+    """No integer-only SFPU op carries a contract. If one is added it belongs on the
+    tolerance metric — or on an exact-equality gate, which this harness does not have
+    yet — not on a step count.
+
+    Derived from the canonical classification and driver sets rather than from name
+    tokens. A token list over ``Int32``/``Int16``/``Int8``/``Shift``/``Bitwise`` misses
+    ``UnaryMaxUint32``/``UnaryMinUint32`` (``Uint32`` does not contain ``Int32``), every
+    ``SFPU_BINARY_INT`` member such as ``SfpuGtInt``, and ``SfpuGcd`` — so enrolling one
+    of those left this green, and under a ``DEFAULT`` key
+    ``test_no_table_entry_can_gate_an_integer_format`` cannot see it either
+    (``key.output_format`` is ``None``) and neither can the short-circuit test.
+    """
     integer_ops = _integer_only_ops()
     # Pin the ops a name-token derivation used to miss, so this set cannot silently
     # narrow back to one.
@@ -725,7 +796,9 @@ def test_the_integer_ops_are_not_enrolled():
     )
 
 
-# ── The contract refuses what its annotations cannot ──────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# The contract refuses what its annotations cannot
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("bogus", ["ulp", "tolerance", "pcc", 0, None], ids=repr)
@@ -734,7 +807,9 @@ def test_a_metric_that_is_not_a_metric_member_is_refused(bogus):
     enum is bare, so the string compares unequal -- and it used to fall through to the
     *tolerance* arm of ``__post_init__``, silently switching off the gate the entry meant
     to declare. Exactly the typo a registry edit makes."""
-    with _refuses("must be a Metric member"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="must be a Metric member"
+    ):
         AccuracyContract(metric=bogus, max_ulp=1)
 
 
@@ -751,10 +826,17 @@ def test_a_metric_that_is_not_a_metric_member_is_refused(bogus):
 )
 def test_a_budget_key_dimension_that_is_not_an_enum_member_is_refused(field, bogus):
     """The same rule as ``AccuracyContract.metric``, on the four dimensions that had no
-    check. All are bare ``Enum``s, so ``DestAccumulation.No.value is False`` never equals
-    its member -- and such a key is *inert*: counted as set by ``specificity``, matched by
-    nothing, and rendered identically by ``describe()``."""
-    with _refuses(f"BudgetKey.{field} must be a"):
+    check. All of them are bare ``Enum``s, so ``DestAccumulation.No.value is False`` and
+    ``ChipArchitecture.WORMHOLE.value == "wormhole"`` never compare equal to their
+    members -- and the failure mode is silence, not an exception: such a key is counted
+    as set by ``specificity``, matched by nothing in ``matches()``, seen as no duplicate
+    by ``budget_table()`` and as no tie by ``validate_registry()``, and rendered
+    identically to the correct key by ``describe()``, since ``ChipArchitecture.__str__``
+    returns ``.value``. The budget it declares would gate nothing at all.
+    """
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match=f"BudgetKey.{field} must be a"
+    ):
         BudgetKey(**{field: bogus})
 
 
@@ -774,8 +856,13 @@ def test_every_budget_key_field_is_guarded():
 
 
 def test_a_repeated_op_in_the_registry_is_refused():
-    """The same hazard ``budget_table`` closes, one level up: a dict literal keeps only the
-    later table, and nothing downstream sees the dropped one."""
+    """The same hazard ``budget_table`` closes, one level up and harder to see: the ops
+    sit 10-20 lines apart across three comment-delimited sections, and a dict literal
+    keeps only the later table. Nothing downstream can catch it -- ``validate_registry``
+    iterates the already-deduplicated dict, the ``len(set(ops)) == len(ops)`` check below
+    is tautological over dict keys, and pylint runs with ``--disable=all`` in pre-commit
+    so ``duplicate-key`` is off.
+    """
     exact = budget_table((DEFAULT, AccuracyContract(max_ulp=0)))
     loose = budget_table((DEFAULT, AccuracyContract(max_ulp=99)))
     assert (
@@ -784,7 +871,9 @@ def test_a_repeated_op_in_the_registry_is_refused():
         ]
         is exact
     )
-    with _refuses("duplicate registry entry for Square"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="duplicate registry entry for Square"
+    ):
         registry(
             (MathOperation.Square, exact),
             (MathOperation.Abs, exact),
@@ -803,7 +892,9 @@ def test_a_negative_tolerance_field_is_refused(field):
     kwargs = {"metric": metric, field: -0.001}
     if metric is Metric.ULP:
         kwargs["max_ulp"] = 1
-    with _refuses("must not be negative"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="must not be negative"
+    ):
         AccuracyContract(**kwargs)
 
 
@@ -815,7 +906,9 @@ def test_a_duplicate_budget_key_is_refused_rather_than_deduplicated():
     promises to reject. A copy-pasted key replacing a measured budget with a broader one
     failed nothing."""
     key = BudgetKey(output_format=DataFormat.Float16_b)
-    with _refuses("duplicate budget key"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="duplicate budget key"
+    ):
         budget_table(
             (key, AccuracyContract(max_ulp=1)),
             (key, AccuracyContract(max_ulp=4)),
@@ -865,11 +958,16 @@ def test_a_key_that_names_an_architecture_binds_on_it(arch):
 
 
 def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
-    """The enrolment rule names five stimulus sources, three of them hand-built specs no
-    recorded measurement covers. None of the enrolled ops reaches those three, so the
-    recorded numbers do bind every sweep that drives them -- asserted here, because the
-    day an enrolled op appears in one is the day a zero-headroom budget has no
-    backstop."""
+    """The enrolment rule names five stimulus sources; three of them are hand-built specs
+    that no recorded measurement covers.
+
+    ``_signbit``, ``_isinf_isnan`` and ``_threshold`` each run ULP-gateable
+    ``Float16_b``/``Float32`` through the same driver, so a budget binds there too, with
+    the ULP arm returning before both the tolerance gate and PCC. None of the nine
+    enrolled ops reaches them today -- but ``ReluMin``/``ReluMax`` are parked in the
+    registry "for a later pass" and the threshold sweep drives exactly those two, with
+    every third lane on the tie. This fails at that enrolment rather than in a device run.
+    """
     from test_eltwise_unary_sfpu import _THRESHOLD_OPS, ISINF_ISNAN_MATHOPS
 
     unmeasured = {

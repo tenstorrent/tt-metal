@@ -25,11 +25,20 @@ from accuracy.emit_budget import (
     _collapse,
     _to_enum_flag,
     agreement_bits,
+    measure_all,
     measure_cell,
+    render,
+    render_skipped,
 )
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
-from helpers.ulp import MAX_MEANINGFUL_ULP
+from helpers.sfpu_accuracy_budget import (
+    DEFAULT,
+    Metric,
+    AccuracyContract,
+    BudgetKey,
+)
+from helpers.ulp import MAX_MEANINGFUL_ULP, ulp_dtype
 
 
 def _cell(**kwargs) -> CellMeasurement:
@@ -115,20 +124,23 @@ def test_a_disagreement_past_the_whole_mantissa_goes_negative():
 
 def test_a_budget_is_never_below_the_measured_maximum():
     """The gate is a max over lanes, so a budget under the measured max fails on the
-    first run. The percentile is a floor, not the answer."""
-    cell = _cell(max_ulp=40, percentile_ulp=4.0)
+    first run. The percentile is a floor, not the answer.
+
+    On Float32, whose usable ceiling is wide enough that the arithmetic rather than the
+    ceiling is what is under test here."""
+    cell = _cell(output_format=DataFormat.Float32, max_ulp=40, percentile_ulp=4.0)
     assert cell.budget(headroom=1.25) == 40
 
 
 def test_the_percentile_floor_lifts_a_tight_distribution():
     """Where the distribution is tight, the budget gets headroom above it rather than
     being pinned to the single worst observed lane."""
-    cell = _cell(max_ulp=8, percentile_ulp=8.0)
+    cell = _cell(output_format=DataFormat.Float32, max_ulp=8, percentile_ulp=8.0)
     assert cell.budget(headroom=1.25) == 10
 
 
 def test_headroom_of_one_pins_the_budget_to_the_measurement():
-    cell = _cell(max_ulp=8, percentile_ulp=8.0)
+    cell = _cell(output_format=DataFormat.Float32, max_ulp=8, percentile_ulp=8.0)
     assert cell.budget(headroom=1.0) == 8
 
 
@@ -503,7 +515,7 @@ def test_keeping_the_floor_keeps_the_budget_on_the_bulk_lanes():
 
 
 def test_a_cell_with_no_near_zero_lanes_resolves_the_same_either_way():
-    cell = _cell(max_ulp=6, percentile_ulp=6.0)
+    cell = _cell(output_format=DataFormat.Float32, max_ulp=6, percentile_ulp=6.0)
     budget, floor = cell.resolve(DEFAULT_HEADROOM)
     assert floor is None
     assert budget == 8
@@ -533,3 +545,158 @@ def test_measure_cell_records_both_views():
     cell = _measure(golden, hardware, fmt=DataFormat.Float32)
     assert cell.max_ulp == 0, "the bulk lanes are exact"
     assert cell.all_max_ulp > 1000, "the all-lane view sees the near-zero blow-up"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The path that actually produces the checked-in table
+#
+# The tests above cover the pure-logic helpers against synthetic cells. These drive
+# measure_all() and render() end to end over a synthetic sweep frame, which is the code
+# that turns sweep rows into the lines pasted into the registry. It cannot validate the
+# real numbers — sweep data is far too large to check in — but it makes a regeneration
+# diffable and catches the structural mistakes, which is where this file's bugs have been.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _sweep_frame(rows):
+    """A frame shaped like the parquet the accuracy harness writes."""
+    return pd.DataFrame(
+        [
+            {
+                "op": op,
+                "input_format": in_fmt,
+                "output_format": out_fmt,
+                "approx_mode": approx,
+                "fast_mode": fast,
+                "dest_acc": dest,
+                "golden_result": golden,
+                "hardware_result": hardware,
+            }
+            for op, in_fmt, out_fmt, approx, fast, dest, golden, hardware in rows
+        ]
+    )
+
+
+def _one_cell(
+    op="tanh", in_fmt="fp32", out_fmt="bf16", approx="0", dest="0", pairs=None
+):
+    pairs = pairs or [(1.0, 1.0)] * 32
+    return [
+        (op, in_fmt, out_fmt, approx, fast, dest, g, h)
+        for fast in ("0", "1")
+        for g, h in pairs
+    ]
+
+
+def test_render_emits_a_key_that_pins_the_input_format():
+    """Never collapsed away, even for a single input format, because a key without it
+    would cover input paths the sweep never measured."""
+    df = _sweep_frame(_one_cell())
+    cells, notes = measure_all(df, None, 99.9, 0.01)
+    assert notes == []
+    text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
+    assert "MathOperation.Tanh" in text
+    assert "input_format=DataFormat.Float32" in text
+    assert text.count("MathOperation.") == 1
+
+
+def test_render_does_not_collapse_a_single_dest_acc_group():
+    """A single-``dest_acc`` group makes the equality check trivially true, so collapsing
+    on it would drop a pin the sweep never justified removing — and groups really are
+    single-dest, since ``main`` passes only gateable cells through."""
+    df = _sweep_frame(_one_cell(dest="1"))
+    cells, _ = measure_all(df, None, 99.9, 0.01)
+    text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
+    assert "dest_acc=DestAccumulation.Yes" in text
+
+
+def test_render_keeps_an_approx_pin_when_collapsing_the_output_format():
+    """Collapsing output format on key *count* alone dropped a pin the approximation stage
+    had deliberately kept, which would then gate approx=Yes and the unswept output formats
+    on a number measured for neither."""
+    rows = _one_cell(out_fmt="bf16", approx="0") + _one_cell(out_fmt="fp32", approx="0")
+    cells, _ = measure_all(_sweep_frame(rows), None, 99.9, 0.01)
+    text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
+    assert "approx_mode=ApproximationMode.No" in text
+
+
+def test_render_refuses_a_budget_looser_than_the_tolerance_it_replaces():
+    """``MAX_MEANINGFUL_ULP`` is ~100% relative error, so emitting against it admits
+    budgets that gate nothing — and because the gate returns on the ULP verdict, such a
+    budget *is* the whole gate. Measured: approximate tanh on fp32 came out at 2,949,120
+    steps, ~35% relative error, on an op bounded in (-1, 1)."""
+    loose = [(1.0, 1.35)] * 32
+    df = _sweep_frame(_one_cell(out_fmt="fp32", pairs=loose))
+    cells, _ = measure_all(df, None, 99.9, 0.01)
+    text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
+    assert "Metric.TOLERANCE" in text
+    assert "stops being tighter than the tolerance it replaces" in text
+
+
+def test_render_says_when_a_measured_zero_was_floored():
+    df = _sweep_frame(_one_cell())
+    cells, _ = measure_all(df, None, 99.9, 0.01)
+    text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
+    assert "max_ulp=1" in text
+    assert "measured 0, floored to 1" in text
+
+
+def test_render_skipped_names_the_cell_it_refused():
+    """A non-finite disagreement gets no budget, and the report has to say which cell."""
+    rows = _one_cell(pairs=[(1.0, float("inf"))] * 32)
+    cells, _ = measure_all(_sweep_frame(rows), None, 99.9, 0.01)
+    lines = render_skipped(cells)
+    assert lines and "Tanh Float32->Float16_b" in lines[0]
+    assert "non-finite disagreement" in lines[0]
+    # main() passes only the gateable cells to render, which is none of them here.
+    assert [c for c in cells if c.gateable] == []
+
+
+def test_measure_all_reports_an_unknown_op_instead_of_dropping_it():
+    df = _sweep_frame(_one_cell(op="not_a_real_op"))
+    cells, notes = measure_all(df, None, 99.9, 0.01)
+    assert cells == []
+    assert any("no MathOperation" in n for n in notes)
+
+
+def test_render_output_parses_as_python_and_rebuilds_the_contracts():
+    """The strongest cheap check on the generated text: it is pasted into a module, so it
+    has to be valid Python that evaluates back to the contracts it describes."""
+    rows = _one_cell(out_fmt="bf16") + _one_cell(out_fmt="fp32")
+    cells, _ = measure_all(_sweep_frame(rows), None, 99.9, 0.01)
+    text = render(cells, "wh", DEFAULT_HEADROOM, "2026-01-01")
+    namespace = {
+        "MathOperation": MathOperation,
+        "DataFormat": DataFormat,
+        "ApproximationMode": ApproximationMode,
+        "DestAccumulation": DestAccumulation,
+        "BudgetKey": BudgetKey,
+        "AccuracyContract": AccuracyContract,
+        "DEFAULT": DEFAULT,
+        "Metric": Metric,
+    }
+    table = eval("{" + text + "}", namespace)  # noqa: S307 - generated, not user input
+    assert MathOperation.Tanh in table
+    for key, contract in table[MathOperation.Tanh].items():
+        assert isinstance(key, BudgetKey)
+        assert isinstance(contract, AccuracyContract)
+        assert key.input_format is DataFormat.Float32
+
+
+def test_a_budget_looser_than_its_formats_tolerance_is_refused_outright():
+    """The same bound as ``usable_budget_ceiling``, applied through ``resolve``: bf16's
+    rtol half is worth about 6 steps, so a 40-step bf16 budget is looser than the gate it
+    would replace and must not be emitted at all."""
+    cell = _cell(output_format=DataFormat.Float16_b, max_ulp=40, percentile_ulp=40.0)
+    assert cell.resolve(DEFAULT_HEADROOM) == (None, None)
+    # The same measurement on Float32 is comfortably inside its ceiling.
+    wide = _cell(output_format=DataFormat.Float32, max_ulp=40, percentile_ulp=40.0)
+    assert wide.resolve(DEFAULT_HEADROOM)[0] == 50
+
+
+def test_the_usable_ceiling_is_the_rtol_half_not_the_whole_mantissa():
+    from accuracy.emit_budget import usable_budget_ceiling
+
+    for fmt in (DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b):
+        assert usable_budget_ceiling(fmt) < MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
+    assert usable_budget_ceiling(DataFormat.Float16_b) == pytest.approx(6.4)
