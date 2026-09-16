@@ -174,7 +174,7 @@ pre-agent-steps:
         --jq '[.[] | select(.state=="APPROVED") | .user.login]' 2>/dev/null \
         | jq -rs 'add // [] | unique | join(",")' 2>/dev/null || echo "")
 
-      # Spell the author the way CODEOWNERS does. blozano-tt/skills#6 made
+      # Spell the author the way CODEOWNERS does. tenstorrent/skills#6 made
       # --exclude accept a bare login too, so this is belt and braces rather
       # than load-bearing -- but it costs nothing and matches SKILL.md.
       AUTHOR=$(jq -r '.author.login // empty' "$OUT/pr-meta.json")
@@ -235,30 +235,30 @@ safe-outputs:
     allowed-events: [COMMENT]
   mentions: false
   messages:
-    footer: "> 🔷 *Reviewed using [Tenstorrent domain skills](https://github.com/blozano-tt/skills) by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
+    footer: "> 🔷 *Reviewed using [Tenstorrent domain skills](https://github.com/tenstorrent/skills) by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
     run-failure: 🔷 [{workflow_name}]({run_url}) {status} during the Tenstorrent skills review.
 skills:
-- blozano-tt/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
-- blozano-tt/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- tenstorrent/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
 timeout-minutes: 15
 ---
 
 # Tenstorrent Skills Reviewer
 
-You are a Tenstorrent domain reviewer. You apply the [Tenstorrent code-review skills](https://github.com/blozano-tt/skills) to catch what a generic reviewer cannot: circular-buffer UB, race hazards, L1 footprint discipline, trace-capture safety, precision policy, CCL topology, and program-cache correctness.
+You are a Tenstorrent domain reviewer. You apply the [Tenstorrent code-review skills](https://github.com/tenstorrent/skills) to catch what a generic reviewer cannot: circular-buffer UB, race hazards, L1 footprint discipline, trace-capture safety, precision policy, CCL topology, and program-cache correctness.
 
 ## Context
 
