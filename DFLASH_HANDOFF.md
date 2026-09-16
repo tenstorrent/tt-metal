@@ -29,6 +29,50 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
+### THE PARITY BUG IS THE BIG ONE: 2.99 -> 17.54 tok/s (0.17x -> 0.98x production)
+
+Acceptance ALTERNATES with traced-generation index, and the demo measures the bad one every run.
+Measured on the demo's own harness with the reference prompt (`DFLASH_PROMPT="The capital of France
+is"`, 5 + 100 = 105 tokens, so it never crosses an anchor and stays traced throughout):
+
+    DFLASH_TRACED_WARM=1 (2nd traced generation)   2.99 tok/s   acceptance 1.021   97 steps   0.17x
+    DFLASH_TRACED_WARM=0 (1st traced generation)  17.54 tok/s   acceptance 4.950   20 steps   0.98x
+
+A 5.9x swing from one warm-up generation. This matches test_dflash_warmup_position.py exactly
+(traced gen 1/2/3 = 7.000 / 1.500 / 7.000): odd traced generations are healthy, even ones are not.
+
+WHY THIS WAS MISSED EARLIER IN THIS DOCUMENT. The parity finding is recorded below and was then
+dismissed on the grounds that "the demo sits at 1.138 on BOTH parities". That test was invalid: it
+used the 128-token condiment prompt, which makes prefill a full bucket and then crosses the anchor,
+so with the `lo == 0` rule the demo runs ENTIRELY EAGER and parity cannot show. Parity only shows on
+a prompt short enough to stay traced.
+
+That also re-reads the `lo == 0` result. Restricting the trace "fixed" the condiment demo
+(1.138 -> 4.950) largely by turning the trace OFF for it; the 4.950 is the eager path's acceptance,
+not a repaired traced path. The fix is still correct and still a win, but it is a fallback, not a
+repair.
+
+WHERE THE DEMO ACTUALLY STANDS:
+
+    reference prompt, good parity   traced   17.54 tok/s   0.98x   <- at parity with production
+    reference prompt, bad parity    traced    2.99 tok/s   0.17x
+    condiment prompt (crosses)      eager     6.19 tok/s   0.35x
+
+TWO REMAINING BUGS, parity first by a wide margin:
+
+1. PARITY. Mechanism unknown. `DFLASH_TRACED_WARM=0` is a workaround, not a fix -- it just lands the
+   measurement on a good generation. A period-2 alternation is the signature of a double-buffered
+   resource toggled once per use; `TT_CCL`'s semaphore pool is exactly that
+   (`get_and_cycle_ag_semaphore_handles` advances `(idx + 1) % 2` over TWO semaphores per axis), and
+   a captured trace bakes whichever semaphore it held. Note the earlier "shared tt_ccl refuted"
+   result tested SHARING with the drafter, not the target cycling its own pool against its own
+   parked trace, so that suspect is NOT actually eliminated.
+2. ANCHOR CROSSING. Still forces the eager fallback, capping any prompt >= 128 tokens at ~6.19 tok/s.
+   Both isolated hypotheses for it are dead (see below); it needs in-loop instrumentation.
+
+Fixing parity alone would take the short-prompt case from 0.98x to roughly 1.3x, since the good
+parity already reaches production and the narrow head is in these numbers.
+
 ### CORRECTION: the capture is NOT offset-specific -- that finding was a fixture artifact
 
 Commits 4a57957c44f and 0aa99e9361d claim the verify trace is only valid at the chunk_start it was
