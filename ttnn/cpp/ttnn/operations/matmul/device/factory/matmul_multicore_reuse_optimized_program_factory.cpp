@@ -717,7 +717,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
 
     Group<TensorParameter> tensor_parameters;
-    tensor_parameters.reserve(bias.has_value() ? 4 : 3);
     tensor_parameters.push_back(TensorParameter{.unique_id = IN0, .spec = in0_buffer.tensor_spec()});
     tensor_parameters.push_back(TensorParameter{.unique_id = IN1, .spec = in1_buffer.tensor_spec()});
     tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
@@ -726,7 +725,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
 
     Group<WorkUnitSpec> work_units;
-    work_units.reserve(has_group_2 ? 2 : 1);
     work_units.push_back(WorkUnitSpec{
         .name = "core_group_1",
         .kernels = {READER, READER_WRITER, COMPUTE_G1},
@@ -749,7 +747,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     };
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args.reserve(2);
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(reader_writer_run_args));
     run_args.tensor_args = {
