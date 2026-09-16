@@ -2372,6 +2372,8 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # placeholder (review finding on tt-metal#56048 / vllm-tt-plugin#118.1).
         self._spec_active_owner = None
         self._spec_active = False
+        # Tokens produced past a step's block width, delivered on the next step.
+        self._spec_carry = []
         self._spec_horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
         # WIDTH SET (vllm-tt-plugin#110 s.8, tt-metal#56048 review step 3): the
         # verify widths are derived from max_model_len at CONFIG time and every
@@ -2783,6 +2785,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_active = True
         self._spec_active_owner = self._spec_pt_identity(page_table)
         self._spec_first_step = True
+        self._spec_carry = []  # a carry never crosses sessions
         self._spec_last_pt = None
         # verify masks/tables were sized for this horizon; past it the packed
         # verify would attend past its capture -- end the request cleanly then.
@@ -2999,7 +3002,17 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
         eos_set = set(eos) if isinstance(eos, (list, tuple)) else {int(eos)}
         vocab = dec.drafter.vocab
-        block = []
+        # CARRY: tokens a previous step produced past its block width. One
+        # iteration commits up to V+1 tokens, so the loop below can pass
+        # _SPEC_BLOCK mid-iteration. Dropping the excess (block[:K]) silently
+        # DESYNCS the stream from the session: those tokens' KV is already
+        # written and dec.start has advanced past them, so the model keeps
+        # conditioning on tokens the caller never received -- a gap in the
+        # delivered text, invisible in prose. Deliver them on the NEXT step
+        # instead; they are already in KV, in order, so the sequence the model
+        # conditions on and the sequence the caller receives stay identical.
+        block = list(self._spec_carry)
+        self._spec_carry = []
         while len(block) < self._SPEC_BLOCK:
             if self._spec_width_set:
                 # Select the narrowest captured width that covers this position.
@@ -3040,11 +3053,19 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             block.extend(committed)
             if eos_set & set(committed):
                 break
-        block = block[: self._SPEC_BLOCK]
-        # Exactly-K valid tokens: a short block happens only at a genuine stop
-        # (EOS emitted or horizon exhausted), so fill the tail with EOS -- the
-        # scheduler trims committed tokens at the first stop token, and the
-        # plugin no longer accepts sentinel padding.
+        if len(block) > self._SPEC_BLOCK:
+            # Past the width: hold the tail for the next step rather than
+            # dropping it (see CARRY above). An EOS anywhere in this block ends
+            # the request, so a carry behind it is moot -- the scheduler trims
+            # at the first stop token and release_request clears it.
+            self._spec_carry = block[self._SPEC_BLOCK :]
+            block = block[: self._SPEC_BLOCK]
+        # Exactly-K valid tokens: a short block now happens only at a genuine
+        # stop -- EOS committed, or a position past the widest captured verify
+        # width -- so fill the tail with EOS; the scheduler trims committed
+        # tokens at the first stop token, and the plugin no longer accepts
+        # sentinel padding. (With the width set the old "horizon exhausted"
+        # case is gone: the session migrates instead of ending.)
         out = torch.full((1, self._SPEC_BLOCK), min(eos_set), dtype=torch.int32)
         out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
         return out
