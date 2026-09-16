@@ -8,6 +8,7 @@ import tempfile
 from collections import namedtuple
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -21,6 +22,12 @@ from .tile_constants import (
     DEFAULT_TILE_R_DIM,
 )
 from .tile_shape import construct_tile_shape
+from .ulp import (
+    ulp_dtype,
+    ulp_elementwise_valid,
+    ulp_verdict_message,
+    warn_if_threshold_unmeaningful,
+)
 
 TEMP_DIR = Path(tempfile.gettempdir())
 
@@ -597,10 +604,55 @@ def passed_test(
     custom_rtol=None,
     custom_pcc_threshold=None,
     tile_shape=None,
+    max_ulp: Optional[int] = None,
+    near_zero_atol: Optional[float] = None,
 ):
+    """Verdict for one result tensor against its golden.
+
+    With *max_ulp* set, the gate becomes "every element is within *max_ulp* representable
+    steps of the reference" and both the tolerance check and the PCC check are skipped.
+    That is not a loosening. On an eltwise tensor a step budget is strictly stronger than
+    either: ``atol=0.05`` is ~6 bf16 steps at 1.0 and ~0.02 at 512, so a tolerance loose
+    enough to pass the tail is blind in the middle, and PCC is a shape metric that stays
+    above 0.99 through error levels no consumer would accept. Running all three would only
+    add two weaker ways to fail. This mirrors the MX path, which has always returned on
+    its lattice verdict without consulting PCC.
+
+    *near_zero_atol* is the floor under that budget for the lanes where the reference
+    crosses zero; see :func:`helpers.ulp.ulp_elementwise_valid`. It does nothing on its
+    own and is rejected without *max_ulp*.
+
+    ``max_ulp=None`` is bit-for-bit the previous behaviour.
+    """
 
     if tile_shape is None:
         tile_shape = construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))
+
+    if max_ulp is None and near_zero_atol is not None:
+        raise ValueError(
+            "near_zero_atol is the floor under a ULP budget and does nothing on its own. "
+            "Pass max_ulp as well, or use custom_atol for a flat tolerance."
+        )
+
+    if max_ulp is not None:
+        # Raises for every format without a per-element ULP. The MX formats and the
+        # block floats below Bfp8_b keep their lattice compares, which are already
+        # ULP-shaped and block-aware; silently applying a per-element count against
+        # their fp32 view would hand the caller a gate it does not have.
+        gate_dtype = ulp_dtype(output_data_format)
+        warn_if_threshold_unmeaningful(max_ulp, gate_dtype)
+        ignored = {
+            "custom_atol": custom_atol,
+            "custom_rtol": custom_rtol,
+            "custom_pcc_threshold": custom_pcc_threshold,
+            "custom_bfp4_max_ulp_diff": custom_bfp4_max_ulp_diff,
+        }
+        named = sorted(name for name, value in ignored.items() if value is not None)
+        if named:
+            raise ValueError(
+                f"max_ulp replaces the tolerance and PCC gates, so {', '.join(named)} "
+                "would be silently ignored. Pass a step budget or a tolerance, not both."
+            )
 
     def get_tolerance(output_data_format):
         try:
@@ -621,7 +673,13 @@ def passed_test(
     golden_tensor = golden_tensor.type(format_dict[output_data_format])
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
-    if output_data_format == DataFormat.Bfp8_b:
+    ulp_distances = None
+
+    if max_ulp is not None:
+        is_valid, ulp_distances = ulp_elementwise_valid(
+            golden_tensor, res_tensor, max_ulp, near_zero_atol=near_zero_atol
+        )
+    elif output_data_format == DataFormat.Bfp8_b:
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
         # that as a mismatch. But Bfp8_b's lattice is fine enough that one step can be
@@ -689,6 +747,22 @@ def passed_test(
         is_valid = is_close | is_nan
 
     is_within_tolerance = torch.all(is_valid)
+
+    if ulp_distances is not None:
+        # Ahead of the tile dump below, so the worst lane and what a step is worth there
+        # are the first thing in the log rather than the last. Logged on a pass too: it
+        # turns every enrolled test into an accuracy datapoint for free.
+        summary = ulp_verdict_message(
+            golden_tensor,
+            res_tensor,
+            ulp_distances,
+            output_data_format,
+            max_ulp=max_ulp,
+        )
+        if is_within_tolerance:
+            logger.debug("ULP within budget — {}", summary)
+        else:
+            logger.error("ULP budget exceeded — {}", summary)
 
     if output_data_format.is_mx_format():
         # Every MX low-bit format is judged by its lattice-aware compare
@@ -779,6 +853,10 @@ def passed_test(
                     res_tensor[idx],
                     golden_tensor[idx],
                 )
+
+    if max_ulp is not None:
+        # A step budget already subsumes both remaining checks; see the docstring.
+        return bool(is_within_tolerance)
 
     if golden_tensor.abs().max().item() < PCC_SIGNAL_FLOOR:
         return bool(is_within_tolerance)
