@@ -64,6 +64,10 @@ class LTXAttention(Module):
     ring_sdpa_chunk_by_n = {
         (True, 8, 4, 9728): (96, 256),
         (True, 8, 4, 38912): (192, 512),
+        # BH 2x4 (sp=4 pads to 128): stage 2 gains ~0.3 s with the wider K chunk (10.51 -> 10.23 s,
+        # VBench-neutral); stage 1 (N=9728) stays on the (256, 256) default, which measured fastest
+        # there — every smaller Q chunk lost time on both stages.
+        (True, 4, 2, 38784): (192, 512),
     }
 
     # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
@@ -195,6 +199,7 @@ class LTXAttention(Module):
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=LTX_SDPA_EXP_APPROX,
         )
+        # The sweep override applies to every stage, so it also takes precedence over the per-N table.
         self._ring_pc_by_n = {
             n: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.sdpa_worker_grid,
@@ -203,7 +208,7 @@ class LTXAttention(Module):
                 exp_approx_mode=LTX_SDPA_EXP_APPROX,
             )
             for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
-            if (b, sp, tp) == mesh_key
+            if (b, sp, tp) == mesh_key and not _ring_chunk_override
         }
         self._sdpa_pc_by_shape = {
             (q, kv): ttnn.SDPAProgramConfig(
