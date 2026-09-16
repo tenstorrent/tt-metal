@@ -13,10 +13,12 @@ Submodules are named to mirror the checkpoint's own keys (``attn.qkv``, ``mlp.w_
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass
 
 import torch
+from safetensors import safe_open
 
 import ttnn
 
@@ -27,6 +29,7 @@ from ...layers.neighborhood_attention import NAKernel, neighborhood_attention_3d
 from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
 from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
+from ...utils.ltx import read_vae_per_channel_stats
 from ...utils.memory_log import log_ccl_cache, log_dram
 from ...utils.tracing import traced_function
 from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
@@ -139,13 +142,8 @@ class DiffVAEOptions:
 
 def decoder_config(path) -> dict:
     """The decoder's architecture block, read from the checkpoint's safetensors metadata."""
-    import json
-    import struct
-
-    with open(path, "rb") as handle:
-        length = struct.unpack("<Q", handle.read(8))[0]
-        header = json.loads(handle.read(length))
-    vae = json.loads(header["__metadata__"]["config"])["vae"]
+    with safe_open(str(path), "pt") as handle:
+        vae = json.loads(handle.metadata()["config"])["vae"]
     config = dict(vae["decoder"])
     for key in ("in_channels", "out_channels", "patch_size", "head_dim", "model_output_type"):
         if key in vae:
@@ -161,6 +159,20 @@ def decoder_config(path) -> dict:
 
 def _tuplify(value):
     return tuple(_tuplify(v) if isinstance(v, list) else v for v in value)
+
+
+def read_decoder_tensors(path, prefixes: tuple[str, ...]) -> dict[str, torch.Tensor]:
+    """The ``decoder.*`` tensors of an LTX-2.5 video-VAE safetensors file whose name (without the
+    ``decoder.`` prefix) starts with one of ``prefixes``, as float32 under that name."""
+    state: dict[str, torch.Tensor] = {}
+    with safe_open(str(path), "pt") as handle:
+        for key in handle.keys():
+            if not key.startswith("decoder."):
+                continue
+            name = key[len("decoder.") :]
+            if name.startswith(prefixes):
+                state[name] = handle.get_tensor(key).float()
+    return state
 
 
 def rope_tables(
@@ -694,29 +706,19 @@ class DeterministicStages(Module):
         return self._rope_cache[dims]
 
     def state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
-        """Load ``decoder.*`` tensors from an LTX-2.5 video-VAE safetensors file, folding
-        ``per_channel_statistics`` into ``conv_in`` when present."""
-        from safetensors import safe_open
+        """Load ``decoder.*`` tensors from an LTX-2.5 video-VAE safetensors file, folding the file's
+        ``per_channel_statistics`` into ``conv_in`` unless ``statistics`` is off."""
+        depth = len(self.det_stages)
+        state = {
+            name: tensor
+            for name, tensor in read_decoder_tensors(path, ("conv_in.", "det_stages.", "upsamples.")).items()
+            # A decoder built with fewer stages than the file ships ignores the rest.
+            if not (name.startswith("det_stages.") and int(name.split(".")[1]) >= depth)
+        }
 
-        state: dict[str, torch.Tensor] = {}
-        stats: dict[str, torch.Tensor] = {}
-        with safe_open(str(path), "pt") as handle:
-            for key in handle.keys():
-                if key.startswith("per_channel_statistics."):
-                    stats[key[len("per_channel_statistics.") :]] = handle.get_tensor(key).float()
-                    continue
-                if not key.startswith("decoder."):
-                    continue
-                name = key[len("decoder.") :]
-                if name.startswith(("conv_in.", "det_stages.", "upsamples.")):
-                    stage = name.split(".")[1] if name.startswith("det_stages.") else None
-                    if stage is not None and int(stage) >= len(self.det_stages):
-                        continue
-                    state[name] = handle.get_tensor(key).float()
-
-        if statistics and "std-of-means" in stats:
+        if statistics:
+            mean, std = (stat.flatten() for stat in read_vae_per_channel_stats(path))
             weight, bias = state["conv_in.weight"], state["conv_in.bias"]
-            std, mean = stats["std-of-means"], stats["mean-of-means"]
             state["conv_in.weight"] = weight * std[None, :]
             state["conv_in.bias"] = bias + weight @ mean
 
@@ -952,18 +954,9 @@ class DiffVAEDecoder(Module):
 
         Kept separate from applying it so the weights can go through the tt_dit disk cache.
         """
-        from safetensors import safe_open
-
         state = {f"stages.{k}": v for k, v in self.stages.state_from_checkpoint(path, statistics=statistics).items()}
-
         prefixes = ("diff_blocks.", "shared_adaln.", "t_embedder.", "conv_in_x_t.", "conv_out.", "norm_out.")
-        with safe_open(str(path), "pt") as handle:
-            for key in handle.keys():
-                if not key.startswith("decoder."):
-                    continue
-                name = key[len("decoder.") :]
-                if name.startswith(prefixes):
-                    state[f"stage5.{name}"] = handle.get_tensor(key).float()
+        state |= {f"stage5.{k}": v for k, v in read_decoder_tensors(path, prefixes).items()}
         return state
 
     def load_checkpoint(self, path, *, statistics: bool = True) -> None:

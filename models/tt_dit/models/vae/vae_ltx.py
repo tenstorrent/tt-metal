@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Sequence
 import torch
 from einops import rearrange
 from loguru import logger
-from safetensors import safe_open
 from safetensors.torch import load_file
 
 import ttnn
@@ -35,7 +34,7 @@ from ...utils.conv3d import (
     conv_pad_width,
     get_conv3d_config,
 )
-from ...utils.ltx import pad_hw_replicate
+from ...utils.ltx import pad_hw_replicate, read_vae_per_channel_stats
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
@@ -1525,29 +1524,6 @@ class LTXVideoEncoder(Module):
 # Latent normalization stats + spatial-2x latent upsample (bridges the VAE
 # per-channel stats with the standalone latent upsampler).
 # =============================================================================
-
-
-def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
-    """Read ``(mean-of-means, std-of-means)`` from a checkpoint and reshape for ``(B, C, F, H, W)``
-    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``.
-
-    Accepts monolith ``vae.per_channel_statistics.*`` and split-file bare ``per_channel_statistics.*``.
-    """
-    with safe_open(checkpoint_path, framework="pt") as f:
-        keys = set(f.keys())
-        mean_key = (
-            "vae.per_channel_statistics.mean-of-means"
-            if "vae.per_channel_statistics.mean-of-means" in keys
-            else "per_channel_statistics.mean-of-means"
-        )
-        std_key = (
-            "vae.per_channel_statistics.std-of-means"
-            if "vae.per_channel_statistics.std-of-means" in keys
-            else "per_channel_statistics.std-of-means"
-        )
-        mean = f.get_tensor(mean_key).float()
-        std = f.get_tensor(std_key).float()
-    return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
 
 
 def _strip_vae_prefix(key: str, *prefixes: str) -> str | None:

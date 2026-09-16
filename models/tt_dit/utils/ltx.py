@@ -6,6 +6,7 @@ import os
 from io import BytesIO
 
 import torch
+from safetensors import safe_open
 
 # I2V conditioning-image H.264 CRF: round-trip through the codec the VAE/DiT were trained on
 # before encoding (a pristine image gives OOD latents). Mirrors ltx_pipelines DEFAULT_IMAGE_CRF.
@@ -78,6 +79,30 @@ STEADY_STATE_REPLAY_LTX_PROMPT = (
 def ceil_to(x: int, multiple: int) -> int:
     """Smallest multiple of ``multiple`` that is >= ``x``."""
     return -(-x // multiple) * multiple
+
+
+def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Read ``(mean-of-means, std-of-means)`` from a video-VAE checkpoint and reshape for
+    ``(B, C, F, H, W)`` broadcast: the un_normalize/normalize bookends matching
+    ``ltx_core.upsample_video``, and what the DiffVAE folds into its ``conv_in``.
+
+    Accepts monolith ``vae.per_channel_statistics.*`` and split-file bare ``per_channel_statistics.*``.
+    """
+    with safe_open(str(checkpoint_path), framework="pt") as f:
+        keys = set(f.keys())
+        mean_key = (
+            "vae.per_channel_statistics.mean-of-means"
+            if "vae.per_channel_statistics.mean-of-means" in keys
+            else "per_channel_statistics.mean-of-means"
+        )
+        std_key = (
+            "vae.per_channel_statistics.std-of-means"
+            if "vae.per_channel_statistics.std-of-means" in keys
+            else "per_channel_statistics.std-of-means"
+        )
+        mean = f.get_tensor(mean_key).float()
+        std = f.get_tensor(std_key).float()
+    return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
 
 
 def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
