@@ -18,6 +18,43 @@ namespace ttnn::operations::experimental::high_bw_all_gather {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+void validate_external_semaphores(const HighBwAllGatherParams& args, const Tensor& input_tensor) {
+    const bool has_ready = args.ready_semaphore.has_value();
+    const bool has_data_valid = args.data_valid_semaphore.has_value();
+    TT_FATAL(
+        has_ready == has_data_valid,
+        "high_bw_all_gather ready_semaphore and data_valid_semaphore must be supplied together or both omitted");
+    if (!has_ready) {
+        return;
+    }
+
+    const auto& ready = args.ready_semaphore.value();
+    const auto& data_valid = args.data_valid_semaphore.value();
+    TT_FATAL(
+        ready.address() != data_valid.address(),
+        "high_bw_all_gather ready_semaphore and data_valid_semaphore must be distinct");
+
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(
+        ready.device() == static_cast<IDevice*>(mesh_device) &&
+            data_valid.device() == static_cast<IDevice*>(mesh_device),
+        "high_bw_all_gather external semaphores must be created on the input tensor's mesh device");
+
+    // attribute_values() is a temporary tuple; copy the metadata before inspecting it.
+    const auto ready_attributes = ready.attribute_values();
+    const auto data_valid_attributes = data_valid.attribute_values();
+    const auto ready_buffer_type = std::get<1>(ready_attributes);
+    const auto data_valid_buffer_type = std::get<1>(data_valid_attributes);
+    const bool has_l1_small = mesh_device->allocator()->get_bank_size(BufferType::L1_SMALL) > 0;
+    const auto expected_buffer_type = has_l1_small ? BufferType::L1_SMALL : BufferType::L1;
+    TT_FATAL(
+        ready_buffer_type == expected_buffer_type && data_valid_buffer_type == expected_buffer_type,
+        "high_bw_all_gather external semaphores must use buffer type {}, got ready={} and data_valid={}",
+        expected_buffer_type,
+        ready_buffer_type,
+        data_valid_buffer_type);
+}
+
 tt::tt_metal::TensorTopology derive_output_topology(
     const Tensor& input_tensor, const std::optional<uint32_t>& cluster_axis, uint32_t gather_dim) {
     const auto& input_topology = input_tensor.tensor_topology();
@@ -73,7 +110,8 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.neighbor_unicast_eligible,
         args.neighbor_route_plan_hash,
         args.subdevice_id,
-        args.sub_core_grid,
+        args.resolved_worker_core_grid,
+        args.ready_semaphore.has_value(),
         args.input_batch_index.has_value(),
         args.gathered_dim_size.has_value(),
         // Slot select via metadata changes the reader binary (it reads the page base on-device instead of
@@ -212,6 +250,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device!");
+    validate_external_semaphores(args, input_tensor);
 
     // Constraints on other inputs
     int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
@@ -386,6 +425,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     // bounds here; all tensor/layout/fabric structure belongs to the program key and was proven on
     // the miss path. This keeps a serving-loop cache hit to scalar validation plus direct RT-arg writes.
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
+    validate_external_semaphores(args, tensor_args.input_tensor);
     const auto& output_tensor = tensor_args.output_tensor;
     TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
     validate_slot_extent_control_mix(args, tensor_args);
@@ -464,7 +504,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
-    uint32_t gathered_slab_global) {
+    uint32_t gathered_slab_global,
+    const std::optional<GlobalSemaphore>& ready_semaphore,
+    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -592,6 +634,27 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
+    const auto subdevice_manager_id = mesh_device->get_active_sub_device_manager_id();
+    const auto selected_subdevice_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto active_subdevice_ids = mesh_device->get_sub_device_ids();
+    TT_FATAL(
+        std::find(active_subdevice_ids.begin(), active_subdevice_ids.end(), selected_subdevice_id) !=
+            active_subdevice_ids.end(),
+        "high_bw_all_gather subdevice_id {} is not part of active subdevice manager {}",
+        selected_subdevice_id,
+        subdevice_manager_id);
+    const auto selected_subdevice_cores =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, selected_subdevice_id);
+    if (sub_core_grid.has_value()) {
+        TT_FATAL(
+            selected_subdevice_cores.contains(*sub_core_grid),
+            "high_bw_all_gather sub_core_grid {} must be fully contained in TENSIX subdevice {} cores {}",
+            *sub_core_grid,
+            selected_subdevice_id,
+            selected_subdevice_cores);
+    }
+    const auto resolved_worker_core_grid = sub_core_grid.value_or(selected_subdevice_cores);
+
     return {
         HighBwAllGatherParams{
             .dim = gather_dim,
@@ -613,6 +676,10 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .neighbor_route_plan_hash = direct_neighbor_route_hash,
             .subdevice_id = subdevice_id,
             .sub_core_grid = sub_core_grid,
+            .subdevice_manager_id = subdevice_manager_id,
+            .resolved_worker_core_grid = resolved_worker_core_grid,
+            .ready_semaphore = ready_semaphore,
+            .data_valid_semaphore = data_valid_semaphore,
             .input_batch_index = input_batch_index,
             .gathered_dim_size = gathered_dim_size,
             .batch_slot_num_layers = batch_slot_num_layers,
@@ -643,7 +710,9 @@ Tensor high_bw_all_gather(
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
-    uint32_t gathered_slab_global) {
+    uint32_t gathered_slab_global,
+    const std::optional<GlobalSemaphore>& ready_semaphore,
+    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -658,7 +727,9 @@ Tensor high_bw_all_gather(
         batch_slot_num_layers,
         batch_slot_layer_idx,
         gathered_prefix_tensor,
-        gathered_slab_global);
+        gathered_slab_global,
+        ready_semaphore,
+        data_valid_semaphore);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }
