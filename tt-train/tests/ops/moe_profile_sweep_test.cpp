@@ -24,7 +24,6 @@
 #include <tools/profiler/op_profiler.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <ttnn/operations/core/core.hpp>
 #include <utility>
 #include <vector>
@@ -127,10 +126,10 @@ void run_group_iters(const ttml::test_utils::moe::MoeDeviceInputs& in, uint32_t 
     for (uint32_t i = 0; i < kWarmup; ++i) {
         auto _ = ttml::metal::moe_group(in.dispatched_bf16, in.metadata_u16, in.scores_bf16, in.leids_u16, e_local, k);
     }
-    tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
     for (uint32_t i = 0; i < kTimedIters; ++i) {
         auto _ = ttml::metal::moe_group(in.dispatched_bf16, in.metadata_u16, in.scores_bf16, in.leids_u16, e_local, k);
-        tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
         // Tracy `-r` flushes the device profiler buffer at process exit; no
         // per-iter ReadDeviceProfilerResults call here (the IDevice* overload
         // doesn't accept MeshDevice).
@@ -150,10 +149,10 @@ void run_ungroup_iters(
     for (uint32_t i = 0; i < kWarmup; ++i) {
         auto _ = ttml::metal::moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, D, B, S);
     }
-    tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
     for (uint32_t i = 0; i < kTimedIters; ++i) {
         auto _ = ttml::metal::moe_ungroup(expert_out, plan, offsets, grouped_scores, e_local, D, B, S);
-        tt::tt_metal::distributed::Synchronize(&dev, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
         // Tracy `-r` flushes the device profiler buffer at process exit; no
         // per-iter ReadDeviceProfilerResults call here (the IDevice* overload
         // doesn't accept MeshDevice).

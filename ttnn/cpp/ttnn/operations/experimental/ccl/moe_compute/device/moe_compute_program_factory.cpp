@@ -197,7 +197,7 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
         final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore.value_or(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0));
 
-        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     }
 
     for (const auto& coord : mesh_coordinates.coords()) {
@@ -353,6 +353,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
+    // and at least the W2 A2A matmul width.
     // (formula-driven, replaces the pre-#43932 per-config table). The ring size is the live
     // DRAM-bank count, so each ring core maps 1:1 to a DRAM bank and no cross-bank walk is needed.
     const uint32_t expected_matmul_n =
@@ -363,7 +364,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         expected_matmul_n,
         matmul_num_cores);
     const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t a2a_cb_pages = (a2a_cb_pages_raw + 1) & ~1u;  // even-rounded per #43932
+    const uint32_t a2a_cb_pages = moe_ring::even_stride_at_least_a2a_width(a2a_cb_pages_raw);
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
@@ -575,7 +576,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Tilize CBs
     //-------------------------------------------------------------------------
 
-    // CB for passing total_chunks from writer to compute
+    // CB for passing total_chunks from the tilize reader to the tilize compute kernel
     uint32_t total_chunks_cb_id = tt::CBIndex::c_3;
     // full indices buffer
     uint32_t indices_tensor_cb_id = tt::CBIndex::c_4;
@@ -730,7 +731,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_num_cores - 1,  // one entry per non-drain core
         tt::DataFormat::UInt32);
 
-    // CB for passing total_chunks from writer to compute kernel
+    // CB for passing total_chunks from the tilize reader to the tilize compute kernel
     // Single page holding one uint32_t value. Page size floored at l1_alignment /
     // CIRCULAR_BUFFER_COMPUTE_WORD_SIZE so the unpack LLK fifo_* fields (16 B words) are non-zero
     // when tilize_compute pops this CB.

@@ -31,12 +31,6 @@ inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_(const std::uint32_
     return block_ct_dim;
 }
 
-inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_(const std::uint32_t num_faces)
-{
-    // Wormhole uses num_faces to select the tilize loop count.
-    return num_faces;
-}
-
 inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t tile_count, const std::uint32_t tile_num_faces)
 {
     // Wormhole tracks dvalids per tile face.
@@ -81,15 +75,10 @@ inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_([[maybe_unused]] c
     return 0;
 }
 
-inline std::uint32_t _llk_unpack_tilize_num_faces_wrapper_([[maybe_unused]] const std::uint32_t num_faces)
-{
-    // Blackhole tests keep unpack_tilize on the default 4-face path.
-    return 4;
-}
-
 inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t tile_count, [[maybe_unused]] const std::uint32_t tile_num_faces)
 {
-    // Blackhole tracks one dvalid per tile for unpack_tilize.
+    // Blackhole unpack_tilize emits 1 DVALID per tile: 8-bit via inline path (SetDvalid on
+    // last face of active pair), non-8-bit via the whole-tile BH workaround.
     return tile_count;
 }
 
@@ -114,5 +103,13 @@ inline void _llk_unpack_tilize_uninit_wrapper_(const std::uint32_t unpack_dst_fo
 #else
 #error "Unsupported architecture for LLK unpack tilize wrappers"
 #endif
+
+// Isolate handshake count shared by unpack and math. The two TRISC threads deadlock
+// if they disagree. Tilize posts architecture-specific dvalids (BH: 1/tile, WH: 1/face);
+// unpack_A posts one per face.
+inline std::uint32_t _perf_src_handshake_iters_(const bool tilize_en, const std::uint32_t num_tiles, const std::uint32_t num_faces)
+{
+    return tilize_en ? _llk_unpack_tilize_num_dvalids_wrapper_(num_tiles, num_faces) : num_tiles * num_faces;
+}
 
 #endif // ENV_LLK_INFRA

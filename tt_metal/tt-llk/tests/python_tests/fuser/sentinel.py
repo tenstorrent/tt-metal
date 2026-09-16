@@ -82,18 +82,28 @@ class FuserSentinel:
         from .fpu_node import FpuNode
 
         for node in operation.math.math_nodes:
-            if isinstance(node, FpuNode):
+            if isinstance(node, FpuNode) and node.src_a is not None:
                 return node
         return None
 
-    @staticmethod
     def _get_src_formats(
+        self,
+        config: "GlobalConfig",
         compute_node: "FpuNode",
+        output_format: DataFormat,
     ) -> Tuple[DataFormat, Optional[DataFormat]]:
         """Extract src_a and src_b data formats, handling DEST_TO_SRCA routing."""
         src_a_fmt = compute_node.src_a.data_format
-        if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-            return src_a_fmt, src_a_fmt
+        if compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE:
+            dest_fmt = self._unpack_A_dst
+            if config.dest_acc.value:
+                dest_fmt = (
+                    DataFormat.Int32 if dest_fmt.is_integer() else DataFormat.Float32
+                )
+            dest_fmt = infer_unpack_out(dest_fmt, output_format, config.dest_acc)
+            if compute_node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
+                return dest_fmt, src_a_fmt
+            return src_a_fmt, dest_fmt
         if compute_node.src_b is not None:
             return src_a_fmt, compute_node.src_b.data_format
         return src_a_fmt, None
@@ -109,7 +119,9 @@ class FuserSentinel:
         Returns:
             (unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, math_fmt, pack_src)
         """
-        src_a_fmt, src_b_fmt = self._get_src_formats(compute_node)
+        src_a_fmt, src_b_fmt = self._get_src_formats(
+            config, compute_node, output_format
+        )
         unpack_to_dest = compute_node.unpack_to_dest.value
         dest_acc = config.dest_acc
 
@@ -290,6 +302,9 @@ class FuserSentinel:
         and emits _llk_unpack_reconfig_data_format_src{a,b}_impl_ for channels that changed.
         When tile shapes differ, uses FACE_ROW_MAJOR to reprogram dim/stride registers.
         """
+        if compute_node.src_a is None:
+            return ""
+
         output_format = operation.math._get_pack_nodes()[0].output.data_format
         new_A_src, new_A_dst, new_B_src, new_B_dst, _, _ = self._infer_node_formats(
             config, compute_node, output_format
@@ -494,7 +509,7 @@ class FuserSentinel:
             self.golden_pack_src = pack_src
             return
 
-        if not isinstance(compute_node, FpuNode):
+        if not isinstance(compute_node, FpuNode) or compute_node.src_a is None:
             return
 
         _, _, _, _, math_fmt, pack_src = self._infer_node_formats(

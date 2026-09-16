@@ -10,7 +10,7 @@
 #include <utility>
 
 namespace tt::umd {
-class TlbWindow;
+class IoWindow;
 }
 
 namespace tt::tt_metal::distributed {
@@ -130,6 +130,24 @@ public:
         uint32_t fifo_size,
         ExternalConfigBuffer external_config,
         ProcessScope scope = ProcessScope::CrossProcess);
+
+    /**
+     * @brief Constructs a D2HSocket with an L2CPU sender.
+     *
+     * Behaves as the standard constructor, with an L2CPU tile as the sender.
+     * L2CPU LIM has no allocator in tt-metal, so the config buffer address is
+     * caller-supplied rather than allocated here.
+     *
+     * @param mesh_device The mesh device containing the sender L2CPU.
+     * @param sender_l2cpu The sending L2CPU tile. @c core_coord must be the TRANSLATED NOC
+     *                     coord of an L2CPU tile on the target device.
+     * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+     * @param config_buffer_address LIM address on the sender L2CPU for the socket metadata.
+     *                              Must be L1-aligned, at least required_config_buffer_size()
+     *                              bytes, and within the L2CPU's IoWindow.
+     */
+    D2HSocket(
+        MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address);
 
     /**
      * @brief Connects to an existing D2HSocket from another process.
@@ -318,6 +336,12 @@ public:
 private:
     D2HSocket() = default;
 
+    // Mock owner only: redirect the device-produced counter to a host-side stand-in.
+    void enable_mock_flow_control(const MeshDevice& mesh_device);
+
+    // Release a blocked mock wait without advertising persistent availability.
+    void simulate_device_sent(uint32_t num_bytes) { mock_bytes_sent_ = bytes_acked_ + num_bytes; }
+
     struct PinnedBufferInfo {
         uint32_t pcie_xy_enc = 0;
         uint32_t addr_lo = 0;
@@ -360,10 +384,13 @@ private:
     uint32_t config_buffer_address_ = 0;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
-    tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
+    std::unique_ptr<tt::umd::IoWindow> sender_core_window_;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_sent_ptr_ = nullptr;
+    // Host-side device-counter stand-in and its activation flag for mock.
+    uint32_t mock_bytes_sent_ = 0;
+    bool mock_flow_control_enabled_ = false;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer_ = nullptr;
     std::unique_ptr<NamedShm> shm_;
     ProcessScope process_scope_ = ProcessScope::CrossProcess;
@@ -381,6 +408,10 @@ private:
     volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
 
     std::optional<DeviceAddr> svc_config_l1_addr_;
+
+    // True when the sender is an L2CPU tile. Selects the L2CPU code paths in
+    // init_sender_tlb() / write_socket_metadata() and blocks descriptor export.
+    bool is_l2cpu_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed

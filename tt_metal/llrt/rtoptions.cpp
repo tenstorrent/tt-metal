@@ -58,6 +58,7 @@ enum class EnvVarID {
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
+    TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
 
     // ========================================
@@ -92,33 +93,36 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,  // Enable experimental VC1 inter-mesh pass-through
-    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
-    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
-    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FORCE_REINIT,                              // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,                        // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,               // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,                 // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
+    RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
-    TT_METAL_MEASURE_DFB_INIT_TIME,                     // Temporary DFB init rdcycle instrumentation (deprecate once device profiler covers this).
+    TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
+                                     // covers this).
+    TT_METAL_TDP_LIMIT_WATTS,        // Firmware throttler TDP limit [W] (Blackhole)
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -145,6 +149,9 @@ enum class EnvVarID {
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
+    TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS,           // NOC debug dump: background poll period (ms)
+    TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS,      // NOC debug dump: period between self-triggered full reads (ms)
+    TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS,        // NOC debug dump: mid-run watermark margin (ms)
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
     TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
 
@@ -184,6 +191,8 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
     TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
     TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
+    TT_METAL_INSPECTOR_LOG_MESH_BUFFERS,               // Log mesh buffer lifecycle to YAML (expensive, off by default)
+    TT_METAL_INSPECTOR_LOG_MESH_SOCKETS,               // Log mesh socket lifecycle to YAML (off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -241,12 +250,16 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
+    TT_METAL_FW_SRC_BRISC,            // BRISC firmware variant to JIT-build instead of the in-tree one
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 
     // ========================================
     // ALLOCATOR CONFIGURATION
     // ========================================
-    TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
+    TT_METAL_ALLOCATOR_MODE_HYBRID,           // Enable hybrid lockstep + per-core L1 allocator mode
+    TT_METAL_TRACE_ALLOC_TRACKING,            // Enable per-trace unsafe allocation accounting
+    TT_METAL_TRACE_ALLOC_TRACEBACKS,          // Capture diagnostics for unsafe trace allocations
+    TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
 
     // ========================================
     // SHM TRACKING
@@ -308,6 +321,11 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
+    // TTNN may need these process-wide options while its Python module is being initialized, before a MetalContext
+    // (and therefore a RunTimeOptions instance) exists. It reads the same lazy snapshot through a native binding.
+    // Touch it here as well to guarantee that it is initialized no later than RunTimeOptions construction.
+    (void)get_trace_allocation_options();
+
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -371,6 +389,32 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
+}
+
+const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
+    // Unlike ordinary RunTimeOptions fields, these options may be queried by TTNN before MetalContext creates a
+    // RunTimeOptions instance. Keep their parsing owned by RunTimeOptions, but cache all related values in one
+    // process-wide snapshot so TTNN and Metal cannot observe different settings.
+    static const TraceAllocationOptions options = [] {
+        const bool tracking_enabled = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
+        return TraceAllocationOptions{
+            .tracking_enabled = tracking_enabled,
+            .diagnostics_enabled = tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS")),
+            .skip_program_cache =
+                tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE")),
+        };
+    }();
+    return options;
+}
+
+bool RunTimeOptions::get_trace_allocation_tracking_enabled() { return get_trace_allocation_options().tracking_enabled; }
+
+bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
+    return get_trace_allocation_options().diagnostics_enabled;
+}
+
+bool RunTimeOptions::get_trace_allocation_skip_program_cache_enabled() {
+    return get_trace_allocation_options().skip_program_cache;
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -503,6 +547,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->custom_fabric_mesh_graph_desc_path = std::string(value);
             break;
 
+        // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH
+        // Path to a Factory System Descriptor (FSD) textproto describing the as-built/expected topology.
+        // When set, tooling may map against it instead of live-discovering the PSD, and it lets
+        // Fabric 2.0 statically reroute traffic around broken links.
+        // Default: unset (fall back to live PSD discovery)
+        // Usage: export TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=/path/to/fsd.textproto
+        // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
+        case EnvVarID::TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH:
+            this->factory_system_descriptor_path = std::string(value);
+            break;
+
         // TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE
         // Override core grid configuration (this is meant to be deprecated).
         // Default: Hardware-detected core grid
@@ -608,7 +663,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Use Ethernet cores for dispatch in tests.
         // Default: Worker cores (default dispatch type)
         // Usage: export TT_METAL_GTEST_ETH_DISPATCH=1
-        case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH: this->dispatch_core_type = tt_metal::DispatchCoreType::ETH; break;
+        case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH:
+            this->dispatch_core_type_override = tt_metal::DispatchCoreType::ETH;
+            break;
 
         // TT_METAL_TENSIX_DISPATCH_CORES
         // Quasar: use interim Tensix dispatch cores from core descriptor YAML instead of soc dispatch-engine cores.
@@ -827,6 +884,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->simulator_direct_tensor_writes = is_env_enabled(value);
             break;
 
+        // TT_METAL_QUASAR_NOC_API_VERSION
+        // Set the NOC API version for Quasar.
+        // Default: 2 (use NOC API v2)
+        // Usage: export TT_METAL_QUASAR_NOC_API_VERSION=1
+        case EnvVarID::TT_METAL_QUASAR_NOC_API_VERSION:
+            this->quasar_noc_api_version = std::stoi(value);
+            TT_FATAL(
+                this->quasar_noc_api_version == 1 || this->quasar_noc_api_version == 2,
+                "Invalid NOC API version: {}",
+                this->quasar_noc_api_version);
+            break;
+
         // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
         // Controls Blackhole DRAM programmable cores in the HAL:
         //   =1 → force enable, =0 → force disable, unset → auto-detect (firmware + topology)
@@ -843,6 +912,34 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_MEASURE_DFB_INIT_TIME:
             this->measure_dfb_init_time_enabled = is_env_enabled(value);
             break;
+
+        // TT_METAL_TDP_LIMIT_WATTS
+        // TDP limit [W] to hand the firmware throttler when the cluster opens, or 0 to restore the
+        // board default. It stays in effect until the chip is reset or another writer replaces it,
+        // outliving this process. Needs Blackhole with firmware 19.11.0+; anywhere else the limit
+        // is left alone with a warning. An empty value is treated as unset.
+        // Default: unset (whatever limit is already in effect stays)
+        // Usage: export TT_METAL_TDP_LIMIT_WATTS=300
+        case EnvVarID::TT_METAL_TDP_LIMIT_WATTS: {
+            std::string limit_value = trim_copy(value);
+            if (limit_value.empty()) {
+                this->tdp_limit_watts = std::nullopt;
+                break;
+            }
+            try {
+                size_t parse_pos = 0;
+                unsigned long long parsed_limit = std::stoull(limit_value, &parse_pos, 0);
+                if (parse_pos != limit_value.size() || parsed_limit > std::numeric_limits<uint32_t>::max()) {
+                    TT_THROW("TT_METAL_TDP_LIMIT_WATTS must be a watt count: {}", value);
+                }
+                this->tdp_limit_watts = static_cast<uint32_t>(parsed_limit);
+            } catch (const std::invalid_argument&) {
+                TT_THROW("TT_METAL_TDP_LIMIT_WATTS must be a watt count: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_TDP_LIMIT_WATTS value out of range: {}", value);
+            }
+            break;
+        }
 
         // ========================================
         // PROFILING & PERFORMANCE
@@ -922,8 +1019,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
-                constexpr uint32_t L1_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
-                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_BITS;
+                // PROFILE_PERF_COUNTERS_L1_0 to L1_5: the six L1 mux groups, which share one set of counters.
+                constexpr uint32_t L1_GROUP_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9);
+                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_GROUP_BITS;
                 if (l1_selected && (l1_selected & (l1_selected - 1))) {
                     TT_THROW(
                         "Multiple L1 perf counter banks cannot be enabled simultaneously. "
@@ -964,10 +1062,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (no mid-run dumps)
         // Usage: export TT_METAL_PROFILER_MID_RUN_DUMP=1
         case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: {
-            // Only enable mid-run dumps if device profiler is also enabled
-            if (this->profiler_enabled && is_env_enabled(value)) {
-                this->profiler_mid_run_dump = true;
-            }
+            this->profiler_mid_run_dump = is_env_enabled(value);
             break;
         }
 
@@ -1000,6 +1095,46 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_accumulate = true;
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS
+        // How often the NOC debug dump background thread polls the device for stalled cores. Lower values unblock
+        // stalled cores sooner at the cost of more NoC/PCIe traffic.
+        // Default: 500
+        // Usage: export TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS=250
+        case EnvVarID::TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS: {
+            if (value) {
+                this->noc_debug_poll_interval = std::chrono::milliseconds(std::stoi(value));
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS
+        // How often the NOC debug dump thread self-triggers a full read, then processes, reports and discharges. This
+        // bounds host memory and surfaces issues during a long run. Rounded up to a whole number of poll intervals.
+        // Set to 0 to disable the self-triggered full read (events are then only processed on a user read or at
+        // device close).
+        // Default: 4000
+        // Usage: export TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS=10000
+        case EnvVarID::TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS: {
+            if (value) {
+                this->noc_debug_full_read_interval = std::chrono::milliseconds(std::stoi(value));
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS
+        // Bounded-lateness margin used when processing NOC debug events mid-run: events newer than
+        // (latest seen - margin) are held back so a momentarily-stalled core cannot have a cross-core violation
+        // judged before its earlier event arrives. MUST exceed TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS, which bounds the
+        // worst-case record-to-host latency; this is validated at debug-dump thread start.
+        // Default: 3000
+        // Usage: export TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS=5000
+        case EnvVarID::TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS: {
+            if (value) {
+                this->noc_debug_watermark_margin = std::chrono::milliseconds(std::stoi(value));
             }
             break;
         }
@@ -1403,6 +1538,30 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_INSPECTOR_LOG_MESH_BUFFERS
+        // Enables logging of every MeshBuffer construction and destruction to YAML.
+        // WARNING: This is expensive. Buffers churn orders of magnitude faster than programs, so the log
+        // grows very quickly and each event costs a flushed write.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_MESH_BUFFERS=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_MESH_BUFFERS:
+            this->inspector_settings.log_mesh_buffers = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_mesh_buffers = true;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_LOG_MESH_SOCKETS
+        // Enables logging of every MeshSocket creation and destruction to YAML.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_MESH_SOCKETS=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_MESH_SOCKETS:
+            this->inspector_settings.log_mesh_sockets = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_mesh_sockets = true;
+            }
+            break;
+
         // ========================================
         // DEBUG PRINTING (DPRINT)
         // ========================================
@@ -1645,6 +1804,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
 
+        // TT_METAL_FW_SRC_BRISC
+        // Select a supported BRISC firmware variant instead of
+        // tt_metal/hw/firmware/src/tt-1xx/brisc.cc. A non-empty value also disables the precompiled firmware.
+        // Default: unset
+        // Usage: export TT_METAL_FW_SRC_BRISC=blaze
+        case EnvVarID::TT_METAL_FW_SRC_BRISC: {
+            if (value != nullptr && *value != '\0') {
+                const std::string variant = to_lower_copy(trim_copy(value));
+                TT_FATAL(
+                    variant == "blaze", "Unsupported TT_METAL_FW_SRC_BRISC value '{}'; supported values: blaze", value);
+                this->brisc_firmware_variant = BriscFirmwareVariant::Blaze;
+                this->set_disable_precompiled_fw(true);
+            }
+            break;
+        }
+
         // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
         // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.
         // Default: 50
@@ -1672,6 +1847,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (lockstep-only allocation)
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
+
+        // These process-wide settings are parsed together by get_trace_allocation_options(). That snapshot may be
+        // initialized before this instance exists and is explicitly touched at the start of the constructor.
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.
@@ -2185,14 +2366,6 @@ std::string RunTimeOptions::get_sanitizer_hash() const {
     hash_str += optional_hash(san.fault);
     hash_str += optional_hash(san.internal);
     return hash_str;
-}
-
-// Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
-// depends on RTOptions settings.
-tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
-    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
-    dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
-    return dispatch_core_config;
 }
 
 void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {

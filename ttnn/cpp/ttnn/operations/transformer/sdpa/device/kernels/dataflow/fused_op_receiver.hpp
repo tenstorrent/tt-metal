@@ -50,7 +50,9 @@ struct RingSDPAOpReceiver {
                 Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(val);
             }
         });
-        // The split shard's second half lands via direction 1 (all-gather semaphore index 0)
+        // The split shard's second half is the forward chain's final arrival, on semaphore_ids[0] —
+        // the semaphore that also carries the local-slice pre-signal (hence the +2 in the threshold;
+        // see push_ring_sdpa_fused_op_rt_args).
         if (this->wait_for_op_signal && this->split_forwarding_enabled && ring_id == this->split_shard_id) {
             Semaphore<>(this->signal_op_semaphore_ids[0]).wait_min(this->split_second_half_wait);
         }

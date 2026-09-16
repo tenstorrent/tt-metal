@@ -299,7 +299,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so"]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so", "libtracy.so*"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -342,7 +342,10 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
-            "ttnn/kernel_lib/*",
+            # Kernel-library JIT headers are organized into nested API domains (for example,
+            # eltwise/core and eltwise/unary). Keep this recursive so every migrated kernel sees
+            # the same header tree in an installed wheel as it does in a source checkout.
+            "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
         ]
         tt_metal_patterns = [

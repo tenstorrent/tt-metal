@@ -10,7 +10,7 @@ on:
         options:
           - manual
           - models-mandatory # unit tests only
-          - models-extended # unit, demo, model perf tests
+          - models-extended # unit tests only
         default: manual
       extra-tag:
         required: true
@@ -32,40 +32,9 @@ on:
           - llama3.2-90b-vision
           - llama3.2-90b
           - mixtral
-          - grok
           - unet shallow
           - qwen25_vl
           - gemma3-small
-      t3000-demo:
-        description: "Demo tests: Select 'all', specific model or 'disabled'"
-        type: choice
-        default: disabled
-        options:
-          - disabled
-          - all
-          - llama3
-          - llama3_vision
-          - llama3_90b_vision
-          - llama3_70b
-          - resnet50
-          - motif
-          - mixtral
-          - whisper
-          - qwen3
-          - qwen25
-          - qwen25_vl
-          - gemma3
-          - mochi
-      t3000-perf:
-        description: "Perf tests: Select 'all', specific model or 'disabled'"
-        type: choice
-        default: disabled
-        options:
-          - disabled
-          - all
-          - resnet50
-          - mochi
-          - motif
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
         type: choice
@@ -76,10 +45,6 @@ on:
           - tteager
           - ethernet
           - trace stress
-          - resnet
-          - motif
-          - mochi
-          - deepseek-modules
       t3000-e2e:
         required: false
         type: boolean
@@ -122,8 +87,6 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       run-unit: ${{ steps.logic.outputs.run-unit }}
-      run-demo: ${{ steps.logic.outputs.run-demo }}
-      run-perf: ${{ steps.logic.outputs.run-perf }}
       run-integration: ${{ steps.logic.outputs.run-integration }}
       run-e2e: ${{ steps.logic.outputs.run-e2e }}
       run-profiler: ${{ steps.logic.outputs.run-profiler }}
@@ -134,24 +97,18 @@ jobs:
           case "${{ inputs.trigger_type }}" in
             "manual")
               echo "run-unit=${{ inputs.t3000-unit != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-perf=${{ inputs.t3000-perf != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-integration=${{ inputs.t3000-integration != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-e2e=${{ inputs.t3000-e2e }}" >> $GITHUB_OUTPUT
               echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-unit=true" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-perf=false" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
               ;;
             "models-extended")
               echo "run-unit=true" >> $GITHUB_OUTPUT
-              echo "run-demo=true" >> $GITHUB_OUTPUT
-              echo "run-perf=true" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
@@ -159,6 +116,7 @@ jobs:
           esac
   build-artifact:
     needs: [check-harbor, determine-tests]
+    if: ${{ !cancelled() && needs.determine-tests.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -182,28 +140,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-unit || 'all' }}
-  t3000-demo-tests:
-    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    with:
-      enabled-skus: "wh_llmbox_perf"
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-demo || 'all' }}
-  t3000-perf-tests:
-    if: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/t3000-perf-tests-impl.yaml
-    with:
-      enabled-skus: "wh_llmbox_perf"
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-perf || 'all' }}
   t3000-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
     needs: [build-artifact, determine-tests]

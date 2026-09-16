@@ -857,6 +857,22 @@ constexpr std::uint32_t get_dest_max_tiles()
 }
 
 /**
+ * @brief Runtime variant of get_dest_max_tiles for assert sites. Reads dest
+ *        accumulation mode from ALU_ACC_CTRL_Fp32_enabled rather than a
+ *        template parameter. Only ever evaluated inside LLK_ASSERT (compiled
+ *        out in production via sizeof).
+ */
+template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
+inline std::uint32_t get_dest_max_tiles_rt()
+{
+    const bool accum_mode = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+    const std::uint32_t dest_register_size =
+        SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                       : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    return dest_register_size >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
+}
+
+/**
  * @brief Returns the maximum number of tiles that fit in the packer's dest region
  *        based on the currently configured W-stride (read from the hardware config register).
  *
@@ -865,11 +881,11 @@ constexpr std::uint32_t get_dest_max_tiles()
  * even when kernels reconfigure the stride for non-standard tile dimensions (e.g. 8x32).
  *
  * Byte capacity of the dest sync region (DEST_REGISTER_{HALF,FULL}_SIZE_BYTES) is constant
- * regardless of ACCUM_MODE because FP32 halves the row count but doubles the datum size,
+ * regardless of dest accumulation mode because FP32 halves the row count but doubles the datum size,
  * which cancels out against the doubled x_stride already baked into the configured W-stride.
  * W-stride from the packer config is in the same byte-oriented addressing units.
  */
-template <DstSync SYNC_MODE, bool ACCUM_MODE>
+template <DstSync SYNC_MODE>
 __attribute__((noinline)) std::uint32_t get_pack_dest_max_tiles()
 {
     constexpr std::uint32_t dest_sync_region_size_bytes = SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE_BYTES : DEST_REGISTER_FULL_SIZE_BYTES;

@@ -98,8 +98,30 @@ Tensor untilize_with_unpadding(
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
+    // Reserve the output buffer's per-core L1 up front: it is allocated after this check
+    // but before the CBs are placed, so leaving it out overestimates the CB budget and can
+    // pick a factory whose static CBs then clash with it.
+    // output_end holds inclusive end indices, so the produced shape is end + 1 per dim.
+    ttsl::SmallVector<uint32_t> output_shape_vector;
+    output_shape_vector.reserve(output_end.rank());
+    for (size_t index = 0; index < output_end.rank(); ++index) {
+        output_shape_vector.push_back(output_end[index] + 1);
+    }
+    const uint32_t pending_l1_output_bytes = operations::data_movement::get_pending_l1_output_reservation(
+        input_tensor,
+        ttnn::Shape(std::move(output_shape_vector)),
+        memory_config.value_or(input_tensor.memory_config()),
+        input_tensor.dtype(),
+        Layout::ROW_MAJOR);
+
     bool enough_space_height = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        /*staging_bytes_per_tile=*/0,
+        /*fixed_staging_bytes=*/0,
+        pending_l1_output_bytes);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return ttnn::prim::untilize_with_unpadding(

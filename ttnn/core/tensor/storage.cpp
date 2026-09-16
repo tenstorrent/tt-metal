@@ -165,6 +165,16 @@ const tt::tt_metal::distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() co
         mesh_tensor_holder_->state_);
 }
 
+const tt::tt_metal::distributed::MeshBuffer& DeviceStorage::get_root_mesh_buffer() const {
+    return std::visit(
+        ttsl::overloaded{
+            [](const MeshTensorHolder::Allocated& allocated) -> const tt::tt_metal::distributed::MeshBuffer& {
+                return allocated.mesh_tensor_.mesh_buffer();
+            },
+            [](const auto&) -> const tt::tt_metal::distributed::MeshBuffer& { TT_THROW("Tensor is not allocated"); }},
+        get_root_mesh_tensor()->state_);
+}
+
 bool DeviceStorage::is_sole_owner_of_device_memory() const {
     if (!is_allocated()) {
         return false;
@@ -212,6 +222,8 @@ void DeviceStorage::deallocate() {
 }
 
 bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_allocated(); }
+
+bool DeviceStorage::is_root_allocated() const { return get_root_mesh_tensor()->is_allocated(); }
 
 bool DeviceStorage::is_uniform_storage() const { return coords_.size() == get_mesh_tensor().device().num_devices(); }
 

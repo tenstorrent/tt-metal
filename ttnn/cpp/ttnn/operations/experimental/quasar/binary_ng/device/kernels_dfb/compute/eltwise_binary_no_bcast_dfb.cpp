@@ -49,7 +49,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))

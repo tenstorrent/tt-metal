@@ -16,6 +16,7 @@ from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -51,7 +52,7 @@ from ....utils.tensor import bf16_tensor
         pytest.param(1920, 1920, 64, 30, 1920, True, False, 2, 4100, 333, id="motif_context_pre_only"),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_attention_motif(
     *,
     mesh_device: ttnn.MeshDevice,
