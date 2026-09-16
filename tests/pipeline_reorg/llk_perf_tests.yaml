@@ -5,127 +5,153 @@
 # LLK perf tests are no longer triggered on PR label "llk:performance"
 # ci-quiet log mode is hard-coded.
 # SPEED_OF_LIGHT is supplied by llk-perf-impl and defaults to true in the runners.
-# {split_group} is substituted with each row's split_group by prepare_test_matrix.py,
-# so every group below shares one identical cmd that calls a shared runner in
-# tt_metal/tt-llk/tests/: run_llk_perf_wormhole.sh and run_llk_perf_blackhole.sh
-# (both use pytest-split sharding).
+# {split_group} is substituted with each row's split_group by prepare_test_matrix.py.
+#
+# Shards (parametrize rows; math_matmul/matmul each still run 5 PerfRunTypes):
+#   1–4  perf_math_matmul.py by MATH_FIDELITY (9320 collected / 8660 run each)
+#   5    perf_matmul.py (8000 collected / 7408 run)
+#   6    remaining perf tests (not those two files; ~8512 WH / ~8895 BH configured variants)
 
-- name: llk_perf_wormhole group 1/5
+- name: llk_perf_wormhole group 1/6 math_matmul LoFi
   split_group: 1
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} perf_math_matmul.py -k LoFi
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 2/5
+- name: llk_perf_wormhole group 2/6 math_matmul HiFi2
   split_group: 2
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} perf_math_matmul.py -k HiFi2
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 3/5
+- name: llk_perf_wormhole group 3/6 math_matmul HiFi3
   split_group: 3
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} perf_math_matmul.py -k HiFi3
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 4/5
+- name: llk_perf_wormhole group 4/6 math_matmul HiFi4
   split_group: 4
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} perf_math_matmul.py -k HiFi4
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_wormhole group 5/5
+- name: llk_perf_wormhole group 5/6 matmul
   split_group: 5
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_wormhole.sh {split_group} 5
+    ./tests/run_llk_perf_wormhole.sh {split_group} perf_matmul.py
   skus:
     wh_n150_civ2:
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 1/5
+- name: llk_perf_wormhole group 6/6 remaining
+  split_group: 6
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh {split_group} --ignore=perf_math_matmul.py --ignore=perf_matmul.py .
+  skus:
+    wh_n150_civ2:
+      timeout: 150
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_blackhole group 1/6 math_matmul LoFi
   split_group: 1
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf_blackhole.sh {split_group} perf_math_matmul.py -k LoFi
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 2/5
+- name: llk_perf_blackhole group 2/6 math_matmul HiFi2
   split_group: 2
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf_blackhole.sh {split_group} perf_math_matmul.py -k HiFi2
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 3/5
+- name: llk_perf_blackhole group 3/6 math_matmul HiFi3
   split_group: 3
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf_blackhole.sh {split_group} perf_math_matmul.py -k HiFi3
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 4/5
+- name: llk_perf_blackhole group 4/6 math_matmul HiFi4
   split_group: 4
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf_blackhole.sh {split_group} perf_math_matmul.py -k HiFi4
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_blackhole group 5/5
+- name: llk_perf_blackhole group 5/6 matmul
   split_group: 5
   team: llk
   budget_type: perf
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 5
+    ./tests/run_llk_perf_blackhole.sh {split_group} perf_matmul.py
   skus:
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 200
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_blackhole group 6/6 remaining
+  split_group: 6
+  team: llk
+  budget_type: perf
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_blackhole.sh {split_group} --ignore=perf_math_matmul.py --ignore=perf_matmul.py .
+  skus:
+    bh_p150b_civ2:
+      timeout: 200
   owner_id: U09UC143684 # Nemanja Divnic

@@ -546,7 +546,7 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
         prov = _ci_provenance()
         # Named from the run tag, not run_id. run_id is a ROW_KEY column and is
         # shared by every shard of one CI workflow by design, so naming files
-        # after it gives all ten shards the same filename -- fine while each
+        # after it gives all twelve shards the same filename -- fine while each
         # stays in its own directory, wrong the moment they are collected into
         # one archive. The tag is the filesystem-unique name; use it here.
         parquet_path = Path(out_dir) / f"{TestConfig.perf_run_tag()}.parquet"
@@ -1117,7 +1117,7 @@ def create_test_or_perf_config(
 
 #  Merging a run's shards into one file per architecture.
 #  The warehouse loader is one file per run: it replays by RUN_ID, and RUNS
-#  carries a single ARCH and RUN_TS. CI produces ten shards on ten machines.
+#  carries a single ARCH and RUN_TS. CI produces twelve shards on twelve machines.
 
 RUN_ID_TEMPLATE = "{pipeline}-{date}-{workflow_run_id}-{arch}"
 

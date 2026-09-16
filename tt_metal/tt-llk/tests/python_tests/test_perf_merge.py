@@ -4,7 +4,7 @@
 
 """Hardware-free tests for merging a run's shards into one file per arch.
 
-The warehouse wants one file per run; CI produces ten. These cover the two
+The warehouse wants one file per run; CI produces twelve. These cover the two
 columns the merge has to unify, the two it must refuse to paper over, and the
 shape of the run_id it mints.
 """
@@ -21,10 +21,10 @@ from helpers.perf.core import (
 from helpers.perf.parquet import write_run_batch
 
 # Split groups per architecture, as tests/pipeline_reorg/llk_perf_tests.yaml
-# defines them -- llk_perf_wormhole group 1/5 .. 5/5, and the same for
+# defines them -- llk_perf_wormhole group 1/6 .. 6/6, and the same for
 # blackhole -- which .github/workflows/llk-perf-impl.yaml turns into one job
 # each.
-SPLIT_GROUPS = 5
+SPLIT_GROUPS = 6
 ARCHES = ("wormhole", "blackhole")
 ROWS_PER_SHARD = 2
 

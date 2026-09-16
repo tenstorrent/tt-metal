@@ -2,17 +2,22 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-# Blackhole LLK perf runner, shared by the 5 bh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
+# Blackhole LLK perf runner. The matrix in
+# tests/pipeline_reorg/llk_perf_tests.yaml passes a split_group (for JUnit /
+# artefact names) and the pytest selector for that shard.
 #
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
+# Compile this shard's items (producer), then measure them (consumer).
+# Both invocations must receive the same selector.
 #
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <pytest args...>
 set -euo pipefail
 
-GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
+GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <pytest args...>}"
+shift
+if [[ $# -lt 1 ]]; then
+  echo "usage: run_llk_perf_blackhole.sh <group> <pytest args...>" >&2
+  exit 2
+fi
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
 
@@ -37,9 +42,7 @@ PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
 pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" .
+  --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" "$@"
 pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-run.xml" .
+  --junitxml="pytest-report-blackhole-${GROUP}-run.xml" "$@"
 junitparser merge pytest-report-blackhole-${GROUP}-compile.xml pytest-report-blackhole-${GROUP}-run.xml pytest-report-blackhole-${GROUP}.xml
