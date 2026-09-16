@@ -20,9 +20,10 @@
 // the kernel_lib MulUnary/AddUnary/Relu/Rsqrt/MulBinary/SubBinary, which have no vector-mode knob and process all 32
 // rows (2.5-3 us of the 7 us latency floor, measured). The chain framework (DEST window, CB ops, reconfig) is
 // unchanged; see that header for the contract.
-// pass 2 (per column group): per channel tile T: [mean; rstd]_full x E_T -> a_T = rstd_T*gamma_T,
-//          b_T = beta_T - mean_T*a_T; then
-//          y = x*a_T + b_T over every row chunk -> cb_out.
+// pass 2 (per column group): ONE expansion matmul [mean; rstd]_full x [E_T..] -> [mean_T..; rstd_T..] for all the
+//          group's channel tiles, ONE chain a_T = rstd_T*gamma_T, ONE bcast + chain b_T = beta_T - mean_T*a_T
+//          (Perf 1: batched per column group instead of per channel tile — 4 helper inits per group, not per tile);
+//          then y = x*a_T + b_T over every row chunk -> cb_out.
 //
 // Helper policy notes (caller-owned lifecycles the headers hand out):
 //  * REDUCE_COL uses ReduceInputPolicy::WaitUpfrontNoPop + caller pop: the BulkWaitBulkPop path asserts the
@@ -58,8 +59,27 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "groupnorm_sc_N_1_HW_C_ragged.hpp"
 #include "groupnorm_sc_N_1_HW_C_lane_sfpu.hpp"
+
+// Per-stage zones (MaybeDeviceZoneScope, PERMANENT — free when the profiler is off; see perf_instrumentation.hpp).
+// The zones wrap the helper calls, so they are OCCUPANCY (the helper's internal cb_wait_front is inside): c_square
+// carries the wait for the reader's x chunk, c_gather_reduce the wait for the records, c_affine the wait for the
+// pass-2 constants. Do NOT hoist those waits into separate zones to split wait from work: a duplicate cb_wait_front
+// on the unpack thread is not free — four hoisted waits measured +0.1..0.45 us per op (Perf 1 bisect, 3-run medians),
+// i.e. the attribution split cost more than several of the stages it attributed. Pin a starvation verdict with the
+// reader's r_x_barrier / r_p2_fill zones or an ablation instead.
+//
+// Ablation switch (perf measurement only, host env GROUPNORM_SC_N_1_HW_C_KERNEL_DEFINES): GN_ABLATE_REDUCE
+// replaces every reduce helper call by its exact CB synchronisation (accumulator reload wait/pop, one
+// reserve/push per output tile) — the reduce helper has no built-in skip. The matmul and the eltwise chains use
+// the kernel_lib switches SKIP_COMPUTE / CKL_ELTWISE_CHAIN_SKIP_COMPUTE. Output is wrong by design under any switch.
+#ifdef GN_ABLATE_REDUCE
+constexpr bool ablate_reduce = true;
+#else
+constexpr bool ablate_reduce = false;
+#endif
 
 namespace ckl = compute_kernel_lib;
 namespace lane = groupnorm_lane_sfpu;
@@ -218,7 +238,20 @@ void kernel_main() {
         const bool partial_last_row = (hw_tail != 0) && (owns_last_row != 0) && (rc + 1 == num_row_chunks);
         const auto partial_scaler =
             partial_last_row ? ckl::ReducePartialScaler::with_partial() : ckl::ReducePartialScaler::none();
+        // Sync-equivalent stand-in for one column-sum reduce call (GN_ABLATE_REDUCE): the Accumulate reload's
+        // wait/pop of the previous partial (rc > 0) and the per-output-tile reserve/push.
+        auto reduce_sync_only = [&](uint32_t rc_, uint32_t valid_cols_) {
+            if (rc_ > 0) {
+                cb_wait_front(cb_colsum, valid_cols_);
+                cb_pop_front(cb_colsum, valid_cols_);
+            }
+            for (uint32_t o = 0; o < valid_cols_; ++o) {
+                cb_reserve_back(cb_colsum, 1);
+                cb_push_back(cb_colsum, 1);
+            }
+        };
         if constexpr (is_rm) {
+            MaybeDeviceZoneScope("c_tilize");
             tilize_ragged_block<cols, cb_x_rm, cb_x_pass1>(valid_rows, valid_cols);
             groupnorm_ragged::pad_push(cb_x_pass1, chunk - valid, chunk);  // nominal chunk quantum
             if constexpr (resident) {
@@ -227,40 +260,58 @@ void kernel_main() {
             }
         }
         // x^2 for the valid tiles (x stays fronted for the column sum); xsq keeps the nominal chunk quantum
-        cb_reserve_back(cb_xsq, chunk);
-        ckl::square<
-            input(cb_x_pass1, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
-            output(cb_xsq, ReservePolicy::None, PushPolicy::None)>(IterationShape::tiles(valid));
-        cb_push_back(cb_xsq, chunk);
+        {
+            MaybeDeviceZoneScope("c_square");
+            cb_reserve_back(cb_xsq, chunk);
+            ckl::square<
+                input(cb_x_pass1, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                output(cb_xsq, ReservePolicy::None, PushPolicy::None)>(IterationShape::tiles(valid));
+            cb_push_back(cb_xsq, chunk);
+        }
         // column sums of x and x^2 over valid_rows, accumulated across row chunks in cb_colsum = [S..; Q..]
-        ckl::reduce<
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_COL,
-            cb_x_pass1,
-            cb_scaler,
-            cb_colsum,
-            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
-            ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_colsum, rc),
-            ckl::NoOp{},
-            partial_scaler);
-        pad_colsum_statistic(rc, valid_cols);
-        cb_pop_front(cb_x_pass1, chunk);
-        ckl::reduce<
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_COL,
-            cb_xsq,
-            cb_scaler,
-            cb_colsum,
-            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
-            ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
-            ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_colsum, rc),
-            ckl::NoOp{},
-            partial_scaler);
-        pad_colsum_statistic(rc, valid_cols);
-        cb_pop_front(cb_xsq, chunk);
+        {
+            MaybeDeviceZoneScope("c_reduce_x");
+            if constexpr (ablate_reduce) {
+                reduce_sync_only(rc, valid_cols);
+            } else {
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_COL,
+                    cb_x_pass1,
+                    cb_scaler,
+                    cb_colsum,
+                    ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+                    ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_colsum, rc),
+                    ckl::NoOp{},
+                    partial_scaler);
+            }
+            pad_colsum_statistic(rc, valid_cols);
+            cb_pop_front(cb_x_pass1, chunk);
+        }
+        {
+            MaybeDeviceZoneScope("c_reduce_xsq");
+            if constexpr (ablate_reduce) {
+                cb_wait_front(cb_xsq, valid);
+                reduce_sync_only(rc, valid_cols);
+            } else {
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_COL,
+                    cb_xsq,
+                    cb_scaler,
+                    cb_colsum,
+                    ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+                    ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_colsum, rc),
+                    ckl::NoOp{},
+                    partial_scaler);
+            }
+            pad_colsum_statistic(rc, valid_cols);
+            cb_pop_front(cb_xsq, chunk);
+        }
     };
 
     // PreKBlockFn of the pass-1 matmul: the row chunks of column group cg (K-block cg).
@@ -274,23 +325,27 @@ void kernel_main() {
     for (uint32_t img = 0; img < image_count; ++img) {
         // ================= pass 1: statistics =================
         // [S; Q] (M=2, K=cols) x E^T (K=cols, N=Kg), one K-block per column group, spill/reload via interm.
-        ckl::matmul_block<
-            /*transpose=*/false,
-            /*packer_l1_acc=*/false,
-            ckl::LastBlockTarget::Out,
-            ckl::OutputCBLayout::SubblockMajor,
-            ckl::matmul_config::InitMode::ShortAfterPreKBlock,
-            ckl::InputPolicy::WaitAndPopPerKBlock,
-            ckl::InputPolicy::WaitAndPopPerKBlock,
-            ckl::NoPostCompute,
-            decltype(colsum_column_group)>(
-            colsum_buf,
-            membership_buf,
-            partial_buf,
-            agg_interm_buf,
-            ckl::MatmulBlockShape::of(2, in1_num_subblocks, 1, out_subblock_w, cols, num_col_groups),
-            ckl::NoPostCompute{},
-            colsum_column_group);
+        // Zone c_pass1 = the whole statistics pass; its aggregation matmul share = c_pass1 - sum of the chunk zones.
+        {
+            MaybeDeviceZoneScope("c_pass1");
+            ckl::matmul_block<
+                /*transpose=*/false,
+                /*packer_l1_acc=*/false,
+                ckl::LastBlockTarget::Out,
+                ckl::OutputCBLayout::SubblockMajor,
+                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::InputPolicy::WaitAndPopPerKBlock,
+                ckl::NoPostCompute,
+                decltype(colsum_column_group)>(
+                colsum_buf,
+                membership_buf,
+                partial_buf,
+                agg_interm_buf,
+                ckl::MatmulBlockShape::of(2, in1_num_subblocks, 1, out_subblock_w, cols, num_col_groups),
+                ckl::NoPostCompute{},
+                colsum_column_group);
+        }
 
         // ================= combine =================
         // The gather reduce: rows = gather tiles per statistic (one record row per core), cols = the 2*Kg statistic
@@ -298,13 +353,22 @@ void kernel_main() {
         // LOCAL: nothing to combine — the partial is the total.
         if constexpr (combine != COMBINE_LOCAL) {
             if (combine == COMBINE_ALL_GATHER || role == ROLE_ROOT) {
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_COL,
-                    cb_gather,
-                    cb_scaler,
-                    cb_reduce_out,
-                    ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(gather_rows, num_stats));
+                MaybeDeviceZoneScope("c_gather_reduce");
+                if constexpr (ablate_reduce) {
+                    for (uint32_t o = 0; o < num_stats; ++o) {
+                        cb_reserve_back(cb_reduce_out, 1);
+                        cb_push_back(cb_reduce_out, 1);
+                    }
+                } else {
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_COL,
+                        cb_gather,
+                        cb_scaler,
+                        cb_reduce_out,
+                        ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+                        ckl::ReduceInputBlockShape::of(gather_rows, num_stats));
+                }
                 cb_pop_front(cb_gather, gather_rows * num_stats);
             }
         }
@@ -327,52 +391,79 @@ void kernel_main() {
             finalize_lane_mode,
             lane::LaneRsqrt<Dst::D1>,
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, Dst::D1>>;
-        cb_wait_front(cb_totals_in, num_stats);
-        cb_reserve_back(cb_stats_row, num_stats);
-        ckl::eltwise_chain(
-            IterationShape::tiles(Kg),
-            ckl::CopyTile<input(cb_totals_in, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
-            FinMul0{inv_n_bits},  // mean = sum / n
-            ckl::CopyTile<
-                input(
-                    cb_totals_in,
-                    WaitPolicy::None,
-                    PopPolicy::None,
-                    InputTileMapping::Block,
-                    DataFormatReconfig::Enabled,
-                    TileAddressing::Offset),
-                Dst::D1>{Kg},
-            FinMul1{inv_n_bits},  // E[x^2]
-            FinSquare{},          // mean^2
-            FinSub{},             // var = E[x^2] - mean^2
-            FinRelu{},            // clamp cancellation below 0
-            FinAdd{eps_bits},     // var + eps
-            FinRsqrt{},           // rstd
-            ckl::PackTile<output(cb_stats_row, ReservePolicy::None, PushPolicy::None), Dst::D0>{},
-            ckl::PackTile<
-                output(
-                    cb_stats_row,
-                    ReservePolicy::None,
-                    PushPolicy::None,
-                    DataFormatReconfig::Enabled,
-                    TileAddressing::Offset),
-                Dst::D1>{Kg});
-        cb_push_back(cb_stats_row, num_stats);
-        cb_pop_front(cb_totals_in, num_stats);
-        ckl::unary_bcast<
-            BroadcastDim::Row,
-            input(cb_stats_row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-            output(cb_stats_g_full)>(IterationShape::tiles(num_stats));
+        {
+            MaybeDeviceZoneScope("c_totals_wait");  // LOCAL: own partial; ROOT: the multicast; ALL_GATHER: own reduce
+            cb_wait_front(cb_totals_in, num_stats);
+        }
+        {
+            MaybeDeviceZoneScope("c_finalize");
+            cb_reserve_back(cb_stats_row, num_stats);
+            ckl::eltwise_chain(
+                IterationShape::tiles(Kg),
+                ckl::CopyTile<
+                    input(cb_totals_in, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
+                    Dst::D0>{},
+                FinMul0{inv_n_bits},  // mean = sum / n
+                ckl::CopyTile<
+                    input(
+                        cb_totals_in,
+                        WaitPolicy::None,
+                        PopPolicy::None,
+                        InputTileMapping::Block,
+                        DataFormatReconfig::Enabled,
+                        TileAddressing::Offset),
+                    Dst::D1>{Kg},
+                FinMul1{inv_n_bits},  // E[x^2]
+                FinSquare{},          // mean^2
+                FinSub{},             // var = E[x^2] - mean^2
+                FinRelu{},            // clamp cancellation below 0
+                FinAdd{eps_bits},     // var + eps
+                FinRsqrt{},           // rstd
+                ckl::PackTile<output(cb_stats_row, ReservePolicy::None, PushPolicy::None), Dst::D0>{},
+                ckl::PackTile<
+                    output(
+                        cb_stats_row,
+                        ReservePolicy::None,
+                        PushPolicy::None,
+                        DataFormatReconfig::Enabled,
+                        TileAddressing::Offset),
+                    Dst::D1>{Kg});
+            cb_push_back(cb_stats_row, num_stats);
+            cb_pop_front(cb_totals_in, num_stats);
+        }
+        {
+            MaybeDeviceZoneScope("c_stats_bcast");
+            ckl::unary_bcast<
+                BroadcastDim::Row,
+                input(cb_stats_row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                output(cb_stats_g_full)>(IterationShape::tiles(num_stats));
+        }
 
         // ================= pass 2: apply =================
         if constexpr (resident) {
+            MaybeDeviceZoneScope("c_x2_wait");  // whole resident block (a no-op wait after pass 1 consumed it)
             cb_wait_front(cb_x_pass2, blk);
         }
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
             const uint32_t valid_cols = col_axis.valid(cg, cols);
-            // ---- build_affine_block: per channel tile T of this column group ----
-            for (uint32_t tl = 0; tl < valid_cols; ++tl) {
-                // [mean_full; rstd_full] (2 x Kg) x E_T (Kg x 1) -> cb_stats_T = [mean_T_full; rstd_T_full]
+            MaybeDeviceZoneScope("c_pass2_cg");  // affine build + apply of one column group (per-chunk zones inside)
+            {
+                MaybeDeviceZoneScope(
+                    "c_affine");  // batched: ONE expansion matmul + ONE a chain + ONE b chain per group
+                // ---- build_affine_block (Perf 1, batched per column group) ----
+                // Was one matmul_block + a_T chain + beta bcast + b_T chain PER CHANNEL TILE (4 helper inits per tile,
+                // ~1.0 us/tile measured); now each stage runs once over the NOMINAL cols tiles of the column group
+                // (measured 1964 -> 1574 ns per 2-tile group, 1.54x at 8 tiles; bit-identical math —
+                // perf_experiments/affine_batch). [mean_full; rstd_full] (2 x Kg) x [E_T0 .. E_T{cols-1}] (Kg x cols)
+                // -> cb_stats_T = [mean_T0..mean_T{cols-1} ; rstd_T0..rstd_T{cols-1}] (SubblockMajor, out subblock 1 x
+                // cols). The reader lays pass-2 E tiles out k-major (kg * cols + tl) = the helper's row-major K x N
+                // in1. N = cols is a compile-time constant on purpose: the same block with a runtime N measured +0.27
+                // us per core at cols = 1 (lost constant folding across the matmul + three chains) and a second,
+                // compile-time instantiation for the full-width group overflowed the RM + streaming + gamma + beta
+                // kernel's text budget. Ragged last group: the reader pads E / gamma / beta to the nominal cols with
+                // exact zeros, so the pad channel tiles come out as a_T = b_T = 0 (finite) in cb_a_full / cb_b_full and
+                // the apply never reads them (it indexes columns < valid_cols) — no pad pop / pad push is needed for
+                // this block any more.
                 ckl::matmul_block<
                     false,
                     false,
@@ -385,13 +476,14 @@ void kernel_main() {
                     membership_buf,
                     stats_T_buf,
                     stats_T_buf,
-                    ckl::MatmulBlockShape::of(2, 1, 1, 1, Kg, 1));
-                cb_wait_front(cb_stats_T, 2);
+                    ckl::MatmulBlockShape::of(2, 1, 1, cols, Kg, 1));
+                cb_wait_front(cb_stats_T, 2 * cols);
 
-                // a_T = rstd_T * gamma_T  (gamma row 0 broadcast down the tile), or rstd_T without gamma
+                // a_T = rstd_T * gamma_T (gamma row 0 broadcast down the tile), or rstd_T without gamma; rstd tiles sit
+                // at offset cols of cb_stats_T.
                 if constexpr (has_gamma) {
                     ckl::eltwise_chain(
-                        IterationShape::one_tile(),
+                        IterationShape::tiles(cols),
                         ckl::BinaryFpu<
                             BinaryFpuOp::Mul,
                             input(
@@ -402,11 +494,11 @@ void kernel_main() {
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
                             input(cb_gamma_row, BroadcastDim::Row, WaitPolicy::PerTile, PopPolicy::PerTile),
-                            Dst::D0>{1u},
+                            Dst::D0>{cols},
                         ckl::PackTile<output(cb_a_full), Dst::D0>{});
                 } else {
                     ckl::eltwise_chain(
-                        IterationShape::one_tile(),
+                        IterationShape::tiles(cols),
                         ckl::CopyTile<
                             input(
                                 cb_stats_T,
@@ -415,27 +507,27 @@ void kernel_main() {
                                 InputTileMapping::Block,
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
-                            Dst::D0>{1u},
+                            Dst::D0>{cols},
                         ckl::PackTile<output(cb_a_full), Dst::D0>{});
                 }
 
-                // b_T = beta_T - mean_T * a_T  (or -mean_T * a_T without beta): beta row 0 broadcast to a full
-                // tile, then DEST = mean_T_full * a_T and b_T = beta_full - DEST (dest-reuse Sub, DEST_TO_SRCB).
+                // b_T = beta_T - mean_T * a_T  (or -mean_T * a_T without beta): beta rows broadcast to full tiles, then
+                // DEST = mean_T_full * a_T and b_T = beta_full - DEST (dest-reuse Sub, DEST_TO_SRCB).
                 // Precision note: b and x*a are both ~|mean|*rstd*gamma and cancel in y = x*a + b; the FPU
                 // evaluates them at tf32-class precision, so a |mean| >> std input loses ~ulp_tf32(|mean|*a)
                 // absolute accuracy (the design's deferred shifted_two_pass_variance row would remove this).
                 //
-                // Ordering: the chain below reads a_T (tile tl of cb_a_full) with WaitPolicy::None, but that tile
-                // was packed by the chain just above. Unpack, math and pack are separate threads; the ONLY thing
-                // that orders "pack wrote a_T to L1" against "unpack reads a_T" is CB credit, so wait for it here.
-                // Without this the unpacker can read stale L1 (non-deterministic per-element errors, seen on
-                // RM input + gamma_only where no beta bcast sat between the two chains).
-                cb_wait_front(cb_a_full, tl + 1);
+                // Ordering: the chain below reads the a_T tiles the chain above packed. Unpack, math and pack are
+                // separate threads; the ONLY thing that orders "pack wrote a_T to L1" against "unpack reads a_T" is CB
+                // credit, so wait for all n tiles here (stale-L1 reads were seen without it).
+                cb_wait_front(cb_a_full, cols);
                 if constexpr (has_beta) {
-                    ckl::unary_bcast<BroadcastDim::Row, input(cb_beta_row), output(cb_beta_full)>(
-                        IterationShape::one_tile());
+                    ckl::unary_bcast<
+                        BroadcastDim::Row,
+                        input(cb_beta_row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                        output(cb_beta_full)>(IterationShape::tiles(cols));
                     ckl::eltwise_chain(
-                        IterationShape::one_tile(),
+                        IterationShape::tiles(cols),
                         ckl::BinaryFpu<
                             BinaryFpuOp::Mul,
                             input(
@@ -453,7 +545,7 @@ void kernel_main() {
                                 InputTileMapping::Block,
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
-                            Dst::D0>{0u, tl},
+                            Dst::D0>{0u, 0u},
                         ckl::DestReuseBinary<
                             BinaryFpuOp::Sub,
                             input(cb_beta_full, WaitPolicy::PerTile, PopPolicy::PerTile),
@@ -462,7 +554,7 @@ void kernel_main() {
                         ckl::PackTile<output(cb_b_full), Dst::D0>{});
                 } else {
                     ckl::eltwise_chain(
-                        IterationShape::one_tile(),
+                        IterationShape::tiles(cols),
                         ckl::BinaryFpu<
                             BinaryFpuOp::Mul,
                             input(
@@ -480,37 +572,26 @@ void kernel_main() {
                                 InputTileMapping::Block,
                                 DataFormatReconfig::Enabled,
                                 TileAddressing::Offset),
-                            Dst::D0>{0u, tl},
+                            Dst::D0>{0u, 0u},
                         ckl::Negative<Dst::D0>{},
                         ckl::PackTile<output(cb_b_full), Dst::D0>{});
                 }
-                cb_pop_front(cb_stats_T, 2);
-            }
-            // Ragged last group: the reader pushed the nominal cols tiles of E / gamma / beta; drain the unused
-            // pad tiles and pad a_full / b_full up to their nominal cols quantum (no data behind the pads).
-            {
-                const uint32_t pad = cols - valid_cols;
-                groupnorm_ragged::pad_pop(cb_membership, pad * Kg, Kg);
-                if constexpr (has_gamma) {
-                    groupnorm_ragged::pad_pop(cb_gamma_row, pad, pad);
-                }
-                if constexpr (has_beta) {
-                    groupnorm_ragged::pad_pop(cb_beta_row, pad, pad);
-                }
-                groupnorm_ragged::pad_push(cb_a_full, pad, pad);
-                groupnorm_ragged::pad_push(cb_b_full, pad, pad);
-            }
+                cb_pop_front(cb_stats_T, 2 * cols);
+            }  // c_affine
 
             // ---- apply_block: y = x * a_T + b_T over every row chunk of this column group ----
             auto apply_chunk = [&](uint32_t valid_rows, uint32_t rc) {
                 const uint32_t valid = valid_rows * valid_cols;
                 if constexpr (!resident) {
                     if constexpr (is_rm) {
+                        MaybeDeviceZoneScope("c_tilize2");
                         tilize_ragged_block<cols, cb_x_rm, cb_x_pass2>(valid_rows, valid_cols);
                         groupnorm_ragged::pad_push(cb_x_pass2, chunk - valid, chunk);
                     }
+                    MaybeDeviceZoneScope("c_x2_wait");  // streaming: this chunk's re-read (reader)
                     cb_wait_front(cb_x_pass2, chunk);
                 }
+                MaybeDeviceZoneScope("c_apply");  // y = x*a + b for one chunk (pack thread: cb_out back-pressure)
                 const uint32_t x_base = resident ? (cg * num_row_chunks + rc) * chunk : 0u;
                 ckl::eltwise_chain(
                     IterationShape::grid(valid_rows, valid_cols),

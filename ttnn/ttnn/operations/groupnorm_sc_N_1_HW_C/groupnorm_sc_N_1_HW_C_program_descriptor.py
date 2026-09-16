@@ -20,6 +20,7 @@ Every block knob is defined ONCE here and passed to the kernels as CT/RT args.
 from __future__ import annotations
 
 import math
+import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,23 @@ from pathlib import Path
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
+
+# Measurement hook (perf tournaments): extra preprocessor defines for ALL three kernels, read from the environment as
+# "NAME=VALUE;NAME2=VALUE2" (a bare NAME means NAME=1). Empty / unset -> byte-identical program. Used for the
+# `/perf-measure` ablation variants (GN_ABLATE_* switches in the kernels, the kernel_lib SKIP_COMPUTE /
+# CKL_ELTWISE_CHAIN_SKIP_COMPUTE switches, KERNEL_LIB_PERF_ZONES_OFF) without editing kernel sources between runs.
+# An ablated kernel's output is WRONG BY DESIGN — never set this under a correctness test.
+KERNEL_DEFINES_ENV = "GROUPNORM_SC_N_1_HW_C_KERNEL_DEFINES"
+
+
+def _kernel_defines():
+    spec = os.environ.get(KERNEL_DEFINES_ENV, "").strip()
+    defines = []
+    for item in filter(None, (t.strip() for t in spec.split(";"))):
+        name, _, value = item.partition("=")
+        defines.append((name.strip(), value.strip() or "1"))
+    return defines
+
 
 # ---------------------------------------------------------------------------
 # Knobs (single source of truth — see op_design.md → Parameters / Buffer-depth knobs)
@@ -506,8 +524,9 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         add(CB_GAMMA_ROW, cols, g_tile_bytes, g_dtype)
     if has_beta:
         add(CB_BETA_ROW, cols, g_tile_bytes, g_dtype)
-        add(CB_BETA_FULL, 1, stat_tile_bytes, stat_dtype)
-    add(CB_STATS_T, 2, stat_tile_bytes, stat_dtype)
+        add(CB_BETA_FULL, cols, stat_tile_bytes, stat_dtype)  # Perf 1: beta_T of the whole column group at once
+    # Perf 1 (batched affine build): [mean_T..; rstd_T..] for every channel tile of the column group in ONE matmul
+    add(CB_STATS_T, 2 * cols, stat_tile_bytes, stat_dtype)
     add(CB_A_FULL, cols, stat_tile_bytes, stat_dtype)
     add(CB_B_FULL, cols, stat_tile_bytes, stat_dtype)
     add(CB_OUT, OUT_DEPTH_FACTOR * out_block, y_tile_bytes, output_tensor.dtype)
@@ -736,6 +755,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         True: [c for c in core_list if _swap_dm_nocs(noc_policy, c[0], c[1], Gx, Gy)],
     }
     NOC0, NOC1 = ttnn.NOC.RISCV_0_default, ttnn.NOC.RISCV_1_default
+    kernel_defines = _kernel_defines()
 
     def _dm_kernels(source, ct, rt_by_core, processor, noc_default, noc_swapped):
         kernels = []
@@ -752,6 +772,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                         [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y) in cores]
                     ),
                     compile_time_args=ct,
+                    defines=kernel_defines,
                     runtime_args=rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=processor, noc=noc_swapped if swapped else noc_default
@@ -770,6 +791,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct,
+        defines=kernel_defines,
         runtime_args=compute_rt,
         config=cfg,
     )

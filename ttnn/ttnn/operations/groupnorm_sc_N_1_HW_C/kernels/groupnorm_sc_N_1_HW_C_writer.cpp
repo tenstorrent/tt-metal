@@ -44,7 +44,26 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "groupnorm_sc_N_1_HW_C_ragged.hpp"
+
+// Per-stage zones (MaybeDeviceZoneScope, PERMANENT — free when the profiler is off; perf_instrumentation.hpp):
+// waits (cb_out from compute, cb_partial from compute, the gather semaphore from the peers, the totals) are zoned
+// apart from the NoC issue loops and the flush / barrier, so "the writer is slow" resolves to who it waits on.
+//
+// Ablation switches (perf measurement only, host env GROUPNORM_SC_N_1_HW_C_KERNEL_DEFINES; output wrong by design):
+//   GN_ABLATE_WRITE_Y   skip the output tile NoC writes (address math, flush / barrier, CB traffic kept)
+//   GN_ABLATE_RECORD    skip the record face-row writes (write barrier + semaphore increments kept)
+#ifdef GN_ABLATE_WRITE_Y
+constexpr bool ablate_write_y = true;
+#else
+constexpr bool ablate_write_y = false;
+#endif
+#ifdef GN_ABLATE_RECORD
+constexpr bool ablate_record = true;
+#else
+constexpr bool ablate_record = false;
+#endif
 
 using namespace dataflow_kernel_lib;
 
@@ -132,7 +151,11 @@ void kernel_main() {
 
     // Row 0 of each of this core's 2*Kg partial tiles -> row p of gather tile (p / 32) of the same statistic.
     auto send_partial_record = [&]() {
-        cb_wait_front(cb_partial, num_stats);
+        {
+            MaybeDeviceZoneScope("w_partial_wait");  // compute's pass 1 (the partial statistics)
+            cb_wait_front(cb_partial, num_stats);
+        }
+        MaybeDeviceZoneScope("w_record_send");  // 4*Kg face-row unicasts + barrier + semaphore increment
         const uint32_t src = get_read_ptr(cb_partial);
         const uint32_t gt = p / 32;
         const uint32_t r = p % 32;
@@ -143,7 +166,9 @@ void kernel_main() {
                 const uint32_t src_off = s * f32_tile_bytes + half * face_bytes;
                 const uint32_t dst_off =
                     dst_tile * f32_tile_bytes + (row_face + half) * face_bytes + (r & 15) * face_row_bytes;
-                noc_async_write(src + src_off, get_noc_addr(root_x, root_y, gather_base + dst_off), face_row_bytes);
+                if constexpr (!ablate_record) {
+                    noc_async_write(src + src_off, get_noc_addr(root_x, root_y, gather_base + dst_off), face_row_bytes);
+                }
             }
         }
         noc_async_write_barrier();
@@ -174,26 +199,41 @@ void kernel_main() {
                 uint32_t c = 0;
                 const uint32_t t0 = col_begin + cg * cols;
                 for (uint32_t b = 0; b < out_blocks_per_chunk; ++b) {
-                    cb_wait_front(cb_out, out_block);
+                    {
+                        MaybeDeviceZoneScope("w_out_wait");  // compute's apply (pack) of this store block
+                        cb_wait_front(cb_out, out_block);
+                    }
                     const uint32_t l1 = get_read_ptr(cb_out);
-                    for (uint32_t k = 0; k < out_block && idx < valid; ++k, ++idx) {
-                        const uint32_t page = n * Ht * Ct + r * Ct + t0 + c;
-                        noc_async_write(l1 + k * y_tile_bytes, out_acc.get_noc_addr(page), y_tile_bytes);
-                        if (++c == valid_cols) {
-                            c = 0;
-                            ++r;
+                    {
+                        MaybeDeviceZoneScope("w_store_issue");  // RISC-serial: one address + NoC command per tile
+                        for (uint32_t k = 0; k < out_block && idx < valid; ++k, ++idx) {
+                            const uint32_t page = n * Ht * Ct + r * Ct + t0 + c;
+                            const uint64_t dst = out_acc.get_noc_addr(page);
+                            if constexpr (ablate_write_y) {
+                                asm volatile("" ::"r"(static_cast<uint32_t>(dst)), "r"(l1 + k * y_tile_bytes));
+                            } else {
+                                noc_async_write(l1 + k * y_tile_bytes, dst, y_tile_bytes);
+                            }
+                            if (++c == valid_cols) {
+                                c = 0;
+                                ++r;
+                            }
                         }
                     }
-                    if constexpr (store_flush_per_block) {
-                        noc_async_writes_flushed();
-                    } else {
-                        noc_async_write_barrier();
+                    {
+                        MaybeDeviceZoneScope("w_store_flush");  // departed-from-L1 (flush) or DRAM ack (barrier)
+                        if constexpr (store_flush_per_block) {
+                            noc_async_writes_flushed();
+                        } else {
+                            noc_async_write_barrier();
+                        }
                     }
                     cb_pop_front(cb_out, out_block);
                 }
             }
         }
         if constexpr (store_flush_per_block) {
+            MaybeDeviceZoneScope("w_store_barrier");  // this image's DRAM acks
             noc_async_write_barrier();  // retire this image's stores before the next image / kernel exit
         }
     };
@@ -202,6 +242,7 @@ void kernel_main() {
     // under ROOT, every non-idle core under ALL_GATHER). Record rows are never zeroed, so a record that lands before
     // this completes is not disturbed; pad rows are never written afterwards.
     auto zero_gather_pad_rows = [&]() {
+        MaybeDeviceZoneScope("w_zero_pad");
         uint32_t issued = 0;
         for (uint32_t gt = 0; gt < gather_tiles_per_stat; ++gt) {
             const uint32_t first_pad_row = (p_used > gt * 32) ? (p_used - gt * 32) : 0u;  // within tile
@@ -240,7 +281,11 @@ void kernel_main() {
     // The rectangle is walked in virtual NoC coordinates; Blackhole's virtual worker columns skip 8 and 9 (the same
     // rule McastRect::area() applies), so those two columns are never addressed.
     auto send_partial_record_all = [&](const auto& rect) {
-        cb_wait_front(cb_partial, num_stats);
+        {
+            MaybeDeviceZoneScope("w_partial_wait");  // compute's pass 1 (the partial statistics)
+            cb_wait_front(cb_partial, num_stats);
+        }
+        MaybeDeviceZoneScope("w_record_send");  // (area-1) x (4*Kg writes + 1 increment) unicast fan-out
         const uint32_t src = get_read_ptr(cb_partial);
         const uint32_t gt = p / 32;
         const uint32_t r = p % 32;
@@ -264,7 +309,9 @@ void kernel_main() {
                         const uint32_t src_off = s * f32_tile_bytes + half * face_bytes;
                         const uint32_t dst_off =
                             dst_tile * f32_tile_bytes + (row_face + half) * face_bytes + (r & 15) * face_row_bytes;
-                        noc_async_write(src + src_off, get_noc_addr(x, y, gather_base + dst_off), face_row_bytes);
+                        if constexpr (!ablate_record) {
+                            noc_async_write(src + src_off, get_noc_addr(x, y, gather_base + dst_off), face_row_bytes);
+                        }
                     }
                 }
             }
@@ -301,7 +348,10 @@ void kernel_main() {
             // before this core's compute consumed the previous gather.
             gather.reserve_back(gather_tiles);
             send_partial_record_all(rect);
-            sem_gather.wait_min((img + 1) * (p_used - 1));  // every other participant's record has landed
+            {
+                MaybeDeviceZoneScope("w_gather_wait");          // the peers' records (rendezvous)
+                sem_gather.wait_min((img + 1) * (p_used - 1));  // every other participant's record has landed
+            }
             gather.push_back(gather_tiles);
             store_image(n);
         }
@@ -312,14 +362,23 @@ void kernel_main() {
             const uint32_t n = image_begin + img * image_stride;
             gather.reserve_back(gather_tiles);  // blocks until root compute consumed the previous image
             send_partial_record();
-            sem_gather.wait_min((img + 1) * num_participants);
+            {
+                MaybeDeviceZoneScope("w_gather_wait");  // every rectangle core's record / increment (rendezvous)
+                sem_gather.wait_min((img + 1) * num_participants);
+            }
             gather.push_back(gather_tiles);
             // totals: root compute reduced the gather; multicast to the rectangle (self copy when P_n == 1)
-            cb_wait_front(cb_totals_src, num_stats);
-            cb_reserve_back(cb_totals_recv, num_stats);
-            sender.send(get_read_ptr(cb_totals_src), totals_recv_base, num_stats * f32_tile_bytes);
-            cb_pop_front(cb_totals_src, num_stats);
-            cb_push_back(cb_totals_recv, num_stats);
+            {
+                MaybeDeviceZoneScope("w_totals_wait");  // root compute's gather reduce
+                cb_wait_front(cb_totals_src, num_stats);
+            }
+            {
+                MaybeDeviceZoneScope("w_mcast");  // totals multicast to the rectangle
+                cb_reserve_back(cb_totals_recv, num_stats);
+                sender.send(get_read_ptr(cb_totals_src), totals_recv_base, num_stats * f32_tile_bytes);
+                cb_pop_front(cb_totals_src, num_stats);
+                cb_push_back(cb_totals_recv, num_stats);
+            }
             store_image(n);
         }
     } else if (role == ROLE_MEMBER) {
@@ -327,9 +386,12 @@ void kernel_main() {
         for (uint32_t img = 0; img < image_count; ++img) {
             const uint32_t n = image_begin + img * image_stride;
             send_partial_record();  // ends with the gather semaphore increment (after the receiver exists)
-            cb_reserve_back(cb_totals_recv, num_stats);
-            receiver.receive();
-            cb_push_back(cb_totals_recv, num_stats);
+            {
+                MaybeDeviceZoneScope("w_recv");  // the root's gather + reduce + multicast (rendezvous)
+                cb_reserve_back(cb_totals_recv, num_stats);
+                receiver.receive();
+                cb_push_back(cb_totals_recv, num_stats);
+            }
             store_image(n);
         }
     } else {

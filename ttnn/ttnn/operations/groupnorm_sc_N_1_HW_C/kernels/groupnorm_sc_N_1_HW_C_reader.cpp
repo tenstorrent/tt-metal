@@ -31,7 +31,32 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "groupnorm_sc_N_1_HW_C_ragged.hpp"
+
+// Per-stage zones (MaybeDeviceZoneScope, PERMANENT — free when the profiler is off; perf_instrumentation.hpp):
+// CB reserves (back-pressure from compute), NoC issue loops (RISC-serial transaction cost) and NoC barriers
+// (fabric / DRAM latency) are zoned separately — a barrier of ~0 only says the transfers had landed by then.
+//
+// Ablation switches (perf measurement only, host env GROUPNORM_SC_N_1_HW_C_KERNEL_DEFINES; output wrong by design):
+//   GN_ABLATE_READ_X        skip the x tile / stick NoC reads (address math, barriers and CB traffic kept)
+//   GN_ABLATE_MEMBERSHIP    skip the E zero-fill + lane writes (reserve / push kept)
+//   GN_ABLATE_AFFINE_READS  skip the gamma / beta row reads + fix-ups (zero-fill, barrier, reserve / push kept)
+#ifdef GN_ABLATE_READ_X
+constexpr bool ablate_read_x = true;
+#else
+constexpr bool ablate_read_x = false;
+#endif
+#ifdef GN_ABLATE_MEMBERSHIP
+constexpr bool ablate_membership = true;
+#else
+constexpr bool ablate_membership = false;
+#endif
+#ifdef GN_ABLATE_AFFINE_READS
+constexpr bool ablate_affine_reads = true;
+#else
+constexpr bool ablate_affine_reads = false;
+#endif
 
 namespace {
 
@@ -117,24 +142,34 @@ void kernel_main() {
     // ---------------- constants ----------------
     constexpr uint32_t hw_tail = HW % 32;  // valid rows of the image's last tile-row (0 = tile-aligned)
     constexpr uint32_t c_tail = C % 32;    // valid lanes of the last channel tile (0 = tile-aligned)
-    if constexpr (hw_tail != 0) {
-        // [full, partial] pair: compute selects tile 1 for the last row tile of the chunk holding row Ht - 1
-        dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
-            cb_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_COL,
-            hw_tail>();
-    } else {
-        dataflow_kernel_lib::
-            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    {
+        MaybeDeviceZoneScope("r_scaler");
+        if constexpr (hw_tail != 0) {
+            // [full, partial] pair: compute selects tile 1 for the last row tile of the chunk holding row Ht - 1
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                cb_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_COL,
+                hw_tail>();
+        } else {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_COL>();
+        }
     }
     const bool owns_last_row = (row_begin + Ht_core == Ht);  // this core's rows end at the image's last tile-row
 
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
 
     // E^T (pass 1, transposed = true) or E (pass 2) for column group cg: cols x Kg 0/1 tiles (Float32 or Float16_b
-    // per e_elem_size), tile index T_local * Kg + kg. E_T[g', c] = 1 iff channel 32T + c belongs to group 32kg + g'.
-    // Tiles tl >= valid_cols of a ragged last group stay zero (they are the K pad of the membership matmul).
+    // per e_elem_size). E_T[g', c] = 1 iff channel 32T + c belongs to group 32kg + g'. Tile order = the consuming
+    // matmul_block's row-major K x N in1 block (index k * N + n, matmul_block_helpers.inl):
+    //   pass 1  in1 = E^T, K = cols channel tiles, N = Kg   -> index tl * Kg + kg; tiles tl >= valid_cols stay zero
+    //           (they are the K pad of the aggregation matmul);
+    //   pass 2  in1 = E,   K = Kg, N = cols (Perf 1: ONE expansion matmul over the NOMINAL column group) -> index
+    //           kg * cols + tl; the zero pad tiles tl >= valid_cols yield a_T = b_T = 0, never read by the apply.
+    // (Identical orders when Kg == 1, i.e. every shape with num_groups <= 32.)
     // The RISC part: the 0/1 lanes into the (already zeroed, reserved) membership pages.
     auto write_membership_lanes = [&](uint32_t cg, bool transposed) {
         const uint32_t valid_cols = col_axis.valid(cg, cols);
@@ -151,7 +186,8 @@ void kernel_main() {
                 const uint32_t gl = g & 31;
                 const uint32_t r = transposed ? c : gl;
                 const uint32_t cc = transposed ? gl : c;
-                const uint32_t addr = base + (tl * Kg + kg) * e_tile_bytes + tile_elem_offset(r, cc, e_elem_size);
+                const uint32_t tile = transposed ? (tl * Kg + kg) : (kg * cols + tl);
+                const uint32_t addr = base + tile * e_tile_bytes + tile_elem_offset(r, cc, e_elem_size);
                 if constexpr (e_elem_size == 4) {
                     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = ONE_F32_BITS;
                 } else {
@@ -161,10 +197,16 @@ void kernel_main() {
         }
     };
     auto fill_membership = [&](uint32_t cg, bool transposed) {
-        cb_reserve_back(cb_membership, membership_tiles);
-        noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
-        noc.write_zeros_l1_barrier();
-        write_membership_lanes(cg, transposed);
+        {
+            MaybeDeviceZoneScope("r_memb_reserve");  // back-pressure: compute still holds the previous E block
+            cb_reserve_back(cb_membership, membership_tiles);
+        }
+        MaybeDeviceZoneScope("r_memb_fill");  // NoC zero-fill + barrier + RISC lane writes
+        if constexpr (!ablate_membership) {
+            noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
+            noc.write_zeros_l1_barrier();
+            write_membership_lanes(cg, transposed);
+        }
         cb_push_back(cb_membership, membership_tiles);
     };
 
@@ -174,21 +216,35 @@ void kernel_main() {
         const uint32_t cb_id = pass2 ? cb_x_pass2 : cb_x_pass1;
         const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
         const uint32_t valid_cols = col_axis.valid(cg, cols);
-        cb_reserve_back(cb_id, chunk);
-        if constexpr (resident) {
-            cb_reserve_back(cb_x_pass2, chunk);  // aliased region: pass-2 credits move in lockstep
-        }
-        uint32_t l1 = get_write_ptr(cb_id);
-        for (uint32_t i = 0; i < valid_rows; ++i) {
-            const uint32_t r = row_begin + rc * chunk_rows + i;
-            for (uint32_t j = 0; j < valid_cols; ++j) {
-                const uint32_t t = col_begin + cg * cols + j;
-                const uint32_t page = n * Ht * Ct + r * Ct + t;
-                noc_async_read(x_acc.get_noc_addr(page), l1, x_tile_bytes);
-                l1 += x_tile_bytes;
+        {
+            MaybeDeviceZoneScope("r_x_reserve");  // back-pressure from compute (streaming ring) / none (resident)
+            cb_reserve_back(cb_id, chunk);
+            if constexpr (resident) {
+                cb_reserve_back(cb_x_pass2, chunk);  // aliased region: pass-2 credits move in lockstep
             }
         }
-        noc_async_read_barrier();
+        uint32_t l1 = get_write_ptr(cb_id);
+        {
+            MaybeDeviceZoneScope("r_x_issue");  // RISC-serial: one TensorAccessor address + NoC command per tile
+            for (uint32_t i = 0; i < valid_rows; ++i) {
+                const uint32_t r = row_begin + rc * chunk_rows + i;
+                for (uint32_t j = 0; j < valid_cols; ++j) {
+                    const uint32_t t = col_begin + cg * cols + j;
+                    const uint32_t page = n * Ht * Ct + r * Ct + t;
+                    const uint64_t src = x_acc.get_noc_addr(page);
+                    if constexpr (ablate_read_x) {
+                        asm volatile("" ::"r"(static_cast<uint32_t>(src)), "r"(l1));  // keep the address math
+                    } else {
+                        noc_async_read(src, l1, x_tile_bytes);
+                    }
+                    l1 += x_tile_bytes;
+                }
+            }
+        }
+        {
+            MaybeDeviceZoneScope("r_x_barrier");  // DRAM / fabric latency of the chunk's reads
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_id, chunk);
         if constexpr (resident) {
             cb_push_back(cb_x_pass2, chunk);
@@ -209,6 +265,7 @@ void kernel_main() {
     CircularBuffer x_rm_cb(cb_x_rm);
     auto load_x_chunk_sticks = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {
         if constexpr (is_rm) {
+            MaybeDeviceZoneScope("r_x_sticks");  // RM: reserve + per-stick reads + barrier of one block
             const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
             const uint32_t valid_cols = col_axis.valid(cg, cols);
             const uint32_t T_first = col_begin + cg * cols;
@@ -219,8 +276,16 @@ void kernel_main() {
             const uint32_t row_bytes = ((lane_ragged ? C : lane_end) - T_first * 32) * x_elem_size;
             const bool row_ragged = (hw_tail != 0) && owns_last_row && (rc + 1 == num_row_chunks);
             if (valid_cols == cols && !lane_ragged && !row_ragged) {
-                dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
-                    x_acc, 32 * valid_rows, row_bytes, n * HW + 32 * tile_row0, col_off);
+                if constexpr (ablate_read_x) {
+                    // sync only: the helper reserves / pushes valid_cols pages per tile-row
+                    for (uint32_t i = 0; i < valid_rows; ++i) {
+                        cb_reserve_back(cb_x_rm, valid_cols);
+                        cb_push_back(cb_x_rm, valid_cols);
+                    }
+                } else {
+                    dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
+                        x_acc, 32 * valid_rows, row_bytes, n * HW + 32 * tile_row0, col_off);
+                }
                 return;
             }
             for (uint32_t i = 0; i < valid_rows; ++i) {
@@ -329,36 +394,52 @@ void kernel_main() {
     [[maybe_unused]] CircularBuffer gamma_row_cb(cb_gamma_row);
     [[maybe_unused]] CircularBuffer beta_row_cb(cb_beta_row);
     auto fill_pass2_constants = [&](uint32_t cg) {
-        cb_reserve_back(cb_membership, membership_tiles);
-        noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
+        {
+            MaybeDeviceZoneScope("r_p2_reserve");  // back-pressure: pass-1 E / previous group's rows still in use
+            cb_reserve_back(cb_membership, membership_tiles);
+            if constexpr (has_gamma) {
+                cb_reserve_back(cb_gamma_row, cols);
+            }
+            if constexpr (has_beta) {
+                cb_reserve_back(cb_beta_row, cols);
+            }
+        }
+        MaybeDeviceZoneScope("r_p2_fill");  // zero-fill barrier + affine DRAM reads + E lanes + read barrier + fix-ups
+        if constexpr (!ablate_membership) {
+            noc.async_write_zeros(membership_cb, membership_tiles * e_tile_bytes);
+        }
         if constexpr (has_gamma) {
-            cb_reserve_back(cb_gamma_row, cols);
             noc.async_write_zeros(gamma_row_cb, cols * get_tile_size(cb_gamma_row));
         }
         if constexpr (has_beta) {
-            cb_reserve_back(cb_beta_row, cols);
             noc.async_write_zeros(beta_row_cb, cols * get_tile_size(cb_beta_row));
         }
         noc.write_zeros_l1_barrier();  // zeros landed before any read data lands on the same pages
-        if constexpr (has_gamma) {
+        if constexpr (has_gamma && !ablate_affine_reads) {
             const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, g_page_bytes);
             issue_affine_reads(cb_gamma_row, gamma_acc, cg);
         }
-        if constexpr (has_beta) {
+        if constexpr (has_beta && !ablate_affine_reads) {
             const auto beta_acc = TensorAccessor(beta_args, beta_addr, g_page_bytes);
             issue_affine_reads(cb_beta_row, beta_acc, cg);
         }
-        write_membership_lanes(cg, /*transposed=*/false);
+        if constexpr (!ablate_membership) {
+            write_membership_lanes(cg, /*transposed=*/false);
+        }
         cb_push_back(cb_membership, membership_tiles);
         if constexpr (has_gamma || has_beta) {
             noc_async_read_barrier();
         }
         if constexpr (has_gamma) {
-            fixup_affine_rows(cb_gamma_row, cg);
+            if constexpr (!ablate_affine_reads) {
+                fixup_affine_rows(cb_gamma_row, cg);
+            }
             cb_push_back(cb_gamma_row, cols);
         }
         if constexpr (has_beta) {
-            fixup_affine_rows(cb_beta_row, cg);
+            if constexpr (!ablate_affine_reads) {
+                fixup_affine_rows(cb_beta_row, cg);
+            }
             cb_push_back(cb_beta_row, cols);
         }
     };
