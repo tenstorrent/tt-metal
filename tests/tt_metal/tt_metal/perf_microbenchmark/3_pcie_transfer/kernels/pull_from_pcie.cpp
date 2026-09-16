@@ -28,6 +28,5 @@ void kernel_main() {
             pcie_read_ptr = pcie_base;
         }
     }
-    noc_async_read_barrier();
     noc_async_read_clear_pcie_state();
 }
