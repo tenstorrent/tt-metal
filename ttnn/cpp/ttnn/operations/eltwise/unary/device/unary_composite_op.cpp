@@ -210,8 +210,15 @@ Tensor clamp(
                             : 16775716;  // max_val and min_val will be updated once unary infra supports int32 scalar.
         return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
     }  // All scalars are float (or null)
-    float min_val = min.has_value() ? std::get<float>(min.value()) : std::numeric_limits<float>::lowest();
-    float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::max();
+    // Omitted bounds must not be substituted with a finite sentinel: on float32 that turns
+    // `clamp(+inf, min=m)` into `FLT_MAX` (3.4028235e38) where `torch.clamp` returns `+inf`.
+    // ±inf compares correctly against every finite operand under the kernel's sign-magnitude
+    // ordering (|inf| = 0x7F800000 is above every finite |v|), so passing ±inf preserves
+    // torch's contract: `clamp(x, min=m)` is `maximum(x, m)` and `clamp(x, max=M)` is
+    // `minimum(x, M)` when the other bound is None. NaN is not addressed here — the kernel's
+    // two SFPSWAP instructions lose it in either sentinel, tracked separately in #51470.
+    float min_val = min.has_value() ? std::get<float>(min.value()) : -std::numeric_limits<float>::infinity();
+    float max_val = max.has_value() ? std::get<float>(max.value()) : std::numeric_limits<float>::infinity();
     return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
 }
 
