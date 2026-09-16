@@ -43,6 +43,16 @@ OUT_DEPTH_FACTOR = 2  # cb_out depth = OUT_DEPTH_FACTOR * out_block tiles (write
 # DRAM contention the ack round trip is ~3-4 us and the writer was the critical half of every large TILE shape
 # (per-RISC attribution: BRISC 50-77 us vs NCRISC 18-36 us on (1,1,16384,320)).
 OUT_STORE_FLUSH_PER_BLOCK = True
+# Per-core data-movement NoC assignment (Refinement 4). The default pair is reader on NoC0 (+x/+y routing) and writer
+# on NoC1 (-x/-y) — the preferred DRAM read/write NoCs. On the 11x10 BH grid the resident regime's two passes are
+# temporally disjoint (pass 1 only reads, pass 2 only writes), so during each pass one NoC carries every DRAM stream
+# while the other idles, and the per-RISC attribution on (1,1,16384,320) showed the store phase route-limited with a
+# 50 -> 77 us gradient towards the far (+x, +y) corner. Swapping the pair on a subset of cores (reader NoC1 / writer
+# NoC0 — still one RISC per NoC in DM_DEDICATED_NOC, so the command buffers never collide) spreads every DRAM stream
+# over both NoCs' disjoint link sets. Policies (per input layout): "none" (byte-identical default),
+# "alternate_x" (odd logical columns swapped), "alternate_y" (odd rows), "checker" ((x + y) odd), "half_x"
+# (right half of the grid). The mcast / gather helpers follow the kernel's noc_index automatically.
+DM_NOC_SPLIT = {"TILE": "none", "ROW_MAJOR": "none"}
 MIN_TILES_PER_CORE = 1  # grid-synchronisation lamp: fewer, fatter cores per image when raised
 # Tie-break among the core splits that use the most cores, per input layout:
 #   "wide" = largest Pc (narrowest per-core Ct_core) — TILE input: the pass-2 affine build (one matmul + chains per
@@ -171,6 +181,21 @@ ROLE_ROOT = 2
 # ---------------------------------------------------------------------------
 # Small integer helpers
 # ---------------------------------------------------------------------------
+def _swap_dm_nocs(policy, x, y, Gx, Gy) -> bool:
+    """DM_NOC_SPLIT: does logical core (x, y) run the swapped (reader NoC1 / writer NoC0) pair?"""
+    if policy == "none":
+        return False
+    if policy == "alternate_x":
+        return (x % 2) == 1
+    if policy == "alternate_y":
+        return (y % 2) == 1
+    if policy == "checker":
+        return ((x + y) % 2) == 1
+    if policy == "half_x":
+        return x >= (Gx + 1) // 2
+    raise ValueError(f"groupnorm_sc_N_1_HW_C: unknown DM_NOC_SPLIT policy {policy!r}")
+
+
 def _divisors(n):
     return [d for d in range(1, n + 1) if n % d == 0]
 
@@ -569,8 +594,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         hw_tail,
     ]
 
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
+    reader_rt_by_core = {}
+    writer_rt_by_core = {}
     compute_rt = ttnn.RuntimeArgs()
     gamma_addr = gamma.buffer_address() if has_gamma else 0
     beta_addr = beta.buffer_address() if has_beta else 0
@@ -591,7 +616,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                 row_begin, Ht_core = _axis_range(Ht, group.pr, i)  # rows [i*Ht // Pr, (i+1)*Ht // Pr)
                 col_begin, Ct_core = _axis_range(Ct, group.pc, j)  # cols [j*Ct // Pc, (j+1)*Ct // Pc)
             active = int(role != ROLE_IDLE)
-            reader_rt[x][y] = [
+            reader_rt_by_core[(x, y)] = [
                 input_tensor.buffer_address(),
                 gamma_addr,
                 beta_addr,
@@ -604,7 +629,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                 Ht_core,
                 Ct_core,
             ]
-            writer_rt[x][y] = [
+            writer_rt_by_core[(x, y)] = [
                 output_tensor.buffer_address(),
                 image_begin,
                 image_count,
@@ -620,24 +645,50 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                 Ht_core,
                 Ct_core,
             ]
-            assert len(writer_rt[x][y]) == writer_rt_scalars
-            writer_rt[x][y] = list(writer_rt[x][y]) + list(helper.runtime_args(core))
+            assert len(writer_rt_by_core[(x, y)]) == writer_rt_scalars
+            writer_rt_by_core[(x, y)] += list(helper.runtime_args(core))
             owns_last_row = int(active and row_begin + Ht_core == Ht)  # holds the image's ragged last tile-row
             compute_rt[x][y] = [image_count, role, inv_n_bits, eps_bits, Ht_core, Ct_core, owns_last_row]
 
-    reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_reader.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
+    # ---- data-movement kernels: one descriptor per (kernel, NoC) set (DM_NOC_SPLIT) ------------
+    # NoC enum values: 0 = NoC0 (RISCV_0_default), 1 = NoC1 (RISCV_1_default). Default pair = the framework's
+    # Reader/WriterConfigDescriptor (reader RISCV_1 on the preferred DRAM-read NoC0, writer RISCV_0 on NoC1).
+    noc_policy = DM_NOC_SPLIT[layout_key]
+    core_list = [(x, y) for g in groups for (x, y) in g.cores]
+    noc_sets = {
+        False: [c for c in core_list if not _swap_dm_nocs(noc_policy, c[0], c[1], Gx, Gy)],
+        True: [c for c in core_list if _swap_dm_nocs(noc_policy, c[0], c[1], Gx, Gy)],
+    }
+    NOC0, NOC1 = ttnn.NOC.RISCV_0_default, ttnn.NOC.RISCV_1_default
+
+    def _dm_kernels(source, ct, rt_by_core, processor, noc_default, noc_swapped):
+        kernels = []
+        for swapped, cores in noc_sets.items():
+            if not cores:
+                continue
+            rt = ttnn.RuntimeArgs()
+            for x, y in cores:
+                rt[x][y] = rt_by_core[(x, y)]
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / source),
+                    core_ranges=ttnn.CoreRangeSet(
+                        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for (x, y) in cores]
+                    ),
+                    compile_time_args=ct,
+                    runtime_args=rt,
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=processor, noc=noc_swapped if swapped else noc_default
+                    ),
+                )
+            )
+        return kernels
+
+    reader_kernels = _dm_kernels(
+        "groupnorm_sc_N_1_HW_C_reader.cpp", reader_ct, reader_rt_by_core, ttnn.DataMovementProcessor.RISCV_1, NOC0, NOC1
     )
-    writer_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_writer.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=writer_ct,
-        runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
+    writer_kernels = _dm_kernels(
+        "groupnorm_sc_N_1_HW_C_writer.cpp", writer_ct, writer_rt_by_core, ttnn.DataMovementProcessor.RISCV_0, NOC1, NOC0
     )
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_compute.cpp"),
@@ -648,7 +699,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     )
 
     return ttnn.ProgramDescriptor(
-        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        kernels=[*reader_kernels, *writer_kernels, compute_kernel],
         semaphores=semaphores,
         cbs=cbs,
     )
