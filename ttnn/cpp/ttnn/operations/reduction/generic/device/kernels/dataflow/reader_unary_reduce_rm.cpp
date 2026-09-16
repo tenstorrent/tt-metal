@@ -42,7 +42,7 @@ void reduce_rm_reader() {
     const uint32_t rt_start = get_arg(args::rt_start);
 
     // Compile-time args. Both paths receive the whole set; each branch reads the names it needs.
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    const uint32_t scaler_bits = get_arg(args::scaler_bits);
     constexpr auto W_logical = get_arg(args::W_logical);
     constexpr auto elem_bytes = get_arg(args::elem_bytes);
     constexpr auto padding_identity_bits = get_arg(args::padding_identity_bits);
