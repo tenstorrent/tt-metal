@@ -27,7 +27,7 @@ Send six interleaved 256K prompts, one different Gutenberg book per slot:
 python -m models.demos.gemma4_d_p.tt.runners.prefill_producer --results /tmp/gemma4-prefill-results.json
 ```
 
-The producer downloads and caches the books under `/tmp/gemma4_prefill_text`. Use one `--text /path/to/book.txt` per slot for local text. It waits for all 60 device layer acknowledgments after each chunk and sends the shutdown sentinel after completion. `--keep-serving` leaves the service available for another producer run. `--tokens 8193` exercises a padded final chunk. Starting at position zero replaces a slot's prompt; subsequent chunks must be contiguous.
+The producer downloads and caches the books under `/tmp/gemma4_prefill_text`. Use one `--text /path/to/book.txt` per slot for local text. It waits for all 60 device layer acknowledgments after each chunk and leaves the service available for another producer run. Pass `--shutdown` to send the shutdown sentinel after completion. `--tokens 8193` exercises a padded final chunk. Starting at position zero replaces a slot's prompt; subsequent chunks must be contiguous.
 
 Set `PREFILL_NUM_USERS` to 1–6 in both terminals to change slot capacity. `PREFILL_H2D_SERVICE_ID` selects the shared service name. `PREFILL_HF_MODEL` overrides `HF_MODEL`; `PREFILL_TTNN_CACHE` overrides the `TT_CACHE_PATH` root. The runner reuses `tensor_cache_bf16_mesh8x4` beneath that root.
 
