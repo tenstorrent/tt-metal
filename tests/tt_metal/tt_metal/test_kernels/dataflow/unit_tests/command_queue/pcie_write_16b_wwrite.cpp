@@ -42,4 +42,6 @@ void kernel_main() {
 
     // Ensure all outstanding transactions are flushed
     noc_async_write_barrier();
+    // The loop left NOC_RET_ADDR_MID routed to PCIe and the plain write path no longer rewrites it.
+    noc_async_write_clear_pcie_state(NOC_0, 0 /* cmd_buf */);
 }

@@ -79,4 +79,8 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
+    // Both chunked helpers program the MID registers from 64 bit PCIe addresses and the plain paths no
+    // longer rewrite them, so put both command buffers back to on-chip routing.
+    noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
+    noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
 }

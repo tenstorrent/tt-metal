@@ -92,6 +92,9 @@ __attribute__((noinline)) void push_entries_to_host(
     socket_push_pages(socket, num_pages);
     socket_notify_receiver(socket);
     noc_async_write_barrier();
+    // The loop above wrote NOC_RET_ADDR_MID from a 64 bit PCIe address and the plain write path no longer
+    // rewrites it, so put write_cmd_buf back to on-chip routing before anything else uses it.
+    noc_async_write_clear_pcie_state(noc_index, write_cmd_buf);
     RT_PROF_NCRISC_DBG_INC(ring_buffer, push_write_barrier_exit_count);
 }
 
