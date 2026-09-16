@@ -19,11 +19,13 @@
 namespace hal::cfg::detail
 {
 
+// Hardware emission: runtime values, MMIO arrays, and constant Tensix instructions.
+
 template <std::uint32_t Addr>
 inline constexpr bool rmwcib_is_ignored_by_hardware = (Addr == STATE_RESET_EN_ADDR32);
 
 template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
-inline __attribute__((always_inline)) void cfg_reg_rmw_tensix(const std::uint32_t value)
+inline __attribute__((always_inline)) void write_runtime_rmwcib(const std::uint32_t value)
 {
     static_assert(!rmwcib_is_ignored_by_hardware<CfgAddr32>, "RMWCIB writes to the state-reset register are ignored by hardware; use Access::MMIO or from_gpr");
 
@@ -50,7 +52,7 @@ inline __attribute__((always_inline)) void cfg_reg_rmw_tensix(const std::uint32_
 // Single fields keep their value unshifted until emission; composed words use
 // Shamt == 0. This avoids extending encoded temporary lifetimes across writes.
 template <Access A, RegisterScope Scope, std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask>
-inline __attribute__((always_inline)) void write_value(const std::uint32_t value, volatile std::uint32_t* tt_reg_ptr cfg)
+inline __attribute__((always_inline)) void write_runtime_word(const std::uint32_t value, volatile std::uint32_t* tt_reg_ptr cfg)
 {
     static_assert(
         A == Access::MMIO || A == Access::TensixCfgUnit,
@@ -79,7 +81,7 @@ inline __attribute__((always_inline)) void write_value(const std::uint32_t value
     {
         // One logical word update. Only byte lanes touched by the combined
         // mask produce RMWCIB instructions.
-        cfg_reg_rmw_tensix<Addr, Shamt, Mask>(value);
+        write_runtime_rmwcib<Addr, Shamt, Mask>(value);
     }
 }
 
@@ -126,82 +128,73 @@ inline __attribute__((always_inline)) void write_constant_word()
     }
 }
 
+// Field assignments: group by physical word, then emit each group once.
+
 template <typename Tuple, std::size_t Index>
-using assignment_at_t = std::remove_cv_t<std::remove_reference_t<std::tuple_element_t<Index, Tuple>>>;
+using operand_at_t = std::remove_cv_t<std::remove_reference_t<std::tuple_element_t<Index, Tuple>>>;
 
-template <typename Key, typename Assignment>
-inline constexpr std::uint32_t encode_group_assignment(const Assignment& assignment)
-{
-    if constexpr (assignments_share_word_v<Key, Assignment>)
-    {
-        return encode(assignment);
-    }
-    else
-    {
-        return 0u;
-    }
-}
-
+// A word is emitted only at its first assignment, preserving first-occurrence order.
 template <typename Key, typename Tuple, std::size_t... Indices>
-inline constexpr bool assignment_group_seen(std::index_sequence<Indices...>)
+inline constexpr bool word_has_prior_assignment(std::index_sequence<Indices...>)
 {
-    return (false || ... || assignments_share_word_v<Key, assignment_at_t<Tuple, Indices>>);
+    return (false || ... || assignments_share_word_v<Key, operand_at_t<Tuple, Indices>>);
 }
 
-template <Access A, std::size_t KeyIndex, typename Tuple, std::size_t... Indices>
-inline __attribute__((always_inline)) void write_assignment_group(
-    volatile std::uint32_t* tt_reg_ptr cfg, const Tuple& assignments, std::index_sequence<Indices...>)
+// Combine assignments for Key's word; assignments to other words contribute zero.
+template <Access A, typename Key, typename... Assignments>
+inline __attribute__((always_inline)) void write_assignment_group(volatile std::uint32_t* tt_reg_ptr cfg, const Key& key, const Assignments&... assignments)
 {
-    using Key                        = assignment_at_t<Tuple, KeyIndex>;
-    constexpr std::size_t group_size = (0u + ... + (assignments_share_word_v<Key, assignment_at_t<Tuple, Indices>> ? 1u : 0u));
-    constexpr std::uint32_t mask = (0u | ... | (assignments_share_word_v<Key, assignment_at_t<Tuple, Indices>> ? assignment_at_t<Tuple, Indices>::mask : 0u));
-    constexpr bool group_is_constant =
-        (true && ... && (!assignments_share_word_v<Key, assignment_at_t<Tuple, Indices>> || is_constant_field_assignment_v<assignment_at_t<Tuple, Indices>>));
+    constexpr std::size_t group_size = (0u + ... + assignments_share_word_v<Key, Assignments>);
+    constexpr std::uint32_t mask     = (0u | ... | (assignments_share_word_v<Key, Assignments> ? Assignments::mask : 0u));
+    constexpr bool group_is_constant = ((!assignments_share_word_v<Key, Assignments> || is_constant_field_assignment_v<Assignments>) && ...);
 
     if constexpr (A == Access::TensixCfgUnit && group_is_constant)
     {
-        constexpr std::uint32_t data = (0u | ... | encode_group_assignment<Key>(assignment_at_t<Tuple, Indices> {}));
+        constexpr std::uint32_t data = (0u | ... | (assignments_share_word_v<Key, Assignments> ? encode(Assignments {}) : 0u));
         write_constant_word<Key::scope, Key::addr, mask, data>();
     }
     else if constexpr (group_size == 1u)
     {
-        write_value<A, Key::scope, Key::addr, Key::shift, mask>(std::get<KeyIndex>(assignments).value, cfg);
+        write_runtime_word<A, Key::scope, Key::addr, Key::shift, mask>(key.value, cfg);
     }
     else
     {
-        const std::uint32_t data = (0u | ... | encode_group_assignment<Key>(std::get<Indices>(assignments)));
-        write_value<A, Key::scope, Key::addr, 0, mask>(data, cfg);
+        const std::uint32_t data = (0u | ... | (assignments_share_word_v<Key, Assignments> ? encode(assignments) : 0u));
+        write_runtime_word<A, Key::scope, Key::addr, 0, mask>(data, cfg);
     }
 }
 
-template <Access A, std::size_t Index, typename Tuple>
-inline __attribute__((always_inline)) void write_assignment_groups(volatile std::uint32_t* tt_reg_ptr cfg, const Tuple& assignments)
+// Visit each assignment; emit its entire word group unless it was already emitted.
+template <Access A, std::size_t Index = 0, typename... Assignments>
+inline __attribute__((always_inline)) void write_assignment_groups(volatile std::uint32_t* tt_reg_ptr cfg, const Assignments&... assignments)
 {
-    if constexpr (Index < std::tuple_size_v<Tuple>)
+    if constexpr (Index < sizeof...(Assignments))
     {
-        using Key = assignment_at_t<Tuple, Index>;
-        if constexpr (!assignment_group_seen<Key, Tuple>(std::make_index_sequence<Index> {}))
+        using Tuple = std::tuple<Assignments...>;
+        using Key   = std::tuple_element_t<Index, Tuple>;
+        if constexpr (!word_has_prior_assignment<Key, Tuple>(std::make_index_sequence<Index> {}))
         {
-            write_assignment_group<A, Index>(cfg, assignments, std::make_index_sequence<std::tuple_size_v<Tuple>> {});
+            write_assignment_group<A>(cfg, std::get<Index>(std::tie(assignments...)), assignments...);
         }
-        write_assignment_groups<A, Index + 1u>(cfg, assignments);
+        write_assignment_groups<A, Index + 1u>(cfg, assignments...);
     }
 }
 
+// Validate the assignments before grouping; cfg is already resolved for MMIO.
 template <Access A, typename... Assignments>
-inline __attribute__((always_inline)) void write_assignments_to(volatile std::uint32_t* tt_reg_ptr cfg, const Assignments&... assignments)
+inline __attribute__((always_inline)) void write_assignments_in_bank(volatile std::uint32_t* tt_reg_ptr cfg, const Assignments&... assignments)
 {
     static_assert(A == Access::MMIO || A == Access::TensixCfgUnit, "field-assignment CFG writes require Access::MMIO or Access::TensixCfgUnit");
-    static_assert(assignment_groups_disjoint<Assignments...>::value, "overlapping CFG field assignments in one physical word");
+    static_assert(write_operations_disjoint<Assignments...>::value, "overlapping CFG field assignments in one physical word");
     if constexpr (A == Access::MMIO)
     {
         static_assert(((Assignments::scope == RegisterScope::State) && ...), "Access::MMIO cannot write thread CFG assignments");
     }
 
-    const auto assignment_tuple = std::tie(assignments...);
-    write_assignment_groups<A, 0u>(cfg, assignment_tuple);
+    write_assignment_groups<A>(cfg, assignments...);
 }
 
+// Resolve the active bank once per MMIO call.
 template <Access A, typename... Assignments>
 inline __attribute__((always_inline)) void write_assignments(const Assignments&... assignments)
 {
@@ -210,17 +203,16 @@ inline __attribute__((always_inline)) void write_assignments(const Assignments&.
     {
         cfg = state_cfg_bank();
     }
-    write_assignments_to<A>(cfg, assignments...);
+    write_assignments_in_bank<A>(cfg, assignments...);
 }
+
+// GPR transfers: WRCFG through the CFG unit or REG2FLOP through the scalar unit.
 
 template <Access A, const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprOperand<GprIndex, Size, Completion>>& transfer)
 {
     static_assert(
         A == Access::TensixCfgUnit || A == Access::TensixScalarUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit or Access::TensixScalarUnit");
-    static_assert(F.scope == RegisterScope::State, "GPR-backed cfg::write cannot write thread CFG (SETC16) fields");
-    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
-    static_assert(F.shamt(S) == 0, "GPR cfg::write must start at the beginning of a CFG word");
     if constexpr (Size == GprTransferSize::Bits128)
     {
         static_assert((F.addr32(S) & 0x3u) == 0u, "128-bit GPR cfg::write destination must be four-word aligned");
@@ -274,16 +266,19 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprOpe
     }
 }
 
+// Mixed operations: group consecutive field assignments without crossing GprWrite.
+
+// Find the next GprWrite or the end of the operation list.
 template <typename Tuple, std::size_t Index>
-inline constexpr std::size_t assignment_run_end()
+inline constexpr std::size_t field_assignment_run_end()
 {
     if constexpr (Index == std::tuple_size_v<Tuple>)
     {
         return Index;
     }
-    else if constexpr (is_field_assignment_v<assignment_at_t<Tuple, Index>>)
+    else if constexpr (is_field_assignment_v<operand_at_t<Tuple, Index>>)
     {
-        return assignment_run_end<Tuple, Index + 1u>();
+        return field_assignment_run_end<Tuple, Index + 1u>();
     }
     else
     {
@@ -302,10 +297,10 @@ inline __attribute__((always_inline)) void write_operation_sequence(const Tuple&
 {
     if constexpr (Index < std::tuple_size_v<Tuple>)
     {
-        using Operation = assignment_at_t<Tuple, Index>;
+        using Operation = operand_at_t<Tuple, Index>;
         if constexpr (is_field_assignment_v<Operation>)
         {
-            constexpr std::size_t end = assignment_run_end<Tuple, Index>();
+            constexpr std::size_t end = field_assignment_run_end<Tuple, Index>();
             write_assignment_run<A, Index>(operations, std::make_index_sequence<end - Index> {});
             write_operation_sequence<A, end>(operations);
         }
@@ -319,7 +314,7 @@ inline __attribute__((always_inline)) void write_operation_sequence(const Tuple&
 }
 
 template <Access A, typename... Operations>
-inline __attribute__((always_inline)) void write_operations(const Operations&... operations)
+inline __attribute__((always_inline)) void write_mixed_operations(const Operations&... operations)
 {
     static_assert(A == Access::TensixCfgUnit, "heterogeneous cfg::write supports Access::TensixCfgUnit only");
     static_assert((is_write_operation_v<Operations> && ...), "heterogeneous cfg::write accepts only set() and from_gpr() operations");
