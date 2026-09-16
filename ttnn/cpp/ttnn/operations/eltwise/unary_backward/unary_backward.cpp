@@ -695,7 +695,7 @@ std::vector<Tensor> logit_bw(
         ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    grad_result = where(ttnn::eq(status, 1.0f, std::nullopt, output_mem_config), grad_result, std::nanf(""));
+    grad_result = where(status, grad_result, std::nanf(""));
     grad_result = where(
         ttnn::logical_or(
             ttnn::eq(input, 0.0f, std::nullopt, output_mem_config),
