@@ -51,8 +51,8 @@ OUT_STORE_FLUSH_PER_BLOCK = True
 # NoC0 — still one RISC per NoC in DM_DEDICATED_NOC, so the command buffers never collide) spreads every DRAM stream
 # over both NoCs' disjoint link sets. Policies (per input layout): "none" (byte-identical default),
 # "alternate_x" (odd logical columns swapped), "alternate_y" (odd rows), "checker" ((x + y) odd), "half_x"
-# (right half of the grid). The mcast / gather helpers follow the kernel's noc_index automatically.
-DM_NOC_SPLIT = {"TILE": "alternate_x", "ROW_MAJOR": "none"}
+# (right half of the grid), "half_y" (bottom half). The mcast / gather helpers follow the kernel's noc_index automatically.
+DM_NOC_SPLIT = {"TILE": "half_y", "ROW_MAJOR": "none"}
 MIN_TILES_PER_CORE = 1  # grid-synchronisation lamp: fewer, fatter cores per image when raised
 # Tie-break among the core splits that use the most cores, per input layout:
 #   "wide" = largest Pc (narrowest per-core Ct_core) — TILE input: the pass-2 affine build (one matmul + chains per
@@ -193,6 +193,8 @@ def _swap_dm_nocs(policy, x, y, Gx, Gy) -> bool:
         return ((x + y) % 2) == 1
     if policy == "half_x":
         return x >= (Gx + 1) // 2
+    if policy == "half_y":
+        return y >= (Gy + 1) // 2
     raise ValueError(f"groupnorm_sc_N_1_HW_C: unknown DM_NOC_SPLIT policy {policy!r}")
 
 
