@@ -1644,3 +1644,110 @@ def test_full_causal_attention_matches_stock_causal_on_raw_scenarios(mesh_device
                 tensor.deallocate(True)
 
     assert not failures, "production-vs-stock raw parity failures: " + "; ".join(failures)
+
+
+class _StreamingRingAttentionExpControl:
+    """Test-only stock ring-joint caller that exercises the shared streaming exp-mode header."""
+
+    def __init__(self, mesh_device, *, exp_approx_mode):
+        self.mesh_device = mesh_device
+        grid = mesh_device.compute_with_storage_grid_size()
+        self.program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=exp_approx_mode,
+        )
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 1))
+        shape = (1, NUM_KV_HEADS, MAX_SEQ_LEN, HEAD_DIM)
+        self.persistent_k = ttnn.from_torch(
+            torch.zeros(shape),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        self.persistent_v = ttnn.from_torch(
+            torch.zeros(shape),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        self.ccl_offset = ttnn.CoreCoord(grid.x - 1, 0)
+        ccl_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(grid.x - 1, 0), ttnn.CoreCoord(grid.x - 1, 1))})
+        self.semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(2)]
+
+    def __call__(self, q, cache, *, slot_idx, layer_idx, actual_start, actual_end):
+        logical_n = math.ceil(actual_end / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        output, joint_output, statistics = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q,
+            cache.k,
+            cache.v,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=self.persistent_k,
+            persistent_output_buffer_v=self.persistent_v,
+            joint_strategy="rear",
+            logical_n=logical_n,
+            program_config=self.program_config,
+            compute_kernel_config=self.compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.semaphores,
+            num_links=1,
+            cluster_axis=SP_AXIS,
+            mesh_device=self.mesh_device,
+            topology=ttnn.Topology.Ring,
+            ccl_core_grid_offset=self.ccl_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            scale=HEAD_DIM**-0.5,
+            is_balanced=False,
+            kv_cache_batch_idx=slot_idx * NUM_LAYERS + layer_idx,
+            kv_actual_isl=actual_start,
+        )
+        for auxiliary in (joint_output, statistics):
+            if isinstance(auxiliary, ttnn.Tensor) and auxiliary is not output:
+                auxiliary.deallocate(True)
+        return output
+
+
+# Protect both shared streaming exp branches independently of the production FP32 standard path. The
+# accurate smooth case fails the same PCC gate with the pre-fix hard-coded approximate invocation.
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
+def test_streaming_ring_exp_modes_match_independent_reference(mesh_device):
+    mesh_config = MeshConfig(MESH_SHAPE, TP)
+    cache = allocate_kv_cache(mesh_device, mesh_config, cache_dtype=ttnn.bfloat16)
+    cases = (
+        (True, 0, 0, 2, _fixture, "exp-approx-hash-0-33"),
+        (False, 1, 13, 1, _sinusoidal_fixture, "exp-accurate-original-smooth-0-33"),
+    )
+    for exp_approx_mode, slot, layer, prompt, fixture_fn, label in cases:
+        attention = _StreamingRingAttentionExpControl(
+            mesh_device,
+            exp_approx_mode=exp_approx_mode,
+        )
+        _run_attention_case(
+            mesh_device,
+            attention,
+            cache,
+            slot=slot,
+            layer=layer,
+            start=0,
+            end=33,
+            prompt=prompt,
+            cache_dtype=ttnn.bfloat16,
+            label=label,
+            fixture_fn=fixture_fn,
+        )

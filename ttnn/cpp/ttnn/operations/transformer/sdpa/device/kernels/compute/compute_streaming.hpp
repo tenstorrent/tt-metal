@@ -519,7 +519,13 @@ void sub_exp_block_bcast_cols(
         constexpr VectorMode vector_mode_exp = VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
-                exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+                if constexpr (EXP_APPROX_MODE) {
+                    exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+                } else {
+                    // Accurate exp does not fold scale into init; apply the same BF16 scale used by online correction.
+                    exp_packthread_tile<false, true, InputClamping::None, iterations>(
+                        dst_index++, vector_mode_exp, static_cast<uint16_t>(scale_fp32 >> 16));
+                }
             }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -1313,7 +1319,7 @@ static void sdpa_inner_loop_step(
     uint32_t q_index_offset = has_q_base_tiles ? q_base_tiles : 0;
     uint32_t kt_index_offset = 0;
 
-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    exp_packthread_tile_init<EXP_APPROX_MODE, scale_fp32, InputClamping::None>();
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
