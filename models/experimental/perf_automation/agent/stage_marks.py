@@ -62,7 +62,7 @@ def signpost(name: str) -> None:
         )
 
 
-def _no_marks(why: str) -> None:
+def no_marks(why: str) -> None:
     """Say why there will be no per-stage split. The absence of this line is what hid the defect.
 
     A zero from mark_stages reached the report as `stage_buckets {}`, which the roofline renders as
@@ -93,7 +93,7 @@ def mark_stages(adapter, device) -> int:
     try:
         import ttnn
     except Exception as exc:  # noqa: BLE001
-        _no_marks("ttnn is not importable here (%s: %s)" % (type(exc).__name__, str(exc)[:120]))
+        no_marks("ttnn is not importable here (%s: %s)" % (type(exc).__name__, str(exc)[:120]))
         return 0
     # SETUP BUILDS THE STAGES. `stages` is [] until setup() runs -- __init__ only declares the
     # attribute, and setup() is what constructs the pipeline and binds one _Stage per declared stage.
@@ -108,11 +108,11 @@ def mark_stages(adapter, device) -> int:
             try:
                 _setup(device)
             except Exception as exc:  # noqa: BLE001
-                _no_marks("adapter.setup failed (%s: %s)" % (type(exc).__name__, str(exc)[:140]))
+                no_marks("adapter.setup failed (%s: %s)" % (type(exc).__name__, str(exc)[:140]))
                 return 0
     stages = list(getattr(adapter, "stages", None) or [])
     if not stages:
-        _no_marks("the pipeline declares no stages after setup")
+        no_marks("the pipeline declares no stages after setup")
         return 0
     n = 0
     for st in stages:
@@ -136,11 +136,11 @@ def mark_stages(adapter, device) -> int:
         finally:
             signpost("stage:%s:end" % name)
     if not n:
-        _no_marks("%d declared stage(s), none could be run one at a time" % len(stages))
+        no_marks("%d declared stage(s), none could be run one at a time" % len(stages))
     return n
 
 
-def _looks_like_a_pipeline(obj) -> bool:
+def looks_like_a_pipeline(obj) -> bool:
     """Does this object expose the stage surface the adapter drives?
 
     The same two things perf_adapter looks for: a PIPELINE_STAGES list, or the per-stage trace hooks
@@ -166,7 +166,7 @@ def find_pipeline_in_scope(scope: dict):
     Ordered so a caller can be told WHICH candidate was taken when more than one qualifies, and
     deterministic (insertion order of locals) so two runs of the same test pick the same object.
     """
-    found = [(k, v) for k, v in (scope or {}).items() if not k.startswith("__") and _looks_like_a_pipeline(v)]
+    found = [(k, v) for k, v in (scope or {}).items() if not k.startswith("__") and looks_like_a_pipeline(v)]
     if not found:
         return None
     if len(found) > 1:
@@ -321,6 +321,37 @@ def _call_preparer(bind, pipe, scope: dict):
     return bind(*args)
 
 
+def mark_stages_for(pipe, device) -> int:
+    """Run the marked pass for `pipe`, whose inputs are already ready. The shared tail of every
+    caller that has a pipeline and a device: the text-driven mark_stages_in_scope below, and the
+    runtime hook in runtime_marks.py that fires from the model's own construction instead.
+
+    THE CAPTURES THE MODEL DECLARES BUT DOES NOT SHIP. A pipeline's <stage>_trace_inputs() reads the
+    golden tensors a bring-up capture wrote; those are large and uncommitted, so on a tree that has
+    never run that capture every stage raises FileNotFoundError and the split is lost. The manifest
+    beside them IS committed and declares every shape, and a timing measurement does not read the
+    values -- so the missing file is supplied from its own description. Installed only around this
+    walk, and only for files that do not exist.
+    """
+    try:
+        from .perf_adapter import PipelineStageAdapter as _PSA
+    except Exception as exc:  # noqa: BLE001
+        no_marks("perf_adapter is not importable here (%s)" % type(exc).__name__)
+        return 0
+    _restore = None
+    try:
+        from .captured_stub import install as _install_stub
+
+        _restore = _install_stub()
+    except Exception:  # noqa: BLE001 -- a stand-in that cannot be installed must not cost the marks
+        _restore = None
+    try:
+        return mark_stages(_PSA(lambda _d: pipe), device)
+    finally:
+        if _restore is not None:
+            _restore()
+
+
 def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
     """Mark each stage of whatever pipeline is live in `scope`. Returns how many were marked.
 
@@ -336,7 +367,7 @@ def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
     preparation."""
     pipe = find_pipeline_in_scope(scope)
     if pipe is None:
-        _no_marks("no object in scope exposes PIPELINE_STAGES or <stage>_trace_step hooks")
+        no_marks("no object in scope exposes PIPELINE_STAGES or <stage>_trace_step hooks")
         return 0
     if callable(bind):
         try:
@@ -350,29 +381,7 @@ def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
                 file=sys.stderr,
                 flush=True,
             )
-    try:
-        from .perf_adapter import PipelineStageAdapter as _PSA
-    except Exception as exc:  # noqa: BLE001
-        _no_marks("perf_adapter is not importable here (%s)" % type(exc).__name__)
-        return 0
-    # THE CAPTURES THE MODEL DECLARES BUT DOES NOT SHIP. A pipeline's <stage>_trace_inputs() reads the
-    # golden tensors a bring-up capture wrote; those are large and uncommitted, so on a tree that has
-    # never run that capture every stage raises FileNotFoundError and the split is lost. The manifest
-    # beside them IS committed and declares every shape, and a timing measurement does not read the
-    # values -- so the missing file is supplied from its own description. Installed only around this
-    # walk, and only for files that do not exist.
-    _restore = None
-    try:
-        from .captured_stub import install as _install_stub
-
-        _restore = _install_stub()
-    except Exception:  # noqa: BLE001 -- a stand-in that cannot be installed must not cost the marks
-        _restore = None
-    try:
-        return mark_stages(_PSA(lambda _d: pipe), device)
-    finally:
-        if _restore is not None:
-            _restore()
+    return mark_stages_for(pipe, device)
 
 
 # --- deterministic injection into the generated perf test ----------------------------------------
