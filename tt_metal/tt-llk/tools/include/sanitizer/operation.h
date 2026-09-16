@@ -411,6 +411,25 @@ struct OperationFpuEltwiseBinary : Operation<Exu::Fpu, Hoistable::Yes>
         NumFacesCDim>;
 };
 
+// ---------------------------
+// OPERATION - SFPU UNARY
+// ---------------------------
+
+struct OperationSfpuUnary : Operation<Exu::Sfpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationSfpuUnary, T>;
+
+    struct SfpuOp : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationSfpuUnary,
+        /* Fields */
+        SfpuOp>;
+};
+
 // ----------------------------------------
 // OPERATION - FPU ELTWISE UNARY DATACOPY
 // ----------------------------------------
@@ -535,7 +554,7 @@ using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBina
 
 using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuEltwiseBinary, OperationFpuFastTilizeWh>;
 
-using SfpuOperations = OperationList<>;
+using SfpuOperations = OperationList<OperationSfpuUnary>;
 
 using PackOperations = OperationList<OperationPack, OperationPackUntilize, OperationPackFastTilizeWh>;
 
