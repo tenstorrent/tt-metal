@@ -1474,12 +1474,6 @@ class Generator(WarmupForwardMixin):
 
         return tt_out_trace
 
-    def _decode_forward_for_warmup(self, **decode_kwargs):
-        # Sampling parameters are uploaded only when decode inputs are reset.
-        # Each warmup configuration starts a new batch, with a prompt for penalty reset.
-        decode_kwargs.update(reset_batch=True, prompt_tokens=decode_kwargs["tokens"])
-        return self.decode_forward(**decode_kwargs)
-
     def decode_forward(
         self,
         tokens,
