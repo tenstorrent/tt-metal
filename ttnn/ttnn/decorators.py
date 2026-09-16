@@ -1070,7 +1070,7 @@ class FastOperation:
             self._slow_operation.__post_init__()
         return self._slow_operation
 
-    def __gt__(self, other):
+    def __lt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
 
     def __hash__(self):
@@ -1265,7 +1265,7 @@ class Operation:
     def __name__(self):
         return self.python_fully_qualified_name
 
-    def __gt__(self, other):
+    def __lt__(self, other):
         return self.python_fully_qualified_name < other.python_fully_qualified_name
 
     def __hash__(self):
