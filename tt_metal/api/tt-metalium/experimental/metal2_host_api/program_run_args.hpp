@@ -16,9 +16,11 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -113,6 +115,27 @@ struct ProgramRunArgs {
     Table<TensorParamName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
+    // PrefetcherPipe arguments
+    ////////////////////////////////////////////////////////////////////////
+
+    // The actual PrefetcherPipe argument.
+    // (Non-owning reference. Non-const: binding a Program records program-side state on the pipe.)
+    using PrefetcherPipeArgument = std::reference_wrapper<PrefetcherPipe>;
+
+    // A PrefetcherPipeArgument must be specified:
+    //  For EVERY PrefetcherPipeParameter in the ProgramSpec, when calling SetProgramRunArgs.
+    //  It MAY be omitted when calling UpdateProgramRunArgs (the binding is stateful).
+    //
+    // The supplied pipe's geometry (sender, receivers, ring size) MUST match the parameter's, and its
+    // ring must accommodate the parameter's entry_size. A Program binds a given parameter to one pipe
+    // object for its lifetime: re-supplying the same pipe is a no-op, supplying a different one is
+    // rejected.
+    //
+    // CAUTION: PrefetcherPipe is an RAII object owning durable L1. The user is responsible for keeping
+    //          it alive until the last Program execution that uses it has completed on the device.
+    Table<PrefetcherPipeParamName, PrefetcherPipeArgument> prefetcher_pipe_args;
+
+    ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
     ////////////////////////////////////////////////////////////////////////
     struct DFBRunOverrides {
@@ -140,6 +163,7 @@ struct ProgramRunArgs {
 using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
 using TensorArgument = ProgramRunArgs::TensorArgument;
+using PrefetcherPipeArgument = ProgramRunArgs::PrefetcherPipeArgument;
 
 //-----------------------------------------------------
 // Helper functions
