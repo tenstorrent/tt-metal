@@ -273,6 +273,7 @@ void dispatch_s_noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id) 
 #ifdef FDS_SIGNALLING
 FORCE_INLINE
 void credit_open_rounds() {
+    WAYPOINT("CORW");
     uint32_t remaining_open_rounds = open_round_mask;
     while (remaining_open_rounds != 0) {
         const uint32_t sub_device_index = __builtin_ctz(remaining_open_rounds);
@@ -295,6 +296,7 @@ void credit_open_rounds() {
 
         remaining_open_rounds &= ~sub_device_mask;
     }
+    WAYPOINT("CORD");
 }
 #endif
 
@@ -755,11 +757,7 @@ void merge_dispatch_d_noc_counter_deltas() {
 
 void kernel_main() {
     set_l1_data_cache<true>();
-#ifdef FDS_SIGNALLING
-    DPRINT("dispatch_s : start (worker signalling FDS)\n");
-#else
-    DPRINT("dispatch_s : start (worker signalling NOC)\n");
-#endif
+    DPRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();

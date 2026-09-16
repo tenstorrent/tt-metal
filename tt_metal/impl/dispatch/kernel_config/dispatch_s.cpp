@@ -357,17 +357,11 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
-    const bool fds_signalling = get_dispatch_query_manager_ref().fds_signalling_enabled();
-    if (fds_signalling) {
+
+    if (get_dispatch_query_manager_ref().fds_signalling_enabled()) {
         defines["FDS_SIGNALLING"] = "1";
     }
-    if (cq_id_ == 0) {
-        log_info(
-            tt::LogMetal,
-            "Worker go and completion transport on device {}: {}",
-            device_->id(),
-            fds_signalling ? "FDS" : "NOC");
-    }
+
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
     if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {
