@@ -90,6 +90,12 @@ uint32_t _start() {
             // so we only include this for non-dispatch kernels
             ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX), DebugAssertNCriscNOCReadsFlushedTripped);
             ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
+            // Swap the line above for the one below to assert writes ACKED rather than merely SENT. A kernel
+            // exiting with acks outstanding desyncs the next kernel on this core (noc_local_state_init
+            // snapshots NIU_MST_WR_ACK_RECEIVED; noc_async_write_barrier then compares for equality), which
+            // the SENT form cannot see. Left inactive: it is shared firmware and the tree-wide sweep is
+            // unfinished. See the commit message for the evidence and the limits.
+            // ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedWritesSentTripped);
             ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX), DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped);
             ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX), DebugAssertNCriscNOCPostedWritesSentTripped);
             ASSERT(ncrisc_noc_packet_tags_cleared(NOC_INDEX), DebugAssertNCriscNOCPacketTagClearedTripped);
