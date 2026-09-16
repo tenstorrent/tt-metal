@@ -61,10 +61,19 @@ void kernel_main() {
 
     uint32_t total_bytes_read = 0;
     uint32_t total_bytes_written = 0;
+
+    // Same PCIe core throughout, so program the routing once per direction. Reads and writes use different
+    // command buffers, so the two setups do not interfere.
+    if constexpr (my_rd_dst_addr) {
+        noc_async_read_set_pcie_state(pcie_noc_xy_encoding | rd_ptr);
+    }
+    if constexpr (pcie_wr_size) {
+        noc_async_write_set_pcie_state(pcie_noc_xy_encoding | wr_ptr);
+    }
+
     while (total_bytes_read + total_bytes_written < my_total_work) {
         if constexpr (my_rd_dst_addr) {
-            uint64_t host_src_addr = pcie_noc_xy_encoding | rd_ptr;
-            noc_async_read_pcie(host_src_addr, my_rd_dst_addr, pcie_rd_transfer_size);
+            noc_async_read_with_state(rd_ptr, my_rd_dst_addr, pcie_rd_transfer_size);
             rd_ptr += pcie_rd_transfer_size;
             total_bytes_read += pcie_rd_transfer_size;
             if (rd_ptr >= pcie_rd_end) {
@@ -72,10 +81,9 @@ void kernel_main() {
             }
         }
         if constexpr (pcie_wr_size) {
-            uint64_t host_dst_addr = pcie_noc_xy_encoding | wr_ptr;
-            noc_async_write_pcie(
+            noc_async_write_with_state(
                 wr_ptr,  // Any data
-                host_dst_addr,
+                wr_ptr,
                 pcie_wr_transfer_size);
             wr_ptr += pcie_wr_transfer_size;
             total_bytes_written += pcie_wr_transfer_size;
@@ -87,9 +95,11 @@ void kernel_main() {
 
     if constexpr (my_rd_dst_addr) {
         noc_async_read_barrier();
+        noc_async_read_clear_pcie_state();
     }
     if constexpr (pcie_wr_size) {
         noc_async_write_barrier();
+        noc_async_write_clear_pcie_state();
     }
 
     auto end = get_cycles();

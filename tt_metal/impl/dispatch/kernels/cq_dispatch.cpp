@@ -350,7 +350,9 @@ void process_write_host_h() {
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
     uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
 #endif
-    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
+    // Programs NOC_CTRL, the destination coordinate and the PCIe routing bit in one go. The with_state issuers
+    // below leave MID alone, so it stays set for the whole command and is cleared once at the end.
+    cq_noc_async_write_init_state_pcie(pcie_noc_xy);
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
     if (is_event) {
@@ -414,6 +416,12 @@ void process_write_host_h() {
         }
     }
     cmd_ptr = data_ptr;
+#if !defined(FABRIC_RELAY)
+    // Return the command buffer to on-chip routing. The register block may not be written while a write is
+    // still outstanding, so drain them first.
+    noc_async_write_barrier(noc_index);
+    noc_async_write_clear_pcie_state(noc_index, NCRISC_WR_CMD_BUF);
+#endif
 }
 
 void process_exec_buf_end_h() {
