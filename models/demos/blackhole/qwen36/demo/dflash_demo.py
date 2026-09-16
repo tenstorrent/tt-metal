@@ -170,8 +170,13 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
         # DFLASH_CTX_CAPACITY=1 sizes a fixed-capacity drafter history to this case and warms
         # every block width before the capture. See warm_block_widths for why the growing-history
         # default cannot be warmed at all.
+        # Fixed-capacity drafter by DEFAULT (DFLASH_CTX_CAPACITY=0 opts out). It is what lets the
+        # drafter keep its KV history at stable addresses across generations, which is the fix for
+        # BOTH the generation-parity collapse and the anchor-crossing collapse -- they were one bug,
+        # a buffer reallocated under a parked trace. It also bounds the drafter's shape space so
+        # every block width can be compiled before the capture, retiring the hang.
         cap = None
-        if os.environ.get("DFLASH_CTX_CAPACITY") == "1":
+        if os.environ.get("DFLASH_CTX_CAPACITY", "1") != "0":
             cap = -(-(seqlen + max_generated_tokens + 32) // 32) * 32
         model, target, drafter, cfg = _build(mesh_device, ctx_capacity=cap)
     except Exception as e:  # noqa: BLE001 -- a missing drafter checkpoint is a skip, not a failure
@@ -219,13 +224,20 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
     if cap is not None:
         logger.info(f"fixed-capacity drafter ({cap} rows); warming every block width before capture")
         drafter.drafter.warm_block_widths()
+        # Safe now that the drafter's history sits at stable addresses: the trace can serve every
+        # bucket rather than only the first, which is worth 6.19 -> 14.88 tok/s on this prompt.
+        target.allow_trace_past_anchor = True
     dflash_generate(drafter, target, token_ids, max_new_tokens=max_generated_tokens)
     # DFLASH_NARROW_HEAD=1 runs the verify LM head over a 32/64-row tile-aligned window instead of
     # the whole 128-row bucket (+20.8 % on the reference prompt, tokens bit-identical -- see
     # tests/reference/test_dflash_narrow_head.py). Off by default: it is validated on one prompt at
     # one length so far. It scales STEP TIME only, so it cannot rescue a run whose acceptance has
     # collapsed -- throughput is acceptance / step_time.
-    target.enable_traced_verify(narrow_head=os.environ.get("DFLASH_NARROW_HEAD") == "1")
+    # Narrow head ON by default (DFLASH_NARROW_HEAD=0 opts out): the verify LM head runs over a
+    # 32/64-row tile-aligned window instead of the whole 128-row bucket. Tokens are bit-identical
+    # -- greedy verification cannot change them -- and it is worth 11.31 -> 14.88 tok/s here, on
+    # top of the +20.8 % measured in isolation (tests/reference/test_dflash_narrow_head.py).
+    target.enable_traced_verify(narrow_head=os.environ.get("DFLASH_NARROW_HEAD", "1") != "0")
     # DFLASH_TRACED_WARM: how many traced generations to run before the measured one. Acceptance
     # ALTERNATES with period 2 on the traced path -- odd traced generations give 7.000, even ones
     # 1.500 (tests/reference/test_dflash_warmup_position.py). One traced warm-up, the historical

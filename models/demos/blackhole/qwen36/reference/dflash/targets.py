@@ -194,6 +194,18 @@ class TtTarget:
     #: Every forward recomputes from the anchor, so a rejected block needs no replay.
     replays_after_rollback = False
 
+    #: Replay the verify trace past the first bucket as well as inside it. OFF by default because
+    #: it is only safe when the DRAFTER keeps its KV history at stable addresses: the crossing
+    #: symptom (acceptance 1.138) and the generation-parity symptom were the SAME defect, a buffer
+    #: reallocated under a parked trace, and both are repaired by TtDFlashDrafter's fixed-capacity
+    #: path with a stable reset. Measured on the demo's 128-token prompt, which crosses:
+    #:     trace past anchor, no fix   acceptance 1.138   3.86 tok/s  0.22x production
+    #:     eager fallback (lo == 0)    acceptance 4.950   6.19 tok/s  0.35x
+    #:     trace past anchor + fix     acceptance 4.950  14.88 tok/s  0.83x
+    #: Set it only when the drafter was built with ``ctx_capacity``; with the growing-history
+    #: drafter the history is reallocated every STEP and the hazard is larger, not smaller.
+    allow_trace_past_anchor = False
+
     def __init__(self, model, tap_layer_ids, page_table, *, checkpoint_path=None, block_size=64, device_taps=False):
         self.model = model
         self.tap_layer_ids = list(tap_layer_ids)
@@ -481,7 +493,14 @@ class TtTarget:
         # remaining int use is `chunk_start_idx=chunk_start` passed alongside the staged
         # `chunk_start_idx_tensor` (tt/model.py, the layer.forward call in
         # _forward_prefill_chunk_masked_tp) -- and stage it, so one capture serves every offset.
-        if getattr(self, "_traced_verify", False) and length < self.ANCHOR and lo == 0:
+        # DFLASH_TRACE_PAST_ANCHOR=1 lifts the `lo == 0` restriction below. It exists to re-test the
+        # anchor defect now that the parity bug is understood: that one was ALSO a buffer
+        # reallocated under a parked trace (TtDFlashDrafter.reset, see DFLASH_STABLE_CTX), and the
+        # anchor symptom has the same shape -- fine eagerly, broken traced, and immune to five
+        # isolated hypotheses. If DFLASH_STABLE_CTX + ctx_capacity also repairs the crossing case,
+        # the two are one bug and this restriction can go.
+        _past_anchor = self.allow_trace_past_anchor or os.environ.get("DFLASH_TRACE_PAST_ANCHOR") == "1"
+        if getattr(self, "_traced_verify", False) and length < self.ANCHOR and (lo == 0 or _past_anchor):
             # Trace replay instead of ~N eager dispatches. Same all-row logits, verified
             # bit-identical to the eager entry point in
             # tests/reference/test_dflash_target_trace_replay.py. One capture serves every

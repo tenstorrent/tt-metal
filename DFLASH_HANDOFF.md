@@ -29,6 +29,41 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
+### THE ANCHOR BUG WAS THE SAME BUG -- and the defaults now ship the fix
+
+Re-testing the anchor crossing with the stable-context fix settles it: the crossing collapse and the
+generation-parity collapse were ONE defect, the drafter's KV history reallocated under a parked
+trace. Measured on the demo's 128-token prompt, which crosses the anchor:
+
+    trace past anchor, no fix    acceptance 1.138   3.86 tok/s   0.22x production
+    eager fallback (lo == 0)     acceptance 4.950   6.19 tok/s   0.35x
+    trace past anchor + fix      acceptance 4.950  14.88 tok/s   0.83x
+
+So `lo == 0` was treating a symptom. With the real fix the trace serves every bucket, worth a
+further 2.4x on any prompt long enough to cross.
+
+DEFAULTS NOW (no DFLASH_* knobs set, plain `pytest ... dflash_demo.py`):
+
+    11.31 tok/s  0.63x   fixed capacity + stable reset + trace past anchor
+    15.45 tok/s  0.86x   ... plus the narrow verify head
+
+acceptance 4.950 and 20 steps for 100 tokens in both, so the head remains token-neutral.
+
+    THE DEMO OVER THIS WHOLE INVESTIGATION:  0.22x -> 0.86x production, hang-free, clean output.
+
+What changed, all now DEFAULT rather than opt-in:
+  * `TtDFlashDrafter.reset()` keeps the fixed-capacity history buffers (DFLASH_STABLE_CTX=0 opts out)
+  * the demo builds a fixed-capacity drafter (DFLASH_CTX_CAPACITY=0 opts out) and warms every block
+    width before the capture
+  * `TtTarget.allow_trace_past_anchor`, set by the demo once the drafter's history is stable
+  * the narrow verify head (DFLASH_NARROW_HEAD=0 opts out)
+
+STILL OPEN: 0.86x is not yet a win over production decode. The remaining gap is acceptance, not step
+time -- 4.950 on this prompt against 7.000 on the reference prompt, which is genuine drafter
+prompt-dependence. `allow_trace_past_anchor` stays OFF by default in `TtTarget` itself because it is
+only safe with a fixed-capacity drafter; the growing-history default reallocates every STEP and has
+the same hazard on a larger scale.
+
 ### PARITY FIXED: reset() was reallocating the drafter's KV history under a parked trace
 
 `TtDFlashDrafter.reset()` frees and reallocates all `2 * n_layers` history buffers on EVERY

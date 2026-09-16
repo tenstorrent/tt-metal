@@ -216,8 +216,9 @@ class TtDFlashDrafter:
     def reset(self) -> None:
         """Drop the drafter's KV history and start a new sequence.
 
-        DFLASH_STABLE_CTX=1 (fixed-capacity only): rewind ``_ctx_len`` and KEEP the buffers instead
-        of freeing and reallocating all 2*n_layers of them.
+        On the fixed-capacity path this rewinds ``_ctx_len`` and KEEPS the buffers instead of freeing
+        and reallocating all 2*n_layers of them. ``DFLASH_STABLE_CTX=0`` restores the old behaviour,
+        as an escape hatch only -- it is measurably worse and there is no reason to want it.
 
         WHY IT MATTERS. :meth:`_alloc_ctx_buffers` exists to allocate this history "once ... so the
         address a capture records stays valid for every replay", but calling it from here undoes
@@ -236,7 +237,7 @@ class TtDFlashDrafter:
         rather than trusted (see :meth:`_alloc_ctx_buffers` and ``_fixed_masks``), so stale content
         beyond the live length cannot reach attention.
         """
-        if self._cap is not None and os.environ.get("DFLASH_STABLE_CTX") == "1" and self._ctx_k[0] is not None:
+        if self._cap is not None and self._ctx_k[0] is not None and os.environ.get("DFLASH_STABLE_CTX") != "0":
             self._ctx_len = 0
             return
         for store in (self._ctx_k, self._ctx_v):
