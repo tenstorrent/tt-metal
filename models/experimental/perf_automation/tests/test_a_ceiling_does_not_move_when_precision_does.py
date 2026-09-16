@@ -56,13 +56,21 @@ def test_the_roof_is_the_same_at_every_precision(monkeypatch):
 
 
 def test_a_stage_without_its_own_anchor_uses_the_pinned_model_peak(monkeypatch):
-    """Falling back to a derivation is what let the roof track the build."""
+    """Falling back to a derivation is what let the roof track the build -- so the RATE still comes
+    from the pin, not a derivation.
+
+    The FIDELITY LABEL is a different question, and this stage's own ops already answered it: they
+    are the same buckets a derived peak would have read. Blanking the label whenever the pinned
+    number wins is the second half of the caveat this file's own name describes -- a stage with a
+    clean per-op fidelity mix still reported "no per-stage evidence" for the shared-peak caveat,
+    because the flag that check reads was thrown away on this exact path. Confirmed on
+    nvidia_nemotron_3_5_lightning_30b_a3b_bf16: two real stages, real per-op data, both blanked."""
     m = _sm()
     monkeypatch.setattr(m, "_pinned_peak_flops", lambda *a, **k: 175.5e12)
     monkeypatch.setattr(m, "_fidelity_breakdown", lambda *a, **k: ([("lofi", 8e12, 702.0, 1.0)], 1.0))
     peak, rung = m._peak_for_stage("s", _prof())
-    assert peak == 175.5e12
-    assert rung == "", "a pinned peak reports no rung; a derived one does"
+    assert peak == 175.5e12, "the pin still decides the RATE"
+    assert rung == "lofi", "the LABEL is this stage's own ops, not blanked by which number won"
 
 
 def test_a_stage_anchor_still_wins_when_one_exists(monkeypatch):

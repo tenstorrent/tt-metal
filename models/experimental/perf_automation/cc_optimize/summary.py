@@ -981,11 +981,31 @@ def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
     Zero means "no per-stage evidence", and the caller keeps the whole-profile figure it already had,
     so an unmarked capture behaves exactly as before stage marks existed.
     """
+    # THE FIDELITY LABEL AND THE PEAK NUMBER ARE TWO QUESTIONS, ANSWERED SEPARATELY. Which TFLOPS
+    # figure to trust is a stability question (a per-stage anchor beats a whole-model one, which
+    # beats deriving a fresh one) -- but whether THIS stage's own ops resolved a dominant fidelity at
+    # all is answered by stage_buckets alone, regardless of which number a caller ends up using.
+    # Computed once here, up front, reused by whichever return path below actually fires -- not
+    # recomputed inline on the one path that used to report it and silently discarded on the other
+    # two. peak_stage (the caller's name for this) is what the shared-peak caveat checks first, so a
+    # stage whose own ops plainly agreed on hifi4 still read as "no per-stage evidence" whenever a
+    # pinned number, not a derived one, answered the peak question.
+    _dom = ""
+    try:
+        _sb = ((profile or {}).get("stage_buckets") or {}).get(stage)
+        if _sb:
+            _rows, _ = _fidelity_breakdown({"buckets": _sb})
+            if _rows:
+                _top = max(_rows, key=lambda r: r[1])
+                if _top[1]:
+                    _dom = str(_top[0])
+    except Exception:  # noqa: BLE001
+        pass
     try:
         led = _ledger()
         _p = led.anchor_value(led.KIND_PEAK_FLOPS, depth=str(stage or "").strip().lower(), model=model, task=task)
         if _p and float(_p) > 0:
-            return float(_p), ""
+            return float(_p), _dom
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -1008,10 +1028,12 @@ def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
         #
         # The whole-model anchor is written at the same baseline the per-stage ones would be, so it
         # is the same quantity at a coarser key: a stage without its own anchor is better served by a
-        # pinned model-wide peak than by a number that moves under it.
+        # pinned model-wide peak than by a number that moves under it. The FIDELITY LABEL is not that
+        # coarser quantity, though -- _dom (above) already answered it from this stage's own ops, so
+        # the rate stays pinned while the label stops being thrown away with it.
         _whole = _pinned_peak_flops(_unit_key(""), model=model, task=task)
         if _whole and float(_whole) > 0:
-            return float(_whole), ""
+            return float(_whole), _dom
         from agent.environment import ARCH_FACTS
         from agent.perf_target import chip_peak_flops as _cpf
 
