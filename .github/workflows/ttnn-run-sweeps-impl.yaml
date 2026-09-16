@@ -32,6 +32,9 @@ on:
       measure-e2e-perf:
         type: string
         default: "false"
+      enable-watcher:
+        type: string
+        default: "false"
       measure-memory:
         type: string
         default: "false"
@@ -223,6 +226,13 @@ jobs:
           fi
           if [[ "${{ inputs.fail-on-test-failure }}" == "true" ]]; then
             CMD+=("--fail-on-test-failure")
+          fi
+
+          # Debugging a hang: Watcher's NOC sanitization names the offending core/kernel at the
+          # moment of the bad transaction, instead of the job timing out with nothing attributable.
+          # Off by default because it slows execution -- turn it on for a targeted rerun.
+          if [[ "${{ inputs.enable-watcher }}" == "true" ]]; then
+            CMD+=("--watcher")
           fi
 
           # ONE device-key batch per job. The matrix (compute_sweep_matrix.py) and the
