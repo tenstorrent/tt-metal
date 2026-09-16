@@ -78,7 +78,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("groups_per_head") = 1,
         nb::arg("wrap_chunk") = 0,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("chronology") = nb::none());
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
@@ -132,6 +133,11 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 returns ``tail_A`` and ``tail_B`` with the same shapes.
 
         Note:
+            With ``chronology``, summaries are packed directly to BFLOAT16 for
+            KDA transport. Inactive slots are unspecified and may only be consumed
+            by topology-aware reduce/scan operations using the same controls.
+            Without chronology, all summaries remain FLOAT32.
+
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
             accepted as part of the shared prepared-chunk protocol but do not contribute
             to the state-only summary. All inputs must be interleaved TILE-layout tensors
@@ -151,7 +157,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("groups_per_head") = 1,
         nb::arg("emit_tail_summaries") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("chronology") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

@@ -78,6 +78,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("wrap_row") = 0,
         nb::arg("wrap_indicator") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("chronology") = nb::none(),
+        nb::arg("predecessor_carry") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

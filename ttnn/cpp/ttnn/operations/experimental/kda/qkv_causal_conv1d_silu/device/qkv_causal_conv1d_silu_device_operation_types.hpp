@@ -35,6 +35,8 @@ struct QkvCausalConv1dSiluInputs {
     Tensor tap2;
     Tensor tap3;
     std::optional<Tensor> wrap_indicator;
+    std::optional<Tensor> chronology;
+    std::optional<Tensor> predecessor_carry;
 };
 
 }  // namespace ttnn::experimental::prim

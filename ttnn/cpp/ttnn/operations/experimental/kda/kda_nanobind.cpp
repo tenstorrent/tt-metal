@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "kda_nanobind.hpp"
+#include "ttnn/operations/experimental/kda/chronological_topology/chronological_topology_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
 
@@ -16,6 +17,7 @@ namespace ttnn::operations::experimental::kda::detail {
 
 void bind_kda(nb::module_& mod) {
     auto kda_module = mod.def_submodule("kda", "Experimental KDA operations");
+    chronological_topology::detail::bind_chronological_topology(kda_module);
     affine_exclusive_scan::detail::bind_affine_exclusive_scan(kda_module);
     qkv_causal_conv1d_silu::detail::bind_qkv_causal_conv1d_silu(kda_module);
     recurrent_chunk_scan::detail::bind_recurrent_chunk_scan(kda_module);

@@ -65,7 +65,8 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
         nb::arg("groups_per_head"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("chronology") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::reduce_affine_transforms::detail

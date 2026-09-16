@@ -49,6 +49,7 @@ struct RecurrentChunkScanInputs {
     // Its value is data, not an operation attribute, so one mesh program can
     // make a device-local summary limit or recurrent reseed decision.
     std::optional<Tensor> wrap_indicator;
+    std::optional<Tensor> chronology;
 };
 
 }  // namespace ttnn::experimental::prim

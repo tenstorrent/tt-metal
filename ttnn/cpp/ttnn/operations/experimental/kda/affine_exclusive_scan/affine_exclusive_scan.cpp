@@ -19,7 +19,8 @@ ttnn::Tensor affine_exclusive_scan(
     uint32_t wrap_group,
     bool split_in_group,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& chronology) {
     TT_FATAL(
         a.storage_type() == StorageType::DEVICE && a.buffer() != nullptr,
         "affine_exclusive_scan: a must be an allocated device tensor");
@@ -49,7 +50,8 @@ ttnn::Tensor affine_exclusive_scan(
         wrap_group,
         split_in_group,
         output_memory_config,
-        kernel_config);
+        kernel_config,
+        chronology);
 }
 
 }  // namespace ttnn::experimental::kda

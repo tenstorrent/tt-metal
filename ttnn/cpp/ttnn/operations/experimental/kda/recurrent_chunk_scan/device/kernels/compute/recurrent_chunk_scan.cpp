@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
 //
 // Phase B (scan) compute kernel: the sequential-over-chunk recurrence for one
 // head.
@@ -340,7 +342,7 @@ FORCE_INLINE void update_state(
     state_update.pop_front(key_value_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t emit_tail_summaries>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t emit_tail_summaries, uint32_t dynamic_chronology>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
@@ -369,6 +371,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
+    pack_reconfig_data_format(dfb::state_update);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         DataflowBuffer& current_b = chunk == 0 ? state : state_ring;
         DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
@@ -404,9 +407,11 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             if (snapshot_chunk != 0 && chunk + 1 == snapshot_chunk) {
                 state_ring.wait_front(key_value_tiles);
                 summary_ring.wait_front(key_value_tiles);
+                pack_reconfig_data_format(summary_head_output.get_id());
                 elementwise_streamed<ElementwiseOperation::SUBTRACT, Kt, Vt>(
                     summary_ring, state_ring, summary_head_output);
                 copy_streamed<Kt, Vt>(state_ring, summary_head_state);
+                pack_reconfig_data_format(dfb::state_update);
                 tail_state.wait_front(key_value_tiles);
                 wrap_mask.wait_front(1);
                 multiply_by_mask(state_ring, wrap_mask, scratch, Kt, Vt);
@@ -432,7 +437,13 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     }
     summary_raw.wait_front(key_value_tiles);
     final_state.wait_front(key_value_tiles);
+    pack_reconfig_data_format(output.get_id());
     elementwise<ElementwiseOperation::SUBTRACT, key_value_tiles>(summary_raw, final_state, output);
+    if constexpr (dynamic_chronology) {
+        DataflowBuffer transport_state(dfb::transport_state);
+        copy(final_state, transport_state, key_value_tiles);
+        final_state.pop_front(key_value_tiles);
+    }
     summary_raw.pop_front(key_value_tiles);
 }
 
@@ -495,11 +506,25 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair, uint32_t emit_tail_summaries>
-TT_KERNEL void compute(uint32_t num_chunks, uint32_t reset_chunk) {
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t summary_pair,
+    uint32_t emit_tail_summaries,
+    uint32_t dynamic_chronology>
+TT_KERNEL void compute(uint32_t num_chunks, uint32_t reset_chunk, uint32_t group) {
+    kda_chronology::Topology topology{};
+    if constexpr (dynamic_chronology) {
+        DataflowBuffer control(dfb::chronology_compute);
+        topology = kda_chronology::receive(control);
+    }
+    if constexpr (dynamic_chronology) {
+        reset_chunk = topology.reset_chunk(group, topology.local_rows / 32 / num_chunks);
+    }
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
     if constexpr (summary_pair) {
-        compute_summary<Ct, Kt, Vt, emit_tail_summaries>(num_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt, emit_tail_summaries, dynamic_chronology>(num_chunks, reset_chunk);
     } else {
         compute_recurrent<Ct, Kt, Vt>(num_chunks, reset_chunk);
     }

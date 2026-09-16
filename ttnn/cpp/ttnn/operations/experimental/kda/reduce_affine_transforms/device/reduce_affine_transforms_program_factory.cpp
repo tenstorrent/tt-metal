@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/reduce_affine_transforms/device/reduce_affine_transforms_program_factory.hpp"
 
 #include <vector>
@@ -244,6 +246,7 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
         {output_b_tensor_name, output_b},
     };
 
+    kda_factory_detail::bind_chronology(spec, run_args, in.chronology, in.a, false);
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),

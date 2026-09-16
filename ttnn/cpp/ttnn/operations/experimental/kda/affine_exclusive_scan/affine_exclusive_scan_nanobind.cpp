@@ -77,7 +77,8 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("wrap_group") = 0,
         nb::arg("split_in_group") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("chronology") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::affine_exclusive_scan::detail

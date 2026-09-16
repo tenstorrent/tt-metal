@@ -17,6 +17,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const ttnn::Tensor& b,
     uint32_t groups_per_head,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& chronology = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

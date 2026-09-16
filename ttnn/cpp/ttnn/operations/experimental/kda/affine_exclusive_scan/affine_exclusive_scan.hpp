@@ -23,6 +23,7 @@ ttnn::Tensor affine_exclusive_scan(
     uint32_t wrap_group = 0,
     bool split_in_group = false,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& chronology = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

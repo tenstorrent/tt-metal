@@ -32,6 +32,7 @@ struct AffineExclusiveScanInputs {
     std::optional<Tensor> tail_b;
     std::optional<Tensor> tail_state;
     std::optional<Tensor> wrap_indicator;
+    std::optional<Tensor> chronology;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -92,6 +92,19 @@ void check_interleaved(const Tensor& tensor, std::string_view operation_name, st
     TT_FATAL(!tensor.is_sharded(), "{}: {} must use interleaved memory", operation_name, tensor_name);
 }
 
+void check_chronology(const Tensor& reference, const Tensor& controls, std::string_view operation_name) {
+    check_allocated_device_tensor(controls, operation_name, "chronology");
+    check_layout(controls, tt::tt_metal::Layout::ROW_MAJOR, operation_name, "chronology");
+    check_dtype(controls, tt::tt_metal::DataType::UINT32, operation_name, "chronology");
+    check_interleaved(controls, operation_name, "chronology");
+    check_same_device(reference, controls, operation_name, "chronology");
+    const auto shape = controls.logical_shape();
+    TT_FATAL(
+        shape.rank() == 2 && shape[0] >= 10 && shape[1] == 8,
+        "{}: chronology must be a table produced by chronological_topology",
+        operation_name);
+}
+
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name) {
     TT_FATAL(
         !memory_config.is_sharded(),
