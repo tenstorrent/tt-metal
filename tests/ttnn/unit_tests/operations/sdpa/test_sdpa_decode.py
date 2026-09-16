@@ -51,6 +51,69 @@ def test_sdpa_decode_golden_preserves_layout_and_batch_positions():
     torch.testing.assert_close(actual, expected)
 
 
+def test_sdpa_decode_golden_supports_mixed_query_and_cache_dtypes():
+    q = torch.randn(1, 1, 2, 4, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, 4, 4, dtype=torch.float32)
+    v = torch.randn(1, 1, 4, 4, dtype=torch.float32)
+    cur_pos = torch.tensor([1], dtype=torch.int32)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+
+    actual = golden_function(q, k, v, cur_pos_tensor=cur_pos)
+
+    query = q.permute(1, 2, 0, 3)
+    key = k.repeat_interleave(2, dim=1)
+    value = v.repeat_interleave(2, dim=1)
+    scale = 1.0 / (query.shape[-1] ** 0.5)
+    logits = torch.matmul(query.float(), key.transpose(-1, -2)) * scale
+    logits[..., 2:] = float("-inf")
+    expected = torch.matmul(torch.softmax(logits, dim=-1), value).to(q.dtype).permute(2, 0, 1, 3)
+
+    torch.testing.assert_close(actual, expected)
+
+
+def test_paged_sdpa_decode_golden_supports_geometry_and_position_modulo():
+    q = torch.randn(1, 1, 1, 128, dtype=torch.bfloat16)
+    k_alloc = torch.randn(4, 1, 64, 64)
+    v_alloc = torch.randn(4, 1, 64, 64)
+    page_table = torch.tensor([[0, 1, 0, 0]], dtype=torch.int32)
+    cur_pos = torch.tensor([80], dtype=torch.int32)
+    geometry = ttnn.PagedCacheGeometryOverride(block_size=32, num_kv_heads=1)
+
+    def reinterpret(cache):
+        tiles = cache.view(4, 1, 2, 32, 2, 32).permute(0, 1, 2, 4, 3, 5).contiguous()
+        return (
+            tiles.reshape(4, 1, 4, 32, 32).reshape(4, 1, 1, 4, 32, 32).permute(0, 1, 2, 4, 3, 5).reshape(4, 1, 32, 128)
+        )
+
+    paged_golden = ttnn.get_golden_function(ttnn.transformer.paged_scaled_dot_product_attention_decode)
+    actual = paged_golden(
+        q,
+        k_alloc,
+        v_alloc,
+        page_table,
+        cur_pos_tensor=cur_pos,
+        paged_cache_geometry=geometry,
+        cache_position_modulo=64,
+        sliding_window_size=64,
+    )
+
+    physical_positions = torch.arange(17, 81) % 64
+    k_ring = reinterpret(k_alloc)[:2].permute(1, 0, 2, 3).reshape(1, 1, 64, 128)
+    v_ring = reinterpret(v_alloc)[:2].permute(1, 0, 2, 3).reshape(1, 1, 64, 128)
+    k_dense = k_ring[:, :, physical_positions, :]
+    v_dense = v_ring[:, :, physical_positions, :]
+    decode_golden = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+    expected = decode_golden(
+        q,
+        k_dense,
+        v_dense,
+        cur_pos_tensor=torch.tensor([63], dtype=torch.int32),
+        sliding_window_size=64,
+    )
+
+    torch.testing.assert_close(actual, expected)
+
+
 def test_chunked_sdpa_golden_gathers_pages_and_offsets_causal_mask():
     q = torch.randn(1, 1, 2, 4)
     dense_k = torch.randn(1, 1, 4, 4)

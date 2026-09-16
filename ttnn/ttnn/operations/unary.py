@@ -7,10 +7,35 @@ import os
 from ttnn.operations import integer_golden
 
 
-def register_ttnn_cpp_unary_function(unary_function):
-    def _golden_function(input_tensor: ttnn.Tensor, *args, **_):
-        import torch
+def _torch_relu(input_tensor):
+    import torch
 
+    # Torch has no UInt32 ReLU kernel; unsigned inputs are already non-negative.
+    return input_tensor if integer_golden.is_unsigned_dtype(input_tensor.dtype) else torch.relu(input_tensor)
+
+
+def _torch_relu6(input_tensor):
+    import torch
+
+    # Widen unsigned values for the clamp, then restore their original storage width.
+    if integer_golden.is_unsigned_dtype(input_tensor.dtype):
+        return integer_golden.clamp(input_tensor, 0, 6)
+    return torch.nn.functional.relu6(input_tensor)
+
+
+def _torch_hardswish(input_tensor):
+    import torch
+
+    if input_tensor.dtype in (torch.int32, torch.uint32):
+        # The integer kernel returns hardsigmoid encoded as Float32 bits, not a numeric integer cast.
+        return torch.nn.functional.hardsigmoid(input_tensor.to(torch.float32)).view(input_tensor.dtype)
+    return torch.nn.functional.hardswish(input_tensor)
+
+
+def register_ttnn_cpp_unary_function(unary_function):
+    import torch
+
+    def _golden_function(input_tensor: ttnn.Tensor, *args, **_):
         def torch_cbrt(x, *args, **kwargs):
             return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
 
@@ -49,18 +74,6 @@ def register_ttnn_cpp_unary_function(unary_function):
                 return integer_golden.compare(x, 0, torch_function)
             return torch_function(x, 0)
 
-        def torch_relu(x):
-            if integer_golden.is_unsigned_dtype(x.dtype):
-                # Unsigned values are non-negative, so ReLU is the identity.
-                return x
-            return torch.relu(x)
-
-        def torch_relu6(x):
-            if integer_golden.is_unsigned_dtype(x.dtype):
-                # Evaluate unsigned ReLU6 as a widened clamp and restore its dtype.
-                return integer_golden.clamp(x, 0, 6)
-            return torch.nn.functional.relu6(x)
-
         def torch_bitcast(x, dtype):
             # Tensor.view requires the torch dtype corresponding to the TTNN output dtype.
             return x.view(ttnn.ttnn_dtype_to_torch_dtype(dtype))
@@ -94,8 +107,8 @@ def register_ttnn_cpp_unary_function(unary_function):
             "ltz": lambda x: torch_compare_zero(x, torch.lt),
             "neg": torch.neg,
             "nez": lambda x: torch.ne(x, 0),
-            "relu": torch_relu,
-            "relu6": torch_relu6,
+            "relu": _torch_relu,
+            "relu6": _torch_relu6,
             "sigmoid": torch.sigmoid,
             "sign": torch.sign,
             "signbit": torch.signbit,
@@ -124,7 +137,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "cosh": torch.cosh,
             "deg2rad": torch.deg2rad,
             "digamma": torch.digamma,
-            "hardswish": torch.nn.functional.hardswish,
+            "hardswish": _torch_hardswish,
             "hardsigmoid": torch.nn.functional.hardsigmoid,
             "lgamma": torch.lgamma,
             "log1p": torch.log1p,
@@ -340,7 +353,16 @@ def _golden_function_gelu(
         # Evaluate BF16 in float32 and round once to match the hardware accurate path.
         input_tensor = input_tensor.to(torch.float32)
     result = torch.nn.functional.gelu(input_tensor, approximate=approximate)
-    return result.to(input_dtype)
+    result = result.to(input_dtype)
+    if input_dtype == torch.bfloat16 and variant != ttnn.GeluVariant.Tanh:
+        # Accurate BF16 GELU is specified in ULPs; ignore only nonfinite and hardware-FTZ subnormal lanes.
+        comparison_mask = torch.isfinite(result) & (
+            (result == 0) | (torch.abs(result) >= torch.finfo(result.dtype).tiny)
+        )
+        ttnn.decorators.set_golden_comparison_config(
+            result, method="ulp", scope="all", ulp_threshold=10, mask=comparison_mask
+        )
+    return result
 
 
 ttnn.attach_golden_function(
@@ -1035,13 +1057,11 @@ ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_f
 
 def _get_unary_chain_torch_op(op_type):
     """Map a UnaryOpType to a torch callable taking (x, *params). Covers the ops commonly fused via unary_chain."""
-    import torch
-
     no_param_ops = {
         ttnn.UnaryOpType.EXP: torch.exp,
         ttnn.UnaryOpType.RECIP: torch.reciprocal,
-        ttnn.UnaryOpType.RELU: torch.relu,
-        ttnn.UnaryOpType.RELU6: torch.nn.functional.relu6,
+        ttnn.UnaryOpType.RELU: _torch_relu,
+        ttnn.UnaryOpType.RELU6: _torch_relu6,
         ttnn.UnaryOpType.SQRT: torch.sqrt,
         ttnn.UnaryOpType.RSQRT: torch.rsqrt,
         ttnn.UnaryOpType.SIGMOID: torch.sigmoid,

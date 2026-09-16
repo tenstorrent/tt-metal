@@ -139,6 +139,21 @@ def _golden_function_batch_norm(
 ):
     import torch
 
+    def to_channel_vector(parameter):
+        return parameter.reshape(-1) if parameter is not None else None
+
+    running_mean = to_channel_vector(running_mean)
+    running_var = to_channel_vector(running_var)
+    weight = to_channel_vector(weight)
+    bias = to_channel_vector(bias)
+
+    # TTNN stores channel parameters as [1,C,1,1], while PyTorch requires [C].
+    # PyTorch also requires running statistics as a pair, so supply a neutral missing companion.
+    channels = input.shape[1]
+    if running_mean is None and running_var is not None:
+        running_mean = torch.zeros(channels, dtype=input.dtype, device=input.device)
+    elif running_var is None and running_mean is not None:
+        running_var = torch.ones(channels, dtype=input.dtype, device=input.device)
     return torch.nn.functional.batch_norm(
         input,
         running_mean,

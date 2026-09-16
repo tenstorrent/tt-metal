@@ -6,6 +6,7 @@ from typing import Tuple, Union, List
 
 import ttnn
 import ttnn.decorators
+from ttnn.operations import integer_golden
 
 
 def _preprocess_golden_function_inputs(args, kwargs):
@@ -390,7 +391,10 @@ ttnn.attach_golden_function(ttnn.tosa_scatter, golden_function=_golden_function)
 def _golden_function(input_tensor, *args, skip_negative_entries=False, **kwargs):
     import torch
 
-    if skip_negative_entries:
+    if integer_golden.is_unsigned_dtype(input_tensor.dtype):
+        # PyTorch cannot add UInt32 directly; widen and restore to preserve TTNN wraparound.
+        input_tensor.copy_(integer_golden.binary(input_tensor, 1, torch.add))
+    elif skip_negative_entries:
         keep = (input_tensor >= 0) & (input_tensor < (2**31 - 1))
         input_tensor.copy_(torch.where(keep, input_tensor + 1, input_tensor))
     else:
@@ -410,34 +414,56 @@ def _golden_function(buffer, shape, dtype, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.from_buffer, golden_function=_golden_function)
 
 
-def _golden_function(input, stride_h, stride_w, *args, padding=(0, 0), collapse_output=False, **kwargs):
-    import torch
+def _parse_fold_padding(padding):
+    if padding is None:
+        return 0, 0, 0, 0, 0, 0
+    if len(padding) == 2:
+        return padding[0], padding[0], padding[1], padding[1], 0, 0
+    if len(padding) == 4:
+        return tuple(padding) + (0, 0)
+    return tuple(padding)
 
-    N, H, W, C = input.shape
 
-    if padding is not None:
-        if len(padding) == 2:
-            pad_top = pad_bottom = padding[0]
-            pad_left = pad_right = padding[1]
-            pad_c_front = pad_c_back = 0
-        elif len(padding) == 4:
-            pad_top, pad_bottom, pad_left, pad_right = padding
-            pad_c_front = pad_c_back = 0
-        else:
-            pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = padding
-        if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
-            input = torch.nn.functional.pad(
-                input, (pad_c_front, pad_c_back, pad_left, pad_right, pad_top, pad_bottom), value=0.0
-            )
-            N, H, W, C = input.shape
-
-    reshaped = input.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
-    transposed = reshaped.permute(0, 1, 3, 2, 4, 5)
-    output_tensor = transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
-
+def _fold_nhwc(input_tensor, stride_h, stride_w, collapse_output):
+    N, H, W, C = input_tensor.shape
+    reshaped = input_tensor.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
+    output_tensor = reshaped.permute(0, 1, 3, 2, 4, 5).reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
     if collapse_output:
         output_tensor = output_tensor.reshape(1, 1, N * (H // stride_h) * (W // stride_w), C * stride_h * stride_w)
     return output_tensor
+
+
+def _golden_function_fold_transposed(input_tensor, stride_h, stride_w, padding, collapse_output):
+    import torch
+
+    # The transpose-based device path consumes NCHW and emits NHWC; six-element padding also aligns channels.
+    pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = _parse_fold_padding(padding)
+    if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
+        input_tensor = torch.nn.functional.pad(
+            input_tensor, (pad_left, pad_right, pad_top, pad_bottom, pad_c_front, pad_c_back), value=0.0
+        )
+    return _fold_nhwc(input_tensor.permute(0, 2, 3, 1), stride_h, stride_w, collapse_output)
+
+
+def _golden_function(
+    input,
+    stride_h,
+    stride_w,
+    *args,
+    padding=(0, 0),
+    collapse_output=False,
+    use_transpose_as_fold=False,
+    **kwargs,
+):
+    if use_transpose_as_fold:
+        return _golden_function_fold_transposed(input, stride_h, stride_w, padding, collapse_output)
+
+    pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = _parse_fold_padding(padding)
+    if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
+        input = torch.nn.functional.pad(
+            input, (pad_c_front, pad_c_back, pad_left, pad_right, pad_top, pad_bottom), value=0.0
+        )
+    return _fold_nhwc(input, stride_h, stride_w, collapse_output)
 
 
 ttnn.attach_golden_function(ttnn.fold, golden_function=_golden_function)
@@ -560,8 +586,14 @@ ttnn.attach_golden_function(ttnn.copy, golden_function=_golden_function_copy)
 def _golden_function_sort(input_tensor, dim=-1, descending=False, stable=False, *_, **__):
     import torch
 
-    # torch.sort returns (values, indices); indices are int64 here and cast to the ttnn index dtype on comparison.
-    return torch.sort(input_tensor, dim=dim, descending=descending, stable=stable)
+    values, indices = torch.sort(input_tensor, dim=dim, descending=descending, stable=stable)
+    if not stable and values.shape[dim] > 1:
+        adjacent_values = values.narrow(dim, 1, values.shape[dim] - 1)
+        previous_values = values.narrow(dim, 0, values.shape[dim] - 1)
+        if bool(torch.any(adjacent_values == previous_values)):
+            # Unstable sort may legally permute equal values differently; only its tied indices are non-unique.
+            ttnn.decorators.set_golden_comparison_config(indices, method="skip", scope="all")
+    return values, indices
 
 
 ttnn.attach_golden_function(ttnn.sort, golden_function=_golden_function_sort)

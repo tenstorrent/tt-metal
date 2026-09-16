@@ -115,6 +115,13 @@ ttnn.attach_golden_function(
 def _golden_function(input_tensor, mat1_tensor, mat2_tensor, alpha=1.0, beta=1.0, out_tensor=None, **kwargs):
     import torch
 
+    if beta == 0:
+        # TTNN intentionally ignores the addend when beta is zero, including an otherwise invalid addend shape.
+        result = alpha * torch.matmul(mat1_tensor, mat2_tensor)
+        if out_tensor is not None:
+            out_tensor.copy_(result)
+            return out_tensor
+        return result
     return torch.addmm(input_tensor, mat1_tensor, mat2_tensor, alpha=alpha, beta=beta, out=out_tensor)
 
 

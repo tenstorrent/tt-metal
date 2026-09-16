@@ -131,6 +131,72 @@ def test_comparison_policy_masks_matching_nonfinite_positions(expect_error):
         _compare_torch_tensors(golden, torch.tensor([1.0, float("inf")]))
 
 
+def test_reduction_goldens_match_ttnn_output_contracts():
+    input_tensor = torch.tensor([[3, 1], [2, 4]], dtype=torch.int32)
+
+    max_output = ttnn.get_golden_function(ttnn.max)(input_tensor, dim=1)
+    std_output = ttnn.get_golden_function(ttnn.std)(input_tensor.float(), dim=0, correction=False)
+    argmax_output = ttnn.get_golden_function(ttnn.argmax)(input_tensor.to(torch.uint32), dim=1)
+
+    assert torch.equal(max_output, torch.tensor([3, 4], dtype=torch.int32))
+    assert torch.equal(std_output, torch.std(input_tensor.float(), dim=0, correction=False))
+    assert torch.equal(argmax_output, torch.tensor([0, 1]))
+
+
+def test_batch_norm_golden_accepts_ttnn_channel_shapes_and_one_running_stat():
+    input_tensor = torch.randn(2, 3, 4, 4)
+    running_mean = torch.zeros(1, 3, 1, 1)
+
+    output = ttnn.get_golden_function(ttnn.batch_norm)(
+        input_tensor,
+        running_mean=running_mean,
+        running_var=None,
+        training=True,
+    )
+
+    assert output.shape == input_tensor.shape
+
+
+def test_data_movement_goldens_cover_unsigned_inplace_fold_and_tied_sort():
+    plus_one_input = torch.tensor([0, 2**32 - 1], dtype=torch.int64).to(torch.uint32)
+    plus_one_output = ttnn.get_golden_function(ttnn.plus_one)(plus_one_input.clone())
+    assert torch.equal(plus_one_output, torch.tensor([1, 0], dtype=torch.int64).to(torch.uint32))
+
+    nchw_input = torch.arange(4, dtype=torch.float32).reshape(1, 1, 2, 2)
+    fold_output = ttnn.get_golden_function(ttnn.fold)(
+        nchw_input, 2, 2, use_transpose_as_fold=True, padding=[0, 0, 0, 0, 0, 0]
+    )
+    assert torch.equal(fold_output, torch.tensor([[[[0.0, 1.0, 2.0, 3.0]]]]))
+
+    _, indices = ttnn.get_golden_function(ttnn.sort)(torch.ones(4), stable=False)
+    assert indices._ttnn_comparison_config.method == "skip"
+    assert indices._ttnn_comparison_config.scope == "all"
+
+
+def test_addmm_golden_ignores_invalid_addend_shape_when_beta_is_zero():
+    invalid_addend = torch.zeros(8, 8)
+    mat1 = torch.arange(16, dtype=torch.float32).reshape(4, 4)
+    mat2 = torch.eye(4)
+
+    output = ttnn.get_golden_function(ttnn.addmm)(invalid_addend, mat1, mat2, alpha=2.0, beta=0.0)
+
+    assert torch.equal(output, 2.0 * mat1)
+
+
+def test_unary_goldens_cover_unsigned_chain_integer_hardswish_and_gelu_policy():
+    unsigned_input = torch.tensor([0, 2**32 - 1], dtype=torch.int64).to(torch.uint32)
+    chain_output = ttnn.get_golden_function(ttnn.unary_chain)(
+        unsigned_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]
+    )
+    hardswish_output = ttnn.get_golden_function(ttnn.hardswish)(torch.zeros(2, dtype=torch.int32))
+    gelu_output = ttnn.get_golden_function(ttnn.gelu)(torch.tensor([-1.0, 0.0, 1.0], dtype=torch.bfloat16))
+
+    assert torch.equal(chain_output, unsigned_input)
+    assert torch.equal(hardswish_output, torch.full((2,), 0x3F000000, dtype=torch.int32))
+    assert gelu_output._ttnn_comparison_config.method == "ulp"
+    assert gelu_output._ttnn_comparison_config.ulp_threshold == 10
+
+
 def test_moreh_dot_golden_uses_degenerate_allclose_policy():
     golden_function = ttnn.get_golden_function(ttnn.moreh_dot)
     golden = golden_function(torch.tensor([1.0]), torch.tensor([1.0]))

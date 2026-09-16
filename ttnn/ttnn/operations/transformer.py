@@ -182,12 +182,13 @@ def _sdpa_reference(
         is_causal = False
         sliding_window_size = None
 
-    if attention_sink is None:
+    if attention_sink is None and q.dtype == k.dtype == v.dtype:
         return torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=attn_mask, is_causal=is_causal, scale=scale
         )
 
-    # Attention sink: an extra per-head logit that contributes to the softmax denominator only.
+    # Block-float K/V preprocesses to FP32 while Q stays BF16; explicit FP32 attention supports that mixed input.
+    # This path also models an attention sink as an extra denominator-only logit.
     if scale is None:
         scale = 1.0 / (q.shape[-1] ** 0.5)
     logits = torch.matmul(q.float(), k.float().transpose(-1, -2)) * scale
@@ -201,10 +202,13 @@ def _sdpa_reference(
         attn_mask = causal_mask if attn_mask is None else attn_mask + causal_mask
     if attn_mask is not None:
         logits = logits + attn_mask
-    sink = attention_sink.float().reshape(1, logits.shape[1], 1, 1) * scale
-    sink = sink.expand(logits.shape[0], logits.shape[1], logits.shape[-2], 1)
-    full_logits = torch.cat([logits, sink], dim=-1)
-    probs = torch.softmax(full_logits, dim=-1)[..., :-1]
+    if attention_sink is not None:
+        sink = attention_sink.float().reshape(1, logits.shape[1], 1, 1) * scale
+        sink = sink.expand(logits.shape[0], logits.shape[1], logits.shape[-2], 1)
+        logits = torch.cat([logits, sink], dim=-1)
+        probs = torch.softmax(logits, dim=-1)[..., :-1]
+    else:
+        probs = torch.softmax(logits, dim=-1)
     return torch.matmul(probs, v.float()).to(q.dtype)
 
 
@@ -345,11 +349,76 @@ ttnn.attach_golden_function(
 )
 
 
-def _gather_paged_kv(cache, page_table):
+def _reinterpret_paged_cache(cache, view_num_heads, view_block_size, view_head_dim):
+    """Reinterpret a TILE cache while preserving its linear per-block tile order."""
+    num_blocks, alloc_num_heads, alloc_block_size, alloc_head_dim = cache.shape
+    tile_size = 32
+    dimensions = (alloc_block_size, alloc_head_dim, view_block_size, view_head_dim)
+    if any(dimension % tile_size != 0 for dimension in dimensions):
+        raise ValueError("paged cache geometry dimensions must be tile aligned")
+
+    alloc_block_tiles = alloc_block_size // tile_size
+    alloc_width_tiles = alloc_head_dim // tile_size
+    view_block_tiles = view_block_size // tile_size
+    view_width_tiles = view_head_dim // tile_size
+    alloc_tiles = alloc_num_heads * alloc_block_tiles * alloc_width_tiles
+    view_tiles = view_num_heads * view_block_tiles * view_width_tiles
+    if alloc_tiles != view_tiles:
+        raise ValueError("paged cache geometry must preserve the per-block tile count")
+
+    # A plain reshape changes tile interpretation; flatten and rebuild the declared row-major tile grid instead.
+    tiles = cache.view(num_blocks, alloc_num_heads, alloc_block_tiles, tile_size, alloc_width_tiles, tile_size)
+    tiles = tiles.permute(0, 1, 2, 4, 3, 5).contiguous().reshape(num_blocks, alloc_tiles, tile_size, tile_size)
+    tiles = tiles.reshape(num_blocks, view_num_heads, view_block_tiles, view_width_tiles, tile_size, tile_size)
+    return (
+        tiles.permute(0, 1, 2, 4, 3, 5).contiguous().reshape(num_blocks, view_num_heads, view_block_size, view_head_dim)
+    )
+
+
+def _gather_paged_kv(cache, page_table, *, paged_cache_geometry=None, head_dim=None):
     """Convert [blocks, kv_heads, block_size, dim] pages to [batch, kv_heads, sequence, dim]."""
+    if paged_cache_geometry is not None:
+        # Shared HMA buffers can be allocated with another layer's shape; Q supplies this view's head dimension.
+        cache = _reinterpret_paged_cache(
+            cache,
+            paged_cache_geometry.num_kv_heads,
+            paged_cache_geometry.block_size,
+            head_dim,
+        )
     pages = cache[page_table.long()]
     batch_size, num_pages, num_heads, block_size, head_dim = pages.shape
     return pages.permute(0, 2, 1, 3, 4).reshape(batch_size, num_heads, num_pages * block_size, head_dim)
+
+
+def _linearize_circular_cache(cache, cur_pos_tensor, capacity):
+    import torch
+
+    positions = [int(position) for position in cur_pos_tensor.reshape(-1)[: cache.shape[0]]]
+    if len(positions) != cache.shape[0]:
+        raise ValueError("cur_pos_tensor must contain one position per cache batch")
+    if cache.shape[-2] < capacity:
+        raise ValueError("page table does not cover cache_position_modulo")
+    valid_lengths = [min(position + 1, capacity) for position in positions]
+    sequence_length = max(1, max(valid_lengths))
+    linear_cache = torch.zeros(
+        cache.shape[0],
+        cache.shape[1],
+        sequence_length,
+        cache.shape[-1],
+        dtype=cache.dtype,
+        device=cache.device,
+    )
+    for batch_index, (position, valid_length) in enumerate(zip(positions, valid_lengths)):
+        if valid_length == 0:
+            continue
+        first_position = position - valid_length + 1
+        physical_positions = torch.arange(first_position, position + 1, device=cache.device) % capacity
+        linear_cache[batch_index, :, :valid_length, :] = cache[batch_index, :, physical_positions, :]
+    return linear_cache, torch.tensor(
+        [valid_length - 1 for valid_length in valid_lengths],
+        dtype=cur_pos_tensor.dtype,
+        device=cur_pos_tensor.device,
+    )
 
 
 def _golden_function_paged_sdpa_decode(
@@ -368,13 +437,32 @@ def _golden_function_paged_sdpa_decode(
     cache_position_modulo=None,
     **_,
 ):
-    if paged_cache_geometry is not None or cache_position_modulo is not None:
-        raise NotImplementedError("paged SDPA golden does not support cache geometry overrides or circular caches")
+    head_dim = input_tensor_q.shape[-1]
+    gathered_k = _gather_paged_kv(
+        input_tensor_k,
+        page_table_tensor,
+        paged_cache_geometry=paged_cache_geometry,
+        head_dim=head_dim,
+    )
+    gathered_v = _gather_paged_kv(
+        input_tensor_v,
+        page_table_tensor,
+        paged_cache_geometry=paged_cache_geometry,
+        head_dim=head_dim,
+    )
+    if cache_position_modulo is not None:
+        # Rebuild each user's chronological window: only page lookup wraps, while decode positions remain absolute.
+        gathered_k = gathered_k[..., :cache_position_modulo, :]
+        gathered_v = gathered_v[..., :cache_position_modulo, :]
+        if cur_pos_tensor is not None:
+            gathered_k, relative_cur_pos = _linearize_circular_cache(gathered_k, cur_pos_tensor, cache_position_modulo)
+            gathered_v, _ = _linearize_circular_cache(gathered_v, cur_pos_tensor, cache_position_modulo)
+            cur_pos_tensor = relative_cur_pos
 
     return _sdpa_decode_reference(
         input_tensor_q,
-        _gather_paged_kv(input_tensor_k, page_table_tensor),
-        _gather_paged_kv(input_tensor_v, page_table_tensor),
+        gathered_k,
+        gathered_v,
         is_causal=is_causal,
         attn_mask=attn_mask,
         cur_pos_tensor=cur_pos_tensor,
