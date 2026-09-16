@@ -3138,6 +3138,15 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
     """
 
     _SPEC_CONTRACT_K = int(os.environ.get("GEMMA4_DFLASH_VERIFY", "5"))
+    # The inherited prefill/warmup paths use ``_SPEC_BLOCK > 1`` as their proxy
+    # for "speculation is on" (prefill arms the session, warmup captures the
+    # width set). On THIS rail the value never reaches the wire -- the runner
+    # owns the committed width and model_capabilities declares
+    # output_tokens_per_step 1 -- so it is pinned here rather than read from
+    # GEMMA4_DFLASH_SERVE_BLOCK. Setting that env to 1 for "no internal block"
+    # otherwise switches the whole class off: the prefill arms nothing and the
+    # first verify has no session to answer from.
+    _SPEC_BLOCK = max(2, int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64")))
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
@@ -3187,14 +3196,16 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
             # contract says "nothing this step"; inventing ids would have the
             # runner verify tokens no drafter produced.
             return DraftOutput(draft_token_ids=torch.zeros((rows, 0), dtype=torch.int32))
-        # Commit what the runner accepted for the PREVIOUS step BEFORE drafting
-        # again: the fused body merges the previous replay's tap rows at the
-        # start of the next replay, so the count has to be in place first.
-        if self._ct_posterior is not None:
-            n = int(counts.reshape(-1)[0]) if counts is not None else 1
-            row = committed.reshape(-1)
-            anchor = int(row[max(0, min(n, int(row.numel())) - 1)])
-            dec.contract_commit(n, anchor)
+        # Commit what the runner just accepted BEFORE drafting again: the fused
+        # body merges the previous replay's tap rows at the start of the next
+        # replay, so the count has to be in place first. ``counts`` is this
+        # step's accept walk, which is exactly the number of that replay's rows
+        # that became real context.
+        n = int(counts.reshape(-1)[0]) if counts is not None else 1
+        row = committed[0] if committed is not None and committed.dim() > 1 else committed
+        row = row.reshape(-1) if row is not None else None
+        anchor = int(row[max(0, min(n, int(row.numel())) - 1)]) if row is not None else dec.anchor
+        dec.contract_commit(n, anchor)
         drafts, posterior = dec.contract_replay(first=self._spec_first_step)
         self._spec_first_step = False
         self._ct_drafts = [int(t) for t in drafts[:k]]
@@ -3224,12 +3235,47 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         tokens = kwargs.get("tokens")
         if tokens is None and args:
             tokens = args[0]
+        start_pos = kwargs.get("start_pos")
+        if start_pos is None and len(args) > 1:
+            start_pos = args[1]
+        # The contract's step order is verify then propose, so the FIRST step of
+        # a request is a verify with no prior proposal: the runner has nothing
+        # to draft with yet and sends a block whose only real column is the last
+        # committed token. Arm the session here (prefill left the taps pending)
+        # and answer that one column from the capture's own first iteration --
+        # the compile pass already produced it, so this costs no replay.
+        if self._spec_pending is not None:
+            self._spec_bootstrap(
+                int(tokens.reshape(-1)[0]),
+                int(start_pos.reshape(-1)[0]) if start_pos is not None else None,
+                kwargs.get("page_table"),
+                kwargs.get("kv_cache"),
+                page_tables_per_layer=page_tables_per_layer,
+            )
+        rows_in = int(tokens.shape[0]) if tokens is not None and tokens.dim() > 1 else 1
+        valid_in = int(num_valid.reshape(-1)[0]) if num_valid is not None else 0
+        if valid_in == 0:
+            # Draft-less step. Answer ONLY column 0, so the walk commits exactly
+            # one token: handing it a full posterior would let it "accept" a
+            # draft column whose token the runner has already committed.
+            if not self._spec_active:
+                raise RuntimeError(
+                    "Gemma4DFlash contract verify has no session to answer from; "
+                    "the prefill must arm one before the first decode step"
+                )
+            drafts, posterior = self._spec_decoder.contract_replay(first=self._spec_first_step)
+            self._spec_first_step = False
+            self._ct_drafts = None  # nothing proposed yet; the next propose replays
+            self._ct_posterior = None
+            width0 = self._SPEC_CONTRACT_K + 1
+            ids0 = torch.full((rows_in, width0), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+            ids0[0, 0] = int(posterior[0])
+            return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids0, hidden=None)
         if self._ct_posterior is None:
             raise RuntimeError(
-                "Gemma4DFlash contract verify ran before any proposal, so there "
-                "is no device posterior for this block. The contract's step "
-                "order is verify then propose, so a session bootstrap must "
-                "leave a posterior behind"
+                "Gemma4DFlash contract verify was sent drafts but holds no device "
+                f"posterior for them (num_valid_drafts={valid_in}); the runner's "
+                "block and this model's proposal have diverged"
             )
         # The kept posterior answers for the drafts WE proposed. Check the block
         # carries them rather than assuming: the runner may truncate a row to

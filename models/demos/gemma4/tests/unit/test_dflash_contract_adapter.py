@@ -43,9 +43,23 @@ def _model(script, active=True):
     m._spec_decoder = _Dec(script) if active else None
     m._spec_active = active
     m._spec_first_step = False
+    m._spec_pending = None  # prefill already armed and bootstrapped
     m._ct_posterior = None
     m._ct_drafts = None
     return m
+
+
+def _bootstrap_step(m):
+    """The contract's FIRST step: a verify with no drafts, which commits exactly
+    one token, followed by the first proposal."""
+    out = m.decode_forward(
+        tokens=torch.tensor([[11]], dtype=torch.int32),
+        start_pos=torch.tensor([[100]], dtype=torch.int32),
+        spec_mode="argmax_ids",
+        num_valid_drafts=torch.tensor([0], dtype=torch.int32),
+        accepted_counts=torch.tensor([1], dtype=torch.int32),
+    )
+    return out
 
 
 def _counts(n):
@@ -120,15 +134,14 @@ def test_propose_without_a_session_proposes_nothing():
 
 
 def test_the_runners_accepted_count_drives_the_commit():
-    """The model must commit what the RUNNER accepted, not its own walk."""
+    """The model must commit what the RUNNER accepted, not its own walk: the
+    count and the anchor both come from the accept walk just performed."""
     m = _model(
         [
             ([21, 22, 23, 24, 25], [31, 32, 33, 34, 35, 36]),
             ([41, 42, 43, 44, 45], [51, 52, 53, 54, 55, 56]),
         ]
     )
-    m.propose_draft_tokens(5, torch.tensor([[11]], dtype=torch.int32), None, _counts(1))
-    assert m._spec_decoder.commits == []  # nothing to commit before the first
     committed = torch.tensor([[21, 22, 23, 99, 0, 0]], dtype=torch.int32)
     m.propose_draft_tokens(5, committed, None, _counts(3))
     assert m._spec_decoder.commits == [(3, 23)]  # 3 rows, anchor = 3rd token
@@ -175,9 +188,11 @@ def test_verify_tolerates_a_row_truncated_to_num_valid_drafts():
     assert out.argmax_ids[0].tolist()[:3] == [31, 32, 33]
 
 
-def test_verify_before_any_proposal_raises_rather_than_inventing(expect_error):
+def test_a_block_carrying_drafts_with_no_proposal_behind_it_raises(expect_error):
+    """The runner sent drafts, but this model holds no posterior for them, so
+    the two have diverged. Answering would invent a verify result."""
     m = _model([])
-    with expect_error(RuntimeError, "before any proposal"):
+    with expect_error(RuntimeError, "holds no device"):
         _verify(m, [11, 21, 22, 23, 24, 25])
 
 
