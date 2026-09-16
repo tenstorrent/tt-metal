@@ -128,8 +128,10 @@ LTX_DISTILLED_MESH_PARAMS_DL = [
     _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_l1small), True),
     # WH (ring) on 4x8: bigger worker L1 for RingAttention.
     _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl4_ring_is_fsdp1, _ring_worker_l1), True),
-    # BH (linear) on 4x8.
-    _with_dynamic_load(_4x8sp1tp0nl2_line_is_fsdp0, False),
+    # BH (linear) on 4x8: L1_SMALL for the vocoder conv taps (without it every tap filter OOMs on the
+    # L1_SMALL pool and falls through to the MAC path, ~13x slower audio) + trace region for the traced
+    # decode -- the same device params the ring row and the I2V/Pro lists already give this id.
+    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_line_is_fsdp0, _line_trace), False),
     # BH (ring) on 4x8: trace region + L1_SMALL for the traced decode.
     _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace), False),
     _with_dynamic_load(_4x32sp1tp0nl2_ring_is_fsdp0, False),
