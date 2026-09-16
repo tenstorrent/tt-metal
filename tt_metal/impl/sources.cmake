@@ -172,6 +172,7 @@ if(TT_METAL_USE_EMULE)
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_multi_rank_runtime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_descriptor_builder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_diagnostics.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
