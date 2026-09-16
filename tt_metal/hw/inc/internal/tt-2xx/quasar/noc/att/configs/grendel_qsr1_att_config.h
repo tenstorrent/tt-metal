@@ -158,6 +158,12 @@ inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
     {.x = 10, .y = 1, .selector = 57, .window = noc_att::WindowClass::FullTile},
     {.x = 1, .y = 6, .selector = 58, .window = noc_att::WindowClass::FullTile},
     {.x = 9, .y = 5, .selector = 31, .window = noc_att::WindowClass::Worker},
+    // The other two live corners. A second command queue's dispatch kernels sit on one of them
+    // ([-1, 0] in the 8x4 Tensix-dispatch core descriptor), and workers resolve the dispatcher
+    // coordinates carried in a go message as a dispatch address, so every tile that can host a
+    // dispatcher must be listed. Two-queue fast dispatch passes only with both present.
+    {.x = 2, .y = 5, .selector = 24, .window = noc_att::WindowClass::Worker},
+    {.x = 9, .y = 2, .selector = 7, .window = noc_att::WindowClass::Worker},
 };
 
 constexpr bool dispatch_entries_match_endpoint_words() {

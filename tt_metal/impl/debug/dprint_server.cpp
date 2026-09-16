@@ -1220,8 +1220,10 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     }
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
 
-    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled).
-    if (!context_->get_dispatch_query_manager().dispatch_s_enabled()) {
+    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled). Under an ATT
+    // map dispatch_s is built without the aggregator (see DispatchSKernel), so the server polls the
+    // per-core L1 buffers directly.
+    if (!context_->get_dispatch_query_manager().dispatch_s_enabled() || env_.get_rtoptions().get_noc_att_map().has_value()) {
         return;
     }
 
