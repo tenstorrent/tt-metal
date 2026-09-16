@@ -1220,11 +1220,38 @@ class WanDupUp3D(Module):
         self.factor = factor_t * factor_s * factor_s
         assert out_channels * self.factor % in_channels == 0
         self.repeats = out_channels * self.factor // in_channels
+        # `_forward_fast` reads offset f from channel-slice f // repeats, which is only a
+        # well-defined strided slice of the input when repeats divides the factor and the
+        # innermost spatial offset (dw) shares a slice, i.e. repeats >= factor_s. Anything
+        # else keeps the generic index-permutation path.
+        self._fast_slice_stride = None
+        if self.factor % self.repeats == 0 and self.repeats >= factor_s:
+            n_slices = self.factor // self.repeats
+            if in_channels == out_channels * n_slices:
+                self._fast_slice_stride = n_slices
 
     def forward(self, x_BTHWC: ttnn.Tensor, first_chunk: bool = False) -> ttnn.Tensor:
+        ft = self.factor_t
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)  # avoid 32x32 tile-pad blowup on small factor dims
+        if self._fast_slice_stride is not None:
+            x = self._forward_fast(x_BTHWC)
+        else:
+            x = self._forward_generic(x_BTHWC)
+        if first_chunk and ft > 1:
+            x = x[:, ft - 1 :, :, :, :]
+        return x
+
+    def _forward_generic(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        """Index-permutation reference path: correct for any factor/repeats combination.
+
+        Retained as the fallback for shapes ``_forward_fast`` does not cover, and as the
+        equivalence reference for it. Every reshape here drives the innermost dimension
+        down to ``fs*fs`` or ``ft*fs*fs`` (4 or 8 elements); ROW_MAJOR pads each row to
+        32 B, so those are 4-16x padded physical copies rather than metadata changes,
+        which is why this path costs ~320 ms per call at production shapes.
+        """
         B, T, H, W, C = x_BTHWC.shape
         ft, fs, oc = self.factor_t, self.factor_s, self.out_channels
-        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)  # avoid 32x32 tile-pad blowup on small factor dims
         if self.repeats != 1:
             x_nc1 = ttnn.reshape(x_BTHWC, (B * T * H * W, C, 1))
             x_ncr = ttnn.concat([x_nc1] * self.repeats, dim=2)
@@ -1239,10 +1266,75 @@ class WanDupUp3D(Module):
         x = ttnn.reshape(x, (B, T * ft, H, W, oc, fs * fs))
         x = ttnn.reshape(x, (B * (T * ft), H, W, oc, fs, fs))
         x = ttnn.permute(x, (0, 1, 4, 2, 5, 3))  # (BT', H, fs, W, fs, oc)
-        x = ttnn.reshape(x, (B, T * ft, H * fs, W * fs, oc))
-        if first_chunk and ft > 1:
-            x = x[:, ft - 1 :, :, :, :]
-        return x
+        return ttnn.reshape(x, (B, T * ft, H * fs, W * fs, oc))
+
+    def _forward_fast(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        """Same permutation, but with ``oc`` kept innermost throughout.
+
+        The scatter sends packed channel ``(oc, f)`` to spatio-temporal offset
+        ``f = dt*fs*fs + dh*fs + dw``, and after the ``repeat_interleave`` the source of
+        offset ``f`` is channel-slice ``f // repeats`` of the *original* tensor with
+        stride ``n_slices = factor // repeats``. So the whole op is: take ``n_slices``
+        strided channel slices, then replicate/interleave them over (T, H, W). Written
+        that way the innermost dimension is always ``oc`` (256-1024 elements, already
+        32 B-aligned), so the reshapes only split or merge outer dimensions and are
+        metadata-only, and nearest-neighbour replication collapses into ``ttnn.upsample``.
+
+        Covers ``repeats >= fs`` (all three 5B decoder instances: two with
+        ``repeats == factor`` which is exact nearest-neighbour, one with
+        ``repeats == fs``). ``__init__`` routes anything else to the generic path.
+        """
+        B, T, H, W, _ = x_BTHWC.shape
+        ft, fs, oc = self.factor_t, self.factor_s, self.out_channels
+        stride = self._fast_slice_stride
+        n_slices = self.factor // self.repeats
+
+        def _slice(s: int) -> ttnn.Tensor:
+            if stride == 1:
+                return x_BTHWC
+            return ttnn.slice(
+                x_BTHWC,
+                [0, 0, 0, 0, s],
+                [B, T, H, W, self.in_channels],
+                [1, 1, 1, 1, stride],
+            )
+
+        slices = [_slice(s) for s in range(n_slices)]
+
+        def _replicate(t: ttnn.Tensor, shape: tuple, axis: int, n: int) -> ttnn.Tensor:
+            """Duplicate ``t`` ``n`` times along a new axis inserted at ``axis``."""
+            expanded = shape[:axis] + (1,) + shape[axis:]
+            t = ttnn.reshape(t, expanded)
+            if n > 1:
+                t = ttnn.concat([t] * n, dim=axis)
+            return t
+
+        # Per temporal offset, build the (H*fs, W*fs) plane.
+        planes = []
+        for dt in range(ft):
+            if self.repeats >= fs * fs:
+                # Every (dh, dw) of this plane reads the same slice: plain NN upsample.
+                src = slices[(dt * fs * fs) // self.repeats]
+                nhwc = ttnn.reshape(src, (B * T, H, W, oc))
+                up = ttnn.upsample(nhwc, scale_factor=fs)
+                planes.append(ttnn.reshape(up, (B, T, H * fs, W * fs, oc)))
+            else:
+                # dw shares a slice (repeats >= fs) but dh does not: replicate along W,
+                # then interleave the fs row-variants along H.
+                rows = []
+                for dh in range(fs):
+                    src = slices[(dt * fs * fs + dh * fs) // self.repeats]
+                    row = _replicate(src, (B, T, H, W, oc), 4, fs)  # (B,T,H,W,fs,oc)
+                    rows.append(ttnn.reshape(row, (B, T, H, W * fs, oc)))
+                stacked = [ttnn.reshape(r, (B, T, H, 1, W * fs, oc)) for r in rows]
+                plane = ttnn.concat(stacked, dim=3) if fs > 1 else stacked[0]
+                planes.append(ttnn.reshape(plane, (B, T, H * fs, W * fs, oc)))
+
+        if ft == 1:
+            return planes[0]
+        stacked = [ttnn.reshape(p, (B, T, 1, H * fs, W * fs, oc)) for p in planes]
+        out = ttnn.concat(stacked, dim=2)  # (B, T, ft, H*fs, W*fs, oc)
+        return ttnn.reshape(out, (B, T * ft, H * fs, W * fs, oc))
 
 
 class WanResidualUpBlock(Module):
