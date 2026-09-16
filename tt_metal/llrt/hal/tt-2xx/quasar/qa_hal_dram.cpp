@@ -90,7 +90,8 @@ HalCoreInfoType create_dram_mem_map() {
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
-        // DM: boot hart only. Extra CCE harts can be added later.
+        // DM: one shared firmware binary. All CCE harts enter the same image; crt0/TLS are per mhartid.
+        // Host still programs only hart 0's reset vector until CCE bring-up releases the rest.
         {
             {.fw_base_addr = MEM_CCE_FIRMWARE_BASE,
              .local_init_addr = MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH,

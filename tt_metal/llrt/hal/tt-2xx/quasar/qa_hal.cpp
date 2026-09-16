@@ -100,7 +100,24 @@ public:
         // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
-        if (params.processor_class == HalProcessorClassType::DM) {
+        if (params.core_type == HalProgrammableCoreType::DRAM) {
+            const DeviceAddr cce_text = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_FIRMWARE_BASE;
+            const DeviceAddr cce_data = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_GLOBAL_BASE;
+            const DeviceAddr cce_tls = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_LOCAL_BASE;
+            if (params.is_fw) {
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", cce_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_FIRMWARE_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
+                flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_CCE_STACK_MIN_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
+            } else {
+                TT_THROW("CCE kernel JIT is not implemented yet");
+            }
+        } else if (params.processor_class == HalProcessorClassType::DM) {
             const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                   ? MEM_DISPATCH_DM_GLOBAL_BASE
                                                   : MEM_DM_GLOBAL_BASE;
@@ -330,6 +347,7 @@ public:
                     case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
                 break;
+            case HalProgrammableCoreType::DRAM: break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -406,7 +424,9 @@ public:
         return cflags;
     }
 
-    bool firmware_is_kernel_object(const Params&) const override { return true; }
+    bool firmware_is_kernel_object(const Params& params) const override {
+        return params.core_type != HalProgrammableCoreType::DRAM;
+    }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -441,6 +461,12 @@ public:
                     }
                     case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
+                break;
+            case HalProgrammableCoreType::DRAM:
+                if (params.processor_class == HalProcessorClassType::DM && params.is_fw) {
+                    return "runtime/hw/toolchain/quasar/firmware_dm.ld";
+                }
+                TT_THROW("CCE kernel JIT is not implemented yet");
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query linker script",
@@ -536,6 +562,11 @@ void Hal::initialize_qa(
             // }
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
+        }
+        // CCE firmware is linked at the hart-visible SRAM window (0x40000000). Host writes go
+        // through the DRAM-core L1 NOC tag, so strip the local base before adding l1_noc_offset.
+        if (addr >= MEM_CCE_SRAM_LOCAL_BASE && addr < MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_L1_SIZE) {
+            return addr - MEM_CCE_SRAM_LOCAL_BASE;
         }
 
         // Note: Quasar does not have IRAM
