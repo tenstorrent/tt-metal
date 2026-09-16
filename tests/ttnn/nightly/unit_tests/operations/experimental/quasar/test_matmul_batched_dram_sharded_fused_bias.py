@@ -77,9 +77,9 @@ def test_quasar_batched_dram_sharded_matmul_fused_bias_multi_batch(device, n_til
     tensor_args.optional_input_tensors = [bias_t]
 
     factory = qsr.matmul_select_program_factory(attributes, tensor_args)
-    assert isinstance(factory, qsr.MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory), (
-        f"Expected batched HS DRAM factory, got {type(factory)}"
-    )
+    assert isinstance(
+        factory, qsr.MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory
+    ), f"Expected batched HS DRAM factory, got {type(factory)}"
 
     output = qsr.MatmulDeviceOperation.create_output_tensors(attributes, tensor_args)
     descriptor = qsr.MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory.create_descriptor(
