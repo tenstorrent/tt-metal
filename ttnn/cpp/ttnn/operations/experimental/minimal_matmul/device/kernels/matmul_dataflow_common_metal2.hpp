@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// matmul_dataflow_common_metal2.hpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
-
 #pragma once
 
 #include <cstdint>
@@ -14,7 +9,7 @@
 #include <tuple>
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -26,32 +21,8 @@
 #define IN0_HAS_SECOND_SOURCE 1
 #endif
 
-namespace detail {
-template <typename... Args, uint32_t... Indexes>
-auto make_tensor_accessor_tuple_impl(
-    const std::tuple<Args...>& args_tuple,
-    uint32_t address_rt_arg_index_start,
-    uint32_t page_size,
-    std::integer_sequence<uint32_t, Indexes...>) {
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    return std::make_tuple(TensorAccessor(
-        std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
-}
-}  // namespace detail
-
-/**
- * Create a tuple of TensorAccessors from a tuple of TensorAccessorArgs.
- * Each tensor gets its address from consecutive RT args starting at address_rt_arg_index_start.
- */
-template <typename... Args>
-auto make_tensor_accessor_tuple_uniform_page_size(
-    const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start, uint32_t page_size) {
-    return detail::make_tensor_accessor_tuple_impl(
-        args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
-}
-inline void fill_zeros_async(const Noc& noc, const CircularBuffer& cb, uint32_t bytes, uint32_t offset_bytes = 0) {
-    noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
+inline void fill_zeros_async(const Noc& noc, const DataflowBuffer& dfb, uint32_t bytes, uint32_t offset_bytes = 0) {
+    noc.async_write_zeros(dfb, bytes, {.offset_bytes = offset_bytes});
 }
 
 struct TensorShape2D {
@@ -86,7 +57,7 @@ template <
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t cb_id,
+    const DataflowBuffer& dfb_in0,
     uint32_t tile_size_bytes,
 #ifdef IN0_HAS_SECOND_SOURCE
     const LocalTensorAccessorType& in3_accessor,
@@ -106,9 +77,8 @@ void read_in0_block_sync(
     ASSERT(d1_end > d1_start);
 
     Noc noc;
-    CircularBuffer cb(cb_id);
-    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    const uint32_t dfb_base_write_ptr = dfb_in0.get_write_ptr();
+    uint32_t write_ptr = dfb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -138,7 +108,7 @@ void read_in0_block_sync(
                 }
 #endif
             } else {
-                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, dfb_in0, tile_size_bytes, write_ptr - dfb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -158,7 +128,7 @@ template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccesso
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t cb_id,
+    const DataflowBuffer& dfb_in1,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -167,9 +137,8 @@ void read_in1_block_sync(
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
     Noc noc;
-    CircularBuffer cb(cb_id);
-    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    const uint32_t dfb_base_write_ptr = dfb_in1.get_write_ptr();
+    uint32_t write_ptr = dfb_base_write_ptr;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -181,7 +150,7 @@ void read_in1_block_sync(
                 noc.async_read(
                     tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
             } else {
-                fill_zeros_async(noc, cb, tile_size_bytes, write_ptr - cb_base_write_ptr);
+                fill_zeros_async(noc, dfb_in1, tile_size_bytes, write_ptr - dfb_base_write_ptr);
             }
             write_ptr += tile_size_bytes;
         }
@@ -231,7 +200,7 @@ void write_block_sync(
 }
 
 /**
- * Read ternary inputs (ternary_a and ternary_b) and write data to CB
+ * Read ternary inputs (ternary_a and ternary_b) and write data to the DFB
  *
  * For ternary_a: read M_block_tiles * N_block_tiles tiles (full block), pushed one row at a time.
  * For ternary_b:
@@ -247,8 +216,8 @@ void read_ternary_blocks_sync(
     const TensorAccessorType& ternary_a_accessor,
     const TensorAccessorType& ternary_b_accessor,
     const TensorShape2D& shape,
-    uint32_t ternary_a_cb,
-    uint32_t ternary_b_cb,
+    DataflowBuffer& dfb_ternary_a,
+    DataflowBuffer& dfb_ternary_b,
     uint32_t a_tile_size_bytes,
     uint32_t b_tile_size_bytes,
     uint32_t broadcast_ternary_b,
@@ -260,13 +229,11 @@ void read_ternary_blocks_sync(
     ASSERT(d1_end > d1_start);
 
     Noc noc;
-    CircularBuffer cb_ternary_a(ternary_a_cb);
-    CircularBuffer cb_ternary_b(ternary_b_cb);
 
     if (broadcast_ternary_b) {
         // Broadcast: read single row, push all at once
-        cb_ternary_b.reserve_back(N_block_tiles);
-        uint32_t ternary_b_write_ptr = cb_ternary_b.get_write_ptr();
+        dfb_ternary_b.reserve_back(N_block_tiles);
+        uint32_t ternary_b_write_ptr = dfb_ternary_b.get_write_ptr();
         for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
             if (n_tile_id >= shape.logical_d1) {
                 break;
@@ -280,14 +247,14 @@ void read_ternary_blocks_sync(
             ternary_b_write_ptr += b_tile_size_bytes;
         }
         noc.async_read_barrier();
-        cb_ternary_b.push_back(N_block_tiles);
+        dfb_ternary_b.push_back(N_block_tiles);
     } else {
         // No broadcast: read row-by-row (matches ternary_a pattern)
         uint32_t b_m_id = 0;
         uint32_t b_i = d0_start;
         for (; b_i < d0_end; b_i++, b_m_id++) {
-            cb_ternary_b.reserve_back(N_block_tiles);
-            uint32_t ternary_b_write_ptr = cb_ternary_b.get_write_ptr();
+            dfb_ternary_b.reserve_back(N_block_tiles);
+            uint32_t ternary_b_write_ptr = dfb_ternary_b.get_write_ptr();
             for (uint32_t j = d1_start; j < d1_end; j++) {
                 if (j >= shape.logical_d1) {
                     break;
@@ -304,23 +271,23 @@ void read_ternary_blocks_sync(
                 ternary_b_write_ptr += b_tile_size_bytes;
             }
             noc.async_read_barrier();
-            cb_ternary_b.push_back(N_block_tiles);
+            dfb_ternary_b.push_back(N_block_tiles);
         }
         for (; b_m_id < M_block_tiles; b_m_id++) {
-            cb_ternary_b.reserve_back(N_block_tiles);
-            cb_ternary_b.push_back(N_block_tiles);
+            dfb_ternary_b.reserve_back(N_block_tiles);
+            dfb_ternary_b.push_back(N_block_tiles);
         }
     }
 
     uint32_t m_id = 0;
     uint32_t i = d0_start;
     for (; i < d0_end; i++, m_id++) {
-        cb_ternary_a.reserve_back(N_block_tiles);
+        dfb_ternary_a.reserve_back(N_block_tiles);
 
-        uint32_t ternary_a_write_ptr = cb_ternary_a.get_write_ptr();
+        uint32_t ternary_a_write_ptr = dfb_ternary_a.get_write_ptr();
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
-                // Do not move tile data into CB if tile is outside ternary/output tensor.
+                // Do not move tile data into the DFB if tile is outside ternary/output tensor.
                 // This can happen when ternary/output tensor shape is not a multiple of block sizes:
                 // For instance, if tensor shape is (M_tiles=7, N_tiles=3), but block sizes are (M_block_tiles=4,
                 // N_block_tiles=4)
@@ -339,35 +306,34 @@ void read_ternary_blocks_sync(
         }
         noc.async_read_barrier();
 
-        cb_ternary_a.push_back(N_block_tiles);
+        dfb_ternary_a.push_back(N_block_tiles);
     }
     for (; m_id < M_block_tiles; m_id++) {
-        cb_ternary_a.reserve_back(N_block_tiles);
-        cb_ternary_a.push_back(N_block_tiles);
+        dfb_ternary_a.reserve_back(N_block_tiles);
+        dfb_ternary_a.push_back(N_block_tiles);
     }
 }
 
 /**
  * This write method is more granular, waiting on a row of output tiles
- * in the output CB before writing those out, rather than waiting on the entire block.
+ * in the output DFB before writing those out, rather than waiting on the entire block.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void write_block_sync_granular(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    uint32_t cb_id_out,
+    DataflowBuffer& dfb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        cb_out.wait_front(N_block_tiles);
+        dfb_out.wait_front(N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < shape.logical_d0) {
-            uint32_t out_read_ptr = cb_out.get_read_ptr();
+            uint32_t out_read_ptr = dfb_out.get_read_ptr();
             for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
                 if (n_tile_id >= shape.logical_d1) {
                     break;
@@ -378,11 +344,11 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
-        // Drain this row's outstanding write-source reads out of the cb_out L1 slot BEFORE pop_front
+        // Drain this row's outstanding write-source reads out of the dfb_out L1 slot BEFORE pop_front
         // releases it back to the compute producer. Otherwise the producer can repack the freed slot while
-        // the async writes are still in flight (WAR on the output CB source) -> corrupt output.
+        // the async writes are still in flight (WAR on the output DFB source) -> corrupt output.
         noc.async_writes_flushed();
-        cb_out.pop_front(N_block_tiles);
+        dfb_out.pop_front(N_block_tiles);
     }
 }
 
@@ -491,22 +457,21 @@ template <
 void write_block_sync_granular_split(
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
-    uint32_t cb_id_out,
+    DataflowBuffer& dfb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
     const uint32_t chunk_idx_start = d1_start / N_tiles_per_chunk;
     const uint32_t tile_idx_in_chunk_start = d1_start % N_tiles_per_chunk;
 
     for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
-        cb_out.wait_front(N_block_tiles);
+        dfb_out.wait_front(N_block_tiles);
         uint32_t m_tile = d0_start + m_id;
         if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
-            uint32_t out_read_ptr = cb_out.get_read_ptr();
+            uint32_t out_read_ptr = dfb_out.get_read_ptr();
 
             uint32_t chunk_idx = chunk_idx_start;
             uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
@@ -536,9 +501,9 @@ void write_block_sync_granular_split(
                 out_read_ptr += tile_size_bytes;
             }
         }
-        // Flush this row's write-source reads out of the cb_out slot before releasing it (same WAR on the
-        // output CB as write_block_sync_granular above).
+        // Flush this row's write-source reads out of the dfb_out slot before releasing it (same WAR on the
+        // output DFB as write_block_sync_granular above).
         noc.async_writes_flushed();
-        cb_out.pop_front(N_block_tiles);
+        dfb_out.pop_front(N_block_tiles);
     }
 }
