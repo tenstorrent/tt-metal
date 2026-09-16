@@ -64,11 +64,13 @@ constexpr uint32_t tile_granularity = get_named_compile_time_arg_val("tile_granu
 constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
 constexpr uint32_t num_tiles_to_write_per_packet = get_named_compile_time_arg_val("num_tiles_to_write_per_packet");
 constexpr uint32_t output_batch_num_pages = get_named_compile_time_arg_val("output_batch_num_pages");
+constexpr uint32_t input_batch_num_pages = get_named_compile_time_arg_val("input_batch_num_pages");
 constexpr uint32_t input_channel_num_pages = get_named_compile_time_arg_val("input_channel_num_pages");
 constexpr uint32_t output_channel_num_pages = get_named_compile_time_arg_val("output_channel_num_pages");
 constexpr uint32_t input_tensor_B = get_named_compile_time_arg_val("input_tensor_B");
 constexpr uint32_t input_tensor_Wt = get_named_compile_time_arg_val("input_tensor_Wt");
 constexpr uint32_t slice_C = get_named_compile_time_arg_val("slice_C");
+constexpr uint32_t fuse_op = get_named_compile_time_arg_val("fuse_op");
 constexpr uint32_t slice_Ht = get_named_compile_time_arg_val("slice_Ht");
 constexpr uint32_t slice_Wt = get_named_compile_time_arg_val("slice_Wt");
 constexpr uint32_t dim = get_named_compile_time_arg_val("dim");
@@ -130,8 +132,8 @@ IntermTensors(const IntermAcc&, const OutputAcc&, const PenultIntermAcc&)
 // and expose the same hooks, called from the same places in kernel_main:
 //
 //   set_packet_header_states(route)    once, before the first send
-//   begin_iteration(b, slice_idx)      once per ring iteration
-//   begin_channel(c)                   once per channel of the slice
+//   begin_iteration(b, slice_idx)      once per (batch, channel) unit, before begin_channel
+//   begin_channel(c)                   once per (batch, channel) unit
 //   skip_chunk(tiles)                  a chunk this worker/direction does not own
 //   write_chunk_remote(...)            send one chunk to the next device; returns true if this
 //                                      chunk's semaphore increment was fused onto a data packet
@@ -235,7 +237,10 @@ struct IntermSink</*Contiguous=*/false> {
     }
 
     void begin_iteration(uint32_t b, uint32_t slice_idx) {
-        interm_slice_base = slice_base_tile_id(slice_idx);
+        // Per-batch staging region, as on the chunk-paged layout. Free here: this intermediate is
+        // input-shaped, and the slice addressing above spans exactly input_batch_num_pages tiles,
+        // so the B regions tile a buffer that was already allocated at full input size.
+        interm_slice_base = b * input_batch_num_pages + slice_base_tile_id(slice_idx);
         output_batch_base = b * output_batch_num_pages;
     }
 
@@ -381,6 +386,7 @@ struct IntermSink</*Contiguous=*/true> {
     uint32_t interm_slice_chunk_base = 0;
     uint32_t interm_channel_chunk_base = 0;
     uint32_t penult_interm_channel_chunk_base = 0;
+    uint32_t penult_interm_batch_chunk_base = 0;
 
     // Headers for contiguous writes to the chunk-paged staging buffers (the main intermediate and the
     // penult intermediate region both use these). Their payload size is patched per packet.
@@ -415,15 +421,19 @@ struct IntermSink</*Contiguous=*/true> {
     }
 
     void begin_iteration(uint32_t b, uint32_t slice_idx) {
-        interm_slice_chunk_base = slice_idx * slice_C * chunks_per_channel;
+        // Each batch stages into its own region, so a batch never overwrites partial sums an
+        // earlier one has yet to consume. This is what lets the per-batch barrier go away.
+        interm_slice_chunk_base = (b * ring_size + slice_idx) * slice_C * chunks_per_channel;
+        penult_interm_batch_chunk_base = b * slice_C * chunks_per_channel;
         output_batch_base = b * output_batch_num_pages;
     }
 
     void begin_channel(uint32_t c) {
         interm_channel_chunk_base = interm_slice_chunk_base + c * chunks_per_channel;
         // The penult intermediate has no slice_idx axis (each device receives exactly one such
-        // contribution, from exactly one neighbor, at exactly one iteration).
-        penult_interm_channel_chunk_base = c * chunks_per_channel;
+        // contribution, from exactly one neighbor, at exactly one iteration), but it does carry the
+        // batch axis, for the same reason the main staging region does.
+        penult_interm_channel_chunk_base = penult_interm_batch_chunk_base + c * chunks_per_channel;
         output_tile_id_start = output_batch_base + c * output_channel_num_pages;
         output_tiles_read = start_tiles_read;
     }
@@ -537,7 +547,7 @@ void kernel_main() {
     uint32_t opposite_core_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);  // retained: fixed arg slot
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
@@ -546,6 +556,12 @@ void kernel_main() {
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    // (batch, channel) units this worker owns, as [unit_start, unit_end) with u = b * slice_C + c. All of
+    // them are processed inside every ring step. The page-major split gives every worker every unit and
+    // a fraction of the pages in each; the unit-major split gives it a contiguous group of units and
+    // every page within them.
+    const uint32_t unit_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t unit_end = get_arg_val<uint32_t>(arg_idx++);
     // Chunk-paged layout only: staging buffer for the 2nd-last iteration's direct-to-remote
     // contribution. The tiled layout scatter-writes that contribution into the remote output tensor
     // instead and leaves this address at 0.
@@ -656,11 +672,20 @@ void kernel_main() {
         noc_obj.async_writes_flushed();
     };
 
-    // The batch_ready_sem is incremented once per batch by the opposite-direction neighbour;
-    // instead of resetting it with set(0) after every batch
-    uint32_t batch_ready_target = 0;
-
-    for (uint32_t b = 0; b < input_tensor_B; ++b) {
+    // Ring step outermost, batches inside: every (batch, channel) unit this worker owns is sent within
+    // each ring step, mirroring the reader. Each batch stages into its own region on the receiving
+    // side, so all batches can be in flight in one step and no barrier is needed between them. The
+    // per-step sync counters therefore span all of the worker's units.
+    // Fused with a batched producer (fuse_op, B > 1): one ring traversal per batch, so the reduce-scatter
+    // of batch b overlaps the matmul producing batch b+1, which is what the fused op batches for. In every
+    // other case a single traversal carries all of the worker's units, one ring step at a time.
+    constexpr uint32_t num_traversals = (fuse_op && input_tensor_B > 1) ? input_tensor_B : 1;
+    for (uint32_t t = 0; t < num_traversals; ++t) {
+        // Units of this traversal: the worker's whole range, or its intersection with batch t.
+        const uint32_t t_unit_start =
+            num_traversals == 1 ? unit_start : (unit_start > t * slice_C ? unit_start : t * slice_C);
+        const uint32_t t_unit_end =
+            num_traversals == 1 ? unit_end : (unit_end < (t + 1) * slice_C ? unit_end : (t + 1) * slice_C);
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
         int slice_idx = my_chip_id + ring_size_by_2;  // start with slice belonging to device half-way across in ring
         uint32_t num_iters = ring_size_by_2 + 1;
@@ -710,13 +735,14 @@ void kernel_main() {
                 slice_idx = (uint32_t)slice_idx - ring_size;
             }
 
-            interm_sink.begin_iteration(b, slice_idx);
-
             uint32_t chunk_count = 0;
             uint32_t even_chunk_count = 0;
             uint32_t odd_chunk_count = 0;
-            for (uint32_t c = 0; c < slice_C; ++c) {
+            for (uint32_t u = t_unit_start; u < t_unit_end; ++u) {
+                const uint32_t b = u / slice_C;
+                const uint32_t c = u % slice_C;
                 // reset addr counters
+                interm_sink.begin_iteration(b, slice_idx);
                 interm_sink.begin_channel(c);
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
@@ -785,7 +811,7 @@ void kernel_main() {
                         }  // if remote or local
                     }  // if skip or process
                 }  // while total_tiles_to_read
-            }  // for slice_C
+            }  // for units
 
             // Flush any residual chunks whose counter never reached chunks_per_sync inside the loop.
             if (write_to_remote) {
@@ -806,32 +832,10 @@ void kernel_main() {
             // Next slice idx
             slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
+    }  // for traversals
 
-        // Batch-ready barrier: a global all-workers sync so the next batch cannot clobber the reused
-        // intermediate scratch or out_ready_sem while this batch is still being consumed. Skipped on the
-        // final batch — there is no next batch to protect, and the reader gates receive-side completion.
-        // input_tensor_B is a compile-time constant, so this whole block compiles away for B == 1.
-        if (b + 1 < input_tensor_B) {
-            // Use neighbor unicast instead of multicast to support reshaped 'logical linear' mesh devices
-            uint64_t opposite_batch_ready_sem_noc_addr =
-                safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
-            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                fabric_direction_connection,
-                pkt_hdr_seminc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_batch_ready_sem_noc_addr, 0});
-            // Complete the eagerly staged mux connection: a worker with no pages has sent nothing before this.
-            mf.flush();
-            noc_obj.async_writes_flushed();
-
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ++batch_ready_target);
-        }
-    }
-
-    // Reset the out_ready semaphores once, only after all batches
-    if constexpr (input_tensor_B > 1) {
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
-    }
+    // batch_ready_sem is unused by this kernel: nothing separates batches any more. It stays in the
+    // runtime args so the host-side semaphore layout is unchanged.
 
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();

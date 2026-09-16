@@ -35,14 +35,29 @@ extern overlay::RemapperAPI g_remapper_configurator;
 
 // ring_size is uint32 L1-aligned units so a DFB can span full Quasar L1 (~4 MB).
 // Cursor byte-offset is not stored: it is derived from wr_entry_idx (advances in lockstep
-// with stride_size / stride_size_tiles). That keeps sizeof(LocalDFBInterface)==89 so
-// g_dfb_interface[16] + logical map fit in pack TLS (2048) with the required 256B stack.
+// with stride_size / stride_size_tiles).
 struct DFBTCSlot {
     uint32_t base_addr;
     uint32_t ring_size;
     uint16_t wr_entry_idx;
     uint16_t base_entry_idx;
     dfb::PackedTileCounter packed_tile_counter;
+} __attribute__((packed));
+
+extern thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS];
+
+// Preserve the iface.tc_slots[i] API while allocating only the slots each active Pack DFB needs.
+// slot_base indexes that DFB's contiguous slice of g_dfb_tc_slots.
+struct DFBTCSlotSpan {
+    uint8_t slot_base;
+
+    inline __attribute__((always_inline)) DFBTCSlot& operator[](uint32_t index) {
+        return g_dfb_tc_slots[slot_base + index];
+    }
+
+    inline __attribute__((always_inline)) const DFBTCSlot& operator[](uint32_t index) const {
+        return g_dfb_tc_slots[slot_base + index];
+    }
 } __attribute__((packed));
 
 struct LocalDFBInterface {
@@ -53,11 +68,12 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
-    DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
+    DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 89, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 12, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -107,11 +123,11 @@ struct LocalDFBInterface {
     uint8_t tc_idx;
 
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
-    uint8_t threshold;        // When this value is met, ISR to post/ack credits will fire.
+    uint8_t threshold;  // When this value is met, ISR to post/ack credits will fire.
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
-    uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
+    uint8_t broadcast_tc;   // DM-DM ALL producer: post to all TCs instead of round-robin
     uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
 
     uint16_t num_entries;
