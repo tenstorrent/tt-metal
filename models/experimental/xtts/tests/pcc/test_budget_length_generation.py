@@ -5,11 +5,13 @@
 
 ``xtts_demo.py`` samples (temperature 0.65), so the number of codes it vocodes changes from run
 to run, and a pass can spend its whole ``GENERATION.max_tokens`` budget without emitting STOP.
-The scheduled e2e job crashed there on 2026-09-16: a HiFi-GAN residual ``conv1d`` on the
-interleaved path built a program whose static circular buffers clashed with the L1 buffers the
-decode trace keeps alive ("Statically allocated circular buffers in program 1429 clash with L1
-buffers"). The perf test (188 codes) and the empty-generation test never reach that length, so
-this pins the budget-length path deterministically with ``min_new_tokens == max_new_tokens``.
+The scheduled e2e job crashed on 2026-09-16 at one sampled length: a HiFi-GAN residual ``conv1d``
+on the interleaved path built a program whose static circular buffers clashed with the L1 buffers
+the traced pipeline keeps alive around the vocoder ("Statically allocated circular buffers in
+program 1429 clash with L1 buffers"). An exact-length sweep over budgets 150..239 reproduced it
+at budgets 223, 224 and 225 (222-224 codes) and nowhere else. The perf test (188 codes) and the
+empty-generation test never reach those lengths, so this pins the path deterministically with
+``min_new_tokens == max_new_tokens`` at a clashing budget and at the full budget.
 """
 import pytest
 import torch
@@ -22,10 +24,10 @@ from models.experimental.xtts.tests.pcc.test_empty_generation import SAMPLING, _
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": SESSION_TRACE_REGION}], indirect=True
 )
-def test_budget_length_generation_vocodes(device, xtts_state_dict, reset_seeds):
-    """A pass that runs out its full code budget still vocodes through the traced path."""
+@pytest.mark.parametrize("budget", [223, GENERATION.max_tokens], ids=["clash_223", "max"])
+def test_budget_length_generation_vocodes(device, xtts_state_dict, reset_seeds, budget):
+    """A pass that runs out its code budget still vocodes through the traced path."""
     tt, wav, spk_tt, padded, real_len, pad_to = _inputs(device, xtts_state_dict)
-    budget = GENERATION.max_tokens
     wav_dev, codes, perf = tt.inference_fully_traced(
         padded,
         wav,

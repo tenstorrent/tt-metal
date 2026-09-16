@@ -5,6 +5,7 @@ import math
 
 import torch
 import ttnn
+from loguru import logger
 
 from models.common.lightweightmodule import LightweightModule
 
@@ -171,20 +172,22 @@ class TtConv1d(LightweightModule):
         if conv_config_overrides:
             for _k, _v in conv_config_overrides.items():
                 setattr(self.conv_config, _k, _v)
-        # Retry config for shapes whose auto-sharded program clashes with live L1 buffers (the
-        # decode trace keeps its tensors allocated while the vocoder runs): the same config with
-        # act/weight double buffering off, which halves those circular buffers at equal output.
-        self._single_buffer_config = ttnn.Conv1dConfig(
-            weights_dtype=weights_dtype,
-            deallocate_activation=False,
-            activation=activation,
-        )
-        if conv_config_overrides:
-            for _k, _v in conv_config_overrides.items():
-                setattr(self._single_buffer_config, _k, _v)
-        self._single_buffer_config.enable_act_double_buffer = False
-        self._single_buffer_config.enable_weights_double_buffer = False
-        self._single_buffer_keys = set()
+        # Fallback configs for shapes whose auto-sharded program's static circular buffers clash
+        # with the L1 buffers the traced pipeline keeps alive around the vocoder. Tried in order
+        # on a clash, each shrinking the program's L1 footprint further; the output is the same.
+        def _variant(**over):
+            cfg = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False, activation=activation)
+            for _k, _v in {**(conv_config_overrides or {}), **over}.items():
+                setattr(cfg, _k, _v)
+            return cfg
+
+        single = {"enable_act_double_buffer": False, "enable_weights_double_buffer": False}
+        self._fallback_configs = [
+            _variant(**single),
+            _variant(**single, act_block_h_override=32),
+            _variant(**single, act_block_h_override=32, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        ]
+        self._fallback_level = {}
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=math_fidelity,
@@ -211,17 +214,23 @@ class TtConv1d(LightweightModule):
             combined = ttnn.to_layout(ttnn.add(self._raw_bias_fp32, cond_bias), ttnn.ROW_MAJOR_LAYOUT)
             bias_tensor = ttnn.from_device(combined)
             ttnn.deallocate(combined)
-        config = self._single_buffer_config if key in self._single_buffer_keys else self.conv_config
-        try:
-            out, out_length, [weight, bias] = self._conv1d(x, bias_tensor, batch_size, input_length, config)
-        except RuntimeError as e:
-            if config is self._single_buffer_config or not is_l1_clash(e):
-                raise
-            self._single_buffer_keys.add(key)
-            self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
-            out, out_length, [weight, bias] = self._conv1d(
-                x, bias_tensor, batch_size, input_length, self._single_buffer_config
-            )
+        level = self._fallback_level.get(key, -1)
+        while True:
+            config = self.conv_config if level < 0 else self._fallback_configs[level]
+            try:
+                out, out_length, [weight, bias] = self._conv1d(x, bias_tensor, batch_size, input_length, config)
+                break
+            except RuntimeError as e:
+                if not is_l1_clash(e) or level + 1 >= len(self._fallback_configs):
+                    raise
+                level += 1
+                logger.warning(
+                    f"conv1d {self.in_channels}->{self.out_channels} k={self.kernel_size} d={self.dilation} "
+                    f"L={input_length}: static circular buffers clash with live L1 buffers, retrying with "
+                    f"fallback config {level}"
+                )
+                self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
+        self._fallback_level[key] = level
         self.tt_weight = weight
         if fold:
             self._folded_bias[fold_key] = (cond_bias, bias)
