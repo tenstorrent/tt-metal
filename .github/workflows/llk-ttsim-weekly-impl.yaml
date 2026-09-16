@@ -236,12 +236,6 @@ jobs:
             "${REF}"
           git -C ttsim-private checkout --detach FETCH_HEAD
 
-      - name: Install g++
-        if: ${{ steps.arch.outputs.name == 'quasar' }}
-        run: |
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential
-
       - name: Build Quasar libttsim.so
         if: ${{ steps.arch.outputs.name == 'quasar' }}
         shell: bash
