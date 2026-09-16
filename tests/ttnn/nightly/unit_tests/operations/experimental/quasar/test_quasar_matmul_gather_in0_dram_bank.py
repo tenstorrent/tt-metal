@@ -22,9 +22,7 @@ qsr = ttnn._ttnn.operations.experimental.quasar
 )
 def test_quasar_gather_in0_unknown_worker_y_is_fatal(device):
     """Ring GRID first-col workers (1,3) and (2,3) have y=3, not in WH map {0,4,5,9}."""
-    worker_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in GRID]
-    )
+    worker_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in GRID])
     dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})
     in0_mc = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
