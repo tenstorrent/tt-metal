@@ -316,13 +316,8 @@ void kernel_main() {
             // fill is only valid for non-negative inputs). A thread's ring entries are strided, so
             // every thread recovers the ring base and idempotently fills it all. Direct CPU fill +
             // flush: clear_out_tiles' NoC self-loopback read is unreliable on the Quasar sim.
-            DataflowBuffer icb_clear(in_cb_id);
-            const uint32_t icb_base = icb_clear.get_write_ptr() - get_my_thread_id() * icb_clear.get_entry_size();
-            const uint32_t clear_bytes = icb_clear.get_entry_size() * multi_buffering_factor * get_num_threads();
-            fill_with_val(icb_base, clear_bytes / 2, bf16_init_value);
-#ifdef ARCH_QUASAR
-            flush_l2_cache_range(static_cast<uintptr_t>(icb_base), static_cast<size_t>(clear_bytes));
-#endif
+            // DIAGNOSTIC PERF LEG: whole-ring identity fill removed (results may be WRONG for max pool;
+            // this leg only measures how much of the per-program fixed cost the fill accounts for).
         }
     }
 
