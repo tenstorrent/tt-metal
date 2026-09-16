@@ -570,8 +570,8 @@ void py_module(nb::module_& m) {
             "swiglu_packed",
             &ttml::ops::swiglu_packed,
             nb::arg("packed"),
-            "Packed-SwiGLU gating: `packed` [.., .., R, 2*I] (gate|up) -> h = silu(gate) * up "
-            "[.., .., R, I].");
+            "Packed-SwiGLU gating: `packed` [.., R, 2*I] (gate|up) -> h = silu(gate) * up "
+            "[.., R, I].");
     }
 
     {

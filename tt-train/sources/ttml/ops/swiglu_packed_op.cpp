@@ -4,7 +4,6 @@
 
 #include "swiglu_packed_op.hpp"
 
-#include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"

@@ -29,9 +29,10 @@ MAX_ULP_P99 = 2.5
 MAX_ULP_P99_DGATE = 10.0
 
 # (batch, S, I). I/32 of 1..4 covers every block size get_block_size(Wt, 4) can pick; I=512
-# adds a row spanning many blocks; the last is the only case with batch > 1 and with
-# total_rows (128) above the core count, which is what splits work into two compute groups.
-SHAPES = [(1, 32, 32), (1, 64, 64), (1, 32, 96), (1, 128, 128), (1, 64, 512), (2, 2048, 128)]
+# adds a row spanning many blocks; (2, 2048, 128) is the only case with batch > 1; 131 tile-rows
+# of I=32 make 131 blocks, which neither an 8x8 nor a 13x10 grid divides evenly, so both compute
+# groups run and the runtime-arg walk crosses the group boundary.
+SHAPES = [(1, 32, 32), (1, 64, 64), (1, 32, 96), (1, 128, 128), (1, 64, 512), (2, 2048, 128), (1, 4192, 32)]
 AUTOGRAD_SHAPES = [(1, 64, 64), (2, 128, 128)]
 
 
@@ -117,6 +118,30 @@ class TestBackward:
         )
         assert_backward(to_host(returned), gate, up, dh, 64, "bw preallocated returned")
         assert_backward(to_host(preallocated), gate, up, dh, 64, "bw preallocated in place")
+
+
+class TestProgramCache:
+    """A second launch of a shape hits the cached program, so only override_runtime_arguments hands
+    the kernels the new buffer addresses. Every launch's tensors stay alive until the end so a
+    later one cannot land at an earlier one's address."""
+
+    def test_forward_reads_the_new_buffers(self):
+        alive = []
+        for seed in (1, 2):
+            gate, up, _ = inputs(1, 64, 64, seed=seed)
+            packed = to_device(pack(gate, up))
+            h = ttml.ops.metal.swiglu_packed_fw(packed.get_value())
+            alive.append((packed, h))
+            assert_forward(to_host(h), gate, up, f"fw relaunch seed={seed}")
+
+    def test_backward_reads_the_new_buffers(self):
+        alive = []
+        for seed in (1, 2):
+            gate, up, dh = inputs(1, 64, 64, seed=seed)
+            packed, dh_dev = to_device(pack(gate, up)), to_device(dh)
+            dpacked = ttml.ops.metal.swiglu_packed_bw(packed.get_value(), dh_dev.get_value())
+            alive.append((packed, dh_dev, dpacked))
+            assert_backward(to_host(dpacked), gate, up, dh, 64, f"bw relaunch seed={seed}")
 
 
 class TestAutogradWrapper:
