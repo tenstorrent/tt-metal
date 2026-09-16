@@ -651,6 +651,40 @@ def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
     assert _ci_provenance()["run_id"] == "999-wormhole-3"
 
 
+def test_pipeline_is_pr_for_a_pull_request(monkeypatch):
+    monkeypatch.delenv("PIPELINE", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+
+    assert _ci_provenance()["pipeline"] == "pr"
+
+
+def test_pipeline_defaults_to_nightly_without_an_explicit_value(monkeypatch):
+    monkeypatch.delenv("PIPELINE", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+
+    assert _ci_provenance()["pipeline"] == "nightly"
+
+
+def test_explicit_pipeline_wins_over_the_event_guess(monkeypatch):
+    """The post-merge baseline run is a push, indistinguishable from a nightly.
+
+    Without the override it would label itself "nightly" and land in the nightly
+    history, where the gate would then compare a full speed-of-light sweep
+    against a PR's L1_TO_L1 run.
+    """
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setenv("PIPELINE", "baseline")
+
+    assert _ci_provenance()["pipeline"] == "baseline"
+
+
+def test_an_explicit_pipeline_is_not_overridden_on_a_pull_request(monkeypatch):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("PIPELINE", "baseline")
+
+    assert _ci_provenance()["pipeline"] == "baseline"
+
+
 def test_prune_keeps_the_current_run_however_old_it_looks(tmp_path):
     # The current run survives by name, not by being the newest: an mtime that is
     # older than its neighbours (a clock step, a filesystem that lies) must not be

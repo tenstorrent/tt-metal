@@ -143,7 +143,8 @@ DB_SCHEMA = [
     Column("arch", "string", False, "provenance", origin="ci"),
     Column("run_id", "string", False, "provenance", origin="ci"),
     Column("timestamp", "string", False, "provenance", origin="ci"),
-    Column("pipeline", "string", False, "provenance", origin="ci"),  # pr | nightly
+    # pr | nightly | baseline
+    Column("pipeline", "string", False, "provenance", origin="ci"),
     Column("pr_number", "string", True, "provenance", origin="ci"),  # NULL for nightly
 ]
 

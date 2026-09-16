@@ -87,11 +87,33 @@ def test_publish_rejects_unknown_pipeline(tmp_path, monkeypatch):
     sub.mkdir()
     _write_csv(sub / "perf_a.csv", pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4]}))
     _set_provenance(monkeypatch)
-    monkeypatch.setenv("PIPELINE", "staging")  # not PR / nightly
+    monkeypatch.setenv("PIPELINE", "staging")  # not pr / nightly / baseline
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         ValueError, match="PIPELINE"
     ):
         publish(str(tmp_path), str(tmp_path / "x.parquet"), "wormhole")
+
+
+def test_publish_accepts_the_baseline_pipeline(tmp_path, monkeypatch):
+    """The post-merge run the PR gate compares against.
+
+    It is the same L1_TO_L1 non-speed-of-light selection the gate measures, so
+    it must be separable from the nightly full sweep by the pipeline column —
+    the gate filters on it, and the run_id and file name inherit it.
+    """
+    sub = tmp_path / "perf_a"
+    sub.mkdir()
+    _write_csv(
+        sub / "perf_a.csv",
+        pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4], "mean(L1_TO_L1)": [900.0]}),
+    )
+    _set_provenance(monkeypatch)
+    monkeypatch.setenv("PIPELINE", "baseline")
+
+    out = tmp_path / "run.parquet"
+    publish(str(tmp_path), str(out), "wormhole")
+
+    assert set(pq.read_table(out).to_pandas()["pipeline"]) == {"baseline"}
 
 
 def test_publish_quasar_uses_quasar_schema(tmp_path, monkeypatch):
