@@ -105,6 +105,14 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+// Always emit positional arguments, including an empty list, in the generated
+// files sent to both the local compiler and the remote JIT server.
+void write_ct_args_header(const string& out_dir, const JitBuildSettings& settings) {
+    settings.process_compile_time_args([&out_dir](const std::vector<uint32_t>& args) {
+        write_file(out_dir + string(jit_build::utils::CT_ARGS_HEADER), jit_build::utils::format_ct_args_header(args));
+    });
+}
+
 // Writes the named compile-time-arg map header, which build.cpp force-includes (-include) in place
 // of a -DKERNEL_COMPILE_TIME_ARG_MAP define; see NAMED_CT_ARG_MAP_HEADER for why the map cannot ride
 // on the command line. Emitted only for the legacy map API, including Metal 2.0 kernels.
@@ -722,6 +730,7 @@ void jit_build_genfiles_kernel_include(
     }
     // No #include line: this one is force-included by the compile recipe so the map is defined
     // before any header that reads it (api/compile_time_args.h) can be pulled in.
+    write_ct_args_header(out_dir, settings);
     write_named_ct_arg_map_header(out_dir, settings);
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
@@ -759,6 +768,7 @@ void jit_build_genfiles_triscs_src(
     }
     // No prolog #include: force-included by the compile recipe instead, so the map is defined ahead
     // of any header that reads it (api/compile_time_args.h).
+    write_ct_args_header(out_dir, settings);
     write_named_ct_arg_map_header(out_dir, settings);
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
