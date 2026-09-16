@@ -10,9 +10,11 @@ arguments and never touches a block class.
 from .quasar_datacopy import QuasarDataCopyGolden
 from .quasar_eltwise import QuasarEltwiseBinaryGolden
 from .quasar_matmul import QuasarMatmulGolden
+from .quasar_reuse_dest import QuasarEltwiseBinaryReuseDestGolden
 
 __all__ = [
     "QuasarDataCopyGolden",
     "QuasarEltwiseBinaryGolden",
+    "QuasarEltwiseBinaryReuseDestGolden",
     "QuasarMatmulGolden",
 ]

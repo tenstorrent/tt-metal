@@ -13,12 +13,14 @@ from .datacopy import DataCopyGolden
 from .eltwise import EltwiseBinaryGolden
 from .golden import Golden, OpConfig
 from .matmul import MatmulGolden
+from .reuse_dest import EltwiseBinaryReuseDestGolden
 
 __all__ = [
     "Chain",
     "DataCopyGolden",
     "EltwiseBinaryGolden",
     "Golden",
+    "EltwiseBinaryReuseDestGolden",
     "MatmulGolden",
     "OpConfig",
     "Registers",

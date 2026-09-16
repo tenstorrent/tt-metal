@@ -120,6 +120,82 @@ class DataTransferBlocks(ABC):
         geometry.setdefault("use_srcs", True)
         return self.l1_to_srcA(l1_bytes, l1_format, src_format, **geometry)
 
+    def l1_to_dest(
+        self,
+        l1_bytes: L1Buffer,
+        l1_format: DataFormat,
+        dest_format: DataFormat = DataFormat.Float32,
+        **geometry,
+    ) -> torch.Tensor:
+        """Load an L1 buffer straight into Dest, bypassing the src registers.
+
+        The path an op takes to seed Dest before a feedback loop. The value
+        lands at Dest precision, not src-register precision, so it keeps more
+        mantissa than the same buffer read through ``l1_to_srcA`` would.
+        """
+        self._check_supported(l1_format)
+        self._check_dest_format(dest_format)
+        values = self.unpack_from_l1(l1_bytes, l1_format, **geometry)
+        return self._to_dest_storage(values, dest_format)
+
+    def dest_to_srcA(
+        self,
+        dest_values: torch.Tensor,
+        dest_format: DataFormat = DataFormat.Float32,
+        src_format: DataFormat = DataFormat.Float16_b,
+    ) -> torch.Tensor:
+        """Move Dest back into SrcA, so an op can use its own result as an operand.
+
+        Dest is wider than a src register, so the round trip is lossy — modelling
+        that loss where the hardware takes it is the point of having this block.
+        See :meth:`_dest_to_src_storage` for what each Dest format costs.
+        """
+        return self._dest_to_src_storage(dest_values, dest_format, src_format)
+
+    def dest_to_srcB(
+        self,
+        dest_values: torch.Tensor,
+        dest_format: DataFormat = DataFormat.Float32,
+        src_format: DataFormat = DataFormat.Float16_b,
+    ) -> torch.Tensor:
+        """Move Dest back into SrcB. See :meth:`dest_to_srcA`."""
+        return self._dest_to_src_storage(dest_values, dest_format, src_format)
+
+    @staticmethod
+    def _dest_to_src_storage(
+        values: torch.Tensor, dest_format: DataFormat, src_format: DataFormat
+    ) -> torch.Tensor:
+        """Re-quantize a Dest datum into a 19-bit src datum.
+
+        The conversion is driven by the **Dest** format, not the src format —
+        the src format is consulted only to decide whether a wide Dest needs its
+        exponent rebiasing into the 5-bit range. Every case is bit-slicing, so
+        nothing rounds: bits below the target width are dropped, not folded in.
+
+        * **Float16_b / Int16** keep 7 mantissa bits and zero-fill the low 3, so
+          a bf16 Dest does **not** come back with a src register's full 10.
+        * **Float16** passes as fp16 — 10 mantissa bits, 5-bit exponent.
+        * **Int32 saturates to INT8**, clamping to +/-127. A wide integer Dest
+          cannot survive the trip, and the clamp is silent.
+        * **Float32 / Tf32** keep 10 mantissa bits and the 8-bit exponent, unless
+          the src register is Float16, in which case the exponent is rebiased and
+          values below the fp16 normal range flush to zero.
+        """
+        if dest_format in (DataFormat.Float16_b, DataFormat.Int16):
+            # 7 explicit mantissa bits survive; the low 3 arrive as zeros.
+            raw = values.to(torch.float32).contiguous().view(torch.int32)
+            return (raw & ~((1 << (23 - 7)) - 1)).view(torch.float32)
+        if dest_format is DataFormat.Float16:
+            return values.to(torch.float16).to(torch.float32)
+        if dest_format is DataFormat.Int32:
+            # Only 7 magnitude bits plus a sign reach the src register.
+            return values.to(torch.float32).clamp(-127, 127).trunc()
+        if dest_format in (DataFormat.Float32, DataFormat.Tf32):
+            if src_format is DataFormat.Float16:
+                return DataTransferBlocks._to_src_storage(values, DataFormat.Float16)
+            return DataTransferBlocks._truncate_src_mantissa(values)
+        return DataTransferBlocks._to_src_storage(values, src_format)
+
     def dest_to_l1(
         self,
         dest_values: torch.Tensor,
@@ -236,10 +312,27 @@ class DataTransferBlocks(ABC):
 
     @staticmethod
     def _to_dest_storage(values: torch.Tensor, dest_format: DataFormat) -> torch.Tensor:
-        """Round `values` to what a Dest slot can hold."""
+        """Round `values` to what a Dest slot can hold.
+
+        The FPU produces no denormal result: a float Dest slot with a zero
+        exponent has a zero mantissa too, so anything below the format's
+        smallest normal lands as zero. Keeping the subnormal instead lets a
+        value the hardware zeroed survive to the packer, which rounds it *up*
+        onto the output lattice — a datum the device reports as 0 comes back as
+        the output format's smallest representable value. Only Float16 Dest
+        meets the threshold in practice; the wider formats bottom out near
+        2**-126.
+        """
         if not isinstance(values, torch.Tensor):
             values = torch.tensor(values)
-        return values.to(format_dict[dest_format])
+        narrowed = values.to(format_dict[dest_format])
+        if not narrowed.is_floating_point():
+            return narrowed
+        return torch.where(
+            narrowed.abs() < torch.finfo(narrowed.dtype).smallest_normal,
+            torch.zeros_like(narrowed),
+            narrowed,
+        )
 
     def pack_to_l1(
         self, tensor: torch.Tensor, l1_format: DataFormat, **geometry

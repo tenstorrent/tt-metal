@@ -444,13 +444,14 @@ def _mxint_block_aware_compare(
     two, so 2^floor(log2(amax)) == amax == max(|g|,|r|) and ULP == block scale,
     preserving the original MxInt2 behavior.
 
-    Tilizes first to match HW's block layout (32-element block = one face
-    row-pair), so block scales line up with how HW derived them.
+    Groups the tensors flat, in the order they are stored. Both sides arrive
+    in the packer's order already -- the golden's quantizer reshapes its flat
+    tensor into 32s and the result read back from L1 is on the lattice that
+    grouping produced -- so tilizing here would re-cut the blocks at a boundary
+    neither side ever used, and score each element against some other block's
+    scale. ``_mxfp_block_aware_compare`` groups flat for the same reason.
     """
-    from helpers.tilize_untilize import tilize_block, untilize_block
-
     BLOCK = 32
-    TILE_SIZE = 1024
 
     g_flat = golden.float().flatten()
     r_flat = result.float().flatten()
@@ -459,14 +460,8 @@ def _mxint_block_aware_compare(
     if n == 0:
         return torch.ones(0, dtype=torch.bool)
 
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        g_til = tilize_block(g_flat, tile_dim, DataFormat.Float32).flatten()
-        r_til = tilize_block(r_flat, tile_dim, DataFormat.Float32).flatten()
-    else:
-        g_til = g_flat
-        r_til = r_flat
+    g_til = g_flat
+    r_til = r_flat
 
     # Batch over 32-element blocks (zero-pad a partial tail block; padded zeros
     # never raise a block's amax, so the real elements compare identically).
@@ -502,20 +497,9 @@ def _mxint_block_aware_compare(
     eps_guard = torch.finfo(torch.float32).eps * block_amax
     bound = (max_ulp_steps * (scale_factor / elem_scale) + eps_guard).unsqueeze(1)
 
-    is_valid_til = ((diff <= bound) | both_nan).reshape(-1)[:n]
-
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        is_valid = (
-            untilize_block(is_valid_til.float(), DataFormat.Float32, tile_dim)
-            .flatten()
-            .bool()
-        )
-    else:
-        is_valid = is_valid_til
-
-    return is_valid
+    # Blocks were cut in the input's own order, so the mask is already aligned
+    # with it and needs no reordering back.
+    return ((diff <= bound) | both_nan).reshape(-1)[:n]
 
 
 _RECORD_TEST_ORDER: bool = False
@@ -526,6 +510,14 @@ _RECORD_TEST_ORDER: bool = False
 #   max_steps = accepted adjacent-representable steps (same role as MxInt's
 #     max_ulp_steps). max_normal and min_subnormal define the element lattice
 #     used with each block's inferred E8M0 scale.
+#: Element mantissa bits per MX-float format, for anything that needs to reason
+#: in lattice steps the way _mxfp_block_aware_compare does.
+MXFP_MANTISSA_BITS = {
+    DataFormat.MxFp4: 1,
+    DataFormat.MxFp8R: 2,
+    DataFormat.MxFp8P: 3,
+}
+
 _MXFP_COMPARE_PARAMS = {
     DataFormat.MxFp4: (1, 2, 6.0, 2.0**-1),  # E2M1
     DataFormat.MxFp8R: (2, 2, 57344.0, 2.0**-16),  # E5M2

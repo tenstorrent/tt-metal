@@ -7,9 +7,9 @@ import pytest
 import torch
 from helpers.constraints import get_perf_math_operations
 from helpers.format_config import DataFormat
-from helpers.golden_generators import (
-    EltwiseBinaryGolden,
-    quantize_mx_tensor_chunked,
+from helpers.golden_generator.heavyweight.mismatch import describe_mismatch
+from helpers.golden_generator.heavyweight.operations.quasar_operations import (
+    QuasarEltwiseBinaryReuseDestGolden,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -49,7 +49,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import MXFP_MANTISSA_BITS, passed_test
 
 INPUT_DIMENSIONS = [
     [512, 32],
@@ -245,93 +245,28 @@ def test_eltwise_binary_reuse_dest_quasar(
     src_A_t = src_A_tilized.flatten()
     src_B_t = src_B_tilized.flatten()
 
-    tile_elements = num_faces * face_r_dim * FACE_C_DIM
     torch_format = format_dict[formats.output_format]
-    if formats.input_format.is_mx_format():
-        src_A_t = quantize_mx_tensor_chunked(
-            src_A_t.to(torch.bfloat16), formats.input_format
-        )
-        src_B_t = quantize_mx_tensor_chunked(
-            src_B_t.to(torch.bfloat16), formats.input_format
-        )
+    # No MX pre-quantization: the stimuli and the golden go through the same
+    # packer, so they land on the same lattice by construction. Pre-quantizing
+    # with a different rounding rule and then packing would round twice.
 
+    golden_dest = []
     if not is_perf:
-        # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
-        # storage is implied from the SrcA tag: Float16 input → FP16A (S1E5M10);
-        # Float16_b and plain MX inputs → BF16 (S1E8M7). Match that here so the
-        # golden's multi-tile accumulation rounds the same way as HW. The pack
-        # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
-        # detour, so the post-loop tensor is kept in fp32 — feeding bf16 into the
-        # MX quantize would discard 3 mantissa bits the HW preserves.
-        if use_mx:
-            internal_dtype = (
-                torch.float16
-                if formats.input_format == DataFormat.Float16
-                else torch.bfloat16
-            )
-            golden_dtype = torch.float32
-        else:
-            internal_dtype = torch_format
-            golden_dtype = torch_format
-        golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=golden_dtype)
-
-        eltwise_golden = (
-            EltwiseBinaryGolden()
-            if (mathop == MathOperation.Elwmul and math_fidelity == MathFidelity.LoFi)
-            else None
+        generate_golden = QuasarEltwiseBinaryReuseDestGolden(
+            mathop, math_fidelity, reuse_dest_type
         )
-
-        math_format_for_fidelity = (
-            (DataFormat.Float16_b if use_mx else formats.output_format)
-            if eltwise_golden is not None
-            else None
+        golden_tensor = generate_golden.run(
+            [src_A_t, src_B_t],
+            formats.input_format,
+            formats.output_format,
+            inner_dim=inner_dim,
+            output_tiles_in_block=output_tiles_in_block,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            # Keep Dest as it stood before the pack, so a failure can say
+            # whether the math or the packer produced the disagreement.
+            dest_out=golden_dest,
         )
-
-        for out_t in range(tile_cnt_output):
-            block_idx = out_t // output_tiles_in_block
-            tile_in_block = out_t % output_tiles_in_block
-            out_start = out_t * tile_elements
-            dest = src_A_t[out_start : out_start + tile_elements].to(internal_dtype)
-
-            for i in range(inner_dim):
-                input_tile_idx = (
-                    block_idx * input_tiles_in_block
-                    + i * output_tiles_in_block
-                    + tile_in_block
-                )
-                start = input_tile_idx * tile_elements
-                end = start + tile_elements
-                a_tile = src_A_t[start:end].to(internal_dtype)
-                b_tile = src_B_t[start:end].to(internal_dtype)
-                srcA, srcB = (
-                    (dest.clone(), b_tile)
-                    if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-                    else (a_tile, dest.clone())
-                )
-
-                if mathop == MathOperation.Elwadd:
-                    dest = srcA + srcB
-                elif mathop == MathOperation.Elwsub:
-                    dest = srcA - srcB
-                elif mathop == MathOperation.Elwmul:
-                    if eltwise_golden is not None:
-                        mask_dtype = format_dict[math_format_for_fidelity]
-                        srcA_m, srcB_m = eltwise_golden._apply_fidelity_masking(
-                            math_format_for_fidelity,
-                            srcA.to(mask_dtype),
-                            srcB.to(mask_dtype),
-                            0,
-                        )
-                        product = (
-                            (srcA_m.to(torch.float32) * srcB_m.to(torch.float32))
-                            .to(srcA_m.dtype)
-                            .to(internal_dtype)
-                        )
-                        dest = product
-                    else:
-                        dest = srcA * srcB
-
-            golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -403,6 +338,23 @@ def test_eltwise_binary_reuse_dest_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    if not passed_test(golden_tensor, res_tensor, formats.output_format):
+        pytest.fail(
+            describe_mismatch(
+                golden_tensor,
+                res_tensor,
+                context=(
+                    f"{formats.input_format}->{formats.output_format} "
+                    f"{mathop.name} {math_fidelity.name} {reuse_dest_type.name} "
+                    f"{dest_sync_mode.name} in={input_dimensions} "
+                    f"out={output_dimensions} inner_dim={inner_dim} "
+                    f"tiles_in_block={output_tiles_in_block}"
+                ),
+                datums_per_tile=num_faces * face_r_dim * FACE_C_DIM,
+                # Rank failures the way passed_test judges them: in lattice
+                # steps at each element's own magnitude, not absolute error.
+                mantissa_bits=MXFP_MANTISSA_BITS.get(formats.output_format, 0),
+                chain=generate_golden.last_chain,
+                dest=torch.cat(golden_dest) if golden_dest else None,
+            )
+        )
