@@ -14,6 +14,7 @@ from contextlib import contextmanager
 import pytest
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import format_dict
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.ulp import ulp_distance
 from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test
@@ -527,3 +528,36 @@ def test_the_displaced_figure_is_not_rounded_to_read_as_equal(captured_logs):
     logged = "\n".join(captured_logs)
     assert "max_ulp=26 is looser" in logged and "~25.6 steps" in logged
     assert "~26 steps" not in logged
+
+
+TORCH_INT_DTYPES = (
+    torch.int8,
+    torch.uint8,
+    torch.int16,
+    torch.int32,
+    torch.int64,
+    torch.bool,
+)
+INTEGER_FORMATS = [
+    fmt for fmt, dtype in format_dict.items() if dtype in TORCH_INT_DTYPES
+]
+assert INTEGER_FORMATS, "no integer DataFormats found; the derivation has broken"
+
+
+@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
+def test_a_budget_on_an_integer_format_raises(fmt):
+    """ULP is not a weaker gate for an integer format, it is a meaningless one: the values
+    are exact and the only sensible verdict is bit equality. The gate must refuse rather
+    than count steps over something that has none."""
+    golden = torch.ones(TILE_SIZE, dtype=format_dict[fmt])
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="no per-element ULP"
+    ):
+        passed_test(golden, golden.clone(), fmt, max_ulp=0)
+
+
+@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
+def test_an_integer_format_still_works_on_the_default_gate(fmt):
+    """Refusing the budget must not have broken the ordinary path for these formats."""
+    golden = torch.ones(TILE_SIZE, dtype=format_dict[fmt])
+    assert passed_test(golden, golden.clone(), fmt)
