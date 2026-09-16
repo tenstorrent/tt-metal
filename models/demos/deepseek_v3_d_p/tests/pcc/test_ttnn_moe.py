@@ -1120,7 +1120,17 @@ def _run_moe_case(
     [
         pytest.param(
             (4, 2),
-            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            fabric2d_device_params(
+                fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE,
+                # The union routed-expert op needs a bigger kernel-config ring than the default
+                # leaves, and the device is opened long before the module that would ask for it.
+                # Only when it is switched on, so the shipping two-op path keeps its own geometry.
+                worker_l1_size=(
+                    1_444_864
+                    if os.environ.get("TT_ROUTED_EXPERT_FUSE_DISPATCH") == "1"
+                    else ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE
+                ),
+            ),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
