@@ -236,6 +236,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/variable_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/variable_matmul/device/variable_matmul_program_factory.cpp
+    # Fused Gumbel-max sampling
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gumbel_sample/gumbel_sample.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gumbel_sample/device/gumbel_sample_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gumbel_sample/device/gumbel_sample_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})

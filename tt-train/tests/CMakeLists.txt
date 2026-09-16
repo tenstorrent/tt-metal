@@ -174,6 +174,14 @@ target_link_libraries(
         TTNN::TTNN
 )
 target_precompile_headers(moe_ffn_swiglu_benchmark REUSE_FROM ttml_pch)
+
+add_executable(gumbel_sample_benchmark benchmark/gumbel_sample_benchmark.cpp)
+target_link_libraries(
+    gumbel_sample_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
