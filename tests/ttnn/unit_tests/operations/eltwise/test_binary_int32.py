@@ -786,9 +786,9 @@ def test_binary_div_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[torch_input_tensor_b == 0] = (
-        1  # avoid division by zero since nan and inf are not representable in int32
-    )
+    torch_input_tensor_b[
+        torch_input_tensor_b == 0
+    ] = 1  # avoid division by zero since nan and inf are not representable in int32
 
     golden_function = ttnn.get_golden_function(ttnn.div)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -872,9 +872,9 @@ def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, ro
     torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
     torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(input_shapes)
 
-    torch_input_tensor_b[torch_input_tensor_b == 0] = (
-        1  # avoid division by zero since nan and inf are not representable in int32
-    )
+    torch_input_tensor_b[
+        torch_input_tensor_b == 0
+    ] = 1  # avoid division by zero since nan and inf are not representable in int32
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -1225,9 +1225,9 @@ def test_binary_divide_int32_full_range(input_shapes, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[torch_input_tensor_b == 0] = (
-        1  # avoid division by zero since nan and inf are not representable in int32
-    )
+    torch_input_tensor_b[
+        torch_input_tensor_b == 0
+    ] = 1  # avoid division by zero since nan and inf are not representable in int32
 
     golden_function = ttnn.get_golden_function(ttnn.divide)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
@@ -1566,7 +1566,9 @@ def test_binary_remainder_fmod_int32_sign_adjustment(ttnn_op, layout, device):
 def test_binary_remainder_fmod_int32_scalar_layout_and_extreme_values(ttnn_op, layout, divisor, device):
     # Reuse the INT32 endpoints, +/-2**30 large-value controls, and empirical
     # -2140947629 / -1 low-bit counterexample documented in the tensor test above.
-    torch_input_tensor = torch.tensor([-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32)
+    torch_input_tensor = torch.tensor(
+        [-(2**31), -2140947629, -(2**30), -1, 0, 1, 2**30, 2**31 - 1], dtype=torch.int32
+    )
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.int32,
@@ -1924,9 +1926,9 @@ def test_binary_remainder_fmod_int32_range_1e15(input_shapes, ttnn_op, device):
         input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
     )
 
-    torch_input_tensor_b[torch_input_tensor_b == 0] = (
-        1  # avoid division by zero since nan and inf are not representable in int32
-    )
+    torch_input_tensor_b[
+        torch_input_tensor_b == 0
+    ] = 1  # avoid division by zero since nan and inf are not representable in int32
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
