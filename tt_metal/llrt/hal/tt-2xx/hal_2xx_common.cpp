@@ -80,6 +80,12 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             defines.push_back("COMPILE_FOR_DISPATCH_ENGINE=1");
             break;
         }
+        case HalProgrammableCoreType::DRAM: {
+            TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
+            defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+            defines.push_back("COMPILE_FOR_DRISC");
+            break;
+        }
         default:
             TT_ASSERT(
                 false,
@@ -152,6 +158,12 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                 case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
             }
             break;
+        case HalProgrammableCoreType::DRAM:
+            if (!params.is_fw) {
+                TT_THROW("CCE kernel JIT is not implemented yet");
+            }
+            srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/drisc.cc");
+            break;
         default:
             TT_ASSERT(
                 false, "Unsupported programmable core type {} to query srcs", enchantum::to_string(params.core_type));
@@ -176,6 +188,9 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
         case HalProgrammableCoreType::DISPATCH:
             TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
             return fmt::format("dispatch_dm{}", params.processor_id);
+        case HalProgrammableCoreType::DRAM:
+            TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
+            return "drisc";
         default:
             TT_THROW(
                 "Unsupported programmable core type {} to query target name", enchantum::to_string(params.core_type));
