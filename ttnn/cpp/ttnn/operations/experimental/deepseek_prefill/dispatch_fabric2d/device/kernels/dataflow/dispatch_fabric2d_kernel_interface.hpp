@@ -134,18 +134,29 @@ constexpr uint32_t FO_PAGE_MASK = (1u << FO_PAGE_BITS) - 1u;
 constexpr uint32_t FO_HOP_MASK = (1u << FO_HOP_BITS) - 1u;
 static_assert(FO_PAGE_BITS + FO_HOP_BITS + FO_SLOT_BITS <= 32);
 
-// One multicast entry: the token, how many destinations it carries, then the packed destinations.
-// A token reaches at most one page per top-k pick, so topk bounds the list.
-constexpr uint32_t fo_entry_words(uint32_t topk) { return 2u + topk; }
+// Everything the routing pass needs to know about one global expert id, in ONE word, so the per-pick
+// inner loop is a single indexed load rather than a dispatch-table lookup followed by a linear search
+// over the destination chip's experts.
+//
+// The hop field is stored ALREADY SHIFTED to where a packed destination wants it, so building that
+// word is a mask and two ors. Bits 18 and 19 are the gap that keeps the slot field clear of it.
+constexpr uint32_t ES_SLOT_BITS = 16;                              // bucket index, extent * experts_per_chip of them
+constexpr uint32_t ES_SLOT_MASK = (1u << ES_SLOT_BITS) - 1u;
+constexpr uint32_t ES_LOCAL_BIT = 1u << 16;                        // the expert lives on this chip
+constexpr uint32_t ES_DIR_SHIFT = 17;                              // 0 clockwise, 1 counter-clockwise
+constexpr uint32_t ES_HOP_FIELD = FO_HOP_MASK << FO_HOP_SHIFT;     // hops away, in FanoutMetadata position
+// An expert of another dispatch group. Distinguishable from any live word because the fields above
+// leave the top bits clear.
+constexpr uint32_t ES_NOT_HERE = 0xFFFFFFFFu;
+static_assert(ES_SLOT_BITS <= 16 && (1u << ES_DIR_SHIFT) < (1u << FO_HOP_SHIFT));
+static_assert((ES_SLOT_MASK & ES_HOP_FIELD) == 0 && (ES_LOCAL_BIT & ES_HOP_FIELD) == 0);
 
-// Words per token the routing index needs. The unicast layout is 3 per (token, pick); the multicast
-// one is 2 directions x (token + count + dests). Only one mode runs, so they share the region -- but
-// which is larger flips with topk, so both sides must size it from the same expression.
-constexpr uint32_t routing_index_words_per_token(uint32_t topk) {
-    const uint32_t uni = 3u * topk;
-    const uint32_t mc = 2u * fo_entry_words(topk);
-    return uni > mc ? uni : mc;
-}
+// One multicast entry: the token, how many destinations it carries, the farthest of them, then the
+// packed destinations. A token reaches at most one page per top-k pick, so topk bounds the list.
+//
+// `far` is stored rather than re-derived by scanning the destinations, because the pass that emits
+// the entry already knows it and the own phase would otherwise recompute it per entry.
+constexpr uint32_t fo_entry_words(uint32_t topk) { return 3u + topk; }
 
 // Destinations one multicast page can carry. A token reaches at most one page per top-k pick, so this
 // is the top-k bound rather than anything about the ring.
@@ -299,11 +310,13 @@ enum ControlBlock : uint32_t {
     kCbCounts,
     kCbRegion,
     kCbTable,
+    kCbExpertSlot,
     kCbAlloc,
     kCbChipExperts,
-    kCbBucketLen,
+    kCbBucketFill,
     kCbBucketStart,
     kCbEntries,
+    kCbMcEntries,
     kCbMcCount,
     kCbReach,
     kCbInStart,
@@ -319,6 +332,10 @@ struct ControlGeometry {
     uint32_t experts_per_chip = 0;
     uint32_t topk = 0;
     uint32_t num_relay = 0;  // relay_chunks_per_stream(extent), the same for every stream
+    // The two modes build different routing indexes and only one of them ever runs, so each mode
+    // reserves only what it uses. Part of the geometry rather than a switch at the carve, because the
+    // host reserves and the kernel carves from this one struct.
+    uint32_t fanout = 0;
 };
 
 // Chunk-start slots. The two modes carve one region: unicast needs one per (relay chunk, expert),
@@ -346,11 +363,20 @@ constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t bl
         // The dispatch table carries a trailing sentinel column, so a padded token's unguarded lookup
         // lands on it and resolves to "not in this group".
         case kCbTable: return 4u * (g.num_routed_experts + 1u);
-        case kCbAlloc: return 4u * g.num_routed_experts;
+        // Indexed by the same expert id the table is, sentinel column included.
+        case kCbExpertSlot: return 4u * (g.num_routed_experts + 1u);
+        // Keyed by bucket slot, not by global expert id: only the experts of this dispatch group
+        // have an allocator, and the slot is what the per-pick lookup already yields.
+        case kCbAlloc: return 4u * g.extent * g.experts_per_chip;
         case kCbChipExperts: return 4u * g.extent * g.experts_per_chip;
-        case kCbBucketLen: return 4u * g.extent * g.experts_per_chip;
-        case kCbBucketStart: return 4u * g.extent * g.experts_per_chip;
-        case kCbEntries: return 4u * g.seq_len * routing_index_words_per_token(g.topk);
+        case kCbBucketFill: return 4u * g.extent * g.experts_per_chip;
+        // Inclusive prefix sums: a bucket's end is the next bucket's start, which is what bounds the
+        // fill, so there is one more of these than there are buckets.
+        case kCbBucketStart: return 4u * (g.extent * g.experts_per_chip + 1u);
+        // (token, page, top-k slot) per surviving pick. Under fan-out only this chip's OWN
+        // destinations go through a bucket, but the worst case is the same: every pick local.
+        case kCbEntries: return 4u * g.seq_len * 3u * g.topk;
+        case kCbMcEntries: return g.fanout ? 4u * 2u * g.seq_len * fo_entry_words(g.topk) : 0u;
         case kCbMcCount: return 4u * 2u;
         case kCbReach: return g.extent * 2u * mc_reach_row_bytes(g.extent);
         case kCbInStart: return 4u * control_chunk_start_slots(g);

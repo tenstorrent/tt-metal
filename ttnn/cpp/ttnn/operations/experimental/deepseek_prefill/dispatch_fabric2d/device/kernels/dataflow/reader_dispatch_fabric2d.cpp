@@ -34,11 +34,13 @@ struct Control {
     volatile tt_l1_ptr uint32_t* counts;        // num_routed_experts, summed over source chips
     volatile tt_l1_ptr uint32_t* region;        // num_routed_experts
     volatile tt_l1_ptr int32_t* table;          // num_routed_experts (+1 sentinel), expert -> chip in group
-    volatile tt_l1_ptr uint32_t* alloc;         // num_routed_experts, the running per-expert allocator
+    volatile tt_l1_ptr uint32_t* expert_slot;   // the same domain, packed as ES_* for the routing pass
+    volatile tt_l1_ptr uint32_t* alloc;         // extent x experts_per_chip, the running allocator by slot
     volatile tt_l1_ptr uint32_t* chip_experts;  // extent x experts_per_chip, ascending global expert id
-    volatile tt_l1_ptr uint32_t* bucket_len;    // extent x experts_per_chip
-    volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip
+    volatile tt_l1_ptr uint32_t* bucket_fill;   // extent x experts_per_chip, the fill cursor
+    volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip + 1, inclusive prefix sums
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
+    volatile tt_l1_ptr uint32_t* mc_entries;    // fanout: one entry per (token, direction)
     volatile tt_l1_ptr uint32_t* mc_count;      // fanout: entries emitted per direction
     // fanout: one reach row per (origin, direction), each padded to 64 bytes. An address rather than a
     // pointer because the pad makes the stride wider than the row.
@@ -60,6 +62,7 @@ dspf2d::ControlGeometry control_geometry() {
     g.experts_per_chip = ct.experts_per_chip;
     g.topk = ct.topk;
     g.num_relay = ct.num_relay;
+    g.fanout = ct.fanout;
     return g;
 }
 
@@ -78,11 +81,13 @@ Control carve_control() {
     c.counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbCounts));
     c.region = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbRegion));
     c.table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(take(dspf2d::kCbTable));
+    c.expert_slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbExpertSlot));
     c.alloc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbAlloc));
     c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbChipExperts));
-    c.bucket_len = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketLen));
+    c.bucket_fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketFill));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketStart));
     c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbEntries));
+    c.mc_entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcEntries));
     c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcCount));
     c.reach = take(dspf2d::kCbReach);
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbInStart));
@@ -144,66 +149,6 @@ void read_indices(const Control& c) {
     noc_async_read_barrier();
 }
 
-// chip -> its experts, ascending. Every chip on the axis builds the same inverse because the dispatch
-// table is replicated along it, which is what lets a relay expand a (origin, destination) descriptor into
-// the same experts_per_chip chunks the writer expanded it into.
-void build_chip_experts(const Control& c) {
-    for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
-        c.chip_experts[i] = 0;
-        c.bucket_len[i] = 0;
-    }
-    for (uint32_t row = 0; row < ct.extent; row++) {
-        uint32_t n = 0;
-        for (uint32_t e = 0; e < ct.num_routed_experts; e++) {
-            if (c.table[e] != (int32_t)row) {
-                continue;
-            }
-            ASSERT(n < ct.experts_per_chip);
-            c.chip_experts[row * ct.experts_per_chip + n] = e;
-            n++;
-        }
-        // The whole protocol sizes a relayed chunk group as experts_per_chip terms, so a chip hosting a
-        // different number would desynchronise the writer and the reader of a forwarding region.
-        ASSERT(n == ct.experts_per_chip);
-    }
-}
-
-// This chip's tokens per (destination chip, expert), replaying the production allocator so the page a
-// token lands on is the page that op would have given it.
-//
-// The production op advances the counter for a token it drops for want of capacity and emits nothing,
-// and so does this: the pages of every later token depend on it.
-void count_buckets(const Control& c) {
-    for (uint32_t e = 0; e < ct.num_routed_experts; e++) {
-        c.alloc[e] = c.offsets[ct.my_row * ct.num_routed_experts + e];
-    }
-    for (uint32_t t = 0; t < ct.seq_len; t++) {
-        volatile tt_l1_ptr uint16_t* idx =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>((uint32_t)c.indices + t * ct.indices_pad_stride);
-        for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t e = idx[k];
-            const int32_t row = c.table[e];
-            if (row == -1) {
-                continue;  // the expert is not in this dispatch group
-            }
-            if (c.alloc[e] >= ct.max_dispatch_buf_tokens) {
-                c.alloc[e]++;
-                continue;
-            }
-            c.alloc[e]++;
-            // Which of that chip's experts this is. Linear over experts_per_chip, which is 8 at
-            // production geometry.
-            const uint32_t base = (uint32_t)row * ct.experts_per_chip;
-            for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-                if (c.chip_experts[base + j] == e) {
-                    c.bucket_len[base + j]++;
-                    break;
-                }
-            }
-        }
-    }
-}
-
 // Tokens one origin chip owes one expert. Every chip on the axis computes this identically from the
 // replicated table, which is what lets a chip size a run it neither wrote nor receives. Rows are
 // absolute buffer positions, so the last origin closes against counts + region, not counts alone.
@@ -219,71 +164,21 @@ uint32_t run_len(const Control& c, uint32_t origin_row, uint32_t e) {
     return routed < room ? routed : room;
 }
 
-// The free consistency check, and the reason to build the index before moving a byte: this chip owes
-// expert e exactly as many tokens as its own row of the offsets table says, because that table was
-// derived from the same routing. Rows are absolute buffer positions, so the last row closes against
-// counts + region rather than counts alone.
-//
-// A mismatch means the replay diverged from the production allocator -- which would otherwise surface as
-// wrong pages or, worse, as a deadlock once chunk lengths are computed from these same numbers.
-void check_buckets(const Control& c) {
-    for (uint32_t row = 0; row < ct.extent; row++) {
-        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-            const uint32_t e = c.chip_experts[row * ct.experts_per_chip + j];
-            ASSERT(c.bucket_len[row * ct.experts_per_chip + j] == run_len(c, ct.my_row, e));
-        }
-    }
-}
-
 // Words per entry in a bucket: the token's index on this chip, the page it lands on at the
 // destination, and which top-k slot it came from. The last two both travel to the destination -- the
 // page as an address, the slot as metadata field 2.
 constexpr uint32_t ENTRY_WORDS = 3;
 
-// Fill each bucket with its (token, page, slot) triples, in token order. Replays the same allocator
-// count_buckets did, which is what makes the page a token lands on match the production op's.
-void fill_entries(const Control& c) {
-    for (uint32_t e = 0; e < ct.num_routed_experts; e++) {
-        c.alloc[e] = c.offsets[ct.my_row * ct.num_routed_experts + e];
-    }
-    for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
-        c.bucket_len[i] = 0;  // reused as the running cursor into each bucket
-    }
-    for (uint32_t t = 0; t < ct.seq_len; t++) {
-        volatile tt_l1_ptr uint16_t* idx =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>((uint32_t)c.indices + t * ct.indices_pad_stride);
-        for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t e = idx[k];
-            const int32_t row = c.table[e];
-            if (row == -1) {
-                continue;
-            }
-            if (c.alloc[e] >= ct.max_dispatch_buf_tokens) {
-                c.alloc[e]++;
-                continue;
-            }
-            const uint32_t page = c.alloc[e]++;
-            const uint32_t base = (uint32_t)row * ct.experts_per_chip;
-            for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-                if (c.chip_experts[base + j] != e) {
-                    continue;
-                }
-                const uint32_t b = base + j;
-                const uint32_t at = (c.bucket_start[b] + c.bucket_len[b]++) * ENTRY_WORDS;
-                c.entries[at + 0] = t;
-                c.entries[at + 1] = page;
-                c.entries[at + 2] = k;
-                break;
-            }
-        }
-    }
-}
-
 // Which way round the ring a destination lies, and how far. A tie at exactly half the ring goes
 // clockwise, matching how the reach table was built -- pick the other way here and a chunk's length
 // stops agreeing with what the origin actually sends.
 uint32_t mc_dir_of(uint32_t my_row, uint32_t dst_row, uint32_t* hop_out) {
-    const uint32_t cw = (dst_row + ct.extent - my_row) % ct.extent;
+    // Both rows are below extent, so the wrap is one conditional subtract rather than a modulo by a
+    // value only known at run time, which on this RISC is a called division.
+    uint32_t cw = dst_row + ct.extent - my_row;
+    if (cw >= ct.extent) {
+        cw -= ct.extent;
+    }
     const uint32_t ccw = ct.extent - cw;
     if (cw <= ccw) {
         *hop_out = cw;
@@ -293,55 +188,165 @@ uint32_t mc_dir_of(uint32_t my_row, uint32_t dst_row, uint32_t* hop_out) {
     return 1;
 }
 
-// Collapse each token to at most one entry per direction: the token, how many destinations it carries
-// that way, then one packed word per destination. Replays the same allocator the unicast path does --
-// same drop rule, same page numbering -- so both modes land a token on the page `dispatch` would.
-void build_multicast_entries(const Control& c) {
-    const uint32_t stride = dspf2d::fo_entry_words(ct.topk);
-    c.mc_count[0] = 0;
-    c.mc_count[1] = 0;
-    for (uint32_t e = 0; e < ct.num_routed_experts; e++) {
-        c.alloc[e] = c.offsets[ct.my_row * ct.num_routed_experts + e];
+// expert -> everything resolving a pick needs, in ONE word, and the chip -> experts inverse beside it.
+//
+// Every chip on the axis builds the same inverse because the dispatch table is replicated along it,
+// which is what lets a relay expand a (origin, destination) descriptor into the same experts_per_chip
+// chunks the writer expanded it into. The packed word is per-chip on top of that -- it carries the hop
+// and the direction as measured from HERE -- so that the routing pass never looks a destination up.
+void build_expert_slots(const Control& c) {
+    for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
+        c.chip_experts[i] = 0;
     }
-    for (uint32_t t = 0; t < ct.seq_len; t++) {
-        volatile tt_l1_ptr uint16_t* idx =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>((uint32_t)c.indices + t * ct.indices_pad_stride);
-        uint32_t n_dir[2] = {0, 0};
-        uint32_t packed[2][dspf2d::FO_MAX_DESTS];
+    for (uint32_t r = 0; r < ct.extent; r++) {
+        c.bucket_fill[r] = 0;  // per-row fill counter; size_buckets re-initialises the whole block
+    }
+    for (uint32_t e = 0; e < ct.num_routed_experts; e++) {
+        const int32_t row = c.table[e];
+        if (row < 0) {
+            c.expert_slot[e] = dspf2d::ES_NOT_HERE;
+            continue;
+        }
+        const uint32_t r = (uint32_t)row;
+        const uint32_t j = c.bucket_fill[r];
+        c.bucket_fill[r] = j + 1u;
+        ASSERT(j < ct.experts_per_chip);
+        const uint32_t slot = r * ct.experts_per_chip + j;
+        c.chip_experts[slot] = e;
+        uint32_t w = slot;
+        if constexpr (ct.fanout) {
+            if (r == ct.my_row) {
+                w |= dspf2d::ES_LOCAL_BIT;
+            } else {
+                uint32_t hop = 0;
+                const uint32_t d = mc_dir_of(ct.my_row, r, &hop);
+                w |= (d << dspf2d::ES_DIR_SHIFT) | ((hop & dspf2d::FO_HOP_MASK) << dspf2d::FO_HOP_SHIFT);
+            }
+        }
+        c.expert_slot[e] = w;
+    }
+    // A padded token's expert id indexes the dispatch table's trailing sentinel column, which resolves
+    // to "not in this group". This table is indexed by the same id, so it has to answer the same way.
+    c.expert_slot[ct.num_routed_experts] = dspf2d::ES_NOT_HERE;
+    for (uint32_t r = 0; r < ct.extent; r++) {
+        // The whole protocol sizes a relayed chunk group as experts_per_chip terms, so a chip hosting a
+        // different number would desynchronise the writer and the reader of a forwarding region.
+        ASSERT(c.bucket_fill[r] == ct.experts_per_chip);
+    }
+}
+
+// Where each bucket sits and how long it is, plus the per-expert allocator's starting point.
+//
+// The lengths come straight out of the offsets table rather than from a counting pass over the picks:
+// this chip owes expert e exactly run_len tokens, because that table was derived from the same
+// routing. Every chunk length in the protocol is already run_len, so taking the buckets from it makes
+// the two agree by construction instead of by an ASSERT this hardware compiles out -- and the counting
+// pass it replaces was half the prologue.
+//
+// bucket_start is an INCLUSIVE prefix sum: a bucket's end is the next one's start, which is what
+// bounds the fill and what gives the phases their run lengths.
+void size_buckets(const Control& c) {
+    const uint32_t n_slots = ct.extent * ct.experts_per_chip;
+    const uint32_t local_first = ct.my_row * ct.experts_per_chip;
+    uint32_t at = 0;
+    for (uint32_t b = 0; b < n_slots; b++) {
+        const uint32_t e = c.chip_experts[b];
+        c.alloc[b] = c.offsets[ct.my_row * ct.num_routed_experts + e];
+        // Under fan-out every remote destination is collapsed into a multicast entry instead, so only
+        // this chip's own experts get a bucket -- the local phase is their only reader.
+        const bool bucketed = !ct.fanout || (b >= local_first && b < local_first + ct.experts_per_chip);
+        c.bucket_start[b] = at;
+        c.bucket_fill[b] = at;
+        at += bucketed ? run_len(c, ct.my_row, e) : 0u;
+    }
+    c.bucket_start[n_slots] = at;
+}
+
+// The routing index, built in ONE pass over every (token, pick).
+//
+// Replaying the production op's allocator EXACTLY is what makes the pages byte-identical to it,
+// including the rule that a token past the buffer's capacity is dropped while its counter still
+// advances: the pages of every later token depend on it. A pick costs one indexed load to resolve --
+// bucket, hop and direction together -- and a survivor goes straight into the layout the running mode
+// consumes.
+//
+// Under fan-out that is one entry per (token, direction) carrying the packed destinations and their
+// farthest hop, plus a bucket entry for each destination on THIS chip. The two layouts have separate
+// blocks, so building one no longer overwrites the other and both come out of this pass.
+void build_routing_index(const Control& c) {
+    const uint32_t cap = ct.max_dispatch_buf_tokens;
+    const uint32_t mc_stride = dspf2d::fo_entry_words(ct.topk);
+    [[maybe_unused]] uint32_t mc_n[2] = {0, 0};
+    uint32_t idx_addr = (uint32_t)c.indices;
+    for (uint32_t t = 0; t < ct.seq_len; t++, idx_addr += ct.indices_pad_stride) {
+        volatile tt_l1_ptr uint16_t* idx = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(idx_addr);
+        [[maybe_unused]] uint32_t n_dir[2] = {0, 0};
+        [[maybe_unused]] uint32_t far_dir[2] = {0, 0};
+        [[maybe_unused]] uint32_t packed[2][dspf2d::FO_MAX_DESTS];
         for (uint32_t k = 0; k < ct.topk; k++) {
-            const uint32_t e = idx[k];
-            const int32_t row = c.table[e];
-            if (row == -1) {
+            const uint32_t w = c.expert_slot[idx[k]];
+            if (w == dspf2d::ES_NOT_HERE) {
+                continue;  // the expert is not in this dispatch group
+            }
+            const uint32_t slot = w & dspf2d::ES_SLOT_MASK;
+            const uint32_t page = c.alloc[slot];
+            c.alloc[slot] = page + 1u;
+            if (page >= cap) {
+                continue;  // dropped for want of capacity, with the counter already advanced
+            }
+            if constexpr (ct.fanout) {
+                if ((w & dspf2d::ES_LOCAL_BIT) == 0u) {
+                    const uint32_t d = (w >> dspf2d::ES_DIR_SHIFT) & 1u;
+                    if (n_dir[d] < dspf2d::FO_MAX_DESTS) {
+                        const uint32_t hop_field = w & dspf2d::ES_HOP_FIELD;
+                        packed[d][n_dir[d]++] =
+                            (page & dspf2d::FO_PAGE_MASK) | hop_field | (k << dspf2d::FO_SLOT_SHIFT);
+                        const uint32_t hop = hop_field >> dspf2d::FO_HOP_SHIFT;
+                        if (hop > far_dir[d]) {
+                            far_dir[d] = hop;
+                        }
+                    }
+                    continue;  // the cable carries these; only this chip's own go in a bucket
+                }
+            }
+            const uint32_t at = c.bucket_fill[slot];
+            // The bucket was sized from the offsets table, which the same routing produced. A table
+            // that disagrees would otherwise write over the next bucket, and the ASSERT below that
+            // reports the disagreement is compiled out on this hardware.
+            if (at >= c.bucket_start[slot + 1u]) {
                 continue;
             }
-            if (c.alloc[e] >= ct.max_dispatch_buf_tokens) {
-                c.alloc[e]++;
-                continue;
-            }
-            const uint32_t page = c.alloc[e]++;
-            if ((uint32_t)row == ct.my_row) {
-                continue;  // the local phase owns these; they never touch a cable
-            }
-            uint32_t hop = 0;
-            const uint32_t d = mc_dir_of(ct.my_row, (uint32_t)row, &hop);
-            if (n_dir[d] < dspf2d::FO_MAX_DESTS) {
-                packed[d][n_dir[d]++] = (page & dspf2d::FO_PAGE_MASK) |
-                                        ((hop & dspf2d::FO_HOP_MASK) << dspf2d::FO_HOP_SHIFT) |
-                                        (k << dspf2d::FO_SLOT_SHIFT);
-            }
-        }
-        for (uint32_t d = 0; d < 2; d++) {
-            if (n_dir[d] == 0) {
-                continue;
-            }
-            const uint32_t at = c.mc_count[d]++;
-            volatile tt_l1_ptr uint32_t* ent = c.entries + (d * ct.seq_len + at) * stride;
+            c.bucket_fill[slot] = at + 1u;
+            volatile tt_l1_ptr uint32_t* ent = c.entries + at * ENTRY_WORDS;
             ent[0] = t;
-            ent[1] = n_dir[d];
-            for (uint32_t i = 0; i < n_dir[d]; i++) {
-                ent[2 + i] = packed[d][i];
+            ent[1] = page;
+            ent[2] = k;
+        }
+        if constexpr (ct.fanout) {
+            for (uint32_t d = 0; d < 2u; d++) {
+                if (n_dir[d] == 0) {
+                    continue;
+                }
+                volatile tt_l1_ptr uint32_t* ent = c.mc_entries + (d * ct.seq_len + mc_n[d]++) * mc_stride;
+                ent[0] = t;
+                ent[1] = n_dir[d];
+                ent[2] = far_dir[d];
+                for (uint32_t i = 0; i < n_dir[d]; i++) {
+                    ent[3 + i] = packed[d][i];
+                }
             }
         }
+    }
+    if constexpr (ct.fanout) {
+        c.mc_count[0] = mc_n[0];
+        c.mc_count[1] = mc_n[1];
+    }
+    // Every bucket filled to exactly the length the offsets table sized it at -- the replay agreeing
+    // with the production allocator, which is the reason to build the index before moving a byte. A
+    // divergence would otherwise surface as wrong pages or, once chunk lengths are computed from these
+    // same numbers, as a deadlock.
+    for (uint32_t b = 0; b < ct.extent * ct.experts_per_chip; b++) {
+        ASSERT(c.bucket_fill[b] == c.bucket_start[b + 1u]);
     }
 }
 
@@ -466,22 +471,9 @@ uint32_t mc_chunk_len(const Control& c, uint32_t origin_row, uint32_t dir_idx, u
     return len;
 }
 
-// Farthest hop of a staged multicast entry, which is the class it is split by. Derived from the
-// entry rather than stored, so there is one definition of a destination's hop.
-uint32_t mc_entry_far(volatile tt_l1_ptr uint32_t* ent) {
-    uint32_t far = 0;
-    for (uint32_t i = 0; i < ent[1]; i++) {
-        const uint32_t hop = (ent[2 + i] >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK;
-        if (hop > far) {
-            far = hop;
-        }
-    }
-    return far;
-}
-
-// The same quantity for a page in flight. A separate function because the two carry their destinations
-// differently: an entry has an explicit count, a wire tail is zero-padded to FO_MAX_DESTS and hop 0 is
-// what marks an unused word.
+// Farthest hop of a page in flight, which is the class it is split by. A staged entry carries the
+// same quantity in a field, because the pass that emitted it already knew it; a wire tail does not,
+// because the 64 bytes are full -- it is zero-padded to FO_MAX_DESTS and hop 0 marks an unused word.
 uint32_t mc_tail_far(volatile tt_l1_ptr dspf2d::FanoutMetadata* tail) {
     uint32_t far = 0;
     for (uint32_t d = 0; d < dspf2d::FO_MAX_DESTS; d++) {
@@ -620,12 +612,13 @@ void own_phase(
         const bool direct = (dst_chip == ct.nbr_chip_id);
         for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
             const uint32_t b = dst_row * ct.experts_per_chip + j;
-            const uint32_t n = c.bucket_len[b];
+            const uint32_t bucket = c.bucket_start[b];
+            const uint32_t n = c.bucket_start[b + 1u] - bucket;
             const uint32_t from = slice_begin(n, split_idx, split_count);
             const uint32_t to = slice_begin(n, split_idx + 1, split_count);
             const uint32_t out_base = direct ? 0 : c.out_start[a * ct.experts_per_chip + j];
             for (uint32_t i = from; i < to; i++) {
-                const uint32_t at = (c.bucket_start[b] + i) * ENTRY_WORDS;
+                const uint32_t at = (bucket + i) * ENTRY_WORDS;
                 const uint32_t token = c.entries[at + 0];
                 const uint32_t page = c.entries[at + 1];
                 const uint32_t slot = ring.claim_slot();
@@ -748,11 +741,12 @@ void local_phase(const Control& c, Ring& ring, const InAcc& in_acc, const OutAcc
         tail->pad = 0;
         for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
             const uint32_t b = ct.my_row * ct.experts_per_chip + j;
-            const uint32_t n = c.bucket_len[b];
+            const uint32_t bucket = c.bucket_start[b];
+            const uint32_t n = c.bucket_start[b + 1u] - bucket;
             const uint32_t from = slice_begin(n, ct.stream, 2 * ct.num_links);
             const uint32_t to = slice_begin(n, ct.stream + 1, 2 * ct.num_links);
             for (uint32_t i = from; i < to; i++) {
-                const uint32_t at = (c.bucket_start[b] + i) * ENTRY_WORDS;
+                const uint32_t at = (bucket + i) * ENTRY_WORDS;
                 const uint32_t token = c.entries[at + 0];
                 const uint32_t page = c.entries[at + 1];
                 noc_async_read(in_acc.get_noc_addr(token), scratch_addr, ct.token_size_bytes);
@@ -820,8 +814,8 @@ void mc_own_phase(
 
     uint32_t q = 0;
     for (uint32_t i = 0; i < c.mc_count[dir_idx]; i++) {
-        volatile tt_l1_ptr uint32_t* ent = c.entries + (dir_idx * ct.seq_len + i) * stride;
-        const uint32_t far = mc_entry_far(ent);
+        volatile tt_l1_ptr uint32_t* ent = c.mc_entries + (dir_idx * ct.seq_len + i) * stride;
+        const uint32_t far = ent[2];
         // Counted for every entry, not just this link's: the rank is a position in the whole class.
         const uint32_t r = rank[far]++;
         if (mc_link_of(r, mc_class_size(c, ct.my_row, dir_idx, far)) != link) {
@@ -844,7 +838,7 @@ void mc_own_phase(
         uint32_t carried = 0;  // destinations left in the tail for chips further on
         uint32_t remote = 0;   // destinations this slot writes into the neighbour itself
         for (uint32_t d = 0; d < n_dests; d++) {
-            const uint32_t packed = ent[2 + d];
+            const uint32_t packed = ent[3 + d];
             if (((packed >> dspf2d::FO_HOP_SHIFT) & dspf2d::FO_HOP_MASK) >= mc_region_hop(1u)) {
                 tail->dests[carried++] = packed;
                 continue;
@@ -1007,21 +1001,14 @@ void kernel_main() {
     const Control c = carve_control();
     ASSERT(c.end <= ct.filled_addr);  // the control region must not run into the semaphores
 
-    read_control_tables(c);
-    read_indices(c);
-    build_chip_experts(c);
-    count_buckets(c);
-    check_buckets(c);
-
-    // Exclusive prefix sum, so the next increment can place each bucket's (token, page) pairs without
-    // moving anything already counted.
-    uint32_t at = 0;
-    for (uint32_t i = 0; i < ct.extent * ct.experts_per_chip; i++) {
-        c.bucket_start[i] = at;
-        at += c.bucket_len[i];
+    {
+        DeviceZoneScopedN("dspf2d_prologue");
+        read_control_tables(c);
+        read_indices(c);
+        build_expert_slots(c);
+        size_buckets(c);
+        build_routing_index(c);
     }
-
-    fill_entries(c);
 
     const auto in_acc =
         TensorAccessor(dspf2d::ReaderCtArgs::in_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kInputAddr));
@@ -1045,41 +1032,61 @@ void kernel_main() {
 
     Ring ring;
     if (ct.fanout) {
-        // The local phase reads the unicast routing index, and build_multicast_entries overwrites it:
-        // the two layouts share one region because only one mode ever runs. So this chip's own pages
-        // are placed before the index they were built from is replaced.
-        local_phase(c, ring, in_acc, out_acc, meta_acc);
-        build_multicast_entries(c);
-
+        {
+            DeviceZoneScopedN("dspf2d_mc_local");
+            local_phase(c, ring, in_acc, out_acc, meta_acc);
+        }
         // Clockwise is direction 0 on both sides -- mc_dir_of resolves a tie at exactly half the ring
         // the same way the reach table was built. Differ in one place and the lengths silently
         // disagree.
         const uint32_t dir_idx = ct.stream % 2u;
         const uint32_t link = ct.stream / 2u;
         const int32_t travel = (dir_idx == 0u) ? 1 : -1;
-        mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/false, c.in_start);
-        mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/true, c.out_start);
-
-        mc_own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link);
-        ring.flush_publish();
-        mc_relay_phase(c, ring, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link, travel);
-        ring.flush_publish();
+        {
+            DeviceZoneScopedN("dspf2d_mc_build");
+            mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/false, c.in_start);
+            mc_chunk_starts(c, dir_idx, link, travel, /*outgoing=*/true, c.out_start);
+        }
+        {
+            DeviceZoneScopedN("dspf2d_mc_own");
+            mc_own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link);
+            ring.flush_publish();
+        }
+        {
+            DeviceZoneScopedN("dspf2d_mc_relay");
+            mc_relay_phase(c, ring, out_acc, meta_acc, fwd_acc, my_region, dir_idx, link, travel);
+            ring.flush_publish();
+        }
     } else {
-        chunk_starts(c, ct.in_chunks_base, c.in_start);
-        chunk_starts(c, ct.out_chunks_base, c.out_start);
-
-        own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region);
-        ring.flush_publish();
-        relay_phase(c, ring, fwd_acc, my_region, nbr_row);
-        ring.flush_publish();
-        local_phase(c, ring, in_acc, out_acc, meta_acc);
+        {
+            DeviceZoneScopedN("dspf2d_starts");
+            chunk_starts(c, ct.in_chunks_base, c.in_start);
+            chunk_starts(c, ct.out_chunks_base, c.out_start);
+        }
+        {
+            DeviceZoneScopedN("dspf2d_own");
+            own_phase(c, ring, in_acc, out_acc, meta_acc, fwd_acc, my_region);
+            ring.flush_publish();
+        }
+        {
+            DeviceZoneScopedN("dspf2d_relay");
+            relay_phase(c, ring, fwd_acc, my_region, nbr_row);
+            ring.flush_publish();
+        }
+        {
+            DeviceZoneScopedN("dspf2d_local");
+            local_phase(c, ring, in_acc, out_acc, meta_acc);
+        }
     }
 
-    const uint32_t end_slot = ring.claim_slot();
-    slot_tail(end_slot)->cmd = dspf2d::CMD_END;
-    ring.mark_ready();
-    ring.flush_publish();
+    {
+        DeviceZoneScopedN("dspf2d_end");
+        const uint32_t end_slot = ring.claim_slot();
+        slot_tail(end_slot)->cmd = dspf2d::CMD_END;
+        ring.mark_ready();
+        ring.flush_publish();
 
-    noc_async_atomic_barrier();
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
+        noc_async_atomic_barrier();
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
+    }
 }
