@@ -179,10 +179,13 @@ diffs sit just above the 0.05 threshold (0.05-0.07), so fewer steps cache than a
 | 0.06 | 110.3s (1.30x) | 10 | 18.5 dB | 0.943 |
 | 0.07 | 105.4s (1.36x) | 11 | 12.3 dB | 0.748 |
 | 0.08 | 101.9s (1.40x) | 12 | 12.3 dB | 0.748 |
+| vLLM recipe: F8, 0.12, warmup 4, no cap, 3 consecutive | 119.3s (1.20x) | 9 | 23.0 dB | 0.980 |
 
 The cliff between 0.06 and 0.07 is about *when* caching starts rather than how many steps cache: at 0.07 the
 high-noise expert starts caching at step 5, at 0.06 at step 10. Steps before ~10 change the trajectory
-strongly, so 0.06 is the recommended setting for 720p.
+strongly, so 0.06 is the recommended F1 setting for 720p. The vLLM-Omni Wan 2.2 recipe (F8 / 0.12, see
+`recipes.vllm.ai`) sits between the two at 720p: its 8-block residual is a smoother signal, so it starts caching
+later (step 13) and keeps PCC 0.98 at 1.20x, but each cached step still computes 8 of 40 blocks.
 
 For comparison, a vLLM-Omni style recipe (`Fn_compute_blocks=8`, threshold 0.12, warmup 4, no cached-step cap,
 3 consecutive) at 480p gives 1.22x with PCC 0.944 / 20.1 dB, i.e. the same speed as the default preset at lower
