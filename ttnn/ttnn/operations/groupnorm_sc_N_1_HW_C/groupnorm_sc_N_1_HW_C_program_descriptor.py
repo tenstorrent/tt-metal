@@ -52,7 +52,7 @@ OUT_STORE_FLUSH_PER_BLOCK = True
 # over both NoCs' disjoint link sets. Policies (per input layout): "none" (byte-identical default),
 # "alternate_x" (odd logical columns swapped), "alternate_y" (odd rows), "checker" ((x + y) odd), "half_x"
 # (right half of the grid), "half_y" (bottom half). The mcast / gather helpers follow the kernel's noc_index automatically.
-DM_NOC_SPLIT = {"TILE": "half_y", "ROW_MAJOR": "none"}
+DM_NOC_SPLIT = {"TILE": "alternate_y", "ROW_MAJOR": "none"}
 MIN_TILES_PER_CORE = 1  # grid-synchronisation lamp: fewer, fatter cores per image when raised
 # Tie-break among the core splits that use the most cores, per input layout:
 #   "wide" = largest Pc (narrowest per-core Ct_core) — TILE input: the pass-2 affine build (one matmul + chains per
