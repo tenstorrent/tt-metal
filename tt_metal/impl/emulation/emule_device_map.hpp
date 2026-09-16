@@ -26,6 +26,11 @@ constexpr uint32_t NUM_NOCS = 2;
 // array size declared by the JIT side in include/jit_hw/internal/dataflow/dataflow_api_addrgen.h.
 constexpr uint32_t MAX_NUM_BANKS = 256;
 constexpr uint32_t NOC_NODE_ID_BITS = 6;  // noc_xy encoding: (y << NOC_NODE_ID_BITS) | x
+// NOC-address decode constants (encoded 64-bit: y[47:42] x[41:36] addr[35:0]), shared by
+// the NOC bridge and the fabric resolvers.
+constexpr uint32_t NOC_LOCAL_BITS = 36;
+constexpr uint64_t NOC_LOCAL_MASK = (1ULL << NOC_LOCAL_BITS) - 1;
+constexpr uint32_t NOC_NODE_MASK = (1u << NOC_NODE_ID_BITS) - 1;
 
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][MAX_NUM_BANKS];
 extern int32_t bank_to_dram_offset[MAX_NUM_BANKS];
