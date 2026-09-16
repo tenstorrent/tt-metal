@@ -133,7 +133,41 @@ def patch_maxschedchunk(body, value):
     return new
 
 
-def force_non_sol(sha, maxschedchunk=None):
+def apply_commit_files(sha, apply_ref, env):
+    """Put `apply_ref`'s version of the files it changed onto `sha`'s tree.
+
+    A cherry-pick without the merge machinery, and safe because it refuses to
+    guess: every file must be identical in `sha` and in `apply_ref`'s parent, so
+    substituting the blob reproduces the change exactly. A file that moved
+    underneath the change is reported rather than silently reverted.
+    """
+    parent = git("rev-parse", f"{apply_ref}^")
+    files = [
+        f for f in git("show", apply_ref, "--name-only", "--format=").split("\n") if f
+    ]
+    drifted = [
+        f
+        for f in files
+        if git("rev-parse", f"{sha}:{f}") != git("rev-parse", f"{parent}:{f}")
+    ]
+    if drifted:
+        raise RuntimeError(
+            f"{short(apply_ref)} cannot be applied cleanly to {short(sha)}; these "
+            f"files changed underneath it: {drifted}"
+        )
+    for f in files:
+        blob = git("rev-parse", f"{apply_ref}:{f}")
+        mode = git("ls-tree", apply_ref, "--", f).split()[0]
+        subprocess.run(
+            ["git", "update-index", "--cacheinfo", f"{mode},{blob},{f}"],
+            env=env,
+            check=True,
+            capture_output=True,
+        )
+    return f"{len(files)} file(s) from {short(apply_ref)}"
+
+
+def force_non_sol(sha, maxschedchunk=None, apply_ref=None):
     """A commit on top of `sha` whose perf runners measure with SoL off.
 
     Speed of light cannot be turned off from a dispatch on older commits: before
@@ -150,6 +184,8 @@ def force_non_sol(sha, maxschedchunk=None):
     subprocess.run(["git", "read-tree", sha], env=env, check=True, capture_output=True)
 
     how = {}
+    if apply_ref:
+        how["apply"] = apply_commit_files(sha, apply_ref, env)
     if maxschedchunk is not None:
         body = git("show", f"{sha}:{PYTEST_INI}")
         patched = patch_maxschedchunk(body, maxschedchunk)
@@ -236,12 +272,14 @@ def force_non_sol(sha, maxschedchunk=None):
 def variant_key(sha, args):
     """Cache key. A variant must not overwrite the plain measurement of a commit."""
     key = short(sha)
+    if getattr(args, "apply", None):
+        key += f"+{short(git('rev-parse', args.apply))}"
     if getattr(args, "maxschedchunk", None) is not None:
         key += f"+chunk{args.maxschedchunk}"
     return key
 
 
-def push_branch(sha, index, maxschedchunk=None):
+def push_branch(sha, index, maxschedchunk=None, apply_ref=None):
     """One branch per run, because the workflow cancels its own concurrency group.
 
     llk-perf.yaml sets `group: <workflow>-<arch>-<github.ref>` with
@@ -250,8 +288,10 @@ def push_branch(sha, index, maxschedchunk=None):
     different group, and the two runs proceed in parallel.
     """
     suffix = "" if maxschedchunk is None else f"-c{maxschedchunk}"
+    if apply_ref:
+        suffix = f"-{short(git('rev-parse', apply_ref))[:7]}{suffix}"
     branch = f"{BRANCH_PREFIX}{short(sha)}{suffix}-r{index}"
-    head, _ = force_non_sol(sha, maxschedchunk)
+    head, _ = force_non_sol(sha, maxschedchunk, apply_ref)
     git("push", "--force", f"git@github.com:{REPO}.git", f"{head}:refs/heads/{branch}")
     return branch
 
@@ -281,7 +321,12 @@ def start_runs(sha, count, args_ns=None):
     print(f"  dispatch inputs: {inputs}")
     ids = []
     for i in range(1, count + 1):
-        branch = push_branch(sha, i, getattr(args_ns, "maxschedchunk", None))
+        branch = push_branch(
+            sha,
+            i,
+            getattr(args_ns, "maxschedchunk", None),
+            getattr(args_ns, "apply", None),
+        )
         before = {r["databaseId"] for r in runs_on(branch)}
         args = ["gh", "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", branch]
         for k, v in inputs.items():
@@ -630,6 +675,12 @@ def main(argv=None):
         help="which run types drive the search: 'core' (L1_TO_L1 plus the three "
         "isolate modes, all clean at the good endpoint), 'total' (adds "
         "L1_CONGESTION, which fires everywhere), or a comma-separated list",
+    )
+    ap.add_argument(
+        "--apply",
+        help="also apply this commit's changes (e.g. a fix PR's head) on top of "
+        "the commit being measured, so a candidate fix is measured by exactly "
+        "the same procedure as everything else",
     )
     ap.add_argument(
         "--maxschedchunk",
