@@ -683,15 +683,6 @@ def _golden_function_rsub(input_tensor_a, value, *args, **kwargs):
 # Do not replace it here with the legacy unary helper after operation modules are loaded.
 
 
-def _golden_function_rdiv(input_tensor_a, value, *args, **kwargs):
-    import torch
-
-    return torch.div(torch.tensor(value, dtype=input_tensor_a.dtype), input_tensor_a)
-
-
-ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)
-
-
 def _golden_function_bitwise_left_shift(input_tensor, shift_amt, *args, **kwargs):
     import torch
 
