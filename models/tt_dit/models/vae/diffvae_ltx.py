@@ -28,7 +28,17 @@ from ...utils import timing_tree
 from ...utils.memory_log import log_ccl_cache, log_dram
 from ...utils.tracing import traced_function
 from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
-from .diffvae_ops import TILE, consume, consume_all, mesh_axis_size, retile, to_row_major, wshard
+from .diffvae_ops import (
+    TILE,
+    consume,
+    consume_all,
+    device_major_qkv,
+    mesh_axis_size,
+    retile,
+    split_qkv,
+    to_row_major,
+    wshard,
+)
 from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
 
 
@@ -314,21 +324,13 @@ class NeighborhoodAttention(Module):
         def reorder_head_dim(tensor: torch.Tensor) -> torch.Tensor:
             return tensor.reshape(self.num_heads, self.head_dim, *tensor.shape[1:])[:, perm].reshape(tensor.shape)
 
-        def device_major(fused: torch.Tensor) -> torch.Tensor:
-            """Reorder ``[q_all | k_all | v_all]`` rows to ``[dev][q|k|v][heads/tp]``, so a contiguous
-            column shard is this chip's own ``[q | k | v]`` as ``nlp_create_qkv_heads`` expects."""
-            rest = fused.shape[1:]
-            grouped = fused.reshape(3, self.tp, self.dim // self.tp, *rest)
-            axes = (1, 0, 2, *range(3, 3 + len(rest)))
-            return grouped.permute(*axes).reshape(3 * self.dim, *rest)
-
         for leaf in ("weight", "bias"):
             key = f"qkv.{leaf}"
             if key in state:
-                q, k, v = state.pop(key).chunk(3, dim=0)
+                q, k, v = split_qkv(state.pop(key))
                 q, k = reorder_head_dim(q), reorder_head_dim(k)
                 if self.fused_qkv:
-                    state[key] = device_major(torch.cat([q, k, v], dim=0))
+                    state[key] = device_major_qkv(torch.cat([q, k, v], dim=0), self.tp)
                 else:
                     state[f"to_q.{leaf}"] = q
                     state[f"to_k.{leaf}"] = k

@@ -49,12 +49,14 @@ from .diffvae_ops import (
     align_down,
     consume,
     consume_all,
+    device_major_qkv,
     mesh_axis_size,
     pad_dim,
     release_intermediates,
     retile,
     slice_last,
     slice_rows,
+    split_qkv,
     to_row_major,
     wshard,
 )
@@ -558,36 +560,16 @@ class _NeighborhoodAttention3D(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Checkpoints ship one Linear(dim, 3*dim) under qkv.*, split [q | k | v] along the output dim.
-        if self.fused_qkv:
-            # Regrouped so a contiguous column shard is one device's own heads of all three of q, k
-            # and v, where the shipped order would give device 0 nothing but q.
-            cfg = self.config
-            hd, hl = cfg.head_dim, self.heads_local
-            devices = cfg.num_heads // hl
-            order = torch.cat(
-                [
-                    torch.arange(part * cfg.dim + h * hd, part * cfg.dim + (h + 1) * hd)
-                    for d in range(devices)
-                    for part in range(3)
-                    for h in range(d * hl, (d + 1) * hl)
-                ]
-            )
-            for leaf in ("weight", "bias"):
-                fused = state.get(f"qkv.{leaf}")
-                if fused is not None:
-                    state[f"qkv.{leaf}"] = fused[order].clone()
-            return
+        # Kept fused, it is regrouped device-major so each chip's column shard is its own q, k and v.
+        devices = self.config.num_heads // self.heads_local
         for leaf in ("weight", "bias"):
             fused = state.pop(f"qkv.{leaf}", None)
             if fused is None:
                 continue
-            if fused.shape[0] % 3 != 0:
-                msg = f"fused qkv.{leaf} leading dim {fused.shape[0]} is not divisible by 3"
-                raise ValueError(msg)
-            d = fused.shape[0] // 3
-            state[f"to_q.{leaf}"] = fused[:d].clone()
-            state[f"to_k.{leaf}"] = fused[d : 2 * d].clone()
-            state[f"to_v.{leaf}"] = fused[2 * d :].clone()
+            if self.fused_qkv:
+                state[f"qkv.{leaf}"] = device_major_qkv(fused, devices)
+            else:
+                state[f"to_q.{leaf}"], state[f"to_k.{leaf}"], state[f"to_v.{leaf}"] = split_qkv(fused)
 
     def _rope(self, x: ttnn.Tensor, tables: _RopeTables) -> ttnn.Tensor:
         """**Consumes** ``x``."""

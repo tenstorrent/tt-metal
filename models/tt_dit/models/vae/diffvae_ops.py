@@ -122,14 +122,42 @@ def align_down(value: int, step: int) -> int:
     return value if step <= 1 else value - (value % step)
 
 
+# ---------------------------------------------------------------------------
+# Host weight prep
+# ---------------------------------------------------------------------------
+
+
 def pad_dim(tensor: torch.Tensor, dim: int, size: int) -> torch.Tensor:
-    """Zero-pad a host weight along ``dim`` up to ``size``. Host side, for tile-aligning features."""
+    """Zero-pad a host weight along ``dim`` up to ``size``, for tile-aligning features."""
     extra = size - tensor.shape[dim]
     if extra == 0:
         return tensor
     shape = list(tensor.shape)
     shape[dim] = extra
     return torch.cat([tensor, tensor.new_zeros(shape)], dim=dim)
+
+
+def split_qkv(fused: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The shipped ``Linear(dim, 3*dim)`` weight or bias split ``[q | k | v]`` along its output dim."""
+    if fused.shape[0] % 3 != 0:
+        msg = f"fused qkv leading dim {fused.shape[0]} is not divisible by 3"
+        raise ValueError(msg)
+    q, k, v = fused.chunk(3, dim=0)
+    return q.clone(), k.clone(), v.clone()
+
+
+def device_major_qkv(fused: torch.Tensor, tp: int) -> torch.Tensor:
+    """Reorder ``[q_all | k_all | v_all]`` rows to ``[dev][q | k | v][heads/tp]``.
+
+    A contiguous column shard over ``tp`` devices is then one device's own ``[q | k | v]``, which is
+    what ``nlp_create_qkv_heads`` and a per-lane slice both expect; the shipped order would hand
+    device 0 nothing but q. ``tp=1`` is the identity.
+    """
+    dim = fused.shape[0] // 3
+    rest = fused.shape[1:]
+    grouped = fused.reshape(3, tp, dim // tp, *rest)
+    axes = (1, 0, 2, *range(3, 3 + len(rest)))
+    return grouped.permute(*axes).reshape(3 * dim, *rest).contiguous()
 
 
 # ---------------------------------------------------------------------------
