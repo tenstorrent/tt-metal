@@ -24,6 +24,8 @@
 
 #include <stdint.h>
 
+#include "tools/profiler/kernel_profiler.hpp"  // TEMP R5 attribution zones
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -318,15 +320,23 @@ void kernel_main() {
 
         // ---------------- pass 1: statistics ----------------
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
-            for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
-                load_x_chunk(n, cg, rc, /*pass2=*/false);
+            {
+                DeviceZoneScopedN("r_load1");
+                for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
+                    load_x_chunk(n, cg, rc, /*pass2=*/false);
+                }
             }
+            DeviceZoneScopedN("r_memb1");
             fill_membership(cg, /*transposed=*/true);
         }
 
         // ---------------- pass 2: apply ----------------
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
-            fill_membership(cg, /*transposed=*/false);
+            {
+                DeviceZoneScopedN("r_memb2");
+                fill_membership(cg, /*transposed=*/false);
+            }
+            DeviceZoneScopedN("r_affine");
             if constexpr (has_gamma) {
                 const auto gamma_acc = TensorAccessor(gamma_args, gamma_addr, g_page_bytes);
                 fill_affine_rows(cb_gamma_row, gamma_acc, cg);

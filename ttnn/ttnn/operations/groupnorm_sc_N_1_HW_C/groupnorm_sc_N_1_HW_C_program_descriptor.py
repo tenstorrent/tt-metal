@@ -101,6 +101,24 @@ MATH_APPROX_MODE = False
 # variant): neutral-to-better on the whole guard set — sdxl_4096x640 47.7 -> 46.7 us, sdxl_16384x320 78.6 -> 77.8 us,
 # every other case within the +-2 % noise band; precision baseline / acceptance / layout matrix unchanged.
 XSQ_16BIT_FOR_16BIT_INPUT = True
+# Cross-core combine topology (Refinement 5, op_design.md -> Regimes `all_gather_combine`). "root": P_used unicast
+# records to an image root, the root reduces them and multicasts the totals (Phase 0). "all_gather": every core
+# multicasts its record into every rectangle core's gather tiles and reduces its own copy — no root serial reduce, no
+# totals round trip. A rectangle of ONE core (single_core_per_image, tiny images) always takes the LOCAL shortcut:
+# compute finalizes its own partial directly, the writer never touches the statistics.
+COMBINE_SCHEME = "all_gather"
+# all_gather transport is a unicast fan-out ((P_used - 1) * (4*Kg + 1) NoC commands per core — P_used concurrent
+# multicasts into one rectangle deadlock on the NoC path reservation, see the writer), so it only pays on small
+# rectangles; larger ones keep the root scheme.
+ALL_GATHER_MAX_CORES = 8
+# finalize_stats on lane-form tiles: row-0-only SFPU passes (kernels/groupnorm_sc_N_1_HW_C_lane_sfpu.hpp) instead
+# of the kernel_lib full-tile chain elements (Refinement 5 attribution: 2.5-3 us of the 7 us latency floor).
+FINALIZE_LANE_MODE = True
+# Images kept resident per core (single_core_per_image, N >= num_cores): a 2-deep block ring lets the reader fetch
+# image i+1 while compute applies image i (the images are otherwise strictly serial: pass 2 of image i must pop the
+# block before pass 1 of image i+1 may be read). Falls back to 1 (then streaming) when the deeper ring exceeds the L1
+# budget. Only takes effect when a core owns more than one image.
+RESIDENT_IMAGE_DEPTH = 2
 
 TILE = 32
 
@@ -195,6 +213,10 @@ SEM_MCAST_CONSUMED = 2
 ROLE_IDLE = 0  # inside an image rectangle but p >= P_used: mcast handshake only
 ROLE_MEMBER = 1
 ROLE_ROOT = 2
+
+COMBINE_LOCAL = 0  # P_used == 1: the partial is the total
+COMBINE_ROOT = 1  # unicast gather at the root + totals multicast
+COMBINE_ALL_GATHER = 2  # every core multicasts its record and reduces its own gather
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +426,17 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     Ct_core_max = math.ceil(Ct / pc)
     p_max = max(g.p_used for g in groups)
     gather_tiles_per_stat = math.ceil(p_max / TILE)
+    images_per_core_max = max(len(g.images) for g in groups)
+    # Combine scheme: a one-core rectangle needs no combine at all; otherwise the configured topology.
+    if p_max == 1:
+        combine = COMBINE_LOCAL
+    elif COMBINE_SCHEME == "all_gather" and p_max <= ALL_GATHER_MAX_CORES:
+        combine = COMBINE_ALL_GATHER
+    else:
+        combine = COMBINE_ROOT
+    # The gather tiles are reused per image with no cross-core reservation, which is only safe when a multi-image
+    # core is alone in its rectangle (LOCAL: nobody else writes into its gather). _assign_images guarantees it.
+    assert images_per_core_max == 1 or combine == COMBINE_LOCAL, "multi-image cores must be single-core rectangles"
 
     # ---- block knobs (derived once, on the max per-core extents) --------------------------
     cols = _balanced_block(Ct_core_max, dest_limit)  # cols_per_group (<= DEST cap of the REDUCE_COL block)
@@ -461,9 +494,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     add(CB_MEMBERSHIP, MEMBERSHIP_DEPTH * cols * Kg, stat_tile_bytes, stat_dtype)
     add(CB_AGG_INTERM, 2 * Kg, f32_tile_bytes, ttnn.float32)  # must match cb_partial (16-bit DEST: no interm->out swap)
     add(CB_PARTIAL, 2 * Kg, f32_tile_bytes, ttnn.float32)  # cross-core record format (Float32 face rows)
-    add(CB_GATHER, 2 * Kg * gather_tiles_per_stat, f32_tile_bytes, ttnn.float32)
-    add(CB_TOTALS_SRC, 2 * Kg, f32_tile_bytes, ttnn.float32)
-    add(CB_TOTALS_RECV, 2 * Kg, f32_tile_bytes, ttnn.float32)
+    if combine != COMBINE_LOCAL:
+        # gather landing (every core: identical address; ALL_GATHER reduces it on every core) + reduced totals
+        add(CB_GATHER, 2 * Kg * gather_tiles_per_stat, f32_tile_bytes, ttnn.float32)
+        add(CB_TOTALS_RECV, 2 * Kg, f32_tile_bytes, ttnn.float32)
+    if combine == COMBINE_ROOT:
+        add(CB_TOTALS_SRC, 2 * Kg, f32_tile_bytes, ttnn.float32)  # the root's multicast source
     add(CB_STATS_ROW, 2 * Kg, stat_tile_bytes, stat_dtype)
     add(CB_STATS_G_FULL, 2 * Kg, stat_tile_bytes, stat_dtype)
     if has_gamma:
@@ -478,12 +514,19 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
 
     # ---- regime: resident_2d vs streaming_2d (host-side, exact) -----------------------------
     l1_budget = _l1_budget_bytes_override if _l1_budget_bytes_override is not None else L1_BUDGET_BYTES_DEFAULT
-    resident = (fixed_bytes + blk_max * x_tile_bytes) <= l1_budget
+    # Resident ring depth in images: RESIDENT_IMAGE_DEPTH when a core owns several images (prefetch the next image
+    # during the current apply), else 1; the deepest ring that fits the budget wins, none -> streaming.
+    resident_depth = 0
+    for depth in range(min(images_per_core_max, RESIDENT_IMAGE_DEPTH), 0, -1):
+        if fixed_bytes + depth * blk_max * x_tile_bytes <= l1_budget:
+            resident_depth = depth
+            break
+    resident = resident_depth > 0
     if resident:
-        # one L1 region, two credit counters (pass 1 / pass 2)
+        # one L1 region (resident_depth blocks), two credit counters (pass 1 / pass 2)
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=blk_max * x_tile_bytes,
+                total_size=resident_depth * blk_max * x_tile_bytes,
                 core_ranges=all_cores,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
@@ -572,12 +615,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         SEM_GATHER,
         out_block,
         int(OUT_STORE_FLUSH_PER_BLOCK),
-    ]  # 14 scalars → McastArgs CT base = 14
+        combine,
+    ]  # 15 scalars → McastArgs CT base = 15
     writer_mc_ct_base = len(writer_ct)
     writer_ct.extend(mcast_ct)
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    writer_rt_scalars = 14  # McastArgs RT base (MC_RT in the writer)
-    assert writer_mc_ct_base == 14
+    writer_rt_scalars = 18  # McastArgs RT base (MC_RT in the writer)
+    assert writer_mc_ct_base == 15
 
     compute_ct = [
         CB_X_PASS1,
@@ -613,6 +657,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         out_subblock_w,
         out_block,
         hw_tail,
+        combine,
+        int(FINALIZE_LANE_MODE),
     ]
 
     reader_rt_by_core = {}
@@ -623,6 +669,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
 
     for group, helper in zip(groups, helpers):
         root_virtual = device.worker_core_from_logical_core(group.root)
+        # rectangle corners in virtual NoC coordinates, on EVERY core (McastArgs::rect() decodes them only on the
+        # multicast sender; the ALL_GATHER writer needs the rectangle on each core to fan its record out)
+        rx0, ry0 = group.cores[0]
+        rect_lo = device.worker_core_from_logical_core(ttnn.CoreCoord(rx0, ry0))
+        rect_hi = device.worker_core_from_logical_core(ttnn.CoreCoord(rx0 + group.rect_w - 1, ry0 + group.rect_h - 1))
         image_begin = group.images[0]
         image_count = len(group.images)
         image_stride = Gx * Gy if image_count > 1 else 1
@@ -665,6 +716,10 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                 len(group.cores),  # num_participants: every rectangle core increments the gather semaphore
                 Ht_core,
                 Ct_core,
+                rect_lo.x,
+                rect_lo.y,
+                rect_hi.x,
+                rect_hi.y,
             ]
             assert len(writer_rt_by_core[(x, y)]) == writer_rt_scalars
             writer_rt_by_core[(x, y)] += list(helper.runtime_args(core))
