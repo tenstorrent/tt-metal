@@ -592,6 +592,7 @@ def open_ring_joint_sdpa_runtime(
     reserve_llk_kernel_config: bool = True,
     full_mesh: bool = False,
     num_global_semaphores: int = 3,
+    sp_outer: bool = False,
 ):
     if full_mesh:
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
@@ -601,8 +602,10 @@ def open_ring_joint_sdpa_runtime(
         fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
         topology = Topology.Ring if use_ring else Topology.Linear
 
-    sp_axis = 1
-    tp_axis = 0
+    # Default keeps this harness's historical (tp, sp) mesh with SP on axis 1. sp_outer opens the
+    # production orientation instead -- (sp, tp) with SP on axis 0 -- which a TP-deduped cache requires.
+    sp_axis = 0 if sp_outer else 1
+    tp_axis = 1 if sp_outer else 0
 
     if mesh_config.sp_size < 2:
         pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
@@ -619,7 +622,11 @@ def open_ring_joint_sdpa_runtime(
             ttnn.FabricManagerMode.DEFAULT,
         )
 
-        mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
+        mesh_shape = (
+            ttnn.MeshShape(mesh_config.sp_size, mesh_config.tp_size)
+            if sp_outer
+            else ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)
+        )
         # trace_region_size defaults to 0 (no trace region), leaving every existing caller unchanged; only
         # the trace-replay test asks for one.
         mesh_device_kwargs = {"mesh_shape": mesh_shape, "trace_region_size": trace_region_size}
