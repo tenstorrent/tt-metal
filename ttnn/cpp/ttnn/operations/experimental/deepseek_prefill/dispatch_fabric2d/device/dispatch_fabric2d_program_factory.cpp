@@ -70,7 +70,8 @@ dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uin
         .num_routed_experts = args.num_routed_experts,
         .experts_per_chip = args.experts_per_chip,
         .topk = args.num_experts_per_tok,
-        .num_relay = relay_chunks_per_stream(extent)};
+        .num_relay = relay_chunks_per_stream(extent),
+        .fanout = args.fanout ? 1u : 0u};
 }
 
 L1Layout compute_l1_layout(
