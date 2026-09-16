@@ -90,6 +90,71 @@ def default_ltx_gemma() -> str:
     return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
+# Fast-mode env bundle: bf8 DiT-linear quant + step-cut denoise schedule. The single authority for
+# both the pytest harness (via conftest) and the ltx_server worker, so the schedule can't drift
+# between them. Validated at ~11.7s warm gen (bh_2x4sp1tp0): S1 8->6 steps (the 1.0->0.975 head is
+# redundant within the structure basin), S2 3->1 (Stage-2 only refines an already-coherent latent,
+# so one step holds composition byte-identical to the 3-step baseline). Cutting S2 is the dominant
+# lever: Stage-2 costs ~3.15s/step vs Stage-1's ~0.72s/step.
+FAST_QUANT = "all_bf8_lofi"
+FAST_S1_SIGMAS = "1.0,0.9875,0.975,0.909375,0.725,0.421875,0.0"
+FAST_S2_SIGMAS = "0.909375,0.0"
+
+
+def apply_fast_env(env=None):
+    """Expand LTX_FAST=1 into the concrete fast-mode vars; no-op unless LTX_FAST is truthy.
+
+    setdefault, so an explicit var still wins. TT_DIT_HOST_WEIGHT_CACHE is read at layer import, so a
+    caller wanting it must apply this before importing the pipeline (or set it in the process env).
+    """
+    env = os.environ if env is None else env
+    if env.get("LTX_FAST", "0") not in ("1", "true", "True"):
+        return
+    env.setdefault("LTX_QUANT", FAST_QUANT)
+    env.setdefault("LTX_S1_SIGMAS", FAST_S1_SIGMAS)
+    env.setdefault("LTX_S2_SIGMAS", FAST_S2_SIGMAS)
+    env.setdefault("LTX_TRACED", "1")
+    env.setdefault("TT_DIT_HOST_WEIGHT_CACHE", "1")
+
+
+# Quality tiers for the served High/Medium/Fast dropdown, sharing the same authority as the fast
+# bundle (conftest + ltx_server worker), applied before the pipeline import. high = shipped baseline
+# (bf16/HiFi2, 8+3 steps); medium = the fast bundle (scene-preserving); fast collapses S1 to a 3-step
+# schedule — the fewest steps that still resolve a coherent composition, so it may land a different
+# scene than medium but not garbage. The perf-only knobs (traced, host-weight-cache) stay on for
+# every tier so high isn't needlessly slow.
+FAST_S1_SIGMAS_N3 = "1.0,0.725,0.421875,0.0"
+
+# tier -> (quant, s1_sigmas, s2_sigmas); None keeps the pipeline's shipped default for that knob.
+_QUALITY_TIERS = {
+    "high": (None, None, None),
+    "medium": (FAST_QUANT, FAST_S1_SIGMAS, FAST_S2_SIGMAS),
+    "fast": (FAST_QUANT, FAST_S1_SIGMAS_N3, FAST_S2_SIGMAS),
+}
+
+
+def apply_quality_env(env=None):
+    """Expand LTX_QUALITY=high|medium|fast into the concrete bundle; no-op if unset, falling back to
+    apply_fast_env so LTX_FAST=1 keeps working. Must run before the pipeline import — the sigma
+    schedule and host-weight-cache are read at import time.
+    """
+    env = os.environ if env is None else env
+    tier = env.get("LTX_QUALITY", "").strip().lower()
+    if not tier:
+        return apply_fast_env(env)
+    if tier not in _QUALITY_TIERS:
+        raise ValueError(f"LTX_QUALITY must be one of {sorted(_QUALITY_TIERS)} (got {tier!r})")
+    quant, s1, s2 = _QUALITY_TIERS[tier]
+    if quant:
+        env.setdefault("LTX_QUANT", quant)
+    if s1:
+        env.setdefault("LTX_S1_SIGMAS", s1)
+    if s2:
+        env.setdefault("LTX_S2_SIGMAS", s2)
+    env.setdefault("LTX_TRACED", "1")
+    env.setdefault("TT_DIT_HOST_WEIGHT_CACHE", "1")
+
+
 def print_ltx_timing_table(
     pipeline, *, label, num_frames, height, width, mesh_shape, sp_axis, tp_axis, topology, output_path, prompt
 ):

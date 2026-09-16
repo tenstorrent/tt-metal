@@ -11,8 +11,24 @@ from typing import TYPE_CHECKING
 import torch
 from loguru import logger
 
+from models.tt_dit.utils import walltime
+
 if TYPE_CHECKING:
     import pytest
+
+# Kernel/JIT cache per worktree: build_key ignores the source tree, so a shared cache root lets
+# sibling worktrees stomp each other's compiled kernels + prewarm manifest (a stale manifest then
+# batch-compiles with another tree's include paths and fails). Root it under this tree unless the
+# caller pinned TT_METAL_CACHE. Weights stay on the shared TT_DIT_CACHE_DIR (tree-independent key).
+_TREE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *([os.pardir] * 3)))
+os.environ.setdefault(
+    "TT_METAL_CACHE",
+    os.path.join(os.path.expanduser("~"), ".cache", "tt-metal-cache", os.path.basename(_TREE_ROOT)),
+)
+
+_WALLTIME_ON = os.environ.get("TT_WALLTIME", "1") != "0"
+_walltime_items = 0
+_walltime_wall = 0.0
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -48,6 +64,25 @@ class _LogStartPlugin:
 
         width = shutil.get_terminal_size()[0]
         print(f"\n\n{'━' * width}\n{label}\n")  # noqa: T201
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Print each item's wall-time block at the end of its call phase, then reset so the
+    next parametrized item starts clean. The session ledger keeps accumulating underneath."""
+    if not _WALLTIME_ON or report.when != "call":
+        return
+    global _walltime_items, _walltime_wall
+    _walltime_items += 1
+    _walltime_wall += report.duration
+    print(walltime.render(report.nodeid, wall=report.duration))  # noqa: T201
+    walltime.reset()
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:  # noqa: ARG001
+    if _WALLTIME_ON and _walltime_items > 1:
+        print(
+            walltime.render_session(f"session aggregate ({_walltime_items} items)", wall=_walltime_wall)
+        )  # noqa: T201
 
 
 num_torch_threads = max(1, os.cpu_count())
