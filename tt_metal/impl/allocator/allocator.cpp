@@ -239,6 +239,50 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     return address;
 }
 
+void AllocatorImpl::reserve_per_core_program(
+    const std::unordered_map<CoreCoord, uint32_t>& program_end_by_core,
+    DeviceAddr program_base) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(
+        config_->allocator_mode == AllocatorMode::HYBRID,
+        "Per-core program reservation requires HYBRID allocation");
+    TT_FATAL(!per_core_program_reserved_, "Only one per-core-reserved program may be resident on a device");
+    TT_FATAL(!program_end_by_core.empty(), "Per-core program reservation requires at least one active core");
+
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    const DeviceAddr expanded_end = config_->worker_l1_size - config_->l1_small_size;
+    DeviceAddr minimum_program_end = config_->l1_unreserved_base;
+    DeviceAddr maximum_program_end = program_base;
+    for (const auto& [core, program_end] : program_end_by_core) {
+        TT_FATAL(
+            program_end >= program_base && program_end <= config_->l1_unreserved_base,
+            "Invalid program extent [{}, {}) on core {}; global reserved frontier is {}",
+            program_base,
+            program_end,
+            core,
+            config_->l1_unreserved_base);
+        const auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+        l1_manager_->expand_and_mark_allocated(
+            AllocatorID{bank_id + 1},
+            program_base,
+            expanded_end - program_base,
+            program_base,
+            program_end - program_base);
+        minimum_program_end = std::min(minimum_program_end, static_cast<DeviceAddr>(program_end));
+        maximum_program_end = std::max(maximum_program_end, static_cast<DeviceAddr>(program_end));
+    }
+    per_core_program_base_ = program_base;
+    per_core_program_reserved_ = true;
+    log_info(
+        tt::LogMetal,
+        "Reserved per-core program L1 on {} cores; program ends [{}, {}], reclaimed [{}, {}] bytes per core",
+        program_end_by_core.size(),
+        minimum_program_end,
+        maximum_program_end,
+        config_->l1_unreserved_base - maximum_program_end,
+        config_->l1_unreserved_base - minimum_program_end);
+}
+
 void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
@@ -494,6 +538,22 @@ std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_address(uint32_t
     // have occupied a lower address range in this bank.
     if (config_->allocator_mode == AllocatorMode::HYBRID) {
         auto per_core = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{bank_id + 1});
+        if (per_core.has_value()) {
+            lowest = lowest.has_value() ? std::make_optional(std::min(*lowest, *per_core)) : per_core;
+        }
+    }
+    return lowest;
+}
+
+std::optional<DeviceAddr> AllocatorImpl::get_lowest_occupied_l1_buffer_address(uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    auto lowest = l1_manager_->lowest_occupied_address(bank_id, AllocatorID{0});
+    if (config_->allocator_mode == AllocatorMode::HYBRID) {
+        const auto per_core = per_core_program_reserved_
+                                  ? l1_manager_->lowest_occupied_address_excluding(
+                                        bank_id, AllocatorID{bank_id + 1}, per_core_program_base_)
+                                  : l1_manager_->lowest_occupied_address(bank_id, AllocatorID{bank_id + 1});
         if (per_core.has_value()) {
             lowest = lowest.has_value() ? std::make_optional(std::min(*lowest, *per_core)) : per_core;
         }

@@ -107,6 +107,7 @@ public:
     void dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const;
 
     std::optional<DeviceAddr> get_lowest_occupied_l1_address(std::uint32_t bank_id) const;
+    std::optional<DeviceAddr> get_lowest_occupied_l1_buffer_address(std::uint32_t bank_id) const;
 
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
@@ -152,6 +153,10 @@ public:
     // This marks the region as occupied so per-bank allocators avoid it.
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
     void unmirror_lockstep_allocation(DeviceAddr address);
+
+    void reserve_per_core_program(
+        const std::unordered_map<CoreCoord, uint32_t>& program_end_by_core,
+        DeviceAddr program_base);
 
     // Device-global L1 arena for allocations that outlive individual programs.
     PersistentL1Arena& persistent_l1() { return persistent_l1_; }
@@ -200,6 +205,8 @@ private:
     // Set while a HYBRID allocation span is open (see try_begin_hybrid_allocation). Not a mutex:
     // a same-thread re-entry must report a bug, not deadlock or hit try_lock's UB.
     std::atomic<bool> hybrid_allocation_in_progress_{false};
+    bool per_core_program_reserved_{false};
+    DeviceAddr per_core_program_base_{0};
 
     // config_ is stored in a unique_ptr because AllocatorConfig is currently an incomplete type in API directory.
     //

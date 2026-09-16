@@ -1124,6 +1124,10 @@ void py_module_types(nb::module_& mod) {
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
         .def_rw(
+            "per_core_program_reservation",
+            &tt::tt_metal::ProgramDescriptor::per_core_program_reservation,
+            "Reserve each worker core's actual program extent in its per-core L1 allocator")
+        .def_rw(
             "custom_program_hash",
             &tt::tt_metal::ProgramDescriptor::custom_program_hash,
             "Optional memoized program hash (skips full descriptor walk when set)");

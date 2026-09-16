@@ -222,6 +222,7 @@ struct ProgramDescriptor {
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
+    bool per_core_program_reservation = false;
     std::optional<std::uint64_t> custom_program_hash;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;

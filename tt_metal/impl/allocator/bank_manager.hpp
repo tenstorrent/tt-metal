@@ -112,6 +112,10 @@ public:
     std::optional<DeviceAddr> lowest_occupied_address(
         uint32_t bank_id,
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
+    std::optional<DeviceAddr> lowest_occupied_address_excluding(
+        uint32_t bank_id,
+        AllocatorDependencies::AllocatorID allocator_id,
+        DeviceAddr excluded_address) const;
 
     Statistics get_statistics(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
@@ -141,6 +145,12 @@ public:
     // Used to mirror lockstep allocations from the mesh-level allocator into per-device allocators.
     void mark_allocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address, DeviceAddr size);
     void mark_deallocated(AllocatorDependencies::AllocatorID allocator_id, DeviceAddr address);
+    void expand_and_mark_allocated(
+        AllocatorDependencies::AllocatorID allocator_id,
+        DeviceAddr expanded_offset,
+        DeviceAddr expanded_size,
+        DeviceAddr address,
+        DeviceAddr size);
 
     // AllocatorState Methods
     // Extracts the state of the given allocator.

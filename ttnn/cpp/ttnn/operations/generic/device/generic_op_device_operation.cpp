@@ -47,7 +47,11 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     if (program_descriptor.custom_program_hash) {
-        return *program_descriptor.custom_program_hash;
+        auto hash = *program_descriptor.custom_program_hash;
+        if (program_descriptor.per_core_program_reservation) {
+            ttsl::hash::hash_combine(hash, true);
+        }
+        return hash;
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
@@ -108,6 +112,9 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     }
     for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
+    }
+    if (program_descriptor.per_core_program_reservation) {
+        ttsl::hash::hash_combine(hash, true);
     }
     return hash;
 }

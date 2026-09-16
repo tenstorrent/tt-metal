@@ -258,6 +258,8 @@ public:
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
     void set_finalized();
+    bool uses_per_core_program_reservation() const { return per_core_program_reservation_; }
+    void set_per_core_program_reservation(bool enabled) { per_core_program_reservation_ = enabled; }
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
     ProgramBinaryStatus get_program_binary_status(ChipId device_id) const {
@@ -518,6 +520,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool per_core_program_reservation_{false};
     bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
     // the same device

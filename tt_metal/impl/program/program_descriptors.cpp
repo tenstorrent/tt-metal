@@ -106,6 +106,9 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
     // Merge all subsequent descriptors
     for (size_t i = 1; i < descriptors.size(); ++i) {
         const auto& other = descriptors[i];
+        TT_FATAL(
+            other.per_core_program_reservation == result.per_core_program_reservation,
+            "Cannot merge ProgramDescriptors with different per-core program reservation settings");
 
         // Merge kernels
         for (const auto& kernel : other.kernels) {
@@ -350,7 +353,11 @@ std::size_t std::hash<tt::tt_metal::FaceGeometry>::operator()(
 std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
     const tt::tt_metal::ProgramDescriptor& descriptor) const noexcept {
     if (descriptor.custom_program_hash) {
-        return *descriptor.custom_program_hash;
+        std::size_t hash = *descriptor.custom_program_hash;
+        if (descriptor.per_core_program_reservation) {
+            ttsl::hash::hash_combine(hash, true);
+        }
+        return hash;
     }
 
     ttsl::hash::hash_t hash = 0;
@@ -362,6 +369,9 @@ std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
     }
     for (const auto& semaphore : descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, tt::tt_metal::hash_semaphore_descriptor(semaphore));
+    }
+    if (descriptor.per_core_program_reservation) {
+        ttsl::hash::hash_combine(hash, true);
     }
     return hash;
 }

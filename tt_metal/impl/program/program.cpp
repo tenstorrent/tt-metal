@@ -408,6 +408,7 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    internal_->set_per_core_program_reservation(descriptor.per_core_program_reservation);
 
     for (const auto& cb_descriptor : descriptor.cbs) {
         internal_->add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
@@ -2104,7 +2105,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
             for (const auto& core : cb_allocator.core_range) {
                 for (auto* phys_alloc : physical_allocators) {
                     auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
-                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
+                    auto addr = phys_alloc->get_lowest_occupied_l1_buffer_address(bank_id);
                     if (addr.has_value()) {
                         lowest_address =
                             lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
@@ -3176,6 +3177,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
+        std::unordered_map<CoreCoord, uint32_t> program_end_by_core;
         state.offset = program_dispatch::finalize_kernel_bins(
             device,
             index,
@@ -3183,7 +3185,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             kernel_groups_getter(index),
             state.offset,
             state.kernel_text_offset,
-            state.kernel_text_size);
+            state.kernel_text_size,
+            program_end_by_core);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
@@ -3195,6 +3198,24 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             state.offset,
             max_size,
             enchantum::to_string(programmable_core_type));
+
+        const bool reserve_per_core_program = std::ranges::any_of(
+            programs, [](const ProgramImpl* program) { return program->uses_per_core_program_reservation(); });
+        if (reserve_per_core_program && programmable_core_type == HalProgrammableCoreType::TENSIX) {
+            TT_FATAL(
+                std::ranges::all_of(
+                    programs, [](const ProgramImpl* program) { return program->uses_per_core_program_reservation(); }),
+                "All programs finalized together must use the same per-core program reservation setting");
+            TT_FATAL(
+                !metal_ctx.rtoptions().get_fast_dispatch(),
+                "Per-core program reservation is supported only with slow dispatch");
+            const DeviceAddr program_base =
+                hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+            for (auto& [core, program_end] : program_end_by_core) {
+                program_end += program_base;
+            }
+            device->allocator_impl()->reserve_per_core_program(program_end_by_core, program_base);
+        }
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);

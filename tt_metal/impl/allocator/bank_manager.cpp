@@ -610,6 +610,26 @@ std::optional<DeviceAddr> BankManager::lowest_occupied_address(
     return adjusted_abs_addr;
 }
 
+std::optional<DeviceAddr> BankManager::lowest_occupied_address_excluding(
+    uint32_t bank_id,
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    DeviceAddr excluded_address) const {
+    const auto* alloc = this->get_allocator_from_id(allocator_id);
+    if (alloc == nullptr) {
+        return std::nullopt;
+    }
+    std::optional<DeviceAddr> lowest_address;
+    for (const auto& [start, _] : alloc->allocated_addresses()) {
+        const DeviceAddr adjusted_address = start + this->bank_offset(bank_id);
+        if (adjusted_address != excluded_address) {
+            lowest_address = lowest_address.has_value()
+                                 ? std::make_optional(std::min(*lowest_address, adjusted_address))
+                                 : std::make_optional(adjusted_address);
+        }
+    }
+    return lowest_address;
+}
+
 Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);
     return alloc ? alloc->get_statistics() : Statistics();
@@ -773,6 +793,44 @@ void BankManager::mark_allocated(AllocatorDependencies::AllocatorID allocator_id
         stats.total_allocated_bytes,
         stats.total_free_bytes,
         stats.largest_free_block_bytes);
+    allocated_buffers_[allocator_id.get()].insert(address);
+    invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+}
+
+void BankManager::expand_and_mark_allocated(
+    AllocatorDependencies::AllocatorID allocator_id,
+    DeviceAddr expanded_offset,
+    DeviceAddr expanded_size,
+    DeviceAddr address,
+    DeviceAddr size) {
+    auto* old_allocator = get_allocator_from_id(allocator_id);
+    TT_FATAL(old_allocator, "Allocator not initialized for ID {}", allocator_id.get());
+    const auto allocations = old_allocator->allocated_addresses();
+
+    auto expanded_allocator = std::make_unique<allocator::FreeListOpt>(
+        expanded_size,
+        expanded_offset,
+        alignment_bytes_,
+        alignment_bytes_,
+        allocator::FreeListOpt::SearchPolicy::FIRST);
+    for (const auto& [start, end] : allocations) {
+        TT_FATAL(
+            expanded_allocator->allocate_at_address(start, end - start).has_value(),
+            "Existing allocation [{}, {}) does not fit expanded allocator {} range [{}, {})",
+            start,
+            end,
+            allocator_id.get(),
+            expanded_offset,
+            expanded_offset + expanded_size);
+    }
+    TT_FATAL(
+        expanded_allocator->allocate_at_address(address, size).has_value(),
+        "Per-core program [{}, {}) overlaps an existing allocation in allocator {}",
+        address,
+        address + size,
+        allocator_id.get());
+
+    allocators_[allocator_id.get()] = std::move(expanded_allocator);
     allocated_buffers_[allocator_id.get()].insert(address);
     invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
