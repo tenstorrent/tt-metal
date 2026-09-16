@@ -44,6 +44,7 @@ from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
+from ..events import DenoiseStep, PipelineEventCallback, null_callback
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
@@ -996,6 +997,7 @@ class LTXPipeline:
         noise_scale: float | None = None,
         image_cond_latent: torch.Tensor | None = None,
         image_cond_strength: float = 1.0,
+        on_event: PipelineEventCallback = null_callback,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent).
 
@@ -1292,6 +1294,7 @@ class LTXPipeline:
             video_lat = self._zero_sp_padding(video_lat_new, video_N_real)
             audio_lat = self._zero_sp_padding(audio_lat_new, audio_N_real)
 
+            on_event(DenoiseStep(step=step_idx + 1, total=num_inference_steps, sigma=sigma))
             if (step_idx + 1) % 5 == 0 or step_idx == 0:
                 logger.info(f"Step {step_idx+1}/{num_inference_steps}: σ {sigma:.4f}→{sigma_next:.4f}")
 
