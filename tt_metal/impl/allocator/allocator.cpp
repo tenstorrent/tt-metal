@@ -678,8 +678,7 @@ AllocatorImpl::~AllocatorImpl() {
         submap.clear();
     }
 
-    // A derived constructor (L1BankingAllocator) can throw before the bank managers exist; the base
-    // destructor still runs, so guard the clears or the original exception is masked by a SEGFAULT.
+    // A derived constructor may throw before the bank managers exist.
     for (BankManager* manager :
          {dram_manager_.get(), l1_manager_.get(), l1_small_manager_.get(), trace_buffer_manager_.get()}) {
         if (manager != nullptr) {
