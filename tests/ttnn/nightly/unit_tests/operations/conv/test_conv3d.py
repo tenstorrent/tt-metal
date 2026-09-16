@@ -17,6 +17,7 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     run_conv3d_test,
     prepare_input_tensor,
     _out_size,
+    apply_logical_pad_mask,
     ALIGNMENT,
 )
 
@@ -1341,3 +1342,139 @@ def test_conv3d_fp32_exact_tail_streaming(device):
     rel = ((out.double() - golden.double()).pow(2).mean().sqrt() / golden.double().std()).item()
     logger.info(f"conv3d fp32-exact tail (streaming): rel RMSE vs float64 = {rel:.3e}")
     assert rel <= 1.35e-3, f"streaming-output path: rel RMSE {rel:.3e} > 1.35e-3 vs float64 golden"
+
+
+@pytest.mark.parametrize(
+    "optional_tensor",
+    ["bias", "halo_buffer", "pad_offset"],
+)
+def test_conv3d_optional_tensor_memory_config_is_hashed(device, optional_tensor):
+    """Moving an optional tensor between DRAM and L1 must miss the program cache (#55831).
+
+    The bias, halo and pad-offset buffers are baked into the kernels as compile-time
+    TensorAccessorArgs (IsDram, page size, sharding), which override_runtime_arguments cannot patch.
+    Before the fix the hash keyed only on has_value(), so the second call below hit the entry
+    compiled for the other memory space and read the tensor through the wrong accessor. Everything
+    but the optional tensor's placement is held fixed (same input/weight tensors, same values) so a
+    second entry can only come from the memory config.
+    """
+    input_shape = (1, 32, 4, 16, 16)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    padding = (0, 1, 1)
+    dtype = ttnn.DataType.BFLOAT16
+    # Non-zero masks are what enable mask mode; the pad-offset accessor is only compiled in then.
+    logical_h_mask, logical_w_mask = (12, 10) if optional_tensor == "pad_offset" else (0, 0)
+
+    torch.manual_seed(42)
+    N, C, D, H, W = input_shape
+    D_out = _out_size(D, padding[0], stride[0], kernel_size[0], 1)
+    H_out = _out_size(H, padding[1], stride[1], kernel_size[1], 1)
+    W_out = _out_size(W, padding[2], stride[2], kernel_size[2], 1)
+
+    input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(
+        C, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=True, padding_mode="zeros"
+    )
+    # A zero-filled halo buffer reproduces zero padding, so the same torch reference serves all cases.
+    reference_input = apply_logical_pad_mask(input_tensor, 0, 0, logical_h_mask, logical_w_mask)
+    gt_output = conv3d_module(reference_input)
+
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=dtype)
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    config = create_conv3d_config(C_in_block=32, weights_dtype=dtype)
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=dtype, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    torch_bias = conv3d_module.bias.data.reshape(1, -1)
+
+    def make_optional_tensor(memory_config):
+        if optional_tensor == "bias":
+            return ttnn.from_torch(
+                torch_bias,
+                device=device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                pad_value=0,
+                memory_config=memory_config,
+            )
+        if optional_tensor == "halo_buffer":
+            # 512 pages covers the [Htop|Hbot|Wleft|Wright] sections this shape needs (2*N*D*(pad_h*W + pad_w*(H+2*pad_h))).
+            return ttnn.from_torch(
+                torch.zeros(512, C).bfloat16(),
+                device=device,
+                dtype=dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=memory_config,
+            )
+        return ttnn.from_torch(
+            torch.tensor([[0, 0]], dtype=torch.int32),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+        )
+
+    # Bias is always present so the writer's bias accessor is compiled in for every case; for the
+    # bias case it is the tensor under test, otherwise it stays in DRAM.
+    dram_bias = ttnn.from_torch(torch_bias, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=0)
+
+    def run(tensor_under_test):
+        kwargs = {"bias_tensor": dram_bias}
+        if optional_tensor == "bias":
+            kwargs["bias_tensor"] = tensor_under_test
+        elif optional_tensor == "halo_buffer":
+            kwargs["halo_buffer"] = tensor_under_test
+        else:
+            kwargs["pad_offset_tensor"] = tensor_under_test
+        tt_output = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            dtype=dtype,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            groups=1,
+            padding=padding,
+            dilation=(1, 1, 1),
+            padding_mode="zeros",
+            config=config,
+            compute_kernel_config=kernel_config,
+            logical_h_mask=logical_h_mask,
+            logical_w_mask=logical_w_mask,
+            **kwargs,
+        )
+        return reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    def run_checked(memory_config):
+        tensor_under_test = make_optional_tensor(memory_config)
+        assert tensor_under_test.memory_config().buffer_type == memory_config.buffer_type
+        tt_output = run(tensor_under_test)
+        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+        logger.info(f"{optional_tensor} in {memory_config.buffer_type}: {pcc_message}")
+        assert pcc_passed, f"{optional_tensor} in {memory_config.buffer_type}: {pcc_message}"
+
+    # Warm-up in DRAM compiles conv3d (IsDram=1 for the tensor under test) plus any helper ops the
+    # loop below also dispatches, so from here on new entries can only come from conv3d itself.
+    run_checked(ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_warmup = device.num_program_cache_entries()
+
+    # Same placement with a freshly allocated buffer must be a hit: the address is not in the key.
+    run_checked(ttnn.DRAM_MEMORY_CONFIG)
+    assert device.num_program_cache_entries() == entries_after_warmup, "re-running in DRAM must hit the cache"
+
+    # Moving the tensor to L1 must miss and compile a second conv3d program.
+    run_checked(ttnn.L1_MEMORY_CONFIG)
+    assert device.num_program_cache_entries() == entries_after_warmup + 1, (
+        f"{optional_tensor} in DRAM and in L1 must compile distinct programs; "
+        f"got {device.num_program_cache_entries() - entries_after_warmup} new entries for the L1 call"
+    )

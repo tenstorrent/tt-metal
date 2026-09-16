@@ -27,8 +27,11 @@ enum AccessPattern : uint8_t {
 };
 
 constexpr uint8_t NUM_DFBS = 32;
-// Pack TRISC stores only active logical DFBs in a compact local array to reduce local-memory pressure.
-constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 16;
+// Pack TRISC stores only active logical DFBs in a compact local array. Its TC state is allocated
+// separately from a shared pool, so common one-TC DFBs do not each reserve the six-slot worst case.
+constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 24;
+constexpr uint8_t MAX_PACK_TC_SLOTS = 32;
+static_assert(MAX_PACK_TC_SLOTS >= MAX_ACTIVE_DFBS_PACK);
 
 constexpr uint8_t NUM_TENSIX = 4;
 constexpr uint8_t NUM_TILE_COUNTERS_PER_TENSIX = 32;
@@ -64,14 +67,14 @@ constexpr uint8_t MAX_NUM_TILE_COUNTERS_TO_RR = 6;
 constexpr uint8_t MAX_PRODUCERS_PER_DFB = MAX_NUM_TILE_COUNTERS_TO_RR;
 // DM0 blob constants
 constexpr uint8_t MAX_DM0_REMAPPER_SLOTS = 8;  // max DM producer RISCs
-constexpr uint8_t MAX_CLIENT_RS          = 4;   // max consumers per remapper slot (4 Tensix or 4 DM clientR IDs)
+constexpr uint8_t MAX_CLIENT_RS = 4;           // max consumers per remapper slot (4 Tensix or 4 DM clientR IDs)
 // Must match TxnDFBDescriptor::tile_counters[18] (32-byte ISR blob slot).
 // Worst consumer case: 4 ALL DMs × 4 producer TCs = 16; worst producer case: 6 DM producers × 1 TC.
-constexpr uint8_t MAX_TCS_PER_TXN        = 18;
+constexpr uint8_t MAX_TCS_PER_TXN = 18;
 // Alias used by TxnDFBDescriptor / main-line overflow guards. Keep identical to MAX_TCS_PER_TXN.
 constexpr uint8_t MAX_TILE_COUNTERS_PER_SIDE = MAX_TCS_PER_TXN;
 
-constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
+constexpr uint16_t TENSIX_RISC_OFFSET = 8;  // First 8 represent DMs
 // Hartids 0-7 = DM0-7, 8-11 = Neo0-3 (TRISC init uses 8 + neo_id).
 constexpr uint8_t NUM_PARTICIPATING_HARTIDS = 12;
 
@@ -145,17 +148,17 @@ struct dfb_global_header_t {
     uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob
     uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (core header + txn pools)
     uint32_t dfb_signal_region_off;     // → signal region: per-producer byte slots then dfb_expected_signal[NUM_DFBS]
-    uint8_t  num_dfbs;
-    uint8_t  dm0_isr_ready;             // cleared by host; set by DM0 when ISR is armed
-    uint8_t  has_dm0_isr;               // 1 if any DFB uses implicit sync (replaces per_dfb_layout_offset > dm0 check)
-    uint8_t  _pad;
+    uint8_t num_dfbs;
+    uint8_t dm0_isr_ready;  // cleared by host; set by DM0 when ISR is armed
+    uint8_t has_dm0_isr;    // 1 if any DFB uses implicit sync (replaces per_dfb_layout_offset > dm0 check)
+    uint8_t _pad;
     // participation_mask[h] bit i set → hartid h participates in DFB i.
     // Device init uses popcount(participation_mask[h]) as this hart's init/wait entry count.
     uint32_t participation_mask[dfb::NUM_PARTICIPATING_HARTIDS];  // 48B
     // Byte offset from config_base to each hartid's init blob (first init entry).
     // Non-participating harts point to an emitted minimal {0,0,0,0} blob.
-    uint16_t hart_blob_offset[dfb::NUM_PARTICIPATING_HARTIDS];    // 24B
-    uint8_t  _pad2[8];  // pad to 96B
+    uint16_t hart_blob_offset[dfb::NUM_PARTICIPATING_HARTIDS];  // 24B
+    uint8_t _pad2[8];                                           // pad to 96B
 };
 
 // DM1/DM0 blobs begin immediately after the header; no prefix tables.
@@ -167,7 +170,7 @@ inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
 }
 
 // Flag bits for dfb_hart_init_entry_t::flags
-constexpr uint8_t DFB_HART_FLAG_IS_PRODUCER  = (1u << 7);
+constexpr uint8_t DFB_HART_FLAG_IS_PRODUCER = (1u << 7);
 // DM1 owns this producer's remapper pair; the producer must wait for it before touching its TCs.
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_WAIT_DM1 = (1u << 6);
 constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
@@ -175,7 +178,7 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 // Tensix-only TC pool is invisible to DM, and one Neo cannot see another Neo's TCs.
 // Mutually exclusive with DFB_HART_FLAG_REMAPPER_WAIT_DM1.
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
-constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
+constexpr uint8_t DFB_HART_FLAG_TRISC_MASK = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
 // Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 28B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
@@ -192,28 +195,28 @@ static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 // uint8_t packed_tile_counter[num_tcs] padded to 4B.
 // Total entry size = 28 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
-    uint8_t  logical_dfb_id;
-    uint8_t  num_tcs;
-    uint8_t  flags;                          // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t _reserved0;                      // kept zeroed for 28B layout stability
-    uint32_t entry_size;                     // raw bytes; device applies >> cb_addr_shift
+    uint8_t logical_dfb_id;
+    uint8_t num_tcs;
+    uint8_t flags;        // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
+    uint8_t _reserved0;   // kept zeroed for 28B layout stability
+    uint32_t entry_size;  // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
     //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
     //   TRISC harts: stride_size_precomp = (entry_size_raw >> cb_addr_shift) * stride_in_entries  (tile units)
     uint32_t stride_size_precomp;
-    uint8_t  stride_size_tiles;              // TRISC: stride in entries; DM: unused (see dm scalar pack below)
-    uint8_t  num_txn_ids;                    // TRISC layout byte 13; DM pack uses byte 21 (see below)
-    uint8_t  threshold;                      // TRISC layout; DM pack byte 18
-    uint8_t  num_entries_per_txn_id;         // TRISC layout; DM pack byte 19
-    uint8_t  num_entries_per_txn_id_per_tc;  // TRISC layout byte 16; DM pack byte 20
-    uint8_t  producer_signal_bit;            // TRISC layout byte 17; DM pack byte 13 (transport)
-    uint8_t  txn_ids[dfb::NUM_TXN_IDS];     // TRISC layout bytes 18-21; DM pack bytes 14-17
-    uint8_t  remapper_pair_index;            // TRISC layout byte 22; DM pack remapper at byte 23
-    uint8_t intra_shadow_tc_id;              // TRISC byte 23: intra-tensix ClientR shadow TC id, 0xFF if unused.
-                                             // Intra-tensix never targets a DM hart, so DM pack p[11]
-                                             // reclaims this byte for remapper_pair_index.
-    uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
-    uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
+    uint8_t stride_size_tiles;              // TRISC: stride in entries; DM: unused (see dm scalar pack below)
+    uint8_t num_txn_ids;                    // TRISC layout byte 13; DM pack uses byte 21 (see below)
+    uint8_t threshold;                      // TRISC layout; DM pack byte 18
+    uint8_t num_entries_per_txn_id;         // TRISC layout; DM pack byte 19
+    uint8_t num_entries_per_txn_id_per_tc;  // TRISC layout byte 16; DM pack byte 20
+    uint8_t producer_signal_bit;            // TRISC layout byte 17; DM pack byte 13 (transport)
+    uint8_t txn_ids[dfb::NUM_TXN_IDS];      // TRISC layout bytes 18-21; DM pack bytes 14-17
+    uint8_t remapper_pair_index;            // TRISC layout byte 22; DM pack remapper at byte 23
+    uint8_t intra_shadow_tc_id;             // TRISC byte 23: intra-tensix ClientR shadow TC id, 0xFF if unused.
+                                            // Intra-tensix never targets a DM hart, so DM pack p[11]
+                                            // reclaims this byte for remapper_pair_index.
+    uint16_t num_entries;                   // bytes 24-25; ring entry count (main update_size path)
+    uint16_t capacity;                      // bytes 26-27; producer: TC capacity; consumer: 0
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 28, "dfb_hart_init_entry_t must be 28B");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
@@ -270,7 +273,7 @@ inline constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
 
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
-    uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking
+    uint8_t num_entries_to_process_threshold;  // entries each txn ID tracks before posting/acking
     uint8_t num_txn_ids;
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
@@ -286,9 +289,9 @@ struct dfb_initializer_t {
     uint16_t capacity;
     uint16_t num_entries;
     struct {
-        uint16_t dm_mask : 8;             // bits 0-7: DM RISC mask
-        uint16_t tensix_mask : 4;         // bits 8-11: Neo RISC mask
-        uint16_t tensix_trisc_mask : 4;   // bits 12-15: which TRISC(s) on the Neo run DFB ops (see dataflow_buffer.inl)
+        uint16_t dm_mask : 8;            // bits 0-7: DM RISC mask
+        uint16_t tensix_mask : 4;        // bits 8-11: Neo RISC mask
+        uint16_t tensix_trisc_mask : 4;  // bits 12-15: which TRISC(s) on the Neo run DFB ops (see dataflow_buffer.inl)
     } risc_mask_bits;
     // Participant mask (DM/Neo hartids, per_risc layout, popcount): dm_mask | (tensix_mask << 8).
     // tensix_trisc_mask is separate — TRISC-side only, not OR'd into that mask.
@@ -296,7 +299,7 @@ struct dfb_initializer_t {
     dfb_txn_id_descriptor_t producer_txn_descriptor;
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
-    uint8_t _pad[3];                  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
+    uint8_t _pad[3];  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
 };
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size changed — check field alignment");
 
@@ -350,8 +353,8 @@ struct dfb_dm0_txn_descriptor_image_t {
 // Device side: setup_dfb_remapper() writes clientR_val/clientL_val directly to remapper HW
 // registers (no staging through g_remapper_configurator arrays).
 struct dfb_dm1_remapper_slot_t {
-    uint8_t  pair_index;   // remapper pair index for this producer
-    uint8_t  _pad[3];      // pad to 8 bytes
+    uint8_t pair_index;    // remapper pair index for this producer
+    uint8_t _pad[3];       // pad to 8 bytes
     uint32_t clientR_val;  // pre-computed ClientR config register value
     uint32_t clientL_val;  // pre-computed ClientL config register value
 } __attribute__((packed));
@@ -383,7 +386,8 @@ inline uint32_t dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, u
 }
 
 inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t consumer_txn_id_mask) {
-    return sizeof(dfb_dm0_isr_blob_core_header_t) + dm0_isr_txn_hw_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask) +
+    return sizeof(dfb_dm0_isr_blob_core_header_t) +
+           dm0_isr_txn_hw_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask) +
            dm0_isr_txn_desc_pool_byte_size(producer_txn_id_mask, consumer_txn_id_mask);
 }
 
@@ -416,13 +420,12 @@ namespace dfb {
 // ---------------------------------------------------------------------------
 constexpr uint8_t DFB_INIT_TIMING_NUM_SLOTS = 16;
 constexpr uint8_t DFB_INIT_TIMING_WORDS_PER_SLOT = 16;
-constexpr uint32_t DFB_INIT_TIMING_REGION_BYTES =
-    static_cast<uint32_t>(DFB_INIT_TIMING_NUM_SLOTS) * static_cast<uint32_t>(DFB_INIT_TIMING_WORDS_PER_SLOT) *
-    sizeof(uint32_t);
+constexpr uint32_t DFB_INIT_TIMING_REGION_BYTES = static_cast<uint32_t>(DFB_INIT_TIMING_NUM_SLOTS) *
+                                                  static_cast<uint32_t>(DFB_INIT_TIMING_WORDS_PER_SLOT) *
+                                                  sizeof(uint32_t);
 // Cached L1 byte offset for host reads (Tensix L1 window is [0, 4 MiB)).
 // Device writes use MEM_L1_UNCACHED_BASE + this offset so TL1 is updated without L2 flush.
-constexpr uint32_t DFB_INIT_TIMING_L1_BYTE_OFFSET =
-    (4u * 1024u * 1024u) - DFB_INIT_TIMING_REGION_BYTES;
+constexpr uint32_t DFB_INIT_TIMING_L1_BYTE_OFFSET = (4u * 1024u * 1024u) - DFB_INIT_TIMING_REGION_BYTES;
 
 constexpr uint32_t DFB_INIT_TIMING_MAGIC = 0xDFB07100u;
 
