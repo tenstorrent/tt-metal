@@ -39,12 +39,16 @@ NUM_USERS_DEFAULT=1
 # caps the FIFO at 5632; 4096 is the next power of two under it and is also the value a plain Kimi
 # 2-galaxy run settled on. It fails on rank 1 at MLA_START of layer 0, i.e. only once tokens flow --
 # never at init -- so a too-large value survives weight load and warmup before killing the run.
-# Verifier threshold matches the sibling KV leg for this trace/depth. The drafter's own default (0.88,
-# dflash_kv_validation.DEFAULT_PCC) was calibrated during K2.6 bring-up and is NOT re-derived for K2.7 at
-# full depth -- an unnormalized V tracks the verifier's own accuracy, which is ~0.879 here. Override with
-# PREFILL_DFLASH_PCC once a K2.7 number is agreed rather than editing the module default.
-PCC_THRESHOLD=0.877
-DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.86}"
+# Verifier threshold is the sibling KV leg's value for this trace and depth -- run_multirank_pcc.sh gates
+# the same cache on the same golden, so the two legs must not disagree on what a passing verifier is.
+# The drafter gate is held at that same value and never above it: an unnormalized V carries the verifier's
+# own error, so a tighter drafter gate fails whenever the verifier merely sits near its own floor rather
+# than when the drafter regresses. K is normalized by RMSNorm+RoPE and clears both by a wide margin, so
+# this number is effectively a V gate. The drafter module default (0.88, dflash_kv_validation.DEFAULT_PCC)
+# is a K2.6 bring-up value that does not hold for K2.7 at full depth; override with PREFILL_DFLASH_PCC
+# rather than editing the module default.
+PCC_THRESHOLD=0.85
+DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 
 case "${MODEL}" in
   kimi27)
@@ -70,11 +74,12 @@ case "${MODEL}" in
     ;;
 esac
 
-# sc1 is single-galaxy: it still runs, but it exercises the local-tensor path, not the staged one.
+# sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- PREFILL_MOCK_MIGRATION all-gathers
+# the stage layouts at any rank count -- so what it does not cover is the remote HOST, not the branch: one
+# rank builds the table over its own DRAM and the producer reads it back over local PCIe. The rank count
+# itself comes from the mesh-graph descriptor below, so this only validates the key.
 case "${CONFIG}" in
-  sc1) NUM_RANKS=1 ;;
-  sc2) NUM_RANKS=2 ;;
-  sc4) NUM_RANKS=4 ;;
+  sc1|sc2|sc4) ;;
   *) echo "unknown config '${CONFIG}' (expected sc1, sc2 or sc4)" >&2; exit 2 ;;
 esac
 
@@ -91,6 +96,12 @@ fi
 # The table must live on storage every rank AND the device-less producer can read. prefill_producer
 # rejects a per-host path outright for world_size > 1 (_require_shared_table_path), so fail here with a
 # clearer message than "validators on other hosts cannot read rank 0's table".
+# In CI the pipeline supplies PREFILL_SUMMARIES; derive the scratch root from it the way the sibling KV
+# leg derives PIPELINE_DIR, so the workflow needs no dflash-specific variable. Interactive runs set
+# PREFILL_SHARED_DIR directly.
+if [ -z "${PREFILL_SHARED_DIR:-}" ] && [ -n "${PREFILL_SUMMARIES:-}" ]; then
+  PREFILL_SHARED_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_dflash_kv}"
+fi
 : "${PREFILL_SHARED_DIR:?PREFILL_SHARED_DIR must be set to shared/NFS scratch (e.g. /data/\$USER/dflash_ci)}"
 case "${PREFILL_SHARED_DIR}" in
   /tmp/*|/dev/shm/*|/run/*|/var/tmp/*)
@@ -101,10 +112,15 @@ MR_DIR=$(mktemp -d "${PREFILL_SHARED_DIR}/${MODEL}_dflash_XXXXXX")
 TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
+PRODUCER_LOG="${MR_DIR}/producer.log"
 mkdir -p "${PCC_DIR}" "${RANKLOGS}"
 
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 TCP_IFACE="${PREFILL_TCP_IFACE:-ens5f0np0}"
+# ttrun writes the allocated hosts here in CI, rank 0 first -- the same file the sibling KV leg reads.
+if [ -z "${PREFILL_HOSTS:-}" ] && [ -f "${TTRUN_DIR:-/etc/ttop}/hostfile" ]; then
+  PREFILL_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR:-/etc/ttop}/hostfile" | sed 's/,$//')
+fi
 # No apostrophe in this message: bash treats a single quote inside ${var:?word} as opening a quote
 # context even within double quotes, and the script fails to parse rather than to run.
 HOSTS="${PREFILL_HOSTS:?PREFILL_HOSTS must list the rank hosts, rank 0 first (e.g. hostA,hostB)}"
@@ -114,19 +130,36 @@ cleanup() {
     kill "${RUNNER_PID}" 2>/dev/null || true
     wait "${RUNNER_PID}" 2>/dev/null || true
   fi
+  # ttrun spawns prterun, which is NOT reaped by killing ttrun: it reparents to init and its ranks sit in
+  # the unbounded request loop holding the mesh, so a failed producer leaks the box to the next CI job.
+  # MR_DIR is mktemp-unique and appears in prterun's --output-filename, so this matches only this run.
+  if pgrep -f "prterun.*${MR_DIR}" >/dev/null 2>&1; then
+    pkill -TERM -f "prterun.*${MR_DIR}" 2>/dev/null || true
+    for _ in $(seq 1 30); do pgrep -f "prterun.*${MR_DIR}" >/dev/null 2>&1 || break; sleep 1; done
+    pkill -KILL -f "prterun.*${MR_DIR}" 2>/dev/null || true
+  fi
   echo "==================== PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
   for f in "${PCC_DIR}"/rank*.json; do
     [ -e "$f" ] || { echo "no verdict files under ${PCC_DIR}"; break; }
     echo "$(basename "$f"): $(cat "$f")"
   done
   # The drafter minimum is printed but NOT recorded in rank*.json (_write_pcc_verdict carries only
-  # per_cache kvpe), so scrape it from the logs or a pass/fail here is unattributable.
+  # per_cache kvpe), so scrape it from the logs or a pass/fail here is unattributable. The producer runs
+  # under its own mpirun, not ttrun, so its output is in PRODUCER_LOG; RANKLOGS holds runner ranks only.
   echo "==================== drafter KV PCC ===================="
-  grep -h -E "drafter KV PCC|min over all|kv_cache_pcc_complete" "${RANKLOGS}"/* 2>/dev/null | tail -20 \
+  grep -h -E "drafter KV PCC|min over all|kv_cache_pcc_complete" "${PRODUCER_LOG}" 2>/dev/null | tail -20 \
     || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
-  rm -rf "${MR_DIR}"
+  if [ -n "${PREFILL_KEEP_RUN_DIR:-}" ]; then
+    echo "keeping run dir (PREFILL_KEEP_RUN_DIR set): ${MR_DIR}"
+  else
+    rm -rf "${MR_DIR}"
+  fi
 }
-trap cleanup EXIT
+# TERM and INT as well as EXIT: bash runs an EXIT-only trap when the script returns, but a signal that
+# kills the shell outright skips it, so a CI cancel or a stray kill leaves the whole ttrun tree holding
+# every reserved box. Killing prterun cascades to the remote prted daemons and their ranks; nothing in
+# cleanup can reach the other hosts directly.
+trap cleanup EXIT INT TERM
 
 python3 "${TTRUN_PY}" \
   --skip-executable-check \
@@ -245,7 +278,7 @@ set +e
     export PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/dflash_kv_device_map.json; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.prefill_producer"
-PROD_RC=$?
+    exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
+PROD_RC=${PIPESTATUS[0]}
 set -e
 exit "${PROD_RC}"

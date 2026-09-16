@@ -202,6 +202,22 @@ def _connect_layer_ack_channel(timeout_s: int):
     return channel
 
 
+def _ack_layers_per_chunk(kv_table) -> int:
+    """Layer acks one chunk produces across all ranks.
+
+    NUM_LAYERS is the VERIFIER's depth; DFlash acks its draft layers past it, so the count the runner
+    emits is wider. Read it off the published table rather than re-deriving the drafter's depth here: a
+    drafter config spans the same global layer axis the acks are numbered on, and the table is the only
+    thing this device-less process and the runner both see.
+    """
+    if kv_table is None:
+        return NUM_LAYERS
+    dflash = [name for name in _config_names(kv_table) if name.startswith("dflash_")]
+    if not dflash:
+        return NUM_LAYERS
+    return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
+
+
 def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
     if ack_channel is None:
         return 0
@@ -820,7 +836,10 @@ def _dflash_caches_are_local(kv_table, device_map: dict, *, slot_id: int) -> boo
 
     try:
         config_id = kv_table.config_id_of(dflash_config_name("k", 0))
-        loc = kv_table.lookup(0, 0, slot_id, config_id)
+        # Last row, not layer 0: the drafter's configs span the merged table's global layer axis and only
+        # its tail is populated. An unpopulated row reads back zeroed, and device_group_index 0 is a real
+        # group, so probing layer 0 would resolve some other cache's host and answer True anywhere.
+        loc = kv_table.lookup(kv_table.config(config_id).num_layers - 1, 0, slot_id, config_id)
         _resolve_unique_id(kv_table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
     except KeyError:
         return False
@@ -1096,6 +1115,7 @@ def main() -> None:
             "channel (pure token feeder; the runner's migration self-test owns it)"
         )
 
+    ack_layers = _ack_layers_per_chunk(kv_table)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1117,7 +1137,7 @@ def main() -> None:
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
         service.barrier()
         if ack_channel is not None:
-            _drain_layer_acks(ack_channel, NUM_LAYERS * warmup_chunks)
+            _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1132,7 +1152,7 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)

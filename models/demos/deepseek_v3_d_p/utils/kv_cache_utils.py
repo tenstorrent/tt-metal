@@ -579,6 +579,7 @@ def populate_kv_chunk_address_table_dflash(
     config_id=0,
     chunk_size_global=PREFILL_CHUNK_TOKENS,
     stage_layout=None,
+    first_layer=0,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from ONE HEAD of the DFlash
@@ -647,7 +648,14 @@ def populate_kv_chunk_address_table_dflash(
     assert sp_axis != tp_axis, f"sp_axis and tp_axis must differ; both are {sp_axis}"
     sp = mesh_shape[sp_axis]
     tp = mesh_shape[tp_axis]
-    num_layers = config.num_layers
+    # Two layer counts, and mixing them addresses the wrong DRAM: the config spans the merged table's whole
+    # layer axis (the verifier's layers, then the draft ones at first_layer), while the cache this walk
+    # describes holds only the drafter's own depth.
+    num_layers = config.num_layers - first_layer
+    assert num_layers > 0, (
+        f"drafter config spans {config.num_layers} layers with first_layer={first_layer}, leaving no draft "
+        f"layers; first_layer is the verifier's layer count, not this cache's"
+    )
 
     assert (
         num_kv_heads % tp == 0
@@ -734,6 +742,11 @@ def populate_kv_chunk_address_table_dflash(
             f"gathered drafter stage spans {stages[0]['count']} layers but the table config declares "
             f"{num_layers}; the drafter is not layer-partitioned across ranks"
         )
+        gathered_first = next(s["first_layer"] for s in stage_layout if s["count"] > 0)
+        assert gathered_first == first_layer, (
+            f"gathered drafter stage starts at layer {gathered_first} but this config was sized for "
+            f"{first_layer}; the owning rank and the table builder disagree on where the draft layers begin"
+        )
 
     for stage in stages:
         dram_bank_base_addr = stage["base_addr"]
@@ -776,7 +789,9 @@ def populate_kv_chunk_address_table_dflash(
                             location.noc_addr = (bank_id << 32) | (dram_bank_base_addr + bank_offset)
                             location.size_bytes = chunk_size_bytes
                             location.device_group_index = group_idx
-                            lookup_table.set(layer, position, slot, location, config_id)
+                            # `layer` indexes the drafter's own cache; the table key continues the
+                            # verifier's layer axis, so the draft layers land at first_layer onwards.
+                            lookup_table.set(first_layer + layer, position, slot, location, config_id)
     return lookup_table
 
 

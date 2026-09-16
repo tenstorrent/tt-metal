@@ -605,10 +605,18 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
         teardown_timeout_ms=30000,
     )
+    first_layer_idx, num_my_layers = compute_layer_split(
+        NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+    )[rank]
+    # A runtime may ack rows the model's layer split does not describe (DFlash acks its draft layers past
+    # the verifier's last), so the ack axis is sized by the runtime, not by NUM_LAYERS. Both paths below
+    # must use the same global count: it is the modulus of the seq the master router reorders on.
+    ack_num_layers, ack_local_layers = (
+        runtime.layer_ack_layers(NUM_LAYERS, num_my_layers)
+        if getattr(runtime, "layer_ack_layers", None) is not None
+        else (NUM_LAYERS, num_my_layers)
+    )
     if use_d2h:
-        first_layer_idx, num_my_layers = compute_layer_split(
-            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
-        )[rank]
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
             global_spec=None,
@@ -620,9 +628,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2h_service,
             ring_shm_name,
             source_rank=rank,
-            num_layers=NUM_LAYERS,
+            num_layers=ack_num_layers,
             first_layer_idx=first_layer_idx,
-            local_layers=num_my_layers,
+            local_layers=ack_local_layers,
         )
         if runtime.config.use_trace:
             runtime.set_d2h_ack_service(d2h_service)
@@ -641,7 +649,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             build_layer_completion_sink(
                 producer,
                 source_rank=rank,
-                num_layers=NUM_LAYERS,
+                num_layers=ack_num_layers,
             )
         )
         source_desc = "host on_layer_complete callback"
@@ -678,9 +686,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             rank_scoped_device_map_path,
         )
 
-        first_layer_idx, num_my_layers = compute_layer_split(
-            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
-        )[rank]
         table_path = migration_table_path()
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
