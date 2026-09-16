@@ -1158,7 +1158,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
   budget_type: e2e
-  
+
 # ── HunyuanImage-3.0 ───────────────────────────────────────────────
 - name: HunyuanImage-3.0 T2I e2e tests
   cmd: |
