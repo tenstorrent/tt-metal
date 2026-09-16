@@ -255,13 +255,23 @@ jobs:
         if: ${{ steps.arch.outputs.name == 'quasar' }}
         shell: bash
         working-directory: ttsim-private
+        env:
+          REF: ${{ steps.pin.outputs.ref }}
         run: |
           set -euo pipefail
           ./make.py src/_out/release_qsr/libttsim.so
           test -f src/_out/release_qsr/libttsim.so
           sha=$(git rev-parse --short HEAD)
-          printf 'ttsim-private@%s (%s)\n' "${{ steps.pin.outputs.ref }}" "$sha" \
-            > "$GITHUB_WORKSPACE/ttsim-quasar-version"
+          # WH/BH report a bare tag here (e.g. v1.10.2), so keep Quasar's string in the
+          # same ballpark — a 40-char SHA stretches the summary table and the Slack line.
+          # A SHA pin collapses to its short form (the full ref added nothing the short
+          # SHA doesn't say); a branch keeps its name plus the SHA it resolved to.
+          if [[ "$REF" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+            version="ttsim-private@${sha}"
+          else
+            version="ttsim-private@${REF} (${sha})"
+          fi
+          printf '%s\n' "$version" > "$GITHUB_WORKSPACE/ttsim-quasar-version"
 
       # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
       # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
