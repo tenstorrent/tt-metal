@@ -102,7 +102,7 @@
     pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_tensor_large.py
   skus:
     bh_galaxy:
-      timeout: 25
+      timeout: 8
   owner_id: U07R05K4WGJ # John Bauman
   team: ttnn
   budget_type: e2e
