@@ -30,18 +30,20 @@ Measured on a single Blackhole Galaxy (4x8), 81 frames and 40 denoising steps, w
 
 | Mode | System       | Arch | SP | TP | Text enc | Image enc | Denoise | VAE dec | **Total** |
 |------|--------------|------|----|----|----------|-----------|---------|---------|-----------|
-| T2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.094s   | —         | 12.184s | 1.095s  | **13.39s** |
-| I2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.089s   | 1.442s    | 12.726s | 0.972s  | **15.25s** |
+| T2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.094s   | —         | 11.436s | 0.966s  | **12.51s** |
+| I2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.089s   | 1.512s    | 12.072s | 0.986s  | **14.68s** |
+
+At 121 frames (the other shipped length) 720p T2V is **19.76s** traced, 494 ms/step.
 
 ### 480p (832x480)
 
 | Mode | System       | Arch | SP | TP | Text enc | Denoise | VAE dec | **Total** |
 |------|--------------|------|----|----|----------|---------|---------|-----------|
-| T2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.090s   | 6.267s  | 0.731s  | **7.09s** |
+| T2V  | Galaxy (4x8) | BH   | 8  | 4  | 0.090s   | 6.301s  | 0.578s  | **6.98s** |
 
 > 480p is **out of distribution** for this checkpoint. The `4x32x32` total compression leaves only 15x26 tokens at 832x480 versus 22x40 at 1280x704, and output is visibly soft. Run quality and correctness work at 720p.
 
-I2V costs **+1.86s** over T2V. That is 1.442s of host-side VAE encode of the conditioning frame plus 0.54s of per-token AdaLN in the denoise loop; text encode and VAE decode are identical to T2V, so the T2V conv3d blockings carry over with no I2V-specific work.
+I2V costs **+2.17s** over T2V. That is 1.512s of host-side VAE encode of the conditioning frame plus 0.64s of per-token AdaLN in the denoise loop; text encode and VAE decode are identical to T2V, so the T2V conv3d blockings carry over with no I2V-specific work. The image-encode figure is host-side `torch.compile` work and is the noisiest number here (17% spread across three runs); treat it as ~1.4-1.5s.
 
 VAE decode was **4.63s** until the `WanDupUp3D` shortcut was rewritten. An op-level profile of the
 production decode put 3.85s of its 4.92s device total inside that one module: it expresses a
@@ -51,13 +53,19 @@ to keep the output channel innermost — which also collapses the two nearest-ne
 single `ttnn.upsample` — took the decode to **~1.0s** with bit-identical output. The same decode serves
 both modes, so T2V and I2V improved together (-20.2% and -19.2% end to end).
 
+Ring SDPA was retuned from the inherited `q_chunk=128` to **160** (`sdpa_chunk_size_overrides` in
+the 5B pipeline config, so the 14B that shares `WanAttention.sdpa_chunk_size_map` does not move).
+Work items are `B*NH*ceil(M/q)` spread flat over the SDPA worker grid, and at M=2336 with 6 local
+heads q=128 gives 114 items against a ~110-core grid — a whole extra scheduling round to place 4
+items. Swept under Tracy across q x k: **q=160/k=512 is 27.8% faster** than the inherited pair,
+worth **-6.1% of denoise** end to end. 480p is unchanged (at M=1024 both already fit one round).
+
 Performance work still open:
-- SDPA q-chunk: at the inherited `q_chunk=128` the 5B produces 114 work items on the 110-core SDPA
-  worker grid, taking 2 scheduling rounds for a 3.6% overshoot; `q=160` would be 90 items in one.
-  `sdpa_chunk_size_overrides` is plumbed through `WanPipelineConfig` for exactly this, and
-  `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` has a `wan2_2_ti2v_5b_1xGLX` sweep entry.
-  Denoise is now ~91% of the run, so this is the largest remaining lever.
-- `_register_5b_matmul_tables` in `pipeline_wan_ti2v_5b.py` registers M values the model never requests, so every transformer matmul falls back to the default `8x8x8` blocking (see Limitations)
+- `_register_5b_matmul_tables` in `pipeline_wan_ti2v_5b.py` registers its entries under the
+  `"11x10"` grid key, but `get_agmm_config` looks up `agmm_worker_grid(...)` = **`12x9`** whenever
+  `force_transpose=True`, which is every Wan call site — so no AGMM shape can reach that table
+  regardless of M, and the M values are wrong too (2368 vs the real 2336). Re-key to `"12x9"` with
+  M=2336 when resweeping (see Limitations)
 - Residual VAE encoder on device, which would remove most of the 1.442s host image encode
 - `flow_shift` is currently forced to the A14B value (see Limitations)
 
