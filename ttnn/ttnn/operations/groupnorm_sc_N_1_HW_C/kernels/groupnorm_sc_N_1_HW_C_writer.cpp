@@ -60,7 +60,10 @@ void kernel_main() {
     constexpr uint32_t gather_tiles_per_stat = get_compile_time_arg_val(10);
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(11);
     constexpr uint32_t out_block = get_compile_time_arg_val(12);  // tiles per store barrier (divides chunk)
-    constexpr uint32_t MC_CT = 13;
+    // Per-out_block store sync: flush (writes departed the core -> cb_out pages reusable; one full barrier per
+    // image) vs a full DRAM-ack barrier per block. Host knob OUT_STORE_FLUSH_PER_BLOCK.
+    constexpr bool store_flush_per_block = get_compile_time_arg_val(13) != 0;
+    constexpr uint32_t MC_CT = 14;
     constexpr uint32_t MC_RT = 14;
     constexpr auto mc = McastArgs<MC_CT, MC_RT>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
@@ -129,9 +132,13 @@ void kernel_main() {
     };
 
     // cb_out -> DRAM tiles of this core's block. Compute packs the chunk row-major (chunk_rows x cols, one push
-    // per tile); the writer drains it in `out_block`-tile groups with ONE barrier per group, so the number of
-    // tiles in flight per barrier is a host knob (OUT_BLOCK_TILES_TARGET) and not an accident of `cols`
+    // per tile); the writer drains it in `out_block`-tile groups with ONE sync per group, so the number of
+    // tiles in flight per sync is a host knob (OUT_BLOCK_TILES_TARGET) and not an accident of `cols`
     // (which is 1 whenever the ct split gives a core a single tile-column).
+    // The per-group sync is `noc_async_writes_flushed` when store_flush_per_block: the block's bytes have left
+    // L1 (so its cb_out pages may be popped and re-packed) but the DRAM acks are not awaited, so the core keeps
+    // issuing while far-route acks are in flight; ONE `noc_async_write_barrier` per image retires them all.
+    // Otherwise a full barrier per group (Phase-0 behaviour; measured 3-4 us per round trip at 110 cores).
     // Ragged blocks: the valid_rows x valid_cols output tiles sit dense at the front of the block's nominal
     // `chunk` pages (idx = r * valid_cols + c); pages idx >= valid carry no data and are only drained.
     auto store_image = [&](uint32_t n) {
@@ -157,10 +164,17 @@ void kernel_main() {
                             ++r;
                         }
                     }
-                    noc_async_write_barrier();
+                    if constexpr (store_flush_per_block) {
+                        noc_async_writes_flushed();
+                    } else {
+                        noc_async_write_barrier();
+                    }
                     cb_pop_front(cb_out, out_block);
                 }
             }
+        }
+        if constexpr (store_flush_per_block) {
+            noc_async_write_barrier();  // retire this image's stores before the next image / kernel exit
         }
     };
 

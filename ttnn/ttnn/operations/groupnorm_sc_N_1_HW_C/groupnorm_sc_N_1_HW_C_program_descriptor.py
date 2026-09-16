@@ -37,6 +37,12 @@ X_RM_DEPTH = 2  # RM stick ring depth, in tile-rows
 MEMBERSHIP_DEPTH = 1  # membership (E) blocks buffered
 OUT_BLOCK_TILES_TARGET = 8  # output tiles per writer barrier (examples/double_buffer: 4-8 in flight saturates)
 OUT_DEPTH_FACTOR = 2  # cb_out depth = OUT_DEPTH_FACTOR * out_block tiles (writer double-buffering)
+# Writer store synchronisation per out_block (Refinement 4). True: `noc_async_writes_flushed` — wait only until the
+# block's writes have DEPARTED the core (the L1 pages may be reused, so cb_out can be popped) and issue one
+# `noc_async_write_barrier` per image; False: a full barrier (DRAM ack round trip) per out_block. Under 110-core
+# DRAM contention the ack round trip is ~3-4 us and the writer was the critical half of every large TILE shape
+# (per-RISC attribution: BRISC 50-77 us vs NCRISC 18-36 us on (1,1,16384,320)).
+OUT_STORE_FLUSH_PER_BLOCK = True
 MIN_TILES_PER_CORE = 1  # grid-synchronisation lamp: fewer, fatter cores per image when raised
 # Tie-break among the core splits that use the most cores, per input layout:
 #   "wide" = largest Pc (narrowest per-core Ct_core) — TILE input: the pass-2 affine build (one matmul + chains per
@@ -519,12 +525,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         gather_tiles_per_stat,
         SEM_GATHER,
         out_block,
-    ]  # 13 scalars → McastArgs CT base = 13
+        int(OUT_STORE_FLUSH_PER_BLOCK),
+    ]  # 14 scalars → McastArgs CT base = 14
     writer_mc_ct_base = len(writer_ct)
     writer_ct.extend(mcast_ct)
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_scalars = 14  # McastArgs RT base (MC_RT in the writer)
-    assert writer_mc_ct_base == 13
+    assert writer_mc_ct_base == 14
 
     compute_ct = [
         CB_X_PASS1,
