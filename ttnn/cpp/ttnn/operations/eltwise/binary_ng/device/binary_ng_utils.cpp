@@ -366,6 +366,13 @@ OpConfig::OpConfig(
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::PRELU:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::PRELU;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         case BinaryOpType::ATAN2:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::ATAN2;
@@ -508,6 +515,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case ATAN2: return {"atan2_binary_tile_init();", "atan2_binary_tile"};
+        case PRELU: return {"prelu_binary_tile_init();", "prelu_binary_tile"};
         case LT:
             if (int_data_format) {
                 return {
