@@ -20,12 +20,6 @@ namespace ckernel
 namespace sfpu
 {
 
-// Set once bitonic_top32_ph3_st4_to_1's fixed 5-instruction step-4/step-3/transpose
-// body has been recorded into the replay buffer; the body never varies across calls
-// (only the SFPCONFIG toggle around it depends on dir), so it is recorded exactly once
-// per kernel launch and replayed on every subsequent call.
-static bool top32_ph3_st4_replay_recorded = false;
-
 // Currently unused: 8-datum load/store variants kept alongside the *16
 // versions below for future top32 configurations that process half-width
 // strips (e.g. single-LREG-pair sorts); not referenced by any kernel today.
@@ -139,9 +133,8 @@ inline void bitonic_top32_store16(std::uint32_t dist0, std::uint32_t dist1)
     }
 }
 
-inline void bitonic_top32_ph3_st4_to_1(bool dir)
+inline void bitonic_top32_ph3_st4_to_1(bool dir, bool &init_replay, std::uint32_t replay_start)
 {
-    constexpr std::uint32_t replay_start = 0;
     constexpr std::uint32_t replay_count = 5; // Step 4 (2) + Step 3 (2) + TRANSP (1)
 
     if (dir == static_cast<bool>(SortDir::ArgMin))
@@ -152,9 +145,10 @@ inline void bitonic_top32_ph3_st4_to_1(bool dir)
     }
 
     // This step-4/step-3/transpose body is identical on every call and is applied
-    // twice per call (two 3-to-1 collapses); record it into the replay buffer once
-    // and issue two replays per call thereafter to amortize instruction fetch/decode.
-    if (!top32_ph3_st4_replay_recorded)
+    // twice per call (two 3-to-1 collapses). The caller owns replay validity only
+    // for its current LLK invocation: another SFPU op may overwrite these slots
+    // between invocations. Record-and-execute once, then reuse within that call.
+    if (init_replay)
     {
         load_replay_buf<Exec>(
             replay_start,
@@ -171,7 +165,7 @@ inline void bitonic_top32_ph3_st4_to_1(bool dir)
 
                 TTI_SFPTRANSP(0, 0, 0, 0);
             });
-        top32_ph3_st4_replay_recorded = true;
+        init_replay = false;
     }
     else
     {
@@ -280,7 +274,10 @@ inline void bitonic_top32_inc_x4_dest(std::uint32_t inc, bool cr)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_phases_steps_(const int idir)
 {
-    bool dir = idir;
+    // Slots [8, 13) are scratch space in the SFPU half of the shared replay buffer.
+    constexpr std::uint32_t replay_start = 8;
+    bool init_replay                     = true;
+    bool dir                             = idir;
     // produce bitonic sequences len=16
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int d = 0; d < 4; d++)
@@ -289,7 +286,7 @@ inline void _bitonic_top32_phases_steps_(const int idir)
         bitonic_top32_ph0_st1_to_1();
         bitonic_top32_ph1_st2_to_1();
         bitonic_top32_ph2_st3_to_1();
-        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_ph3_st4_to_1(dir, init_replay, replay_start);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         dir = !dir;
     }
@@ -324,10 +321,10 @@ inline void _bitonic_top32_phases_steps_(const int idir)
     for (int d = 0; d < 2; d++)
     {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_ph3_st4_to_1(dir, init_replay, replay_start);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_ph3_st4_to_1(dir, init_replay, replay_start);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         dir = !dir;
     }
@@ -351,6 +348,9 @@ inline void _bitonic_top32_merge_(const bool across_tiles)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second)
 {
+    // Slots [8, 13) are scratch space in the SFPU half of the shared replay buffer.
+    constexpr std::uint32_t replay_start = 8;
+    bool init_replay                     = true;
     // Step 5
     bool dir = idir;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -374,10 +374,10 @@ inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second)
     for (std::uint32_t d = 0; d < (skip_second ? 1 : 2); d++)
     {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_ph3_st4_to_1(dir, init_replay, replay_start);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_ph3_st4_to_1(dir, init_replay, replay_start);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         dir = !dir;
     }
@@ -402,6 +402,9 @@ inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min>
 inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index)
 {
+    // Slots [8, 13) are scratch space in the SFPU half of the shared replay buffer.
+    constexpr std::uint32_t replay_start   = 8;
+    bool init_replay                       = true;
     constexpr std::uint32_t odd_col_offset = 2;
     constexpr bool decreasing              = false;
     const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
@@ -415,7 +418,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index)
         for (int d = 0; d < 4; d++)
         {
             bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-            bitonic_top32_ph3_st4_to_1(dir);
+            bitonic_top32_ph3_st4_to_1(dir, init_replay, replay_start);
             bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
             dir = !dir;
         }
@@ -487,6 +490,9 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_combine_(std::uint32_t dst_inde
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
 {
+    // Slots [8, 13) are scratch space in the SFPU half of the shared replay buffer.
+    constexpr std::uint32_t replay_start   = 8;
+    bool init_replay                       = true;
     constexpr bool decreasing              = false;
     constexpr std::uint32_t odd_col_offset = 2;
     const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
@@ -517,7 +523,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
     for (int d = 0; d < 2; d++)
     {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(decreasing);
+        bitonic_top32_ph3_st4_to_1(decreasing, init_replay, replay_start);
         set_dst_write_addr_offset(tile_offset + odd_col_offset);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         set_dst_write_addr_offset(tile_offset);
@@ -570,7 +576,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
     for (int d = 0; d < 2; d++)
     {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(decreasing);
+        bitonic_top32_ph3_st4_to_1(decreasing, init_replay, replay_start);
         set_dst_write_addr_offset(tile_offset + odd_col_offset);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         set_dst_write_addr_offset(tile_offset);
@@ -626,7 +632,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
     for (int d = 0; d < 2; d++)
     {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(decreasing);
+        bitonic_top32_ph3_st4_to_1(decreasing, init_replay, replay_start);
         set_dst_write_addr_offset(tile_offset + odd_col_offset);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
         set_dst_write_addr_offset(tile_offset);
@@ -679,7 +685,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
     for (int d = 0; d < 2; d++)
     {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
-        bitonic_top32_ph3_st4_to_1(decreasing);
+        bitonic_top32_ph3_st4_to_1(decreasing, init_replay, replay_start);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
     }
 }
