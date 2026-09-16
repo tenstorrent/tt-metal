@@ -181,8 +181,12 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
 
 
 def fused_qkv_head_norm_enabled() -> bool:
-    """Opt out of the fused decode q/k/v per-head norm with ``GEMMA4_FUSED_QKV_NORM=0``."""
-    return os.environ.get("GEMMA4_FUSED_QKV_NORM", "1").lower() not in ("0", "false", "no")
+    """Opt in to the fused decode q/k/v per-head norm with ``GEMMA4_FUSED_QKV_NORM=1``.
+
+    Default off: main @ 73059c26d99 used three separate per-head norms; enabling
+    this without the matching HiFi4 numerics regressed batch-1 decode quality.
+    """
+    return os.environ.get("GEMMA4_FUSED_QKV_NORM", "0").lower() in ("1", "true", "yes")
 
 
 # The fused decode norm is restricted to batch == 1.
@@ -231,7 +235,19 @@ def apply_fused_qkv_head_norm(xqkv, qkv_norm_weight, eps, num_rows, head_dim, me
     """
     b = int(xqkv.shape[-2])
     flat = ttnn.reshape(xqkv, (1, 1, b * num_rows, head_dim))
-    normed = ttnn.rms_norm(flat, epsilon=eps, memory_config=memory_config)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        xqkv.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    normed = ttnn.rms_norm(
+        flat,
+        epsilon=eps,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
     scaled = ttnn.mul(normed, qkv_norm_weight, memory_config=memory_config)
     normed.deallocate(True)
     out = ttnn.reshape(scaled, (1, 1, b, num_rows * head_dim))
