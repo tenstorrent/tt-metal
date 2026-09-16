@@ -42,9 +42,87 @@ function enumTitle(value) {
   return parts.join(" · ");
 }
 
-function idTail(id) {
-  const parts = String(id).split(".");
-  return parts[parts.length - 1] || id;
+// Siblings often share a tail (`credits.downstream.vc0.edge3.free_slots` vs
+// `credits.vc2_receiver.free_slots`), so label a region by what its parent does not say.
+function relativeId(region) {
+  const id = String(region.id ?? "");
+  const parent = String(region.parent ?? "");
+  if (parent && id.startsWith(`${parent}.`)) {
+    return id.slice(parent.length + 1);
+  }
+  return id;
+}
+
+function hasKey(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function hex32(raw) {
+  return typeof raw === "number" ? `0x${(raw >>> 0).toString(16).padStart(8, "0")}` : String(raw);
+}
+
+function chipList(entries) {
+  const list = el("div", "value-chips");
+  for (const [label, value] of entries) {
+    const chip = el("span", "value-chip");
+    chip.append(el("b", null, label), el("span", null, value));
+    list.append(chip);
+  }
+  return list;
+}
+
+function jsonDetails(value) {
+  const details = el("details", "region-json");
+  details.append(el("summary", null, `${Object.keys(value).length} fields`));
+  details.append(el("pre", null, JSON.stringify(value, null, 2)));
+  return details;
+}
+
+// Formats by decoded value shape, not by builder names: counter arrays are one u32 per
+// channel, stream registers carry pre/post, u32 regions carry a word plus its neighbors.
+function regionValueNode(region) {
+  const value = region.value;
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return el("div", "region-value", formatScalar(value));
+  }
+  if (hasKey(value, "name") || hasKey(value, "raw")) {
+    const node = el("div", "region-value", enumLabel(value));
+    node.title = enumTitle(value);
+    return node;
+  }
+  if (Array.isArray(value.counters)) {
+    const stride = region.stride ? ` · ${region.stride} B stride` : "";
+    const node = chipList(value.counters.map((counter, index) => [`ch${index}`, String(counter)]));
+    node.title = `one counter per sender channel${stride}`;
+    return node;
+  }
+  if (hasKey(value, "pre") && hasKey(value, "post")) {
+    const node = el(
+      "div",
+      "region-value",
+      value.torn ? `${dash(value.pre)} → ${dash(value.post)} (moved during capture)` : dash(value.post),
+    );
+    node.title = `pre ${dash(value.pre)} · post ${dash(value.post)}`;
+    return node;
+  }
+  if (Array.isArray(value.words)) {
+    const trailing = value.words.slice(1);
+    const text = trailing.every((word) => word === 0) ? dash(value.word) : value.words.join(" ");
+    return el("div", "region-value", text);
+  }
+  if (Array.isArray(value.samples)) {
+    const node = el("div", "region-value", value.samples.map((sample) => hex32(sample.raw)).join(" → "));
+    node.title = value.samples.map((sample) => `${sample.t}: ${sample.raw}`).join("\n");
+    return node;
+  }
+  const entries = Object.entries(value);
+  if (entries.some(([, item]) => item !== null && typeof item === "object")) {
+    return jsonDetails(value);
+  }
+  return chipList(entries.map(([key, item]) => [key, formatScalar(item)]));
 }
 
 function formatScalar(value) {
@@ -94,28 +172,42 @@ function empty(text) {
   return el("p", "empty-list", text);
 }
 
-function headerDest(header) {
-  const dest = header?.routing?.destination;
-  if (!dest) {
-    return "";
-  }
-  return `mesh ${dest.mesh_id} chip ${dest.chip_id}`;
-}
-
-function renderSummary(router) {
-  const section = el("section", "panel-block");
-  section.append(el("h3", null, "Summary"));
-  const meta = el("div", "kv-grid");
+export function renderSummary(router) {
+  const section = el("section", "router-card");
   const identity = router.identity || {};
   const lifecycle = router.lifecycle || {};
   const liveness = router.liveness || {};
+
+  const heading = el("div", "router-card-heading");
+  heading.append(el("div", "eyebrow", "Selected router"));
+  const title = el("h3", null, `${router.direction || "—"} · eth ${router.id.eth_chan} · plane ${dash(router.routing_plane)}`);
+  title.title = endpointLabel(router.id);
+  heading.append(title);
+  heading.append(el("p", "muted", `${endpointLabel(router.id)} · ${dash(router.link_class)}`));
+  section.append(heading);
+
+  const badges = el("div", "value-chips");
+  const status = el("span", `status ${router.capture?.status || "unknown"}`, router.capture?.status || "unknown");
+  badges.append(status);
+  const identityBadge = el(
+    "span",
+    `status ${identity.matches === true ? "ok" : identity.matches === false ? "reset" : "unknown"}`,
+    identity.matches === true ? "identity matches" : identity.matches === false ? "identity mismatch" : "identity —",
+  );
+  badges.append(identityBadge);
+  badges.append(
+    el(
+      "span",
+      "status",
+      router.stall_score === null || router.stall_score === undefined
+        ? "stall —"
+        : `stall ${Number(router.stall_score).toFixed(2)}`,
+    ),
+  );
+  section.append(badges);
+
+  const meta = el("div", "kv-grid");
   meta.append(
-    kv("endpoint", endpointLabel(router.id)),
-    kv("direction", dash(router.direction)),
-    kv("link class", dash(router.link_class)),
-    kv("plane", dash(router.routing_plane)),
-    kv("status", dash(router.capture?.status)),
-    kv("identity", identity.matches === true ? "matches" : identity.matches === false ? "mismatch" : "—"),
     kv("exit", dash(lifecycle.exit_state), enumTitle(lifecycle.edm_status)),
     kv("EDM", enumLabel(lifecycle.edm_status), enumTitle(lifecycle.edm_status)),
     kv("term", enumLabel(lifecycle.termination_signal), enumTitle(lifecycle.termination_signal)),
@@ -126,128 +218,109 @@ function renderSummary(router) {
         ? `${liveness.classification} (fabric ${liveness.fabric_samples}, base_fw ${liveness.base_fw_samples})`
         : "—",
     ),
-    kv("stall", router.stall_score === null || router.stall_score === undefined ? "—" : Number(router.stall_score).toFixed(2)),
   );
   section.append(meta);
   for (const warning of router.warnings || []) {
     section.append(el("p", "panel-warning", warning));
   }
+  return section;
+}
+
+function senderCredits(sender) {
+  if (sender.credit_backing === "counter") {
+    return `ack ${dash(sender.counters?.to_sender_ack)} / done ${dash(sender.counters?.to_sender_completion)}`;
+  }
+  return `ack ${dash(sender.acked_pending)} / done ${dash(sender.completed_pending)}`;
+}
+
+function renderSenderRow(sender) {
+  const row = el("div", `sender-row${sender.status && sender.status !== "ok" ? ` status-${sender.status}` : ""}`);
+  const id = el("span", "mono");
+  id.append(el("b", null, `ch${sender.index}`));
+  row.append(id);
+  row.append(el("span", "role-chip", dash(sender.role)));
+  row.append(el("span", "muted mono", sender.vc === null || sender.vc === undefined ? "—" : `VC${sender.vc}`));
+  const occ = el("span", "sender-occ");
+  occ.append(occupancyBar(sender.occupied, sender.depth, sender.status));
+  row.append(occ);
+  row.append(el("span", "mono", `free ${dash(sender.free_slots)}`));
+  const credits = el("span", "mono muted", senderCredits(sender));
+  credits.title =
+    sender.credit_backing === "counter"
+      ? "backed by on-device counters"
+      : "backed by credit streams";
+  row.append(credits);
+  row.append(el("span", "muted", dash(sender.connection?.name)));
+  return row;
+}
+
+function renderReceiverChip(receiver) {
+  const chip = el(
+    "span",
+    `value-chip${receiver.status && receiver.status !== "ok" ? ` status-${receiver.status}` : ""}`,
+  );
+  const pending =
+    typeof receiver.pkts_pending === "number" && typeof receiver.depth === "number"
+      ? `${receiver.pkts_pending}/${receiver.depth}`
+      : `${dash(receiver.pkts_pending)}/${dash(receiver.depth)}`;
+  chip.append(el("b", null, `ch${receiver.index}`), el("span", null, `VC${dash(receiver.vc)} · pending ${pending}`));
+  chip.title = `receiver ${receiver.index}, status ${receiver.status || "unknown"}`;
+  return chip;
+}
+
+function renderEdgeChip(edge) {
+  const free = edge.free_slots;
+  const state = free === 0 ? "starved" : free === null || free === undefined ? "unknown" : "open";
+  const chip = el("span", `value-chip edge-chip edge-${state}`);
+  chip.append(el("b", null, `vc${edge.vc}:e${edge.edge}`), el("span", null, `free ${dash(free)}`));
+  if (state === "starved") {
+    chip.title = "downstream edge reports zero free slots — backpressure candidate";
+  }
+  return chip;
+}
+
+export function renderChannels(router) {
+  const section = el("section", "channels-card");
+  const heading = el("div", "buffers-title");
+  heading.append(
+    el("div", "eyebrow", "Channels"),
+    el("h3", null, "Senders · receivers · downstream"),
+    el("p", "muted", "Occupancy from streams; credit returns as ack/done pairs."),
+  );
+  section.append(heading);
 
   const channels = router.channels || { senders: [], receivers: [], downstream: [] };
   section.append(el("h4", null, "Senders"));
   if (!channels.senders?.length) {
     section.append(empty("No enabled senders."));
   } else {
-    const table = el("table", "data-table");
-    const head = el("tr");
-    for (const label of ["idx", "vc", "role", "occupied", "free", "credits", "conn"]) {
-      head.append(el("th", null, label));
-    }
-    table.append(head);
+    const list = el("div", "sender-list");
     for (const sender of channels.senders) {
-      const row = el("tr");
-      row.append(el("td", "mono", sender.index));
-      row.append(el("td", "mono", dash(sender.vc)));
-      row.append(el("td", null, dash(sender.role)));
-      const occ = el("td");
-      occ.append(occupancyBar(sender.occupied, sender.depth, sender.status));
-      row.append(occ);
-      row.append(el("td", "mono", dash(sender.free_slots)));
-      const credits = sender.credit_backing === "counter"
-        ? `ack ${dash(sender.counters?.to_sender_ack)} / done ${dash(sender.counters?.to_sender_completion)}`
-        : `ack ${dash(sender.acked_pending)} / done ${dash(sender.completed_pending)}`;
-      row.append(el("td", "mono", credits));
-      row.append(el("td", null, dash(sender.connection?.name)));
-      table.append(row);
+      list.append(renderSenderRow(sender));
     }
-    section.append(table);
+    section.append(list);
   }
 
   section.append(el("h4", null, "Receivers"));
   if (!channels.receivers?.length) {
     section.append(empty("No enabled receivers."));
   } else {
-    const table = el("table", "data-table");
-    const head = el("tr");
-    for (const label of ["idx", "vc", "pending"]) {
-      head.append(el("th", null, label));
-    }
-    table.append(head);
+    const list = el("div", "value-chips");
     for (const receiver of channels.receivers) {
-      const row = el("tr");
-      row.append(el("td", "mono", receiver.index));
-      row.append(el("td", "mono", dash(receiver.vc)));
-      const occ = el("td");
-      occ.append(occupancyBar(receiver.pkts_pending, receiver.depth, receiver.status));
-      row.append(occ);
-      table.append(row);
+      list.append(renderReceiverChip(receiver));
     }
-    section.append(table);
+    section.append(list);
   }
 
-  section.append(el("h4", null, "Downstream"));
+  section.append(el("h4", null, "Downstream edges"));
   if (!channels.downstream?.length) {
     section.append(empty("No enabled downstream edges."));
   } else {
-    const table = el("table", "data-table");
-    const head = el("tr");
-    for (const label of ["vc", "edge", "free", "depth"]) {
-      head.append(el("th", null, label));
-    }
-    table.append(head);
+    const list = el("div", "value-chips");
     for (const edge of channels.downstream) {
-      const row = el("tr");
-      row.append(el("td", "mono", edge.vc));
-      row.append(el("td", "mono", edge.edge));
-      row.append(el("td", "mono", dash(edge.free_slots)));
-      row.append(el("td", "mono", "—"));
-      table.append(row);
+      list.append(renderEdgeChip(edge));
     }
-    section.append(table);
-  }
-  return section;
-}
-
-function renderRings(router) {
-  const section = el("section", "panel-block");
-  section.append(el("h3", null, "Rings"));
-  const rings = router.rings || [];
-  if (!rings.length) {
-    section.append(empty("No packet rings."));
-    return section;
-  }
-  for (const ring of rings) {
-    const details = el("details", "ring-row");
-    const summary = el("summary");
-    const title = el("span", "ring-id", ring.id);
-    const bar = occupancyBar(ring.occupied_count, ring.depth, ring.occupancy_status);
-    const status = el("span", `status ${ring.occupancy_status}`, ring.occupancy_status);
-    summary.append(title, bar, status);
-    details.append(summary);
-    const slots = ring.slots || [];
-    if (!slots.length) {
-      details.append(el("p", "muted", "No slot headers in this file (`--slots none` or ring unread)."));
-    } else {
-      const table = el("table", "data-table");
-      const head = el("tr");
-      for (const label of ["slot", "state", "plausible", "dest"]) {
-        head.append(el("th", null, label));
-      }
-      table.append(head);
-      for (const slot of slots) {
-        const row = el("tr");
-        if (slot.header && slot.header.plausible === false) {
-          row.classList.add("implausible");
-        }
-        row.append(el("td", "mono", slot.index));
-        row.append(el("td", "mono", slot.slot_state || "unknown"));
-        row.append(el("td", "mono", slot.header ? String(Boolean(slot.header.plausible)) : "—"));
-        row.append(el("td", "mono", headerDest(slot.header) || dash(slot.error)));
-        table.append(row);
-      }
-      details.append(table);
-    }
-    section.append(details);
+    section.append(list);
   }
   return section;
 }
@@ -259,7 +332,13 @@ function renderRegionNode(region, children, byParent, expert) {
     const folder = el("details", `region-group${disabled ? " muted" : ""}`);
     folder.open = region.parent === "";
     const summary = el("summary");
-    summary.append(el("span", null, region.id || "(root)"), el("span", `status ${region.status || "ok"}`, region.status || "group"));
+    const name = el("span", null, relativeId(region) || "(root)");
+    name.title = region.id || "";
+    summary.append(name);
+    if (disabled) {
+      summary.append(el("span", "status disabled", "disabled"));
+    }
+    summary.append(el("span", `status ${region.status || "ok"}`, region.status || "group"));
     folder.append(summary);
     const nested = el("div", "region-children");
     for (const child of children) {
@@ -271,18 +350,21 @@ function renderRegionNode(region, children, byParent, expert) {
 
   const leaf = el("div", `region-leaf${disabled ? " muted" : ""}`);
   const line = el("div", "region-line");
-  line.append(el("span", "region-name", idTail(region.id)));
-  line.append(el("span", `status ${region.status || "unknown"}`, region.status || "unknown"));
+  const name = el("span", "region-name", relativeId(region));
+  name.title = region.id || "";
+  line.append(name);
+  const badges = el("span", "region-badges");
+  if (disabled && region.status !== "unallocated") {
+    badges.append(el("span", "status disabled", "disabled"));
+  }
+  badges.append(el("span", `status ${region.status || "unknown"}`, region.status || "unknown"));
+  line.append(badges);
   leaf.append(line);
   if (region.status === "unallocated") {
     return leaf;
   }
-  if (region.value !== null && region.value !== undefined) {
-    const value = el("div", "region-value");
-    value.textContent = formatScalar(region.value);
-    if (region.value && typeof region.value === "object") {
-      value.title = enumTitle(region.value) || formatScalar(region.value);
-    }
+  const value = regionValueNode(region);
+  if (value) {
     leaf.append(value);
   }
   if (expert && region.raw_hex) {
@@ -294,7 +376,7 @@ function renderRegionNode(region, children, byParent, expert) {
   return leaf;
 }
 
-function renderRegions(router, expert) {
+export function renderRegions(router, expert) {
   const section = el("section", "panel-block");
   section.append(el("h3", null, "Regions"));
   const regions = router.regions || [];
@@ -323,14 +405,6 @@ function renderRegions(router, expert) {
   return section;
 }
 
-export function renderPanel(root, router, { expert = false } = {}) {
-  if (!router) {
-    root.replaceChildren(empty("Select a router on the map or in the list."));
-    return;
-  }
-  root.replaceChildren(
-    renderSummary(router),
-    renderRings(router),
-    renderRegions(router, expert),
-  );
+export function emptyNotice(text) {
+  return empty(text);
 }

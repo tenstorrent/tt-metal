@@ -143,7 +143,7 @@ def _decode_case(chip_specs: list[dict], links: list[dict], *, topology: str = "
         decoded = build_decoded(
             discover_inputs([case]),
             generated_at="2026-09-15T00:00:00Z",
-            slots="none",
+            slots="headers",
         )
         return _sanitize(_force_identity(decoded))
 

@@ -83,6 +83,22 @@ class FixtureTest(unittest.TestCase):
         chips = load("line_1d.json")["topology"]["meshes"][0]["chips"]
         self.assertEqual([chip["mesh_coord"] for chip in chips], [[0, 0], [0, 1], [0, 2], [0, 3]])
 
+    def test_mesh_contains_clickable_header_candidates(self):
+        decoded = load("mesh_2d.json")
+        slots = [
+            slot
+            for router in decoded["routers"]
+            for ring in router["rings"]
+            for slot in ring.get("slots", [])
+        ]
+        self.assertTrue(slots)
+        self.assertTrue(any(slot["header"] and slot["header"]["plausible"] for slot in slots))
+        self.assertTrue(any(slot["header"] and not slot["header"]["plausible"] for slot in slots))
+        plausible = next(slot["header"] for slot in slots if slot["header"] and slot["header"]["plausible"])
+        self.assertIn("payload_size_bytes", plausible)
+        self.assertIn("noc_send_type", plausible)
+        self.assertIn("routing", plausible)
+
 
 if __name__ == "__main__":
     unittest.main()

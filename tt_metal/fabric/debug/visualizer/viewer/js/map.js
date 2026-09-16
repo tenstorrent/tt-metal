@@ -1,4 +1,5 @@
 import { captureAppearance, linkAppearance, stallStroke } from "./color.js";
+import { renderCardinal } from "./chip.js";
 import { layoutModel, PORT } from "./layout.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -64,13 +65,21 @@ export class FabricMap {
 
   popDrill() {
     if (this.drillChipKey) {
-      this.drillChipKey = null;
-      this.viewBox = fitBounds(this.layout.bounds);
-      this.render();
-      this.onDrill?.(null);
+      this.fitView();
       return true;
     }
     return false;
+  }
+
+  fitView() {
+    if (!this.layout) {
+      return false;
+    }
+    this.drillChipKey = null;
+    this.viewBox = fitBounds(this.layout.bounds);
+    this.render();
+    this.onDrill?.(null);
+    return true;
   }
 
   zoom(factor, origin) {
@@ -97,14 +106,19 @@ export class FabricMap {
       return;
     }
     this.drillChipKey = chipKey;
-    this.viewBox = {
-      x: chip.x - 36,
-      y: chip.y - 36,
-      w: chip.w + 72,
-      h: chip.h + 72,
-    };
+    const endpoints = chip.chip.routers || [];
+    const selectedOnChip = endpoints.some(
+      (endpoint) => `${endpoint.mesh_id}:${endpoint.chip_id}:${endpoint.eth_chan}` === this.selectedKey,
+    );
+    if (!selectedOnChip && endpoints.length) {
+      const first = endpoints[0];
+      this.selectedKey = `${first.mesh_id}:${first.chip_id}:${first.eth_chan}`;
+    }
     this.render();
     this.onDrill?.(chip);
+    if (this.selectedKey) {
+      this.onSelect?.(this.selectedKey, null);
+    }
   }
 
   pointerToSvg(event) {
@@ -119,9 +133,26 @@ export class FabricMap {
       this.root.replaceChildren();
       return;
     }
+    if (this.drillChipKey) {
+      this.svg = null;
+      renderCardinal(
+        this.root,
+        this.model,
+        this.layout,
+        this.drillChipKey,
+        this.selectedKey,
+        (key) => {
+          this.selectedKey = key;
+          this.render();
+          this.onSelect?.(key, null);
+        },
+      );
+      return;
+    }
     const svgNode = svg("svg", {
       class: "fabric-map",
       viewBox: viewBoxString(this.viewBox),
+      preserveAspectRatio: "xMidYMid meet",
       role: "img",
       "aria-label": "Fabric topology map",
     });
