@@ -630,7 +630,7 @@ class TestStoreWrite(unittest.TestCase):
             # already-open date dir must stay world-writable.
             date_dir = Path(tmp) / "2026-08-19"
             date_dir.mkdir()
-            os.chmod(date_dir, 0o1777)
+            os.chmod(date_dir, STORE_DIR_MODE_WORLD)
             argv = [
                 "--test-type",
                 "physical",

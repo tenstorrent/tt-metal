@@ -42,6 +42,7 @@ STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
 # root is already other-writable (then date dirs follow that and stay sticky).
 STORE_DIR_MODE = 0o3770
 STORE_DIR_MODE_WORLD = 0o1777
+STORE_OTHER_WRITE = 0o002
 
 
 def date_dir_mode_for_root(root_mode: int) -> int:
@@ -51,7 +52,7 @@ def date_dir_mode_for_root(root_mode: int) -> int:
     group, so a group-only ``03770`` date dir locks out later writers when the
     typed store root is already ``0777``.
     """
-    if root_mode & 0o002:
+    if root_mode & STORE_OTHER_WRITE:
         return STORE_DIR_MODE_WORLD
     return STORE_DIR_MODE
 
@@ -673,7 +674,7 @@ def _ensure_date_dir(root: Path, date_name: str) -> int:
             current_mode = os.fstat(date_dir_fd).st_mode
             # Never undo a world-writable date dir created by wrappers or an
             # earlier world-writable root; only repair toward desired_mode.
-            if current_mode & 0o002:
+            if current_mode & STORE_OTHER_WRITE:
                 mode = STORE_DIR_MODE_WORLD
             else:
                 mode = desired_mode
