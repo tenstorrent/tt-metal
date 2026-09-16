@@ -124,6 +124,61 @@ The text encoder (UMT5) is parallelized with tensor parallelism. The VAE is para
 
 Both variants use the same MoE two-stage denoising architecture with separate high-noise and low-noise expert transformers.
 
+## Step caching (DBCache)
+
+The pipeline supports [cache-dit](https://github.com/vipshop/cache-dit) style **Dual Block Cache** step
+skipping, ported to TT-NN in `models/tt_dit/utils/dbcache.py` (decision logic) and
+`models/tt_dit/pipelines/wan/dbcache.py` (device buffers / tracers). On every denoising step the first
+`Fn` blocks are computed and the change they make to the hidden state is compared with the previous
+computed step (relative mean-L1). If the change is below `residual_diff_threshold`, the remaining
+blocks are skipped and the residual they produced on the last computed step is re-applied instead.
+Each expert (high-noise / low-noise) and each CFG branch (conditional / unconditional) is cached
+independently, mirroring cache-dit's `has_separate_cfg=True` dual-transformer setup.
+
+```python
+from models.tt_dit.pipelines.wan.dbcache import WanDBCacheConfig
+from models.tt_dit.utils.dbcache import DBCacheConfig
+
+# Default preset (cache-dit's Wan 2.2 settings with a TT-tuned 0.05 threshold): F1B0,
+# <= 2 consecutive cached steps, high-noise expert: 4 warmup steps / max 8 cached,
+# low-noise expert: 2 warmup / max 20 cached. See `WanDBCacheConfig.default` for the rationale.
+frames = pipeline(prompts=[...], num_inference_steps=40, cache_config=WanDBCacheConfig.default())
+
+# Same knobs for both experts, custom threshold:
+frames = pipeline(prompts=[...], num_inference_steps=40, cache_config=DBCacheConfig(residual_diff_threshold=0.12))
+
+pipeline.cache_summary()  # cached steps and residual diffs per expert / branch for the last call
+```
+
+`cache_config=None` (the default) runs the original single-trace path. A default can also be set at
+construction time via `WanPipelineConfig.default(..., cache_config=...)`.
+
+A/B test (same seed, baseline vs. split-without-caching vs. DBCache, with PSNR against the baseline):
+
+```bash
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_dbcache.py -k "bh_4x8sp1tp0nl2_ring"
+```
+
+Measured on Blackhole Galaxy (4x8, sp=8, tp=4, ring), 832x480, 81 frames, 40 steps, one prompt, seed 0:
+
+| Run | Denoising | Cached steps (of 40, per CFG branch) | PSNR vs. baseline | PCC vs. baseline |
+|---|---|---|---|---|
+| baseline (no cache) | 45.3s | 0 | - | - |
+| split path, caching disabled | 46.2s | 0 | inf (bit-exact) | 1.0000 |
+| DBCache default preset (threshold 0.05) | 37.2s (1.22x) | 8 | 23.3 dB | 0.974 |
+| DBCache, cache-dit's threshold 0.08 | 32.7s (1.38x) | 12 | 15.7 dB | 0.849 |
+
+The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
+video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
+bit-exact as well.
+
+At threshold 0.08 the video is still clean and coherent but follows a different trajectory (different
+choreography); at 0.05 it is visually the same video as the uncached run. TaylorSeer forecasting
+(`taylorseer_order=1/2`) did not improve agreement with the baseline in this setup and is off by default.
+The cached-step pattern is alternating (compute, cache, compute, ...) because the residual diff is measured
+against the last *computed* step. Multi-host (4x32) meshes are not supported yet: the residual-diff readback
+needs a host-side all-reduce.
+
 ## Limitations
 
 While output videos look good, we have many items of work in progress to improve correctness.
