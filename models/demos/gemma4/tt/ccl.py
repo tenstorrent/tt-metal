@@ -50,6 +50,25 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
+def _tiny_decode_fused_ar(tensor) -> bool:
+    """True for launch-bound decode all-reduces (MTP drafter: M≤32, N≤2048).
+
+    The 31B target AR is bandwidth-bound at hidden=5376 and wants the tuned
+    sync split. The 453M it-assistant is hidden=1024 with 24 ARs per K=3 iter;
+    those payloads are tiny and the extra RS+AG launch dominates. Fused
+    ``ttnn.all_reduce`` is one kernel and bit-identical. Default on;
+    ``GEMMA4_CCL_TINY_FUSED=0`` keeps the split for every shape.
+    """
+    if os.environ.get("GEMMA4_CCL_TINY_FUSED", "1").lower() in ("0", "false", "no"):
+        return False
+    try:
+        h = int(tensor.shape[-2])
+        w = int(tensor.shape[-1])
+    except Exception:
+        return False
+    return h <= 32 and w <= 2048
+
+
 def ccl_sync_split_enabled() -> bool:
     """Run the TP all-reduce as sync ``reduce_scatter`` + sync ``all_gather``
     instead of the fused ``ttnn.all_reduce``. Default ON; ``GEMMA4_CCL_SPLIT=0``
@@ -428,8 +447,32 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
-    # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
-    # Fabric / cluster_axis supply those defaults (same as sync all_gather).
+    if ccl_sync_split_enabled() and not _tiny_decode_fused_ar(tensor):
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=3,
+            cluster_axis=tp_axis,
+            num_links=ccl_manager.num_links,
+            topology=topology,
+            memory_config=memory_config,
+            num_workers_per_link=ccl_sync_rs_workers(),
+            chunks_per_sync=ccl_sync_rs_chunks(),
+            num_buffers_per_channel=ccl_sync_rs_buffers(),
+        )
+        tensor.deallocate(True)
+        # num_links/topology are deprecated-and-ignored on the new ttnn.all_gather
+        # (tt-metal 3218270556c, "New ttnn.all_gather" #48301): passing them only
+        # logs the Sep-2026 removal warning. Links/topology come from the Fabric
+        # config now — see ccl_allgather() below, which already omits them.
+        result = ttnn.all_gather(
+            scattered,
+            dim=3,
+            cluster_axis=tp_axis,
+            memory_config=memory_config,
+        )
+        scattered.deallocate(True)
+        return result
+
     result = ttnn.all_reduce(
         tensor,
         cluster_axis=tp_axis,
