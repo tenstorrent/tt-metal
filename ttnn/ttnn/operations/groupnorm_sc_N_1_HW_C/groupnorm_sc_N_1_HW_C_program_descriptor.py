@@ -31,7 +31,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # ---------------------------------------------------------------------------
 # Knobs (single source of truth — see op_design.md → Parameters / Buffer-depth knobs)
 # ---------------------------------------------------------------------------
-CHUNK_TILES_TARGET = 32  # tiles per (chunk_rows x cols_per_group) block; chunk_rows derives from it
+CHUNK_TILES_TARGET = 16  # tiles per (chunk_rows x cols_per_group) block; chunk_rows derives from it
 X_DEPTH = 2  # streaming x ring depth, in chunks
 X_RM_DEPTH = 2  # RM stick ring depth, in tile-rows
 MEMBERSHIP_DEPTH = 1  # membership (E) blocks buffered
@@ -53,6 +53,10 @@ OUT_STORE_FLUSH_PER_BLOCK = True
 # "alternate_x" (odd logical columns swapped), "alternate_y" (odd rows), "checker" ((x + y) odd), "half_x"
 # (right half of the grid), "half_y" (bottom half). The mcast / gather helpers follow the kernel's noc_index automatically.
 DM_NOC_SPLIT = {"TILE": "alternate_y", "ROW_MAJOR": "alternate_y"}
+# The split only pays when enough cores share the DRAM routes; on small rectangles it costs the gather / multicast a
+# mixed-NoC round trip ((1,1,128,128) on 16 cores: 8.24 -> 8.58 us). Below this many cores per image rectangle the
+# default pair is used everywhere.
+DM_NOC_SPLIT_MIN_CORES = 32
 MIN_TILES_PER_CORE = 1  # grid-synchronisation lamp: fewer, fatter cores per image when raised
 # Tie-break among the core splits that use the most cores, per input layout:
 #   "wide" = largest Pc (narrowest per-core Ct_core) — TILE input: the pass-2 affine build (one matmul + chains per
@@ -655,7 +659,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     # ---- data-movement kernels: one descriptor per (kernel, NoC) set (DM_NOC_SPLIT) ------------
     # NoC enum values: 0 = NoC0 (RISCV_0_default), 1 = NoC1 (RISCV_1_default). Default pair = the framework's
     # Reader/WriterConfigDescriptor (reader RISCV_1 on the preferred DRAM-read NoC0, writer RISCV_0 on NoC1).
-    noc_policy = DM_NOC_SPLIT[layout_key]
+    noc_policy = DM_NOC_SPLIT[layout_key] if p_max >= DM_NOC_SPLIT_MIN_CORES else "none"
     core_list = [(x, y) for g in groups for (x, y) in g.cores]
     noc_sets = {
         False: [c for c in core_list if not _swap_dm_nocs(noc_policy, c[0], c[1], Gx, Gy)],
