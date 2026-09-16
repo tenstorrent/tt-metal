@@ -207,6 +207,7 @@ own Wan 2.2 example runs `flow_shift=3` (480p) / `5` (720p). Re-running 480p wit
 | 5 | F1, 0.08 | 28.2s (1.60x) | 6 / 10 | 18.6 dB | 0.909 |
 | 3 | F1, 0.05 (default) | 39.8s (1.14x) | 0 / 6 | 35.6 dB | 0.998 |
 | 3 | F1, 0.08 | 28.4s (1.61x) | 4 / 12 | 21.5 dB | 0.952 |
+| 5, **720p** | F1, 0.08 | 93.8s vs 142.9s (1.52x) | 6 / 9 | 17.7 dB | 0.894 |
 
 With cache-dit's schedule and threshold the low-noise expert caches 10 to 12 steps (including consecutive
 pairs) and the pipeline reaches 1.6x while staying above PCC 0.9, i.e. the GPU-class result. Whether to change
