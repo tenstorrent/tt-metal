@@ -319,8 +319,8 @@ class FuserConfigSchema(BaseModel):
                 f"Validation failed:\n{format_validation_error(e)}"
             ) from None
 
-    @classmethod
-    def load(cls, test_name: str):
+    @staticmethod
+    def load_definition(test_name: str) -> dict:
         yaml_path = (FUSER_CONFIG_DIR / f"{test_name}.yaml").resolve()
         if not yaml_path.exists():
             yaml_path = (FUSER_CONFIG_DIR / arch.value / f"{test_name}.yaml").resolve()
@@ -335,6 +335,13 @@ class FuserConfigSchema(BaseModel):
         if not isinstance(config_dict, dict):
             raise ValueError(f"Invalid config in {yaml_path.name}")
 
+        return config_dict
+
+    @classmethod
+    def load(cls, test_name: str, config_dict: Optional[dict] = None):
+        if config_dict is None:
+            config_dict = cls.load_definition(test_name)
+        config_dict = config_dict.copy()
         supported_archs = config_dict.pop("supported_archs", None)
         if supported_archs is not None:
             if arch.value not in supported_archs:
@@ -344,10 +351,10 @@ class FuserConfigSchema(BaseModel):
             schema = cls.model_validate(config_dict)
         except ValidationError as e:
             raise ValueError(
-                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
+                f"Validation failed for {test_name}:\n{format_validation_error(e)}"
             ) from None
 
         try:
             return schema.to_fuser_config(test_name)
         except ValueError as e:
-            raise ValueError(f"Validation failed for {yaml_path.name}:\n{e}") from None
+            raise ValueError(f"Validation failed for {test_name}:\n{e}") from None
