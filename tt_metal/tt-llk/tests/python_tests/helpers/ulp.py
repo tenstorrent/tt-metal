@@ -9,9 +9,10 @@ budget can be added on top of something already pinned by host tests.
 
 Why an *integer* distance and not the fractional ``|err| / ulp(golden)`` that
 ``accuracy_metrics.compute_pointwise_metrics`` already reports: ``ulp(golden)`` is not the
-same size above and below a power of two, so a single representable step across such a
-boundary reads as 0.5 or 2.0 ULP and a budget of "1 ULP" stops being a well-defined
-predicate. The fractional form remains the better *diagnostic* and keeps its place in the
+same size above and below a power of two. ``local_ulp`` divides by the *upward* gap, so a
+single representable step below a boundary reads as 0.5 ULP and one above it reads as 1.0:
+a "1 ULP" fractional budget admits two representable steps below a power of two and only
+one above it, which is not a well-defined predicate. The fractional form remains the better *diagnostic* and keeps its place in the
 sweeps and the CSVs; this is the form a pass/fail line can use.
 
 The distance is measured over a **value-order index**: each bit pattern is mapped to its
@@ -19,11 +20,14 @@ rank in the format's ordered list of representable values, so a distance of N me
 "N representable values apart". Three properties of that mapping are what the harness
 needs:
 
-* ``flush_subnormals`` (the default) collapses the subnormal band onto zero *and compacts
-  it out of the ranking*, so the smallest normal is one step from zero. That is the SFPU's
-  own number system (DAZ+FTZ), and ``UnarySFPUGolden`` already models the FP16 flush, so
-  golden and metric agree. Without it a legitimately flushed result sitting next to a
-  subnormal golden reads as a ``2**mantissa_bits`` error that is really a 0-step agreement.
+* ``flush_subnormals`` collapses the subnormal band onto zero *and compacts it out of the
+  ranking*, so the smallest normal is one step from zero. That is the SFPU's own number
+  system (DAZ+FTZ) for bf16 and fp32, where it is also a no-op because the golden models
+  the same flush. Without it, a legitimately flushed result next to a subnormal golden
+  would read as a ``2**mantissa_bits - 1`` error that is really a 0-step agreement.
+  It defaults **per dtype** rather than to ``True`` -- see ``_FLUSHES_SUBNORMALS``, and
+  note that fp16 keeps its subnormals in this harness, so collapsing them there would
+  hide up to 1023 steps.
 * ``+0`` and ``-0`` are 0 steps apart, by construction rather than by a fixup: the index is
   a signed rank of the magnitude, and both zeros have magnitude rank 0. ``-0.0`` does not
   survive unpack in this harness and the pack path canonicalises it again, so the one step
@@ -42,9 +46,11 @@ Ported from the ttnn helpers ``tests/ttnn/utils_for_testing.ulp_distance`` and
 rather than imported, because the test venv has neither ``ttnn`` nor ``models.common``
 (see ``tests/requirements.txt``). Generalised over the three
 float formats, vectorised, and corrected on one point: the ttnn DAZ index bases its
-negative half at ``0x7F7F`` while the positive half is based at ``0x7F80 - 0x7F``, which
-puts every negative value ``2**mantissa_bits - 1`` steps too far from zero and inflates
-every sign-crossing distance. ``test_ulp.py::test_flush_makes_smallest_normal_one_step_from_zero``
+negative half at ``0x7F7F`` while the positive half is based at ``0x7F80 - 0x7F``. It is
+missing the ``2**mantissa_bits - 1`` subnormal compaction *and* based one lower than the
+mirror, so every negative value sits ``2**mantissa_bits`` steps too far from zero and
+every sign-crossing distance is inflated by that much: measured,
+``ulp_distance_bf16_daz(0.0, -tiny)`` returns 129 where this module returns 1. ``test_ulp.py::test_flush_makes_smallest_normal_one_step_from_zero``
 pins the crossing in both directions.
 """
 
@@ -89,9 +95,49 @@ class _UlpDtype:
 
 
 _ULP_DTYPES: Dict[torch.dtype, _UlpDtype] = {
-    torch.bfloat16: _UlpDtype(torch.int16, torch.int32, 0x8000, 0xFFFF, 7),
-    torch.float16: _UlpDtype(torch.int16, torch.int32, 0x8000, 0xFFFF, 10),
-    torch.float32: _UlpDtype(torch.int32, torch.int64, 0x80000000, 0xFFFFFFFF, 23),
+    torch.bfloat16: _UlpDtype(
+        bits_dtype=torch.int16,
+        wide_dtype=torch.int32,
+        sign_mask=0x8000,
+        all_mask=0xFFFF,
+        mantissa_bits=7,
+    ),
+    torch.float16: _UlpDtype(
+        bits_dtype=torch.int16,
+        wide_dtype=torch.int32,
+        sign_mask=0x8000,
+        all_mask=0xFFFF,
+        mantissa_bits=10,
+    ),
+    torch.float32: _UlpDtype(
+        bits_dtype=torch.int32,
+        wide_dtype=torch.int64,
+        sign_mask=0x80000000,
+        all_mask=0xFFFFFFFF,
+        mantissa_bits=23,
+    ),
+}
+
+#: Whether this harness's datapath model flushes a format's subnormal band, and so
+#: whether collapsing it is the right default for that dtype.
+#:
+#: bf16 and fp32 flush below their smallest *normal*
+#: (``golden_generators._FTZ_THRESHOLD``), so a golden in those formats never carries a
+#: subnormal and the collapse is a no-op that stays as a safety net. **fp16 does not**:
+#: its threshold there is ``2**-24``, the smallest fp16 *subnormal*, so an fp16 golden
+#: legitimately carries the whole band. Collapsing it would report up to
+#: ``2**10 - 1 = 1023`` representable steps as zero -- almost the whole
+#: ``MAX_MEANINGFUL_ULP[float16]`` range -- and a 1-step fp16 gate would be blind to it.
+#:
+#: The underlying question is whether the *producing Dest path* flushed, not what the
+#: output dtype is: an fp16 output with ``dest_acc=No`` lands in a Float16 Dest and is
+#: flushed, while ``dest_acc=Yes`` gives it an fp32 Dest and keeps the band. The metric
+#: cannot see the Dest, so it defaults to the answer that cannot hide error and a caller
+#: that knows the Dest flushed may pass ``flush_subnormals=True``.
+_FLUSHES_SUBNORMALS: Dict[torch.dtype, bool] = {
+    torch.bfloat16: True,
+    torch.float32: True,
+    torch.float16: False,
 }
 
 # ttnn's sanity ceiling (``utils_for_testing.assert_with_ulp``): 2**mantissa_bits. A budget
@@ -124,6 +170,11 @@ def ulp_dtype(fmt: DataFormat) -> torch.dtype:
     )
 
 
+def flushes_subnormals(dtype: torch.dtype) -> bool:
+    """Whether collapsing *dtype*'s subnormal band is the right default. See the table."""
+    return _FLUSHES_SUBNORMALS.get(dtype, True)
+
+
 def _value_order_index(
     t: torch.Tensor, spec: _UlpDtype, *, flush_subnormals: bool
 ) -> torch.Tensor:
@@ -152,13 +203,17 @@ def ulp_distance(
     golden: torch.Tensor,
     result: torch.Tensor,
     *,
-    flush_subnormals: bool = True,
+    flush_subnormals: Optional[bool] = None,
 ) -> torch.Tensor:
     """Integer count of representable steps between *golden* and *result*, per element.
 
     Both tensors must already be in the output format's dtype — ``passed_test`` casts
     them, so at the gate they are bit-comparable without further work here. Lanes where
     either side is NaN come back as :data:`UNMEASURABLE`.
+
+    *flush_subnormals* defaults per dtype via :func:`flushes_subnormals`: on for bf16 and
+    fp32, off for fp16, which keeps its subnormals in this harness. ``True`` forces the
+    collapse for a caller that knows the producing Dest flushed.
 
     Returns an ``int64`` tensor shaped like the inputs.
     """
@@ -178,6 +233,8 @@ def ulp_distance(
             f"ulp_distance: shape mismatch {tuple(golden.shape)} vs {tuple(result.shape)}"
         )
 
+    if flush_subnormals is None:
+        flush_subnormals = flushes_subnormals(golden.dtype)
     golden_rank = _value_order_index(golden, spec, flush_subnormals=flush_subnormals)
     result_rank = _value_order_index(result, spec, flush_subnormals=flush_subnormals)
     distance = (golden_rank - result_rank).abs()
@@ -259,17 +316,41 @@ def ulp_stats(
     }
 
 
-def local_step(value: float, dtype: torch.dtype) -> float:
-    """Size of one representable step of *dtype* at ``|value|``.
+def local_step(
+    value: float, dtype: torch.dtype, *, flush_subnormals: Optional[bool] = None
+) -> float:
+    """Size of one *counted* step of *dtype* at ``|value|``, as the metric counts it.
 
-    The same ``nextafter`` definition ``accuracy_metrics.local_ulp`` uses, for one scalar,
-    so a failure message can say what a step is worth at the point that failed.
+    Not simply ``accuracy_metrics.local_ulp``'s ``nextafter`` gap, because the message
+    that prints this sits next to an integer step count and has to agree with it:
+
+    * Inside the subnormal band with the band collapsed, the step out of zero is to the
+      smallest *normal*, not to the smallest subnormal. Reporting the raw gap there
+      understates what one counted step is worth by ``2**mantissa_bits`` -- 128x for bf16
+      -- and contradicts ``test_flush_makes_smallest_normal_one_step_from_zero``.
+    * At the largest finite value the gap upward is to ``Inf``, so the raw difference is
+      infinite and a failure at the top of the range reads "1 ULP = inf". The binade is
+      the same downward, so measure it that way. This is the ``finfo.max`` fixup ttnn's
+      ``ulp()`` carries for the same reason.
     """
     if not math.isfinite(value):
         return float("nan")
-    magnitude = torch.tensor(abs(value), dtype=dtype)
-    upward = torch.nextafter(magnitude, torch.tensor(float("inf"), dtype=dtype))
-    return float((upward - magnitude).to(torch.float32))
+    if flush_subnormals is None:
+        flush_subnormals = flushes_subnormals(dtype)
+
+    info = torch.finfo(dtype)
+    magnitude = abs(value)
+    if flush_subnormals and magnitude < info.tiny:
+        # The band is compacted out of the ranking, so one step from here is the jump to
+        # the smallest normal.
+        return float(info.tiny)
+
+    scalar = torch.tensor(magnitude, dtype=dtype)
+    if float(scalar) == info.max:
+        downward = torch.nextafter(scalar, torch.tensor(0.0, dtype=dtype))
+        return float((scalar - downward).to(torch.float32))
+    upward = torch.nextafter(scalar, torch.tensor(float("inf"), dtype=dtype))
+    return float((upward - scalar).to(torch.float32))
 
 
 def ulp_failure_message(
@@ -280,13 +361,20 @@ def ulp_failure_message(
     *,
     mask: Optional[torch.Tensor] = None,
     max_ulp: Optional[int] = None,
+    stats: Optional[Dict[str, Any]] = None,
+    flush_subnormals: Optional[bool] = None,
 ) -> str:
     """One actionable line for the worst lane, plus the distribution behind it.
 
     A ULP verdict is only useful if it names the point: what the hardware produced, what
     the reference was, and what one step is worth there.
+
+    *stats* accepts an already-computed :func:`ulp_stats` dict, so a caller that needed the
+    verdict first does not pay for a second pass over the same distances — this message is
+    built on passes too, so the duplicate ran on every call.
     """
-    stats = ulp_stats(distance, mask)
+    if stats is None:
+        stats = ulp_stats(distance, mask)
     label = fmt.name if fmt is not None else str(golden.dtype)
     if stats["worst_index"] is None:
         return f"no measurable lane ({stats['unmeasurable']} unmeasurable, {label})"
@@ -294,7 +382,7 @@ def ulp_failure_message(
     index = stats["worst_index"]
     golden_value = float(golden.reshape(-1)[index])
     result_value = float(result.reshape(-1)[index])
-    step = local_step(golden_value, golden.dtype)
+    step = local_step(golden_value, golden.dtype, flush_subnormals=flush_subnormals)
     budget = "" if max_ulp is None else f" (budget {max_ulp})"
     return (
         f"max {stats['max']} ULP @ [{index}]{budget}: result {result_value!r} vs golden "
@@ -327,7 +415,7 @@ def within_ulp(
     max_ulp: int,
     *,
     fmt: Optional[DataFormat] = None,
-    flush_subnormals: bool = True,
+    flush_subnormals: Optional[bool] = None,
     mask: Optional[torch.Tensor] = None,
 ) -> Tuple[bool, str]:
     """The whole verdict: non-finite positions agree, and every finite lane is in budget.
@@ -345,6 +433,13 @@ def within_ulp(
             f"shape mismatch: golden {tuple(golden.shape)} vs result "
             f"{tuple(result.shape)}"
         )
+    if fmt is not None:
+        # Not just a display label. format_dict collapses Bfp8_b/Bfp4_b/Bfp2_b, every Mx*
+        # and Fp8_e4m3 onto torch.bfloat16 and Tf32 onto torch.float32, so the dtype check
+        # in ulp_distance cannot tell them apart: without this, a verdict labelled
+        # "Bfp8_b" would come back measured in bfloat16 steps, which is exactly the
+        # measurement ulp_dtype exists to refuse.
+        ulp_dtype(fmt)
     warn_if_threshold_unmeaningful(max_ulp, golden.dtype)
 
     selected = torch.ones_like(golden, dtype=torch.bool) if mask is None else mask
@@ -362,5 +457,12 @@ def within_ulp(
     stats = ulp_stats(distance, selected)
     ok = stats["worst_index"] is None or stats["max"] <= max_ulp
     return ok, ulp_failure_message(
-        golden, result, distance, fmt, mask=selected, max_ulp=max_ulp
+        golden,
+        result,
+        distance,
+        fmt,
+        mask=selected,
+        max_ulp=max_ulp,
+        stats=stats,
+        flush_subnormals=flush_subnormals,
     )
