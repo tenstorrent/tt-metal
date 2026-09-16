@@ -44,6 +44,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/binary_shift.h
     inc/api/compute/blank.h
     inc/api/compute/cb_api.h
+    inc/api/compute/clamped_silu_glu.h
     inc/api/compute/common.h
     inc/api/compute/common_globals.h
     inc/api/compute/compute_kernel_api_debug.h
@@ -291,6 +292,8 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/eth_l1_address_map.h
     inc/internal/tt-2xx/quasar/noc/att/att.h
     inc/internal/tt-2xx/quasar/noc/att/att_address.h
+    inc/internal/tt-2xx/quasar/noc/att/att_config.h
+    inc/internal/tt-2xx/quasar/noc/att/noc_address_backend_att.h
     inc/internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h
     inc/internal/tt-2xx/quasar/noc/att/temporary_programming/att_program.h
