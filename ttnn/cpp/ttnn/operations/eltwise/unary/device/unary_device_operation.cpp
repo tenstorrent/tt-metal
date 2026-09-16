@@ -196,6 +196,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
             input_tensor.layout(),
             input_tensor.memory_config(),
             input_tensor.padded_shape(),
+            output_spec.data_type(),
             src_shard_vol,
             dst_shard_vol);
     }
@@ -205,6 +206,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         input_tensor.dtype(),
         input_tensor.layout(),
         input_tensor.memory_config(),
+        output_spec.data_type(),
         src_shard_vol,
         dst_shard_vol);
 }
