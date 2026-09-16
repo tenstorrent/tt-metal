@@ -36,8 +36,6 @@
 
 #include <stdint.h>
 
-#include "tools/profiler/kernel_profiler.hpp"  // TEMP R5 attribution zones
-
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -288,7 +286,6 @@ void kernel_main() {
     if constexpr (combine == COMBINE_LOCAL) {
         // P_used == 1: compute finalizes its own cb_partial (no gather, no totals); the writer only stores.
         for (uint32_t img = 0; img < image_count; ++img) {
-            DeviceZoneScopedN("w_store");
             store_image(image_begin + img * image_stride);
         }
     } else if constexpr (combine == COMBINE_ALL_GATHER) {
@@ -303,23 +300,10 @@ void kernel_main() {
             // (host: image_count > 1 => P_used == 1 => LOCAL); a peer's next record could otherwise land here
             // before this core's compute consumed the previous gather.
             gather.reserve_back(gather_tiles);
-            {
-                DeviceZoneScopedN("w_wait_partial");
-                cb_wait_front(cb_partial, num_stats);
-            }
-            {
-                DeviceZoneScopedN("w_send_record");
-                send_partial_record_all(rect);
-            }
-            {
-                DeviceZoneScopedN("w_wait_gather");
-                sem_gather.wait_min((img + 1) * (p_used - 1));  // every other participant's record has landed
-            }
+            send_partial_record_all(rect);
+            sem_gather.wait_min((img + 1) * (p_used - 1));  // every other participant's record has landed
             gather.push_back(gather_tiles);
-            {
-                DeviceZoneScopedN("w_store");
-                store_image(n);
-            }
+            store_image(n);
         }
     } else if (role == ROLE_ROOT) {
         auto sender = mc.sender(noc);
@@ -327,58 +311,26 @@ void kernel_main() {
         for (uint32_t img = 0; img < image_count; ++img) {
             const uint32_t n = image_begin + img * image_stride;
             gather.reserve_back(gather_tiles);  // blocks until root compute consumed the previous image
-            {
-                DeviceZoneScopedN("w_wait_partial");
-                cb_wait_front(cb_partial, num_stats);
-            }
-            {
-                DeviceZoneScopedN("w_send_record");
-                send_partial_record();
-            }
-            {
-                DeviceZoneScopedN("w_wait_gather");
-                sem_gather.wait_min((img + 1) * num_participants);
-            }
+            send_partial_record();
+            sem_gather.wait_min((img + 1) * num_participants);
             gather.push_back(gather_tiles);
             // totals: root compute reduced the gather; multicast to the rectangle (self copy when P_n == 1)
-            {
-                DeviceZoneScopedN("w_wait_totals");
-                cb_wait_front(cb_totals_src, num_stats);
-            }
-            {
-                DeviceZoneScopedN("w_mcast");
-                cb_reserve_back(cb_totals_recv, num_stats);
-                sender.send(get_read_ptr(cb_totals_src), totals_recv_base, num_stats * f32_tile_bytes);
-                cb_pop_front(cb_totals_src, num_stats);
-                cb_push_back(cb_totals_recv, num_stats);
-            }
-            {
-                DeviceZoneScopedN("w_store");
-                store_image(n);
-            }
+            cb_wait_front(cb_totals_src, num_stats);
+            cb_reserve_back(cb_totals_recv, num_stats);
+            sender.send(get_read_ptr(cb_totals_src), totals_recv_base, num_stats * f32_tile_bytes);
+            cb_pop_front(cb_totals_src, num_stats);
+            cb_push_back(cb_totals_recv, num_stats);
+            store_image(n);
         }
     } else if (role == ROLE_MEMBER) {
         auto receiver = mc.receiver(noc);
         for (uint32_t img = 0; img < image_count; ++img) {
             const uint32_t n = image_begin + img * image_stride;
-            {
-                DeviceZoneScopedN("w_wait_partial");
-                cb_wait_front(cb_partial, num_stats);
-            }
-            {
-                DeviceZoneScopedN("w_send_record");
-                send_partial_record();  // ends with the gather semaphore increment (after the receiver exists)
-            }
-            {
-                DeviceZoneScopedN("w_recv_totals");
-                cb_reserve_back(cb_totals_recv, num_stats);
-                receiver.receive();
-                cb_push_back(cb_totals_recv, num_stats);
-            }
-            {
-                DeviceZoneScopedN("w_store");
-                store_image(n);
-            }
+            send_partial_record();  // ends with the gather semaphore increment (after the receiver exists)
+            cb_reserve_back(cb_totals_recv, num_stats);
+            receiver.receive();
+            cb_push_back(cb_totals_recv, num_stats);
+            store_image(n);
         }
     } else {
         auto receiver = mc.receiver(noc);

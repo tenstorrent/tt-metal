@@ -45,8 +45,6 @@
 #include <stdint.h>
 #include <type_traits>
 
-#include "tools/profiler/kernel_profiler.hpp"  // TEMP R5 attribution zones
-
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -276,26 +274,23 @@ void kernel_main() {
     for (uint32_t img = 0; img < image_count; ++img) {
         // ================= pass 1: statistics =================
         // [S; Q] (M=2, K=cols) x E^T (K=cols, N=Kg), one K-block per column group, spill/reload via interm.
-        {
-            DeviceZoneScopedN("c_pass1");
-            ckl::matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/false,
-                ckl::LastBlockTarget::Out,
-                ckl::OutputCBLayout::SubblockMajor,
-                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::NoPostCompute,
-                decltype(colsum_column_group)>(
-                colsum_buf,
-                membership_buf,
-                partial_buf,
-                agg_interm_buf,
-                ckl::MatmulBlockShape::of(2, in1_num_subblocks, 1, out_subblock_w, cols, num_col_groups),
-                ckl::NoPostCompute{},
-                colsum_column_group);
-        }
+        ckl::matmul_block<
+            /*transpose=*/false,
+            /*packer_l1_acc=*/false,
+            ckl::LastBlockTarget::Out,
+            ckl::OutputCBLayout::SubblockMajor,
+            ckl::matmul_config::InitMode::ShortAfterPreKBlock,
+            ckl::InputPolicy::WaitAndPopPerKBlock,
+            ckl::InputPolicy::WaitAndPopPerKBlock,
+            ckl::NoPostCompute,
+            decltype(colsum_column_group)>(
+            colsum_buf,
+            membership_buf,
+            partial_buf,
+            agg_interm_buf,
+            ckl::MatmulBlockShape::of(2, in1_num_subblocks, 1, out_subblock_w, cols, num_col_groups),
+            ckl::NoPostCompute{},
+            colsum_column_group);
 
         // ================= combine =================
         // The gather reduce: rows = gather tiles per statistic (one record row per core), cols = the 2*Kg statistic
@@ -303,7 +298,6 @@ void kernel_main() {
         // LOCAL: nothing to combine — the partial is the total.
         if constexpr (combine != COMBINE_LOCAL) {
             if (combine == COMBINE_ALL_GATHER || role == ROLE_ROOT) {
-                DeviceZoneScopedN("c_comb_reduce");
                 ckl::reduce<
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_COL,
@@ -333,53 +327,42 @@ void kernel_main() {
             finalize_lane_mode,
             lane::LaneRsqrt<Dst::D1>,
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, Dst::D1>>;
-        {
-            DeviceZoneScopedN("c_wait_totals");
-            cb_wait_front(cb_totals_in, num_stats);
-        }
-        {
-            DeviceZoneScopedN("c_finalize");
-            cb_reserve_back(cb_stats_row, num_stats);
-            ckl::eltwise_chain(
-                IterationShape::tiles(Kg),
-                ckl::CopyTile<
-                    input(cb_totals_in, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block),
-                    Dst::D0>{},
-                FinMul0{inv_n_bits},  // mean = sum / n
-                ckl::CopyTile<
-                    input(
-                        cb_totals_in,
-                        WaitPolicy::None,
-                        PopPolicy::None,
-                        InputTileMapping::Block,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    Dst::D1>{Kg},
-                FinMul1{inv_n_bits},  // E[x^2]
-                FinSquare{},          // mean^2
-                FinSub{},             // var = E[x^2] - mean^2
-                FinRelu{},            // clamp cancellation below 0
-                FinAdd{eps_bits},     // var + eps
-                FinRsqrt{},           // rstd
-                ckl::PackTile<output(cb_stats_row, ReservePolicy::None, PushPolicy::None), Dst::D0>{},
-                ckl::PackTile<
-                    output(
-                        cb_stats_row,
-                        ReservePolicy::None,
-                        PushPolicy::None,
-                        DataFormatReconfig::Enabled,
-                        TileAddressing::Offset),
-                    Dst::D1>{Kg});
-            cb_push_back(cb_stats_row, num_stats);
-            cb_pop_front(cb_totals_in, num_stats);
-        }
-        {
-            DeviceZoneScopedN("c_bcast");
-            ckl::unary_bcast<
-                BroadcastDim::Row,
-                input(cb_stats_row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                output(cb_stats_g_full)>(IterationShape::tiles(num_stats));
-        }
+        cb_wait_front(cb_totals_in, num_stats);
+        cb_reserve_back(cb_stats_row, num_stats);
+        ckl::eltwise_chain(
+            IterationShape::tiles(Kg),
+            ckl::CopyTile<input(cb_totals_in, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+            FinMul0{inv_n_bits},  // mean = sum / n
+            ckl::CopyTile<
+                input(
+                    cb_totals_in,
+                    WaitPolicy::None,
+                    PopPolicy::None,
+                    InputTileMapping::Block,
+                    DataFormatReconfig::Enabled,
+                    TileAddressing::Offset),
+                Dst::D1>{Kg},
+            FinMul1{inv_n_bits},  // E[x^2]
+            FinSquare{},          // mean^2
+            FinSub{},             // var = E[x^2] - mean^2
+            FinRelu{},            // clamp cancellation below 0
+            FinAdd{eps_bits},     // var + eps
+            FinRsqrt{},           // rstd
+            ckl::PackTile<output(cb_stats_row, ReservePolicy::None, PushPolicy::None), Dst::D0>{},
+            ckl::PackTile<
+                output(
+                    cb_stats_row,
+                    ReservePolicy::None,
+                    PushPolicy::None,
+                    DataFormatReconfig::Enabled,
+                    TileAddressing::Offset),
+                Dst::D1>{Kg});
+        cb_push_back(cb_stats_row, num_stats);
+        cb_pop_front(cb_totals_in, num_stats);
+        ckl::unary_bcast<
+            BroadcastDim::Row,
+            input(cb_stats_row, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+            output(cb_stats_g_full)>(IterationShape::tiles(num_stats));
 
         // ================= pass 2: apply =================
         if constexpr (resident) {
@@ -388,141 +371,137 @@ void kernel_main() {
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
             const uint32_t valid_cols = col_axis.valid(cg, cols);
             // ---- build_affine_block: per channel tile T of this column group ----
+            for (uint32_t tl = 0; tl < valid_cols; ++tl) {
+                // [mean_full; rstd_full] (2 x Kg) x E_T (Kg x 1) -> cb_stats_T = [mean_T_full; rstd_T_full]
+                ckl::matmul_block<
+                    false,
+                    false,
+                    ckl::LastBlockTarget::Out,
+                    ckl::OutputCBLayout::SubblockMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndRetainOnLastBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock>(
+                    stats_g_full_buf,
+                    membership_buf,
+                    stats_T_buf,
+                    stats_T_buf,
+                    ckl::MatmulBlockShape::of(2, 1, 1, 1, Kg, 1));
+                cb_wait_front(cb_stats_T, 2);
+
+                // a_T = rstd_T * gamma_T  (gamma row 0 broadcast down the tile), or rstd_T without gamma
+                if constexpr (has_gamma) {
+                    ckl::eltwise_chain(
+                        IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            BinaryFpuOp::Mul,
+                            input(
+                                cb_stats_T,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            input(cb_gamma_row, BroadcastDim::Row, WaitPolicy::PerTile, PopPolicy::PerTile),
+                            Dst::D0>{1u},
+                        ckl::PackTile<output(cb_a_full), Dst::D0>{});
+                } else {
+                    ckl::eltwise_chain(
+                        IterationShape::one_tile(),
+                        ckl::CopyTile<
+                            input(
+                                cb_stats_T,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            Dst::D0>{1u},
+                        ckl::PackTile<output(cb_a_full), Dst::D0>{});
+                }
+
+                // b_T = beta_T - mean_T * a_T  (or -mean_T * a_T without beta): beta row 0 broadcast to a full
+                // tile, then DEST = mean_T_full * a_T and b_T = beta_full - DEST (dest-reuse Sub, DEST_TO_SRCB).
+                // Precision note: b and x*a are both ~|mean|*rstd*gamma and cancel in y = x*a + b; the FPU
+                // evaluates them at tf32-class precision, so a |mean| >> std input loses ~ulp_tf32(|mean|*a)
+                // absolute accuracy (the design's deferred shifted_two_pass_variance row would remove this).
+                //
+                // Ordering: the chain below reads a_T (tile tl of cb_a_full) with WaitPolicy::None, but that tile
+                // was packed by the chain just above. Unpack, math and pack are separate threads; the ONLY thing
+                // that orders "pack wrote a_T to L1" against "unpack reads a_T" is CB credit, so wait for it here.
+                // Without this the unpacker can read stale L1 (non-deterministic per-element errors, seen on
+                // RM input + gamma_only where no beta bcast sat between the two chains).
+                cb_wait_front(cb_a_full, tl + 1);
+                if constexpr (has_beta) {
+                    ckl::unary_bcast<BroadcastDim::Row, input(cb_beta_row), output(cb_beta_full)>(
+                        IterationShape::one_tile());
+                    ckl::eltwise_chain(
+                        IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            BinaryFpuOp::Mul,
+                            input(
+                                cb_stats_T,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            input(
+                                cb_a_full,
+                                BroadcastDim::None,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            Dst::D0>{0u, tl},
+                        ckl::DestReuseBinary<
+                            BinaryFpuOp::Sub,
+                            input(cb_beta_full, WaitPolicy::PerTile, PopPolicy::PerTile),
+                            DestReuseType::DEST_TO_SRCB,
+                            Dst::D0>{},
+                        ckl::PackTile<output(cb_b_full), Dst::D0>{});
+                } else {
+                    ckl::eltwise_chain(
+                        IterationShape::one_tile(),
+                        ckl::BinaryFpu<
+                            BinaryFpuOp::Mul,
+                            input(
+                                cb_stats_T,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            input(
+                                cb_a_full,
+                                BroadcastDim::None,
+                                WaitPolicy::None,
+                                PopPolicy::None,
+                                InputTileMapping::Block,
+                                DataFormatReconfig::Enabled,
+                                TileAddressing::Offset),
+                            Dst::D0>{0u, tl},
+                        ckl::Negative<Dst::D0>{},
+                        ckl::PackTile<output(cb_b_full), Dst::D0>{});
+                }
+                cb_pop_front(cb_stats_T, 2);
+            }
+            // Ragged last group: the reader pushed the nominal cols tiles of E / gamma / beta; drain the unused
+            // pad tiles and pad a_full / b_full up to their nominal cols quantum (no data behind the pads).
             {
-                DeviceZoneScopedN("c_affine");
-                for (uint32_t tl = 0; tl < valid_cols; ++tl) {
-                    // [mean_full; rstd_full] (2 x Kg) x E_T (Kg x 1) -> cb_stats_T = [mean_T_full; rstd_T_full]
-                    ckl::matmul_block<
-                        false,
-                        false,
-                        ckl::LastBlockTarget::Out,
-                        ckl::OutputCBLayout::SubblockMajor,
-                        ckl::matmul_config::InitMode::Short,
-                        ckl::InputPolicy::WaitAndRetainOnLastBlock,
-                        ckl::InputPolicy::WaitAndPopPerKBlock>(
-                        stats_g_full_buf,
-                        membership_buf,
-                        stats_T_buf,
-                        stats_T_buf,
-                        ckl::MatmulBlockShape::of(2, 1, 1, 1, Kg, 1));
-                    cb_wait_front(cb_stats_T, 2);
-
-                    // a_T = rstd_T * gamma_T  (gamma row 0 broadcast down the tile), or rstd_T without gamma
-                    if constexpr (has_gamma) {
-                        ckl::eltwise_chain(
-                            IterationShape::one_tile(),
-                            ckl::BinaryFpu<
-                                BinaryFpuOp::Mul,
-                                input(
-                                    cb_stats_T,
-                                    WaitPolicy::None,
-                                    PopPolicy::None,
-                                    InputTileMapping::Block,
-                                    DataFormatReconfig::Enabled,
-                                    TileAddressing::Offset),
-                                input(cb_gamma_row, BroadcastDim::Row, WaitPolicy::PerTile, PopPolicy::PerTile),
-                                Dst::D0>{1u},
-                            ckl::PackTile<output(cb_a_full), Dst::D0>{});
-                    } else {
-                        ckl::eltwise_chain(
-                            IterationShape::one_tile(),
-                            ckl::CopyTile<
-                                input(
-                                    cb_stats_T,
-                                    WaitPolicy::None,
-                                    PopPolicy::None,
-                                    InputTileMapping::Block,
-                                    DataFormatReconfig::Enabled,
-                                    TileAddressing::Offset),
-                                Dst::D0>{1u},
-                            ckl::PackTile<output(cb_a_full), Dst::D0>{});
-                    }
-
-                    // b_T = beta_T - mean_T * a_T  (or -mean_T * a_T without beta): beta row 0 broadcast to a full
-                    // tile, then DEST = mean_T_full * a_T and b_T = beta_full - DEST (dest-reuse Sub, DEST_TO_SRCB).
-                    // Precision note: b and x*a are both ~|mean|*rstd*gamma and cancel in y = x*a + b; the FPU
-                    // evaluates them at tf32-class precision, so a |mean| >> std input loses ~ulp_tf32(|mean|*a)
-                    // absolute accuracy (the design's deferred shifted_two_pass_variance row would remove this).
-                    //
-                    // Ordering: the chain below reads a_T (tile tl of cb_a_full) with WaitPolicy::None, but that tile
-                    // was packed by the chain just above. Unpack, math and pack are separate threads; the ONLY thing
-                    // that orders "pack wrote a_T to L1" against "unpack reads a_T" is CB credit, so wait for it here.
-                    // Without this the unpacker can read stale L1 (non-deterministic per-element errors, seen on
-                    // RM input + gamma_only where no beta bcast sat between the two chains).
-                    cb_wait_front(cb_a_full, tl + 1);
-                    if constexpr (has_beta) {
-                        ckl::unary_bcast<BroadcastDim::Row, input(cb_beta_row), output(cb_beta_full)>(
-                            IterationShape::one_tile());
-                        ckl::eltwise_chain(
-                            IterationShape::one_tile(),
-                            ckl::BinaryFpu<
-                                BinaryFpuOp::Mul,
-                                input(
-                                    cb_stats_T,
-                                    WaitPolicy::None,
-                                    PopPolicy::None,
-                                    InputTileMapping::Block,
-                                    DataFormatReconfig::Enabled,
-                                    TileAddressing::Offset),
-                                input(
-                                    cb_a_full,
-                                    BroadcastDim::None,
-                                    WaitPolicy::None,
-                                    PopPolicy::None,
-                                    InputTileMapping::Block,
-                                    DataFormatReconfig::Enabled,
-                                    TileAddressing::Offset),
-                                Dst::D0>{0u, tl},
-                            ckl::DestReuseBinary<
-                                BinaryFpuOp::Sub,
-                                input(cb_beta_full, WaitPolicy::PerTile, PopPolicy::PerTile),
-                                DestReuseType::DEST_TO_SRCB,
-                                Dst::D0>{},
-                            ckl::PackTile<output(cb_b_full), Dst::D0>{});
-                    } else {
-                        ckl::eltwise_chain(
-                            IterationShape::one_tile(),
-                            ckl::BinaryFpu<
-                                BinaryFpuOp::Mul,
-                                input(
-                                    cb_stats_T,
-                                    WaitPolicy::None,
-                                    PopPolicy::None,
-                                    InputTileMapping::Block,
-                                    DataFormatReconfig::Enabled,
-                                    TileAddressing::Offset),
-                                input(
-                                    cb_a_full,
-                                    BroadcastDim::None,
-                                    WaitPolicy::None,
-                                    PopPolicy::None,
-                                    InputTileMapping::Block,
-                                    DataFormatReconfig::Enabled,
-                                    TileAddressing::Offset),
-                                Dst::D0>{0u, tl},
-                            ckl::Negative<Dst::D0>{},
-                            ckl::PackTile<output(cb_b_full), Dst::D0>{});
-                    }
-                    cb_pop_front(cb_stats_T, 2);
+                const uint32_t pad = cols - valid_cols;
+                groupnorm_ragged::pad_pop(cb_membership, pad * Kg, Kg);
+                if constexpr (has_gamma) {
+                    groupnorm_ragged::pad_pop(cb_gamma_row, pad, pad);
                 }
-                // Ragged last group: the reader pushed the nominal cols tiles of E / gamma / beta; drain the unused
-                // pad tiles and pad a_full / b_full up to their nominal cols quantum (no data behind the pads).
-                {
-                    const uint32_t pad = cols - valid_cols;
-                    groupnorm_ragged::pad_pop(cb_membership, pad * Kg, Kg);
-                    if constexpr (has_gamma) {
-                        groupnorm_ragged::pad_pop(cb_gamma_row, pad, pad);
-                    }
-                    if constexpr (has_beta) {
-                        groupnorm_ragged::pad_pop(cb_beta_row, pad, pad);
-                    }
-                    groupnorm_ragged::pad_push(cb_a_full, pad, pad);
-                    groupnorm_ragged::pad_push(cb_b_full, pad, pad);
+                if constexpr (has_beta) {
+                    groupnorm_ragged::pad_pop(cb_beta_row, pad, pad);
                 }
+                groupnorm_ragged::pad_push(cb_a_full, pad, pad);
+                groupnorm_ragged::pad_push(cb_b_full, pad, pad);
             }
 
             // ---- apply_block: y = x * a_T + b_T over every row chunk of this column group ----
-            DeviceZoneScopedN("c_apply");
             auto apply_chunk = [&](uint32_t valid_rows, uint32_t rc) {
                 const uint32_t valid = valid_rows * valid_cols;
                 if constexpr (!resident) {
