@@ -20,6 +20,7 @@
 #include <cstdint>
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 
 namespace ring_attention_all_gather {
 
@@ -140,9 +141,18 @@ inline uint32_t compute_halo_tail_start_Ht(
     uint32_t ring_size,
     uint32_t halo_tile_rows,
     uint32_t source_device,
-    uint32_t cache_local_tile_rows) {
+    uint32_t cache_local_tile_rows,
+    uint32_t hop = 1) {
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    if (q_group_tile_rows == 0 || halo_tile_rows > q_local_tile_rows) {
+    if (q_group_tile_rows == 0 || hop == 0 || hop > ring_size) {
+        return 0;
+    }
+    // Rows this hop ships: a full slab, except the farthest hop which ships the remainder. Shared
+    // with the host rather than re-derived -- sender and receiver rows must agree exactly, and a
+    // second copy of this would drift silently.
+    const uint32_t hop_rows = ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_hop_rows(
+        halo_tile_rows, q_local_tile_rows, hop);
+    if (hop_rows == 0) {
         return 0;
     }
     kv_actual_isl =
@@ -153,11 +163,12 @@ inline uint32_t compute_halo_tail_start_Ht(
         return 0;
     }
     const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
-    if (current_group == 0 && source_device + 1 == ring_size) {
+    const bool wraps_group = source_device + hop >= ring_size;
+    if (current_group == 0 && wraps_group) {
         return 0;
     }
-    const uint32_t source_group = source_device + 1 == ring_size ? current_group - 1 : current_group;
-    return source_group * q_local_tile_rows + q_local_tile_rows - halo_tile_rows;
+    const uint32_t source_group = wraps_group ? current_group - 1 : current_group;
+    return source_group * q_local_tile_rows + q_local_tile_rows - hop_rows;
 }
 
 // Shift a halo worker's page range from the group baked at program-create time to the group this chunk

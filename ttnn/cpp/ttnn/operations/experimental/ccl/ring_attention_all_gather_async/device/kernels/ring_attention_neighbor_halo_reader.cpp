@@ -27,6 +27,8 @@ enum CompileTimeArg : uint32_t {
     kNumInputs,
     kPrefetchPackets,
     kMetaCbId,
+    kCollectsArrivals,
+    kArrivalsExpected,
     kNumFixedCompileTimeArgs,
 };
 
@@ -38,6 +40,11 @@ constexpr uint32_t input_page_size = get_compile_time_arg_val(kInputPageSize);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
 constexpr uint32_t meta_cb_id = get_compile_time_arg_val(kMetaCbId);
+// Only one exchange per halo waits for arrivals and signals the SDPA: every hop's writer increments
+// the same rendezvous core, so this one reader can gate on the whole halo. One signaller means one
+// incrementer per semaphore, which is what Semaphore::up requires to not drop updates.
+constexpr bool collects_arrivals = get_compile_time_arg_val(kCollectsArrivals) == 1;
+constexpr uint32_t arrivals_expected = get_compile_time_arg_val(kArrivalsExpected);
 
 void kernel_main() {
     constexpr auto input_accessor_args =
@@ -92,6 +99,7 @@ void kernel_main() {
         const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t baked_start_Ht = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t hop = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
         CircularBuffer cb_meta(meta_cb_id);
         const uint32_t slot_id =
@@ -104,7 +112,7 @@ void kernel_main() {
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
         const uint32_t tail_start_Ht = ring_attention_all_gather::compute_halo_tail_start_Ht(
-            kv_actual_isl, q_local_tile_rows, ring_size, halo_tile_rows, source_device, cache_local_tile_rows);
+            kv_actual_isl, q_local_tile_rows, ring_size, halo_tile_rows, source_device, cache_local_tile_rows, hop);
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
             ring_attention_all_gather::relocate_halo_range(
@@ -137,11 +145,15 @@ void kernel_main() {
         }
     }
 
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(incoming_ready_sem), 1);
-    constexpr uint32_t predecessor_ring_id = my_ring_id == 0 ? ring_size - 1 : my_ring_id - 1;
-    op_signaler.synchronize_workers_and_signal_op(predecessor_ring_id);
-    // Consume exactly one arrival. The wrapping atomic decrement preserves a concurrent remote
-    // increment for the next exchange; a read-modify-write could lose it.
-    noc_semaphore_inc(get_noc_addr(incoming_ready_sem), static_cast<uint32_t>(-1));
-    noc_async_atomic_barrier();
+    if constexpr (collects_arrivals) {
+        // Wait for every hop of this halo, not just one: with a multi-hop halo the SDPA must not
+        // start its K loop until the whole compact buffer has landed.
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(incoming_ready_sem), arrivals_expected);
+        constexpr uint32_t predecessor_ring_id = my_ring_id == 0 ? ring_size - 1 : my_ring_id - 1;
+        op_signaler.synchronize_workers_and_signal_op(predecessor_ring_id);
+        // Consume exactly the arrivals gated on. The wrapping atomic decrement preserves a
+        // concurrent remote increment for the next exchange; a read-modify-write could lose it.
+        noc_semaphore_inc(get_noc_addr(incoming_ready_sem), static_cast<uint32_t>(0u - arrivals_expected));
+        noc_async_atomic_barrier();
+    }
 }

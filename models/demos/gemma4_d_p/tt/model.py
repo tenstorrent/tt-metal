@@ -126,6 +126,42 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
     return caches_4d, caches_2d
 
 
+GEMMA4_SLIDING_WINDOW_TOKENS = 1024
+
+
+def sliding_halo_hop_count(prefill_chunk_size, cp_degree, sliding_window=GEMMA4_SLIDING_WINDOW_TOKENS):
+    """Cyclic predecessors a rank must read to cover the sliding window.
+
+    A chunk under window*cp leaves each rank's Q slab narrower than the window, so the halo is
+    fetched from several predecessors instead of one. ring_joint supports that as a multi-hop halo,
+    time-sharing the fabric links when there are more hops than links, so the ring size is the only
+    cap left.
+
+    This mirrors chunked_sliding_halo_hop_count in sliding_window_work_plan.hpp closely enough to
+    pre-screen a config before weights are loaded. The op's own validator is authoritative: it
+    rounds the halo up to whole K chunks first, which only differs from this when the window is not
+    a multiple of the K chunk size (it is for Gemma4: 1024 over 128-token K chunks).
+    """
+    return -(-sliding_window // (prefill_chunk_size // cp_degree))
+
+
+def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len):
+    """Reason this chunk geometry is unusable, or None. Shared by the model and the demo so the
+    guard cannot drift between the two."""
+    if max_seq_len <= 0 or prefill_chunk_size <= 0:
+        return "sequence and chunk lengths must be positive"
+    if prefill_chunk_size % (cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
+        return "prefill chunks must divide max_seq_len and contain whole CP-local tiles"
+    hops = sliding_halo_hop_count(prefill_chunk_size, cp_degree)
+    if hops > cp_degree:
+        return (
+            f"prefill chunk {prefill_chunk_size} gives a {prefill_chunk_size // cp_degree}-token Q "
+            f"slab at CP={cp_degree}, needing {hops} sliding-window halo hops, more than the ring "
+            f"has ranks"
+        )
+    return None
+
+
 class Gemma4Model:
     """Galaxy prefill model with ring-cache outputs for disaggregation."""
 
@@ -149,12 +185,9 @@ class Gemma4Model:
         ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
-        if max_seq_len <= 0 or prefill_chunk_size <= 0:
-            raise ValueError("sequence and chunk lengths must be positive")
-        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
-            raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-        if prefill_chunk_size < 1024 * mesh_config.cp_degree:
-            raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+        geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+        if geometry_error:
+            raise ValueError(geometry_error)
 
         self.mesh_device = mesh_device
         self.hf_config = hf_config

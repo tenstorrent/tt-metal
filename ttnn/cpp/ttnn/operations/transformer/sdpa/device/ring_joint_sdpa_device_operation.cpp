@@ -614,13 +614,28 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             N_local_q % k_chunk_size == 0,
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
+        // A halo wider than the per-device Q slab is delivered by several hops around the CP ring,
+        // one slab tail each (sliding_window_work_plan.hpp). It cannot need more than the whole ring:
+        // beyond that the source is this device's own earlier slab, which is a local read.
+        const uint32_t halo_hops = ring_joint::chunked_sliding_halo_hop_count(
+            halo_tokens / tt::constants::TILE_HEIGHT, N_local_q / tt::constants::TILE_HEIGHT);
         TT_FATAL(
-            halo_tokens <= N_local_q,
-            "Chunked sliding halo {} (window {}) exceeds the per-device Q slab {}; wider windows need a multi-hop "
-            "halo",
+            halo_hops <= args.ring_size,
+            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}, more than the SP{} ring",
             halo_tokens,
             window_size,
-            N_local_q);
+            halo_hops,
+            N_local_q,
+            args.ring_size);
+        // The work plan holds one source range per hop plus this device's own slab, and silently
+        // returns an EMPTY plan if it runs out. Reject that here instead of computing no attention.
+        TT_FATAL(
+            halo_hops + 1 <= ring_joint::SlidingQWorkPlan::max_source_ranges,
+            "Chunked sliding halo needs {} source ranges but the work plan holds {}; SP rings wider "
+            "than {} are not supported",
+            halo_hops + 1,
+            ring_joint::SlidingQWorkPlan::max_source_ranges,
+            ring_joint::SlidingQWorkPlan::max_supported_ring_size);
     }
 
     if (args.circular_kv_cache) {
