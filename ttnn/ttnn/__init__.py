@@ -583,6 +583,13 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+# PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
+from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
+
+experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
+experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
+experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat

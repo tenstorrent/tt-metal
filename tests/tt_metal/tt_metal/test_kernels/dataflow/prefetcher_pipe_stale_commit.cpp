@@ -4,18 +4,21 @@
 
 // Sender-only kernel that proves commit() rejects a stale entry_size epoch.
 //
-// Compile-time args:
-//   [0] prefetcher_pipe_id
-//   [1] entry_size          - initial / dense-slot size (E1)
-//   [2] new_entry_size      - resize target (E2); must differ from E1
-//   [3] poison_wr_ptr       - value that must NOT land in word[4] on stale commit
-//
-// Runtime args:
-//   [0] l1_staging_addr
+// Bindings:
+//   pipe::out              — KernelAdvancedOptions::PrefetcherPipeBinding accessor (program slot id baked in)
+// Args (named CTAs):
+//   args::entry_size       - initial / dense-slot size (E1)
+//   args::new_entry_size   - resize target (E2); must differ from E1
+//   args::poison_wr_ptr    - value that must NOT land in word[4] on stale commit
+// Args (named RTAs):
+//   args::staging_addr     - sender-local L1 staging base
+// Defines:
+//   PREFETCHER_PIPE_TEST_HELPERS - exposes the test-only friend used below
 
 #include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 
 namespace experimental {
 
@@ -57,17 +60,16 @@ FORCE_INLINE void test_stale_commit_after_resize(
 }  // namespace experimental
 
 void kernel_main() {
-    constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
-    constexpr uint32_t entry_size = get_compile_time_arg_val(1);
-    constexpr uint32_t new_entry_size = get_compile_time_arg_val(2);
-    constexpr uint32_t poison_wr_ptr = get_compile_time_arg_val(3);
-    const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    constexpr uint32_t entry_size = get_arg(args::entry_size);
+    constexpr uint32_t new_entry_size = get_arg(args::new_entry_size);
+    constexpr uint32_t poison_wr_ptr = get_arg(args::poison_wr_ptr);
+    const uint32_t staging_base = get_arg(args::staging_addr);
     const CoreLocalMem<uint8_t> staging(staging_base);
 
     static_assert(entry_size != new_entry_size, "stale-commit test requires distinct entry sizes");
 
     Noc noc;
-    experimental::PrefetcherPipe dfb(prefetcher_pipe_id);
+    experimental::PrefetcherPipe dfb(pipe::out);
 
     // Advance one entry so the durable checkpoint is not fifo_start.
     dfb.reserve_back(1);

@@ -123,8 +123,15 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     auto* mesh_device = this->devices_[0].get();
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
-    auto pipe = experimental::CreatePrefetcherPipe(
-        mesh_device, sender, CoreRangeSet(CoreRange(receiver)), /*ring_size=*/1024);
+    auto space = experimental::CreatePrefetcherPipeSpace(
+        *mesh_device,
+        experimental::PrefetcherPipeSpaceConfig{
+            .sender_cores = CoreRangeSet(CoreRange(sender)),
+            .receiver_domain = CoreRangeSet(CoreRange(receiver)),
+            .ring_size = 1024,
+            .max_receivers_per_pipe = 1,
+        });
+    auto pipe = space.create_pipe(sender, CoreRangeSet(CoreRange(receiver)));
 
     const CoreRangeSet pipe_cores = CoreRangeSet(CoreRange(sender, receiver));
     ShardSpecBuffer shard_spec(pipe_cores, {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});

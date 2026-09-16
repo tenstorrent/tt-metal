@@ -243,6 +243,18 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
+    // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
+    // hashes them in binding order; both orders carry the same set, so the cache key is stable).
+    struct PipeEntry {
+        string name;
+        uint8_t prefetcher_pipe_id;
+    };
+    vector<PipeEntry> pipe_entries;
+    settings.process_prefetcher_pipe_binding_handles([&pipe_entries](const string& name, uint8_t prefetcher_pipe_id) {
+        pipe_entries.push_back({name, prefetcher_pipe_id});
+    });
+    sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
     struct TensorBindingSequenceEntry {
         string name;
@@ -281,6 +293,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     if (!dfb_entries.empty()) {
         content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+    }
+    if (!pipe_entries.empty()) {
+        // Defines PrefetcherPipeBindingToken. Header-only and dependency-free (the token is just
+        // the slot id); the kernel includes api/dataflow/prefetcher_pipe.h itself to use it.
+        content << "#include \"api/dataflow/prefetcher_pipe_binding_token.h\"\n";
     }
 
     if (!sem_entries.empty()) {
@@ -337,6 +354,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     }
     emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
     content << "}  // namespace dfb\n";
+
+    // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
+    if (!pipe_entries.empty()) {
+        content << "namespace pipe {\n";
+        for (const auto& entry : pipe_entries) {
+            content << "constexpr PrefetcherPipeBindingToken " << entry.name << "{"
+                    << static_cast<uint32_t>(entry.prefetcher_pipe_id) << "};\n";
+        }
+        content << "}  // namespace pipe\n";
+    }
 
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
@@ -899,15 +926,9 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     const tt::ARCH arch,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr,
-        unpack_conditional_dst_format,
-        fp32_dest_acc_en,
-        bfp8_pack_precise,
-        false,
-        arch);
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.buf_dataformat_arr);
+    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
 
     // Fp8_e4m3 is always unpacked to Float16 (A-family) in source/dest registers.
     // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
@@ -1001,11 +1022,7 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc,
-        unpack_conditional_dst_format,
-        options.fp32_dest_acc_en,
-        options.unpack_to_dest_mode,
-        max_cbs);
+        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
@@ -1181,8 +1198,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     out << "#if defined(UCK_CHLKC_PACK)\n";
     emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
-    out << "#endif\n";   // if pack
-    out << "#endif\n\n"; // if not math and not unpack
+    out << "#endif\n";    // if pack
+    out << "#endif\n\n";  // if not math and not unpack
 
     out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
