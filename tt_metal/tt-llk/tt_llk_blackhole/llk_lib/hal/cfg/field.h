@@ -145,5 +145,18 @@ inline constexpr std::uint32_t extract(const std::uint32_t word)
     return (word & F.mask(S)) >> F.shamt(S);
 }
 
+/**
+ * @brief Resolve the absolute config word of a field section at compile time.
+ *
+ * @tparam F: Field whose containing word is resolved.
+ * @tparam S: Repeated descriptor section; compilation fails when it is outside F.count.
+ */
+template <const Field& F, Sec S>
+inline constexpr std::uint32_t word_addr = []
+{
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    return F.addr32(S);
+}();
+
 } // namespace cfg
 } // namespace hal
