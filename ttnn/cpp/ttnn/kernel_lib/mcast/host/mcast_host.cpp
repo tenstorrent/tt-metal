@@ -324,10 +324,10 @@ void McastFamily::prepare_arguments() {
     const bool has_irregular_receiver_set = std::any_of(
         groups_.begin(), groups_.end(), [](const auto& group) { return group.receivers_.ranges().size() > 1; });
     // Resolve the irregular-set policy once because every group uses the same compile-time TransferMode.
-    const auto transfer_mode =
+    const auto transfer_mode = cfg_.transfer_mode_override.value_or(
         has_irregular_receiver_set && cfg_.irregular_receiver_set_mode == TransferMode::ChainUnicast
             ? TransferMode::ChainUnicast
-            : TransferMode::Multicast;
+            : TransferMode::Multicast);
     const bool rotating = groups_.front().rotating();
     layout_.rotating_span = rotating ? groups_.front().num_senders() : 0;
     layout_.flags = detail::mcast_flags(cfg_);

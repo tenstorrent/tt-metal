@@ -95,6 +95,9 @@ struct McastConfig {
     // Family-wide delivery policy when any group is irregular. Entirely rectangular
     // families always use Multicast, regardless of this setting.
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
+    // Force the family transport regardless of receiver-set shape. When set, it overrides
+    // irregular_receiver_set_mode, so a rectangular family can use ChainUnicast too.
+    std::optional<dataflow_kernel_lib::TransferMode> transfer_mode_override = std::nullopt;
 };
 
 void attach_absent(tt::tt_metal::KernelDescriptor& kernel, std::string_view prefix);

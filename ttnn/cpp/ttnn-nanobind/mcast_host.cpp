@@ -104,7 +104,8 @@ void py_module(nb::module_& mod) {
                std::optional<uint32_t> base_sem_id,
                std::optional<std::vector<uint32_t>> sem_ids,
                std::optional<uint32_t> ack_count_override,
-               dataflow_kernel_lib::TransferMode irregular_receiver_set_mode) {
+               dataflow_kernel_lib::TransferMode irregular_receiver_set_mode,
+               std::optional<dataflow_kernel_lib::TransferMode> transfer_mode_override) {
                 new (self) kh::McastConfig{
                     .noc = noc,
                     .handshake = handshake,
@@ -112,7 +113,8 @@ void py_module(nb::module_& mod) {
                     .base_sem_id = base_sem_id,
                     .sem_ids = std::move(sem_ids),
                     .ack_count_override = ack_count_override,
-                    .irregular_receiver_set_mode = irregular_receiver_set_mode};
+                    .irregular_receiver_set_mode = irregular_receiver_set_mode,
+                    .transfer_mode_override = transfer_mode_override};
             },
             nb::kw_only(),
             nb::arg("noc") = NOC::NOC_0,
@@ -121,7 +123,8 @@ void py_module(nb::module_& mod) {
             nb::arg("base_sem_id") = nb::none(),
             nb::arg("sem_ids") = std::optional<std::vector<uint32_t>>{},
             nb::arg("ack_count_override") = std::optional<uint32_t>{},
-            nb::arg("irregular_receiver_set_mode") = dataflow_kernel_lib::TransferMode::Multicast)
+            nb::arg("irregular_receiver_set_mode") = dataflow_kernel_lib::TransferMode::Multicast,
+            nb::arg("transfer_mode_override") = std::optional<dataflow_kernel_lib::TransferMode>{})
         .def_rw("noc", &kh::McastConfig::noc)
         .def_rw("handshake", &kh::McastConfig::handshake)
         .def_rw("data_ready", &kh::McastConfig::data_ready)
@@ -135,7 +138,8 @@ void py_module(nb::module_& mod) {
             "Adopt data_ready, consumer_ready, and (for ChainUnicast) a distinct signal_source ID. "
             "Initialize chain cells to zero; signal_source must not alias another live channel.")
         .def_rw("ack_count_override", &kh::McastConfig::ack_count_override)
-        .def_rw("irregular_receiver_set_mode", &kh::McastConfig::irregular_receiver_set_mode);
+        .def_rw("irregular_receiver_set_mode", &kh::McastConfig::irregular_receiver_set_mode)
+        .def_rw("transfer_mode_override", &kh::McastConfig::transfer_mode_override);
 
     static_cast<nb::class_<kh::Mcast1DFixedSenderConfig>>(mod.attr("Mcast1DFixedSenderConfig"))
         .def(
