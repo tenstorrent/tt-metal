@@ -168,6 +168,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
     matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
     matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
+    matmul/device/factory/matmul_unified_program_factory.cpp
     # reshape_view
     reshape_view/reshape.cpp
     reshape_view/reshape_common.cpp

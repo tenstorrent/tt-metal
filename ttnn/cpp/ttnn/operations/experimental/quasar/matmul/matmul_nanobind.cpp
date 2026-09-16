@@ -644,6 +644,68 @@ void py_module(nb::module_& mod) {
             additional memory round-trips in DRAM-based operations.
         )doc");
 
+    auto matmul_unified_program_config =
+        tt_serializable_class<MatmulUnifiedProgramConfig>(mod, "MatmulUnifiedProgramConfig", R"doc(
+        Placement-first program config (Quasar-native matmul, stage A).
+
+        Name the cores and the output block (in tiles) each core owns; the factory tiles the output
+        into ceil(Mt / per_core_M) x ceil(Nt / per_core_N) blocks, numbers them row-major and hands
+        them to the cores in enumeration order (a core may own a run of blocks; surplus cores idle).
+        Edge blocks are clipped on read and write, so any M / N works. Every operand is addressed
+        through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded inputs and outputs all
+        take the same kernels. The 1D, 2D and DRAM-sharded strategies are particular choices of
+        (cores, per_core_M, per_core_N).
+
+        Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
+        only; a sharded output needs batch 1 and exactly one block per core.
+    )doc");
+
+    matmul_unified_program_config
+        .def(
+            nb::init<CoreRangeSet, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool>(),
+            nb::kw_only(),
+            nb::arg("cores"),
+            nb::arg("per_core_M").noconvert(),
+            nb::arg("per_core_N").noconvert(),
+            nb::arg("in0_block_w").noconvert() = 0,
+            nb::arg("out_subblock_h").noconvert() = 0,
+            nb::arg("out_subblock_w").noconvert() = 0,
+            nb::arg("row_major_cores") = true)
+        .def_rw("cores", &MatmulUnifiedProgramConfig::cores, R"doc(
+            Cores (clusters) that take part, as a CoreRangeSet.
+        )doc")
+        .def_rw("per_core_M", &MatmulUnifiedProgramConfig::per_core_M, R"doc(
+            Output block height per core, in tiles.
+        )doc")
+        .def_rw("per_core_N", &MatmulUnifiedProgramConfig::per_core_N, R"doc(
+            Output block width per core, in tiles.
+        )doc")
+        .def_rw("in0_block_w", &MatmulUnifiedProgramConfig::in0_block_w, R"doc(
+            K block in tiles; must divide K in tiles. 0 = auto (largest divisor <= 8 whose buffers fit L1).
+        )doc")
+        .def_rw("out_subblock_h", &MatmulUnifiedProgramConfig::out_subblock_h, R"doc(
+            DST subblock height in tiles; must divide per_core_M. 0 with out_subblock_w = 0 means auto.
+        )doc")
+        .def_rw("out_subblock_w", &MatmulUnifiedProgramConfig::out_subblock_w, R"doc(
+            DST subblock width in tiles; must divide per_core_N. The subblock holds at most 8 tiles
+            (4 with fp32 accumulation).
+        )doc")
+        .def_rw("row_major_cores", &MatmulUnifiedProgramConfig::row_major_cores, R"doc(
+            Core enumeration order for the block assignment: x fastest when True, y fastest when False.
+        )doc")
+        .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {
+            return fmt::format(
+                "MatmulUnifiedProgramConfig(cores={}, per_core_M={}, per_core_N={}, in0_block_w={}, "
+                "out_subblock_h={}, out_subblock_w={}, row_major_cores={})",
+                config.cores.str(),
+                config.per_core_M,
+                config.per_core_N,
+                config.in0_block_w,
+                config.out_subblock_h,
+                config.out_subblock_w,
+                config.row_major_cores);
+        });
+
     ttnn::bind_function<"matmul", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
@@ -788,6 +850,9 @@ void py_module(nb::module_& mod) {
                 * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=True)
                   - Interleaved (L1/DRAM), Height Sharded (L1)
                   - Interleaved (L1/DRAM)
+                * - MatmulUnifiedProgramConfig
+                  - Interleaved (L1/DRAM), any sharding (L1/DRAM)
+                  - Interleaved (L1/DRAM), any sharding (L1/DRAM)
 
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
         )doc",
