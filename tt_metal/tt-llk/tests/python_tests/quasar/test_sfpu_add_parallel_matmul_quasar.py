@@ -11,6 +11,7 @@ Both outputs verified after a single configuration.run().
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.data_format_inference import data_formats
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -67,10 +68,18 @@ DIMENSION_PROFILES = (
 # Caps each add operand at 45% of format max so |a|+|b| stays <= 90% with rounding headroom.
 ADD_RANGE_SAFETY_FACTOR = 0.45
 
-SFPU_ADD_FORMATS = input_output_formats(
-    [
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
+    ]
+)
+
+SFPU_ADD_FORMATS = input_output_formats(
+    [
+        *_MX_FORMATS,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
