@@ -833,6 +833,182 @@ std::map<MeshId, MeshPhysicalLayout> mesh_physical_layouts_from_psd_placements(
     return layouts;
 }
 
+// -----------------------------------------------------------------------------
+// Shared round-robin mesh-packing machinery used by both
+// build_physical_multi_mesh_adjacency_graph overloads (single-MGD and
+// multi-MGD).
+//
+// MeshEnumState bundles everything needed to drive one shape's solver and
+// remember what it has found so far:
+//   logical_graph   — the pattern we want to place: either the mesh
+//                     instances from the logical descriptor, or the full
+//                     physical coarse topology when only one shape exists
+//                     and all placements need to be assigned.
+//   physical_graph  — the hardware mesh-level connectivity for this shape.
+//   session         — the incremental solver; it keeps prior constraints in
+//                     memory so each call only adds new work.
+//   excluded        — solutions already returned; fed back to the solver so
+//                     it doesn't repeat them.
+//   solutions       — all solutions found so far, in the order returned.
+//   solution_bits   — a chip bitmask for each solution; used for fast
+//                     overlap checks in the packing search below.
+//   embedding_sizes — how many meshes each solution places; used to try
+//                     larger placements first (better pruning).
+//   exhausted       — set to true once the solver finds no more options.
+// -----------------------------------------------------------------------------
+struct MeshEnumState {
+    AdjacencyGraph<MeshId> logical_graph;
+    AdjacencyGraph<MeshId> physical_graph;
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> constraints;
+    ::tt::tt_fabric::TopologyMappingEnumerationSession<MeshId, MeshId> session;
+    std::vector<std::map<MeshId, MeshId>> excluded;
+    std::vector<::tt::tt_fabric::MappingResult<MeshId, MeshId>> solutions;
+    std::vector<std::vector<std::uint64_t>> solution_bits;
+    std::vector<std::size_t> embedding_sizes;
+    bool exhausted = false;
+};
+
+// -----------------------------------------------------------------------------
+// BITMASK HELPERS
+// Each cached solution carries a bitmask with one bit per chip in the
+// cluster. Three helpers operate on these bitmasks word by word
+// (asic_word_count = number of 64-bit words per bitmask, passed explicitly by
+// the callers):
+//
+//   bitset_disjoint(a, b) — true if a and b share no chip (no bit set in
+//                           both), i.e. the two placements don't overlap.
+//   mark_used(dst, src)   — dst |= src  (mark src's chips as taken).
+//   unmark(dst, src)      — dst &= ~src (release src's chips on backtrack).
+//
+// These are tight 64-bit word loops that the compiler can auto-vectorise.
+// The cost per combination is proportional to cluster size in words, not
+// to the number of chips per mesh.
+// -----------------------------------------------------------------------------
+bool bitset_disjoint(
+    const std::vector<std::uint64_t>& cand, const std::vector<std::uint64_t>& occupied, std::size_t asic_word_count) {
+    for (std::size_t i = 0; i < asic_word_count; ++i) {
+        if (cand[i] & occupied[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+void mark_used(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src, std::size_t asic_word_count) {
+    for (std::size_t i = 0; i < asic_word_count; ++i) {
+        dst[i] |= src[i];
+    }
+}
+void unmark(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src, std::size_t asic_word_count) {
+    for (std::size_t i = 0; i < asic_word_count; ++i) {
+        dst[i] &= ~src[i];
+    }
+}
+
+// -----------------------------------------------------------------------------
+// DisjointPackingSearch — depth-first search over all combinations of one
+// placement per mesh shape.
+//
+// At each level of the recursion we try every cached placement for one
+// shape (largest first), skip any that overlap chips already claimed by
+// earlier levels, and recurse deeper if it fits.
+//
+// "Test each combination only once" rule: in round k we only check
+// combinations that include at least one placement that is new this round
+// (cache index k-1). Any combination made entirely of older placements was
+// already checked in a previous round. This is enforced by carrying a
+// flag (frontier_satisfied) through the recursion; at the leaf level we
+// only accept a candidate if the flag is already set or the candidate
+// itself is the new one.
+// -----------------------------------------------------------------------------
+struct DisjointPackingSearch {
+    const std::vector<MeshEnumState*>& states;
+    const std::vector<std::vector<std::size_t>>& try_order_per_depth;
+    std::vector<std::size_t>& chosen_index;
+    std::vector<std::uint64_t>& occupied_asics;
+    std::size_t round;       // current round number (1-based)
+    std::size_t target_idx;  // = round - 1; the "new" cache index this round
+    std::size_t n_meshes;
+    std::size_t& combinations_tested;
+    std::size_t& timer_check_mask;
+    std::chrono::steady_clock::time_point& last_progress_log_time;
+    const std::chrono::steady_clock::time_point& search_start_time;
+    std::size_t asic_word_count;
+    // frontier_reachable_from[d] = true if any depth >= d has a solution
+    // with index target_idx (i.e., can still satisfy the new-this-round
+    // rule). Computed once before each search call and used to prune
+    // interior subtrees that can never satisfy the frontier.
+    std::vector<bool> frontier_reachable_from;
+    std::chrono::seconds progress_interval{10};
+
+    // Returns true (and fills chosen_index[depth..n_meshes)) when it finds
+    // a conflict-free assignment that satisfies the new-this-round rule.
+    bool run(std::size_t depth, bool frontier_satisfied) {
+        // Interior pruning: if no depth from here to the leaf can provide
+        // the required new-this-round solution, skip this whole subtree.
+        if (!frontier_satisfied && !frontier_reachable_from[depth]) {
+            return false;
+        }
+
+        const MeshEnumState& s = *states[depth];
+        const std::vector<std::size_t>& order = try_order_per_depth[depth];
+        const bool is_leaf = (depth + 1 == n_meshes);
+
+        if (is_leaf) {
+            for (std::size_t si : order) {
+                if (si >= round) {
+                    continue;
+                }
+                // Only accept this leaf if the "new this round" rule is
+                // already satisfied, or if this candidate is itself new.
+                if (!frontier_satisfied && si != target_idx) {
+                    continue;
+                }
+                ++combinations_tested;
+                // Log progress periodically so a long search isn't silent.
+                if ((combinations_tested & timer_check_mask) == 0) {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now - last_progress_log_time >= progress_interval) {
+                        const auto elapsed_sec =
+                            std::chrono::duration_cast<std::chrono::seconds>(now - search_start_time).count();
+                        log_info(
+                            tt::LogFabric,
+                            "Topology mapper round-robin: tested {} mesh-level combinations in {}s (round {})",
+                            combinations_tested,
+                            elapsed_sec,
+                            round);
+                        last_progress_log_time = now;
+                    }
+                }
+                if (!bitset_disjoint(s.solution_bits[si], occupied_asics, asic_word_count)) {
+                    continue;
+                }
+                chosen_index[depth] = si;
+                return true;
+            }
+            return false;
+        }
+
+        // Interior level: try each candidate, claim its chips, recurse
+        // into the next level, and release the chips if we backtrack.
+        for (std::size_t si : order) {
+            if (si >= round) {
+                continue;
+            }
+            if (!bitset_disjoint(s.solution_bits[si], occupied_asics, asic_word_count)) {
+                continue;
+            }
+            mark_used(occupied_asics, s.solution_bits[si], asic_word_count);
+            chosen_index[depth] = si;
+            const bool child_frontier = frontier_satisfied || (si == target_idx);
+            if (run(depth + 1, child_frontier)) {
+                return true;
+            }
+            unmark(occupied_asics, s.solution_bits[si], asic_word_count);
+        }
+        return false;
+    }
+};
+
 }  // namespace
 
 PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
@@ -970,37 +1146,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
 
     // -------------------------------------------------------------------------
-    // Phase 5: Set up the incremental solver state for each mesh shape.
-    //
-    // MeshEnumState bundles everything needed to drive one shape's solver and
-    // remember what it has found so far:
-    //   logical_graph   — the pattern we want to place: either the mesh
-    //                     instances from the logical descriptor, or the full
-    //                     physical coarse topology when only one shape exists
-    //                     and all placements need to be assigned.
-    //   physical_graph  — the hardware mesh-level connectivity for this shape.
-    //   session         — the incremental solver; it keeps prior constraints in
-    //                     memory so each call only adds new work.
-    //   excluded        — solutions already returned; fed back to the solver so
-    //                     it doesn't repeat them.
-    //   solutions       — all solutions found so far, in the order returned.
-    //   solution_bits   — a chip bitmask for each solution; used for fast
-    //                     overlap checks in the packing search below.
-    //   embedding_sizes — how many meshes each solution places; used to try
-    //                     larger placements first (better pruning).
-    //   exhausted       — set to true once the solver finds no more options.
+    // Phase 5: Set up the incremental solver state for each mesh shape (see
+    // MeshEnumState at the top of this file).
     // -------------------------------------------------------------------------
-    struct MeshEnumState {
-        AdjacencyGraph<MeshId> logical_graph;
-        AdjacencyGraph<MeshId> physical_graph;
-        MappingConstraints<MeshId, MeshId> constraints;
-        TopologyMappingEnumerationSession<MeshId, MeshId> session;
-        std::vector<std::map<MeshId, MeshId>> excluded;
-        std::vector<MappingResult<MeshId, MeshId>> solutions;
-        std::vector<std::vector<std::uint64_t>> solution_bits;
-        std::vector<std::size_t> embedding_sizes;
-        bool exhausted = false;
-    };
 
     // Read the inter-mesh connections from the logical descriptor once here;
     // they are reused when building the pattern graph for each mesh shape.
@@ -1084,44 +1232,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     // -------------------------------------------------------------------------
     // Phase 6: Round-by-round search for a conflict-free chip assignment.
-    //
-    // BITMASK HELPERS
-    // Each cached solution carries a bitmask with one bit per chip in the
-    // cluster. Three helpers operate on these bitmasks word by word:
-    //
-    //   bitset_disjoint(a, b) — true if a and b share no chip (no bit set in
-    //                           both), i.e. the two placements don't overlap.
-    //   mark_used(dst, src)   — dst |= src  (mark src's chips as taken).
-    //   unmark(dst, src)      — dst &= ~src (release src's chips on backtrack).
-    //
-    // These are tight 64-bit word loops that the compiler can auto-vectorise.
-    // The cost per combination is proportional to cluster size in words, not
-    // to the number of chips per mesh.
+    // Bitmask helpers bitset_disjoint / mark_used / unmark are defined at the
+    // top of this file.
     // -------------------------------------------------------------------------
     std::vector<std::uint64_t> occupied_asics(asic_word_count, 0);
-
-    auto bitset_disjoint = [asic_word_count](
-                               const std::vector<std::uint64_t>& cand,
-                               const std::vector<std::uint64_t>& occupied) -> bool {
-        for (std::size_t i = 0; i < asic_word_count; ++i) {
-            if (cand[i] & occupied[i]) {
-                return false;
-            }
-        }
-        return true;
-    };
-    auto mark_used = [asic_word_count](
-                         std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src) {
-        for (std::size_t i = 0; i < asic_word_count; ++i) {
-            dst[i] |= src[i];
-        }
-    };
-    auto unmark = [asic_word_count](
-                      std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src) {
-        for (std::size_t i = 0; i < asic_word_count; ++i) {
-            dst[i] &= ~src[i];
-        }
-    };
 
     // Build the chip bitmask for one solver solution by OR-ing together the
     // pre-computed per-group bitsets. No hash lookups in this hot path.
@@ -1191,119 +1305,14 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         return true;
     };
 
-    // -----------------------------------------------------------------------
-    // DisjointPackingSearch — depth-first search over all combinations of one
-    // placement per mesh shape.
-    //
-    // At each level of the recursion we try every cached placement for one
-    // shape (largest first), skip any that overlap chips already claimed by
-    // earlier levels, and recurse deeper if it fits.
-    //
-    // "Test each combination only once" rule: in round k we only check
-    // combinations that include at least one placement that is new this round
-    // (cache index k-1). Any combination made entirely of older placements was
-    // already checked in a previous round. This is enforced by carrying a
-    // flag (frontier_satisfied) through the recursion; at the leaf level we
-    // only accept a candidate if the flag is already set or the candidate
-    // itself is the new one.
-    // -----------------------------------------------------------------------
+    // Per-depth state for DisjointPackingSearch (defined at the top of this
+    // file).
     std::vector<MeshEnumState*> mesh_state_ptrs(n_meshes, nullptr);
     for (std::size_t d = 0; d < n_meshes; ++d) {
         mesh_state_ptrs[d] = &mesh_enum_states.at(mesh_order[d]);
     }
     std::vector<std::vector<std::size_t>> try_order_per_depth(n_meshes);
     std::vector<std::size_t> chosen_index(n_meshes, 0);
-
-    struct DisjointPackingSearch {
-        const std::vector<MeshEnumState*>& states;
-        const std::vector<std::vector<std::size_t>>& try_order_per_depth;
-        std::vector<std::size_t>& chosen_index;
-        std::vector<std::uint64_t>& occupied_asics;
-        std::size_t round;       // current round number (1-based)
-        std::size_t target_idx;  // = round - 1; the "new" cache index this round
-        std::size_t n_meshes;
-        std::size_t& combinations_tested;
-        std::size_t& timer_check_mask;
-        std::chrono::steady_clock::time_point& last_progress_log_time;
-        const std::chrono::steady_clock::time_point& search_start_time;
-        decltype(bitset_disjoint)& is_disjoint;
-        decltype(mark_used)& mark_used_fn;
-        decltype(unmark)& unmark_fn;
-        // frontier_reachable_from[d] = true if any depth >= d has a solution
-        // with index target_idx (i.e., can still satisfy the new-this-round
-        // rule). Computed once before each search call and used to prune
-        // interior subtrees that can never satisfy the frontier.
-        std::vector<bool> frontier_reachable_from;
-        std::chrono::seconds progress_interval{10};
-
-        // Returns true (and fills chosen_index[depth..n_meshes)) when it finds
-        // a conflict-free assignment that satisfies the new-this-round rule.
-        bool run(std::size_t depth, bool frontier_satisfied) {
-            // Interior pruning: if no depth from here to the leaf can provide
-            // the required new-this-round solution, skip this whole subtree.
-            if (!frontier_satisfied && !frontier_reachable_from[depth]) {
-                return false;
-            }
-
-            const MeshEnumState& s = *states[depth];
-            const std::vector<std::size_t>& order = try_order_per_depth[depth];
-            const bool is_leaf = (depth + 1 == n_meshes);
-
-            if (is_leaf) {
-                for (std::size_t si : order) {
-                    if (si >= round) {
-                        continue;
-                    }
-                    // Only accept this leaf if the "new this round" rule is
-                    // already satisfied, or if this candidate is itself new.
-                    if (!frontier_satisfied && si != target_idx) {
-                        continue;
-                    }
-                    ++combinations_tested;
-                    // Log progress periodically so a long search isn't silent.
-                    if ((combinations_tested & timer_check_mask) == 0) {
-                        const auto now = std::chrono::steady_clock::now();
-                        if (now - last_progress_log_time >= progress_interval) {
-                            const auto elapsed_sec =
-                                std::chrono::duration_cast<std::chrono::seconds>(now - search_start_time).count();
-                            log_info(
-                                tt::LogFabric,
-                                "Topology mapper round-robin: tested {} mesh-level combinations in {}s (round {})",
-                                combinations_tested,
-                                elapsed_sec,
-                                round);
-                            last_progress_log_time = now;
-                        }
-                    }
-                    if (!is_disjoint(s.solution_bits[si], occupied_asics)) {
-                        continue;
-                    }
-                    chosen_index[depth] = si;
-                    return true;
-                }
-                return false;
-            }
-
-            // Interior level: try each candidate, claim its chips, recurse
-            // into the next level, and release the chips if we backtrack.
-            for (std::size_t si : order) {
-                if (si >= round) {
-                    continue;
-                }
-                if (!is_disjoint(s.solution_bits[si], occupied_asics)) {
-                    continue;
-                }
-                mark_used_fn(occupied_asics, s.solution_bits[si]);
-                chosen_index[depth] = si;
-                const bool child_frontier = frontier_satisfied || (si == target_idx);
-                if (run(depth + 1, child_frontier)) {
-                    return true;
-                }
-                unmark_fn(occupied_asics, s.solution_bits[si]);
-            }
-            return false;
-        }
-    };
 
     // -----------------------------------------------------------------------
     // Main loop: keep growing each shape's solution cache by one per round,
@@ -1423,9 +1432,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             timer_check_mask_ref,
             last_progress_log_time,
             search_start_time,
-            bitset_disjoint,
-            mark_used,
-            unmark,
+            asic_word_count,
             std::move(frontier_reachable)};
         found_disjoint_combination = search.run(0, /*frontier_satisfied=*/false);
         log_debug(
@@ -1794,37 +1801,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
 
     // -------------------------------------------------------------------------
-    // Phase 5: Set up the incremental solver state for each mesh shape.
-    //
-    // MeshEnumState bundles everything needed to drive one shape's solver and
-    // remember what it has found so far:
-    //   logical_graph   — the pattern we want to place: either the mesh
-    //                     instances from the logical descriptor, or the full
-    //                     physical coarse topology when only one shape exists
-    //                     and all placements need to be assigned.
-    //   physical_graph  — the hardware mesh-level connectivity for this shape.
-    //   session         — the incremental solver; it keeps prior constraints in
-    //                     memory so each call only adds new work.
-    //   excluded        — solutions already returned; fed back to the solver so
-    //                     it doesn't repeat them.
-    //   solutions       — all solutions found so far, in the order returned.
-    //   solution_bits   — a chip bitmask for each solution; used for fast
-    //                     overlap checks in the packing search below.
-    //   embedding_sizes — how many meshes each solution places; used to try
-    //                     larger placements first (better pruning).
-    //   exhausted       — set to true once the solver finds no more options.
+    // Phase 5: Set up the incremental solver state for each mesh shape (see
+    // MeshEnumState at the top of this file).
     // -------------------------------------------------------------------------
-    struct MeshEnumState {
-        AdjacencyGraph<MeshId> logical_graph;
-        AdjacencyGraph<MeshId> physical_graph;
-        MappingConstraints<MeshId, MeshId> constraints;
-        TopologyMappingEnumerationSession<MeshId, MeshId> session;
-        std::vector<std::map<MeshId, MeshId>> excluded;
-        std::vector<MappingResult<MeshId, MeshId>> solutions;
-        std::vector<std::vector<std::uint64_t>> solution_bits;
-        std::vector<std::size_t> embedding_sizes;
-        bool exhausted = false;
-    };
 
     // Count how many mesh shapes actually have a hardware-derived placement
     // graph. Used below to decide whether to expand the pattern to cover the
@@ -1924,44 +1903,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     // -------------------------------------------------------------------------
     // Phase 6: Round-by-round search for a conflict-free chip assignment.
-    //
-    // BITMASK HELPERS
-    // Each cached solution carries a bitmask with one bit per chip in the
-    // cluster. Three helpers operate on these bitmasks word by word:
-    //
-    //   bitset_disjoint(a, b) — true if a and b share no chip (no bit set in
-    //                           both), i.e. the two placements don't overlap.
-    //   mark_used(dst, src)   — dst |= src  (mark src's chips as taken).
-    //   unmark(dst, src)      — dst &= ~src (release src's chips on backtrack).
-    //
-    // These are tight 64-bit word loops that the compiler can auto-vectorise.
-    // The cost per combination is proportional to cluster size in words, not
-    // to the number of chips per mesh.
+    // Bitmask helpers bitset_disjoint / mark_used / unmark are defined at the
+    // top of this file.
     // -------------------------------------------------------------------------
     std::vector<std::uint64_t> occupied_asics(asic_word_count, 0);
-
-    auto bitset_disjoint = [asic_word_count](
-                               const std::vector<std::uint64_t>& cand,
-                               const std::vector<std::uint64_t>& occupied) -> bool {
-        for (std::size_t i = 0; i < asic_word_count; ++i) {
-            if (cand[i] & occupied[i]) {
-                return false;
-            }
-        }
-        return true;
-    };
-    auto mark_used = [asic_word_count](
-                         std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src) {
-        for (std::size_t i = 0; i < asic_word_count; ++i) {
-            dst[i] |= src[i];
-        }
-    };
-    auto unmark = [asic_word_count](
-                      std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src) {
-        for (std::size_t i = 0; i < asic_word_count; ++i) {
-            dst[i] &= ~src[i];
-        }
-    };
 
     // Build the chip bitmask for one solver solution by OR-ing together the
     // pre-computed per-group bitsets. No hash lookups in this hot path.
@@ -2031,119 +1976,14 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         return true;
     };
 
-    // -----------------------------------------------------------------------
-    // DisjointPackingSearch — depth-first search over all combinations of one
-    // placement per mesh shape.
-    //
-    // At each level of the recursion we try every cached placement for one
-    // shape (largest first), skip any that overlap chips already claimed by
-    // earlier levels, and recurse deeper if it fits.
-    //
-    // "Test each combination only once" rule: in round k we only check
-    // combinations that include at least one placement that is new this round
-    // (cache index k-1). Any combination made entirely of older placements was
-    // already checked in a previous round. This is enforced by carrying a
-    // flag (frontier_satisfied) through the recursion; at the leaf level we
-    // only accept a candidate if the flag is already set or the candidate
-    // itself is the new one.
-    // -----------------------------------------------------------------------
+    // Per-depth state for DisjointPackingSearch (defined at the top of this
+    // file).
     std::vector<MeshEnumState*> mesh_state_ptrs(n_meshes, nullptr);
     for (std::size_t d = 0; d < n_meshes; ++d) {
         mesh_state_ptrs[d] = &mesh_enum_states.at(mesh_order[d]);
     }
     std::vector<std::vector<std::size_t>> try_order_per_depth(n_meshes);
     std::vector<std::size_t> chosen_index(n_meshes, 0);
-
-    struct DisjointPackingSearch {
-        const std::vector<MeshEnumState*>& states;
-        const std::vector<std::vector<std::size_t>>& try_order_per_depth;
-        std::vector<std::size_t>& chosen_index;
-        std::vector<std::uint64_t>& occupied_asics;
-        std::size_t round;       // current round number (1-based)
-        std::size_t target_idx;  // = round - 1; the "new" cache index this round
-        std::size_t n_meshes;
-        std::size_t& combinations_tested;
-        std::size_t& timer_check_mask;
-        std::chrono::steady_clock::time_point& last_progress_log_time;
-        const std::chrono::steady_clock::time_point& search_start_time;
-        decltype(bitset_disjoint)& is_disjoint;
-        decltype(mark_used)& mark_used_fn;
-        decltype(unmark)& unmark_fn;
-        // frontier_reachable_from[d] = true if any depth >= d has a solution
-        // with index target_idx (i.e., can still satisfy the new-this-round
-        // rule). Computed once before each search call and used to prune
-        // interior subtrees that can never satisfy the frontier.
-        std::vector<bool> frontier_reachable_from;
-        std::chrono::seconds progress_interval{10};
-
-        // Returns true (and fills chosen_index[depth..n_meshes)) when it finds
-        // a conflict-free assignment that satisfies the new-this-round rule.
-        bool run(std::size_t depth, bool frontier_satisfied) {
-            // Interior pruning: if no depth from here to the leaf can provide
-            // the required new-this-round solution, skip this whole subtree.
-            if (!frontier_satisfied && !frontier_reachable_from[depth]) {
-                return false;
-            }
-
-            const MeshEnumState& s = *states[depth];
-            const std::vector<std::size_t>& order = try_order_per_depth[depth];
-            const bool is_leaf = (depth + 1 == n_meshes);
-
-            if (is_leaf) {
-                for (std::size_t si : order) {
-                    if (si >= round) {
-                        continue;
-                    }
-                    // Only accept this leaf if the "new this round" rule is
-                    // already satisfied, or if this candidate is itself new.
-                    if (!frontier_satisfied && si != target_idx) {
-                        continue;
-                    }
-                    ++combinations_tested;
-                    // Log progress periodically so a long search isn't silent.
-                    if ((combinations_tested & timer_check_mask) == 0) {
-                        const auto now = std::chrono::steady_clock::now();
-                        if (now - last_progress_log_time >= progress_interval) {
-                            const auto elapsed_sec =
-                                std::chrono::duration_cast<std::chrono::seconds>(now - search_start_time).count();
-                            log_info(
-                                tt::LogFabric,
-                                "Topology mapper round-robin: tested {} mesh-level combinations in {}s (round {})",
-                                combinations_tested,
-                                elapsed_sec,
-                                round);
-                            last_progress_log_time = now;
-                        }
-                    }
-                    if (!is_disjoint(s.solution_bits[si], occupied_asics)) {
-                        continue;
-                    }
-                    chosen_index[depth] = si;
-                    return true;
-                }
-                return false;
-            }
-
-            // Interior level: try each candidate, claim its chips, recurse
-            // into the next level, and release the chips if we backtrack.
-            for (std::size_t si : order) {
-                if (si >= round) {
-                    continue;
-                }
-                if (!is_disjoint(s.solution_bits[si], occupied_asics)) {
-                    continue;
-                }
-                mark_used_fn(occupied_asics, s.solution_bits[si]);
-                chosen_index[depth] = si;
-                const bool child_frontier = frontier_satisfied || (si == target_idx);
-                if (run(depth + 1, child_frontier)) {
-                    return true;
-                }
-                unmark_fn(occupied_asics, s.solution_bits[si]);
-            }
-            return false;
-        }
-    };
 
     // -----------------------------------------------------------------------
     // Main loop: keep growing each shape's solution cache by one per round,
@@ -2263,9 +2103,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             timer_check_mask_ref,
             last_progress_log_time,
             search_start_time,
-            bitset_disjoint,
-            mark_used,
-            unmark,
+            asic_word_count,
             std::move(frontier_reachable)};
         found_disjoint_combination = search.run(0, /*frontier_satisfied=*/false);
         log_debug(
@@ -2537,8 +2375,8 @@ std::optional<std::string> hostname_for_asic_from_hostname_map(
     return std::nullopt;
 }
 
-// Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply preferred
-// constraints so unbound logical meshes tend to pack onto fewer hosts.
+// Minimal host cover for inter-mesh mapping: partition physical meshes by host and cap the number of hosts the
+// mapping may occupy, so unbound logical meshes pack onto the fewest hosts.
 // Only called when the physical graph is not already identity-bound via asic_id_to_mesh_rank (Phase 1).
 // TODO: This can be removed and replaced with cost heuristics when using a SAT solver because preferred
 // constraints aren't very effective here
@@ -2596,9 +2434,9 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         return;
     }
 
-    const auto [single_group_fits, preferred_globals] =
-        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
-            logical_target_set, global_mesh_groups);
+    const bool single_group_fits =
+        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(logical_target_set, global_mesh_groups)
+            .first;
     if (single_group_fits) {
         std::vector<std::set<MeshId>> target_groups;
         target_groups.push_back(logical_target_set);
@@ -2617,22 +2455,17 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         log_warning(
             tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
     } else {
-        // 2. TRY A HARD CAP: fit the mapping within the minimum number of hosts,
-        //    k_min = ceil(chips used by the MGD / chips per host), rounded up to the next whole host. Count CHIPS
-        //    (ASICs), not meshes: meshes-per-host is lumpy (one host can own several small meshes while another owns a
-        //    single large one), but the per-host chip capacity is uniform, so the chip-based division is exact. The
-        //    solver picks WHICH k_min hosts -- never pinned to a specific, possibly-unroutable cover.
+        // 2. HARD CAP: fit the mapping within k_min = ceil(chips used / chips per host) hosts. The solver
+        //    encodes this as a hard at-most-k occupancy constraint (not an optional/guarded clause). If that
+        //    solve is infeasible, MultiMeshSolutionEnumerator::next() drops the cap, sets
+        //    set_minimize_same_rank_groups_used (SOFT occupancy packing), and restarts the session.
         std::size_t chips_per_host = 0;
         for (const auto& [hostname, asics] : config.hostname_to_asics) {
             chips_per_host = std::max(chips_per_host, asics.size());
         }
         if (total_chips_used > 0 && chips_per_host > 0) {
             const std::size_t k_min = (total_chips_used + chips_per_host - 1) / chips_per_host;
-            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);  // HARD: fit within k_min hosts
-
-            // 3. SOFT fallback: if that hard cap is infeasible for this graph's connectivity, the solver reduces to
-            //    merely MINIMIZING the number of host groups used (best-effort) instead of failing the mapping.
-            inter_mesh_constraints.set_minimize_same_rank_groups_used(true);  // SOFT
+            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);
 
             log_debug(
                 tt::LogFabric,
@@ -2642,20 +2475,9 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
                 chips_per_host);
         }
     }
-
-    if (!preferred_globals.empty()) {
-        if (!single_group_fits) {
-            log_debug(
-                tt::LogFabric,
-                "Inter-mesh host alignment: target count {} exceeds largest single partition; preferring minimal host "
-                "cover ({} preferred globals)",
-                logical_target_set.size(),
-                preferred_globals.size());
-        }
-        for (const MeshId& target : logical_target_set) {
-            inter_mesh_constraints.add_preferred_constraint(target, preferred_globals);
-        }
-    }
+    // No per-mesh preferred host cover: the same-rank partition plus the hard at-most-k_min cap already make the
+    // solver use the fewest hosts, and the SAT solver picks which ones. Preferring one guessed cover on top of the
+    // cap only asked the solver to prove that guess infeasible before settling on a valid packing.
 }
 
 // Helper function to build ASIC positions to ASIC IDs map
@@ -3635,50 +3457,30 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     const auto& mesh_logical_graph = adjacency_map_logical_.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical_.mesh_level_graph_;
     while (true) {
-        // Inter-mesh solve. The FIRST solve (emitted_ == 0) -- for single-solve AND the first solution of an
-        // enumeration -- uses the single-shot solve_topology_mapping, which runs the full capped ladder (capacity
-        // precheck -> full-packing fast path -> general fallback -> conflict budget) so a tight minimal-host cap is
-        // FOUND by unit propagation instead of falsely downgraded; excluded_ is empty on the first solve and the
-        // forbidden-pair constraint drives any intra-completion retry. Subsequent solves (emitted_ > 0, enumeration
-        // only) use the streaming session's GENERAL encoding so every partial-fill placement stays enumerable; their
-        // exhaustion is a genuine "no more solutions" (the emitted_ == 0 downgrade guard below no longer fires). A
-        // failed FIRST solve means the cap is genuinely infeasible -> the relax/downgrade below.
-        MappingResult<MeshId, MeshId> placement = emitted_ == 0 ? ::tt::tt_fabric::solve_topology_mapping(
-                                                                      mesh_logical_graph,
-                                                                      mesh_physical_graph,
-                                                                      inter_mesh_constraints_,
-                                                                      inter_mesh_validation_mode_,
-                                                                      /*quiet_mode=*/true)
-                                                                : session_.next(
-                                                                      mesh_logical_graph,
-                                                                      mesh_physical_graph,
-                                                                      inter_mesh_constraints_,
-                                                                      excluded_,
-                                                                      inter_mesh_validation_mode_,
-                                                                      /*quiet_mode=*/true,
-                                                                      TopologyMappingSolverEngine::Auto,
-                                                                      unique_shapes_);
+        // One incremental session for the first solve and every later one. A failed first solve with a hard
+        // host-group cap means the cap is infeasible for this instance -> drop the cap, enable SOFT
+        // minimize_same_rank_groups_used, and restart the session. Later exhaustion with emitted_ > 0 is
+        // genuine "no more capped solutions" and must not start emitting over-cap placements.
+        MappingResult<MeshId, MeshId> placement = session_.next(
+            mesh_logical_graph,
+            mesh_physical_graph,
+            inter_mesh_constraints_,
+            excluded_,
+            inter_mesh_validation_mode_,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            unique_shapes_);
         if (!placement.success) {
-            // Mirror the single-solve path (map_multi_mesh_to_physical): the minimal-host cap is best-effort --
-            // if the capped encoding is UNSAT drop the hard cap (the SOFT minimize bias stays on) and re-encode a
-            // fresh session, so an infeasible cap never turns a solvable enumeration into "no solutions"
-            // (split-host meshes partition hosts into more same-rank groups than the chip-count k_min allows).
-            //
-            // Relax ONLY when NO capped solution has been emitted (emitted_ == 0). Once the enumeration has
-            // returned even one cap-compliant placement, the cap is feasible for this instance, so genuine
-            // exhaustion means "no more capped solutions" -- NOT license to start emitting over-cap placements.
-            // Relaxing here after emitted_ > 0 would mix cap-compliant and over-cap solutions in one enumeration
-            // and diverge from map_multi_mesh_to_physical_n (which pulls from this same next()). Keeping the cap
-            // and reporting exhaustion matches the single-solve precedent and the batch path.
             if (!host_cap_relaxed_ && emitted_ == 0 && inter_mesh_constraints_.max_same_rank_groups_used() > 0) {
                 log_warning(
                     tt::LogFabric,
                     "Multi-solution enumeration: hard host-group cap (k={}) infeasible for this instance with zero "
-                    "capped solutions ({}); DOWNGRADING to an uncapped solve (soft minimize stays on) -- returned "
-                    "placements may occupy more than k host groups",
+                    "capped solutions ({}); dropping the cap and falling back to SOFT minimize, then "
+                    "restarting the session -- returned placements may occupy more than k host groups",
                     inter_mesh_constraints_.max_same_rank_groups_used(),
                     placement.error_message);
                 inter_mesh_constraints_.set_max_same_rank_groups_used(0);
+                inter_mesh_constraints_.set_minimize_same_rank_groups_used(true);  // SOFT
                 session_ = {};
                 host_cap_relaxed_ = true;
                 continue;

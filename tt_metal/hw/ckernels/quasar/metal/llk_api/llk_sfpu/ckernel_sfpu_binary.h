@@ -62,7 +62,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
 template <
-    [[maybe_unused]] bool APPROXIMATION_MODE,
+    bool APPROXIMATION_MODE /*maybe_unused*/,
     BinaryOp BINOP,
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
@@ -101,7 +101,10 @@ inline void calculate_sfpu_binary(
                 }
                 v_endif;
             }
-            v_elseif(in0 == in1) { result = 1.0f; }
+            // sfpi's vFloat equality subtracts the operands as integers and tests the
+            // difference as sign-magnitude, so it matches x == -x as well as x == x. Take the
+            // magnitude from the shortcut and the sign from the quotient, correct for both.
+            v_elseif(in0 == in1) { result = sfpi::copysgn(sfpi::vFloat(1.0f), result); }
             v_endif;
 
             if constexpr (!is_fp32_dest_acc_en) {
@@ -129,7 +132,7 @@ inline void calculate_sfpu_binary(
  * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
  * @tparam BINOP: selects which op's init to run
  */
-template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP>
+template <bool APPROXIMATION_MODE /*maybe_unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
         _init_reciprocal_<APPROXIMATION_MODE>();

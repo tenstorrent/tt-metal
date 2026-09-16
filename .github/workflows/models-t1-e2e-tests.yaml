@@ -18,6 +18,7 @@ on:
           - llama3.3-70b-galaxy
           - qwen3-32b-galaxy
           - qwen3.6-27b
+          - qwen3.6-35b-a3b
           - gpt-oss-120b
           - whisper
           - gemma-4-12b
@@ -25,6 +26,7 @@ on:
           - gemma-4-31b
           - flux.1-schnell
           - flux.1-dev
+          - flux.2-dev
           - wan-2.2-t2v
           - wan-2.2-i2v
           - ltx-2.3-pro-t2v

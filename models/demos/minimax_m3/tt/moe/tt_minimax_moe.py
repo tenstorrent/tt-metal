@@ -116,6 +116,10 @@ class TtMiniMaxMoE(LightweightModule):
             topology=topology,
             subdevice_id=None,
         )
+        worst_case_tokens = dispatch_group_size * seq_len_per_chip * num_experts_per_tok
+        assert (
+            max_dispatch_buffer_token_size >= worst_case_tokens
+        ), f"init_zeros=False needs a drop-free dispatch buffer: {max_dispatch_buffer_token_size} < {worst_case_tokens}"
         self.combine_module = TtCombineModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -126,12 +130,17 @@ class TtMiniMaxMoE(LightweightModule):
             cluster_axis=0,
             num_links=num_links,
             topology=topology,
-            # M3's real routing is heavily skewed -> many empty experts/unwritten combine slots. With
-            # init_zeros=False those slots keep STALE DRAM (a weight/old activation under the full-model
-            # footprint) which the weighted-sum reads as a ~1e38 garbage value -> residual overflow -> nan
-            # -> token-0. Zero-init the combine output so unwritten slots are 0. (DS default is True; the
-            # False override was unsafe for skewed routing.) See token-0 debug 2026-06-29.
-            init_zeros=True,
+            # No zero-init (~95 us per call). Invariant: every slot post_combine_reduce reads with a
+            # non-zero weight is written, because the dispatch buffer is drop-free (asserted above).
+            # Unwritten slots ARE still read: when none of a token's top-k experts is local to this
+            # dispatch group (about (1-1/ndg)^topk of tokens, ~1/3 on the 8x4 mesh, plus every padded
+            # row) the kernel's must_zero_init branch forces the last slot through with a writer-
+            # forced zero weight, so the result is stale_slot * 0. That is exact for finite stale
+            # data; for NaN/Inf it relies on the Blackhole FPU returning 0 for NaN*0 and Inf*0
+            # (measured on BH Galaxy, not an IEEE guarantee). deepseek_v3_d_p prefill runs the same
+            # path with init_zeros=False. Hard guarantee = kernel packs explicit zeros in the
+            # must_zero_init branch instead of reading the slot.
+            init_zeros=False,
         )
         global_expert_idx_tt = ttnn.from_torch(
             ExpertMapping.create_global_expert_idx_table(

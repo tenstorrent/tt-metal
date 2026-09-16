@@ -78,6 +78,8 @@ sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
 template <bool numerator_can_be_int_min = true>
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
     sfpi::vMag a, sfpi::vFloat a_f, const sfpi::vInt& b_signed, const sfpi::vFloat& inv_b_f) {
+    sfpi::lreg_pressure _;
+
     // Initial quotient approximation : q = a * 1/b
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
     // Fill the quotient MAD dependency slot with the divisor magnitude.
