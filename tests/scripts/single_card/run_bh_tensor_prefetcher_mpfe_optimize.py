@@ -46,6 +46,16 @@ MPFE_ENV_NAMES = (
     "ACTIVE_WEIGHTS",
     "FORCE_REQUEST_SYNC",
 )
+BENCHMARK_ENV_NAMES = (
+    "BENCH_K",
+    "BENCH_N",
+    "BENCH_DTYPE",
+    "BENCH_RECV_PER_BANK",
+    "BENCH_ORDINARY_READ_BYTES",
+    "BENCH_GCB_WINDOW_BLOCKS",
+    "BENCH_DUAL_SENDERS",
+    "BENCH_TRACE_REPEATS",
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +95,7 @@ class OptimizationRunner:
         self.pytest_log_path = self.output_dir / "pytest.log"
         self.summary_log_path = self.output_dir / "summary.log"
         self.temp_result_path = self.output_dir / ".current-result.jsonl"
+        self.manifest_path = self.output_dir / "manifest.json"
         self.python = shlex.split(os.environ.get("PYTHON", sys.executable))
         self.pytest_args = pytest_args
         self.matmul_shape = os.environ.get("MPFE_MATMUL_SHAPE", "3B_FF1")
@@ -94,13 +105,47 @@ class OptimizationRunner:
         self.tuning_iterations = env_int("MPFE_TUNING_ITERATIONS", 5)
         self.confirm_iterations = env_int("MPFE_CONFIRM_ITERATIONS", 15)
         self.lifecycle_iterations = env_int("MPFE_LIFECYCLE_ITERATIONS", 20)
+        self.manifest = {
+            "schema_version": 1,
+            "git_revision": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=TT_METAL_HOME,
+                text=True,
+            ).strip(),
+            "python": self.python,
+            "pytest_args": self.pytest_args,
+            "matmul_shape": self.matmul_shape,
+            "matmul_trace_repeats": self.matmul_repeats,
+            "contention_trace_repeats": self.contention_repeats,
+            "random_seed": self.seed,
+            "tuning_iterations": self.tuning_iterations,
+            "confirmation_iterations": self.confirm_iterations,
+            "lifecycle_iterations": self.lifecycle_iterations,
+        }
+        if self.manifest_path.exists():
+            with self.manifest_path.open(encoding="utf-8") as source:
+                saved_manifest = json.load(source)
+            if saved_manifest != self.manifest:
+                raise RuntimeError(
+                    f"{self.output_dir} belongs to a different benchmark configuration; "
+                    "choose a new OUTPUT_DIR or restore the settings in manifest.json"
+                )
+        else:
+            with self.manifest_path.open("w", encoding="utf-8") as output:
+                json.dump(self.manifest, output, indent=2, sort_keys=True)
+                output.write("\n")
         self.existing: dict[tuple[str, str, int, str], dict] = {}
+        self.hardware_signature: tuple[int, int] | None = None
         if self.results_path.exists():
             with self.results_path.open(encoding="utf-8") as source:
                 for line in source:
                     if line.strip():
                         record = json.loads(line)
                         self.existing[self.key(record)] = record
+                        signature = (record["num_dram_banks"], record["ring_size"])
+                        if self.hardware_signature not in (None, signature):
+                            raise RuntimeError(f"{self.results_path} mixes multiple device topologies")
+                        self.hardware_signature = signature
 
     @staticmethod
     def key(record: dict) -> tuple[str, str, int, str]:
@@ -123,7 +168,15 @@ class OptimizationRunner:
             return [CONTENTION_TEST], self.contention_repeats
         raise ValueError(f"unknown benchmark {benchmark}")
 
-    def run_case(self, stage: str, benchmark: str, iteration: int, case: Case) -> dict:
+    def run_case(
+        self,
+        stage: str,
+        benchmark: str,
+        iteration: int,
+        case: Case,
+        sequence: int,
+        sequence_count: int,
+    ) -> dict:
         record_key = (stage, benchmark, iteration, case.label)
         if record_key in self.existing:
             return self.existing[record_key]
@@ -132,6 +185,8 @@ class OptimizationRunner:
         environment = os.environ.copy()
         for name in MPFE_ENV_NAMES:
             environment.pop(f"{MPFE_ENV_PREFIX}{name}", None)
+        for name in BENCHMARK_ENV_NAMES:
+            environment.pop(name, None)
         environment.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
         environment.update(
             {
@@ -192,9 +247,18 @@ class OptimizationRunner:
                 "optimization_stage": stage,
                 "optimization_benchmark": benchmark,
                 "optimization_mode": case.mode,
+                "optimization_sequence": sequence,
+                "optimization_sequence_count": sequence_count,
                 "weight_tuple": list(case.weight_tuple) if case.weight_tuple is not None else None,
             }
         )
+        signature = (record["num_dram_banks"], record["ring_size"])
+        if self.hardware_signature not in (None, signature):
+            raise RuntimeError(
+                f"device topology changed from {self.hardware_signature} to {signature}; "
+                "resume with the original device or choose a new OUTPUT_DIR"
+            )
+        self.hardware_signature = signature
         with self.results_path.open("a", encoding="utf-8") as output:
             json.dump(record, output, sort_keys=True)
             output.write("\n")
@@ -243,18 +307,26 @@ def write_ranking(
     records: list[dict],
     candidate_labels: set[str],
 ) -> list[tuple[int, int, int]]:
-    baselines: dict[int, float] = {}
+    baselines: dict[int, tuple[dict, dict]] = {}
     iterations = sorted({record["suite_iteration"] for record in records})
     for iteration in iterations:
-        sentinel_values = [
-            record["tflops"]
+        sentinels = [
+            record
             for record in records
             if record["suite_iteration"] == iteration
             and record["run_label"] in {"static-000-start", "static-000-end"}
         ]
-        if len(sentinel_values) != 2:
-            raise RuntimeError(f"iteration {iteration} has {len(sentinel_values)} baseline sentinels")
-        baselines[iteration] = mean(sentinel_values)
+        if len(sentinels) != 2:
+            raise RuntimeError(f"iteration {iteration} has {len(sentinels)} baseline sentinels")
+        start = next(record for record in sentinels if record["run_label"] == "static-000-start")
+        end = next(record for record in sentinels if record["run_label"] == "static-000-end")
+        baselines[iteration] = (start, end)
+
+    def interpolated_baseline(record: dict) -> float:
+        start, end = baselines[record["suite_iteration"]]
+        span = end["optimization_sequence"] - start["optimization_sequence"]
+        fraction = (record["optimization_sequence"] - start["optimization_sequence"]) / span
+        return start["tflops"] + fraction * (end["tflops"] - start["tflops"])
 
     rows = []
     for label in sorted(candidate_labels):
@@ -265,16 +337,21 @@ def write_ranking(
                 for record in records
                 if record["run_label"] in {"static-000-start", "static-000-end"}
             ]
-            deltas = [0.0] * len(samples)
+            deltas = []
+            for record in samples:
+                start, end = baselines[record["suite_iteration"]]
+                iteration_baseline = mean((start["tflops"], end["tflops"]))
+                deltas.append((record["tflops"] / iteration_baseline - 1.0) * 100.0)
         else:
             deltas = [
-                (record["tflops"] / baselines[record["suite_iteration"]] - 1.0) * 100.0
+                (record["tflops"] / interpolated_baseline(record) - 1.0) * 100.0
                 for record in samples
             ]
-        weights = tuple(samples[0]["weight_tuple"])
+        weights_value = samples[0]["weight_tuple"]
+        weights = tuple(weights_value) if weights_value is not None else None
         rows.append(
             {
-                "tuple": tuple_string(weights),
+                "tuple": tuple_string(weights) if weights is not None else label,
                 "mean_tflops": mean(record["tflops"] for record in samples),
                 "mean_vs_static_000_percent": mean(deltas),
                 "stdev_vs_static_000_percent": statistics.stdev(deltas) if len(deltas) > 1 else 0.0,
@@ -305,7 +382,7 @@ def write_ranking(
                     "samples": row["samples"],
                 }
             )
-    return [row["_weights"] for row in rows]
+    return [row["_weights"] for row in rows if row["_weights"] is not None]
 
 
 def write_lifecycle_summary(path: Path, records: list[dict]) -> None:
@@ -409,10 +486,19 @@ def main() -> int:
     tuning_candidates = [static_case(weights) for weights in all_tuples if weights != (0, 0, 0)]
     runner.log(f"Stage 1: exhaustive static sweep ({len(all_tuples)} tuples)")
     for iteration in range(1, runner.tuning_iterations + 1):
-        runner.run_case("tuning", "matmul", iteration, baseline_case("start"))
-        for case in runner.randomized("tuning", iteration, tuning_candidates):
-            runner.run_case("tuning", "matmul", iteration, case)
-        runner.run_case("tuning", "matmul", iteration, baseline_case("end"))
+        ordered_cases = runner.randomized("tuning", iteration, tuning_candidates)
+        sequence_count = len(ordered_cases) + 2
+        runner.run_case("tuning", "matmul", iteration, baseline_case("start"), 0, sequence_count)
+        for sequence, case in enumerate(ordered_cases, start=1):
+            runner.run_case("tuning", "matmul", iteration, case, sequence, sequence_count)
+        runner.run_case(
+            "tuning",
+            "matmul",
+            iteration,
+            baseline_case("end"),
+            sequence_count - 1,
+            sequence_count,
+        )
     tuning_records = records_for(runner, "tuning", "matmul")
     tuning_ranking_path = runner.output_dir / "stage1-tuning-ranking.csv"
     tuning_ranking = write_ranking(
@@ -431,17 +517,26 @@ def main() -> int:
     )
     runner.log("Stage 2: randomized finalist confirmation")
     for iteration in range(1, runner.confirm_iterations + 1):
-        runner.run_case("confirmation", "matmul", iteration, baseline_case("start"))
         cases = [*confirmation_candidates, production]
-        for case in runner.randomized("confirmation", iteration, cases):
-            runner.run_case("confirmation", "matmul", iteration, case)
-        runner.run_case("confirmation", "matmul", iteration, baseline_case("end"))
+        ordered_cases = runner.randomized("confirmation", iteration, cases)
+        sequence_count = len(ordered_cases) + 2
+        runner.run_case("confirmation", "matmul", iteration, baseline_case("start"), 0, sequence_count)
+        for sequence, case in enumerate(ordered_cases, start=1):
+            runner.run_case("confirmation", "matmul", iteration, case, sequence, sequence_count)
+        runner.run_case(
+            "confirmation",
+            "matmul",
+            iteration,
+            baseline_case("end"),
+            sequence_count - 1,
+            sequence_count,
+        )
     confirmation_records = records_for(runner, "confirmation", "matmul")
     confirmation_ranking_path = runner.output_dir / "stage2-confirmation-ranking.csv"
     confirmation_ranking = write_ranking(
         confirmation_ranking_path,
         confirmation_records,
-        {case.label for case in confirmation_candidates},
+        {case.label for case in confirmation_candidates} | {production.label},
     )
     # A 000 winner is already represented by the lifecycle baseline and has no
     # meaningful idle-to-active transition. Compare the best two nonzero tuples.
@@ -482,8 +577,16 @@ def main() -> int:
     for iteration in range(1, runner.lifecycle_iterations + 1):
         for benchmark in ("matmul", "contention"):
             cases = [lifecycle_baseline, *lifecycle_cases]
-            for case in runner.randomized(f"lifecycle-{benchmark}", iteration, cases):
-                runner.run_case("lifecycle", benchmark, iteration, case)
+            ordered_cases = runner.randomized(f"lifecycle-{benchmark}", iteration, cases)
+            for sequence, case in enumerate(ordered_cases):
+                runner.run_case(
+                    "lifecycle",
+                    benchmark,
+                    iteration,
+                    case,
+                    sequence,
+                    len(ordered_cases),
+                )
     lifecycle_records = records_for(runner, "lifecycle", "matmul") + records_for(
         runner, "lifecycle", "contention"
     )
