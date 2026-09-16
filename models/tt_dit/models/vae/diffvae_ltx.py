@@ -30,7 +30,8 @@ from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
 from ...utils.memory_log import log_ccl_cache, log_dram
 from ...utils.tracing import traced_function
-from .diffvae_ltx_stage5 import TILE
+from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
+from .diffvae_ops import TILE, consume, consume_all, mesh_axis_size, retile, to_row_major, wshard
 from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
 
 #: Executors that take this chip's W-band and reassemble the window across the shard seam.
@@ -222,22 +223,6 @@ def _pointwise_in_chunks(x: ttnn.Tensor, fn, *, width: int) -> ttnn.Tensor:
     return joined
 
 
-def _consume(x: ttnn.Tensor, op, *args) -> ttnn.Tensor:
-    """``op(x, *args)``, freeing ``x`` unless ``op`` handed it straight back. Only for ops that copy."""
-    out = op(x, *args)
-    if out is not x:
-        ttnn.deallocate(x)
-    return out
-
-
-def _consume_pair(op, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
-    """``op(a, b)``, freeing both operands."""
-    out = op(a, b)
-    ttnn.deallocate(a)
-    ttnn.deallocate(b)
-    return out
-
-
 def apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
     """Rotate a permuted ``(1, T, H, W, heads, head_dim)`` tensor using contiguous halves. **Consumes** ``x``.
 
@@ -249,8 +234,8 @@ def apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tenso
     high = ttnn.slice(x, [0] * (len(shape) - 1) + [half], shape[:-1] + [2 * half])
     ttnn.deallocate(x)
 
-    first = _consume_pair(ttnn.subtract, ttnn.multiply(low, cos), ttnn.multiply(high, sin))
-    second = _consume_pair(ttnn.add, ttnn.multiply(low, sin), ttnn.multiply(high, cos))
+    first = consume_all(ttnn.subtract, ttnn.multiply(low, cos), ttnn.multiply(high, sin))
+    second = consume_all(ttnn.add, ttnn.multiply(low, sin), ttnn.multiply(high, cos))
     ttnn.deallocate(low)
     ttnn.deallocate(high)
 
@@ -306,7 +291,7 @@ class NeighborhoodAttention(Module):
         # already puts q/k in HF's rotate_half convention; it needs full-width cos/sin.
         self.fused_rope = opts.fused_rope
         self._fused_rope_cache: dict = {}
-        self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
+        self.tp = mesh_axis_size(mesh_device, tp_axis) if tp_axis is not None else 1
         if self.fused_qkv:
             assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
         # The bricked executor never slices heads itself under TP, so on that backend this block
@@ -393,17 +378,17 @@ class NeighborhoodAttention(Module):
         if self.fused_rope:
             with timing_tree.span(self.mesh_device, "qkv-rope (fused op)", category=timing_tree.NORM_ROPE, deep=True):
                 cos_full, sin_full = self._fused_rope_tables(cos, sin, tokens)
-                q = _consume(q, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
-                k = _consume(k, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+                q = consume(q, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+                k = consume(k, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
 
         # Untilize before splitting out the head axis: TILE pads both of the last two dims to 32,
         # so a trailing (heads, head_dim) in TILE costs many times its own size.
         shape = (1, t, h, w, heads, self.head_dim)
 
         def to_volume(part: ttnn.Tensor) -> ttnn.Tensor:
-            part = _consume(part, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            part = consume(part, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
             if self.fused_qkv:
-                part = _consume(part, ttnn.permute, (0, 2, 1, 3))
+                part = consume(part, ttnn.permute, (0, 2, 1, 3))
             return ttnn.reshape(part, shape)
 
         with timing_tree.span(self.mesh_device, "qkv-to-volume", category=timing_tree.RESHAPE, deep=True):
@@ -460,7 +445,7 @@ class NeighborhoodAttention(Module):
         t, h, w = dims
         if self.na3d_backend == "bricked_sp_w_sharded":
             # q/k/v are this chip's W-slice, so `dims` here is local; the executor is told the full W.
-            sp = int(list(q.device().shape)[self.sp_axis])
+            sp = mesh_axis_size(q.device(), self.sp_axis)
             return neighborhood_attention_3d_bricked_w_sharded(
                 q,
                 k,
@@ -486,9 +471,9 @@ class NeighborhoodAttention(Module):
 
     @timing_tree.span("mesh_device", "out-proj", category=timing_tree.PROJ, deep=True)
     def _out_proj(self, attended: ttnn.Tensor, tokens: int) -> ttnn.Tensor:
-        attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
-        out = self.proj(attended)
-        ttnn.deallocate(attended)
+        flat = consume(attended, retile, (tokens, self.dim))
+        out = self.proj(flat)
+        ttnn.deallocate(flat)
         return out
 
 
@@ -556,7 +541,7 @@ class SwiGLU(Module):
 
     @property
     def mlp_shards(self) -> int:
-        return int(list(self.gate_up.mesh_device.shape)[self.tp_axis]) if self.tp_mlp else 1
+        return mesh_axis_size(self.gate_up.mesh_device, self.tp_axis) if self.tp_mlp else 1
 
     def _project(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.fused:
@@ -692,7 +677,7 @@ class LinearPixelShuffleUpsample(Module):
         in TILE. **Consumes** ``projected``; returns the tile tensor and the output frame count."""
         p1, p2, p3 = self.stride
         c = self.out_channels
-        projected = _consume(
+        projected = consume(
             projected, lambda v: ttnn.permute(ttnn.reshape(v, (t, h, w, p1, p2, p3, c)), (0, 3, 1, 4, 2, 5, 6))
         )
         out_t = t * p1
@@ -700,11 +685,11 @@ class LinearPixelShuffleUpsample(Module):
         if p1 == 2 and drop_leading_frame:
             # The temporal shuffle emits a duplicate first frame; dropping it preserves the causal
             # 1:2 mapping. Only the slab holding the true t=0 has one.
-            projected = _consume(
+            projected = consume(
                 projected, lambda v: ttnn.slice(ttnn.reshape(v, (out_t, rows, c)), [1, 0, 0], [out_t, rows, c])
             )
             out_t -= 1
-        projected = _consume(projected, lambda v: ttnn.to_layout(ttnn.reshape(v, (out_t * rows, c)), ttnn.TILE_LAYOUT))
+        projected = consume(projected, retile, (out_t * rows, c))
         return projected, out_t
 
     def forward(
@@ -722,7 +707,7 @@ class LinearPixelShuffleUpsample(Module):
         slab = max(1, CHUNK_BYTES // (hw * self.proj_out_channels * 2))
 
         if slab >= t or hw % TILE != 0:
-            projected = _consume(self.proj(x), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            projected = consume(self.proj(x), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
             out, out_t = self._shuffle(projected, t, h, w, drop_leading_frame)
             return out, (out_t, h * p2, w * p3)
 
@@ -732,7 +717,7 @@ class LinearPixelShuffleUpsample(Module):
         for start in range(0, t, slab):
             st = min(start + slab, t) - start
             x_slab = ttnn.slice(x, [start * hw, 0], [(start + st) * hw, in_channels])
-            projected = _consume(self.proj(x_slab), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+            projected = consume(self.proj(x_slab), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(x_slab)
             part, part_t = self._shuffle(projected, st, h, w, drop_leading_frame and start == 0)
             parts.append(part)
@@ -784,7 +769,7 @@ class DeterministicStages(Module):
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
         self._w_sharded = self.na3d_backend in W_SHARDED_BACKENDS
-        self.sp = int(list(mesh_device.shape)[sp_axis]) if self._w_sharded else 1
+        self.sp = mesh_axis_size(mesh_device, sp_axis) if self._w_sharded else 1
         if self._w_sharded:
             assert sp_axis is not None and ccl_manager is not None, f"{self.na3d_backend} needs sp_axis + ccl_manager"
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
@@ -885,15 +870,7 @@ class DeterministicStages(Module):
     def _wshard(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
         """Reshard a replicated ``(T*H*W, ch)`` volume into this chip's W-band ``(T*H*(W/sp), ch)``.
         **Consumes** ``x``."""
-        t, h, w = dims
-        ch = int(x.shape[-1])
-        rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(x)
-        vol = ttnn.reshape(rm, (t, h, w, ch))
-        band = ttnn.mesh_partition(vol, dim=2, cluster_axis=self.sp_axis)
-        ttnn.deallocate(rm)
-        flat = ttnn.reshape(band, (t * h * (w // self.sp), ch))
-        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+        return wshard(x, dims, sp_axis=self.sp_axis)
 
     @timing_tree.span("mesh_device", "det -> replicated context gather", category=timing_tree.ALLGATHER)
     def _wgather(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
@@ -901,11 +878,9 @@ class DeterministicStages(Module):
         **Consumes** ``x``."""
         t, h, w = dims
         ch = int(x.shape[-1])
-        w_local = w // self.sp
-        vol = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (t, h, w_local, ch))
-        ttnn.deallocate(x)
+        vol = consume(x, to_row_major, (t, h, w // self.sp, ch))
         full = self.ccl_manager.all_gather(vol, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
-        return ttnn.to_layout(ttnn.reshape(full, (t * h * w, ch)), ttnn.TILE_LAYOUT)
+        return retile(full, (t * h * w, ch))
 
     def forward(
         self,
@@ -1012,8 +987,6 @@ class DiffVAEDecoder(Module):
         options: DiffVAEOptions = DiffVAEOptions(),
     ):
         super().__init__()
-        from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
-
         self.options = options
         # A replicated stage 5's activations are too large to share the mesh with a resident DiT;
         # a sharded one holds a fraction of the volume per chip and can sit beside it, which also
@@ -1189,14 +1162,9 @@ class DiffVAEDecoder(Module):
             if keep < dims[0]:
                 channels_out = self.config["stage_channels"][-1]
                 # The crop is on T, which the W-shard leaves untouched.
-                frames = ttnn.reshape(
-                    ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * w_eff, channels_out)
-                )
-                ttnn.deallocate(x)
-                cropped = ttnn.slice(frames, [0, 0, 0], [keep, dims[1] * w_eff, channels_out])
-                ttnn.deallocate(frames)
-                x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * w_eff, channels_out)), ttnn.TILE_LAYOUT)
-                ttnn.deallocate(cropped)
+                frames = consume(x, to_row_major, (dims[0], dims[1] * w_eff, channels_out))
+                cropped = consume(frames, ttnn.slice, [0, 0, 0], [keep, dims[1] * w_eff, channels_out])
+                x = consume(cropped, retile, (keep * dims[1] * w_eff, channels_out))
                 dims = (keep, dims[1], dims[2])
         return x, dims
 
@@ -1227,8 +1195,6 @@ class DiffVAEDecoder(Module):
 
     def _decode(self, latent, *, noise, seed, latent_tt, device_out, output_type):
         """:meth:`decode`, also returning the stage-5 grid the pixel pull needs."""
-        from .diffvae_ltx_stage5 import Grid
-
         context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
         grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
         channels_out = self.config["stage_channels"][-1]
@@ -1287,8 +1253,6 @@ class DiffVAEDecoder(Module):
         own input buffer, so the fresh one is freed afterwards, except on the capture call, where
         the fresh buffer IS the trace's input and has to stay.
         """
-        from .diffvae_ltx_stage5 import Grid
-
         if not self.options.device_boundaries:
             msg = (
                 "a traced DiffVAE decode needs DiffVAEOptions(device_boundaries=True): "

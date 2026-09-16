@@ -28,8 +28,8 @@ from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
     _apply_rope,
     _build_bricked_rope_tables,
     _build_rope_tables,
-    _reshape_retiled,
 )
+from models.tt_dit.models.vae.diffvae_ops import retile
 from models.tt_dit.models.vae.diffvae_rope import default_rope_dim_split, pair_swap_matrix, rope_permutation
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.tensor import from_torch as sharded_from_torch
@@ -146,7 +146,7 @@ def test_halves_and_pair_swap_rotations_agree(mesh_device: ttnn.MeshDevice):
     rotated = _apply_rope(
         tt_pairs, tables, pair_swap=_pair_swap(mesh_device), compute_kernel_config=_fp32_compute(mesh_device)
     )
-    pairs = ttnn.to_torch(_reshape_retiled(rotated, tuple(x.shape)))
+    pairs = ttnn.to_torch(retile(rotated, tuple(x.shape)))
     _check(expected, pairs, what="pair-swap rotation vs oracle")
 
     _check(halves, pairs, what="halves vs pair-swap")

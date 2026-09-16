@@ -30,11 +30,11 @@ from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
     DiffVAEStage5Config,
     Grid,
     _bands,
-    _slice_last,
     default_rope_dim_split,
     patchify,
     unpatchify,
 )
+from models.tt_dit.models.vae.diffvae_ops import retile, slice_last
 from models.tt_dit.utils.check import assert_quality
 
 
@@ -248,7 +248,7 @@ def test_rope_dim_split_matches_upstream():
 def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
     """The RoPE prelude in isolation: pair-swap matmul + fused cos/sin table against
     upstream's per-axis W-slabbed rotation."""
-    from models.tt_dit.models.vae.diffvae_ltx_stage5 import _apply_rope, _build_rope_tables, _reshape_retiled
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import _apply_rope, _build_rope_tables
     from models.tt_dit.models.vae.diffvae_rope import inv_freqs, pair_swap_matrix
 
     config = DiffVAEStage5Config()
@@ -292,7 +292,7 @@ def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
         x.reshape(frame_shape).contiguous(), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
     )
     got = _apply_rope(tt_x, tables, pair_swap=swap, compute_kernel_config=compute)
-    got = _reshape_retiled(got, tuple(x.shape))
+    got = retile(got, tuple(x.shape))
 
     assert_quality(expected, ttnn.to_torch(got), pcc=0.9999)
 
@@ -413,7 +413,7 @@ def test_stage5_parity(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, pcc: 
     # Only to hold upstream's joint ``[context | x]`` buffer to its exact round trip; the blocks
     # below read the context half out of it.
     buffer = ttnn.concat([tt_context, join(x_bands)], dim=-1)
-    tt_ctx_half = _slice_last(buffer, 0, config.context_channels)
+    tt_ctx_half = slice_last(buffer, 0, config.context_channels)
 
     failures = []
     for i, block in enumerate(model.diff_blocks):
