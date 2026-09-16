@@ -127,10 +127,28 @@ struct MapData {
     std::uint32_t worker_grid_y;
     Table<std::uint8_t> worker_selectors;  // worker_grid_x * worker_grid_y entries, row-major
 
-    /// Generated inverse maps: endpoint words ((y << 6) | x) by selector, used
-    /// to resolve this initiator's identity from its NOC_NODE_ID coordinate.
+    /// Offset from the kernel-visible frame to the NOC_NODE_ID frame. Every
+    /// coordinate the host hands a kernel (worker/dispatch (x, y), packed
+    /// (y << 6) | x bank words, go messages, CQ state) is in the soc
+    /// descriptor's frame; the endpoint words below and the my_x/my_y firmware
+    /// latches out of NOC_NODE_ID are in the live package frame. Applied before
+    /// every inverse lookup or my_x/my_y compare of a host coordinate. Mirrors
+    /// UMD's package offset; zero where the two frames coincide.
+    std::uint32_t node_id_offset_x;
+    std::uint32_t node_id_offset_y;
+
+    /// Generated inverse maps: endpoint words ((y << 6) | x) by selector, in
+    /// the NOC_NODE_ID frame, used to resolve this initiator's identity from
+    /// its NOC_NODE_ID coordinate.
     Table<std::uint16_t> worker_endpoint_words;
     Table<std::uint16_t> full_tile_endpoint_words;
+
+    /// DRAM endpoint words by DRAM-window selector, in the NOC_NODE_ID frame
+    /// (0 = row not programmed). Lets a host DRAM-tile coordinate (a packed
+    /// bank word, a CQ write_linear noc_xy) resolve to the DRAM window on maps
+    /// whose DRAM ingress nodes are in neither table above. Empty on maps where
+    /// the full-tile table already covers the DRAM tiles.
+    Table<std::uint16_t> dram_endpoint_words;
 
     /// Logical DRAM bank -> selector. Empty = no binding: every Dram identity
     /// resolves invalid.
@@ -300,7 +318,28 @@ constexpr ResolvedTile resolve_current(const MapData& map, std::uint32_t noc_x, 
             return {selector, noc_x, noc_y, true, WindowClass::FullTile};
         }
     }
+    for (std::uint32_t selector = 0; selector < map.dram_endpoint_words.size(); ++selector) {
+        if (map.dram_endpoint_words[selector] != 0 && map.dram_endpoint_words[selector] == endpoint) {
+            return {selector, noc_x, noc_y, true, WindowClass::Dram};
+        }
+    }
     return INVALID_TILE;
+}
+
+/// @brief Resolve a coordinate in the kernel-visible (host/descriptor) frame:
+/// the map's frame offset is applied first, then resolve_current's search
+/// (worker, full-tile, then DRAM endpoint words, so a host coordinate naming a
+/// DRAM tile resolves to the Dram window). This is the only correct way to turn
+/// a host-packed (y << 6) | x word into an identity.
+constexpr ResolvedTile resolve_host_coordinate(const MapData& map, std::uint32_t x, std::uint32_t y) {
+    return resolve_current(map, x + map.node_id_offset_x, y + map.node_id_offset_y);
+}
+
+/// @brief Whether a kernel-visible (host/descriptor frame) coordinate names
+/// the initiator whose NOC_NODE_ID coordinates are (@p noc_x, @p noc_y).
+constexpr bool host_coordinate_is_current(
+    const MapData& map, std::uint32_t x, std::uint32_t y, std::uint32_t noc_x, std::uint32_t noc_y) {
+    return x + map.node_id_offset_x == noc_x && y + map.node_id_offset_y == noc_y;
 }
 
 template <const MapData& Map>
