@@ -14,9 +14,15 @@ that are *about* enrolment touch the real table.
 """
 
 import pytest
+import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    MathOperation,
+    format_dict,
+)
 from helpers.sfpu_accuracy_budget import (
     DEFAULT,
     METRIC_TOLERANCE,
@@ -378,3 +384,55 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         MathOperation.Ceil,
         MathOperation.Trunc,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Integers never reach the ULP metric through the registry
+# ─────────────────────────────────────────────────────────────────────────────
+
+TORCH_INT_DTYPES = (
+    torch.int8,
+    torch.uint8,
+    torch.int16,
+    torch.int32,
+    torch.int64,
+    torch.bool,
+)
+INTEGER_FORMATS = [
+    fmt for fmt, dtype in format_dict.items() if dtype in TORCH_INT_DTYPES
+]
+assert INTEGER_FORMATS, "no integer DataFormats found; the derivation has broken"
+
+
+@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
+def test_no_enrolled_op_gets_a_step_budget_on_an_integer_format(fmt):
+    """The registry is the other way a budget could reach an integer format: an op is
+    enrolled once and then asked about every format the sweep runs. ULP is meaningless for
+    an integer format — the values are exact and adjacent ones are one apart by definition
+    — so every enrolled op has to come back on the tolerance metric here.
+
+    Checked for every op rather than for the table's current contents, so enrolling an
+    integer op later fails this instead of quietly gating on a step count.
+    """
+    for op in MathOperation:
+        contract = accuracy_contract(op, output_format=fmt)
+        assert contract.metric == METRIC_TOLERANCE, (
+            f"{op.name} resolves to a {contract.metric} contract on {fmt.name}. ULP is "
+            "not a gate for an integer format; it wants bit equality."
+        )
+
+
+def test_the_integer_ops_are_not_enrolled():
+    """No integer-only SFPU op carries a contract. If one is added it belongs on the
+    tolerance metric — or on an exact-equality gate, which this harness does not have
+    yet — not on a step count."""
+    enrolled = {op.name for op in enrolled_ops()}
+    integer_ops = {
+        op.name
+        for op in MathOperation
+        if any(
+            token in op.name for token in ("Int32", "Int16", "Int8", "Shift", "Bitwise")
+        )
+    }
+    assert integer_ops, "no integer MathOperations found; the derivation has broken"
+    assert not (enrolled & integer_ops), sorted(enrolled & integer_ops)
