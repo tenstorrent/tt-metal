@@ -77,8 +77,8 @@ def main():
     parser.add_argument(
         "--slots",
         type=int,
-        default=int(os.getenv("PREFILL_NUM_USERS", str(Gemma4ServiceConfig.MAX_USERS))),
-        choices=range(1, Gemma4ServiceConfig.MAX_USERS + 1),
+        default=int(os.getenv("PREFILL_NUM_USERS", str(Gemma4ServiceConfig.MAX_USER_SLOTS))),
+        choices=range(1, Gemma4ServiceConfig.MAX_USER_SLOTS + 1),
     )
     parser.add_argument("--tokens", type=int, default=Gemma4ServiceConfig.MAX_SEQ_LEN)
     parser.add_argument(

@@ -14,7 +14,7 @@ class Gemma4ServiceConfig:
     MESH_SHAPE = (8, 4)
     CHUNK_SIZE = 8192
     MAX_SEQ_LEN = 262144
-    MAX_USERS = 6
+    MAX_USER_SLOTS = 6
 
 
 def validate_params(params):
@@ -35,8 +35,8 @@ def validate_params(params):
     for name, value in expected.items():
         if getattr(params, name) != value:
             raise ValueError(f"Gemma4 prefill requires {name}={value}, got {getattr(params, name)}")
-    if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USERS:
-        raise ValueError(f"Gemma4 prefill requires 1 to {Gemma4ServiceConfig.MAX_USERS} KV slots")
+    if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USER_SLOTS:
+        raise ValueError(f"Gemma4 prefill requires 1 to {Gemma4ServiceConfig.MAX_USER_SLOTS} KV slots")
 
 
 class Gemma4PrefillAdapter(PrefillModelAdapter):
