@@ -625,8 +625,9 @@ once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from
 * The `DetBlockOptions` forms and `stage5_fused_qkv` change which parameters a block owns (one fused
   `qkv` or three projections; packed `gate_up` or `w_gate` + `w_up`), and the weight cache is keyed by
   parallel config, mesh and dtype alone. `DiffVAEDecoder.parameter_layout()` therefore names the cache
-  subfolder (`diffvae/det-q1m1-q1m1-q1m1-q1m1_s5-q3/...`), read off the built modules. Change a form
-  and the first run writes a fresh cache under the new token; the old directory is left behind.
+  subfolder (`diffvae/det-q1m1-q1m1-q1m1-q1m1_s5-q3m1-<hash>/...`): the forms read off the built
+  modules, then a hash of every parameter's name and shape. Change a form, or rename a parameter, and
+  the first run writes a fresh cache under the new token; the old directory is left behind.
 
 
 ---

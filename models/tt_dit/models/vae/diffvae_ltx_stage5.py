@@ -23,6 +23,7 @@ from loguru import logger
 import ttnn
 
 from ...layers.embeddings import TimestepEmbedding, Timesteps
+from ...layers.feedforward import SwiGLU
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.neighborhood_attention import NAKernel, neighborhood_attention_3d, resolve_na_kernel
@@ -744,23 +745,12 @@ class DiffusionNABlock(Module):
             tp_proj=tp_proj,
         )
         self.norm2 = RMSNorm(config.dim, **norm)
-        # Fused [up | gate] projection whose epilogue emits silu(gate) * up.
-        self.mlp_gate_up = Linear(
-            config.dim, config.mlp_hidden, bias=False, activation_fn="swiglu", mesh_device=mesh_device, dtype=dtype
-        )
-        self.mlp_down = Linear(config.mlp_hidden, config.dim, bias=False, mesh_device=mesh_device, dtype=dtype)
+        # One fused [up | gate] GEMM whose epilogue emits silu(gate) * up; replicated (TP is over heads).
+        self.mlp = SwiGLU(config.dim, config.mlp_hidden, mesh_device=mesh_device, dtype=dtype, fused=True)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "scale_shift_table" in state:
             state["scale_shift_table"] = state["scale_shift_table"].reshape(1, -1)
-
-        gate = state.pop("mlp.w_gate.weight", None)
-        up = state.pop("mlp.w_up.weight", None)
-        if gate is not None and up is not None:
-            state["mlp_gate_up.weight"] = torch.cat([up, gate], dim=0)
-        down = state.pop("mlp.w_down.weight", None)
-        if down is not None:
-            state["mlp_down.weight"] = down
 
     def forward(
         self,
@@ -868,11 +858,7 @@ class DiffusionNABlock(Module):
     @timing_tree.span("mesh_device", "mlp", category=timing_tree.MLP)
     def _mlp(self, modulated: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
         """SwiGLU plus the residual add. **Consumes** ``modulated`` and ``y``."""
-        hidden = self.mlp_gate_up(modulated)
-        ttnn.deallocate(modulated)
-        projected = self.mlp_down(hidden)
-        ttnn.deallocate(hidden)
-        return consume_all(ttnn.add, y, projected)
+        return consume_all(ttnn.add, y, self.mlp(modulated))
 
     def _padded_rows(
         self,

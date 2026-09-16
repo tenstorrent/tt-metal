@@ -12,6 +12,7 @@ Submodules are named to mirror the checkpoint's own keys (``attn.qkv``, ``mlp.w_
 
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import dataclass
 
@@ -19,7 +20,8 @@ import torch
 
 import ttnn
 
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ...layers.feedforward import CHUNK_BYTES, SwiGLU
+from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList
 from ...layers.neighborhood_attention import NAKernel, neighborhood_attention_3d, resolve_na_kernel
 from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
@@ -188,42 +190,6 @@ def rope_tables(
         return ttnn.from_torch(table, device=mesh_device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     return upload(cos_columns), upload(sin_columns)
-
-
-#: Bytes one pointwise chunk may hold. Bounds the SwiGLU's 4x-wide intermediates by the chunk
-#: instead of the volume.
-CHUNK_BYTES = 1 << 30
-
-
-def _chunk_rows(width: int, *, dtype_bytes: int = 2) -> int:
-    """Rows whose ``width``-wide intermediate fits :data:`CHUNK_BYTES`, tile-aligned."""
-    rows = CHUNK_BYTES // (width * dtype_bytes)
-    return max(TILE, rows // TILE * TILE)
-
-
-def _pointwise_in_chunks(x: ttnn.Tensor, fn, *, width: int) -> ttnn.Tensor:
-    """Apply the pointwise ``fn`` to row chunks of ``(rows, ·)`` ``x``. **Consumes** ``x``.
-
-    ``width`` is the widest intermediate ``fn`` builds per row. A single chunk runs whole so
-    short videos pay no concat.
-    """
-    rows, columns = int(x.shape[-2]), int(x.shape[-1])
-    step = _chunk_rows(width)
-    if step >= rows:
-        out = fn(x)
-        ttnn.deallocate(x)
-        return out
-
-    parts = []
-    for start in range(0, rows, step):
-        chunk = ttnn.slice(x, [start, 0], [min(start + step, rows), columns])
-        parts.append(fn(chunk))
-        ttnn.deallocate(chunk)
-    ttnn.deallocate(x)
-    joined = ttnn.concat(parts, dim=-2)
-    for part in parts:
-        ttnn.deallocate(part)
-    return joined
 
 
 def apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
@@ -462,98 +428,6 @@ class NeighborhoodAttention(Module):
         flat = consume(attended, retile, (tokens, self.dim))
         out = self.proj(flat)
         ttnn.deallocate(flat)
-        return out
-
-
-class SwiGLU(Module):
-    """``w_down(silu(w_gate(x)) * w_up(x))``, biasless, as upstream ships it."""
-
-    def __init__(
-        self,
-        dim: int,
-        hidden_dim: int,
-        *,
-        mesh_device=None,
-        tp_axis=None,
-        ccl_manager=None,
-        fused: bool = False,
-        tp_mlp: bool = False,
-    ):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.dim = dim
-        self.tp_axis = tp_axis
-        self.ccl_manager = ccl_manager
-        # tp_mlp: gate/up column-parallel and w_down row-parallel over tp_axis, on the packed weight.
-        self.tp_mlp = tp_mlp and tp_axis is not None
-        # fused: one [up | gate] GEMM whose epilogue emits silu(gate) * up.
-        self.fused = fused or self.tp_mlp
-
-        if self.tp_mlp:
-            self.gate_up = ColParallelLinear(
-                dim,
-                hidden_dim,
-                bias=False,
-                activation_fn="swiglu",
-                mesh_device=mesh_device,
-                mesh_axis=tp_axis,
-                ccl_manager=ccl_manager,
-            )
-            self.w_down = RowParallelLinear(
-                hidden_dim, dim, bias=False, mesh_device=mesh_device, mesh_axis=tp_axis, ccl_manager=ccl_manager
-            )
-        elif self.fused:
-            self.gate_up = Linear(dim, hidden_dim, bias=False, activation_fn="swiglu", mesh_device=mesh_device)
-            self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
-        else:
-            self.w_gate = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
-            self.w_up = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
-            self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Pack the shipped ``w_gate``/``w_up`` into the fused ``[up | gate]`` weight.
-
-        ``up`` first: ``prepare_for_fused_swiglu``'s default ordering is ``[up (N) | gate (N)]``.
-        """
-        if not self.fused:
-            return
-        gate = state.pop("w_gate.weight", None)
-        up = state.pop("w_up.weight", None)
-        if gate is not None and up is not None:
-            state["gate_up.weight"] = torch.cat([up, gate], dim=0)
-
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """**Consumes** ``x``. Row-chunked: the hidden intermediates are 4x the activation."""
-        width = self.hidden_dim // self.mlp_shards
-        return _pointwise_in_chunks(x, self._project, width=width)
-
-    @property
-    def mlp_shards(self) -> int:
-        return mesh_axis_size(self.gate_up.mesh_device, self.tp_axis) if self.tp_mlp else 1
-
-    def _project(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        if self.fused:
-            hidden = self.gate_up(x)
-            if self.tp_mlp:
-                # The all_gather below names dim 3 absolutely, so the tensor must be rank 4 here.
-                hidden = ttnn.reshape(hidden, (1, 1, hidden.shape[-2], hidden.shape[-1]))
-            # use_persistent_buffer=False: RowParallelLinear otherwise returns the CCL manager's
-            # cached reduce-scatter buffer, which the deallocate below would destroy under it.
-            out = self.w_down(hidden, use_persistent_buffer=False) if self.tp_mlp else self.w_down(hidden)
-            ttnn.deallocate(hidden)
-            if self.tp_mlp:
-                gathered = self.ccl_manager.all_gather(out, dim=3, mesh_axis=self.tp_axis, use_hyperparams=False)
-                ttnn.deallocate(out)
-                out = ttnn.reshape(gathered, (gathered.shape[-2], self.dim))
-            return out
-
-        gate = ttnn.silu(self.w_gate(x))
-        up = self.w_up(x)
-        product = ttnn.multiply(gate, up)
-        ttnn.deallocate(gate)
-        ttnn.deallocate(up)
-        out = self.w_down(product)
-        ttnn.deallocate(product)
         return out
 
 
@@ -1052,16 +926,26 @@ class DiffVAEDecoder(Module):
 
         The fusion flags change the parameter SET (one fused ``qkv`` or three projections, one
         packed ``gate_up`` or two), so a cache written under one flag set does not load under
-        another. Read off the built modules rather than the options.
+        another. The readable prefix names the forms, read off the built modules rather than the
+        options; the suffix hashes every parameter's name and shape, so any change to the set, a
+        rename included, lands in a fresh folder instead of failing against a stale one.
         """
 
         def stage_token(blocks) -> str:
             block = blocks[0]
             return f"q{1 if block.attn.fused_qkv else 3}m{1 if block.mlp.fused else 2}"
 
+        def parameters(module: Module, prefix: str = ""):
+            for name, parameter in module.named_parameters():
+                yield f"{prefix}{name}:{tuple(parameter.total_shape)}"
+            for name, child in module.named_children():
+                yield from parameters(child, f"{prefix}{name}.")
+
         det = "-".join(stage_token(self.stages.det_stages[i]) for i in range(len(self.stages.det_stages)))
-        stage5 = f"q{1 if self.stage5.diff_blocks[0].attn.fused_qkv else 3}"
-        return f"det-{det}_s5-{stage5}"
+        block = self.stage5.diff_blocks[0]
+        stage5 = f"q{1 if block.attn.fused_qkv else 3}m{1 if block.mlp.fused else 2}"
+        digest = hashlib.sha1("\n".join(sorted(parameters(self))).encode()).hexdigest()[:8]
+        return f"det-{det}_s5-{stage5}-{digest}"
 
     def torch_state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
         """One state dict for the whole decoder, keyed for :meth:`load_torch_state_dict`.

@@ -32,6 +32,7 @@ import torch
 from safetensors import safe_open
 
 import ttnn
+from models.tt_dit.layers import feedforward
 from models.tt_dit.layers.neighborhood_attention_plan import build_device_plan, plan_na3d
 from models.tt_dit.models.vae import diffvae_ltx
 from models.tt_dit.models.vae.diffvae_ltx import (
@@ -181,7 +182,7 @@ def test_row_chunking_is_exact(*, device, monkeypatch):
         return ttnn.to_torch(block(tt_hidden, dims=dims, cos=cos, sin=sin, device_plan=plan))
 
     whole = run()
-    monkeypatch.setattr(diffvae_ltx, "CHUNK_BYTES", 2 * diffvae_ltx.TILE * hidden * 2)
+    monkeypatch.setattr(feedforward, "CHUNK_BYTES", 2 * diffvae_ltx.TILE * hidden * 2)
     chunked = run()
 
     assert torch.equal(whole, chunked), (whole - chunked).abs().max()
