@@ -29,7 +29,7 @@ struct L1Layout {
     uint32_t pkt_hdr_drain;
     uint32_t drain_sink;
     uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the sender
-    uint32_t pkt_hdr_ring;  // TWO prebuilt headers per slot: the last hop issues two writes from one slot
+    uint32_t pkt_hdr_ring;  // headers_per_slot(fanout) prebuilt headers per slot
     // fanout: per (slot, destination) delivery records and the metadata words they point at. Written
     // by the reader, read by the sender, so they live outside the reader's control carve, which the
     // sender knows nothing about.
@@ -154,7 +154,9 @@ constexpr uint32_t FO_MAX_DESTS = 8;
 // The fan-out tail, occupying the same 64 bytes as FwdMetadata. Hops are measured from the ORIGIN and
 // never rewritten, so a page is immutable in flight: a chip `j` hops from the origin consumes the
 // destinations with hop == j out of its own forwarding region -- a local write, not a fabric one --
-// and forwards the page untouched if any hop > j remains.
+// and forwards the page untouched if any hop > j + 1 remains. If the farthest is exactly j + 1 the
+// page ends next door and that chip writes those destinations itself, straight into the neighbour's
+// output pages, so a page enters a region only while something beyond that region's chip is left.
 //
 // `cmd` and `this_addr` sit at the SAME offsets FwdMetadata puts them at, and the asserts below are
 // what hold them there. The sender reads the command word out of a slot without knowing which mode
@@ -167,21 +169,36 @@ struct FanoutMetadata {
     uint32_t dests[FO_MAX_DESTS];  // packed page | hop | top-k slot, zero where unused
     uint64_t cmd;
     uint64_t this_addr;
-    // How many of this slot's staged deliveries the SENDER writes out, as local DRAM writes on its own
-    // NOC, before it acts on `cmd`. The reader stages them because only it holds the output accessors;
-    // the sender issues them because its port has the headroom -- multicast forwards far fewer pages
-    // than it delivers, and the reader's port was the one saturated.
-    uint32_t deliver_count;
-    uint32_t pad;
+    // How many of this slot's staged deliveries the SENDER writes out before it acts on `cmd`. The
+    // reader stages them because only it holds the output accessors; the sender issues them because
+    // its port has the headroom -- multicast forwards far fewer pages than it delivers, and the
+    // reader's port was the one saturated.
+    //
+    // The first `local_count` records land on THIS chip and go out as plain NoC writes; the
+    // `remote_count` after them land on the NEXT one and go out as fabric packets. Position in the
+    // list is the ONLY thing that distinguishes the two, so a stager that emitted them in the other
+    // order would write the neighbour's pages here and fabric-send this chip's pages next door. A
+    // destination is staged at most once either way, so both counts share one list of FO_MAX_DESTS.
+    //
+    // These two words sit past the end of FwdMetadata, which is 56 bytes used of the same 64. A tail
+    // built by the unicast path therefore leaves them uninitialised, and they are loop bounds for
+    // sends -- which is why the sender runs the delivery loops only for the commands fan-out emits.
+    uint32_t local_count;
+    uint32_t remote_count;
 };
 static_assert(sizeof(FanoutMetadata) <= FORWARDING_METADATA_SIZE);
+// The claim above, held: the counts begin at or after everything FwdMetadata defines, so a unicast
+// tail never happens to leave a plausible value in them.
+static_assert(offsetof(FanoutMetadata, local_count) >= sizeof(FwdMetadata));
 
 // Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
 
-// One local delivery the sender issues out of a slot: where the token and its metadata go on THIS chip,
-// and where the reader staged the metadata words. Every destination has its own record and its own
-// metadata buffer because several are in flight from one slot at once.
+// One delivery the sender issues out of a slot: where the token and its metadata go, and where the
+// reader staged the metadata words. Every destination has its own record and its own metadata buffer
+// because several are in flight from one slot at once. The addresses are page addresses in
+// interleaved DRAM whose base is uniform across the mesh, so the same record serves a write on this
+// chip and a fabric write to the next one.
 struct FanoutDelivery {
     uint64_t payload_addr;
     uint64_t meta_addr;
@@ -189,6 +206,21 @@ struct FanoutDelivery {
     uint32_t pad;
 };
 static_assert(sizeof(FanoutDelivery) == 24);
+
+// Prebuilt packet headers a ring slot needs. A header is read out of L1 asynchronously while the next
+// send is being built, so every packet in flight from one slot needs its own or the one still going
+// out is torn. Index 0 is the forward, or the payload of a unicast last hop; index 1 is the metadata
+// beside it and goes unused under fan-out. From FO_FIRST_DELIVERY_HDR the headers come in pairs, one
+// pair per destination a fan-out slot delivers into the next chip -- and that slot may still forward,
+// so the pairs cannot reuse index 0.
+//
+// The host reserves the pool from this same expression. A pool shorter than the kernel's stride puts
+// the last slots' headers on top of what follows, which under fan-out is the delivery records those
+// very sends read their addresses from.
+constexpr uint32_t FO_FIRST_DELIVERY_HDR = 2;
+constexpr uint32_t headers_per_slot(bool fanout) { return fanout ? FO_FIRST_DELIVERY_HDR + 2u * FO_MAX_DESTS : 2u; }
+// The highest index deliver_remotely can reach, against what the pool provides.
+static_assert(FO_FIRST_DELIVERY_HDR + 2u * (FO_MAX_DESTS - 1u) + 1u < headers_per_slot(true));
 
 // Asserted so that whoever changes this layout has to acknowledge they need some other means of ensuring
 // every device runs kernels built from the same metadata format.
@@ -210,10 +242,12 @@ constexpr uint64_t CMD_END = 0;          // end of stream; the slot carries no t
 constexpr uint64_t CMD_FINAL_WRITE = 1;  // this hop is the last: write payload and metadata to their pages
 constexpr uint64_t CMD_FORWARD = 2;      // push one page further along the stream
 constexpr uint64_t CMD_FORWARD_END = 3;  // as CMD_FORWARD, and the last page of its chunk
-// Fan-out only: every destination this page had was on this chip, so nothing goes on the cable. The
-// slot still has to travel the ring in order -- handing it back would reorder the sender's view of it
-// -- so the sender frees it and sends nothing.
-constexpr uint64_t CMD_SKIP = 4;
+// Fan-out only: nothing is left past the chip across the cable, so no PAGE is forwarded. The slot's
+// staged deliveries still go out, and up to 2 * FO_MAX_DESTS of them are fabric packets aimed at that
+// chip's output pages -- so this is not a silent slot, and the counts in the tail rather than this
+// command say what it sends. The slot still has to travel the ring in order, since handing it back
+// would reorder the sender's view of it.
+constexpr uint64_t CMD_NO_FORWARD = 4;
 
 // One (origin chip, destination chip) term of a stream's forwarding region, narrowed to the share the two
 // chips agreed on. Generated identically by the chip that writes the region and the chip that reads it,

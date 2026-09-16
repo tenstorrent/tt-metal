@@ -66,9 +66,14 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   appends per-block scales that do not fit the routing tail this op
                                   carries.
 
-        fanout: one fabric send per (token, destination chip) rather than per (token, expert). A
-        token picking several experts on one chip otherwise puts the same bytes on the same cable once
-        per expert. Both modes are retained so they can be measured against each other in one build.
+        fanout: one copy per (token, DIRECTION) crosses a cable rather than one per (token, expert).
+        The copy travels the ring and every chip en route keeps the pages addressed to it, so a token
+        picking several experts spread along one direction puts its bytes on a cable once instead of
+        once per expert. Not once per cable exactly: the chip one hop short of the token's farthest
+        destination writes those last pages itself, so a token with several pages on that one chip
+        pays an extra crossing each, against two DRAM transfers saved on the chip that would otherwise
+        have landed the page and read it back. Both modes are retained so they can be measured against
+        each other in one build.
 
         `cluster_axis` other than 0 is reachable but untested: it is only bounds-checked, and a
         different axis gives a structurally different schedule.
