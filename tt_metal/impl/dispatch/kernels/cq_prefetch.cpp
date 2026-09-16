@@ -179,6 +179,9 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy =
     uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
+#if defined(NOC_ATT_ENABLED)
+#error "ATT fast dispatch requires DRAM-backed command queues: no ATT window maps host memory"
+#endif
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 #endif

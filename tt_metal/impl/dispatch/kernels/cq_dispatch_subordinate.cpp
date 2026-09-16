@@ -182,17 +182,25 @@ static uint32_t num_worker_sems = 1;
 // The dispatch message entry limit also bounds the number of sub-devices.
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
+// Pre-program the XY coordinate register. Under ATT every V3 issue writes its
+// source as the full local-window operand, so there is nothing to latch.
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
+#if !defined(NOC_ATT_ENABLED)
     uint64_t xy_local_addr = get_noc_addr_helper(my_noc_xy, 0);
     noc_cmd_buf_set_targ_addr_coordinate(
         my_noc_index, DISPATCH_S_WR_REG_CMD_BUF, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+#endif
 }
 
+// Pre-program the atomic return address. Under ATT it is the command
+// buffer's boot-time programming (overlay_cmd_buff_init).
 FORCE_INLINE
 void dispatch_s_atomic_cmd_buf_init() {
+#if !defined(NOC_ATT_ENABLED)
     uint64_t atomic_ret_addr = get_noc_addr_helper(my_noc_xy, MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_cmd_buf_set_ret_addr(my_noc_index, DISPATCH_S_ATOMIC_CMD_BUF, atomic_ret_addr);
+#endif
 }
 
 FORCE_INLINE
@@ -384,7 +392,7 @@ void process_go_signal_mcast_cmd() {
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+            cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));

@@ -357,14 +357,9 @@ public:
             } else {
                 TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
             }
-            // The dispatch kernels stay on the V2 API until their dedicated
-            // conversion, so fast dispatch cannot run under ATT yet. Check the
-            // effective runtime mode, not the raw env var.
-            TT_FATAL(
-                !params.rtoptions.get_fast_dispatch(),
-                "TT_METAL_NOC_ATT requires slow dispatch (dispatch kernels are not converted to the V3 API yet)");
-            // The watcher NoC sanitizer decodes XY operands; reject the
-            // effective runtime state until it is ATT-aware.
+            // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
+            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
+            // decodes XY operands; reject it until it is ATT-aware.
             TT_FATAL(!params.rtoptions.get_watcher_enabled(), "TT_METAL_NOC_ATT does not support the watcher yet");
             defines.push_back("NOC_ATT_ENABLED");
             defines.push_back("NOC_API_V3");
