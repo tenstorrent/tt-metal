@@ -1201,8 +1201,6 @@ def eltwise_unary_sfpu(
     fast_mode: FastMode,
     input_dimensions: list[int],
     spec_A=None,
-    custom_atol=None,
-    custom_rtol=None,
     shift_amount=None,
     relu_min_int_threshold=None,
     twos_complement=False,
@@ -1321,17 +1319,11 @@ def eltwise_unary_sfpu(
         dest_acc=dest_acc,
         arch=get_chip_architecture(),
     )
-    verdict_kwargs = contract.passed_test_kwargs()
-    if custom_atol is not None or custom_rtol is not None:
-        # An explicit tolerance from the caller still wins. The registry is the default
-        # for an op, not an override of a deliberate per-test choice.
-        verdict_kwargs = {"custom_atol": custom_atol, "custom_rtol": custom_rtol}
-
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **verdict_kwargs,
+        **contract.passed_test_kwargs(),
     ), "Assert against golden failed"
 
 

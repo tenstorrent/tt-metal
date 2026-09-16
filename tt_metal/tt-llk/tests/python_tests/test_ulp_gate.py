@@ -16,7 +16,7 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import format_dict
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.ulp import ulp_distance
+from helpers.ulp import INTEGER_FORMATS, ulp_distance
 from helpers.utils import PCC_SIGNAL_FLOOR, calculate_pcc, passed_test
 
 TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
@@ -538,10 +538,6 @@ TORCH_INT_DTYPES = (
     torch.int64,
     torch.bool,
 )
-INTEGER_FORMATS = [
-    fmt for fmt, dtype in format_dict.items() if dtype in TORCH_INT_DTYPES
-]
-assert INTEGER_FORMATS, "no integer DataFormats found; the derivation has broken"
 
 
 @pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)

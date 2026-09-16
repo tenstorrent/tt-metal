@@ -21,9 +21,10 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
-    format_dict,
 )
 from helpers.sfpu_accuracy_budget import (
+    _SFPU_ACCURACY_BUDGET,
+    BFP8_B_EXACT_INTEGER_DOMAIN,
     DEFAULT,
     METRIC_TOLERANCE,
     METRIC_ULP,
@@ -35,7 +36,15 @@ from helpers.sfpu_accuracy_budget import (
     resolve_contract,
     validate_registry,
 )
-from helpers.ulp import MAX_MEANINGFUL_ULP, ULP_FORMATS, has_ulp_gate, ulp_dtype
+from helpers.sfpu_domains import for_op
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+from helpers.ulp import (
+    INTEGER_FORMATS,
+    MAX_MEANINGFUL_ULP,
+    ULP_FORMATS,
+    has_ulp_gate,
+    ulp_dtype,
+)
 from helpers.utils import passed_test
 
 BLOCK_FORMATS_WITHOUT_ULP = [
@@ -128,10 +137,11 @@ def test_every_contract_is_accepted_by_passed_test():
         )
 
 
-def torch_ones():
-    import torch
+TILE_SIZE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
-    return torch.ones(1024, dtype=torch.bfloat16)
+
+def torch_ones():
+    return torch.ones(TILE_SIZE, dtype=torch.bfloat16)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -328,19 +338,39 @@ EXACT_BY_CONSTRUCTION = (
 )
 
 
+def _every_variant(op):
+    """Every contract an op can resolve to, across the whole keyed variant space.
+
+    Passing only ``output_format`` is not enough: by the ``matches()`` rule an unset
+    caller dimension cannot match a key that sets one, so any ``BudgetKey(arch=...)`` or
+    ``BudgetKey(dest_acc=...)`` entry is invisible to such a query — which is exactly the
+    growth path this file advertises, and would hide a wide budget from the guards below.
+    """
+    for fmt in ULP_CAPABLE_FORMATS:
+        for approx_mode in list(ApproximationMode) + [None]:
+            for dest_acc in list(DestAccumulation) + [None]:
+                for arch in list(ChipArchitecture) + [None]:
+                    yield fmt, accuracy_contract(
+                        op,
+                        output_format=fmt,
+                        approx_mode=approx_mode,
+                        dest_acc=dest_acc,
+                        arch=arch,
+                    )
+
+
 @pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
-@pytest.mark.parametrize("fmt", ULP_CAPABLE_FORMATS, ids=lambda f: f.name)
-def test_an_exact_op_never_carries_a_wide_budget(op, fmt):
+def test_an_exact_op_never_carries_a_wide_budget(op):
     """These ops clear a sign bit, copy, or land on an integer. One step of slack is the
     pack path; more than that is not the op, and a budget hiding it defeats the point of
     having these enrolled as the canaries."""
-    contract = accuracy_contract(op, output_format=fmt)
-    if contract.metric == METRIC_ULP:
-        assert contract.max_ulp <= 1, (
-            f"{op.name} on {fmt.name} carries max_ulp={contract.max_ulp}. These ops are "
-            "exact by construction; a budget this wide means the number was fitted to a "
-            "failure. Investigate the datapath or the golden instead."
-        )
+    for fmt, contract in _every_variant(op):
+        if contract.metric == METRIC_ULP:
+            assert contract.max_ulp <= 1, (
+                f"{op.name} on {fmt.name} carries max_ulp={contract.max_ulp}. These "
+                "ops are exact by construction; a budget this wide means the number was "
+                "fitted to a failure. Investigate the datapath or the golden instead."
+            )
 
 
 def test_no_budget_exceeds_its_formats_meaningful_ceiling():
@@ -352,8 +382,7 @@ def test_no_budget_exceeds_its_formats_meaningful_ceiling():
     the budget is 15616".
     """
     for op in enrolled_ops():
-        for fmt in ULP_CAPABLE_FORMATS:
-            contract = accuracy_contract(op, output_format=fmt)
+        for fmt, contract in _every_variant(op):
             if contract.metric != METRIC_ULP:
                 continue
             ceiling = MAX_MEANINGFUL_ULP[ulp_dtype(fmt)]
@@ -377,7 +406,8 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
     enrolled_on_bfp8 = {
         op
         for op in enrolled_ops()
-        if accuracy_contract(op, output_format=DataFormat.Bfp8_b).metric == METRIC_ULP
+        for fmt, contract in _every_variant(op)
+        if fmt is DataFormat.Bfp8_b and contract.metric == METRIC_ULP
     }
     assert enrolled_on_bfp8 == {
         MathOperation.Floor,
@@ -386,33 +416,36 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
     }
 
 
+def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format():
+    """A shared exponent does not represent integers exactly in general — the in-block
+    step scales with the block maximum, so an integer is exact only while every block
+    maximum stays under ``2**7``. Floor/Ceil/Trunc qualify because
+    ``_OP_DOMAIN_REGISTRY`` bounds them to ``uniform(-10, 10)``, which is a property of
+    the *stimulus*, not of the format — the same mechanism takes Abs and Neg to 15616
+    steps. Widen the domain and the 0-step Bfp8_b budget stops being legitimate, so the
+    dependency is asserted rather than left in a comment.
+    """
+    for op in (MathOperation.Floor, MathOperation.Ceil, MathOperation.Trunc):
+        spec = for_op(op).spec_A
+        assert spec.low is not None and spec.high is not None, op.name
+        assert max(abs(spec.low), abs(spec.high)) < BFP8_B_EXACT_INTEGER_DOMAIN, (
+            f"{op.name} is swept over [{spec.low}, {spec.high}], whose block maxima can "
+            f"reach {BFP8_B_EXACT_INTEGER_DOMAIN}. Its 0-step Bfp8_b budget relied on "
+            "every block maximum staying below that; re-measure before widening."
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Integers never reach the ULP metric through the registry
 # ─────────────────────────────────────────────────────────────────────────────
 
-TORCH_INT_DTYPES = (
-    torch.int8,
-    torch.uint8,
-    torch.int16,
-    torch.int32,
-    torch.int64,
-    torch.bool,
-)
-INTEGER_FORMATS = [
-    fmt for fmt, dtype in format_dict.items() if dtype in TORCH_INT_DTYPES
-]
-assert INTEGER_FORMATS, "no integer DataFormats found; the derivation has broken"
-
 
 @pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
-def test_no_enrolled_op_gets_a_step_budget_on_an_integer_format(fmt):
-    """The registry is the other way a budget could reach an integer format: an op is
-    enrolled once and then asked about every format the sweep runs. ULP is meaningless for
-    an integer format — the values are exact and adjacent ones are one apart by definition
-    — so every enrolled op has to come back on the tolerance metric here.
-
-    Checked for every op rather than for the table's current contents, so enrolling an
-    integer op later fails this instead of quietly gating on a step count.
+def test_the_integer_short_circuit_holds_for_every_op(fmt):
+    """``accuracy_contract`` returns the tolerance contract on ``not has_ulp_gate`` before
+    it ever consults the table, so this pins the short-circuit rather than the table's
+    contents — adding ``LeftShift: {DEFAULT: AccuracyContract(max_ulp=0)}`` would leave it
+    green. ``test_no_table_entry_can_gate_an_integer_format`` is what guards the table.
     """
     for op in MathOperation:
         contract = accuracy_contract(op, output_format=fmt)
@@ -420,6 +453,22 @@ def test_no_enrolled_op_gets_a_step_budget_on_an_integer_format(fmt):
             f"{op.name} resolves to a {contract.metric} contract on {fmt.name}. ULP is "
             "not a gate for an integer format; it wants bit equality."
         )
+
+
+def test_no_table_entry_can_gate_an_integer_format():
+    """Asserted against ``_SFPU_ACCURACY_BUDGET`` directly, because the short-circuit
+    above means a bad entry is unreachable through ``accuracy_contract`` and so invisible
+    to it. The alternative guard — a name-token list — misses any integer op not named
+    ``Int32``/``Int16``/``Int8``/``Shift``/``Bitwise``."""
+    for op, table in _SFPU_ACCURACY_BUDGET.items():
+        for key, contract in table.items():
+            if contract.metric != METRIC_ULP:
+                continue
+            fmt = key.output_format
+            assert fmt is None or not fmt.is_integer(), (
+                f"{op.name} carries a step budget keyed on {fmt.name}, an integer "
+                "format, which wants bit equality rather than ULP."
+            )
 
 
 def test_the_integer_ops_are_not_enrolled():

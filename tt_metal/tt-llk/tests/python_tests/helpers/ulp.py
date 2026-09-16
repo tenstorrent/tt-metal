@@ -146,6 +146,16 @@ _ULP_PROXY_DTYPES: Dict[DataFormat, torch.dtype] = {
 #: same 1%: deliberately simple and scale-relative rather than tuned per op.
 NEAR_ZERO_FRACTION = 1e-2
 
+#: Every integer ``DataFormat``, derived from the enum's own predicate.
+#:
+#: Not derived from ``format_dict``: that mapping omits ``Bfp8``, ``MxFp4_2x_A`` and
+#: ``MxFp4_2x_B`` entirely and gives ``MxInt8``/``MxInt4``/``MxInt2`` a bfloat16 proxy, so
+#: an integer format added without an entry, or given a float proxy, would be silently
+#: uncovered by anything testing through it. ``DataFormat.is_integer()`` is the authority.
+INTEGER_FORMATS: Tuple[DataFormat, ...] = tuple(
+    fmt for fmt in DataFormat if fmt.is_integer()
+)
+
 #: Returned for any lane where either side is NaN — NaN has no place in the value order.
 #: A caller must never compare this against a budget directly: ``-1 <= max_ulp`` is true
 #: for every budget. Use :func:`within_ulp`, or gate on ``dist >= 0`` yourself.

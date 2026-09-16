@@ -33,12 +33,12 @@ import pytest
 import torch
 from helpers.accuracy_metrics import local_ulp
 from helpers.format_config import DataFormat
-from helpers.llk_params import format_dict
 from helpers.pack import float_to_bfp8_block
 from helpers.ulp import (
     _MIN_LANES_FOR_P95,
     _MIN_LANES_FOR_P99,
     _ULP_DTYPES,
+    INTEGER_FORMATS,
     MAX_MEANINGFUL_ULP,
     NEAR_ZERO_FRACTION,
     ULP_FORMATS,
@@ -81,15 +81,11 @@ TORCH_INT_DTYPES = (
     torch.bool,
 )
 
-# Derived rather than listed, so a format added to the enum later is covered without
-# anyone remembering to add it here. ULP is meaningless for these: the values are exact,
-# adjacent integers are one apart by definition, and "correct" is bit equality. The
-# assertion below keeps the derivation from silently going empty and making every test
-# that uses it vacuous.
-INTEGER_FORMATS = [
-    fmt for fmt, dtype in format_dict.items() if dtype in TORCH_INT_DTYPES
-]
-assert INTEGER_FORMATS, "no integer DataFormats found; the derivation has broken"
+# INTEGER_FORMATS comes from helpers.ulp, which derives it from DataFormat.is_integer()
+# rather than from format_dict: that mapping omits Bfp8 and both MxFp4_2x variants and
+# gives MxInt8/MxInt4/MxInt2 a bfloat16 proxy, so deriving through it would silently miss
+# an integer format. ULP is meaningless for these anyway -- the values are exact, adjacent
+# integers are one apart by definition, and "correct" is bit equality.
 
 # Mantissa bits after the implicit leading 1, i.e. what sets the size of the subnormal
 # band that the flush has to compact away.
@@ -635,7 +631,7 @@ def test_ulp_dtype_maps_the_float_formats(fmt, expected):
         DataFormat.MxFp4,
         DataFormat.Tf32,
     ]
-    + INTEGER_FORMATS,
+    + list(INTEGER_FORMATS),
     ids=lambda f: f.name,
 )
 def test_ulp_dtype_rejects_formats_without_a_per_element_ulp(fmt):
@@ -1581,3 +1577,15 @@ def test_the_bit_containers_are_not_measurable_dtypes():
     assert set(_ULP_DTYPES) == set(FLOAT_DTYPES)
     for dtype in TORCH_INT_DTYPES:
         assert dtype not in _ULP_DTYPES
+
+
+def test_the_integer_format_list_comes_from_the_enum_not_from_format_dict():
+    """``format_dict`` omits ``Bfp8`` and both ``MxFp4_2x`` variants and gives the
+    ``MxInt*`` formats a bfloat16 proxy, so deriving the integer set through it would
+    silently miss a format added without an entry — or given a float proxy.
+    ``DataFormat.is_integer()`` is the authority, and this pins the two agreeing today so
+    a divergence is a test failure rather than a quiet coverage hole."""
+    assert set(INTEGER_FORMATS) == {f for f in DataFormat if f.is_integer()}
+    assert (
+        INTEGER_FORMATS
+    ), "the derivation has gone empty; every test using it is vacuous"

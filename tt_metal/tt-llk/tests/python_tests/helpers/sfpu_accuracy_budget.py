@@ -46,6 +46,10 @@ from .format_config import DataFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
 from .ulp import has_ulp_gate
 
+#: The architecture every measured budget in this table came from. An op resolves to the
+#: tolerance metric anywhere else until the sweep has been re-run there.
+MEASURED_ARCH = ChipArchitecture.WORMHOLE
+
 METRIC_ULP = "ulp"
 METRIC_TOLERANCE = "tolerance"
 
@@ -179,8 +183,11 @@ DEFAULT = BudgetKey()
 # of failing. Each entry carries what it came from. Re-measure on Blackhole before
 # trusting these there; the keys have an `arch` dimension for the day they diverge.
 #
-# MathOperation.Relu is absent because it is not in _OP_DOMAIN_REGISTRY and so is never
-# swept. ReluMax/ReluMin take a threshold operand and are left for a later pass.
+# MathOperation.Relu is absent because _NON_SFPU_UNARY_OPS subtracts it from
+# sfpu_unary_ops(): it is packer-applied via STACC_RELU and is not a member of SfpuType,
+# so it will not compile through the unary driver at all. It *does* have an
+# _OP_DOMAIN_REGISTRY entry, so that is not the blocker. ReluMax/ReluMin take a threshold
+# operand and are left for a later pass.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -207,17 +214,39 @@ DEFAULT = BudgetKey()
 # ─────────────────────────────────────────────────────────────────────────────
 _BFP8_B_QUANTIZATION_DOMINATES = AccuracyContract(metric=METRIC_TOLERANCE)
 
+#: The domain that makes a 0-step Bfp8_b budget legitimate for the integer-valued ops:
+#: every block maximum stays below 2**7, so the shared exponent represents their results
+#: exactly. Asserted against _OP_DOMAIN_REGISTRY by the host tests, because it is a
+#: property of the *stimulus*, not of the format.
+BFP8_B_EXACT_INTEGER_DOMAIN = 128.0
+
+
+def _exact_everywhere() -> Dict[BudgetKey, AccuracyContract]:
+    """A fresh 0-step table, for the ops measured exact on every output format.
+
+    A factory rather than one dict literal aliased three ways, so a retune of one op
+    cannot silently move the others.
+    """
+    return {DEFAULT: AccuracyContract(max_ulp=0)}
+
 
 _SFPU_ACCURACY_BUDGET: Dict[MathOperation, Dict[BudgetKey, AccuracyContract]] = {
     # ── Exact everywhere, including Bfp8_b ───────────────────────────────────
     # Floor/Ceil/Trunc land on a representable integer below the format's integer limit
-    # and are the identity above it. The block floats represent those integers exactly
-    # too, which is why these three need no per-format key at all — the only ops here
-    # that are clean on every output format measured.
+    # and are the identity above it.
+    #
+    # They are also the only ops enrolled on Bfp8_b, and the reason is narrower than
+    # "integers are exact in a block float". A shared exponent does not represent
+    # integers exactly in general: the in-block step scales with the block maximum, so an
+    # integer is exact only while every block maximum stays below 2**7 = 128. That holds
+    # here because _OP_DOMAIN_REGISTRY bounds these three to uniform(-10, 10) --
+    # BFP8_B_EXACT_INTEGER_DOMAIN below pins it -- and not because of anything about the
+    # format. An integer-valued op with a wider domain would fail, the same mechanism
+    # that takes Abs and Neg to 15616 steps in the note above.
     #   wh: 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16
-    MathOperation.Floor: {DEFAULT: AccuracyContract(max_ulp=0)},
-    MathOperation.Ceil: {DEFAULT: AccuracyContract(max_ulp=0)},
-    MathOperation.Trunc: {DEFAULT: AccuracyContract(max_ulp=0)},
+    MathOperation.Floor: _exact_everywhere(),
+    MathOperation.Ceil: _exact_everywhere(),
+    MathOperation.Trunc: _exact_everywhere(),
     # ── Sign-bit and select: exact in fp32, one step in the 16-bit formats ───
     # Abs clears the sign bit, Neg flips it, Identity copies; there is no arithmetic to
     # round. fp32 out is bit-exact. The 16-bit outputs are one step off on part of the
@@ -303,6 +332,15 @@ def accuracy_contract(
     op, and an enrolled op asked about a format with no per-element ULP, both keep the
     behaviour they have today.
     """
+    if arch is not None and arch != MEASURED_ARCH:
+        # Every number in the table was measured on Wormhole with no headroom added, so
+        # letting it bind on an architecture that was never swept would make the
+        # "re-measure on Blackhole first" caveat unenforceable -- and WH and BH SFPUs
+        # differ in available instructions and therefore in kernel. Adding arch=WORMHOLE
+        # to the ULP keys instead would tie specificity with the per-format keys and make
+        # validate_registry() raise, so the gate is here.
+        return TOLERANCE_CONTRACT
+
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT
