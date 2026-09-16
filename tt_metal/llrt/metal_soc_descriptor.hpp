@@ -28,6 +28,10 @@ public:
         dram_view_worker_cores;                               // per dram view preferred worker endpoints for each noc
     std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;            // starting address offset
+    // Per dram view: whether that GDDR channel has a programmable CCE (Metal DRAM core).
+    // Omitted in YAML means false today; later the default can flip once non-CCE descriptors
+    // set programmable: false explicitly.
+    std::vector<bool> dram_view_programmable;
 
     // Per bank, ordered endpoint translated coordinates. The index is the y of a logical DRAM
     // CoreCoord, and the order is by role so that y means the same thing on every device regardless
@@ -58,6 +62,8 @@ public:
     std::vector<tt::tt_metal::CoreCoord> get_metal_dram_cores(tt::CoordSystem coord_system) const;
     tt::tt_metal::CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;
+    bool is_dram_view_programmable(int dram_view) const;
+    bool has_programmable_dram_views() const;
     size_t get_channel_for_dram_view(int dram_view) const;
     size_t get_num_dram_views() const;
 

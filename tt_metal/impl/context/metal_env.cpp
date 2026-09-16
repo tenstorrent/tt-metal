@@ -157,6 +157,21 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         res);
     return res.dram_programmable_cores;
 }
+
+// Quasar CCE / DRAM-core firmware is opt-in per dram_view.programmable in the SoC YAML.
+// Missing programmable means false so today's Tensix Quasar chips stay GDDR-only; a future
+// default of true requires every non-CCE descriptor to set programmable: false first.
+bool should_enable_cce_programmable_cores(const Cluster& cluster) {
+    if (cluster.arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    for (ChipId chip_id : cluster.all_chip_ids()) {
+        if (cluster.get_soc_desc(chip_id).has_programmable_dram_views()) {
+            return true;
+        }
+    }
+    return false;
+}
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
@@ -192,7 +207,8 @@ void MetalEnvImpl::initialize_base_objects() {
         get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
         this->rtoptions_->get_dram_backed_cq(),
         this->rtoptions_->get_simulator_enabled(),
-        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_));
+        should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_),
+        should_enable_cce_programmable_cores(*this->cluster_));
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());

@@ -38,14 +38,17 @@ Hal::Hal(
     uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) :
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_cce_programmable_cores) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
             initialize_wh(is_base_routing_fw_enabled, profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq);
             break;
 
-        case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq); break;
+        case tt::ARCH::QUASAR:
+            initialize_qa(profiler_dram_bank_size_per_risc_bytes, enable_dram_backed_cq, enable_cce_programmable_cores);
+            break;
 
         case tt::ARCH::BLACKHOLE:
             initialize_bh(

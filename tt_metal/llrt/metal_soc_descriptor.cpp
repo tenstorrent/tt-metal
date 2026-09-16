@@ -131,6 +131,24 @@ size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
     return this->dram_view_address_offsets.at(dram_view);
 }
 
+bool metal_SocDescriptor::is_dram_view_programmable(int dram_view) const {
+    TT_ASSERT(
+        dram_view < this->dram_view_programmable.size(),
+        "dram_view={} must be within range of dram_view_programmable.size={}",
+        dram_view,
+        this->dram_view_programmable.size());
+    return this->dram_view_programmable.at(dram_view);
+}
+
+bool metal_SocDescriptor::has_programmable_dram_views() const {
+    for (bool programmable : this->dram_view_programmable) {
+        if (programmable) {
+            return true;
+        }
+    }
+    return false;
+}
+
 size_t metal_SocDescriptor::get_physical_channel_for_dram_view(int dram_view) const {
     TT_ASSERT(
         dram_view < this->dram_view_channels.size(),
@@ -262,11 +280,13 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     this->dram_view_eth_cores.clear();
     this->dram_view_worker_cores.clear();
     this->dram_view_address_offsets.clear();
+    this->dram_view_programmable.clear();
     this->dram_bank_endpoint_coords.clear();
     this->dram_view_channels.reserve(num_dram_views_in_descriptor);
     this->dram_view_eth_cores.reserve(num_dram_views_in_descriptor);
     this->dram_view_worker_cores.reserve(num_dram_views_in_descriptor);
     this->dram_view_address_offsets.reserve(num_dram_views_in_descriptor);
+    this->dram_view_programmable.reserve(num_dram_views_in_descriptor);
     this->dram_bank_endpoint_coords.reserve(num_dram_views_in_descriptor);
 
     const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
@@ -281,6 +301,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             break;
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
+        const bool programmable = dram_view["programmable"] ? dram_view["programmable"].as<bool>() : false;
 
         const auto eth_endpoint_ids = dram_view["eth_endpoint"].as<std::vector<int>>();
         std::vector<tt::tt_metal::CoreCoord> eth_dram_cores;
@@ -321,6 +342,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
         this->dram_view_channels.push_back(channel);
         this->dram_view_address_offsets.push_back(address_offset);
+        this->dram_view_programmable.push_back(programmable);
         this->dram_view_eth_cores.push_back(std::move(eth_dram_cores));
         this->dram_view_worker_cores.push_back(std::move(worker_dram_cores));
 

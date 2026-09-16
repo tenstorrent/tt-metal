@@ -464,7 +464,10 @@ public:
     }
 };
 
-void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
+void Hal::initialize_qa(
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes,
+    bool enable_dram_backed_cq,
+    bool enable_cce_programmable_cores) {
     using namespace quasar;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -478,6 +481,9 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    if (enable_cce_programmable_cores) {
+        this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DRAM)] = quasar::create_dram_mem_map();
+    }
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));

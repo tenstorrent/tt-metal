@@ -459,5 +459,37 @@
 #define SUBORDINATE_AERISC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
 
 /////////////
+// CCE (DRAM-core) memory map
+//
+// Mimir CCE SRAM is the Quasar analogue of Blackhole DRISC L1: host reaches it through the
+// DRAM-core coordinate plus the 0x2000000000 NOC tag, while the hart sees the remapped local
+// window at 0x40000000. HAL L1 addresses below are offsets in that tagged window (base 0) so
+// get_dev_noc_addr() = offset + MEM_CCE_L1_NOC_OFFSET lands in UMD's dram_l1 range. The reset
+// vector programmed into the hart is the CCE-visible address MEM_CCE_SRAM_LOCAL_BASE + offset.
+//
+#define MEM_CCE_L1_NOC_OFFSET 0x2000000000ULL
+#define MEM_CCE_SRAM_LOCAL_BASE 0x40000000
+#define MEM_CCE_L1_BASE 0x0
+#define MEM_CCE_L1_SIZE (4 * 1024 * 1024)
+#define MEM_CCE_RESERVED_SIZE 64
+#define MEM_CCE_MAILBOX_BASE MEM_CCE_RESERVED_SIZE
+// Must hold mailboxes_t as instantiated for CCE (COMPILE_FOR_DRISC, PROCESSOR_COUNT == 1). The
+// static_assert in qa_hal_dram.cpp fires if this is too small.
+#define MEM_CCE_MAILBOX_SIZE 32768
+#define MEM_CCE_MAILBOX_END (MEM_CCE_MAILBOX_BASE + MEM_CCE_MAILBOX_SIZE)
+#define MEM_CCE_FIRMWARE_BASE MEM_CCE_MAILBOX_END
+#define MEM_CCE_FIRMWARE_SIZE (24 * 1024)
+#define MEM_CCE_MAP_END (MEM_CCE_FIRMWARE_BASE + MEM_CCE_FIRMWARE_SIZE)
+#define MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH MEM_CCE_MAP_END
+#define MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE (1 * 1024)
+#define MEM_CCE_BANK_TO_NOC_SCRATCH (MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH + MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE)
+#define MEM_CCE_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+#define MEM_CCE_KERNEL_CONFIG_BASE (MEM_CCE_BANK_TO_NOC_SCRATCH + MEM_CCE_BANK_TO_NOC_SIZE)
+#define MEM_CCE_KERNEL_CONFIG_SIZE (2 * 1024)
+// CCE0 RESET_VECTOR[n] in the SMC/CCE config map. 8-byte entries; Mimir CCE boot hart is 1.
+#define CCE_RESET_VECTOR_BASE 0x02000000
+#define CCE_BOOT_HART_RESET_VECTOR (CCE_RESET_VECTOR_BASE + 8)
+
+/////////////
 // Padding/alignment restriction needed in linker scripts for erisc
 #define MEM_IERISC_KERNEL_PAD 32
