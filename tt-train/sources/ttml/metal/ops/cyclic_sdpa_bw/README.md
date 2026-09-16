@@ -249,11 +249,13 @@ sequence); the cyclic kernel's are the lower bound of every operand once
 | 14080 x 2, 4 | 10.4, 1.8%, 10%, 328 | 60.1, 10.1%, 36%, 27 | 5.8x |
 | 28160 x 1, 4 | 10.6, 1.8%, 10%, 332 | 63.0, 10.6%, 38%, 14 | 6.0x |
 
-Bytes moved for the 28160-row problem: about 8 GB against 58 MB, a factor
-of 138. The two-pass kernel sits at roughly 65% of DRAM bandwidth with its
-matrix pipe a tenth busy; the cyclic kernel uses 3% of the bandwidth and
-is bound by its own pipeline (the vector unit's DST traffic in the score
-pass, then the matmuls of the gradient updates), not by DRAM.
+Bytes requested for the 28160-row problem: about 8 GB against 58 MB, a
+factor of 138 (the two-pass figure is counted from its readers, not
+measured). The two-pass kernel is bound on the memory side -- 65% of the
+card's theoretical bandwidth over its run time, or the latency of its
+per-row reads, with its matrix pipe a tenth busy; the cyclic kernel uses
+3% of the bandwidth and is bound by its own pipeline (the vector unit's
+DST traffic in the score pass, then the matmuls of the gradient updates).
 
 ## Accuracy
 
