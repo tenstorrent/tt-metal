@@ -680,7 +680,14 @@ For complete examples, see:
 
 1. **Architecture enum**: Convert lowercase YAML values to uppercase proto enum values (`wormhole_b0` → `WORMHOLE_B0`)
 2. **Channel count**: Use the number of ethernet ports per direction from `ChipSpec.ethernet_ports`
-3. **Policy**: Default to `STRICT` unless you have specific requirements
+3. **Policy**: Default to `STRICT` unless you have specific requirements. `RELAXED` tolerates
+   fewer lanes than `count` but still requires at least one physical link. `SUPER_RELAXED`
+   (issue #56762) declares a *logical-only* connection: the mapping succeeds even with **zero**
+   physical links between the endpoints (the data path can ride the host interconnect, e.g.
+   D2D); the mapper treats it as a placement preference and claims leftover links
+   opportunistically. `SUPER_RELAXED` is only valid on explicit `connections` blocks (not on
+   mesh/switch/`graph_topology` channels) and may be freely mixed with `STRICT` or `RELAXED`
+   connections in the same graph.
 4. **Device IDs**: When converting strict Graph connections, you may need to map port-based connections to device IDs based on your topology
 5. **Bidirectional connections**: Remember to add reverse connections for bidirectional links
 6. **Graph type**: Always use `type: "FABRIC"` for the top-level graph descriptor

@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <array>
@@ -5381,5 +5382,168 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     const auto mapping_result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
     ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
+}
+
+// ============================================================================
+// SUPER_RELAXED policy (issue #56762): logical-only connections, zero physical
+// links permitted. Mapper-level coverage: the edges are excluded from the
+// solver's hard target graph, so mapping succeeds regardless of physical
+// inter-mesh connectivity.
+// ============================================================================
+
+namespace {
+
+// Three 2x2 meshes; a hard RELAXED mesh-level edge 0<->1 plus SUPER_RELAXED edges 0<->2
+// (mesh-level) and 1<->2 (device-level).
+constexpr const char* kSuperRelaxedMixedMgd = R"proto(
+    mesh_descriptors {
+      name: "M0"
+      arch: WORMHOLE_B0
+      device_topology { dims: [ 2, 2 ] }
+      host_topology { dims: [ 1, 1 ] }
+      channels { count: 2 policy: RELAXED }
+    }
+
+    graph_descriptors {
+      name: "G0"
+      type: "FABRIC"
+      instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+      instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+      instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+
+      connections {
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+        channels { count: 2 policy: RELAXED }
+      }
+      connections {
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+        channels { count: 8 policy: SUPER_RELAXED }
+      }
+      connections {
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
+        channels { count: 2 policy: SUPER_RELAXED }
+      }
+    }
+
+    top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)proto";
+
+void verify_super_relaxed_edges_excluded(const LogicalMultiMeshGraph& multi_mesh_graph) {
+    EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
+
+    // Mesh-level graph carries only the hard 0<->1 edge (multiplicity 2); nothing touches mesh 2.
+    const auto& mesh0_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{0});
+    EXPECT_EQ(mesh0_neighbors.size(), 2u);
+    EXPECT_EQ(std::count(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{1}), 2);
+    EXPECT_EQ(std::count(mesh0_neighbors.begin(), mesh0_neighbors.end(), MeshId{2}), 0);
+    const auto& mesh1_neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(MeshId{1});
+    EXPECT_EQ(std::count(mesh1_neighbors.begin(), mesh1_neighbors.end(), MeshId{2}), 0);
+
+    // No exit nodes are created for the SUPER_RELAXED endpoints: mesh 2's exit-node graph is
+    // empty, and mesh 1 has only the mesh-level exit node from the hard edge (no device-3 one).
+    ASSERT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{2}));
+    EXPECT_TRUE(multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{2}).get_nodes().empty());
+    if (multi_mesh_graph.mesh_exit_node_graphs_.contains(MeshId{1})) {
+        for (const auto& exit_node : multi_mesh_graph.mesh_exit_node_graphs_.at(MeshId{1}).get_nodes()) {
+            EXPECT_FALSE(exit_node.fabric_node_id.has_value())
+                << "Device-level SUPER_RELAXED connection must not create a device-level exit node";
+        }
+    }
+}
+
+}  // namespace
+
+TEST_F(TopologyMapperUtilsTest, BuildLogicalMultiMeshGraph_SuperRelaxedConnectionsExcluded) {
+    // Both build paths must exclude SUPER_RELAXED connections from the hard target graph:
+    // the MeshGraph path (MeshGraph::initialize_from_mgd) ...
+    const std::filesystem::path temp_mgd_path = create_temp_mgd_file(kSuperRelaxedMixedMgd, "test_super_relaxed_");
+    ::tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::GALAXY, temp_mgd_path.string());
+    verify_super_relaxed_edges_excluded(build_logical_multi_mesh_adjacency_graph(mesh_graph));
+
+    // ... and the descriptor-only path (get_requested_intermesh_from_mgd).
+    const std::string mixed_mgd_textproto{kSuperRelaxedMixedMgd};
+    ::tt::tt_fabric::MeshGraphDescriptor mgd(mixed_mgd_textproto);
+    verify_super_relaxed_edges_excluded(build_logical_multi_mesh_adjacency_graph(mgd));
+    std::filesystem::remove(temp_mgd_path);
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SuperRelaxedZeroLinks_Succeeds) {
+    // Two 2x2 meshes whose only declared connection is SUPER_RELAXED, mapped onto a physical
+    // system with ZERO inter-mesh links: mapping must succeed (the connection is logical-only;
+    // the data path rides the host interconnect). The identical MGD with RELAXED must still
+    // fail — RELAXED requires at least one physical link.
+    using namespace ::tt::tt_fabric;
+
+    // Textproto template with a POLICY_TOKEN placeholder: fmt::format cannot be used here
+    // because clang-format's proto RawStringFormats rule reflows R"proto()" contents and would
+    // corrupt {{ }} escapes.
+    const auto make_mgd = [](const std::string& policy) {
+        std::string mgd_text = R"proto(
+            mesh_descriptors {
+              name: "M0"
+              arch: WORMHOLE_B0
+              device_topology { dims: [ 2, 2 ] }
+              host_topology { dims: [ 1, 1 ] }
+              channels { count: 2 policy: RELAXED }
+            }
+
+            graph_descriptors {
+              name: "G0"
+              type: "FABRIC"
+              instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+              instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+              connections {
+                nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+                nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+                channels { count: 2 policy: POLICY_TOKEN }
+              }
+            }
+
+            top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+        )proto";
+        const std::string token = "POLICY_TOKEN";
+        mgd_text.replace(mgd_text.find(token), token.size(), policy);
+        return mgd_text;
+    };
+
+    // Physical system: two 2x2 meshes, no inter-mesh links at all.
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    for (uint64_t mesh = 0; mesh < 2; ++mesh) {
+        std::vector<tt::tt_metal::AsicID> asics;
+        asics.reserve(4);
+        for (uint64_t i = 0; i < 4; ++i) {
+            asics.push_back(tt::tt_metal::AsicID{100 * (mesh + 1) + i});
+        }
+        physical_multi_mesh_graph.mesh_adjacency_graphs_[MeshId{static_cast<uint32_t>(mesh)}] =
+            AdjacencyGraph<tt::tt_metal::AsicID>(build_grid_adjacency(asics, 2, 2));
+    }
+    AdjacencyGraph<MeshId>::AdjacencyMap empty_mesh_level_adj;
+    empty_mesh_level_adj[MeshId{0}] = {};
+    empty_mesh_level_adj[MeshId{1}] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(empty_mesh_level_adj);
+
+    TopologyMappingConfig config;
+    config.disable_rank_bindings = true;
+
+    // SUPER_RELAXED: succeeds with zero links.
+    {
+        MeshGraphDescriptor mgd(make_mgd("SUPER_RELAXED"));
+        const auto logical = build_logical_multi_mesh_adjacency_graph(mgd);
+        const auto result = map_multi_mesh_to_physical(logical, physical_multi_mesh_graph, config);
+        EXPECT_TRUE(result.success) << "SUPER_RELAXED connection must map with zero physical links: "
+                                    << result.error_message;
+        EXPECT_EQ(result.fabric_node_to_asic.size(), 8u);
+    }
+
+    // RELAXED regression: still requires at least one physical link.
+    {
+        MeshGraphDescriptor mgd(make_mgd("RELAXED"));
+        const auto logical = build_logical_multi_mesh_adjacency_graph(mgd);
+        const auto result = map_multi_mesh_to_physical(logical, physical_multi_mesh_graph, config);
+        EXPECT_FALSE(result.success) << "RELAXED connection with zero physical links must still fail to map";
+    }
 }
 }  // namespace tt::tt_metal::experimental::tt_fabric

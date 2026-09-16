@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <fmt/format.h>
 #include <filesystem>
 #include <vector>
 #include <string>
@@ -2541,6 +2542,182 @@ TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
         << "First MGD's MESH connection index must survive vector reallocation";
     EXPECT_FALSE(mgds[1].connections_by_type("FABRIC").empty())
         << "Dual MGD should retain FABRIC connections after emplace";
+}
+
+// ============================================================================
+// SUPER_RELAXED policy (issue #56762): logical-only connections, zero physical
+// links permitted. Parsing/validation-level coverage.
+// ============================================================================
+
+namespace {
+
+// Two 2x2 meshes and one mesh-level connection with the given channels block, plus an optional
+// second (device-level) connection. Used by the SUPER_RELAXED policy tests below.
+std::string make_two_mesh_mgd_with_connections(const std::string& connections_block) {
+    return R"proto(
+               mesh_descriptors: {
+                 name: "M0"
+                 arch: WORMHOLE_B0
+                 device_topology: { dims: [ 2, 2 ] }
+                 channels: { count: 2 policy: RELAXED }
+                 host_topology: { dims: [ 1, 1 ] }
+               }
+
+               graph_descriptors: { name: "G0" type: "FABRIC"
+                                    instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                                    instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+           )proto" +
+           connections_block +
+           R"proto(
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+}
+
+}  // namespace
+
+TEST(MeshGraphDescriptorTests, SuperRelaxedPolicyParsesMeshLevel) {
+    const std::string text_proto = make_two_mesh_mgd_with_connections(R"proto(
+        connections: {
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          channels: { count: 8 policy: SUPER_RELAXED }
+        }
+    )proto");
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Undirected connections are expanded into both directions.
+    const auto& fabric_connections = desc.connections_by_type("FABRIC");
+    ASSERT_EQ(fabric_connections.size(), 2u);
+    for (const auto& conn_id : fabric_connections) {
+        EXPECT_TRUE(desc.is_connection_super_relaxed(conn_id));
+        EXPECT_EQ(desc.get_connection(conn_id).count, 8u);
+    }
+}
+
+TEST(MeshGraphDescriptorTests, SuperRelaxedPolicyParsesDeviceLevel) {
+    const std::string text_proto = make_two_mesh_mgd_with_connections(R"proto(
+        connections: {
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+          channels: { count: 2 policy: SUPER_RELAXED }
+        }
+    )proto");
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Undirected connections are expanded into both directions.
+    const auto& fabric_connections = desc.connections_by_type("FABRIC");
+    ASSERT_EQ(fabric_connections.size(), 2u);
+    for (const auto& conn_id : fabric_connections) {
+        EXPECT_TRUE(desc.is_connection_super_relaxed(conn_id));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, SuperRelaxedMixesWithStrictAndRelaxed) {
+    // SUPER_RELAXED connections are logical-only and exempt from the "no mixing STRICT and
+    // RELAXED in one graph" rule: they may coexist with either policy.
+    // Textproto template with a POLICY_TOKEN placeholder: fmt::format cannot be used here
+    // because clang-format's proto RawStringFormats rule reflows R"proto()" contents and would
+    // corrupt {{ }} escapes.
+    for (const std::string other_policy : {"STRICT", "RELAXED"}) {
+        std::string connections_block = R"proto(
+            connections: {
+              nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+              nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+              channels: { count: 2 policy: POLICY_TOKEN }
+            }
+            connections: {
+              nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+              nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+              channels: { count: 8 policy: SUPER_RELAXED }
+            }
+        )proto";
+        const std::string token = "POLICY_TOKEN";
+        connections_block.replace(connections_block.find(token), token.size(), other_policy);
+        const std::string text_proto = make_two_mesh_mgd_with_connections(connections_block);
+
+        EXPECT_NO_THROW({ MeshGraphDescriptor desc(text_proto, /*backwards_compatible=*/true); })
+            << "SUPER_RELAXED should be mixable with " << other_policy;
+    }
+}
+
+TEST(MeshGraphDescriptorTests, StrictRelaxedMixStillRejected) {
+    // Regression: the SUPER_RELAXED mixing exemption must not weaken the STRICT/RELAXED rule,
+    // including when a SUPER_RELAXED connection comes first (the reference policy is derived
+    // from the first non-SUPER_RELAXED connection).
+    const std::string text_proto = make_two_mesh_mgd_with_connections(R"proto(
+        connections: {
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          channels: { count: 8 policy: SUPER_RELAXED }
+        }
+        connections: {
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          channels: { count: 2 policy: STRICT }
+        }
+        connections: {
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          channels: { count: 2 policy: RELAXED }
+        }
+    )proto");
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto, /*backwards_compatible=*/true); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot mix STRICT and RELAXED")));
+}
+
+TEST(MeshGraphDescriptorTests, SuperRelaxedRejectedOnMeshChannels) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 2 policy: SUPER_RELAXED }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("SUPER_RELAXED policy is not allowed on mesh channels")));
+}
+
+TEST(MeshGraphDescriptorTests, SuperRelaxedRejectedOnGraphTopologyChannels) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 2 policy: RELAXED }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 2 policy: SUPER_RELAXED }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("SUPER_RELAXED policy is not allowed on graph_topology channels")));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

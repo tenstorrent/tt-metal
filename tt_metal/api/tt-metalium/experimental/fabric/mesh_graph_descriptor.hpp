@@ -136,6 +136,11 @@ public:
         TT_FATAL(it != connections_.end(), "Connection id {} not found", connection_id);
         return it->second;
     }
+
+    // True when the connection's channel policy is SUPER_RELAXED: a logical-only edge that may
+    // resolve to zero physical links (issue #56762). Defined in the .cpp so callers can query
+    // the policy without the protobuf headers (proto::Policy is only forward-declared here).
+    bool is_connection_super_relaxed(ConnectionId connection_id) const;
     const InstanceData& top_level() const {
         auto it = instances_.find(top_level_id_);
         TT_FATAL(it != instances_.end(), "Top-level instance id {} not found", top_level_id_);

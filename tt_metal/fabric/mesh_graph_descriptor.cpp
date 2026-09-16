@@ -657,6 +657,34 @@ void MeshGraphDescriptor::validate_switch_descriptors(
 
 void MeshGraphDescriptor::validate_channels(
     const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // SUPER_RELAXED is only meaningful on explicit inter-mesh/graph connections: a mesh's or
+    // switch's internal links and graph_topology-generated edges cannot be logical-only.
+    for (const auto& mesh : proto.mesh_descriptors()) {
+        if (mesh.has_channels() && mesh.channels().policy() == proto::Policy::SUPER_RELAXED) {
+            error_messages.push_back(fmt::format(
+                "SUPER_RELAXED policy is not allowed on mesh channels; it is only valid on explicit connections "
+                "(Mesh: {})",
+                mesh.name()));
+        }
+    }
+    for (const auto& switch_desc : proto.switch_descriptors()) {
+        if (switch_desc.has_channels() && switch_desc.channels().policy() == proto::Policy::SUPER_RELAXED) {
+            error_messages.push_back(fmt::format(
+                "SUPER_RELAXED policy is not allowed on switch channels; it is only valid on explicit connections "
+                "(Switch: {})",
+                switch_desc.name()));
+        }
+    }
+    for (const auto& graph : proto.graph_descriptors()) {
+        if (graph.has_graph_topology() && graph.graph_topology().has_channels() &&
+            graph.graph_topology().channels().policy() == proto::Policy::SUPER_RELAXED) {
+            error_messages.push_back(fmt::format(
+                "SUPER_RELAXED policy is not allowed on graph_topology channels; it is only valid on explicit "
+                "connections (Graph: {})",
+                graph.name()));
+        }
+    }
+
     // Check all channel counts > 0
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.channels().count() <= 0) {
@@ -804,27 +832,34 @@ void MeshGraphDescriptor::validate_legacy_requirements(
         }
     }
 
-    // Check that connections in the same graph don't mix STRICT and RELAXED policies
+    // Check that connections in the same graph don't mix STRICT and RELAXED policies.
+    // SUPER_RELAXED connections are exempt: they are logical-only edges (zero physical links
+    // permitted) that never constrain the physical solve, so they may coexist with either
+    // policy in the same graph.
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.connections_size() == 0) {
             continue;
         }
 
-        // Determine the policy of the first connection (default to STRICT if not specified)
-        proto::Policy first_policy = proto::Policy::STRICT;
-        if (graph.connections(0).has_channels() && graph.connections(0).channels().has_policy()) {
-            first_policy = graph.connections(0).channels().policy();
-        }
-
-        // Check all other connections have the same policy
-        for (int i = 1; i < graph.connections_size(); ++i) {
+        // Determine the reference policy from the first non-SUPER_RELAXED connection
+        // (default to STRICT if not specified).
+        std::optional<proto::Policy> first_policy;
+        for (int i = 0; i < graph.connections_size(); ++i) {
             const auto& connection = graph.connections(i);
             proto::Policy connection_policy = proto::Policy::STRICT;
             if (connection.has_channels() && connection.channels().has_policy()) {
                 connection_policy = connection.channels().policy();
             }
+            if (connection_policy == proto::Policy::SUPER_RELAXED) {
+                continue;
+            }
 
-            if (connection_policy != first_policy) {
+            if (!first_policy.has_value()) {
+                first_policy = connection_policy;
+                continue;
+            }
+
+            if (connection_policy != *first_policy) {
                 error_messages.push_back(fmt::format(
                     "MGD 1.0 Compatibility requirement: Cannot mix STRICT and RELAXED policies in the same graph. "
                     "All connections in a graph must use the same policy (Graph: {})",
@@ -833,6 +868,10 @@ void MeshGraphDescriptor::validate_legacy_requirements(
             }
         }
     }
+}
+
+bool MeshGraphDescriptor::is_connection_super_relaxed(ConnectionId connection_id) const {
+    return get_connection(connection_id).policy == proto::Policy::SUPER_RELAXED;
 }
 
 void MeshGraphDescriptor::populate_descriptors() {

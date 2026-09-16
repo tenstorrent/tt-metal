@@ -321,6 +321,13 @@ get_requested_intermesh_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd
     }
 
     for (::tt::tt_fabric::ConnectionId conn_id : mgd.connections_by_type("FABRIC")) {
+        // SUPER_RELAXED connections are logical-only (zero physical links permitted); they are
+        // excluded from the solver's hard target graph so the mapping succeeds regardless of
+        // physical connectivity between their endpoints. See issue #56762.
+        if (mgd.is_connection_super_relaxed(conn_id)) {
+            continue;
+        }
+
         const auto& connection_data = mgd.get_connection(conn_id);
         const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
         const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);

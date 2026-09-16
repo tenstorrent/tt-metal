@@ -304,8 +304,14 @@ void MeshGraph::initialize_from_mgd(
     }
 
     for (const auto& connection : mgd.connections_by_type("FABRIC")) {
-        const auto& connection_data = mgd.get_connection(connection);
+        // SUPER_RELAXED connections are logical-only (zero physical links permitted); they never
+        // become requested inter-mesh connections/ports and thus never constrain link discovery
+        // or validation. See issue #56762.
+        if (mgd.is_connection_super_relaxed(connection)) {
+            continue;
+        }
 
+        const auto& connection_data = mgd.get_connection(connection);
         const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
         const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);
 
@@ -378,14 +384,21 @@ void MeshGraph::initialize_from_mgd(
     // Priority: 1) Check individual connections (if any), 2) Check graph_topology, 3) Unspecified
     // (inter_mesh_policy_specified_ false — do not treat as STRICT vs a sibling MGD that does specify)
     this->inter_mesh_policy_specified_ = false;
+    // Derive from the first non-SUPER_RELAXED connection: validation guarantees all such
+    // connections share one policy, while SUPER_RELAXED connections are logical-only and carry
+    // no link-enforcement semantics (issue #56762).
     const auto& fabric_connections = mgd.connections_by_type("FABRIC");
-    if (!fabric_connections.empty()) {
-        // Check policy from the first connection (all connections have the same policy due to validation)
-        const auto& first_connection_data = mgd.get_connection(fabric_connections[0]);
-        this->inter_mesh_relaxed_policy_ = (first_connection_data.policy == proto::Policy::RELAXED);
+    for (const auto& connection : fabric_connections) {
+        if (mgd.is_connection_super_relaxed(connection)) {
+            continue;
+        }
+        const auto& connection_data = mgd.get_connection(connection);
+        this->inter_mesh_relaxed_policy_ = (connection_data.policy == proto::Policy::RELAXED);
         this->inter_mesh_policy_specified_ = true;
-    } else {
-        // No individual connections, check graph_topology
+        break;
+    }
+    if (!this->inter_mesh_policy_specified_) {
+        // No enforcing individual connections, check graph_topology
         const auto& top_level_instance = mgd.top_level();
         if (top_level_instance.kind == NodeKind::Graph) {
             const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
