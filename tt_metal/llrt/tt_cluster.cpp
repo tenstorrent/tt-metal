@@ -860,6 +860,9 @@ void Cluster::write_core(
     tt_cxy_pair core,
     uint64_t addr,
     std::optional<tt::umd::IoOrdering> ordering) const {
+    if (sz_in_bytes == 0) {
+        return;  // nothing to write
+    }
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
