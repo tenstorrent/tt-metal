@@ -1104,6 +1104,7 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
                 UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
                 DEST_SYNC(DestSync.Half),
                 TYPECAST_FORMATS(),
+                FILL_CONSTANT(),
             ],
             "runtimes": [
                 TILE_COUNT(1),
@@ -1295,6 +1296,7 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
                     input_format=variant.sfpu_src,
                     output_format=variant.sfpu_dst,
                 ),
+                FILL_CONSTANT(),
             ],
             "runtimes": [
                 TILE_COUNT(1),
