@@ -20,11 +20,15 @@ below the row's count, and the column at the row's count carries the bonus that
 follows a fully accepted row.
 """
 
+import pytest
 import torch
 
 from models.vllm_test_utils.spec_test.test_model import DummySpecDecodeModel
 
 VOCAB = 1024
+
+# Distinguishes "pass the model's own handle" from "pass None on purpose".
+_UNSET = object()
 
 
 def _model(monkeypatch, accept_depth=None):
@@ -154,3 +158,139 @@ def test_every_claimed_id_is_inside_the_vocabulary(monkeypatch):
 
     assert int(ids.min()) >= 0
     assert int(ids.max()) < VOCAB
+
+
+def _propose(model, committed, counts, num_drafts=3, hidden=_UNSET):
+    """Call the drafter with the handle the model's own verify produced."""
+    rows = committed.shape[0]
+    positions = torch.arange(committed.shape[1], dtype=torch.int32).repeat(rows, 1)
+    return model.propose_draft_tokens(
+        num_drafts,
+        committed,
+        positions,
+        counts,
+        hidden=model._verify_hidden if hidden is _UNSET else hidden,
+    )
+
+
+def test_the_drafter_continues_from_each_row_s_own_last_committed_token(monkeypatch):
+    """``accepted_counts - 1`` selects the row's last token, not a fixed column.
+
+    Two rows commit different lengths of the same fixed-width block. A drafter
+    reading a fixed column would continue the shorter row from padding, or from
+    the longer row's token, and the whole row's output would be wrong from
+    there on with nothing reporting it.
+    """
+    model = _model(monkeypatch)
+    model._verify_hidden = object()
+    committed = torch.tensor([[10, 11, 12, 13], [20, 21, 22, 23]], dtype=torch.int32)
+    counts = torch.tensor([4, 2], dtype=torch.int32)
+
+    drafts = _propose(model, committed, counts).draft_token_ids
+
+    # Row 0's last committed token is 13 (count 4), row 1's is 21 (count 2).
+    assert drafts[0].tolist() == [14, 15, 16]
+    assert drafts[1].tolist() == [22, 23, 24]
+
+
+def test_the_drafts_are_what_this_model_s_own_verify_accepts(monkeypatch):
+    """The property that makes a fixed committed width measurable.
+
+    The drafter proposes ``last + 1 + j`` and the verify returns each draft
+    unchanged up to its accept depth, so at full depth every draft is accepted
+    and the step commits ``1+K``. If these two drifted apart, the acceptance
+    rate would become a property of arithmetic coincidence.
+    """
+    model = _model(monkeypatch)
+    model._verify_hidden = object()
+    committed = torch.tensor([[100, 0, 0, 0]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    drafts = _propose(model, committed, counts).draft_token_ids
+    # The verify's own input block for the next step: the row's last committed
+    # token, then the drafts it was given.
+    tokens = torch.cat([committed[:, :1], drafts], dim=1)
+    verified = model._verified_ids(tokens, torch.tensor([3], dtype=torch.int32))
+
+    assert verified[0, :3].tolist() == drafts[0].tolist()
+
+
+def test_a_draft_id_stays_inside_the_vocabulary(monkeypatch):
+    """The arithmetic wraps, because the plugin range-checks every draft."""
+    model = _model(monkeypatch)
+    model._verify_hidden = object()
+    committed = torch.tensor([[VOCAB - 1, 0, 0, 0]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    drafts = _propose(model, committed, counts).draft_token_ids
+
+    assert int(drafts.min()) >= 0
+    assert int(drafts.max()) < VOCAB
+    assert drafts.dtype == torch.int32
+
+
+def test_a_foreign_hidden_handle_is_refused(monkeypatch):
+    """The handoff check: the runner must carry the handle back unchanged.
+
+    A runner that dropped or replaced it would leave a real drafter running
+    against another step's hidden state, which produces worse drafts and never
+    an error. Here it produces an error.
+    """
+    model = _model(monkeypatch)
+    model._verify_hidden = object()
+    committed = torch.tensor([[10, 11, 12, 13]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    with pytest.raises(ValueError, match="hidden handle"):
+        _propose(model, committed, counts, hidden=object())
+
+    with pytest.raises(ValueError, match="hidden handle"):
+        _propose(model, committed, counts, hidden=None)
+
+
+def test_a_committed_block_of_the_wrong_width_is_refused(monkeypatch):
+    model = _model(monkeypatch)
+    model._verify_hidden = object()
+    committed = torch.tensor([[10, 11]], dtype=torch.int32)
+    counts = torch.tensor([1], dtype=torch.int32)
+
+    with pytest.raises(ValueError, match="1\\+K wide"):
+        _propose(model, committed, counts, num_drafts=3)
+
+
+def test_an_accepted_count_outside_its_range_is_refused(monkeypatch):
+    """Validated against the contract module, not a private copy of its rules."""
+    model = _model(monkeypatch)
+    model._verify_hidden = object()
+    committed = torch.tensor([[10, 11, 12, 13]], dtype=torch.int32)
+
+    with pytest.raises(ValueError):
+        _propose(model, committed, torch.tensor([0], dtype=torch.int32))
+    with pytest.raises(ValueError):
+        _propose(model, committed, torch.tensor([5], dtype=torch.int32))
+
+
+def test_the_verify_hands_out_a_fresh_handle_each_step(monkeypatch):
+    """A drafter that cached a handle would be running on stale hidden state."""
+    model = _model(monkeypatch)
+    tokens = _block(1)
+    num_valid = torch.tensor([3], dtype=torch.int32)
+
+    first = model.decode_forward(
+        tokens=tokens,
+        start_pos=torch.zeros(1, 4, dtype=torch.int32),
+        num_valid_drafts=num_valid,
+        accepted_counts=torch.ones(1, dtype=torch.int32),
+        spec_mode="argmax_ids",
+    )
+    second = model.decode_forward(
+        tokens=tokens,
+        start_pos=torch.zeros(1, 4, dtype=torch.int32),
+        num_valid_drafts=num_valid,
+        accepted_counts=torch.ones(1, dtype=torch.int32),
+        spec_mode="argmax_ids",
+    )
+
+    assert first.hidden is not None
+    assert second.hidden is not None
+    assert first.hidden is not second.hidden

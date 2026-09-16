@@ -39,6 +39,15 @@ class DummySpecDecodeModel(DummyNoOpModel):
     its grammar truncation of drafts, placeholder accounting, and KV cache
     allocation. None of it is reachable from a host test.
 
+    It serves both halves of the contract. ``decode_forward`` verifies a
+    candidate block, and ``propose_draft_tokens`` drafts the next one, which is
+    what a launch asking for the model's own drafter calls instead of an n-gram
+    proposer. The drafter proposes exactly what the verify accepts, so with
+    every draft accepted each step commits ``1+K`` tokens and no step is ever
+    draftless; an n-gram drafter stalls whenever the generated text stops
+    repeating, which makes a fixed committed width impossible to measure with
+    it.
+
     ``README.md`` beside this file carries the server command, the two modes
     and what the measurement mode measures.
 
@@ -59,10 +68,15 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # The master gate. Everything below it is read only when a launch
         # carries a speculative_config.
         "supports_spec_decode": True,
-        # Nothing: an n-gram drafter runs on the host and asks the model for no
-        # drafting of its own. A device drafter would declare device_propose
-        # and hidden_feed here.
-        "spec_requirements": [],
+        # This model drafts as well as verifies, so it declares both halves of
+        # a device drafter. An n-gram launch requires neither and is unaffected:
+        # admission checks that the method's requirements are a subset of what
+        # the model declares, so declaring more never refuses a launch.
+        "spec_requirements": ["device_propose", "hidden_feed"],
+        # Where the target hidden state the drafter consumes lives. This model
+        # keeps it on device, which is what the first real TT drafter does; the
+        # handle is opaque to the plugin either way.
+        "spec_hidden_handoff": ["on_device"],
         # Left at 1 by omission. Any value above 1 selects the block-output
         # rail, which owns the committed width per step and cannot be combined
         # with speculation.
@@ -72,6 +86,10 @@ class DummySpecDecodeModel(DummyNoOpModel):
         super().__init__(mesh_device, max_batch_size, vocab_size, **kwargs)
         depth = int(os.environ.get("TT_SPEC_ACCEPT_DEPTH", "-1"))
         self.accept_depth = None if depth < 0 else depth
+        # Set by every verify and checked by the drafter. None before the first
+        # verify, which is also the state a propose arriving before any verify
+        # would be caught by.
+        self._verify_hidden = None
         logger.info(
             f"DummySpecDecodeModel: accept_depth=" f"{'all' if self.accept_depth is None else self.accept_depth}"
         )
@@ -143,10 +161,81 @@ class DummySpecDecodeModel(DummyNoOpModel):
             int(tokens.shape[0]),
             int(tokens.shape[1]) - 1,
         )
+        # A fresh handle per verify, of no useful type on purpose. The contract
+        # is that the runner carries it back to the drafter without
+        # interpreting its dtype, layout or tensor-parallel fracturing, so this
+        # model can check the one thing that has to hold, that the object it
+        # receives is the object it produced, and nothing else can be checked
+        # by a stand-in.
+        self._verify_hidden = object()
         return VerifyOutput(
             spec_mode=ACCEPT_MODE_ARGMAX_IDS,
             argmax_ids=self._verified_ids(tokens, num_valid_drafts),
+            hidden=self._verify_hidden,
         )
+
+    def propose_draft_tokens(
+        self,
+        num_drafts,
+        committed_tokens,
+        committed_positions,
+        accepted_counts,
+        hidden=None,
+    ):
+        """Draft the next ``num_drafts`` tokens per row, on the host.
+
+        This is the device-drafter half of the contract, and what it exists to
+        exercise is the loop rather than any drafting quality: it proposes
+        exactly what its own verify accepts, ``last + 1 + j`` from each row's
+        last committed token, so with every draft accepted a step commits
+        ``1+K`` tokens and no step is ever draftless. An n-gram drafter cannot
+        give that, because it stalls whenever the text stops repeating, which
+        makes this the only way to measure a speculative step's cost at a fixed
+        committed width.
+
+        Which entry of the committed block is a row's last token is
+        ``accepted_counts - 1``, the same arithmetic the verify uses to pick a
+        candidate state slot. Reading a fixed column instead would continue
+        every row from the same place and quietly lose the rows that accepted
+        less.
+        """
+        from vllm_tt_plugin.spec_decode import DraftOutput, check_spec_side_tensors
+
+        rows, width = committed_tokens.shape
+        if committed_positions.shape != committed_tokens.shape:
+            raise ValueError(
+                f"propose committed_tokens {tuple(committed_tokens.shape)} and "
+                f"committed_positions {tuple(committed_positions.shape)} must "
+                "agree"
+            )
+        if width != num_drafts + 1:
+            raise ValueError(
+                f"propose committed_tokens is {width} wide for "
+                f"num_drafts {num_drafts}; the committed block is 1+K wide"
+            )
+        # Against the contract module's own validator rather than a private
+        # copy of its rules: a row's count is what selects its last token here,
+        # so a count outside [1, 1+K] would read the wrong entry or pad.
+        check_spec_side_tensors(
+            torch.zeros(rows, dtype=torch.int32),
+            accepted_counts,
+            rows,
+            num_drafts,
+            call="propose",
+        )
+        if hidden is not self._verify_hidden:
+            raise ValueError(
+                "propose_draft_tokens received a hidden handle that is not the "
+                "one this model's verify returned, so the runner replaced or "
+                "dropped it; a device drafter cannot run against another "
+                "step's hidden state"
+            )
+
+        index = (accepted_counts.to(torch.int64) - 1).unsqueeze(1)
+        last = committed_tokens.to(torch.int64).gather(1, index)
+        offsets = torch.arange(1, num_drafts + 1, dtype=torch.int64)
+        drafts = (last + offsets.unsqueeze(0)) % self.vocab_size
+        return DraftOutput(draft_token_ids=drafts.to(torch.int32))
 
     def _verified_ids(self, tokens, num_valid_drafts):
         """What this model claims at each candidate position.
