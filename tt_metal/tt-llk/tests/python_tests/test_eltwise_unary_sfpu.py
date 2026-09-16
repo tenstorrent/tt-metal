@@ -159,21 +159,33 @@ FORMATS_BFP4_B = [
 ]
 
 
+# Ops that return wrong results under coverage instrumentation, so they are skipped only
+# when WITH_COVERAGE is set. Reciprocal is the only op in the sweep that emits
+# SFPLOADMACRO, and the gcov counters interleaved into its loop perturb the macro
+# sequence's issue timing: 46 of its 153 variants come back with alternate elements stale
+# on Blackhole, while its sfp* instruction stream stays byte-identical to the
+# non-coverage build. An op that starts emitting SFPLOADMACRO belongs here too.
+#   https://github.com/tenstorrent/tt-metal/issues/56751
+COVERAGE_SFPLOADMACRO_SKIP_OPS = [
+    MathOperation.Reciprocal,
+]
+
+
 def _skip_coverage_unsupported(mathop):
     """Coverage-build exclusions, shared by every sweep that drives the unary ops.
 
-    Only the sweep envelope is narrowed now: no unary op is excluded from the coverage
-    build for its own sake. Every sweep that can select a broad-profile op needs the
-    guard, so it stays a helper rather than an inline check.
+    The exclusions are per-op, so this stays a helper called from every unary sweep even
+    where the sweep's current op pool cannot select an excluded one: a pool that later
+    gains one is then covered without touching the sweep. That has already been needed
+    once, when ReluMin joined _INT_UNARY_OPS.
     """
     if not TestConfig.WITH_COVERAGE:
         return
 
-    # Coverage runs skip the broad profile wholesale; only the standard profile runs.
-    if mathop in BROAD_SWEEP_OPS:
+    if mathop in COVERAGE_SFPLOADMACRO_SKIP_OPS:
         pytest.skip(
-            reason="Broad-profile ops are not run under coverage: "
-            "https://github.com/tenstorrent/tt-llk/issues/1435"
+            reason="SFPLOADMACRO returns wrong results under coverage instrumentation: "
+            "https://github.com/tenstorrent/tt-metal/issues/56751"
         )
 
 
@@ -837,9 +849,10 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # ReluMin is in BROAD_SWEEP_OPS, so this sweep needs the same coverage guard the float
-    # ones use. It was unreachable before ReluMin joined _INT_UNARY_OPS -- no integer-only
-    # op is in that list.
+    # No op in _INT_UNARY_OPS is currently excluded under coverage, so this call skips
+    # nothing today. It stays because the exclusion list is per-op: the last time this
+    # sweep's pool changed -- ReluMin joining _INT_UNARY_OPS -- it needed the guard, and
+    # the coverage job built a kernel it should not have.
     _skip_coverage_unsupported(mathop)
 
     int_format = (
@@ -1152,8 +1165,9 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    # ReluMin/ReluMax are BROAD_SWEEP_OPS members, so this sweep needs the guard too now
-    # that _THRESHOLD_OPS carries them.
+    # As in test_eltwise_unary_sfpu_int: nothing in _THRESHOLD_OPS is excluded under
+    # coverage today, and the call stays so that a change to the pool cannot silently
+    # bypass the exclusion list.
     _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
 
