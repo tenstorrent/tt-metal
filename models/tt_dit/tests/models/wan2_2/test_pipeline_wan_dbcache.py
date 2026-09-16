@@ -217,6 +217,8 @@ def test_wan_dbcache_ab(
         "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
     )
     seed = int(os.environ.get("WAN_DBCACHE_SEED", "0"))
+    flow_shift_env = os.environ.get("WAN_DBCACHE_FLOW_SHIFT")
+    flow_shift = float(flow_shift_env) if flow_shift_env else None  # None -> pipeline default (12.0)
 
     configs = {
         "baseline": None,
@@ -235,12 +237,15 @@ def test_wan_dbcache_ab(
     for name in runs:
         cache_config = _parse_custom_config(name) if name.startswith("custom:") else configs[name]
         timer = _Timer()
-        logger.info(f"=== run '{name}' (steps={num_inference_steps}, traced={traced}, cache={cache_config}) ===")
+        logger.info(
+            f"=== run '{name}' (steps={num_inference_steps}, flow_shift={flow_shift}, traced={traced}, cache={cache_config}) ==="
+        )
         with torch.no_grad():
             frames = pipeline(
                 prompts=[prompt],
                 num_inference_steps=num_inference_steps,
                 seed=seed,
+                flow_shift=flow_shift,
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
                 output_type="uint8",
@@ -288,7 +293,8 @@ def test_wan_dbcache_ab(
 
         if int(ttnn.distributed_context_get_rank()) == 0:
             safe = name.replace(":", "_").replace("&", "_").replace("=", "")
-            stem = f"wan_dbcache_{safe}_{width}x{height}_s{num_inference_steps}{'_traced' if traced else ''}"
+            shift_tag = f"_fs{flow_shift:g}" if flow_shift is not None else ""
+            stem = f"wan_dbcache_{safe}_{width}x{height}_s{num_inference_steps}{shift_tag}{'_traced' if traced else ''}"
             _save_frame_strip(frames, f"{stem}_strip.png")
             try:
                 from models.tt_dit.utils.video import export_to_video
