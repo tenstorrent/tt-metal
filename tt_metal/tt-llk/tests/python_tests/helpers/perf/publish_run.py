@@ -22,7 +22,11 @@ from .parquet import convert_csvs_to_parquet
 
 _VALID_ARCHES = ("wormhole", "blackhole", "quasar")
 # Lowercase, as the warehouse's RUNS.PIPELINE stores them.
-_VALID_PIPELINES = ("pr", "nightly")
+# "baseline" is the post-merge sanity run: the same L1_TO_L1 non-speed-of-light
+# selection the PR gate measures, re-run on main after every merge. The gate
+# compares against the latest of these, so it must be distinguishable from the
+# nightly full sweep by a column, not by guessing from a file name.
+_VALID_PIPELINES = ("pr", "nightly", "baseline")
 
 
 def _run_csvs(csv_dir):
