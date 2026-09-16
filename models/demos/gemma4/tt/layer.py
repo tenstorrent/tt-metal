@@ -446,11 +446,14 @@ class Gemma4DecoderLayer:
         if has_pli:
             hidden_states = maybe_interleave(hidden_states)
             residual_pli = hidden_states
-            from models.demos.gemma4.tt.compute_config import gelu_variant
-
             gated = ttnn.linear(hidden_states, self.per_layer_input_gate)
-            gated = ttnn.gelu(gated, variant=gelu_variant())
-            gated = ttnn.mul(gated, per_layer_input)
+            # Fused gelu(gated)*per_layer_input; GELU param 0.0 == Accurate
+            # (ttnn unary.cpp maps ACCURATE->0.0f, FAST_LUT->1.0f).
+            gated = ttnn.mul(
+                gated,
+                per_layer_input,
+                input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)],
+            )
             projected = ttnn.linear(gated, self.per_layer_projection)
             normed_pli = self.post_per_layer_input_norm.forward(projected)
             hidden_states = ttnn.add(residual_pli, normed_pli)

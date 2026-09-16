@@ -274,18 +274,6 @@ class Gemma4Model:
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
-        # Keep prompt-dependent slice bounds in persistent buffers. Literal
-        # offsets compile a new program after prefill traces are already live.
-        self._tail_slice_start = ttnn.from_torch(
-            torch.zeros(4, dtype=torch.int32),
-            device=mesh_device,
-            mesh_mapper=self._replicate_to_mesh_mapper(),
-        )
-        self._tail_slice_end = ttnn.from_torch(
-            torch.zeros(4, dtype=torch.int32),
-            device=mesh_device,
-            mesh_mapper=self._replicate_to_mesh_mapper(),
-        )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
@@ -1159,11 +1147,22 @@ class Gemma4Model:
                 layer_packed = {
                     "packed_p": packed["packed_p"],
                     "position_idx": packed["position_idx"],
+                    "position_idx_cache": packed.get("position_idx_cache"),
                     "kv_write_idxs": packed.get("kv_write_idxs"),
-                    "attn_mask": packed["attn_mask_sliding"] if sliding else packed["attn_mask_full"],
+                    "attn_mask": packed.get("attn_mask_sliding") if sliding else packed.get("attn_mask_full"),
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": _hot,
+                    # Loop-invariant KV-write slices, hoisted once per step
+                    # (merged from ign/gemma4_31B_MTP_Dflash). Only valid when
+                    # every layer shares ONE page table -- with per-layer page
+                    # tables the pt_b row differs per layer, so it self-disables
+                    # there, which is exactly the packed-verify path that needs
+                    # width-trimmed per-layer tables (see spec_decode's
+                    # _pv_tables_per_layer). STAGED ONLY: attention/__init__.py
+                    # forwards it, but packed_decode_forward ignores it until
+                    # MTP's serialized-KV-write path is ported.
+                    "kv_write_pack": (packed.get("kv_write_pack") if page_tables_per_layer is None else None),
                 }
 
             hidden_states = layer(
@@ -1244,6 +1243,7 @@ class Gemma4Model:
         # loop, so skip the expensive full-sequence lm_head.
         # Gate on chunk_page_table: get_last_token defaults to -1 for all direct
         # ttnn_prefill_forward callers (unit tests, demos), which still need logits.
+
         if (
             not is_decode
             and get_last_token == -1
@@ -1571,6 +1571,7 @@ class Gemma4Model:
         attn_mask_full,
         attn_mask_sliding,
         packed_p,
+        position_idx_cache=None,
         page_table=None,
         kv_cache=None,
         kv_write_idxs=None,
@@ -1620,9 +1621,22 @@ class Gemma4Model:
             sin_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
             rope_packed[lt] = (cos_bp, sin_bp)
 
+        # The sequential KV write needs one page-table row and P position
+        # indices, and every layer needs the SAME ones. Build them once here,
+        # the same hoist rope_packed does just above. Bit-exact: identical
+        # values, computed once instead of once per layer.
+        kv_write_pack = None
+        if position_idx_cache is not None and page_table is not None:
+            kv_write_pack = (
+                ttnn.slice(page_table, [0, 0], [1, page_table.shape[1]]),
+                [ttnn.slice(position_idx_cache, [p], [p + 1]) for p in range(packed_p)],
+            )
+
         packed = {
             "packed_p": packed_p,
             "position_idx": position_idx,
+            "position_idx_cache": position_idx_cache,
+            "kv_write_pack": kv_write_pack,
             "kv_write_idxs": kv_write_idxs,
             "attn_mask_full": attn_mask_full,
             "attn_mask_sliding": attn_mask_sliding,
@@ -1657,6 +1671,11 @@ class Gemma4Model:
         for cos_bp, sin_bp in rope_packed.values():
             cos_bp.deallocate(True)
             sin_bp.deallocate(True)
+        if kv_write_pack is not None:
+            pt_b, pos_bs = kv_write_pack
+            pt_b.deallocate(True)
+            for pos_b in pos_bs:
+                pos_b.deallocate(True)
         return out
 
     def compute_host_pli(self, token_id):
@@ -2324,23 +2343,10 @@ class Gemma4Model:
         # decode may be the next call).
         self._g4_retire_scavenge()
         get_last_token = (last_token_idx // 32) * 32
-        for device_tensor, values in (
-            (self._tail_slice_start, [0, 0, get_last_token, 0]),
-            (self._tail_slice_end, [1, 1, get_last_token + 32, int(hidden_states.shape[-1])]),
-        ):
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    torch.tensor(values, dtype=torch.int32),
-                    mesh_mapper=self._replicate_to_mesh_mapper(),
-                ),
-                device_tensor,
-            )
         sliced = ttnn.slice(
-            input_tensor=hidden_states,
-            starts=self._tail_slice_start,
-            ends=self._tail_slice_end,
-            slice_dim=2,
-            num_devices=int(hidden_states.shape[-2]) // 32,
+            hidden_states,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, hidden_states.shape[-1]),
         )
         if batched and hidden_states is not sliced:
             hidden_states.deallocate(True)
