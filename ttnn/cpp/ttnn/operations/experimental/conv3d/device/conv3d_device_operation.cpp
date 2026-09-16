@@ -326,8 +326,11 @@ ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
         weight_tensor.memory_config(),
         weight_tensor.logical_shape(),
         bias_tensor.has_value(),
+        bias_tensor.has_value() ? std::make_optional(bias_tensor.value().memory_config()) : std::nullopt,
         tensor_args.halo_buffer.has_value(),
-        tensor_args.pad_offset_tensor.has_value());
+        tensor_args.halo_buffer.has_value() ? std::make_optional(tensor_args.halo_buffer.value().memory_config()) : std::nullopt,
+        tensor_args.pad_offset_tensor.has_value(),
+        tensor_args.pad_offset_tensor.has_value() ? std::make_optional(tensor_args.pad_offset_tensor.value().memory_config()) : std::nullopt);
 
     return hash;
 }
