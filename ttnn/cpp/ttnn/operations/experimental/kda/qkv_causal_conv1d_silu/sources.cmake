@@ -1,13 +1,7 @@
-set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_API_HEADERS
-    pack_convolution_carry.hpp
-    qkv_causal_conv1d_silu.hpp
-)
+set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_API_HEADERS qkv_causal_conv1d_silu.hpp)
 
 set(TTNN_OP_EXPERIMENTAL_KDA_QKV_CAUSAL_CONV1D_SILU_SRCS
     qkv_causal_conv1d_silu.cpp
-    pack_convolution_carry.cpp
-    device/pack_convolution_carry_device_operation.cpp
-    device/pack_convolution_carry_program_factory.cpp
     device/qkv_causal_conv1d_silu_device_operation.cpp
     device/qkv_causal_conv1d_silu_program_factory.cpp
 )

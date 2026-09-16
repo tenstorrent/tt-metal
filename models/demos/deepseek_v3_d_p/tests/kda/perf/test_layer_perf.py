@@ -181,8 +181,6 @@ def _deallocate_state(state: KdaState) -> None:
 
 
 def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
-    if any("pack_convolution_carry" in Path(source).stem for source in kernel_sources):
-        return "experimental.kda.pack_convolution_carry"
     names = set()
     for source in kernel_sources:
         parts = source.replace("\\", "/").split("/")
@@ -204,12 +202,6 @@ def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
 
 
 def test_device_program_label_preserves_material_operation_identity() -> None:
-    assert (
-        _device_program_label(
-            ("src/operations/experimental/kda/qkv_causal_conv1d_silu/" "reader_pack_convolution_carry.cpp",)
-        )
-        == "experimental.kda.pack_convolution_carry"
-    )
     assert (
         _device_program_label(("src/operations/experimental/kda/recurrent_chunk_scan/kernel.cpp",))
         == "experimental.kda.recurrent_chunk_scan"
