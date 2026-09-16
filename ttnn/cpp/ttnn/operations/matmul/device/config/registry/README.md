@@ -27,8 +27,9 @@ an unsupported call, or a table miss.
 The dense table currently covers exact Blackhole, single-device, rank-2,
 interleaved calls. Explicit program configs and core grids, sharded tensors,
 mesh-wide tensors, and trace capture are not covered. The AGMM table currently
-contains 32-chip entries; its lookup is used only when the caller omits both
-the program config and compute-kernel config.
+contains 32-chip entries. In `on` mode, an exact AGMM entry supersedes caller
+program and compute-kernel configs; a miss keeps them unchanged. This makes the
+same model command a valid `off`/`on` comparison without model-specific logic.
 
 Do not describe an `on` model run as registry coverage unless it also enables
 `throw_exception_on_fallback` and completes successfully.
@@ -45,5 +46,4 @@ scripts/pipeline.sh registry ~/tt-metal
 
 Then build the TTNN tests and run the focused registry tests before running
 the same model command once with the registry `off` and once with strict
-registry `on`. A model call site should drop a bespoke config only after its
-runtime contract has an exact measured registry entry.
+registry `on`.

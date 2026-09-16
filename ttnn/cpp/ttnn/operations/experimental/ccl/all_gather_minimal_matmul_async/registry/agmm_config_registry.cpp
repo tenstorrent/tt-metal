@@ -158,12 +158,12 @@ std::optional<compact::KeyDescriptor> build_registry_key(const RegistryRequestFa
     return key_is_consistent(key) ? std::make_optional(key) : std::nullopt;
 }
 
-std::span<const compact::EntryDescriptor> entries_for_device_count(const std::uint16_t device_count) noexcept {
+std::span<const compact::CohortDescriptor> cohorts_for_device_count(const std::uint16_t device_count) noexcept {
     if (device_count == 8) {
-        return generated::bh8_entries();
+        return generated::bh8_cohorts();
     }
     if (device_count == 32) {
-        return generated::bh32_entries();
+        return generated::bh32_cohorts();
     }
     return {};
 }
@@ -172,23 +172,25 @@ const compact::EntryDescriptor* lookup(const compact::KeyDescriptor& key) noexce
     if (!key_is_consistent(key)) {
         return nullptr;
     }
-    const auto entries = entries_for_device_count(key.device.device_count);
-    if (entries.empty()) {
-        return nullptr;
+    for (const auto& cohort : cohorts_for_device_count(key.device.device_count)) {
+        // The campaign grid is a minimum capability, not a physical-device
+        // identity: a larger live grid is legal, while a harvested/smaller
+        // grid is not.
+        const auto& required = cohort.device;
+        if (key.device.architecture != required.architecture || key.device.device_count != required.device_count ||
+            key.device.mesh_rows != required.mesh_rows || key.device.mesh_cols != required.mesh_cols ||
+            key.device.compute_grid_x < required.compute_grid_x ||
+            key.device.compute_grid_y < required.compute_grid_y) {
+            continue;
+        }
+        auto normalized = key;
+        normalized.device.compute_grid_x = required.compute_grid_x;
+        normalized.device.compute_grid_y = required.compute_grid_y;
+        if (const auto* entry = compact::lookup_exact(normalized, cohort.entries)) {
+            return entry;
+        }
     }
-    // validate_entries requires one device descriptor per cohort. The
-    // campaign grid is a minimum capability, not a physical-device identity:
-    // a larger live grid is legal, while a harvested/smaller grid is not.
-    const auto& required = entries.front().key.device;
-    if (key.device.architecture != required.architecture || key.device.device_count != required.device_count ||
-        key.device.mesh_rows != required.mesh_rows || key.device.mesh_cols != required.mesh_cols ||
-        key.device.compute_grid_x < required.compute_grid_x || key.device.compute_grid_y < required.compute_grid_y) {
-        return nullptr;
-    }
-    auto normalized = key;
-    normalized.device.compute_grid_x = required.compute_grid_x;
-    normalized.device.compute_grid_y = required.compute_grid_y;
-    return compact::lookup_exact(normalized, entries);
+    return nullptr;
 }
 
 std::optional<Recipe> materialize_recipe(const compact::EntryDescriptor& descriptor) noexcept {

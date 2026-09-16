@@ -142,6 +142,10 @@ struct EntryDescriptor {
     ReplayDescriptor replay{};
     auto operator<=>(const EntryDescriptor&) const = default;
 };
+struct CohortDescriptor {
+    DeviceDescriptor device{};
+    std::span<const EntryDescriptor> entries{};
+};
 
 inline constexpr bool is_supported_device(const DeviceDescriptor& device) noexcept {
     if (device.architecture != kBlackholeArchitecture || device.compute_grid_x == 0 || device.compute_grid_y == 0 ||

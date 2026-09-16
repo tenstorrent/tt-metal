@@ -32,34 +32,38 @@ registry::RegistryRequestFacts facts_from_key(const registry::compact::KeyDescri
 }
 
 TEST(AgmmRegistry, CohortsDoNotCrossDeviceCounts) {
-    EXPECT_TRUE(registry::entries_for_device_count(8).empty());
-    EXPECT_EQ(registry::entries_for_device_count(32).size(), 40U);
-    EXPECT_TRUE(registry::entries_for_device_count(1).empty());
-    EXPECT_TRUE(registry::entries_for_device_count(16).empty());
+    EXPECT_TRUE(registry::cohorts_for_device_count(8).empty());
+    EXPECT_EQ(registry::cohorts_for_device_count(32).size(), 2U);
+    EXPECT_TRUE(registry::cohorts_for_device_count(1).empty());
+    EXPECT_TRUE(registry::cohorts_for_device_count(16).empty());
 }
 
 TEST(AgmmRegistry, EveryBh32EntryRoundTripsAndMaterializes) {
-    const auto entries = registry::generated::bh32_entries();
-    ASSERT_EQ(entries.size(), 40U);
-    for (const auto& entry : entries) {
-        EXPECT_EQ(entry.key.device, registry::generated::kBh32Device);
-        EXPECT_EQ(registry::lookup(entry.key), &entry);
-        EXPECT_TRUE(registry::materialize_recipe(entry).has_value());
+    std::size_t entry_count = 0;
+    for (const auto& cohort : registry::generated::bh32_cohorts()) {
+        for (const auto& entry : cohort.entries) {
+            ++entry_count;
+            EXPECT_EQ(entry.key.device, cohort.device);
+            EXPECT_EQ(registry::lookup(entry.key), &entry);
+            EXPECT_TRUE(registry::materialize_recipe(entry).has_value());
+        }
     }
+    EXPECT_EQ(entry_count, 44U);
 }
 
 TEST(AgmmRegistry, LiveGridIsCheckedAsCapabilityNotIdentity) {
-    auto live_key = registry::generated::bh32_entries().front().key;
+    const auto& cohort = registry::generated::bh32_cohorts().front();
+    auto live_key = cohort.entries.front().key;
     live_key.device.compute_grid_x += 1;
     live_key.device.compute_grid_y += 1;
     EXPECT_NE(registry::lookup(live_key), nullptr);
 
-    live_key.device.compute_grid_x = registry::generated::kBh32Device.compute_grid_x - 1;
+    live_key.device.compute_grid_x = cohort.device.compute_grid_x - 1;
     EXPECT_EQ(registry::lookup(live_key), nullptr);
 }
 
 TEST(AgmmRegistry, SelectionUsesTheSharedMatmulMode) {
-    const auto& entry = registry::generated::bh32_entries().front();
+    const auto& entry = registry::generated::bh32_cohorts().front().entries.front();
     auto facts = facts_from_key(entry.key);
     EXPECT_FALSE(registry::select_recipe(ttnn::MatmulRegistryMode::Off, facts).has_value());
     EXPECT_FALSE(registry::select_recipe(ttnn::MatmulRegistryMode::Shadow, facts).has_value());
@@ -73,7 +77,7 @@ TEST(AgmmRegistry, SelectionUsesTheSharedMatmulMode) {
 TEST(AgmmRegistry, StrictOnRejectsAMissAndAcceptsAnExactHit) {
     FallbackStateReset reset;
     ttnn::CONFIG.set<"throw_exception_on_fallback">(true);
-    const auto& key = registry::generated::bh32_entries().front().key;
+    const auto& key = registry::generated::bh32_cohorts().front().entries.front().key;
     auto facts = facts_from_key(key);
 
     EXPECT_TRUE(registry::select_recipe(ttnn::MatmulRegistryMode::On, facts).has_value());
