@@ -29,7 +29,107 @@ produced, so it compiled under a parked trace, and hung.
 *Proof:* warming with the real prompts at the real budget before the capture makes the test **pass**
 (243 s) where it had hung twice, deterministically. Committed in that file.
 
-**The §6 acceptance gap is a real leak, and it is specific to the traced path.**
+### ROOT CAUSE FOUND: crossing the ANCHOR permanently kills the drafter
+
+Everything else in §0 is downstream of this. `tests/reference/test_dflash_anchor_crossing.py` holds
+the prompt constant (the same five tokens) and varies only `max_new_tokens`, so the single
+difference between arms is whether `start` walks past `ANCHOR`. Per-step accepted lengths,
+`start:accepted`, for the 200-token arm:
+
+    before   5:3  8:2  10:16  26:4  30:16  46:2  48:5  53:7  60:10 ... 121:6  127:1
+    cross    128:9
+    after    137:1 138:1 139:1 140:1 ... 202:1 203:1        <- EVERY step, to the end
+
+    acceptance before the anchor 4.241 (29 steps), after 1.118 (68 steps)
+    non-ascii characters in the output: 37 / 728            <- the token soup, same run
+
+After the anchor advances, **every single step accepts exactly 1** — the target's own bonus token.
+The drafter never lands another token for the rest of the generation. This is not degradation, it is
+total and permanent failure, and it starts at the boundary.
+
+That accounts for everything that looked mysterious:
+
+* **the demo.** Its prompt is 128 tokens, so it crosses immediately and spends nearly every step on
+  the far side. Post-crossing acceptance 1.118 vs the demo's 1.138 — the same number.
+* **"prompt-dependence" (§6).** Wrong. Healthy runs are the ones that never cross (5+64=69);
+  sick ones are the ones that do. Prompt length mattered only because it decides how soon you cross.
+* **the token soup.** Same runs, same cause: every post-crossing verify computes from the
+  re-anchored state, so the target's own argmax is wrong and greedy verification no longer pins the
+  tokens to what the 27B would emit. This is a CORRECTNESS bug, not a throughput bug, and
+  `_assert_output_quality` passes it because it only detects repetition.
+
+PRE-EXISTING, not introduced by any change in this branch: the same demo configuration reproduces
+acceptance 1.138 and the same soup on the commit before the narrow head.
+
+WHERE TO LOOK. `forward` re-anchors with `self._anchor_gdn = self.model.save_gdn_state(into=...)`
+after each whole bucket, and every later `_run` begins `restore_gdn_state(self._anchor_gdn)`. If the
+re-anchored snapshot is wrong, every subsequent verify is computed from bad state — which is exactly
+the observed signature (drafts always rejected AND garbage tokens). The `into=` buffer-reuse path is
+already independently implicated: adding the same reuse to `reset()` SIGBUSed the drafter. The next
+experiment is to drop `into=` from the re-anchor save so it allocates fresh, and see whether
+post-crossing acceptance recovers.
+
+Note the whole-bucket run also takes the EAGER fallback (`length == ANCHOR`), so a crossing step
+mixes an eager verify with traced ones — a second candidate worth separating from the snapshot.
+
+**TESTED, and it is half the answer.** `DFLASH_FRESH_ANCHOR=1` (in `targets.py`, uncommitted) makes
+the re-anchor save allocate instead of reusing. Same `gen200` arm:
+
+                             baseline      DFLASH_FRESH_ANCHOR=1
+    before the anchor          4.241            4.241     (unchanged, as it must be)
+    after  the anchor          1.118            1.617
+    non-ascii in output       37 / 728          0 / 810   <- the CORRUPTION IS GONE
+    overall / throughput   2.052 / 2.05     2.618 / 5.67 tok/s
+
+So the `into=` buffer reuse at re-anchor is a real correctness bug: dropping it produces clean
+English for the whole generation and 2.8x the throughput. The "keeps DRAM flat" rationale costs
+little to give up — re-anchoring happens once per 128 tokens, not once per block. Combined with the
+SIGBUS that `into=` caused in `reset()`, the buffer-reuse path on this snapshot should be considered
+unsafe generally.
+
+TWO THINGS IT DOES NOT FIX, both important:
+
+1. **Acceptance still falls across the boundary** — 1.617 against 4.241 before. A second defect
+   remains; the eager whole-bucket verify is the next suspect.
+2. **The demo still hangs with it on.** Changing acceptance changes which `(new_ctx, q_len)` pairs
+   the loop produces, and any shape the warm-up did not compile hangs under the parked trace. It
+   hung at `drafter.py:766`, `start=213`, `q_len=15`, `kv_seq=16` — `verify_size = min(16, 228-213)`.
+   This is the SAME bug as §0's opening, resurfacing: warming "the real prompts at the real budget"
+   only covers the shapes THAT run happened to hit, so it is not robust to anything that shifts
+   acceptance.
+
+   The durable fix is to warm the drafter across its whole width space before the capture —
+   `q_len` 1..16 against the `new_ctx` values the loop can produce — rather than relying on a
+   warm-up run to stumble on them. `tests/unit/test_drafter_block_width.py` shows each new width
+   costs ~3.3 s to compile once, so the space is affordable to cover exhaustively, and doing so
+   would make every future acceptance change safe instead of hang-prone.
+
+### On the acceptance oscillation (a separate, smaller effect)
+
+**It is not a decay, it OSCILLATES with period 2.** Everything
+below described the acceptance loss as a decay that compounds per generation. That was wrong.
+`tests/reference/test_dflash_warmup_position.py` varies only how many traced generations sit between
+the capture and the measured one, holding every other value at the known-good run's, each arm in its
+own fixture instance:
+
+    N=0   eager 7.000 -> capture -> MEASURED (traced gen 1) = 7.000
+    N=1   eager 7.000 -> capture -> gen 1 7.000 -> MEASURED (gen 2) = 1.500
+    N=2   eager 7.000 -> capture -> gen 1 7.000 -> gen 2 1.500 -> MEASURED (gen 3) = 7.000
+
+Traced generations run 7.000 / 1.500 / 7.000: ODD ones are healthy, EVEN ones are broken, and the
+third recovers completely. Nothing compounds.
+
+A clean period-2 alternation is the signature of a DOUBLE-BUFFERED resource toggled once per use.
+`TT_CCL` is exactly that: `get_and_cycle_ag_semaphore_handles` advances `(current_idx + 1) % 2` over
+**two** semaphores per axis. A captured trace bakes whichever semaphore it held at capture time, so
+on alternate generations the live parity collides with the baked one. Note this arm does NOT share
+`tt_ccl` with the drafter, so the earlier "shared TT_CCL refuted" result (below) tested the wrong
+half — the suspect is the TARGET's own cycling against its own parked trace, not sharing.
+
+**This makes the demo's acceptance an artifact of parity.** The demo runs eager warm -> capture ->
+traced warm -> measure, so it measures traced generation **2** every time: the bad parity.
+
+**The §6 acceptance gap is real and specific to the traced path.**
 `test_dflash_generation_repeat.py` (new) holds everything still and varies only generation index:
 
     eager   gen 1-5   6.200  6.200  6.200  6.200  6.200     flat to three decimals

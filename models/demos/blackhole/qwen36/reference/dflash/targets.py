@@ -530,8 +530,17 @@ class TtTarget:
             logit_parts.append(lg)
             tap_parts.append(tp)
             self._anchor += self.ANCHOR
-            # Reuse the snapshot's buffers rather than reallocating every bucket.
-            self._anchor_gdn = self.model.save_gdn_state(into=self._anchor_gdn)
+            # DFLASH_FRESH_ANCHOR=1: allocate a fresh snapshot instead of reusing the buffers.
+            # DIAGNOSTIC. After this re-anchor every later _run() begins restore_gdn_state(
+            # self._anchor_gdn), and post-crossing acceptance collapses to exactly 1 for the rest of
+            # the generation (tests/reference/test_dflash_anchor_crossing.py) with garbage tokens in
+            # the same runs -- the signature of verifying from bad state. The `into=` reuse path is
+            # independently implicated: adding the same reuse to reset() SIGBUSed the drafter.
+            if os.environ.get("DFLASH_FRESH_ANCHOR") == "1":
+                self._anchor_gdn = self.model.save_gdn_state()
+            else:
+                # Reuse the snapshot's buffers rather than reallocating every bucket.
+                self._anchor_gdn = self.model.save_gdn_state(into=self._anchor_gdn)
         # The partial tail bucket — where a speculative block always lands.
         lg, tp = self._run(self._anchor, end, keep_rows=want if narrow else None)
         logit_parts.append(lg)

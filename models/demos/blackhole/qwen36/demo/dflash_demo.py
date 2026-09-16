@@ -85,7 +85,7 @@ NUM_BLOCKS = 64
 PRODUCTION_TOK_S = 17.87
 
 
-def _build(mesh_device):
+def _build(mesh_device, ctx_capacity=None):
     """The 27B target, the DFlash drafter, and the speculative loop's view of both."""
     drafter_path = resolve_drafter_path()
     cfg = DFlashDrafterConfig.from_pretrained(drafter_path)
@@ -97,8 +97,19 @@ def _build(mesh_device):
     # device_taps=True keeps the target's residual taps on the mesh for the ttnn drafter -- five
     # fewer PCIe round trips per step than reading them back to host.
     target = TtTarget(model, cfg.target_layer_ids, page_table, device_taps=True)
+    # ctx_capacity makes the drafter's KV history a persistent fixed buffer, which collapses its
+    # per-step shape space to the block width alone -- the precondition for warm_block_widths, and
+    # so for retiring the compile-under-a-parked-trace hang. Acceptance is unaffected: priced at
+    # 5.182 tok/step both ways (tests/reference/test_dflash_acceptance_capacity.py).
     drafter = TtDrafter(
-        TtDFlashDrafter(mesh_device, cfg, load_drafter_state_dict(drafter_path), tt_ccl=model.tt_ccl), target
+        TtDFlashDrafter(
+            mesh_device,
+            cfg,
+            load_drafter_state_dict(drafter_path),
+            tt_ccl=model.tt_ccl,
+            ctx_capacity=ctx_capacity,
+        ),
+        target,
     )
     return model, target, drafter, cfg
 
@@ -143,7 +154,13 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
     )
 
     try:
-        model, target, drafter, cfg = _build(mesh_device)
+        # DFLASH_CTX_CAPACITY=1 sizes a fixed-capacity drafter history to this case and warms
+        # every block width before the capture. See warm_block_widths for why the growing-history
+        # default cannot be warmed at all.
+        cap = None
+        if os.environ.get("DFLASH_CTX_CAPACITY") == "1":
+            cap = -(-(seqlen + max_generated_tokens + 32) // 32) * 32
+        model, target, drafter, cfg = _build(mesh_device, ctx_capacity=cap)
     except Exception as e:  # noqa: BLE001 -- a missing drafter checkpoint is a skip, not a failure
         if "drafter" in str(e).lower() or "DFLASH_HF_MODEL" in str(e):
             pytest.skip(f"drafter checkpoint unavailable ({type(e).__name__}: {e})")
@@ -186,6 +203,9 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
     # So warm at the REAL token budget. This costs one eager generation of the full length, which is
     # why `compile_s` below is large -- that is the point of reporting it separately.
     t0 = time.perf_counter()
+    if cap is not None:
+        logger.info(f"fixed-capacity drafter ({cap} rows); warming every block width before capture")
+        drafter.drafter.warm_block_widths()
     dflash_generate(drafter, target, token_ids, max_new_tokens=max_generated_tokens)
     # DFLASH_NARROW_HEAD=1 runs the verify LM head over a 32/64-row tile-aligned window instead of
     # the whole 128-row bucket (+20.8 % on the reference prompt, tokens bit-identical -- see
@@ -193,7 +213,13 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
     # one length so far. It scales STEP TIME only, so it cannot rescue a run whose acceptance has
     # collapsed -- throughput is acceptance / step_time.
     target.enable_traced_verify(narrow_head=os.environ.get("DFLASH_NARROW_HEAD") == "1")
-    dflash_generate(drafter, target, token_ids, max_new_tokens=max_generated_tokens)
+    # DFLASH_TRACED_WARM: how many traced generations to run before the measured one. Acceptance
+    # ALTERNATES with period 2 on the traced path -- odd traced generations give 7.000, even ones
+    # 1.500 (tests/reference/test_dflash_warmup_position.py). One traced warm-up, the historical
+    # value, lands the measurement on generation 2, i.e. the bad parity, every single run. This is
+    # a DIAGNOSTIC KNOB, not a fix: the right fix is whatever makes the parity stop mattering.
+    for _ in range(int(os.environ.get("DFLASH_TRACED_WARM", "1"))):
+        dflash_generate(drafter, target, token_ids, max_new_tokens=max_generated_tokens)
     compile_s = time.perf_counter() - t0
 
     # NO separate TTFT probe here, deliberately. An earlier version timed the prefill by calling

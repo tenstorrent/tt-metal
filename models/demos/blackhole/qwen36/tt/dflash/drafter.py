@@ -151,6 +151,66 @@ class TtDFlashDrafter:
 
     # ---- state -----------------------------------------------------------------------------
 
+    def warm_block_widths(self, widths=None, seed=0):
+        """Compile one program set per block width, BEFORE any trace is parked.
+
+        THE HANG THIS EXISTS TO RETIRE. A program first compiled while a verify trace is parked does
+        not raise -- it spins the host at ~110 % CPU in ``fetch_queue_reserve_back`` on a dispatch
+        queue that never drains, and killing it wedges the Ethernet cores (DFLASH_HANDOFF.md §0).
+        The loop reaches a narrow block whenever a generation ends mid-block:
+        ``verify_size = min(block_size, max_length - start, target.max_block(start))``, so q_len
+        takes values in 1..block_size depending on where the budget and the anchor happen to fall.
+        Warming with "a real prompt at the real budget" only covers the widths THAT run happened to
+        hit, which is why it kept failing again the moment anything shifted the accept pattern.
+
+        THIS IS ONLY AFFORDABLE UNDER ``ctx_capacity``. On the growing-history path the key length is
+        ``hist_len + new_ctx + q_len`` and hist_len changes every step, so the shape space is
+        unbounded and no finite warm-up covers it. Fixed capacity makes the history a persistent
+        ``[1, nkv, C, hd]`` buffer and pads the accepted context to a constant 16 rows, so -- as
+        :meth:`forward` puts it -- "everything per-step is a CONSTANT shape here ... only tensor
+        CONTENTS vary", and ``q_len`` is the single remaining variable. That collapses the space to
+        ``block_size`` program sets, which is small enough to compile up front.
+
+        Costs nothing measurable in acceptance: fixed capacity was priced against the growing path
+        at 5.182 tok/step BOTH ways, identical on every prompt
+        (tests/reference/test_dflash_acceptance_capacity.py), and emits bit-identical tokens.
+
+        Leaves the drafter reset, so call it before the first real generation.
+        """
+        import torch
+
+        assert self._cap is not None, (
+            "warm_block_widths needs ctx_capacity: on the growing-history path the key length moves "
+            "with hist_len every step, so the shape space is unbounded and warming it is impossible"
+        )
+        widths = list(range(1, self.block_size + 1)) if widths is None else list(widths)
+        gen = torch.Generator().manual_seed(seed)
+
+        def _mk(rows):
+            t = torch.randn(1, 1, rows, self.cfg.hidden_size, generator=gen, dtype=torch.float32) * 0.05
+            return ttnn.from_torch(
+                t.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=_DRAM,
+                **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
+            )
+
+        for q_len in widths:
+            self.reset()
+            # Two steps per width: the first with no context (the prompt-shaped entry), the second
+            # with one accepted row, which is the steady-state shape the loop actually replays.
+            for new_ctx in (0, 1):
+                kv_source = _mk(new_ctx) if new_ctx else None
+                noise = _mk(q_len)
+                ttnn.deallocate(self.forward(kv_source, noise, new_ctx))
+                ttnn.deallocate(noise)
+                if kv_source is not None:
+                    ttnn.deallocate(kv_source)
+        self.reset()
+        ttnn.synchronize_device(self.device)
+
     def reset(self) -> None:
         """Drop the drafter's KV history and start a new sequence."""
         for store in (self._ctx_k, self._ctx_v):
