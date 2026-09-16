@@ -19,6 +19,11 @@
       "shared_mlp": "bfp8",
       "attention": "bfp8"
     },
+    "1x8": {
+      "shared_mlp": "bfp8",
+      "attention": "bfp8",
+      "lm_head": "bfp8"
+    },
     "bfp8_max_context": {
       "1x8": {
         "shared_mlp": 131072
@@ -29,6 +34,11 @@
     "default": {
       "shared_mlp": "bfp8",
       "attention": "bfp8"
+    },
+    "1x8": {
+      "shared_mlp": "bfp8",
+      "attention": "bfp8",
+      "lm_head": "bfp8"
     }
   },
   "gemma-4-31B-it-assistant": {

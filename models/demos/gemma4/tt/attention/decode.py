@@ -999,11 +999,19 @@ def packed_decode_forward(
     # P-as-batch SDPA: Q/K/V + staging write still run once over P rows, but
     # SDPA uses the native decode batch axis and per-row current positions.
     # Avoids folding P into the query-head axis, additive masks, and the
-    # ROW_MAJOR pack/unpack below. Default on; GEMMA4_PACKED_VERIFY_BATCH_SDPA=0
-    # restores the packed-head SDPA.
-    if os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in ("0", "false", "no", "off"):
-        if position_idx_cache is None:
-            raise ValueError("batch-SDPA packed verify requires position_idx_cache")
+    # ROW_MAJOR pack/unpack below. Default on for B==1 spec verify only;
+    # B>1 batched verify uses the packed-head + mask path below.
+    # GEMMA4_PACKED_VERIFY_BATCH_SDPA=0 restores the packed-head SDPA for B==1.
+    batch_sdpa_env = os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+    batch_sdpa = batch_sdpa_env and B == 1 and position_idx_cache is not None
+    if batch_sdpa_env and B == 1 and position_idx_cache is None:
+        raise ValueError("batch-SDPA packed verify requires position_idx_cache")
+    if batch_sdpa:
         tt_q_decode = ttnn.transpose(tt_q, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tt_q)
         device_grid = mesh_device.compute_with_storage_grid_size()
