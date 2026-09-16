@@ -76,6 +76,7 @@ DB_SCHEMA = [
     # flags
     Column("dest_acc", "string", True, "flags"),
     Column("speed_of_light", "bool", True, "flags"),
+    Column("llk_asserts", "bool", True, "flags"),
     Column("unpack_to_dest", "string", True, "flags"),
     # key
     Column("loop_factor", "int64", True, "key"),
