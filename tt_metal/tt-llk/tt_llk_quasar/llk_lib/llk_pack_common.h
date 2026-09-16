@@ -167,15 +167,23 @@ inline void _llk_pack_dest_dvalid_section_done_()
 /**
  * @brief Configures Packer 0 edge-mask programming for reduce operations.
  *
+ * @tparam reduce_type: Pool type; selects negative-infinity filling for MAX and zero otherwise.
  * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the math thread, pair with @ref _llk_math_reduce_init_ (T1).
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
-template <ReduceDim REDUCE_DIMENSION>
+template <PoolType reduce_type, ReduceDim REDUCE_DIMENSION>
 inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 {
-    cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
+    if constexpr (reduce_type == PoolType::MAX)
+    {
+        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_NEG_INF);
+    }
+    else
+    {
+        cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
+    }
 
     // This register specifies which datums will not have the mask applied
     // The register is 16 bits, each bit corresponds to a datum in the 1x16 row in dest
