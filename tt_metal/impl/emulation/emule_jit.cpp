@@ -24,6 +24,15 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_emule/kernel_patcher.hpp"
 #include "emule_sanitizers.hpp"
+#include "host_sanitizers.hpp"              // emule_asan_enabled
+#include "tt_metal/common/stable_hash.hpp"  // tt::StableHasher
+
+// Blaze-only experimental named-args header emit (defined in experimental/blaze/named_kernel_args.cpp).
+// Removal tracked by issue #50953.
+namespace tt::tt_metal::experimental::blaze {
+bool emit_named_args_header(
+    const std::string& dir, const NamedCTArgNamespaces& ct_namespaces, const NamedRuntimeArgNamespaces& rt_namespaces);
+}  // namespace tt::tt_metal::experimental::blaze
 
 #ifndef TT_EMULE_CXX_COMPILER
 #error "TT_EMULE_CXX_COMPILER must be defined by CMake"
