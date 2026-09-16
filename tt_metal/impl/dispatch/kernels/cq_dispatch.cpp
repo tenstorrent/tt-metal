@@ -417,9 +417,6 @@ void process_write_host_h() {
     }
     cmd_ptr = data_ptr;
 #if !defined(FABRIC_RELAY)
-    // Return the command buffer to on-chip routing. The register block may not be written while a write is
-    // still outstanding, so drain them first.
-    noc_async_write_barrier(noc_index);
     noc_async_write_clear_pcie_state(noc_index, NCRISC_WR_CMD_BUF);
 #endif
 }
