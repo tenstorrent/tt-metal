@@ -552,7 +552,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             num_rows_per_core_group_1,
             num_rows_per_core_group_2,
             [&](const CoreWork& work) {
-                const auto& [core, core_index, num_rows, start_row] = work;
+                const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
                 SetRuntimeArgs(
                     program,
                     kernels.reader,
@@ -572,10 +572,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                     core,
                     {grad_key_buffer->address(), grad_value_buffer->address(), num_rows, start_row});
                 SetRuntimeArgs(
-                    program,
-                    core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2,
-                    core,
-                    {start_row});
+                    program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
             });
     }
 

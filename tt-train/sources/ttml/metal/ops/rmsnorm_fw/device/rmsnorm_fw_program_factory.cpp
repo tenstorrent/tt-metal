@@ -296,7 +296,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
         [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row] = work;
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             // Reader kernel: (input_addr, gamma_addr, number_of_rows, offset_in_rows)
             SetRuntimeArgs(
                 program, kernels.reader, core, {input_buffer->address(), gamma_buffer->address(), num_rows, start_row});

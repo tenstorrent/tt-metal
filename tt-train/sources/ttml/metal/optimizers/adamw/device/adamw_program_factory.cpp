@@ -321,7 +321,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2,
         [&](const CoreWork& work) {
-            const auto& [core, core_index, num_tiles, start_tile] = work;
+            const auto& [core, core_index, num_tiles, start_tile, in_group_1] = work;
             SetRuntimeArgs(
                 program,
                 kernels.reader,
@@ -334,11 +334,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
                  num_tiles,
                  start_tile});
             compute_args[kComputeSeedIdx] = seeds[core_index];
-            SetRuntimeArgs(
-                program,
-                core_group_1.contains(core) ? kernels.compute_group_1 : kernels.compute_group_2,
-                core,
-                compute_args);
+            SetRuntimeArgs(program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, compute_args);
             SetRuntimeArgs(
                 program,
                 kernels.writer,

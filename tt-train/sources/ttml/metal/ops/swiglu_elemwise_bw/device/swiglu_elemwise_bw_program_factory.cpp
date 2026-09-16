@@ -114,7 +114,7 @@ SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory:
 
     for_each_core_with_work(
         num_cores, num_cores_y, core_group_1, core_group_2, num_rows_g1, num_rows_g2, [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row] = work;
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             SetRuntimeArgs(
                 program,
                 kernels.reader,
