@@ -6,17 +6,32 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
+
+// Spec resource names (prefixed to stay distinct under unity builds — see
+// port_patterns.md "Unity-build hygiene for anonymous-namespace symbols").
+const DFBSpecName FRNC_IN0{"frnc_in0"};  // legacy c_0 (input)
+const DFBSpecName FRNC_IN1{"frnc_in1"};  // legacy c_1 (zero tile)
+const DFBSpecName FRNC_OUT{"frnc_out"};  // legacy c_16 (output)
+const TensorParamName FRNC_INPUT{"frnc_input"};
+const TensorParamName FRNC_OUTPUT{"frnc_output"};
+const KernelSpecName FRNC_READER{"frnc_reader"};
+const KernelSpecName FRNC_WRITER{"frnc_writer"};
+const KernelSpecName FRNC_COMPUTE_G1{"frnc_compute_g1"};
+const KernelSpecName FRNC_COMPUTE_G2{"frnc_compute_g2"};
 
 bool is_tensor_divisible_by_shard(const ttnn::Shape& tensor_shape, const ttnn::Shape& shard_shape) {
     // Only compare common (end) dimensions. Any extra front dimensions would be
@@ -51,7 +66,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_program_artifacts(
     const FastReduceNCParams& operation_attributes,
     const FastReduceNCInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -76,8 +91,8 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(operation_attributes.dim));
     const auto num_reduce_input_tile = input_shape[operation_attributes.dim];
     const auto num_output_tiles = tensor_return_value.physical_volume() / TILE_HW;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(tensor_args.input.device()->arch(), operation_attributes.compute_kernel_config);
+    const bool fp32_dest_acc_en =
+        std::get<2>(ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config));
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
     // Helps with locality and increases work unit for better performance.
     uint32_t input_granularity;
@@ -96,7 +111,6 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
 
     const uint32_t in0_t = input_granularity * 2;  // input
     const uint32_t in1_t = 1;                      // zero
-    const uint32_t intermed0_t = 1;                // accumulated sum
     const uint32_t out0_t = 2;                     // output
     uint32_t shard_factor = 1;
 
@@ -146,124 +160,141 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 
-    const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : output_data_format;
-    const auto intermed_cb_single_tile_size = tt::tile_size(intermed_cb_data_format);
+    ////////////////////////////////////////////////////////////////////////////
+    //                            ProgramSpec
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramSpec spec;
+    spec.name = "fast_reduce_nc";
 
-    ProgramDescriptor desc;
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = FRNC_INPUT, .spec = tensor_args.input.tensor_spec()},
+        TensorParameter{.unique_id = FRNC_OUTPUT, .spec = tensor_return_value.tensor_spec()},
+    };
 
     ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
+    //                         DataflowBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in0_t * input_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
-            .data_format = input_data_format,
-            .page_size = input_tile_size,
-        }}},
+    // Legacy c_0 (input). Double-buffered by input_granularity.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = FRNC_IN0,
+        .entry_size = input_tile_size,
+        .num_entries = in0_t,
+        .data_format_metadata = input_data_format,
     });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in1_t * cb_1_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
-            .data_format = cb_1_data_format,
-            .page_size = cb_1_tile_size,
-        }}},
+    // Legacy c_1 (zero tile). Single BF16 tile broadcast into the reduction.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = FRNC_IN1,
+        .entry_size = cb_1_tile_size,
+        .num_entries = in1_t,
+        .data_format_metadata = cb_1_data_format,
     });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed0_t * intermed_cb_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
-            .data_format = intermed_cb_data_format,
-            .page_size = intermed_cb_single_tile_size,
-        }}},
+    // Legacy c_16 (output). Double-buffered.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = FRNC_OUT,
+        .entry_size = output_tile_size,
+        .num_entries = out0_t,
+        .data_format_metadata = output_data_format,
     });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out0_t * output_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
-            .data_format = output_data_format,
-            .page_size = output_tile_size,
-        }}},
-    });
+    // Legacy c_24 ("accumulated sum" intermediate) is dropped: the compute kernel
+    // accumulates in DST registers and no kernel touched index 24 (dead CB). A
+    // bindingless DFB cannot be expressed in Metal 2.0; removal is L1-only, zero
+    // behavior change.
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
-
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
     const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
-    KernelDescriptor reader_kernel_desc;
-    reader_kernel_desc.kernel_source = reader_kernel_file;
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_kernel_desc.core_ranges = all_cores;
-    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.config = ReaderConfigDescriptor{};
+    KernelSpec reader{
+        .unique_id = FRNC_READER,
+        .source = reader_kernel_file,
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = FRNC_IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = FRNC_IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = FRNC_INPUT, .accessor_name = "src"}},
+        .compile_time_args =
+            {{"input_granularity", input_granularity},
+             {"shard_factor", shard_factor},
+             {"num_cores_to_be_used", num_cores_to_be_used}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_input_tiles", "id_range_length", "start_id", "dim", "reduce_tile_size", "inner_tile_size"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source = writer_kernel_file;
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = all_cores;
-    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.config = WriterConfigDescriptor{};
+    KernelSpec writer{
+        .unique_id = FRNC_WRITER,
+        .source = writer_kernel_file,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = FRNC_OUT, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = FRNC_OUTPUT, .accessor_name = "dst"}},
+        .compile_time_args = {{"shard_factor", shard_factor}, {"num_cores_to_be_used", num_cores_to_be_used}},
+        .runtime_arg_schema = {.runtime_arg_names = {"id_range_length", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> compute_args_group_1 = {
-        num_cols_per_core_group_1, num_reduce_input_tile, input_granularity};
-    KernelDescriptor::Defines compute_defines;
-    if (fp32_dest_acc_en) {
-        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
-    }
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
 
-    KernelDescriptor compute_kernel_1_desc;
-    compute_kernel_1_desc.kernel_source = compute_kernel_file;
-    compute_kernel_1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_1_desc.core_ranges = core_group_1;
-    compute_kernel_1_desc.compile_time_args = compute_args_group_1;
-    compute_kernel_1_desc.defines = compute_defines;
-    compute_kernel_1_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    if (fp32_dest_acc_en) {
+        compute_defines.emplace("FP32_DEST_ACC_EN", "1");
+    }
+
+    // Style A: op resolves a TTNN ComputeKernelConfig, so the arch-agnostic helper
+    // carries the four knobs (math_fidelity / math_approx_mode / fp32_dest_acc_en /
+    // dst_full_sync_en) to their Metal 2.0 equivalents.
+    ComputeHardwareConfig compute_hw =
+        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
+    // Float32 DFB with enable_32_bit_dest = true. Legacy set no unpack_to_dest_mode (Default),
+    // which maps to UnpackToSrc. Only the input DFB (c_0) can be Float32; the zero DFB is BF16.
+    if (fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32) {
+        std::get<ComputeGen1Config>(compute_hw).unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToSrc);
+    }
+
+    auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_cols_per_core_group) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = compute_kernel_file,
+            .compiler_options = {.defines = compute_defines},
+            .dfb_bindings =
+                {DFBBinding{
+                     .dfb_spec_name = FRNC_IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = FRNC_IN1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+                 DFBBinding{
+                     .dfb_spec_name = FRNC_OUT, .accessor_name = "out0", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .compile_time_args =
+                {{"num_output_tiles", num_cols_per_core_group},
+                 {"num_input_tiles", num_reduce_input_tile},
+                 {"input_granularity", input_granularity}},
+            .hw_config = compute_hw,
+        };
     };
 
-    std::optional<KernelDescriptor> compute_kernel_2_desc;
-    if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2 = {
-            num_cols_per_core_group_2, num_reduce_input_tile, input_granularity};
-        KernelDescriptor k2;
-        k2.kernel_source = compute_kernel_file;
-        k2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        k2.core_ranges = core_group_2;
-        k2.compile_time_args = compute_args_group_2;
-        k2.defines = compute_defines;
-        k2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-        };
-        compute_kernel_2_desc = std::move(k2);
+    const bool group_2_present = !core_group_2.ranges().empty();
+
+    spec.kernels = {reader, writer, make_compute(FRNC_COMPUTE_G1, num_cols_per_core_group_1)};
+    if (group_2_present) {
+        spec.kernels.push_back(make_compute(FRNC_COMPUTE_G2, num_cols_per_core_group_2));
+    }
+
+    // Two compute KernelSpecs of the same source over disjoint node sets → one WorkUnitSpec
+    // each (reader + writer + that group's compute). Reader / writer belong to both work units;
+    // their effective node set is the union (all_cores). Each DFB sees one producer + one
+    // consumer per node — a legal 1:1 binding, not the multi-binding flag.
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "wu_g1", .kernels = {FRNC_READER, FRNC_WRITER, FRNC_COMPUTE_G1}, .target_nodes = core_group_1});
+    if (group_2_present) {
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "wu_g2", .kernels = {FRNC_READER, FRNC_WRITER, FRNC_COMPUTE_G2}, .target_nodes = core_group_2});
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -308,8 +339,9 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
         }
     }
 
-    auto* const input_buffer = tensor_args.input.buffer();
-    auto* const output_buffer = tensor_return_value.buffer();
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = FRNC_READER};
+    KernelRunArgs writer_run{.kernel = FRNC_WRITER};
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = ordered_cores[i];
@@ -323,33 +355,29 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        reader_kernel_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
             core,
-            {input_buffer,
-             num_reduce_input_tile,
-             /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
-             tile_offset,
-             static_cast<uint32_t>(operation_attributes.dim),
-             reduce_tile_size,
-             inner_tile_size});
+            {{"num_input_tiles", num_reduce_input_tile},
+             {"id_range_length", num_tiles_per_core * num_cores_to_be_used},
+             {"start_id", tile_offset},
+             {"dim", static_cast<uint32_t>(operation_attributes.dim)},
+             {"reduce_tile_size", reduce_tile_size},
+             {"inner_tile_size", inner_tile_size}});
 
-        writer_kernel_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
             core,
-            {output_buffer,
-             /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
-             tile_offset});
+            {{"id_range_length", num_tiles_per_core * num_cores_to_be_used}, {"start_id", tile_offset}});
 
         tile_offset += shard_factor;
     }
 
-    desc.kernels.push_back(std::move(reader_kernel_desc));
-    desc.kernels.push_back(std::move(writer_kernel_desc));
-    desc.kernels.push_back(std::move(compute_kernel_1_desc));
-    if (compute_kernel_2_desc.has_value()) {
-        desc.kernels.push_back(std::move(*compute_kernel_2_desc));
-    }
+    run_args.kernel_run_args = {reader_run, writer_run};
+    run_args.tensor_args.emplace(FRNC_INPUT, TensorArgument{tensor_args.input.mesh_tensor()});
+    run_args.tensor_args.emplace(FRNC_OUTPUT, TensorArgument{tensor_return_value.mesh_tensor()});
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim
