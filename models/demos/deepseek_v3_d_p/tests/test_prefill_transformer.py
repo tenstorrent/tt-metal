@@ -1186,7 +1186,7 @@ def test_kimi_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2", "glm_5_3"], indirect=True, ids=["glm51", "glm52", "glm53"])
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer(
     variant,
@@ -1242,6 +1242,111 @@ def test_glm_prefill_transformer(
         tokenizer,
         request,
     )
+
+
+# ---------------------------------------------------------------------------
+# GLM weight-cache build (no forward, no golden trace)
+# ---------------------------------------------------------------------------
+# Provisioning, not validation: downloads the checkpoint if absent and writes the TTNN
+# .tensorbin cache the other GLM rows consume. Split out from test_glm_prefill_transformer
+# rather than folded into it, because a cache-build row wants the opposite of what a PCC row
+# wants -- no golden trace, no reference model, no forward pass -- and because gutting the
+# end-to-end test to build a cache silently deletes its coverage.
+#
+# Runs on a device on purpose: the .tensorbin dump needs the mesh for its shard/mesh metadata,
+# even though no compute happens (build_ttnn_cache passes device=None per module).
+@pytest.mark.skipif(not is_blackhole(), reason="GLM requires Blackhole")
+@pytest.mark.parametrize("isl_total", [PREFILL_CHUNK_TOKENS], ids=["isl_5k"])
+@pytest.mark.parametrize(
+    "num_layers",
+    [
+        5,
+        pytest.param(78, marks=pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer cache only on Galaxy")),
+    ],
+    ids=["5_layers", "78_layers"],
+)
+@pytest.mark.parametrize("n_routed_experts, gate_fallback_mode", [(256, GateComputeMode.DEVICE)], ids=["e256_device"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2", "glm_5_3"], indirect=True, ids=["glm51", "glm52", "glm53"])
+@pytest.mark.timeout(0)
+def test_glm_build_ttnn_cache(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    isl_total,
+    num_layers,
+    n_routed_experts,
+    gate_fallback_mode,
+    num_links,
+    weight_cache_path,
+    request,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+
+    if weight_cache_path is None:
+        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+
+    config = config_only
+    config.max_seq_len = isl_total
+
+    rows, cols = list(mesh_device.shape)
+    effective_cache_path = weight_cache_path / f"{rows}x{cols}"
+    effective_cache_path.mkdir(parents=True, exist_ok=True)
+    experts_per_chip = n_routed_experts // (rows * cols)
+
+    def _cache_complete():
+        return TtPrefillTransformer.check_cache_complete(
+            effective_cache_path,
+            num_layers,
+            experts_per_chip,
+            first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        )
+
+    if _cache_complete():
+        logger.info(f"TTNN cache already complete for {num_layers} layers at {effective_cache_path} - reusing")
+        return
+
+    # Resolving model_path is what downloads the checkpoint (get_or_download_model). The
+    # weight_cache_path fixture already depends on it, so by here it is a no-op lookup.
+    model_path = request.getfixturevalue("model_path")
+    logger.info(f"Building TTNN cache for {num_layers} layers: {model_path} -> {effective_cache_path}")
+
+    # compute_reference=False => no HF reference model and no forward pass; weights are dequantized
+    # and dumped layer by layer (~21 GB peak host, no accumulation). No token_ids / attention_mask
+    # needed, which is exactly what the compute_reference guard in load_and_compute_layer_by_layer
+    # exists to allow.
+    load_and_compute_layer_by_layer(
+        variant=variant,
+        model_path=model_path,
+        config=config,
+        num_layers=num_layers,
+        compute_reference=False,
+        build_ttnn_cache=True,
+        weight_cache_path=effective_cache_path,
+        mesh_device=mesh_device,
+        seq_len=isl_total,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=0,
+        tp_axis=1,
+        gate_fallback_mode=gate_fallback_mode,
+    )
+
+    assert _cache_complete(), f"TTNN cache still incomplete for {num_layers} layers at {effective_cache_path}"
+    logger.info(f"TTNN cache build complete: {effective_cache_path}")
 
 
 # ---------------------------------------------------------------------------

@@ -813,8 +813,15 @@ def load_and_compute_layer_by_layer(
     # Hand a non-eager backend no mask: transformers computes `is_causal = q_len > 1 and
     # attention_mask is None`, so an explicit mask silently downgrades SDPA to the masked kernel --
     # and costs [1, 1, seq, seq] fp32, 12.7 GB at isl 56320. Verified identical output.
+    # Only the reference forward consumes this (the single use is decoder_layer_kwargs below, inside
+    # `if compute_reference`), and the signature already documents attention_mask as required only
+    # when compute_reference=True -- so a cache-only build (compute_reference=False) must not build
+    # it. Without the compute_reference guard, get_4d_causal_mask dereferences attention_mask=None
+    # and a weights-only cache build dies with AttributeError before writing a single tensor.
     attention_mask = (
-        None if _ref_attn_implementation() != "eager" else get_4d_causal_mask(attention_mask, causal_only=causal_only)
+        get_4d_causal_mask(attention_mask, causal_only=causal_only)
+        if compute_reference and _ref_attn_implementation() == "eager"
+        else None
     )
 
     if build_ttnn_cache:
