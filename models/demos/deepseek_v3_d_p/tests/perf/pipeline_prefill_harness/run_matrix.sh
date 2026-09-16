@@ -46,9 +46,11 @@ declare -A CACHE=(
 )
 # ISL -> chunks (of 5,120) | cache width | throughput request count (keeps total chunks ~50-100)
 # 40,960 (8 chunks) is the 2026-09-15 campaign's break-even bracket cell; the rest are unchanged.
-declare -A CHUNKS=(  [5120]=1     [25600]=5     [40960]=8     [102400]=20    [261120]=51    )
-declare -A WIDTH=(   [5120]=10240 [25600]=30720 [40960]=46080 [102400]=122880 [261120]=261120 )
-declare -A NREQ=(    [5120]=48    [25600]=10    [40960]=6     [102400]=3     [261120]=2     )
+# 15,360 (3 chunks) is the 17th cell: NOT one of the 16 registered in PREDICTIONS_MISTRAL4.md, so it
+# is run AFTER them and reported separately, or admission rule 6 is broken for the whole matrix.
+declare -A CHUNKS=(  [5120]=1     [15360]=3     [25600]=5     [40960]=8     [102400]=20    [261120]=51    )
+declare -A WIDTH=(   [5120]=10240 [15360]=20480 [25600]=30720 [40960]=46080 [102400]=122880 [261120]=261120 )
+declare -A NREQ=(    [5120]=48    [15360]=20    [25600]=10    [40960]=6     [102400]=3     [261120]=2     )
 
 CONFIGS=${CONFIGS:-"1rank pp4"}
 ISLS=${ISLS:-"5120 25600 102400 261120"}
