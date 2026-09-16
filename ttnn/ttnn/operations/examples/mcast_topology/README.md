@@ -104,10 +104,3 @@ the bytes still have to cross the NoC. Expect the win to grow with the line leng
 column shares one read further) and to shrink toward nothing as the slices get small enough that the
 per-chunk semaphore handshake dominates the transfer. At a 1×1 grid there is no line to share along
 and both variants are the same program.
-
-## Multicast helper API
-
-The factory uses `Mcast1DFixedSenderConfig` and attaches each channel to all of its reader
-kernels under a distinct prefix (`a` or `b`). Attachment allocates the semaphore pairs and
-appends the argument blocks. Kernels read the published named offsets with `McastArgs`.
-Completed kernel objects are assigned to the program descriptor after both attachments.
