@@ -7,7 +7,7 @@ import {
   filterRouters,
   provenanceHosts,
 } from "./model.js";
-import { renderPanel } from "./panel.js";
+import { renderDossier } from "./dossier.js";
 
 const elements = {
   fileInput: document.querySelector("#file-input"),
@@ -23,12 +23,16 @@ const elements = {
   coverageStrip: document.querySelector("#coverage-strip"),
   modelSummary: document.querySelector("#model-summary"),
   mapRoot: document.querySelector("#map-root"),
-  mapBack: document.querySelector("#map-back"),
+  mapRecenter: document.querySelector("#map-recenter"),
+  viewMesh: document.querySelector("#view-mesh"),
+  viewChip: document.querySelector("#view-chip"),
   mapCrumb: document.querySelector("#map-crumb"),
+  dossier: document.querySelector("#dossier"),
+  mapPane: document.querySelector(".map-pane"),
+  routerBrowser: document.querySelector(".router-browser"),
   routerFilter: document.querySelector("#router-filter"),
   filterCount: document.querySelector("#filter-count"),
   routerList: document.querySelector("#router-list"),
-  routerPanel: document.querySelector("#router-panel"),
   expertRaw: document.querySelector("#expert-raw"),
   errorBanner: document.querySelector("#error-banner"),
   errorMessage: document.querySelector("#error-message"),
@@ -38,17 +42,38 @@ const elements = {
 const state = {
   model: null,
   selectedKey: null,
+  chipKey: null,
 };
+
+const wideLayout = window.matchMedia("(min-width: 781px)");
+
+function syncRailHeight() {
+  if (!wideLayout.matches) {
+    elements.routerBrowser.style.height = "";
+    return;
+  }
+  elements.routerBrowser.style.height = `${elements.mapPane.offsetHeight}px`;
+}
 
 const map = new FabricMap(elements.mapRoot, {
   onSelect(key) {
     selectRouter(key);
   },
   onDrill(chip) {
-    elements.mapBack.disabled = !chip;
+    state.chipKey = chip ? chip.key : null;
+    elements.viewMesh.classList.toggle("active", !chip);
+    elements.viewChip.classList.toggle("active", Boolean(chip));
+    elements.viewChip.disabled = !chip;
+    elements.viewChip.textContent = chip ? `Chip ${chip.meshId}:${chip.chipId}` : "Chip";
     elements.mapCrumb.textContent = chip ? `Chip ${chip.meshId}:${chip.chipId}` : "Mesh";
+    syncRailHeight();
   },
 });
+
+if (typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(() => syncRailHeight()).observe(elements.mapPane);
+}
+wideLayout.addEventListener("change", () => syncRailHeight());
 
 function coverageState(name, value) {
   if (name === "ok") {
@@ -98,14 +123,29 @@ function selectedRouter() {
 }
 
 function renderSelection() {
-  renderPanel(elements.routerPanel, selectedRouter(), { expert: elements.expertRaw.checked });
+  renderDossier(elements.dossier, state.model, selectedRouter(), { expert: elements.expertRaw.checked });
 }
 
 function selectRouter(key) {
   state.selectedKey = key;
+  const router = selectedRouter();
+  if (router) {
+    state.chipKey = `${router.id.mesh_id}:${router.id.chip_id}`;
+  }
   map.setSelection(key);
   renderRouterList();
   renderSelection();
+}
+
+function showMesh() {
+  map.popDrill();
+}
+
+function showChip() {
+  if (!state.chipKey) {
+    return;
+  }
+  map.drillToChip(state.chipKey);
 }
 
 function matchingKeys() {
@@ -120,25 +160,13 @@ function routerRow(router) {
 
   const endpoint = document.createElement("span");
   endpoint.className = "endpoint";
-  endpoint.textContent = endpointLabel(router.id);
+  endpoint.textContent = `${endpointLabel(router.id)} · ${router.direction || "—"}`;
 
   const status = document.createElement("span");
-  status.className = `status ${router.capture?.status || "unknown"}`;
-  status.textContent = router.capture?.status || "unknown";
+  status.className = `status dot ${router.capture?.status || "unknown"}`;
+  status.title = router.capture?.status || "unknown";
 
-  const meta = document.createElement("span");
-  meta.className = "router-meta";
-  meta.textContent = [
-    router.direction,
-    router.lifecycle?.exit_state,
-    router.stall_score === null || router.stall_score === undefined
-      ? null
-      : `stall ${router.stall_score.toFixed(2)}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  row.append(endpoint, status, meta);
+  row.append(endpoint, status);
   row.addEventListener("click", () => {
     selectRouter(key);
   });
@@ -183,13 +211,18 @@ function renderSession(decoded, sourceName) {
 
   renderCoverage(decoded.coverage);
   elements.routerFilter.value = "";
-  elements.mapBack.disabled = true;
+  state.chipKey = null;
+  elements.viewMesh.classList.add("active");
+  elements.viewChip.classList.remove("active");
+  elements.viewChip.disabled = true;
+  elements.viewChip.textContent = "Chip";
   elements.mapCrumb.textContent = "Mesh";
   map.setModel(model);
   renderRouterList();
   renderSelection();
   elements.emptyState.hidden = true;
   elements.session.hidden = false;
+  syncRailHeight();
 }
 
 function showError(error) {
@@ -287,8 +320,14 @@ elements.routerFilter.addEventListener("input", () => {
     renderRouterList();
   }
 });
-elements.mapBack.addEventListener("click", () => {
-  map.popDrill();
+elements.viewMesh.addEventListener("click", () => {
+  showMesh();
+});
+elements.viewChip.addEventListener("click", () => {
+  showChip();
+});
+elements.mapRecenter.addEventListener("click", () => {
+  map.fitView();
 });
 elements.dismissError.addEventListener("click", () => {
   elements.errorBanner.hidden = true;
@@ -302,6 +341,8 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape") {
     map.popDrill();
+  } else if (event.key === "0") {
+    map.fitView();
   } else if (event.key === "+" || event.key === "=") {
     map.zoom(0.9);
   } else if (event.key === "-" || event.key === "_") {

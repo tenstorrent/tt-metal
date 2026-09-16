@@ -26,6 +26,31 @@ def port_side(direction: str) -> str:
     return {"N": "top", "S": "bottom", "E": "right", "W": "left"}.get(direction, "inside")
 
 
+def pack_along(count: int, start: float, span: float) -> list[float]:
+    center = start + span / 2
+    if count <= 1:
+        return [center]
+    step = min(PORT + PORT_GAP, span / (count - 1))
+    origin = center - step * (count - 1) / 2
+    return [origin + index * step for index in range(count)]
+
+
+def port_point(chip: tuple[float, float], side: str, index: int, count: int) -> tuple[float, float]:
+    x, y = chip
+    if side == "top":
+        return pack_along(count, x + PORT, CHIP_W - PORT * 2)[index], y
+    if side == "bottom":
+        return pack_along(count, x + PORT, CHIP_W - PORT * 2)[index], y + CHIP_H
+    if side == "left":
+        return x, pack_along(count, y + PORT, CHIP_H - PORT * 2)[index]
+    if side == "right":
+        return x + CHIP_W, pack_along(count, y + PORT, CHIP_H - PORT * 2)[index]
+    return (
+        x + CHIP_W / 2 + (index - (count - 1) / 2) * (PORT + PORT_GAP),
+        y + CHIP_H / 2,
+    )
+
+
 def wrap_control(
     x1: float,
     y1: float,
@@ -66,6 +91,38 @@ class LayoutMathTest(unittest.TestCase):
         self.assertEqual(port_side("W"), "left")
         self.assertEqual(port_side("Z"), "inside")
         self.assertEqual(port_side("NONE"), "inside")
+
+    def test_single_port_sits_on_the_edge_midpoint(self):
+        chip = chip_position([0, 0])
+        self.assertEqual(port_point(chip, "top", 0, 1), (CHIP_W / 2, 0))
+        self.assertEqual(port_point(chip, "bottom", 0, 1), (CHIP_W / 2, CHIP_H))
+        self.assertEqual(port_point(chip, "left", 0, 1), (0, CHIP_H / 2))
+        self.assertEqual(port_point(chip, "right", 0, 1), (CHIP_W, CHIP_H / 2))
+
+    def test_several_ports_stay_centered_on_the_edge(self):
+        chip = chip_position([0, 0])
+        for count in range(1, 6):
+            with self.subTest(count=count):
+                xs = [port_point(chip, "top", index, count)[0] for index in range(count)]
+                self.assertAlmostEqual(sum(xs) / count, CHIP_W / 2)
+                self.assertGreaterEqual(min(xs), PORT)
+                self.assertLessEqual(max(xs), CHIP_W - PORT)
+
+    def test_neighbor_south_and_north_ports_align(self):
+        top_chip = chip_position([0, 0])
+        bottom_chip = chip_position([1, 0])
+        for count in (1, 2, 3):
+            with self.subTest(count=count):
+                south = [port_point(top_chip, "bottom", index, count) for index in range(count)]
+                north = [port_point(bottom_chip, "top", index, count) for index in range(count)]
+                self.assertEqual([point[0] for point in south], [point[0] for point in north])
+
+    def test_ports_compress_instead_of_overflowing_the_edge(self):
+        chip = chip_position([0, 0])
+        crowded = [port_point(chip, "right", index, 12)[1] for index in range(12)]
+        self.assertLess(crowded[1] - crowded[0], PORT + PORT_GAP)
+        self.assertGreaterEqual(min(crowded), PORT)
+        self.assertLessEqual(max(crowded), CHIP_H - PORT)
 
     def test_east_west_wrap_control_is_outside_chip_box(self):
         chips = [chip_position([0, 0]), chip_position([0, 1])]

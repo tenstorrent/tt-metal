@@ -694,7 +694,86 @@
             "offset": 256,
             "size": 192,
             "blob": "unreserved"
-          }
+          },
+          "slots": [
+            {
+              "index": 0,
+              "slot_state": "unknown",
+              "raw_ref": {
+                "file": "snapshot_0.bin",
+                "offset": 256,
+                "size": 96
+              },
+              "header": {
+                "type": "HybridMeshPacketHeaderT<36>",
+                "payload_size_bytes": 64,
+                "noc_send_type": {
+                  "raw": 0,
+                  "name": "NOC_UNICAST_WRITE"
+                },
+                "src_channel": 2,
+                "command": {
+                  "noc_address": {
+                    "raw": 26731876454964,
+                    "x": 5,
+                    "y": 6,
+                    "local_addr": 4660
+                  }
+                },
+                "routing": {
+                  "value": 0,
+                  "route_buffer": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
+                  "destination": {
+                    "mesh_id": 0,
+                    "chip_id": 0
+                  },
+                  "mcast_params": [
+                    1,
+                    2,
+                    3,
+                    4
+                  ]
+                },
+                "plausible": true
+              },
+              "error": null
+            },
+            {
+              "index": 1,
+              "slot_state": "unknown",
+              "raw_ref": {
+                "file": "snapshot_0.bin",
+                "offset": 352,
+                "size": 96
+              },
+              "header": {
+                "type": "HybridMeshPacketHeaderT<36>",
+                "payload_size_bytes": 5000,
+                "noc_send_type": {
+                  "raw": 255,
+                  "name": null
+                },
+                "src_channel": 0,
+                "command": null,
+                "routing": {
+                  "value": 0,
+                  "route_buffer": "000000000000000000000000000000000000000000000000000000000000000000000000",
+                  "destination": {
+                    "mesh_id": 99,
+                    "chip_id": 99
+                  },
+                  "mcast_params": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "plausible": false
+              },
+              "error": null
+            }
+          ]
         }
       ],
       "channels": {
@@ -1259,7 +1338,86 @@
             "offset": 256,
             "size": 192,
             "blob": "unreserved"
-          }
+          },
+          "slots": [
+            {
+              "index": 0,
+              "slot_state": "unknown",
+              "raw_ref": {
+                "file": "snapshot_0.bin",
+                "offset": 256,
+                "size": 96
+              },
+              "header": {
+                "type": "HybridMeshPacketHeaderT<36>",
+                "payload_size_bytes": 64,
+                "noc_send_type": {
+                  "raw": 0,
+                  "name": "NOC_UNICAST_WRITE"
+                },
+                "src_channel": 2,
+                "command": {
+                  "noc_address": {
+                    "raw": 26731876454964,
+                    "x": 5,
+                    "y": 6,
+                    "local_addr": 4660
+                  }
+                },
+                "routing": {
+                  "value": 0,
+                  "route_buffer": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
+                  "destination": {
+                    "mesh_id": 0,
+                    "chip_id": 0
+                  },
+                  "mcast_params": [
+                    1,
+                    2,
+                    3,
+                    4
+                  ]
+                },
+                "plausible": true
+              },
+              "error": null
+            },
+            {
+              "index": 1,
+              "slot_state": "unknown",
+              "raw_ref": {
+                "file": "snapshot_0.bin",
+                "offset": 352,
+                "size": 96
+              },
+              "header": {
+                "type": "HybridMeshPacketHeaderT<36>",
+                "payload_size_bytes": 5000,
+                "noc_send_type": {
+                  "raw": 255,
+                  "name": null
+                },
+                "src_channel": 0,
+                "command": null,
+                "routing": {
+                  "value": 0,
+                  "route_buffer": "000000000000000000000000000000000000000000000000000000000000000000000000",
+                  "destination": {
+                    "mesh_id": 99,
+                    "chip_id": 99
+                  },
+                  "mcast_params": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                "plausible": false
+              },
+              "error": null
+            }
+          ]
         }
       ],
       "channels": {

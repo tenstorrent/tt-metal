@@ -159,7 +159,14 @@ python3 tt_metal/fabric/debug/visualizer/viewer/tests/make_fixtures.py
 python3 -m pytest tt_metal/fabric/debug/visualizer/viewer/tests -q --noconftest
 ```
 
-Occupancy in the panel is `occupied/depth` from streams. Ring `slot_state` is always `unknown`. `stall_score` is a colour heuristic: idle-healthy and hung-backpressure can look the same at occupancy 0. The stalled-link fixture is the hot-edge check; idle T3K is uniformly cool.
+Click a chip to open its cardinal N/S/E/W router view, select a router, and inspect its sender/receiver
+buffer rows. A slot marked `H` contains a structurally plausible decoded packet header (NOC operation,
+payload size, source channel, destination and route fields). It is still residual ring memory:
+occupancy is `occupied/depth` from streams, while every physical `slot_state` remains `unknown`
+because the live read/write indices are not captured. Raw packet payload bytes are not embedded.
+
+`stall_score` is a colour heuristic: idle-healthy and hung-backpressure can look the same at occupancy
+0. The stalled-link fixture is the hot-edge check; idle T3K is uniformly cool.
 
 #### Open a T3K decode
 

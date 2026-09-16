@@ -39,13 +39,16 @@ export function portSide(direction) {
   return "inside";
 }
 
+// Ports cluster on the middle of their chip edge so N/S and E/W of neighboring chips
+// line up: one router sits exactly at the midpoint, several stack around it and only
+// compress when PORT + PORT_GAP would run past the edge.
 function packAlong(count, start, span) {
+  const center = start + span / 2;
   if (count <= 1) {
-    return [start + span / 2];
+    return [center];
   }
-  const step = Math.max(PORT + PORT_GAP, span / (count - 1));
-  const used = step * (count - 1);
-  const origin = start + Math.max(0, (span - used) / 2);
+  const step = Math.min(PORT + PORT_GAP, span / (count - 1));
+  const origin = center - (step * (count - 1)) / 2;
   return Array.from({ length: count }, (_, index) => origin + index * step);
 }
 

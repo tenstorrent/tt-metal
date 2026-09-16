@@ -54,28 +54,34 @@
         </section>
 
         <section class="workspace">
-          <div class="map-pane">
-            <div class="map-toolbar">
-              <button id="map-back" type="button" disabled>Back</button>
-              <p id="map-crumb" class="map-crumb">Mesh</p>
-              <p id="model-summary" class="muted"></p>
-            </div>
-            <div id="map-root" class="map-root"></div>
-          </div>
-
-          <aside class="router-browser">
-            <div class="browser-heading">
-              <div>
-                <p class="eyebrow">Router index</p>
-                <h3>Fabric routers</h3>
+          <div class="top-row">
+            <div class="map-pane">
+              <div class="map-toolbar">
+                <div class="view-toggle" role="group" aria-label="Context view">
+                  <button id="view-mesh" type="button" class="active">Mesh</button>
+                  <button id="view-chip" type="button" disabled>Chip</button>
+                </div>
+                <button id="map-recenter" type="button" title="Recenter the mesh (0)">Re-center</button>
+                <p id="map-crumb" class="map-crumb">Mesh</p>
+                <p id="model-summary" class="muted"></p>
               </div>
-              <span id="filter-count" class="count-badge"></span>
+              <div id="map-root" class="map-root"></div>
             </div>
-            <label class="filter-label" for="router-filter">Filter by identity or status</label>
-            <input id="router-filter" type="search" placeholder="mesh, chip, eth, direction, status…">
-            <div id="router-list" class="router-list"></div>
-            <div id="router-panel" class="router-panel"></div>
-          </aside>
+
+            <aside class="router-browser">
+              <div class="browser-heading">
+                <div>
+                  <p class="eyebrow">Router lookup</p>
+                  <h3>Fabric routers</h3>
+                </div>
+                <span id="filter-count" class="count-badge"></span>
+              </div>
+              <label class="filter-label" for="router-filter">Filter by identity or status</label>
+              <input id="router-filter" type="search" placeholder="mesh, chip, eth, direction, status…">
+              <div id="router-list" class="router-list"></div>
+            </aside>
+          </div>
+          <div id="dossier" class="dossier" aria-live="polite"></div>
         </section>
       </div>
     </section>
