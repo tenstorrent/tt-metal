@@ -228,7 +228,7 @@ void kernel_main() {
     // its own dispatcher write, which only lands on an L1-aligned address.
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
     constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t shutdown_semaphore_id = get_compile_time_arg_val(6);
+    constexpr uint32_t sender_sync_semaphore_id = get_compile_time_arg_val(6);
     constexpr uint32_t own_mpfe_weight = get_compile_time_arg_val(7);
     constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(8);
     constexpr uint32_t ring_half = stage_ring_size / 2;
@@ -264,16 +264,17 @@ void kernel_main() {
     set_mpfe_weight(ordinary_operation_mpfe_port, ordinary_mpfe_weight);
     set_mpfe_weight(own_mpfe_port, own_mpfe_weight);
 
-    const uint32_t shutdown_semaphore_addr = get_semaphore<ProgrammableCoreType::DRAM>(shutdown_semaphore_id);
-    volatile tt_l1_ptr uint32_t* shutdown_semaphore =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shutdown_semaphore_addr);
+    const uint32_t sender_sync_semaphore_addr = get_semaphore<ProgrammableCoreType::DRAM>(sender_sync_semaphore_id);
+    volatile tt_l1_ptr uint32_t* sender_sync_semaphore =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_sync_semaphore_addr);
     // Both sender NIUs remain in stream mode through this handshake, so incoming
     // NoC traffic terminates in DRISC L1 at the untagged local address.
-    const uint64_t peer_shutdown_semaphore = NOC_XY_ADDR(
-        DYNAMIC_NOC_X(noc_index, peer_noc_x), DYNAMIC_NOC_Y(noc_index, peer_noc_y), shutdown_semaphore_addr);
+    const uint64_t peer_sender_sync_semaphore = NOC_XY_ADDR(
+        DYNAMIC_NOC_X(noc_index, peer_noc_x), DYNAMIC_NOC_Y(noc_index, peer_noc_y), sender_sync_semaphore_addr);
 
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
     bool has_loaded_sender_state = false;
+    uint32_t handshake_target = 1;
 
     // Zero the per-CQ signal slots before parking on the socket. Safe to do here
     // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
@@ -308,19 +309,19 @@ void kernel_main() {
             // operation slot to the hardware default.
             set_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
             if (is_coordinator) {
-                noc_semaphore_wait(shutdown_semaphore, 1);
+                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
                 set_mpfe_weight(ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
                 ASSERT(
                     gddr_mc_read_mpfe_weight(1) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
                         gddr_mc_read_mpfe_weight(2) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
                         gddr_mc_read_mpfe_weight(3) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT,
                     DebugAssertTripped);
-                noc_semaphore_inc(peer_shutdown_semaphore, 1);
+                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
                 noc_async_atomic_barrier();
             } else {
-                noc_semaphore_inc(peer_shutdown_semaphore, 1);
+                noc_semaphore_inc(peer_sender_sync_semaphore, 1);
                 noc_async_atomic_barrier();
-                noc_semaphore_wait(shutdown_semaphore, 1);
+                noc_semaphore_wait(sender_sync_semaphore, handshake_target);
             }
             break;
         }
@@ -846,6 +847,20 @@ void kernel_main() {
         // Persist mutable state (fifo_wr_ptr) so the next request to this GCB
         // resumes at the right ring offset.
         store_sender_state(state, iface);
+
+        // Keep the two senders for this bank at the same request boundary. A
+        // sender that runs ahead cannot complete the layer by itself, but it can
+        // consume GDDR, NoC, and GCB resources needed by its slower peer.
+        if (is_coordinator) {
+            noc_semaphore_wait(sender_sync_semaphore, handshake_target);
+            noc_semaphore_inc(peer_sender_sync_semaphore, 1);
+            noc_async_atomic_barrier();
+        } else {
+            noc_semaphore_inc(peer_sender_sync_semaphore, 1);
+            noc_async_atomic_barrier();
+            noc_semaphore_wait(sender_sync_semaphore, handshake_target);
+        }
+        ++handshake_target;
 
         socket_pop_pages(socket, 1);
         socket_notify_sender(socket);

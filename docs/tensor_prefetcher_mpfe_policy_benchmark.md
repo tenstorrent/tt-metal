@@ -8,6 +8,11 @@ ordinary-operation order, are:
 0 / 1 / 5
 ```
 
+The two senders in each bank rendezvous after every prefetch request. This
+prevents one sender from running ahead and contending with the peer that gates
+overall completion. The measured FF1 cost was indistinguishable from zero, while
+the repeated-request contention benchmark improved by approximately 1–1.6%.
+
 Stopping the Tensor Prefetcher restores all three hardware weights to `0/0/0`.
 
 ## Benchmark controls

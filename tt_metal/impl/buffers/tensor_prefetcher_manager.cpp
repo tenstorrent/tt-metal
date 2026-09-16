@@ -575,7 +575,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>();
-        const uint32_t shutdown_semaphore_id = CreateSemaphore(
+        const uint32_t sender_sync_semaphore_id = CreateSemaphore(
             *program,
             CoreRangeSet(ttsl::Span<const CoreCoord>(sender_logical_cores_)),
             /*initial_value=*/0,
@@ -623,7 +623,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 socket_page_size,
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
-                shutdown_semaphore_id,
+                sender_sync_semaphore_id,
                 is_coordinator ? mpfe_weights.free_sender : mpfe_weights.noc1_sender,
                 mpfe_weights.ordinary,
             };
