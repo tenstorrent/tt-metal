@@ -217,9 +217,16 @@ def _causal_conv1d_fir(
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
     # Depthwise K-tap FIR via multiply + addcmul; re-tilize k>=1 slices (only k=0 is tile-aligned).
+    # Tap slices land in DRAM on purpose: a k>=1 row begin is non-tile-aligned, so ttnn.slice
+    # takes its rm_only path, which converts the WHOLE tensor TILE->RM, slices, and re-tilizes —
+    # three full-size intermediates in the OUTPUT memory space. With x_padded L1-resident next
+    # to qkvzab (TP-2 P300: ~88% of L1 allocated), tripling ~21 MiB in L1 OOMs at the final
+    # re-tilize (bank_manager.cpp:451). Asking for a DRAM output keeps the whole rm hop in DRAM
+    # (still returns TILE — slice preserves layout); multiply/addcmul read the DRAM taps fine.
+    # Pure memory placement, numerics unchanged; the MAC below still computes in `mc` (L1).
     out = None
     for k in range(kernel_size):
-        x_slice = x_padded[:, k : k + T]
+        x_slice = ttnn.slice(x_padded, (0, k, 0), (1, k + T, D), memory_config=_dram)
         if k != 0:
             x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
         if out is None:
