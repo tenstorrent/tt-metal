@@ -39,9 +39,9 @@ struct WorkerCandidate {
 // its own column block and a sender-row core sits in the same column as its group's cores in the row above.
 UntilizerGroups decide_untilizers(
     const StreamPlacements& streams,
-    std::set<CoreCoord>& taken,
+    std::set<tt::tt_metal::CoreCoord>& taken,
     tt::tt_metal::IDevice* dev,
-    const CoreCoord& grid,
+    const tt::tt_metal::CoreCoord& grid,
     const tt::tt_fabric::FabricNodeId& who,
     uint32_t per_group) {
     if (per_group == 0) {
@@ -95,7 +95,7 @@ UntilizerGroups decide_untilizers(
                 if (groups[g].size() == per_group) {
                     break;
                 }
-                const CoreCoord core{column, row};
+                const tt::tt_metal::CoreCoord core{column, row};
                 if (row == sender_row && taken.contains(core)) {
                     continue;
                 }

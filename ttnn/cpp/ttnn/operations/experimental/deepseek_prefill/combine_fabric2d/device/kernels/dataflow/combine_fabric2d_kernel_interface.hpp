@@ -118,7 +118,7 @@ struct KernelPlan {
 
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
 struct HandshakePeer {
-    CoreCoord noc;
+    tt::tt_metal::CoreCoord noc;
     uint32_t counter_addr = 0;
 };
 

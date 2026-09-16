@@ -45,8 +45,8 @@ constexpr uint32_t DEFAULT_UNTILIZERS_PER_GROUP = 5;
 constexpr uint32_t MAX_UNTILIZERS_PER_GROUP = 10;
 
 struct UntilizerPlacement {
-    CoreCoord logical;
-    CoreCoord worker_virtual;  // what a reader on this chip addresses
+    tt::tt_metal::CoreCoord logical;
+    tt::tt_metal::CoreCoord worker_virtual;  // what a reader on this chip addresses
 };
 
 using UntilizerGroups = std::array<std::vector<UntilizerPlacement>, UNTILIZER_GROUPS>;
