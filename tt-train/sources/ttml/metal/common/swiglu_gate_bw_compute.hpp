@@ -5,9 +5,9 @@
 // Shared compute for the SwiGLU-gating backward, used by both `swiglu_elemwise_bw` (two separate
 // [.,I] tensors) and `swiglu_packed_bw` (one packed [.,2I] tensor).
 //
-// Given the gate branch (the one that is silu'd), the plain branch, and the upstream grad dL/dh:
-//   dL/d(plain) = dL/dh * silu(gate),                       silu(gate) = gate * sigmoid(gate)
-//   dL/d(gate)  = dL/dh * plain * silu'(gate),
+// Given the gate branch (the one that is silu'd), the up branch, and the upstream grad dL/dh:
+//   dL/d(up)   = dL/dh * silu(gate),                       silu(gate) = gate * sigmoid(gate)
+//   dL/d(gate) = dL/dh * up * silu'(gate),
 //                 silu'(gate) = sigmoid(gate) * (1 + gate * (1 - sigmoid(gate)))
 //
 // KERNEL-SIDE ONLY: include this from a compute kernel .cpp; it pulls in the LLK compute API.
@@ -24,15 +24,15 @@
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 // Compute one block of the SwiGLU-gating backward. The caller must have already
-// waited `block_size` tiles on cb_gate / cb_plain / cb_dh; this function fully manages the internal
-// cb_sigmoid / cb_scratch / cb_silu_grad and leaves cb_grad_gate / cb_grad_plain pushed. Input CBs
+// waited `block_size` tiles on cb_gate / cb_up / cb_dh; this function fully manages the internal
+// cb_sigmoid / cb_scratch / cb_silu_grad and leaves cb_grad_gate / cb_grad_up pushed. Input CBs
 // are popped by the caller.
 template <
-    uint32_t cb_gate,        // gate branch (silu'd)
-    uint32_t cb_plain,       // plain branch
-    uint32_t cb_dh,          // upstream grad dL/dh
-    uint32_t cb_grad_gate,   // out: grad wrt gate branch
-    uint32_t cb_grad_plain,  // out: grad wrt plain branch
+    uint32_t cb_gate,       // gate branch (silu'd)
+    uint32_t cb_up,         // up branch
+    uint32_t cb_dh,         // upstream grad dL/dh
+    uint32_t cb_grad_gate,  // out: grad wrt gate branch
+    uint32_t cb_grad_up,    // out: grad wrt up branch
     uint32_t cb_sigmoid,
     uint32_t cb_scratch,
     uint32_t cb_silu_grad,
@@ -53,7 +53,7 @@ inline void swiglu_gate_bw_block() {
     tile_regs_commit();
     pack_and_push_block(cb_sigmoid, block_size);
 
-    // dL/d(plain) = dL/dh * silu(gate), silu(gate) = gate * sigmoid(gate).
+    // dL/d(up) = dL/dh * silu(gate), silu(gate) = gate * sigmoid(gate).
     cb_wait_front(cb_sigmoid, block_size);
     tile_regs_acquire();
     mul_init(cb_gate, cb_sigmoid);
@@ -71,7 +71,7 @@ inline void swiglu_gate_bw_block() {
     }
     tile_regs_commit();
     cb_pop_front(cb_scratch, block_size);
-    pack_and_push_block(cb_grad_plain, block_size);
+    pack_and_push_block(cb_grad_up, block_size);
 
     // silu'(gate) = sigmoid(gate) * (1 + gate * (1 - sigmoid(gate))).
     tile_regs_acquire();
@@ -110,12 +110,12 @@ inline void swiglu_gate_bw_block() {
     cb_pop_front(cb_silu_grad, block_size);
     pack_and_push_block(cb_silu_grad, block_size);
 
-    // dL/d(gate) = dL/dh * plain * silu'(gate).
+    // dL/d(gate) = dL/dh * up * silu'(gate).
     cb_wait_front(cb_silu_grad, block_size);
     tile_regs_acquire();
-    mul_init(cb_plain, cb_dh);
+    mul_init(cb_up, cb_dh);
     for (uint32_t i = 0; i < block_size; ++i) {
-        mul_tiles(cb_plain, cb_dh, i, i, i);
+        mul_tiles(cb_up, cb_dh, i, i, i);
     }
     tile_regs_commit();
     pack_and_push_block(cb_scratch, block_size);

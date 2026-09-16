@@ -13,7 +13,7 @@ constexpr uint32_t num_blocks_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
 constexpr uint32_t cb_gate = tt::CBIndex::c_0;   // gate branch (silu'd)
-constexpr uint32_t cb_up = tt::CBIndex::c_1;     // up branch (plain)
+constexpr uint32_t cb_up = tt::CBIndex::c_1;     // up branch
 constexpr uint32_t cb_dh = tt::CBIndex::c_2;     // upstream grad dL/dh
 constexpr uint32_t cb_dgate = tt::CBIndex::c_3;  // out: grad wrt gate branch
 constexpr uint32_t cb_dup = tt::CBIndex::c_4;    // out: grad wrt up branch

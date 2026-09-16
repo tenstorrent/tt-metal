@@ -24,7 +24,7 @@ constexpr uint32_t kDhBufferIdx = 1U;
 constexpr uint32_t kDPackedBufferIdx = 0U;
 
 constexpr auto kGateCbIndex = tt::CBIndex::c_0;   // gate branch (silu'd)
-constexpr auto kUpCbIndex = tt::CBIndex::c_1;     // up branch (plain)
+constexpr auto kUpCbIndex = tt::CBIndex::c_1;     // up branch
 constexpr auto kDhCbIndex = tt::CBIndex::c_2;     // upstream grad dL/dh
 constexpr auto kDGateCbIndex = tt::CBIndex::c_3;  // output: grad wrt gate branch
 constexpr auto kDUpCbIndex = tt::CBIndex::c_4;    // output: grad wrt up branch
