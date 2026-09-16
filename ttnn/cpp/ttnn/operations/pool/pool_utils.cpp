@@ -143,7 +143,7 @@ FactoryParameters get_factory_parameters(
     // and DFB_FAST_TILIZE entry count are not lane-aware.
     const bool tiled_output = output_layout == Layout::TILE;
     // One SPMD thread per Tensix engine; a Quasar cluster has 4 NEOs.
-    constexpr uint32_t kQuasarNeosPerCluster = 4;
+    constexpr uint32_t kQuasarNeosPerCluster = 1;  // PERF A/B LEG: threads=1 baseline (sim table methodology)
     const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? kQuasarNeosPerCluster : 1;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
