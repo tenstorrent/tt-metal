@@ -26,14 +26,19 @@ struct DispatchFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
-    // One send per (token, destination chip) instead of per (token, expert). A token picking several
-    // experts on one chip currently puts the same bytes on the same cable once per expert; with
-    // fan-out the destination gets one copy and a page list. Both modes are kept so they can be
-    // measured against each other in one build.
+    // One copy per (token, DIRECTION) crosses a cable instead of one per (token, expert): it travels
+    // to the farthest destination that way carrying its own page list, and every chip en route keeps
+    // the pages addressed to it. The chip one hop short of the farthest destination writes those last
+    // pages itself rather than forwarding. See the nanobind docstring. Both modes are kept so they
+    // can be measured against each other in one build.
     bool fanout = false;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    // Every core the op may use: the stream cores and, for a TILE input, the untilizer pool. Resolved
+    // from the caller's sub-device in the front end, so the device op never holds a SubDeviceId -- the
+    // cores are what the program is built from and what the cache key has to distinguish.
+    CoreRangeSet worker_core_range_set;
 };
 
 struct DispatchFabric2dInputs {
