@@ -58,6 +58,9 @@
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
+#include "tt_metal/fabric/mcast_reverse_tree.hpp"
+#include "tt_metal/fabric/routing_2d_table_builder.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
@@ -1565,6 +1568,152 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
     return std::nullopt;
 }
 
+std::vector<FabricNodeId> ControlPlane::get_canonical_intramesh_route(
+    FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const {
+    TT_FATAL(
+        src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,
+        "get_canonical_intramesh_route: {} and {} are in different meshes",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+    // One copy of the table, then indexed per hop; get_forwarding_direction would copy it each time.
+    const auto intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+    const auto& mesh_table = intra_mesh_routing_table[*src_fabric_node_id.mesh_id];
+
+    std::vector<FabricNodeId> route{src_fabric_node_id};
+    FabricNodeId current = src_fabric_node_id;
+    while (current != dst_fabric_node_id) {
+        const auto direction = mesh_table[current.chip_id][dst_fabric_node_id.chip_id];
+        TT_FATAL(
+            direction != RoutingDirection::NONE && direction != RoutingDirection::C,
+            "get_canonical_intramesh_route: no next hop at {} toward {}",
+            current,
+            dst_fabric_node_id);
+        const auto neighbors = this->get_intra_chip_neighbors(current, direction);
+        TT_FATAL(
+            !neighbors.empty(),
+            "get_canonical_intramesh_route: no neighbor at {} in the forwarding direction",
+            current);
+        current = FabricNodeId{current.mesh_id, static_cast<std::uint32_t>(neighbors[0])};
+        route.push_back(current);
+        TT_FATAL(
+            route.size() <= mesh_table.size(),
+            "get_canonical_intramesh_route: route from {} to {} did not converge",
+            src_fabric_node_id,
+            dst_fabric_node_id);
+    }
+    return route;
+}
+
+bool ControlPlane::express_routing_enabled(MeshId mesh_id) const {
+    return this->routing_table_generator_->get_express_rings(mesh_id) != nullptr;
+}
+
+// The ring covering `direction` from `local`: the express decomposition for an axis hop, the ordinary X
+// ring for E/W. Null when that dimension carries no ring.
+const AxisRouteTopology* ControlPlane::ring_for_direction(MeshId mesh_id, RoutingDirection direction) const {
+    const bool orthogonal = direction == RoutingDirection::E || direction == RoutingDirection::W;
+    return orthogonal ? this->routing_table_generator_->get_x_rings(mesh_id)
+                      : this->routing_table_generator_->get_express_rings(mesh_id);
+}
+
+const AxisRouteTopology* ControlPlane::axis_topology(MeshId mesh_id, int axis) const {
+    return this->routing_table_generator_->get_axis_topology(mesh_id, axis);
+}
+
+// Coordinate of `node` along the ring's axis, and of the neighbor reached by `direction`.
+std::optional<int> ControlPlane::ring_coord_of_neighbor(
+    const AxisRouteTopology& rings, FabricNodeId local, RoutingDirection direction) const {
+    const auto neighbors = this->get_intra_chip_neighbors(local, direction);
+    if (neighbors.empty()) {
+        return std::nullopt;
+    }
+    return static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, neighbors[0])[rings.axis_dim]);
+}
+
+bool ControlPlane::has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const {
+    const auto* rings = dimension == RoutingDimension::X
+                            ? this->routing_table_generator_->get_x_rings(fabric_node_id.mesh_id)
+                            : this->routing_table_generator_->get_express_rings(fabric_node_id.mesh_id);
+    if (rings == nullptr) {
+        return false;
+    }
+    const int coord = static_cast<int>(
+        this->get_mesh_graph().chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id)[rings->axis_dim]);
+    return !rings->is_leaf(coord);
+}
+
+bool ControlPlane::is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const {
+    const auto* rings = this->ring_for_direction(local.mesh_id, egress);
+    if (rings == nullptr) {
+        return false;
+    }
+    const int coord =
+        static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
+    const auto peer = this->ring_coord_of_neighbor(*rings, local, egress);
+    if (!peer.has_value() || rings->is_leaf(coord) || rings->is_leaf(*peer)) {
+        return false;
+    }
+    if (rings->domain_of[coord] != rings->domain_of[*peer]) {
+        return false;  // a crossover joins two rings; it belongs to neither
+    }
+    return rings->ring_distance(rings->domain_of[coord], coord, *peer) == 1;
+}
+
+bool ControlPlane::are_same_directed_ring_edges(
+    FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
+    const auto* rings = this->ring_for_direction(local.mesh_id, ingress);
+    // Both hops must ride the same ring, so a turn between the two axes is never the same view.
+    if (rings == nullptr || rings != this->ring_for_direction(local.mesh_id, egress) ||
+        !this->is_protected_ring_edge(local, ingress) || !this->is_protected_ring_edge(local, egress)) {
+        return false;
+    }
+    const int coord =
+        static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
+    const auto from = this->ring_coord_of_neighbor(*rings, local, ingress);
+    const auto to = this->ring_coord_of_neighbor(*rings, local, egress);
+    if (!from.has_value() || !to.has_value()) {
+        return false;
+    }
+    const int domain = rings->domain_of[coord];
+    const int n = static_cast<int>(rings->forward_cycle[domain].size());
+    const auto forward_step = [&](int a, int b) {
+        return (rings->pos_in_domain[b] - rings->pos_in_domain[a] + n) % n == 1;
+    };
+    // Arriving from the ingress neighbor and leaving toward the egress one must step the same way
+    // around the cycle: both forward, or both reverse.
+    return (forward_step(*from, coord) && forward_step(coord, *to)) ||
+           (forward_step(coord, *from) && forward_step(*to, coord));
+}
+
+bool ControlPlane::continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const {
+    const auto* rings = this->routing_table_generator_->get_express_rings(local.mesh_id);
+    if (rings == nullptr || !this->is_protected_ring_edge(local, egress)) {
+        return true;  // nothing protected is being acquired, so nothing to gate
+    }
+    const int row =
+        static_cast<int>(this->get_mesh_graph().chip_to_coordinate(local.mesh_id, local.chip_id)[rings->axis_dim]);
+    const auto from_row = this->ring_coord_of_neighbor(*rings, local, ingress);
+    if (!from_row.has_value() || rings->is_leaf(row) || rings->is_leaf(*from_row)) {
+        return true;  // worker injection, or arrival over a leaf-run or anchor edge
+    }
+    if (rings->domain_of[*from_row] == rings->domain_of[row]) {
+        return true;  // already riding this ring: transit, not an acquisition
+    }
+    // Arrived over a crossover, so the packet carries the ingress side's family. Only the family
+    // marked as continuing may acquire the other; the reverse crossing is terminal.
+    return rings->domain_of[*from_row] == rings->continue_src_domain;
+}
+
+bool ControlPlane::mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const {
+    TT_FATAL(
+        axis_direction != RoutingDirection::C && axis_direction != RoutingDirection::NONE,
+        "mesh_has_protected_ring_in_axis_of: {} is not a port direction",
+        enchantum::to_string(axis_direction));
+    // Ring state is per mesh, and a mesh's express rings span every line where they exist, so the
+    // answer is just whether the axis has a ring at all.
+    return this->ring_for_direction(mesh_id, axis_direction) != nullptr;
+}
+
 std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const {
     const auto& forwarding_direction = get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
@@ -1796,8 +1945,73 @@ void ControlPlane::compute_and_embed_1d_routing_path_table(MeshId mesh_id, routi
     std::memcpy(&routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
 }
 
+ControlPlane::Routing2DActionVectors ControlPlane::compute_2d_routing_action_vectors(
+    MeshId mesh_id, const MeshShape& mesh_shape, const RoutingTable& intra_mesh_routing_table) const {
+    const std::uint32_t y_size = mesh_shape[0];
+    const std::uint32_t x_size = mesh_shape[1];
+    TT_FATAL(
+        is_valid_2d_route_table_shape(y_size, x_size),
+        "Mesh {} shape {}x{} cannot use the 2D route table: both axes must be in [1, {}], the mesh must have at "
+        "most {} chips, and its action vectors and multicast trees must fit their fixed L1 regions.",
+        *mesh_id,
+        y_size,
+        x_size,
+        Routing2DCodec::MAX_AXIS_SIZE,
+        MAX_MESH_SIZE);
+
+    TT_FATAL(
+        *mesh_id < intra_mesh_routing_table.size(),
+        "2D route table: mesh {} is absent from the intra-mesh routing table",
+        *mesh_id);
+    const auto& mesh_table = intra_mesh_routing_table[*mesh_id];
+    const std::uint32_t num_chips = y_size * x_size;
+    TT_FATAL(
+        mesh_table.size() == num_chips,
+        "2D route table: mesh {} shape {}x{} describes {} chips, but its routing table has {}",
+        *mesh_id,
+        y_size,
+        x_size,
+        num_chips,
+        mesh_table.size());
+    TT_FATAL(
+        std::all_of(
+            mesh_table.begin(),
+            mesh_table.end(),
+            [num_chips](const auto& destinations) { return destinations.size() == num_chips; }),
+        "2D route table: mesh {} routing table is not square with {} chips",
+        *mesh_id,
+        num_chips);
+
+    auto probe = [&](std::uint32_t src_chip, std::uint32_t dst_chip) {
+        const auto direction = mesh_table[src_chip][dst_chip];
+        TT_FATAL(
+            direction != RoutingDirection::NONE && direction != RoutingDirection::C,
+            "2D route table: no first-hop direction from chip {} to chip {} in mesh {}",
+            src_chip,
+            dst_chip,
+            *mesh_id);
+        return this->routing_direction_to_eth_direction(direction);
+    };
+    auto y_action = [&](std::uint32_t cur_y, std::uint32_t dst_y) { return probe(cur_y * x_size, dst_y * x_size); };
+    auto x_action = [&](std::uint32_t cur_x, std::uint32_t dst_x) { return probe(cur_x, dst_x); };
+
+    Routing2DActionVectors action_vectors{};
+    TT_FATAL(
+        pack_2d_route_vectors(action_vectors.data(), action_vectors.size(), y_size, x_size, y_action, x_action),
+        "2D route table: mesh {} shape {}x{} contains an off-axis first-hop direction",
+        *mesh_id,
+        y_size,
+        x_size);
+    return action_vectors;
+}
+
 void ControlPlane::compute_and_embed_2d_routing_path_table(
-    MeshId mesh_id, ChipId chip_id, routing_l1_info_t& routing_info) const {
+    MeshId mesh_id,
+    ChipId chip_id,
+    const MeshShape& mesh_shape,
+    const Routing2DActionVectors& action_vectors,
+    const RoutingTable& inter_mesh_routing_table,
+    routing_l1_info_t& routing_info) const {
     auto host_rank_id = this->get_local_host_rank_id_binding();
     auto local_mesh_chip_id_container = this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
 
@@ -1815,28 +2029,65 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         *host_rank_id,
         *mesh_id);
 
-    // Calculate routing using global mesh geometry (device tables are indexed by global chip ids)
-    MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
-    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
-    TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
-    TT_ASSERT(
-        mesh_shape[0] <= 32 && mesh_shape[1] <= 32,
-        "One or both of mesh axis exceed 32 for mesh {}: {}x{}",
-        *mesh_id,
-        mesh_shape[0],
-        mesh_shape[1]);
+    // Every chip embeds the mesh-identical unicast vectors and its own multicast trees.
+    {
+        route_table_2d_t route_table_2d{};
+        std::memcpy(route_table_2d.action_vectors, action_vectors.data(), sizeof(route_table_2d.action_vectors));
 
-    intra_mesh_routing_path_t<2, true> routing_path_2d;
-    routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+        // Unicast rows are mesh-identical, but each chip stores reverse trees for its own row and
+        // column. Use axis_topology() for its ring-or-line fallback; a missing tree decodes as an
+        // empty multicast map.
+        const auto* y_topo = this->axis_topology(mesh_id, 0);
+        const auto* x_topo = this->axis_topology(mesh_id, 1);
+        TT_FATAL(
+            y_topo != nullptr && x_topo != nullptr,
+            "mesh {}: no axis topology on {} (shape {}x{}); 2D multicast cannot be encoded",
+            *mesh_id,
+            y_topo == nullptr ? "Y" : "X",
+            mesh_shape[0],
+            mesh_shape[1]);
+        // A declared ring closes only when connectivity includes wrap edges. Log the derived kind
+        // once per mesh because a line fallback cannot cover a full-ring multicast.
+        if (chip_id == 0) {
+            log_info(
+                tt::LogFabric,
+                "mesh {} shape {}x{}: axis topologies derived as Y={} X={}",
+                *mesh_id,
+                mesh_shape[0],
+                mesh_shape[1],
+                y_topo->wraps ? "RING" : "LINE",
+                x_topo->wraps ? "RING" : "LINE");
+        }
+        {
+            const auto coord = this->get_mesh_graph().chip_to_coordinate(mesh_id, chip_id);
+            std::string failure;
+            // No fallback multicast encoder exists: an invalid tree would otherwise report success
+            // while delivering nowhere. Multiple feeders cannot occur on a chordless axis, so this
+            // also validates express topology structure.
+            TT_FATAL(
+                embed_mcast_reverse_trees(
+                    this->get_mesh_graph(),
+                    mesh_id,
+                    *y_topo,
+                    *x_topo,
+                    static_cast<int>(coord[0]),
+                    static_cast<int>(coord[1]),
+                    route_table_2d.mcast_trees,
+                    &failure),
+                "mesh {} chip {}: cannot encode 2D multicast: {}",
+                *mesh_id,
+                chip_id,
+                failure);
+        }
 
-    std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
+        std::memcpy(&routing_info.route_table_2d, &route_table_2d, sizeof(route_table_2d_t));
+    }
 
     // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip
     std::uint8_t exit_table[MAX_NUM_MESHES];
     std::fill_n(exit_table, MAX_NUM_MESHES, eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
-    const auto& inter_mesh_table = this->routing_table_generator_->get_inter_mesh_table();
     for (const auto& dst_mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
-        auto direction = inter_mesh_table[*mesh_id][chip_id][*dst_mesh_id];
+        auto direction = inter_mesh_routing_table[*mesh_id][chip_id][*dst_mesh_id];
         if (direction == RoutingDirection::NONE) {
             continue;
         }
@@ -1847,7 +2098,13 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
 }
 
 // Write routing table to Tensix cores' L1 on a specific chip
-void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id) const {
+void ControlPlane::write_routing_info_to_devices(
+    MeshId mesh_id,
+    ChipId chip_id,
+    const MeshShape& mesh_shape,
+    const RoutingTable& router_intra_mesh_routing_table,
+    const RoutingTable& router_inter_mesh_routing_table,
+    const Routing2DActionVectors* action_vectors_2d) const {
     FabricNodeId src_fabric_node_id{mesh_id, static_cast<uint32_t>(chip_id)};
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
 
@@ -1856,9 +2113,28 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
+    // Use the same global shape passed to the 2D route-table packer. A Galaxy presents as either
+    // 8x4 or 4x8, so a shape from a second source risks transposed coordinates that index
+    // valid-looking but wrong table slots.
+    const bool is_2d_routing_enabled = this->get_fabric_context().is_2D_routing_enabled();
+    if (is_2d_routing_enabled) {
+        TT_FATAL(
+            mesh_shape[0] > 0 && mesh_shape[1] > 0 && mesh_shape[0] <= Routing2DCodec::MAX_AXIS_SIZE &&
+                mesh_shape[1] <= Routing2DCodec::MAX_AXIS_SIZE,
+            "Mesh {} shape {}x{} cannot be represented in the 2D routing metadata; both axes must be in [1, {}].",
+            *mesh_id,
+            mesh_shape[0],
+            mesh_shape[1],
+            Routing2DCodec::MAX_AXIS_SIZE);
+    }
+    routing_info.my_mesh_coord_y = chip_id / mesh_shape[1];
+    routing_info.my_mesh_coord_x = chip_id % mesh_shape[1];
+    if (is_2d_routing_enabled) {
+        routing_info.mesh_y_size = static_cast<std::uint8_t>(mesh_shape[0]);
+        routing_info.mesh_x_size = static_cast<std::uint8_t>(mesh_shape[1]);
+    }
 
     // Build intra-mesh routing entries (chip-to-chip routing)
-    const auto& router_intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
     TT_FATAL(
         router_intra_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_MESH_SIZE,
         "ControlPlane: Intra mesh routing table size exceeds maximum allowed size");
@@ -1885,7 +2161,6 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     }
 
     // Build inter-mesh routing entries (mesh-to-mesh routing)
-    const auto& router_inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
     TT_FATAL(
         router_inter_mesh_routing_table[*mesh_id][chip_id].size() <= tt::tt_fabric::MAX_NUM_MESHES,
         "ControlPlane: Inter mesh routing table size exceeds maximum allowed size");
@@ -1911,9 +2186,11 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
         routing_info.inter_mesh_direction_table.set_original_direction(dst_mesh_id, direction_value);
     }
 
-    if (this->get_fabric_context().is_2D_routing_enabled()) {
+    if (is_2d_routing_enabled) {
+        TT_FATAL(action_vectors_2d != nullptr, "Mesh {} is missing its precomputed 2D action vectors", *mesh_id);
         // Compute and embed 2D routing path table and exit node table (per src chip id)
-        compute_and_embed_2d_routing_path_table(mesh_id, chip_id, routing_info);
+        compute_and_embed_2d_routing_path_table(
+            mesh_id, chip_id, mesh_shape, *action_vectors_2d, router_inter_mesh_routing_table, routing_info);
     } else {
         // Compute and embed 1D routing path table (independent of src chip id)
         compute_and_embed_1d_routing_path_table(mesh_id, routing_info);
@@ -2134,8 +2411,21 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
     TT_ASSERT(
         this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),
         "Intra mesh routing tables size mismatch with inter mesh routing tables");
+
+    // RoutingTableGenerator currently returns snapshots by value. Take one of each for this entire
+    // write pass instead of copying both nested tables once (or more) per chip.
+    const auto intra_mesh_routing_table = this->routing_table_generator_->get_intra_mesh_table();
+    const auto inter_mesh_routing_table = this->routing_table_generator_->get_inter_mesh_table();
+    const bool is_2d_routing_enabled = this->get_fabric_context().is_2D_routing_enabled();
+
     auto user_meshes = this->get_user_physical_mesh_ids();
     for (auto mesh_id : user_meshes) {
+        const MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
+        std::optional<Routing2DActionVectors> action_vectors_2d;
+        if (is_2d_routing_enabled) {
+            action_vectors_2d = this->compute_2d_routing_action_vectors(mesh_id, mesh_shape, intra_mesh_routing_table);
+        }
+
         const auto& local_mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
         for (const auto& mesh_coord : local_mesh_coord_range) {
             auto fabric_chip_id = this->mesh_graph_->coordinate_to_chip(mesh_id, mesh_coord);
@@ -2143,7 +2433,13 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
             TT_ASSERT(
                 this->inter_mesh_routing_tables_.contains(fabric_node_id),
                 "Intra mesh routing tables keys mismatch with inter mesh routing tables");
-            this->write_routing_info_to_devices(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+            this->write_routing_info_to_devices(
+                fabric_node_id.mesh_id,
+                fabric_node_id.chip_id,
+                mesh_shape,
+                intra_mesh_routing_table,
+                inter_mesh_routing_table,
+                action_vectors_2d ? &*action_vectors_2d : nullptr);
             this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
             this->write_fabric_telemetry_to_all_chips(fabric_node_id);
         }
