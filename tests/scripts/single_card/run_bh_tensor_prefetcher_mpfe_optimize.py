@@ -350,7 +350,13 @@ def write_lifecycle_summary(path: Path, records: list[dict]) -> None:
                 "metric": metric_name,
                 "mean": mean(record[metric_name] for record in samples),
                 "vs_same_tuple_static_percent": mean(vs_static) if vs_static else "",
+                "stdev_vs_same_tuple_static_percent": (
+                    statistics.stdev(vs_static) if len(vs_static) > 1 else ""
+                ),
                 "vs_static_000_percent": mean(vs_baseline) if vs_baseline else "",
+                "stdev_vs_static_000_percent": (
+                    statistics.stdev(vs_baseline) if len(vs_baseline) > 1 else ""
+                ),
                 "samples": len(samples),
             }
         )
@@ -363,14 +369,21 @@ def write_lifecycle_summary(path: Path, records: list[dict]) -> None:
             "metric",
             "mean",
             "vs_same_tuple_static_percent",
+            "stdev_vs_same_tuple_static_percent",
             "vs_static_000_percent",
+            "stdev_vs_static_000_percent",
             "samples",
         ]
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             row["mean"] = f"{row['mean']:.6f}"
-            for field in ("vs_same_tuple_static_percent", "vs_static_000_percent"):
+            for field in (
+                "vs_same_tuple_static_percent",
+                "stdev_vs_same_tuple_static_percent",
+                "vs_static_000_percent",
+                "stdev_vs_static_000_percent",
+            ):
                 if row[field] != "":
                     row[field] = f"{row[field]:.3f}"
             writer.writerow(row)
@@ -430,7 +443,9 @@ def main() -> int:
         confirmation_records,
         {case.label for case in confirmation_candidates},
     )
-    winners = confirmation_ranking[:2]
+    # A 000 winner is already represented by the lifecycle baseline and has no
+    # meaningful idle-to-active transition. Compare the best two nonzero tuples.
+    winners = [weights for weights in confirmation_ranking if weights != (0, 0, 0)][:2]
     runner.log(f"Stage 2 winners: {', '.join(tuple_string(weights) for weights in winners)}")
 
     lifecycle_cases = []
