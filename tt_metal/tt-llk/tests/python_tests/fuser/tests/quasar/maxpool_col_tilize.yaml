@@ -18,6 +18,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [256, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Reduce"
@@ -25,8 +26,23 @@ operations:
         reduce_pool: "MAX"
         unpacker: "UnpackReduceTilize"
         math_fidelity: "HiFi4"
-        reduce_to_tile: true
-    block_size: [256, 32]
+        loop:
+          in0: [0, 1, 2, 3, 4, 5, 6, 7,
+                64, 65, 66, 67, 68, 69, 70, 71,
+                128, 129, 130, 131, 132, 133, 134, 135,
+                192, 193, 194, 195, 196, 197, 198, 199]
+          in1:
+            multipliers: {tile_y: 0}
+          dest:
+            multipliers: {tile_y: 0}
     pack:
       - output: "maxpool_out"
+        block_size: [256, 32]
         packer: "PackUntilize"
+        loop:
+          dest:
+            multipliers: {tile_y: 0}
+          out: [0, 1, 2, 3, 4, 5, 6, 7,
+                64, 65, 66, 67, 68, 69, 70, 71,
+                128, 129, 130, 131, 132, 133, 134, 135,
+                192, 193, 194, 195, 196, 197, 198, 199]

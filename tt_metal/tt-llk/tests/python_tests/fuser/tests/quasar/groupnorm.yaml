@@ -120,236 +120,310 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 64]
         in0: "x"
         operation: "Datacopy"
         unpacker: "UnpackerTilizeA"
         math_fidelity: "LoFi"
-    block_size: [32, 64]
     pack:
       - output: "x_tiled"
+        block_size: [32, 64]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "x_tiled"
         in1: "input_mask"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "x_masked"
+        block_size: [32, 32]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 64]
         in0: "x_masked"
         in1: "scaler"
         operation: "Reduce"
         reduce_dim: "REDUCE_SCALAR"
         reduce_pool: "SUM"
-        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
-    block_size: [32, 64]
+        loop:
+          in0: [0, 2]
+          in1: [0, 2]
+          dest:
+            multipliers: {tile_x: 0}
     pack:
       - output: "ex_sum"
+        block_size: [32, 32]
         packer: "Packer"
         pack_l1_accumulation: 1
+        loop:
+          dest: [0]
+          out: [0, 0]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "ex_sum"
         in1: "inv_num_datums"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
+        loop:
+          in0: [0]
+          in1: [0]
+          dest: [0]
     pack:
       - output: "ex"
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "x_tiled"
         in1: "ex"
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         broadcast_type: "SCALAR"
-        broadcast_tile: 0
         math_fidelity: "LoFi"
-    block_size: [32, 32]
+        loop:
+          in0: [0, 1, 2, 3]
+          in1: [0, 0, 0, 0]
+          dest: [0]
     pack:
       - output: "xmm"
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0, 1, 2, 3]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "xmm"
         in1: "input_mask"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "xmm_masked"
+        block_size: [32, 32]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "xmm_masked"
         in1: "xmm_masked"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "xmm2"
+        block_size: [32, 32]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 64]
         in0: "xmm2"
         in1: "scaler"
         operation: "Reduce"
         reduce_dim: "REDUCE_SCALAR"
         reduce_pool: "SUM"
-        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
-    block_size: [32, 64]
+        loop:
+          in0: [0, 2]
+          in1: [0, 2]
+          dest:
+            multipliers: {tile_x: 0}
     pack:
       - output: "ex2_sum"
+        block_size: [32, 32]
         packer: "Packer"
         pack_l1_accumulation: 1
+        loop:
+          dest: [0]
+          out: [0, 0]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "ex2_sum"
         in1: "inv_num_datums"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
+        loop:
+          in0: [0]
+          in1: [0]
+          dest: [0]
     pack:
       - output: "ex2"
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "ex2"
         in1: "eps"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
+        loop:
+          in0: [0]
+          in1: [0]
+          dest: [0]
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Rsqrt"
         approximation_mode: true
         iterations: 32
-    block_size: [32, 32]
+        loop:
+          dest: [0]
     pack:
       - output: "ex2pe"
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "x_tiled"
         in1: "ex"
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         broadcast_type: "SCALAR"
-        broadcast_tile: 0
         math_fidelity: "LoFi"
-    block_size: [32, 32]
+        loop:
+          in0: [0, 1, 2, 3]
+          in1: [0, 0, 0, 0]
+          dest: [0]
     pack:
       - output: "xmm_final"
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0, 1, 2, 3]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "xmm_final"
         in1: "input_mask"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "xmm_final_masked"
+        block_size: [32, 32]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "xmm_final_masked"
         in1: "ex2pe"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "SCALAR"
-        broadcast_tile: 0
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
+        loop:
+          in0: [0, 1, 2, 3]
+          in1: [0, 0, 0, 0]
+          dest: [0]
     pack:
       - output: "normalized"
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0, 1, 2, 3]
 
   - math:
       - type: "Fpu"
+        block_size: [32, 64]
         in0: "reread_rm"
         operation: "Datacopy"
         unpacker: "UnpackerTilizeA"
         math_fidelity: "LoFi"
-    block_size: [32, 64]
     pack:
       - output: "reread_out"
+        block_size: [32, 64]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "reread_out"
         in1: "normalized"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [32, 32]
     pack:
       - output: "accum_out"
+        block_size: [32, 32]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "accum_out"
         in1: "gamma"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
         math_fidelity: "HiFi4"
-    block_size: [32, 32]
     pack:
       - output: "gamma_out"
+        block_size: [32, 32]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "gamma_out"
         in1: "beta"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
         math_fidelity: "LoFi"
-    block_size: [32, 32]
     pack:
       - output: "out_tiled"
+        block_size: [32, 32]
         packer: "Packer"
 
   - math:
       - type: "Fpu"
+        block_size: [32, 64]
         in0: "out_tiled"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-    block_size: [32, 64]
     pack:
       - output: "output"
+        block_size: [32, 64]
         packer: "PackUntilize"

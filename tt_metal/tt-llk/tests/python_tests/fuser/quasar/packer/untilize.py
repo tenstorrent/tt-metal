@@ -56,9 +56,13 @@ class PackUntilize(Packer):
         block: BlockData,
     ) -> str:
         full_ct_dim = pack_node.output.tile_count_x
+        tensor_shape = pack_node.output.tile_shape.cpp_value
         row_stride = full_ct_dim * pack_node.output.tile_shape.total_row_dim()
         tile_row = f"({block.tile_id_out}) / {full_ct_dim}"
         tile_col = f"({block.tile_id_out}) % {full_ct_dim}"
         l1_row_idx = f"{row_stride} * ({tile_row}) + ({tile_col})"
 
-        return f"_llk_pack_untilize_({block.tile_id_dest}, {l1_row_idx});\n"
+        return (
+            f"_llk_pack_untilize_set_dst_offset_({tensor_shape}, {l1_row_idx});\n"
+            f"_llk_pack_untilize_({block.tile_id_dest}, 0);\n"
+        )
