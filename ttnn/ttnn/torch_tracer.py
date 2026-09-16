@@ -53,6 +53,19 @@ def is_tracing_enabled():
     return GRAPH_STACK is not None
 
 
+@contextmanager
+def pushed_graph():
+    """Run the block with a fresh graph on GRAPH_STACK, popped again even if the block raises."""
+    graph_stack = GRAPH_STACK
+    graph_stack.append(nx.MultiDiGraph())
+    try:
+        yield
+    finally:
+        # Pop from the list we pushed onto rather than the module global: disable_tracing() rebinds that to None,
+        # and the block may have called it before raising.
+        graph_stack.pop()
+
+
 TORCH_NN_MODULE_CALL = torch.nn.Module.__call__
 
 
@@ -690,25 +703,24 @@ def traced_module_forward(*function_args: Any, **function_kwargs: Any) -> Any:
 
     function_args, function_kwargs = preprocess_args_and_kwargs(*function_args, **function_kwargs)
 
-    GRAPH_STACK.append(nx.MultiDiGraph())
-    module_args, module_kwargs = convert_to_module_args_and_kwargs(module, *function_args, **function_kwargs)
+    with pushed_graph():
+        module_args, module_kwargs = convert_to_module_args_and_kwargs(module, *function_args, **function_kwargs)
 
-    start_time = time.time()
-    module_return_value = TORCH_NN_MODULE_CALL(*module_args, **module_kwargs)
-    end_time = time.time()
-    duration = end_time - start_time
+        start_time = time.time()
+        module_return_value = TORCH_NN_MODULE_CALL(*module_args, **module_kwargs)
+        end_time = time.time()
+        duration = end_time - start_time
 
-    module_input_tensors = get_input_tensors(module_args) + get_input_tensors(module_kwargs)
-    module_output_tensors = preprocess_return_value(module_return_value)
+        module_input_tensors = get_input_tensors(module_args) + get_input_tensors(module_kwargs)
+        module_output_tensors = preprocess_return_value(module_return_value)
 
-    shapes = tuple(tuple(tensor.shape) for tensor in module_output_tensors)
-    dtypes = tuple(tensor.dtype for tensor in module_output_tensors)
+        shapes = tuple(tuple(tensor.shape) for tensor in module_output_tensors)
+        dtypes = tuple(tensor.dtype for tensor in module_output_tensors)
 
-    arg_name_value_pairs = get_arg_name_value_pairs(
-        module.forward, function_args=function_args, function_kwargs=function_kwargs
-    )[1:]
-    operation = create_module(module, module_input_tensors, module_output_tensors, arg_name_value_pairs)
-    GRAPH_STACK.pop()
+        arg_name_value_pairs = get_arg_name_value_pairs(
+            module.forward, function_args=function_args, function_kwargs=function_kwargs
+        )[1:]
+        operation = create_module(module, module_input_tensors, module_output_tensors, arg_name_value_pairs)
 
     unique_id = get_unique_id()
     node_name = f"{module.__ttnn_tracer_name__}_{unique_id}"

@@ -57,11 +57,12 @@ from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabr
 
 
 def _raise_nproc_limit():
-    """tt-metal JIT-compiles device kernels in parallel, and each `g++ -flto=auto` fans out to
-    `make -j<nproc>` — a burst of hundreds/thousands of short-lived processes. A low RLIMIT_NPROC
-    (e.g. a 512 soft default) makes clone3 fail with EAGAIN mid-build, which gcc reports as
-    "posix_spawn: Operation not permitted" and aborts the kernel link. Raise the soft limit to the
-    hard limit (allowed without privileges) so the build never starves."""
+    """tt-metal JIT-compiles device kernels in parallel, and each target is its own chain of
+    short-lived processes (g++/cc1plus/as to compile; g++/collect2/lto-wrapper/lto1/as/ld to link),
+    so the live process count runs to roughly a dozen times the build's parallelism. A low
+    RLIMIT_NPROC (e.g. a 512 soft default) makes clone3 fail with EAGAIN mid-build, which gcc
+    reports as "posix_spawn: Operation not permitted" and aborts the kernel link. Raise the soft
+    limit to the hard limit (allowed without privileges) so the build never starves."""
     soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
     if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
         try:

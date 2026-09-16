@@ -187,82 +187,65 @@ LAYER_PCC_THRESHOLD = 0.88
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
-# Per-chunk baseline medians (seconds) for the perf gate, derived from completed CI runs. Keyed by
+# Per-chunk baseline medians (seconds) for the perf gate, derived from completed Galaxy runs. Keyed by
 # (num_layers, n_chunks, num_iters) so only exact configs with CI numbers are gated; every other combo
 # in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). Recalibrate
-# from the per-chunk median across multiple independent Galaxy runs rather than copying one run's
-# measurements directly.
+# from completed Galaxy CI runs that exercise the exact configuration, and record the source run.
 #
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
-# are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
-# attends to KV[0:c*CHUNK]) while untraced is a flat ~0.81 s/chunk, host-dispatch bound so the op2op
-# gap swamps the depth ramp entirely.
+# are different regimes: traced follows the KV-depth ramp, while untraced also pays host-dispatch
+# overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut twice; the medians below are the current cut.
-    #
-    # The shift from the previous cut is -10.8% to -15.2% per chunk, largest at chunk 0 and tapering
-    # with depth. In absolute terms it is close to flat -- 0.072-0.076 s off chunks 0-5, drifting to
-    # 0.087-0.093 s over chunks 7-10 -- so the bulk of it is a fixed cost coming off the front of each
-    # chunk, whose share shrinks as the depth ramp grows (chunk c attends to KV[0:c*CHUNK]). The extra
-    # saving at the deep chunks is on top of that and does scale with the attended window.
+    # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
     (61, 11, 10): [
-        0.412,
-        0.418,
-        0.451,
+        0.413,
+        0.419,
+        0.452,
         0.481,
-        0.512,
-        0.546,
-        0.574,
-        0.608,
-        0.656,
-        0.696,
-        0.735,
+        0.513,
+        0.549,
+        0.584,
+        0.623,
+        0.676,
+        0.716,
+        0.756,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # (55k / code_debug), 2026-09-01 on an 8x4 galaxy, per-chunk medians of run 33534897935/job
-    # 99949625303.
-    #
-    # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
-    # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
-    # 9 post-warmup iterations is not: on the previous baseline no chunk median across 32 recorded runs
-    # landed further than 3.2% from its median-of-runs value. So the gate is on the median, with
-    # UNTRACED_PERF_MARGIN rather than the traced 3%.
-    #
-    # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
-    # the fallback after that -- a band that needs more than 10% is a regression, not noise.
-    (61, 11, 10): [0.805, 0.808, 0.811, 0.816, 0.808, 0.806, 0.806, 0.805, 0.802, 0.823, 0.854],
+    # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
+    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
+    (61, 11, 10): [0.710, 0.708, 0.710, 0.709, 0.711, 0.717, 0.711, 0.713, 0.725, 0.763, 0.797],
 }
+
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
 # program, so the device is its only noise source; untraced re-dispatches from host every iteration and
 # carries the op2op gap, so it needs the wider band. Overridable per test via the perf_margin pytest
 # argument (None = use the mode default; see test_prefill_block_perf.py's `margin` column).
 #
-# 5% untraced is deliberately tight: the worst per-chunk deviation over all 32 recorded runs is 3.2%,
-# so CI noise already spends ~2/3 of the band. That is the intended bar -- catch a >5% eager-dispatch
-# regression -- but it leaves little slack, so triage a failure as noise-vs-regression (compare the
-# other chunks and the traced twin from the same run) before touching the number.
+# Keep the untraced band at 5% to catch eager-dispatch regressions. Compare the other chunks and the
+# traced twin from the same run before attributing a failure to noise or recalibrating the baseline.
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-# GLM-5.2 per-chunk baseline medians (seconds)
+# GLM-5.2 per-chunk baseline medians (seconds), recentered to CI run 34492835936 /
+# job 102927415889.
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     (78, 11, 10): [
+        0.542,
+        0.541,
+        0.555,
+        0.551,
+        0.567,
+        0.565,
+        0.563,
+        0.567,
         0.585,
-        0.583,
-        0.598,
-        0.593,
-        0.608,
-        0.607,
-        0.605,
-        0.611,
-        0.627,
-        0.632,
-        0.644,
+        0.590,
+        0.601,
     ],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
@@ -1407,12 +1390,28 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        # Same 8x4 mesh on a PLAIN 2D fabric, which wraps neither axis. The snake's closing edge spans a
+        # whole axis, so no cycle closes here and the full mesh resolves as an open Hamiltonian path --
+        # the tier the torus row above can never reach, because a torus always closes the ring. Both
+        # rows must produce the same PCCs: the transport-to-tensor mapping is the same row-major
+        # linearization either way, only the closing edge differs.
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 # KV dedup end-to-end through the full chunked transformer: tp_sharded must match the sp_only PCC, since
-# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather. The 8x4 torus
-# always closes the snake ring, so this row covers the snake route only.
+# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather. The torus row
+# covers the snake RING route; the fabric2d row covers the open PATH, where no cycle closes.
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
@@ -1716,6 +1715,72 @@ def run_chunked_transformer_updated(
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
+
+    # Production overlap qualification asks this full-model harness to prove that the requested profile
+    # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
+    # behavior, while the checked qualification driver cannot report a win from two accidentally identical
+    # serial runs (or from only a subset of the GLM-5.2 full-indexer layers).
+    expected_overlap_profile = os.environ.get("TT_PREFILL_EXPECT_SPARSE_MLA_OVERLAP_PROFILE")
+    profile_call_counts = None
+    if expected_overlap_profile is not None:
+        expected_overlap_profile = expected_overlap_profile.lower()
+        worker_grid = mesh_device.compute_with_storage_grid_size()
+        eligible_layers = [
+            layer.mla.layer_idx
+            for layer in transformer.layers
+            if layer.mla._has_indexer and not layer.mla.kv_only and not layer.mla._indexer_reuse
+        ]
+        active = [
+            (layer.mla.layer_idx, layer.mla._sparse_mla_overlap)
+            for layer in transformer.layers
+            if layer.mla._sparse_mla_overlap is not None
+        ]
+        if expected_overlap_profile in ("", "0", "off", "none"):
+            assert not active, f"expected serialized sparse MLA, but overlap is active on {[idx for idx, _ in active]}"
+            observed_profile = "off"
+            observed_topk_cores = worker_grid.x * worker_grid.y
+            observed_gather_cores = 0
+        else:
+            active_layers = [idx for idx, _ in active]
+            assert active_layers == eligible_layers, (
+                f"profile {expected_overlap_profile!r}: expected overlap on eligible layers {eligible_layers}, "
+                f"got {active_layers}"
+            )
+            assert active, f"profile {expected_overlap_profile!r} did not create overlap resources"
+            profiles = {resources.profile for _, resources in active}
+            topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
+            gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
+            assert profiles == {expected_overlap_profile}, profiles
+            assert topk_cores == {80}, topk_cores
+            assert gather_cores == {40}, gather_cores
+            observed_profile = next(iter(profiles))
+            observed_topk_cores = next(iter(topk_cores))
+            observed_gather_cores = next(iter(gather_cores))
+        logger.info(
+            f"SPARSE_MLA_PROFILE_ASSERT variant={variant.name} expected={observed_profile} "
+            f"active_layer_count={len(active)} "
+            f"eligible_layer_count={len(eligible_layers)} worker_grid={worker_grid.x}x{worker_grid.y} "
+            f"mesh={sp}x{tp} topk_cores={observed_topk_cores} gather_cores={observed_gather_cores}"
+        )
+
+        # Count the actually dispatched serial/overlap branches per eligible layer. Construction-time
+        # resource checks alone would miss a future runtime fallback after model initialization.
+        profile_call_counts = {layer_idx: {"serial": 0, "overlap": 0} for layer_idx in eligible_layers}
+
+        def counted_call(method, layer_idx, path):
+            def wrapped(*args, **kwargs):
+                profile_call_counts[layer_idx][path] += 1
+                return method(*args, **kwargs)
+
+            return wrapped
+
+        for layer in transformer.layers:
+            if layer.mla.layer_idx not in profile_call_counts:
+                continue
+            layer.mla._indexer.forward = counted_call(layer.mla._indexer.forward, layer.mla.layer_idx, "serial")
+            layer.mla._sparse_chunked_attn_overlapped = counted_call(
+                layer.mla._sparse_chunked_attn_overlapped, layer.mla.layer_idx, "overlap"
+            )
     ttnn.synchronize_device(mesh_device)
     gc.collect()
     profiler.end("tt_transformer_creation")
@@ -2019,6 +2084,24 @@ def run_chunked_transformer_updated(
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
+
+    if profile_call_counts is not None:
+        expected_calls_per_layer = n_chunks * num_iters
+        serial_counts = [counts["serial"] for counts in profile_call_counts.values()]
+        overlap_counts = [counts["overlap"] for counts in profile_call_counts.values()]
+        if expected_overlap_profile in ("", "0", "off", "none"):
+            assert serial_counts and set(serial_counts) == {expected_calls_per_layer}, serial_counts
+            assert set(overlap_counts) == {0}, overlap_counts
+            observed_profile = "off"
+        else:
+            assert set(serial_counts) == {0}, serial_counts
+            assert overlap_counts and set(overlap_counts) == {expected_calls_per_layer}, overlap_counts
+            observed_profile = expected_overlap_profile
+        logger.info(
+            f"SPARSE_MLA_EXECUTION_ASSERT expected={observed_profile} "
+            f"eligible_layer_count={len(profile_call_counts)} calls_per_layer={expected_calls_per_layer} "
+            f"serial_calls={sum(serial_counts)} overlap_calls={sum(overlap_counts)}"
+        )
 
     profiler.end("total_test_time")
     logger.success(

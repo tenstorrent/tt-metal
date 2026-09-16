@@ -13,6 +13,29 @@ Use when: a test fails intermittently (bad output / NaN / hang), static race aud
 
 Two failure modes are detected and reported separately: **data mismatch** (wrong/NaN output vs golden) and **hang** (device timeout/wedge).
 
+## LLK first step — run `focus.sh` with defaults
+For a failure reproducible by one **tt-llk Python test case**, use the committed `tests/python_tests/ttnop/focus.sh` before editing kernels or writing a custom sweep. It compiles the case, finds safe detour sites in the thread ELFs, runs a clean baseline, injects delays directly into L1, restores each instruction, and writes `reports/focus/{report.md,failures.jsonl}`.
+
+1. Identify and quote one complete pytest node ID, including parameters.
+2. Set only `CHIP_ARCH` and slow dispatch. Do not narrow sites, fillers, delays, repeats, or device jobs on the initial run:
+   ```bash
+   cd tt_metal/tt-llk/tests/python_tests/ttnop
+   CHIP_ARCH=<wormhole|blackhole> TT_METAL_SLOW_DISPATCH_MODE=1 \
+     ./focus.sh '<file.py::test_name[parameters]>'
+   ```
+3. Keep the initial defaults: `sync` sites; `unpack,math` threads; automatic fillers; delays `1-100`; 10 repeats; drift checking; 8 device workers.
+4. If the report or bug evidence specifically places the issue in pack, make the initial run pack-only:
+   ```bash
+   CHIP_ARCH=<wormhole|blackhole> TT_METAL_SLOW_DISPATCH_MODE=1 \
+     ./focus.sh --threads pack '<node-id>'
+   ```
+5. Read the terminal result, `report.md`, and `failures.jsonl`. Record the strongest finding's thread, site, filler, delay band, failure rate, failure type, and resolved source chain. Use the exact reproduction
+command emitted by the report before changing code.
+
+The clean baseline must pass. If it fails, report that the run did not isolate a timing perturbation and diagnose the ordinary test failure first. After a wedge, reset the card before another device run. Do not reset for a compile failure.
+
+If the default run is clean, escalate in this order: replay the known failing case; select a promising sync site and delay band from other evidence; try `--site all`; then use `--enable-unpacr-nop` only for an explicit unpacker hardware audit. Read `tests/python_tests/ttnop/FOCUS.md` before overriding defaults. Use the manual instrumentation workflow below only when focus cannot cover the test,
+
 ## The actors
 A Tensix op pipeline has up to five perturbable actors **per core**:
 - **Compute (Tensix coprocessor threads):** `unpack` (TRISC0), `math` (TRISC1), `pack` (TRISC2).
@@ -54,7 +77,7 @@ Example anchor set (untilize wide, single-core reference run — yours will diff
 
 That example is single-core with no MMIO/mailbox/mcast traffic, so those anchors don't appear; an op that reconfigures formats, coordinates the two RISCs through a mailbox, or fans out over a multicast/remote-CB handshake adds the corresponding config, mailbox, and NoC-semaphore anchors from the list above.
 
-## Injection mechanics (JIT, no host rebuild)
+## Manual fallback: injection mechanics (JIT, no host rebuild)
 Control everything with compile-time `#define`s so the JIT kernel hash changes per value → the kernel **recompiles per count with no host rebuild**. Verify a recompile actually happened via the `BuildKernels` "JIT cache stats" line showing MISSES on a fresh count.
 
 - **Compute kernel:** put `NOP_COUNT` / `NOP_THREAD` (0/1/2) / `NOP_POS` `#define`s at the **TOP of the compute .cpp, BEFORE the includes**, so the LLK headers and the compute-API orchestration header see them. `EMIT_NOPS` uses `TTI_NOP` (defined deeper in the include chain) — fine, macro bodies expand lazily at the use site.
@@ -71,7 +94,7 @@ Slow dispatch bypasses the asynchronous command-queue path: the host issues one 
 
 Set it once for the whole sweep so every data point is comparable, and confirm it took effect (the run should not create command queues). If a test *only* fails under fast dispatch and never under slow dispatch, that itself is a finding: the race is in the host dispatch layer, not the kernel — note it in the report rather than continuing to perturb the kernel.
 
-## The sweep
+## The manual sweep
 For each (actor, position):
 1. Set that actor+position active.
 2. Sweep `NOP_COUNT = 0 .. MAXN` (default 100). For each count: `sed` the `#define` in the target source (forces JIT recompile), run the test **10×** in one process **with `TT_METAL_SLOW_DISPATCH_MODE=1`** (see above), record `fails/10` (data-mismatch or NaN) and any hang/wedge.

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
@@ -56,6 +57,7 @@
 #include "tt-metalium/mesh_workload.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
+#include "jit_build/build_cache_telemetry.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
@@ -412,6 +414,10 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+
+    if (descriptor.reload_table.has_value()) {
+        internal_->set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
+    }
 
     for (const auto& cb_descriptor : descriptor.cbs) {
         internal_->add_circular_buffer_(std::make_shared<CircularBufferImpl>(cb_descriptor));
@@ -980,6 +986,7 @@ KernelGroup::KernelGroup(
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
 
     kernel_config.exit_erisc_kernel() = false;
+    kernel_config.reload_table_addr() = program.get_reload_table_addr(this->core_ranges);
     kernel_config.local_cb_mask() = local_cb_mask;
     kernel_config.min_remote_cb_start_index() = min_remote_cb_start_index;
     this->go_msg.view().signal() = dev_msgs::RUN_MSG_GO;
@@ -1966,27 +1973,52 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     this->local_circular_buffer_allocation_needed_ = false;
 }
 
-std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
-    int device_id, size_t num_devices) const {
-    (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
-    (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
+namespace {
+void merge_cb_stats_intervals(
+    std::vector<std::pair<uint64_t, uint64_t>>& merged, const std::vector<std::pair<uint64_t, uint64_t>>& incoming) {
+    for (const auto& region : incoming) {
+        // Ends increase with starts because the accumulator contains disjoint intervals.
+        auto first =
+            std::lower_bound(merged.begin(), merged.end(), region.first, [](const auto& existing, uint64_t start) {
+                return existing.second < start;
+            });
+        if (first != merged.end() && first->first <= region.first && first->second >= region.second) {
+            continue;
+        }
+        auto combined = region;
+        auto last = first;
+        while (last != merged.end() && last->first <= combined.second) {
+            combined.first = std::min(combined.first, last->first);
+            combined.second = std::max(combined.second, last->second);
+            ++last;
+        }
+        if (first == last) {
+            merged.insert(first, combined);
+        } else {
+            *first = combined;
+            merged.erase(first + 1, last);
+        }
+    }
+}
+}  // namespace
 
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
-
-    // For each allocator, iterate through all cores in its CoreRange
+void detail::ProgramImpl::merge_cb_l1_regions_by_core_range(
+    std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const {
     for (const auto& cb_allocator : cb_allocators_) {
-        const auto& l1_regions = cb_allocator.l1_regions;
+        merge_cb_stats_intervals(regions_per_range[cb_allocator.core_range], cb_allocator.l1_regions);
+    }
+}
 
-        // Add these regions to every core in the CoreRange
-        for (uint32_t x = cb_allocator.core_range.start_coord.x; x <= cb_allocator.core_range.end_coord.x; x++) {
-            for (uint32_t y = cb_allocator.core_range.start_coord.y; y <= cb_allocator.core_range.end_coord.y; y++) {
-                CoreCoord core(x, y);
-                auto& core_regions = regions_per_core[core];
-                core_regions.insert(core_regions.end(), l1_regions.begin(), l1_regions.end());
+std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::expand_cb_l1_regions_per_core(
+    const std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) {
+    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
+    for (const auto& [core_range, intervals] : regions_per_range) {
+        for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                merge_cb_stats_intervals(regions_per_core[CoreCoord(x, y)], intervals);
             }
         }
     }
-
     return regions_per_core;
 }
 
@@ -2596,7 +2628,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     // allocated bottom up
     std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
     if (!this->kernels_buffer_.contains(device->id()) and binary_data_size_bytes) {
-        std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
+        std::shared_ptr<Buffer> kernel_bin_buf = BufferImpl::create(
             device,
             binary_data_size_bytes,
             HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
@@ -3266,6 +3298,25 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             state.offset,
             max_size,
             enchantum::to_string(programmable_core_type));
+
+        // Recorded here, not per program: `state` is computed once per core type and then copied
+        // into every program in the span, so recording inside the loop below would log the same
+        // numbers N times for an N-program MeshWorkload (inflating count/total, and making min==max).
+        {
+            const auto target = enchantum::to_string(programmable_core_type);
+            const auto record_size = [&](std::string_view name, uint32_t bytes) {
+                per_target_telemetry_token(name, target, "B").record(bytes);
+            };
+            // finalize_rt_args lays out unique RTAs and common RTAs back to back between rta_offset
+            // and sem_offset, so this span covers both (plus alignment padding), not unique RTAs alone.
+            record_size("program_config_size.rta_and_crta", state.sem_offset - state.rta_offset);
+            record_size("program_config_size.semaphore", state.sem_size);
+            record_size("program_config_size.circular_buffer", state.cb_size);
+            record_size("program_config_size.local_circular_buffer", state.local_cb_size);
+            record_size("program_config_size.dataflow_buffer", state.dfb_size);
+            record_size("program_config_size.kernel_text", state.kernel_text_size);
+            record_size("program_config_size.total", state.offset);
+        }
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);

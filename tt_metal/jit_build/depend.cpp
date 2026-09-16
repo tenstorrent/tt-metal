@@ -284,7 +284,7 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     // tok must stay a reference into the pre-warmed BuildCacheTelemetry singleton's owned_tokens_: a
     // by-value static here would first-construct on a pool thread after atexit runs, reopening the
     // process-exit use-after-destroy the prewarm warming closes.
-    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("dependencies_up_to_date");
+    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().get_or_register_metric("dependencies_up_to_date");
     tok.record(elapsed_ms);
 
     return up_to_date;

@@ -8,6 +8,7 @@
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <cstdint>
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -216,8 +217,8 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             // the allocation at its source so program-cache filtering does not depend on which dispatch path got here.
             // Preserve the richer op-specific context installed by TTNN on the normal cache-miss path.
             std::optional<AllocationContextGuard> program_cache_context;
-            if (!current_allocation_context().starts_with("program_cache:")) {
-                program_cache_context.emplace("program_cache: kernel binaries");
+            if (!current_allocation_context().starts_with(kProgramCacheAllocationContextPrefix)) {
+                program_cache_context.emplace(std::string(kProgramCacheAllocationContextPrefix) + " kernel binaries");
             }
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
@@ -238,7 +239,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     device_range,
                     false);
 
-                std::shared_ptr<Buffer> buffer_view = Buffer::create(
+                std::shared_ptr<Buffer> buffer_view = BufferImpl::create(
                     mesh_device,
                     kernel_bin_buf_->address(),
                     kernel_bin_size,
