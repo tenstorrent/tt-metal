@@ -193,8 +193,8 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 100
-    bh_sc1: 150
+    bh_sc4: 145
+    bh_sc1: 210
 
 scaleout:
   merge_gate:

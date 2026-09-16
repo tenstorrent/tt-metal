@@ -1282,7 +1282,7 @@
   sp_config: sc1
 
 
-# ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
+# ===== Disaggregated prefill, SC4 -- keep these adjacent; the first two share one launcher =============
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
@@ -1347,6 +1347,42 @@
   sp_config: sc4
 
 
+# 4-galaxy (SC4) DFlash drafter KV accuracy. A separate launcher from the two entries above rather than a
+# flag on them: the drafter path is not trace-captured and prefill_runner asserts on the pair, so this leg
+# runs PREFILL_USE_TRACE=0 while both verifier legs run with trace on. The request is sized to the drafter
+# golden (55k) instead of to a perf depth, since every position past it is unverifiable.
+# What only the 4-rank shape covers: the drafter is built on the LAST pipeline rank while rank 0 serializes
+# the table, so every drafter address in it is a remote host's DRAM reached via the all-gathered stage
+# layout, and the device-less producer reads those back over UMD from a third process. The verifier KVPE is
+# PCC'd alongside on every rank, so a drafter regression stays separable from a verifier one.
+- name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27
+  test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k2_7, runner, kv_cache, dflash]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # 32 min end-to-end on a reserved quad: ~21 min of 4-rank weight load, then 11 untraced chunks and
+      # the producer's 96-config drafter read. The margin is for CI, where four ranks pull the same TTNN
+      # cache over one NFS mount concurrently and the per-layer load rate is the dominant unknown.
+      timeout: 45
+      tier: 1
+      # Not a release gate yet: the drafter V minimum clears its threshold by 0.003 and has been measured
+      # on two topologies, neither on a die known to be marginal.
+      release_ready: false
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
 
 - name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
   cmd: |
@@ -1385,6 +1421,36 @@
     bh_sc1:
       timeout: 80
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
+
+# Single-galaxy (SC1) DFlash drafter KV accuracy, same launcher under a different config key. It takes the
+# same STAGED code path as SC4 -- PREFILL_MOCK_MIGRATION all-gathers the stage layouts at any rank count --
+# so what it drops is the remote HOST, not the branch: one rank builds the table over its own DRAM and the
+# producer reads it back over local PCIe. That is what makes it worth running alongside SC4: a failure here
+# is in the drafter or the table, a failure only in SC4 is in the cross-host path.
+- name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27 sc1
+  test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k2_7, runner, kv_cache, dflash]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      # One galaxy loads all 67 layers serially, so weight load sets this number and the chunk loop is a
+      # minor part of it. The 72 min measured locally was ~60 min of cold-NFS load; the sibling SC1 leg
+      # fits the same 61-layer load inside 35 min in CI, so this is sized off that rather than off the
+      # local figure, plus the 6 drafter layers and the untraced chunk loop.
+      timeout: 60
+  owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
   budget_type: demo
   sp_config: sc1
