@@ -55,11 +55,16 @@ class LTXAttention(Module):
     }
     default_sdpa_chunk_size = (256, 256)
 
-    # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the SP-padded
-    # sequence length passed to the op. Misses fall back to sdpa_chunk_size_map.
+    # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the SP-padded sequence
+    # length (a TILE_SIZE * sp multiple) the tensors carry — the op itself is handed the logical N,
+    # so the lookup pads it. Misses fall back to sdpa_chunk_size_map.
     ring_sdpa_chunk_by_n = {
         (True, 8, 4, 9728): (96, 256),
         (True, 8, 4, 38912): (192, 512),
+        # BH 2x4 (sp=4, so N pads to a 128 multiple): stage 2 measured 10.51 -> 10.29 s with the wider
+        # K chunk at pcc 0.999; stage 1 (N=9728) stays on the (256, 256) default, which measured
+        # fastest there, and K=1024 overflows L1.
+        (True, 4, 2, 38784): (192, 512),
     }
 
     # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
@@ -601,7 +606,12 @@ class LTXAttention(Module):
                     ),
                     joint_strategy="rear",
                     logical_n=N,
-                    program_config=self._ring_pc_by_n.get(N, self.ring_sdpa_program_config),
+                    # The op is handed the logical (unpadded) N; the table is keyed by the SP-padded
+                    # length the tensors actually carry.
+                    program_config=self._ring_pc_by_n.get(
+                        -(-N // (ttnn.TILE_SIZE * sp_factor)) * ttnn.TILE_SIZE * sp_factor,
+                        self.ring_sdpa_program_config,
+                    ),
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
