@@ -65,12 +65,8 @@ def test_quasar_gather_in0_unknown_worker_y_is_fatal(device):
     torch.manual_seed(12345)
     in0 = torch.rand([1, 1, 32, 1280], dtype=torch.bfloat16)
     in1 = torch.rand([1, 1, 1280, 3200], dtype=torch.bfloat16)
-    in0_t = ttnn.from_torch(
-        in0, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in0_mc
-    )
-    in1_t = ttnn.from_torch(
-        in1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=in1_mc
-    )
+    in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in0_mc)
+    in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=device, memory_config=in1_mc)
 
     with pytest.raises(RuntimeError, match="NOT FOUND in first-col map"):
         ttnn.experimental.quasar.matmul(

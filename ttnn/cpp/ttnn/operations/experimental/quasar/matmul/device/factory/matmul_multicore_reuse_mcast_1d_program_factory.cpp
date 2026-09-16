@@ -2599,18 +2599,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
                 TT_FATAL(
                     it != worker_y_to_dram_bank_first_col.end(),
-                    "Worker core ({}, {}) y={} NOT FOUND in first-col map",
+                    "Worker core ({}, {}) NOT FOUND in first-col map",
                     core.x,
-                    core.y,
                     core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
                 TT_FATAL(
                     it != worker_y_to_dram_bank_second_col.end(),
-                    "Worker core ({}, {}) y={} NOT FOUND in second-col map",
+                    "Worker core ({}, {}) NOT FOUND in second-col map",
                     core.x,
-                    core.y,
                     core.y);
                 bank_id = it->second;
             }
