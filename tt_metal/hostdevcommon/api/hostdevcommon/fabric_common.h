@@ -274,20 +274,32 @@ struct Routing2DCodec {
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
+    // Y leg first, X leg once Y is spent: the general dimension-ordered read, valid on any facing.
+    // A router whose Y byte is still nonzero owes a N/S (or Z) hop; zero means the Y leg is done and
+    // the X row governs.
+    static inline std::uint8_t decode_action_y_first(
+        const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
+        const std::uint8_t action_y = route_buffer[local_y];
+        if (action_y != 0) {
+            return action_y;
+        }
+        return route_buffer[y_size + local_x];
+    }
+
     // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]
-    // route buffer. E/W-facing routers consume X only; N/S/Z-facing routers consume Y whenever the
-    // whole Y byte is nonzero, and X otherwise.
+    // route buffer. N/S/Z-facing routers take the general read above. An E/W facing may skip the Y
+    // byte outright, because Y-before-X means a packet only reaches one after its Y leg is spent.
+    //
+    // That shortcut is scoped to packets already travelling this mesh's map. It does NOT hold at an
+    // intermesh landing, where the boundary router installs a fresh map and the Y leg restarts under
+    // it -- that path must call decode_action_y_first regardless of facing.
     template <eth_chan_directions MY_DIR>
     static inline std::uint8_t decode_action(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         if constexpr (MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST) {
             return route_buffer[y_size + local_x];
         } else {
-            const std::uint8_t action_y = route_buffer[local_y];
-            if (action_y != 0) {
-                return action_y;
-            }
-            return route_buffer[y_size + local_x];
+            return decode_action_y_first(route_buffer, local_y, local_x, y_size);
         }
     }
 
