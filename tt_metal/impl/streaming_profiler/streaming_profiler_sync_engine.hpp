@@ -335,11 +335,22 @@ private:
     // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
     bool publish_dev(uint32_t dev);
     void publish_all();
-    // The capture-end report: every link's solution and the loop closures, each chip's clock model; the sync error
-    // per round and each chip's AICLK as plots.
+    // The capture-end report: each chip's clock model, every link's solution, the loop closures; the sync error per
+    // round and each chip's AICLK as plots.
     void log_summary() const;
+    void log_clock_models() const;
+    void log_link_solutions() const;
+    void log_loop_closures() const;
     void publish_error_plots();
     void publish_clock_plots();
+    // One link's rounds placed through the final map: per round the error (as a plot point), the placement's terms,
+    // the raw offset, the stamps' own residual and the path figures.
+    struct LinkErrors;
+    LinkErrors link_errors(size_t li) const;
+    static void stamp_residuals(LinkErrors& e);
+    void log_link_stats(const CaptureContext::Link& L, const LinkErrors& e, size_t rounds) const;
+    void log_worst_rounds(const CaptureContext::Link& L, const LinkErrors& e) const;
+    void write_err_csv(const CaptureContext::Link& L, const LinkErrors& e) const;
     // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
     // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
     // abscissa. False when a chip has no fitted run or no node to place a stamp with.
