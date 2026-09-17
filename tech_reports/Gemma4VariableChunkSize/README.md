@@ -17,14 +17,19 @@ that no single prefill chunk width is good at both ends of the ISL range.
    measured-cheapest width in **4 of 4** prompt lengths, for **1.42x** over pinning 4096 and a
    **1.68x per-request geometric mean (up to 5.28x)** over pinning 32768.
 
-2. **Gemma4 CP prefill is not chunk-width invariant, and that predates this work.** The same
-   prompt through **one sliding layer** over an **empty** KV history gives **PCC 0.871** between
-   chunk 8192 and chunk 32768. One layer cannot amplify anything. The `ring_joint` op is **not**
-   the culprit — it matches torch at every width on both SP4 and SP8 (§4) — so a correct kernel is
-   being driven differently by the model. Until that is fixed, changing chunk width changes the
-   model's output, which blocks per-request bucketing **and equally invalidates the
-   already-published 8192 -> 32768 throughput recommendation**, since nothing had checked whether
-   that change is numerically neutral.
+2. **The implementation has a bug: a model built with several widths computes the wrong answer
+   even at a width it shares with a single-width build.** Same prompt, one layer, identical
+   `ring_cache` geometry — chunk 8192 from a `(8192,)` build and from a `(4096, 8192, 32768)`
+   build differ at **PCC 0.869**, `max_abs_diff` 29.9. So per-request bucketing as implemented here
+   is **not functionally correct**, and the fault is mine, not the model's.
+
+**Retracted (2026-09-17):** an earlier version of this report claimed Gemma4 prefill is inherently
+not chunk-width invariant, that this predated the work, and that it invalidated the published
+8192 -> 32768 throughput recommendation. **All three claims are withdrawn.** They rested on
+cross-width comparisons made *inside a single multi-width build* — that is, inside the bug above.
+The single-vs-multi-width control that would have caught it was identified as missing but not run
+until later. `ring_joint` matching torch at every width (§4) is consistent with the op having been
+correct all along.
 
 The mechanism in (1) is sound and separately validated (padding is bit-exact, replay is exact,
 the negative control fires). The blocker is underneath it, in the attention op.
@@ -68,72 +73,85 @@ second, nearly-empty wide chunk. Measured at 36,864 tokens: **1693 ms** at chunk
 **Any policy written as `narrow if prompt < T else wide` is wrong in that band.** Pinned by
 `test_selection_is_sawtooth_not_a_single_threshold`.
 
-## 3. Measured: the selector beats pinning either width
+## 3. Measured, three buckets, against the shipping config
 
-`test_variable_chunk_prefill_beats_either_fixed_width`, one model with both widths captured,
-every prompt run at **both** widths so the comparison is measured rather than modelled.
+`test_variable_chunk_prefill_beats_either_fixed_width` with `GEMMA4_CHUNK_BUCKETS=4096,8192,32768`.
+Every prompt run at **all three** widths, so nothing here is projected.
 
-| prompt | chunk 4096 | chunk 32768 | picked | modelled | picked vs best measured |
+| prompt | chunk 4096 | **chunk 8192 (shipping)** | chunk 32768 | picked | **picked vs fixed 8192** |
 |---:|---:|---:|---:|---:|---:|
-| 4,096 | **175.8 ms** | 928.6 ms | 4096 | 174.2 | 1.000x |
-| 16,384 | **722.5 ms** | 930.0 ms | 4096 | 714.8 | 1.000x |
-| 36,864 | **1693.1 ms** | 1984.9 ms | 4096 | 1675.7 | 1.000x |
-| 262,144 | 17295.9 ms | **11439.2 ms** | 32768 | 10960.0 | 1.000x |
+| 4,096 | **175.8 ms** | 244.5 ms | 928.4 ms | 4096 | **1.39x** |
+| 16,384 | 722.3 ms | **501.1 ms** | 930.0 ms | 8192 | 1.00x |
+| 36,864 | 1692.6 ms | **1343.8 ms** | 1984.4 ms | 8192 | 1.00x |
+| 262,144 | 17292.3 ms | 13890.0 ms | **11447.9 ms** | 32768 | **1.21x** |
 
-* **4 of 4 correct picks**, and the model predicts each measurement to **0.9-4.2%**.
-* vs pinning **4096**: 19.89 s -> 14.03 s = **1.42x** on the workload.
-* vs pinning **32768**: 15.28 s -> 14.03 s = 1.09x on the workload, but **1.68x per-request
-  geometric mean**, range 1.00x-**5.28x**. The workload total understates it because the single
-  256k prompt dominates the sum; per-request is what a short request actually experiences.
+* Selector picked the measured-cheapest width **4 of 4**.
+* Workload total: fixed 8192 **15.98 s** -> variable **13.47 s** = **1.19x**; per-request geometric
+  mean **1.14x**, range 1.00x-1.39x.
+* vs fixed 4096: 1.48x total. vs fixed 32768: 1.14x total (1.95x geomean) — but nobody would deploy
+  a fixed 32768, so that column flatters the result and should be ignored.
 
-Cost of the second bucket: one extra captured trace (~2.4 s capture, trace region 600 MB for two)
-and one extra chunk-major RoPE table (~67 MB/device, and **unused on the traced path** — see §6).
-No extra weights and no extra KV cache.
+**A two-bucket {4096, 32768} set LOSES to shipping 8192 in the middle** — 0.69x at 16,384 and 0.79x
+at 36,864 — because 8192 pays half the per-chunk floors of 4096 and wastes none of 32768's padding.
+An earlier version of this report reported 1.42x/1.68x for that pair against *its own two members*
+and called it a win. That was the wrong baseline: **a bucket set can only be judged against widths
+it does not contain.** Three buckets are the minimum that never loses to shipping.
 
----
+The cost model held up: it predicted the four newly measured chunk-8192 points to **0.7-1.3%**
+(244.5 vs 242.7, 501.1 vs 497.4, 1343.8 vs 1333.3, 13890.0 vs 13710.0).
 
-## 4. The blocker: prefill is not chunk-width invariant
+### The admission policy oscillates 11 times
 
-Found while building the correctness gate for the above. **It is not caused by variable chunking**
-— it reproduces between any two fixed widths.
+With three buckets, `select_chunk_size` changes its answer **eleven** times over [4k, 256k]:
 
-Same prompt, same tokens, two chunk widths, comparing the output hidden states:
+```
+4096->4096  8192->8192  28672->32768  36864->8192  61440->32768  69632->8192
+86016->32768  102400->8192  110592->32768  135168->8192  143360->32768
+```
 
-| pair | row 1 PCC | worst row |
-|---|---:|---:|
-| 4096 vs 8192 | 0.794 | **-0.269** |
-| 4096 vs 32768 | 0.840 | -0.177 |
-| 8192 vs 32768 | 0.986 | 0.189 |
-| **4096 vs itself, replayed last** | **1.0000** | **1.0000** |
+It flips between 8192 and 32768 at every 32768-boundary remainder, because a prompt just past a
+multiple of 32768 pays for a second, nearly-empty wide chunk. Operationally this matters: the
+bucket abstraction is **not** a clean "short -> narrow, long -> wide" tiering, two users with
+similar prompt lengths get different widths and different TTFT, and the policy cannot be summarised
+to a capacity planner in one sentence.
 
-The control is exact, so this is not nondeterminism and not cross-trace contamination.
+## 4. The bug: multi-width construction changes the answer
 
-### It is a first-order difference, not 60-layer amplification
+Same prompt, one decoder layer, `max_seq_len` 65536, and `ring_cache_capacity` = 65536 for **both**
+builds (it is `max(max_seq_len, 2*max(C))`, which saturates at 65536 either way) — so the KV cache
+geometry is byte-identical and cannot explain the difference. The only variable is the width tuple
+the model was constructed with:
 
-The obvious benign explanation is that a different SDPA blocking gives slightly different
-arithmetic that compounds over 60 layers. **It does not.** Truncating the same loaded model to N
-layers (chunk 8192 vs 32768, prompt 8192, whole-tensor PCC):
+| build | widths | chunk-8192 layer-1 output std |
+|---|---|---:|
+| single-width (the shipping config) | `(8192,)` | **0.883347** |
+| multi-width | `(4096, 8192, 32768)` | **0.928255** |
 
-| layers | 1 | 2 | 4 | 8 | 16 | 30 | 60 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| PCC | **0.871** | 0.922 | 0.924 | 0.965 | 0.969 | 0.939 | 0.576 |
+`bitwise_identical = False`, `max_abs_diff = 29.9`, **PCC = 0.869**.
 
-**0.871 at one layer**, and the curve *improves* to 16 layers before collapsing. Amplification
-would decay monotonically from ~1.0. Layer 0 is `sliding_attention`, and at chunk 0 the KV history
-is empty — so a single sliding-window ring attention over a fresh cache already depends on the
-chunk width.
+A lead worth starting from — the single-width 8192 result matches the multi-build's **4096** result,
+not its 8192 result:
 
-### What this costs
+```
+single-build @8192  = 0.883347   ~=   multi-build @4096  = 0.883675
+                                      multi-build @8192  = 0.928255
+                                      multi-build @32768 = 0.928538
+```
 
-* **Per-request bucketing cannot ship** until width is neutral: two requests with the same prompt
-  would get different answers depending on how busy the server was.
-* **The published 8192 -> 32768 recommendation (+24.3% tok/s) silently changes the output.** That
-  is the same defect, and it was never checked: the only surviving CP prefill test asserts
-  finiteness and non-degeneracy, never numerics.
-* **Which width is correct is unknown.** There is no absolute reference on this path — the CPU
-  reference was deleted, and the model here has no final norm or LM head, so there are no logits.
+That pattern suggests per-width resources being bound by position-in-tuple, or by the model's
+"default" width (`prefill_chunk_sizes[-1]`), rather than by the width actually requested. The two
+candidates are `VariableChunkPrefill.capture()`, which captures N traces sequentially and may bake
+overlapping intermediate addresses, and the per-width RoPE table construction. Not yet tested —
+this is the next thing to do.
 
-### The op is not at fault — measured
+**What this invalidates from the earlier investigation.** Every cross-width number previously
+reported here was measured inside one multi-width build, so all of it is suspect: the pair table
+(4096-vs-8192 PCC 0.794, etc.), and the PCC-vs-depth curve (0.871 at 1 layer rising to 0.969 at 16,
+collapsing to 0.576 at 60). The replay-determinism control (PCC 1.0000) and the padding-invariance
+result (PCC 1.0) were both measured *within* one build and remain valid as far as they go, but they
+do not establish cross-build correctness.
+
+### `ring_joint` itself is width-neutral — measured, and still useful
 
 `ring_joint` sliding SDPA was checked against **torch** at every width involved, on both ring
 sizes, using the in-tree harnesses. All pass, and the PCCs are flat in the width:
@@ -150,8 +168,9 @@ Note the SP4 cases alone would not have settled it — the model is CP8 — so t
 one that matters. There is no in-tree coverage at slab 4096 / global 32768; those rows were run
 for this report.
 
-**So a torch-correct op is being driven differently at the two widths.** The fault is in the model
-layer, not the kernel. The next step is to bisect inside one `sliding_attention` layer: capture the
+**The op is width-neutral.** With the retraction above this is no longer evidence of a model-level
+defect — it is what rules the kernel out as a suspect for the construction bug in §4. If a deeper
+bisect is ever wanted, it would go inside one `sliding_attention` layer: capture the
 post-RoPE Q handed to `ring_joint` and the tensor it returns, at both widths, and find which is the
 first to disagree. If Q already differs it is RoPE or the projections; if only the SDPA output
 differs it is the arguments the model passes (program config, halo sizing, `logical_n`, the
@@ -249,3 +268,31 @@ GEMMA4_CHUNK_BUCKETS=8192,32768 ./python_env/bin/python3 -m pytest "$D" -k beats
 ```
 
 Run logs from this session: `/data/kmabee/gemma4_runs/varchunk/`.
+
+---
+
+## 8. Should this ship? No.
+
+Recorded because the investigation reached a clear answer, against the thing it was built to do.
+
+**What it is worth, measured:** 1.19x on the workload above against the shipping 8192, per-request
+1.00x-1.39x. And the short-prompt half of that (1.39x at 4,096) is **fully available from a single
+fixed width of 4096**, with no new machinery at all — the prior report already found 4096 the best
+single setting. So the genuine *incremental* value of per-request width is only the long-context
+term, **1.21x at 256k**.
+
+**What it costs:**
+
+| cost | detail |
+|---|---|
+| **Correctness** | broken today (§4), and the layout has two silent-corruption modes: width changed mid-request, and decode reading with the wrong block-cyclic period. Neither raises |
+| **Scheduling** | the quantum becomes non-uniform — 176 ms for a 4096 chunk vs 928 ms for a 32768 one. Under continuous batching a short request behind a wide chunk eats up to ~930 ms of head-of-line blocking. **Every number in this report is single-request on an exclusive mesh and cannot see this** |
+| **Disagg** | per-slot width must cross the process boundary in slot metadata; `iter_cache_chunk_locations` is already width-parametric, but a wrong period at the decode worker is silent corruption |
+| **Memory** | one captured 60-layer trace per bucket (900 MB of trace region for three), plus one chunk-major RoPE table per width (~67 MB/device, and **never read on the traced path**) |
+| **Predictability** | the 11-switch policy above |
+
+**Recommendation.** Deploy a single fixed width chosen from the ISL distribution — 4096 if short
+prompts dominate, 8192 as the balanced default, 16384/32768 if long contexts dominate. Revisit
+per-request width only if the ISL distribution is strongly bimodal *and* the 1.21x long-context term
+is worth a per-slot invariant with silent failure modes. The code here is kept as a measured answer
+to "what would it buy", not as a candidate for merge.
