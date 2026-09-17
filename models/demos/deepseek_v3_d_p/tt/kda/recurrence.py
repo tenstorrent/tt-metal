@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
@@ -24,7 +25,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDARecurrenceProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology
 
 
 def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim: int) -> ttnn.MemoryConfig:
@@ -53,7 +53,7 @@ class _AffineTransform:
 @dataclass(frozen=True)
 class _RecurrenceGeometry:
     batch: int
-    sequence: int
+    local_rows: int
     heads: int
     key_dim: int
     value_dim: int
@@ -108,17 +108,17 @@ def _recurrence_geometry(
     """Derive host-only execution metadata from layer-produced tensors."""
     q_shape = tuple(q.shape)
     v_shape = tuple(v.shape)
-    batch, sequence, heads = tuple(beta.shape)
+    batch, local_rows, heads = tuple(beta.shape)
     key_dim = q_shape[2] // heads
     value_dim = v_shape[2] // heads
     return _RecurrenceGeometry(
         batch=batch,
-        sequence=sequence,
+        local_rows=local_rows,
         heads=heads,
         key_dim=key_dim,
         value_dim=value_dim,
         chunk_size=KDA_CHUNK_SIZE,
-        num_chunks=sequence // KDA_CHUNK_SIZE,
+        num_chunks=local_rows // KDA_CHUNK_SIZE,
     )
 
 
@@ -247,7 +247,7 @@ def _distributed_prefix(
     initial_state: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    chronology: DeviceChronology,
+    selections: ChronologicalSelections,
     compute_config: ttnn.DeviceComputeKernelConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
@@ -281,7 +281,7 @@ def _distributed_prefix(
     for step in range(gathered.shape[0]):
         # Keep chronological slots until the final device-indexed entry selection.
         entry_states.append(carry)
-        selected = chronology.select_affine_transform(gathered, step, memory_config=working_memory)
+        selected = selections.select_affine_transform(gathered, step, memory_config=working_memory)
         transported_a = ttnn.slice(
             selected,
             (0, 0, 0, 0),
@@ -307,7 +307,7 @@ def _distributed_prefix(
         carry = ttnn.add(carry, b_for_carry, memory_config=working_memory)
 
     chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=working_memory)
-    local_entries = chronology.select_local_entry_state(chronological_entries, memory_config=working_memory)
+    local_entries = selections.select_local_entry_state(chronological_entries, memory_config=working_memory)
     entry = ttnn.reshape(local_entries, (batch_heads, key_dim, value_dim))
     final_state = ttnn.reshape(ttnn.to_memory_config(carry, output_memory), (batch_heads, key_dim, value_dim))
     return entry, final_state
@@ -411,7 +411,7 @@ def _partition_prefix(
     groups_per_head: int,
     local_rows: int,
     sequence_parallel_axis: int,
-    chronology: DeviceChronology,
+    selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -429,7 +429,7 @@ def _partition_prefix(
         _AffineTransform(a, b),
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
-        chronology=chronology,
+        selections=selections,
         compute_config=compute_config.affine_prefix,
     )
 
@@ -441,7 +441,7 @@ def _scan_sp_grouped_chunks(
     *,
     summary_group_chunks: int,
     sequence_parallel_axis: int,
-    chronology: DeviceChronology,
+    selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
@@ -461,10 +461,10 @@ def _scan_sp_grouped_chunks(
         head,
         initial_state,
         groups_per_head=groups,
-        local_rows=geometry.sequence,
+        local_rows=geometry.local_rows,
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
-        chronology=chronology,
+        selections=selections,
         compute_config=compute_config,
     )
     entries = ttnn.experimental.kda.affine_exclusive_scan(
@@ -472,7 +472,7 @@ def _scan_sp_grouped_chunks(
         head_b,
         entry,
         groups,
-        local_rows=geometry.sequence,
+        local_rows=geometry.local_rows,
         tail_a=tail_a,
         tail_b=tail_b,
         tail_state=tail_state,
@@ -501,7 +501,7 @@ def _scan_sp_grouped_chunks(
     gathered = ttnn.reshape(gathered, (-1, geometry.batch_heads, geometry.key_dim, geometry.value_dim))
     prefix = ttnn.reshape(tail_state, (1, geometry.batch_heads, geometry.key_dim, geometry.value_dim))
     candidates = ttnn.concat([gathered, prefix], dim=0, memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG)
-    final = chronology.select_final_state(candidates)
+    final = selections.select_final_state(candidates)
     return _ScanResult(output, ttnn.reshape(final, (geometry.batch_heads, geometry.key_dim, geometry.value_dim)))
 
 
@@ -572,7 +572,7 @@ class KDARecurrence:
 
     @staticmethod
     def _finish(scan: _ScanResult, geometry: _RecurrenceGeometry) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.sequence, geometry.value_dim))
+        output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
         final_state = ttnn.reshape(
             scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
         )
@@ -612,7 +612,7 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-        chronology: DeviceChronology,
+        selections: ChronologicalSelections,
         actual_start: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run SP recurrence from the layer's normalized chronological topology."""
@@ -623,7 +623,7 @@ class KDARecurrence:
             geometry,
             summary_group_chunks=self._summary_group_chunks,
             sequence_parallel_axis=cast(int, self._sequence_parallel_axis),
-            chronology=chronology,
+            selections=selections,
             actual_start=actual_start,
             compute_config=self._compute_config,
         )

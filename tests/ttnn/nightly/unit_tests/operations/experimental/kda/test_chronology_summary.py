@@ -22,9 +22,7 @@ pytestmark = run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 2_000_000}], indirect=True)
 @pytest.mark.parametrize("groups", [1, 4])
-def test_device_chronology_summaries_single_capture(
-    mesh_device: ttnn.MeshDevice, groups: int, device_params: dict
-) -> None:
+def test_chronology_summaries_single_capture(mesh_device: ttnn.MeshDevice, groups: int, device_params: dict) -> None:
     """Validate only live head/tail slots while one trace changes split and boundary rank."""
     device = mesh_device
     chunks_per_group = 4
@@ -55,13 +53,13 @@ def test_device_chronology_summaries_single_capture(
     outputs = run()
     ttnn.end_trace_capture(device, trace, cq_id=0)
     try:
-        for offset in range(0, 2 * rows + 32, 32):
-            source = scalar(offset)
+        for actual_start_value in range(0, 2 * rows + 32, 32):
+            source = scalar(actual_start_value)
             ttnn.copy(source, actual_start)
             ttnn.deallocate(source)
             ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
-            split = offset % rows != 0 and (offset // rows) % 2 == 0
-            wrap = (rows - offset % rows) // 32 if split else rows // 32
+            split = actual_start_value % rows != 0 and (actual_start_value // rows) % 2 == 0
+            wrap = (rows - actual_start_value % rows) // 32 if split else rows // 32
             expected = _segmented_summary_oracle(host, groups, chunks_per_group, wrap)
             actual = [ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float() for t in outputs]
             assert all(t.dtype == ttnn.bfloat16 for t in outputs)
@@ -75,7 +73,7 @@ def test_device_chronology_summaries_single_capture(
                         assert_accurate(
                             expected[part][folded_head].bfloat16().float(),
                             actual[part][folded_head],
-                            name=f"summary G={groups} start={offset} group={group} part={part}",
+                            name=f"summary G={groups} actual_start={actual_start_value} group={group} part={part}",
                             pcc_threshold=0.999,
                         )
     finally:

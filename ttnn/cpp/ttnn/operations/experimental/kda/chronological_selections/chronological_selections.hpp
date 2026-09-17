@@ -4,7 +4,7 @@
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
 namespace ttnn::experimental::kda {
-Tensor chronological_topology(
+Tensor chronological_selections(
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,

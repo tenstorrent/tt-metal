@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/chronology.hpp"
 
 #include <cstdint>
 
@@ -200,8 +200,8 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     if constexpr (dynamic_chronology) {
         DataflowBuffer control(dfb::chronology_compute);
         control.reserve_back(1);
-        const auto metadata = TensorAccessor(tensor::actual_start);
-        noc.async_read(metadata, control, sizeof(uint32_t), {.page_id = 0}, {});
+        const auto actual_start = TensorAccessor(tensor::actual_start);
+        noc.async_read(actual_start, control, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
         topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);

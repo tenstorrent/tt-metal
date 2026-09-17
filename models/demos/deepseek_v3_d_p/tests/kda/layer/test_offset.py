@@ -315,8 +315,8 @@ def test_device_boundary_offsets_match_natural_order(
     config, weights, hidden, expected_output, expected_state = _reference_case()
     layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
 
-    for boundary_chip in range(sp_size):
-        actual_start = boundary_chip * local_rows
+    for first_rank in range(sp_size):
+        actual_start = first_rank * local_rows
         permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
         hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -405,8 +405,8 @@ def test_split_offsets_match_natural_order(
     config, weights, hidden, expected_output, expected_state = _reference_case()
     layer = _build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis)
 
-    for boundary_chip in range(sp_size):
-        actual_start = boundary_chip * local_rows + tail_rows
+    for first_rank in range(sp_size):
+        actual_start = first_rank * local_rows + tail_rows
         permutation = _mla_row_permutation(actual_start, sp_size, local_rows)
         hidden_tt = _to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
         with ttnn.manage_config("throw_exception_on_fallback", True):

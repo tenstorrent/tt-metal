@@ -135,9 +135,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             tt::tt_metal::experimental::TensorBinding{input_tensor_name, "wrap_indicator"});
     }
 
-    const tt::tt_metal::experimental::TensorParamName chronology_name{"actual_start"};
+    const tt::tt_metal::experimental::TensorParamName actual_start_name{"actual_start"};
     const tt::tt_metal::experimental::TensorParamName predecessor_name{"predecessor_carry"};
-    reader.tensor_bindings.push_back({in.actual_start ? chronology_name : input_tensor_name, "actual_start"});
+    reader.tensor_bindings.push_back({in.actual_start ? actual_start_name : input_tensor_name, "actual_start"});
     reader.tensor_bindings.push_back(
         {in.predecessor_carry ? predecessor_name : history_tensor_name, "predecessor_carry"});
 
@@ -220,7 +220,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
 
     if (in.actual_start) {
         tensor_parameters.push_back(
-            {.unique_id = chronology_name, .spec = in.actual_start->mesh_tensor().tensor_spec()});
+            {.unique_id = actual_start_name, .spec = in.actual_start->mesh_tensor().tensor_spec()});
     }
     if (in.predecessor_carry) {
         tensor_parameters.push_back(
@@ -263,7 +263,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     }
 
     if (in.actual_start) {
-        run_args.tensor_args.emplace(chronology_name, in.actual_start->mesh_tensor());
+        run_args.tensor_args.emplace(actual_start_name, in.actual_start->mesh_tensor());
     }
     if (in.predecessor_carry) {
         run_args.tensor_args.emplace(predecessor_name, in.predecessor_carry->mesh_tensor());

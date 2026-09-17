@@ -5,7 +5,7 @@
 Reports paired warm trace wall time per offset against the S=0 baseline.
 
 Timing is interleaved through ONE capture per geometry. Only the contents of
-persistent start metadata change between samples. Correctness is covered by the
+persistent start actual_start change between samples. Correctness is covered by the
 changing-offset layer tests; this sweep isolates warmed execution cost.
 """
 
@@ -89,22 +89,22 @@ def test_offset_handling_cost(
     sweep = _offset_sweep(local_rows)
     samples: dict[str, list[float]] = {name: [] for name in sweep}
     sweep_items = list(sweep.items())
-    metadata = make_actual_start(mesh_device, 0)
+    actual_start = make_actual_start(mesh_device, 0)
     state = _allocate_state(layer)
     for _ in range(2):
-        warm_output, warm_state = layer.forward(hidden_tt, state, metadata)
+        warm_output, warm_state = layer.forward(hidden_tt, state, actual_start)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         _deallocate_state(warm_state)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    output, next_state = layer.forward(hidden_tt, state, metadata)
+    output, next_state = layer.forward(hidden_tt, state, actual_start)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     try:
         for sample_index in range(_TIMING_SAMPLES):
             ordered_items = sweep_items[sample_index:] + sweep_items[:sample_index]
             for name, actual_start in ordered_items:
                 source = make_actual_start(mesh_device, actual_start)
-                ttnn.copy(source, metadata)
+                ttnn.copy(source, actual_start)
                 ttnn.deallocate(source)
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
                 start = time.perf_counter()
@@ -117,7 +117,7 @@ def test_offset_handling_cost(
         ttnn.deallocate(output)
         _deallocate_state(next_state)
         _deallocate_state(state)
-        ttnn.deallocate(metadata)
+        ttnn.deallocate(actual_start)
 
     baseline_ms = statistics.median(samples["baseline"])
     measurements = {

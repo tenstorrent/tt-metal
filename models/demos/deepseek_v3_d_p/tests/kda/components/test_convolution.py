@@ -14,8 +14,8 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import _chronological_topology
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_actual_start
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from models.demos.deepseek_v3_d_p.tt.kda.device_chronology import DeviceChronology
 
 pytestmark = [run_for_blackhole()]
 
@@ -93,28 +93,30 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                 ttnn.deallocate(tensor)
 
     try:
-        for boundary in range(sp):
+        for first_rank in range(sp):
             for tail_rows in (0, 32, local_rows // 2, local_rows - 32):
-                topology = _chronological_topology(boundary * local_rows + tail_rows, sp, local_rows)
+                topology = _chronological_topology(first_rank * local_rows + tail_rows, sp, local_rows)
                 expected_entries = []
                 for rank in range(sp):
                     previous = (rank - 1) % sp
                     end_row = previous * local_rows + (
-                        topology.head_rows if topology.is_split and previous == boundary else local_rows
+                        topology.head_rows if topology.is_split and previous == first_rank else local_rows
                     )
                     outgoing = qkv[:, end_row - 3 : end_row]
                     expected_entries.append(outgoing)
                 expected_entries = torch.stack(expected_entries)
-                final_rank = boundary if topology.is_split else (boundary - 1) % sp
+                final_rank = first_rank if topology.is_split else (first_rank - 1) % sp
                 end_row = (final_rank + 1) * local_rows
                 expected_final = qkv[:, end_row - 3 : end_row]
 
-                metadata = make_actual_start(mesh_device, boundary * local_rows + tail_rows)
-                controls = ttnn.experimental.kda.chronological_topology(metadata, axis, local_rows, 1, 32, 32)
-                chronology = DeviceChronology(controls)
+                actual_start = make_actual_start(mesh_device, first_rank * local_rows + tail_rows)
+                selection_records = ttnn.experimental.kda.chronological_selections(
+                    actual_start, axis, local_rows, 1, 32, 32
+                )
+                selections = ChronologicalSelections(selection_records)
 
                 def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-                    return exchange_convolution_carry(qkv_tt, sequence_parallel_axis=axis, chronology=chronology)
+                    return exchange_convolution_carry(qkv_tt, sequence_parallel_axis=axis, selections=selections)
 
                 def check(outputs: tuple[ttnn.Tensor, ttnn.Tensor]) -> None:
                     entries, final = outputs
@@ -142,7 +144,7 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                     ttnn.release_trace(mesh_device, trace)
                     release(outputs)
 
-                if boundary == sp - 1 and tail_rows in (0, local_rows // 2):
+                if first_rank == sp - 1 and tail_rows in (0, local_rows // 2):
                     # Keep old allocations alive so fresh addresses cannot be recycled.
                     old_qkv, old_initial = qkv_tt, initial_tt
                     cache_entries = mesh_device.num_program_cache_entries()
@@ -166,7 +168,7 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                         ttnn.deallocate(qkv_tt)
                         ttnn.deallocate(initial_tt)
                         qkv_tt, initial_tt = old_qkv, old_initial
-                for tensor in (metadata, controls):
+                for tensor in (actual_start, selection_records):
                     ttnn.deallocate(tensor)
         assert torch.equal(_sp_carries(qkv_tt, mesh_device, axis, tp_axis), qkv.reshape(sp, 1, local_rows, width))
         assert all(torch.equal(item, initial) for item in _sp_carries(initial_tt, mesh_device, axis, tp_axis))

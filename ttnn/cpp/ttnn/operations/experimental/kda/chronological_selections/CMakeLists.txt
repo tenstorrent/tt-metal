@@ -1,13 +1,16 @@
 include(sources.cmake)
 
-add_library(ttnn_op_experimental_kda_chronological_topology ${LIB_TYPE})
-add_library(TTNN::Ops::Experimental::KDA::ChronologicalTopology ALIAS ttnn_op_experimental_kda_chronological_topology)
+add_library(ttnn_op_experimental_kda_chronological_selections ${LIB_TYPE})
+add_library(
+    TTNN::Ops::Experimental::KDA::ChronologicalSelections
+    ALIAS ttnn_op_experimental_kda_chronological_selections
+)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_kda_chronological_topology TT::CommonPCH)
-TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_kda_chronological_topology)
+tt_reuse_precompile_headers(ttnn_op_experimental_kda_chronological_selections TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_kda_chronological_selections)
 
 set_target_properties(
-    ttnn_op_experimental_kda_chronological_topology
+    ttnn_op_experimental_kda_chronological_selections
     PROPERTIES
         INTERFACE_HEADER_SETS_TO_VERIFY
             api
@@ -16,7 +19,7 @@ set_target_properties(
 file(GLOB_RECURSE kernels device/kernels/*.cpp)
 
 target_sources(
-    ttnn_op_experimental_kda_chronological_topology
+    ttnn_op_experimental_kda_chronological_selections
     PUBLIC
         FILE_SET api
         TYPE HEADERS
@@ -31,7 +34,7 @@ target_sources(
 )
 
 target_link_libraries(
-    ttnn_op_experimental_kda_chronological_topology
+    ttnn_op_experimental_kda_chronological_selections
     PRIVATE
         TT::Metalium
         TTNN::Ops::Experimental::KDA::Common
@@ -41,15 +44,15 @@ target_link_libraries(
 
 install(
     TARGETS
-        ttnn_op_experimental_kda_chronological_topology
+        ttnn_op_experimental_kda_chronological_selections
     FILE_SET
     kernels
         DESTINATION
-            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_kda_chronological_topology FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_kda_chronological_selections FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
 
 if(TARGET ttnn)
     target_sources(ttnn PRIVATE ${TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_TOPOLOGY_NANOBIND_SRCS})

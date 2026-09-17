@@ -55,18 +55,18 @@ def test_topology_orders_every_position_exactly_once(start):
 
 
 @pytest.mark.parametrize("start", ALL_STARTS)
-def test_boundary_chip_owns_the_first_and_last_positions(start):
+def test_first_rank_owns_the_first_and_last_positions(start):
     """The boundary chip is where the wrap lands, and it holds both ends when split."""
     topology = _chronological_topology(start, SP_SIZE, LOCAL_ROWS)
     oracle = rotated_chip_positions(start, SP_SIZE, LOCAL_ROWS)
     segments = segment_owners(topology)
 
-    assert oracle[topology.boundary_chip][0] == start
-    assert segments[0][0] == topology.boundary_chip
+    assert oracle[topology.first_rank][0] == start
+    assert segments[0][0] == topology.first_rank
     if topology.is_split:
         assert len(segments) == SP_SIZE + 1
-        assert segments[-1][0] == topology.boundary_chip
-        assert oracle[topology.boundary_chip][topology.head_rows] == start + GLOBAL_ROWS - topology.tail_rows
+        assert segments[-1][0] == topology.first_rank
+        assert oracle[topology.first_rank][topology.head_rows] == start + GLOBAL_ROWS - topology.tail_rows
     else:
         assert len(segments) == SP_SIZE
         assert len({chip for chip, _, _ in segments}) == SP_SIZE
@@ -85,9 +85,9 @@ def test_segment_rows_partition_each_chip(start):
         assert sorted(covered[chip]) == list(range(LOCAL_ROWS))
 
 
-def test_every_boundary_chip_is_reachable():
+def test_every_first_rank_is_reachable():
     """All eight chips occur as the boundary chip across the tile-aligned starts."""
-    boundaries = {_chronological_topology(start, SP_SIZE, LOCAL_ROWS).boundary_chip for start in ALL_STARTS}
+    boundaries = {_chronological_topology(start, SP_SIZE, LOCAL_ROWS).first_rank for start in ALL_STARTS}
     assert boundaries == set(range(SP_SIZE))
 
 
@@ -96,7 +96,7 @@ def test_device_boundary_offsets_are_unsplit():
     for chip in range(SP_SIZE):
         topology = _chronological_topology(chip * LOCAL_ROWS, SP_SIZE, LOCAL_ROWS)
         assert not topology.is_split
-        assert topology.boundary_chip == chip
+        assert topology.first_rank == chip
         assert topology.head_rows == LOCAL_ROWS
         assert topology.chip_order == tuple((chip + step) % SP_SIZE for step in range(SP_SIZE))
 
@@ -125,7 +125,7 @@ def test_unsplit_topologies_do_not_require_chunk_aligned_local_rows():
     """
     topology = _chronological_topology(32, SP_SIZE, 8)
     assert not topology.is_split
-    assert topology.boundary_chip == 4
+    assert topology.first_rank == 4
 
 
 @pytest.mark.parametrize("start", [32, 960, GLOBAL_ROWS - 32])

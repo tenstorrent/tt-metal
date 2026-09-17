@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "chronological_topology_nanobind.hpp"
-#include "chronological_topology.hpp"
+#include "chronological_selections_nanobind.hpp"
+#include "chronological_selections.hpp"
 #include "chronology.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
-namespace ttnn::operations::experimental::kda::chronological_topology::detail {
-void bind_chronological_topology(nb::module_& mod) {
-    // Private representation contract shared with the model's DeviceChronology adapter.
-    auto layout = mod.def_submodule("_chronology_layout");
+namespace ttnn::operations::experimental::kda::chronological_selections::detail {
+void bind_chronological_selections(nb::module_& mod) {
+    // Private representation contract shared with the model's ChronologicalSelections adapter.
+    auto layout = mod.def_submodule("_selection_layout");
     using namespace kda_chronology::selection;
     layout.attr("HISTORY_ROWS") = history_rows;
     layout.attr("SLICE_RANK") = slice_rank;
@@ -19,10 +19,10 @@ void bind_chronological_topology(nb::module_& mod) {
     layout.attr("FINAL_STATE") = final_state;
     layout.def("affine_transform", &affine_transform);
 
-    ttnn::bind_function<"chronological_topology", "ttnn.experimental.kda.">(
+    ttnn::bind_function<"chronological_selections", "ttnn.experimental.kda.">(
         mod,
         "Derive KDA selection records from device actual_start and static mesh geometry.",
-        &ttnn::experimental::kda::chronological_topology,
+        &ttnn::experimental::kda::chronological_selections,
         nb::arg("actual_start").noconvert(),
         nb::arg("sequence_parallel_axis"),
         nb::arg("local_rows"),
@@ -30,4 +30,4 @@ void bind_chronological_topology(nb::module_& mod) {
         nb::arg("key_dim"),
         nb::arg("value_dim"));
 }
-}  // namespace ttnn::operations::experimental::kda::chronological_topology::detail
+}  // namespace ttnn::operations::experimental::kda::chronological_selections::detail

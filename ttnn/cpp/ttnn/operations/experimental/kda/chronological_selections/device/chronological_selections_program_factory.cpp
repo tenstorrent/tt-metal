@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "chronological_topology_device_operation.hpp"
+#include "chronological_selections_device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 namespace ttnn::experimental::prim {
-ttnn::device_operation::MeshWorkloadArtifacts ChronologyFactory::create_mesh_workload_artifacts(
-    const ChronologyParams& a,
-    const ChronologyInputs& in,
+ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::create_mesh_workload_artifacts(
+    const ChronologicalSelectionsParams& a,
+    const ChronologicalSelectionsInputs& in,
     std::vector<Tensor>& outputs,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     using namespace tt::tt_metal::experimental;
@@ -20,14 +20,14 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologyFactory::create_mesh_wor
     const TensorParamName sn{"actual_start"}, on{"output"};
     KernelSpec reader{
         .unique_id = kernel,
-        .source = "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/device/kernels/derive.cpp",
+        .source = "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/derive.cpp",
         .scratchpad_bindings = {{scratch, "scratch"}},
         .tensor_bindings = {{sn, "actual_start"}, {on, "output"}},
         .compile_time_args = {{"BH", a.batch_heads}, {"K", a.key_dim}, {"V", a.value_dim}},
         .hw_config = ttnn::create_reader_datamovement_config(actual_start.device().arch()),
     };
     ProgramSpec spec{
-        .name = "kda_chronological_topology",
+        .name = "kda_chronological_selections",
         .kernels = {std::move(reader)},
         .scratchpads = {{.unique_id = scratch, .size_per_node = 32}},
         .tensor_parameters =

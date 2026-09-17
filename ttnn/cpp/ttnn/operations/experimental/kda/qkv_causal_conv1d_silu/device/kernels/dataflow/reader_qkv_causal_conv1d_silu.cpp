@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_topology/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/chronology.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -66,7 +66,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t wrap_row) {
         const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(activation.get_write_ptr());
         const auto topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
         device_wrap_row = topology.local_split ? topology.head_rows : 0;
-        initial_from_predecessor = topology.rank != topology.boundary;
+        initial_from_predecessor = topology.rank != topology.first_rank;
     } else if constexpr (has_wrap_indicator) {
         const auto wrap_indicator = TensorAccessor(tensor::wrap_indicator);
         // The activation buffer has not been queued yet, so its first word is
