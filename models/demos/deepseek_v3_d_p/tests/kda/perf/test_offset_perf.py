@@ -5,7 +5,7 @@
 Reports paired warm trace wall time per offset against the S=0 baseline.
 
 Timing is interleaved through ONE capture per geometry. Only the contents of
-persistent start actual_start change between samples. Correctness is covered by the
+persistent actual_start tensor change between samples. Correctness is covered by the
 changing-offset layer tests; this sweep isolates warmed execution cost.
 """
 
@@ -102,8 +102,8 @@ def test_offset_handling_cost(
     try:
         for sample_index in range(_TIMING_SAMPLES):
             ordered_items = sweep_items[sample_index:] + sweep_items[:sample_index]
-            for name, actual_start in ordered_items:
-                source = make_actual_start(mesh_device, actual_start)
+            for name, actual_start_value in ordered_items:
+                source = make_actual_start(mesh_device, actual_start_value)
                 ttnn.copy(source, actual_start)
                 ttnn.deallocate(source)
                 ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
