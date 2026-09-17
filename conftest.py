@@ -843,9 +843,7 @@ def _check_required_num_devices(request, ttnn):
         return
 
     if len(marker.args) != 1:
-        raise pytest.UsageError(
-            "requires_num_devices expects exactly one integer argument"
-        )
+        raise pytest.UsageError("requires_num_devices expects exactly one integer argument")
 
     required_devices = int(marker.args[0])
     available_devices = ttnn.get_num_devices()
