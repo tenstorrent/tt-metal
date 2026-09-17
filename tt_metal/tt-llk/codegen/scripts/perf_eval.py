@@ -16,9 +16,10 @@ returns an **intent-aware** verdict:
 
 It is schema-agnostic: every perf module has a different set of parameter
 columns, so the variant key is "all columns that are not a metric column"
-(`mean(...)`, `std(...)`, `TEXT_SIZE(...)`). The headline metric is
-`mean(L1_TO_L1)` (total L1->L1 cycles), measured on the `TILE_LOOP` marker
-(per-tile, the most comparable number) and falling back to `KERNEL`.
+(`mean(...)`, `std(...)`, `TEXT_SIZE(...)`). The headline metric defaults to
+`mean(L1_TO_L1)` and can be switched with `--metric`. It is measured on the
+`TILE_LOOP` marker (per-tile, the most comparable number) and falls back to
+`KERNEL`.
 
 The perf tests' run-to-run noise is ~0.5% (per the perf team), so deltas within
 +/-0.5% are treated as noise (neutral) by default — see --regress-pct /
@@ -45,8 +46,9 @@ from typing import Any
 PRIMARY_METRIC = "mean(L1_TO_L1)"
 MARKER_PREFERENCE = ("TILE_LOOP", "KERNEL")
 METRIC_PREFIXES = ("mean(", "std(", "TEXT_SIZE(")
-# Extra context metrics surfaced in the report when present.
+# Context metrics for the report; the primary metric is skipped.
 CONTEXT_METRICS = (
+    "mean(L1_TO_L1)",
     "mean(UNPACK_ISOLATE)",
     "mean(MATH_ISOLATE)",
     "mean(PACK_ISOLATE)",
@@ -114,6 +116,7 @@ def evaluate(
     noise_pct: float,
     regress_pct: float,
     improve_pct: float,
+    metric: str = PRIMARY_METRIC,
 ) -> dict[str, Any]:
     """Return a `perf` result dict. Pure function for easy unit testing."""
 
@@ -136,19 +139,31 @@ def evaluate(
         current_rows = [r for r in current_rows if r.get("marker") == marker]
         baseline_rows = [r for r in baseline_rows if r.get("marker") == marker]
 
-    primary_label = f"{PRIMARY_METRIC} @ {marker or 'all-markers'}"
+    primary_label = f"{metric} @ {marker or 'all-markers'}"
+
+    if current_rows and metric not in current_rows[0]:
+        return {
+            "measured": True,
+            "goal": goal,
+            "op": op,
+            "test": None,
+            "primary_metric": primary_label,
+            "verdict": "not_measured",
+            "reason": f"current perf rows carry no {metric} column",
+            "exit_code": 2,
+        }
 
     base_index = _index_by_key(baseline_rows, key_cols)
 
     per_variant: list[dict[str, Any]] = []
     deltas: list[float] = []
     for cur in current_rows:
-        cur_val = _to_float(cur.get(PRIMARY_METRIC))
+        cur_val = _to_float(cur.get(metric))
         if cur_val is None or cur_val == 0:
             continue
         key = tuple(cur.get(c, "") for c in key_cols)
         base = base_index.get(key)
-        base_val = _to_float(base.get(PRIMARY_METRIC)) if base else None
+        base_val = _to_float(base.get(metric)) if base else None
         entry: dict[str, Any] = {
             "key": {c: cur.get(c, "") for c in key_cols},
             "current_cycles": cur_val,
@@ -180,6 +195,18 @@ def evaluate(
     worst = max(deltas)  # most positive == worst regression
     best = min(deltas)  # most negative == best improvement
     median = statistics.median(deltas)
+    # Per-variant tally: how many got faster, slower, or stayed.
+    n_regressed = sum(1 for x in deltas if x > regress_pct)
+    n_improved = sum(1 for x in deltas if x < -improve_pct)
+    n_neutral = len(deltas) - n_regressed - n_improved
+    # `verdict` is the strict rule (any slower variant regresses);
+    # `verdict_typical` follows the median.
+    if median > regress_pct:
+        typical = "regressed"
+    elif median < -improve_pct:
+        typical = "improved"
+    else:
+        typical = "neutral"
 
     # Base verdict from thresholds, independent of goal.
     if worst > regress_pct:
@@ -210,12 +237,14 @@ def evaluate(
     # knows which thread the change slowed down, instead of only the L1->L1 total.
     breakdown: dict[str, Any] = {}
     cur_row, base_row = worst_variant.get("_cur"), worst_variant.get("_base")
-    for metric in CONTEXT_METRICS:
-        cur_m = _to_float(cur_row.get(metric)) if cur_row else None
-        base_m = _to_float(base_row.get(metric)) if base_row else None
+    for ctx_metric in CONTEXT_METRICS:
+        if ctx_metric == metric:
+            continue
+        cur_m = _to_float(cur_row.get(ctx_metric)) if cur_row else None
+        base_m = _to_float(base_row.get(ctx_metric)) if base_row else None
         if cur_m is None or base_m is None or base_m == 0:
             continue
-        breakdown[metric] = {
+        breakdown[ctx_metric] = {
             "baseline": base_m,
             "current": cur_m,
             "delta_pct": round((cur_m - base_m) / base_m * 100.0, 3),
@@ -240,10 +269,14 @@ def evaluate(
         "regress_pct": regress_pct,
         "improve_pct": improve_pct,
         "variants_compared": len(deltas),
+        "variants_improved": n_improved,
+        "variants_neutral": n_neutral,
+        "variants_regressed": n_regressed,
         "delta_pct_median": round(median, 3),
         "delta_pct_worst": round(worst, 3),
         "delta_pct_best": round(best, 3),
         "verdict": verdict,
+        "verdict_typical": typical,
         "worst_variant": worst_variant,
         "exit_code": exit_code,
     }
@@ -265,6 +298,17 @@ def _format_summary(result: dict[str, Any]) -> str:
                 result["delta_pct_worst"],
                 result["delta_pct_best"],
                 result["variants_compared"],
+            )
+        )
+        lines.append(
+            "  variants: %d improved, %d neutral, %d regressed  (verdict is 'regressed' "
+            "if ANY variant is slower by more than %.1f%%; typical variant: %s)"
+            % (
+                result.get("variants_improved", 0),
+                result.get("variants_neutral", 0),
+                result.get("variants_regressed", 0),
+                result.get("regress_pct", 0.0),
+                result.get("verdict_typical", "?"),
             )
         )
         wv = result.get("worst_variant") or {}
@@ -321,6 +365,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Delta%% below which (faster) a variant counts as an improvement",
     )
     p.add_argument(
+        "--metric",
+        default=PRIMARY_METRIC,
+        help="Headline metric column, e.g. 'mean(L1_TO_L1)' or 'mean(MATH_ISOLATE)'",
+    )
+    p.add_argument(
         "--json-out", default=None, help="Write the perf result JSON to this path"
     )
     args = p.parse_args(argv)
@@ -336,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         noise_pct=args.noise_pct,
         regress_pct=args.regress_pct,
         improve_pct=args.improve_pct,
+        metric=args.metric,
     )
     if args.test:
         result["test"] = args.test
