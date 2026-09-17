@@ -2235,7 +2235,9 @@ def run_qsfp_tests(
     problem = ""
     records: list = []
     malformed = 0
-    if not dump_path.is_file():
+    if timed_out:
+        log("  timed out; leaving the partial dump unread")
+    elif not dump_path.is_file():
         problem = f"wrote no {dump_path.name}"
     else:
         try:
@@ -2257,7 +2259,9 @@ def run_qsfp_tests(
 
     if timed_out:
         status = SKIP
-        details = f"timed out after {QSFP_TIMEOUT_S}s; no findings collected"
+        details = f"timed out after {QSFP_TIMEOUT_S}s; " + (
+            "the partial dump is kept as an artifact but not read" if dump_path.is_file() else "no dump was written"
+        )
     elif problem:
         status = SKIP
         # Why it produced nothing is the only useful thing left to report, and

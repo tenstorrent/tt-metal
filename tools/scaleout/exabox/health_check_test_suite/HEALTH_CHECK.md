@@ -275,11 +275,10 @@ either way. In `checks.csv` a non-gating phase's rows carry `acknowledged=1`,
 keeping them out of `top_fail_category` and `checks_warn_actionable` while
 leaving the raw counts intact.
 
-Before enabling it, note that `qsfp_link_training` currently counts every
-in-service port, including cage-attached ports with no module plugged in, which
-never train. On a partly cabled machine that is a large FAIL that says nothing:
-one measured Galaxy reported 256/320 trained, where all 64 "down" ports were
-empty cages. That check wants tightening first.
+The check most likely to produce a false FAIL under gating is
+`qsfp_link_training`, and it is already filtered for it: a port behind an empty
+QSFP cage cannot train, so it is set aside rather than counted. See the note
+under the check table below for what that filter does and does not cover.
 
 The dump lands in `<output_dir>/logs/qsfp_dump_<host>.jsonl` (~3.4 MB with
 cages) alongside `qsfp.txt` and `qsfp.log`, so
@@ -398,7 +397,7 @@ JSON-only are store-only forensics kept out of the console summary.
 | `qsfp_findings` | The collector's own `FINDINGS` list (unreadable descriptor, unusable ipmitool, a cage sweep that fell over) | **WARN** — lost coverage. This is what stops `collect`'s exit code 0 reading as a clean run. |
 | `qsfp_collection_failures` | No record is `READ_FAILED` / `UNREACHABLE` / `ABSENT` | **FAIL** — a part that did not answer |
 | `qsfp_collection_partial` | No record is `PARTIAL` / `SKIPPED` | **WARN** — lost coverage, kept separate from the above so it doesn't read as a fault. JSON-only when clean. |
-| `qsfp_link_training` | Every in-service port (not harvested, `PORT_TYPE` not `PCIE`/`UNCONNECTED`/`INVALID_LOCATION`) reports `TRAIN_STATUS == LINK_TRAIN_PASS`. Unread ports are excluded — a failed read is not a failed link. | **FAIL**, naming the ports |
+| `qsfp_link_training` | Every port that *should* have trained reports `TRAIN_STATUS == LINK_TRAIN_PASS`. Excluded: harvested tiles and `PCIE`/`UNCONNECTED`/`INVALID_LOCATION` types; ports that were not read (a failed read is not a failed link); and cage-attached ports whose cage holds no module or was not read (see below). | **FAIL**, naming the ports |
 | `qsfp_link_asymmetry` | Both ends of a resolved link agree on `LINK_UP`. Reported once per link, not once per record. | **FAIL** — the asymmetry names the end at fault. JSON-only when clean. |
 | `qsfp_missing_channel` | Every port with an expected partner saw one. A pair blind at both ends collapses to one row. | **FAIL**. **SKIP** when no port carries an expectation. |
 | `qsfp_miscabled` | The partner the firmware found is the one expected | **FAIL** on a wrong end. **WARN** on a link nobody described, but only when a descriptor matched this host — otherwise recorded without alerting. |
@@ -407,6 +406,26 @@ JSON-only are store-only forensics kept out of the console summary.
 | `qsfp_cage_gaps` | Cages match the expected cabling | **WARN**. **SKIP** without expected cabling, or when the sweep didn't run. |
 | `qsfp_eth_counters` | Store-only: `RETRAIN_COUNT`, `CORR_CW`, `UNCORR_CW` totals plus the worst ports | never alerts — JSON-only, like `gddr_info_*` |
 | `qsfp_modules` | Store-only: the transceiver inventory (vendor PN/SN, length, cage) | never alerts — JSON-only |
+
+**An empty QSFP cage is not a dead link.** A partly populated Galaxy is a
+supported configuration, and a port behind a cage with nothing plugged into it
+can never train. Counting those made a healthy measured 6U — 24 of 56 cages
+filled — report 256/320 ports trained, a deterministic 64-port FAIL that scales
+with how little of the chassis is cabled and would have taken healthy nodes out
+of service under `--qsfp-gating`. So `qsfp_link_training` judges a cage-attached
+port only once its cage is known to hold a module, and the same machine now
+reports `256/256 cabled and internal ports trained (64 behind an empty cage not
+counted)`.
+
+Three things keep that from becoming a blind spot. Cage attachment is decided by
+`PORT_TYPE` (`CHIP_TO_QSFPDD`, `CHIP_TO_WARP400`), not by the port's cage
+pointer, which is null on a dump collected with `--skip-qsfp` where the port is
+just as cage-attached. The soldered links — `CHIP_TO_CHIP` and both EXAMAX
+types, which train with nothing plugged in — always count, so the check keeps
+its real subject. And a port behind a cage that was *not read* is set aside
+separately from one behind a cage known to be empty, because "no cable here" and
+"nobody looked" are different facts; both counts appear in `details` and `data`,
+so what the check stopped looking at is never silent.
 
 An all-zero `remote_info` is treated as **no answer, not an answer**: an
 untrained port still carries a zero-filled one, and reading it as a partner

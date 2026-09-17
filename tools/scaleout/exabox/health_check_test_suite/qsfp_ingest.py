@@ -81,6 +81,20 @@ SOFT_FAILURES = ("PARTIAL", "SKIPPED")
 # PORT_TYPEs that never carry a link, so a port holding one is not "down".
 NO_LINK_PORT_TYPES = ("PCIE", "UNCONNECTED", "INVALID_LOCATION")
 
+# PORT_TYPEs that leave the chassis through a QSFP cage, and so cannot train
+# until somebody plugs a cable into that cage. A partly populated Galaxy is a
+# supported configuration, which makes "this port did not train" meaningless
+# for one of these until the cage is known to hold a module.
+#
+# The EXAMAX types are deliberately absent: they are the inter-UBB links inside
+# the chassis, soldered to the backplane, and they train with nothing plugged
+# in. So are CHIP_TO_CHIP's, which is why only these two are listed.
+CAGED_PORT_TYPES = ("CHIP_TO_QSFPDD", "CHIP_TO_WARP400")
+
+# COLLECTION.STATUS values that make a cage's PRESENT meaningless: the cage was
+# never read, so it is not empty, it is unknown.
+CAGE_UNREAD = ("SKIPPED", "READ_FAILED", "UNREACHABLE")
+
 TRAIN_PASS = "LINK_TRAIN_PASS"
 
 # Offending parts named in a check's one-line `details`. The full list always
@@ -160,6 +174,31 @@ def port_read(port: dict) -> bool:
 def in_service(port: dict) -> bool:
     """A port that is meant to carry a link: not harvested, not a PCIe tile."""
     return not port.get("HARVESTED") and str(port.get("PORT_TYPE") or "") not in NO_LINK_PORT_TYPES
+
+
+def behind_a_cage(port: dict) -> bool:
+    """Whether this port only carries a link once a cable is plugged in.
+
+    Keyed on PORT_TYPE, the static topology, rather than on the port's QSFP_UID:
+    the cage pointer arrives with the opt-in cage stage and is null on a dump
+    collected with --skip-qsfp, where the port is still just as cage-attached.
+    """
+    return str(port.get("PORT_TYPE") or "") in CAGED_PORT_TYPES
+
+
+def cage_occupancy(cages: list[dict]) -> dict[str, bool]:
+    """ENTRY_ID → whether a module answered in that cage.
+
+    Only cages whose own read succeeded are in the map. PRESENT off a cage that
+    never answered says nothing, so a port behind one is left as unjudgeable
+    rather than quietly counted as uncabled — the difference between "there is
+    no cable here" and "nobody looked".
+    """
+    return {
+        str(cage["ENTRY_ID"]): bool(cage.get("PRESENT"))
+        for cage in cages
+        if cage.get("ENTRY_ID") and collection_status(cage) not in CAGE_UNREAD
+    }
 
 
 def port_status(port: dict, field: str) -> Any:
@@ -448,24 +487,62 @@ def _board_rev(ubbs: list[dict]) -> dict:
     )
 
 
-def _link_training(ports: list[dict]) -> dict:
-    """Every in-service link that did not train.
+def _link_training(ports: list[dict], occupancy: dict[str, bool]) -> dict:
+    """Every link that should have trained and did not.
 
     The broadest of the link checks and the one that needs no expectation at
     all: it asks what is down, not what was lost, which is the question to ask
     when the descriptor is itself in doubt.
     """
-    considered = [p for p in ports if in_service(p) and port_read(p)]
-    if not considered:
-        return check("qsfp_link_training", SKIP, "no in-service ETH ports were read", ip="eth")
+    judged: list[dict] = []
+    empty_cage: list[dict] = []
+    unread_cage: list[dict] = []
+    for port in ports:
+        if not (in_service(port) and port_read(port)):
+            continue
+        if not behind_a_cage(port):
+            judged.append(port)
+            continue
+        occupied = occupancy.get(str(port.get("QSFP_ENTRY") or ""))
+        if occupied is True:
+            judged.append(port)
+        elif occupied is False:
+            empty_cage.append(port)
+        else:
+            unread_cage.append(port)
 
-    failed = [p for p in considered if port_status(p, "TRAIN_STATUS") != TRAIN_PASS]
+    # What was set aside, said out loud: a check that quietly stopped looking at
+    # a third of the ports would read as coverage it no longer has.
+    aside = []
+    if empty_cage:
+        aside.append(f"{len(empty_cage)} behind an empty cage")
+    if unread_cage:
+        aside.append(f"{len(unread_cage)} behind a cage that was not read")
+    tail = f" ({', '.join(aside)} not counted)" if aside else ""
+
+    data = {
+        "judged": len(judged),
+        "skipped_empty_cage": [short_path(p) for p in empty_cage],
+        "skipped_unread_cage": [short_path(p) for p in unread_cage],
+    }
+
+    if not judged:
+        return check(
+            "qsfp_link_training",
+            SKIP,
+            f"no port could be judged{tail or ': none were read'}",
+            ip="eth",
+            data=data,
+        )
+
+    failed = [p for p in judged if port_status(p, "TRAIN_STATUS") != TRAIN_PASS]
     if not failed:
         return check(
             "qsfp_link_training",
             PASS,
-            f"{len(considered)}/{len(considered)} in-service ports trained",
+            f"{len(judged)}/{len(judged)} cabled and internal ports trained{tail}",
             ip="eth",
+            data=data,
         )
 
     entries = [
@@ -482,10 +559,10 @@ def _link_training(ports: list[dict]) -> dict:
     return check(
         "qsfp_link_training",
         FAIL,
-        f"{len(considered) - len(failed)}/{len(considered)} in-service ports trained; down: "
+        f"{len(judged) - len(failed)}/{len(judged)} cabled and internal ports trained{tail}; down: "
         + _listing([f"{e['path']} ({e['train_status'] or 'no train status'})" for e in entries]),
         ip="eth",
-        data={"failures": entries},
+        data={**data, "failures": entries},
     )
 
 
@@ -733,7 +810,7 @@ def _cage_gaps(cages: list[dict]) -> dict:
     if not cages:
         return check("qsfp_cage_gaps", SKIP, "no cage records (the QSFP sweep did not run)", ip="eth")
     # A cage that was not read is not empty; the collection checks have it.
-    readable = [c for c in cages if collection_status(c) not in ("SKIPPED", "READ_FAILED", "UNREACHABLE")]
+    readable = [c for c in cages if collection_status(c) not in CAGE_UNREAD]
     if not readable:
         return check("qsfp_cage_gaps", SKIP, f"none of the {len(cages)} cage(s) were read", ip="eth")
     if not any(c.get("QSFP_PARTNER_UID") for c in readable):
@@ -888,6 +965,7 @@ def summarize(records: list[dict], malformed: int = 0) -> list[dict]:
     # ENTRY_ID joins within a snapshot, UID joins across them; the partner
     # pointers use the first and the firmware's own answer resolves through the
     # second, so both indexes are needed.
+    occupancy = cage_occupancy(cages)
     by_entry = {str(p["ENTRY_ID"]): p for p in ports if p.get("ENTRY_ID")}
     by_uid = {str(p["UID"]): p for p in ports if p.get("UID")}
     complete = descriptor_matched(envelope)
@@ -897,7 +975,7 @@ def summarize(records: list[dict], malformed: int = 0) -> list[dict]:
         _board_rev(groups.get("ubb", [])),
         _findings(envelope),
         *_collection_failures(records),
-        _link_training(ports),
+        _link_training(ports, occupancy),
         _link_asymmetry(ports, by_entry),
         _missing_channel(ports, by_entry),
         _miscabled(ports, by_uid, complete),
