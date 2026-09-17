@@ -4,11 +4,19 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal::distributed {
+
+/// Program-memory use established by non-dispatch workload preparation.
+struct MeshWorkloadProgramCapacity {
+    uint32_t max_program_config_size_bytes = 0;
+    uint32_t max_kernel_binary_size_bytes = 0;
+};
 
 class MeshWorkload;
 class MeshWorkloadImpl;
@@ -35,6 +43,9 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
+
+    /// Compiles kernels, finalizes program offsets, and validates capacity without dispatching.
+    MeshWorkloadProgramCapacity prepare(MeshDevice* mesh_device);
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);

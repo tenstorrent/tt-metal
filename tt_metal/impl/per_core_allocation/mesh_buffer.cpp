@@ -47,9 +47,9 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
             }},
         mesh_buffer_config);
 
-    // Create a non-owning MeshBuffer — each device buffer will own its own allocation.
     auto mesh_buffer = std::shared_ptr<distributed::MeshBuffer>(new distributed::MeshBuffer(
         mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
+    mesh_buffer->state_ = distributed::MeshBuffer::PerCoreOwnedState{};
 
     // Only allocate on the target device.
     TT_FATAL(mesh_device->impl().is_local(coord), "Target device coordinate must be local");

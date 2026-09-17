@@ -98,6 +98,7 @@ private:
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
+    friend class MeshWorkload;
     friend class tt::tt_metal::Program;
 
     bool use_prefetcher_cache_ = false;

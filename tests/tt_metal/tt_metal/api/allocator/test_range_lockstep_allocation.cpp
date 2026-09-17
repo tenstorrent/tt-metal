@@ -208,6 +208,46 @@ TEST_F(HybridAllocatorTest, SurvivesASubRegionView) {
         << "the view reports default lockstep while sharing a range lockstep allocation";
 }
 
+// Verifies that a retained mesh view preserves range-lockstep ownership semantics.
+TEST_F(HybridAllocatorTest, MeshBufferViewPreservesRangeLockstepMode) {
+    constexpr DeviceAddr owner_pages = 4;
+    constexpr DeviceAddr view_pages = 2;
+    const CoreRangeSet shard_grid(CoreCoord(0, 0));
+
+    auto owner_sharding = BufferShardingArgs(
+        ShardSpecBuffer(shard_grid, {1, owner_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, owner_pages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    range_lockstep::set_range_lockstep_allocation(owner_sharding, true);
+    const distributed::DeviceLocalBufferConfig owner_local_config{
+        .page_size = HYBRID_TEST_PAGE_SIZE,
+        .buffer_type = BufferType::L1,
+        .sharding_args = owner_sharding,
+        .bottom_up = false};
+    auto owner = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = owner_pages * HYBRID_TEST_PAGE_SIZE},
+        owner_local_config,
+        this->devices_[0].get());
+
+    auto view_sharding = BufferShardingArgs(
+        ShardSpecBuffer(shard_grid, {1, view_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, view_pages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    range_lockstep::set_range_lockstep_allocation(view_sharding, true);
+    distributed::DeviceLocalBufferConfig view_local_config{
+        .page_size = HYBRID_TEST_PAGE_SIZE,
+        .buffer_type = BufferType::L1,
+        .sharding_args = view_sharding,
+        .bottom_up = false};
+    const distributed::ReplicatedBufferConfig view_config{.size = view_pages * HYBRID_TEST_PAGE_SIZE};
+
+    auto view =
+        distributed::MeshBuffer::create_sharded_view(owner, view_config, view_local_config, HYBRID_TEST_PAGE_SIZE);
+    EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(*view->get_reference_buffer()));
+
+    range_lockstep::set_range_lockstep_allocation(view_local_config.sharding_args, false);
+    EXPECT_ANY_THROW(
+        distributed::MeshBuffer::create_sharded_view(owner, view_config, view_local_config, HYBRID_TEST_PAGE_SIZE));
+}
+
 // Only the L1 branch of allocate_buffer reads the flag, so anywhere else it would be a no-op that
 // is_range_lockstep_allocation() still reports as enabled.
 TEST_F(HybridAllocatorTest, RejectsNonL1Buffers) {

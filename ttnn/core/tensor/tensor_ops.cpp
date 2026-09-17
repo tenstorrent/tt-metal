@@ -28,7 +28,9 @@
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 
 using tt::tt_metal::BufferRegion;
+using tt::tt_metal::BufferType;
 using tt::tt_metal::DataType;
+using tt::tt_metal::DeviceAddr;
 using tt::tt_metal::DistributedHostBuffer;
 using tt::tt_metal::GraphTracker;
 using tt::tt_metal::HostTensor;
@@ -115,6 +117,30 @@ Tensor create_device_tensor(
     GraphTracker::instance().track_function_end(output);
 
     return output;
+}
+
+Tensor create_sharded_tensor_view(const Tensor& owner, const TensorSpec& tensor_spec, DeviceAddr shard_offset) {
+    TT_FATAL(owner.storage_type() == StorageType::DEVICE, "A sharded tensor view requires device storage");
+    const auto& owner_storage = owner.device_storage();
+    const auto& owner_buffer = owner_storage.get_mesh_buffer();
+    TT_FATAL(
+        owner_buffer.global_layout() == tt::tt_metal::distributed::MeshBufferLayout::REPLICATED,
+        "A sharded tensor view currently requires replicated mesh storage");
+    TT_FATAL(tensor_spec.memory_config().buffer_type() == BufferType::L1, "A sharded tensor view requires L1 storage");
+
+    auto view_buffer = tt::tt_metal::distributed::MeshBuffer::create_sharded_view(
+        owner_storage.get_mesh_tensor().shared_buffer(),
+        tt::tt_metal::distributed::ReplicatedBufferConfig{.size = tensor_spec.compute_packed_buffer_size_bytes()},
+        tt::tt_metal::distributed::DeviceLocalBufferConfig{
+            .page_size = tensor_spec.compute_page_size_bytes(),
+            .buffer_type = tensor_spec.memory_config().buffer_type(),
+            .sharding_args = tensor_spec.compute_buffer_sharding_args(),
+            .bottom_up = owner_buffer.device_local_config().bottom_up,
+            .sub_device_id = owner_buffer.device_local_config().sub_device_id},
+        shard_offset);
+    MeshTensor view_tensor =
+        mesh_tensor_from_buffer_with_topology(std::move(*view_buffer), tensor_spec, owner.tensor_topology());
+    return Tensor(std::move(view_tensor));
 }
 
 }  // namespace ttnn

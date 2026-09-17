@@ -10,6 +10,13 @@
 
 namespace ttnn {
 
+struct GenericOpPreparationResult {
+    uint32_t max_program_config_size_bytes;
+    uint32_t max_kernel_binary_size_bytes;
+
+    bool operator==(const GenericOpPreparationResult&) const = default;
+};
+
 // GenericOp exposes everything needed to construct and write an operation on device for the user.
 // This includes: cb attributes, data movement attributes, compute attributes, rt args, compile time args.
 // Unlike other operations, must create and pass in output tensor with the input tensors.
@@ -23,5 +30,11 @@ Tensor generic_op(
 
 // Convenience entry point for single ProgramDescriptor (SPMD mode)
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+GenericOpPreparationResult prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
+GenericOpPreparationResult prepare_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
 }  // namespace ttnn
