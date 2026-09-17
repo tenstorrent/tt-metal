@@ -177,12 +177,15 @@ class MiniMaxH3ViTAttention(Module):
                 state[f"to_out.{suffix}"] = state.pop(key)
 
     def _rms(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Parameter-free RMS over the head dim, computed in fp32 like the reference."""
-        original = x.get_dtype()
-        if original != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
-        x = ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
-        return ttnn.typecast(x, original) if original != ttnn.float32 else x
+        """Parameter-free RMS over the head dim: bfloat16 operands, fp32 accumulation.
+
+        The reference computes this in fp32 and the port used to match it by casting up and back.
+        The upcast cannot add information -- `x` arrives bfloat16 from `nlp_create_qkv_heads` -- and
+        `elementwise_compute_kernel_config` already accumulates in fp32, so the pair bought nothing:
+        a Tracy capture of one forward billed them at 144 ops and 14.9 ms of 172.8, 9 % of the
+        decoder. `test_qk_rms_minimax_h3.py` gates that against a float64 reference at this shape.
+        """
+        return ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
 
     def forward(
         self,
