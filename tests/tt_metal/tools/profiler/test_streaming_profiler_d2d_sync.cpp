@@ -28,7 +28,7 @@
 
 #include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
-#include "impl/streaming_profiler/streaming_profiler_host_clock.hpp"
+#include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
 #include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 using namespace tt::tt_metal;

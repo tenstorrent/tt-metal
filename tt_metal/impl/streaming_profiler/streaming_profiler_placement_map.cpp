@@ -11,7 +11,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "impl/streaming_profiler/streaming_profiler_host_clock.hpp"
+#include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
 #include "tt_metal/common/indexed_ring.hpp"
 
 #include <condition_variable>

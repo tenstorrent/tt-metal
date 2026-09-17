@@ -20,6 +20,7 @@
 
 #include "hostdev/profiler_zone_id.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "llrt/zone_meta.hpp"
 
@@ -119,3 +120,22 @@ void UnregisterCallback(CallbackHandle handle) {
 bool IsActive() { return internal::service().is_active(); }
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler
+
+namespace tt::tt_metal::experimental::streaming_profiler {
+host_clock::time_point host_clock::now() noexcept { return from_tsc(tt::tt_metal::streaming_profiler::tsc_now()); }
+int64_t host_clock::tsc(time_point t) noexcept {
+    return std::llround(
+        static_cast<double>(t.time_since_epoch().count()) / tt::tt_metal::streaming_profiler::units_per_tsc());
+}
+host_clock::time_point host_clock::from_tsc(int64_t ticks) noexcept {
+    return time_point(
+        duration(std::llround(static_cast<double>(ticks) * tt::tt_metal::streaming_profiler::units_per_tsc())));
+}
+}  // namespace tt::tt_metal::experimental::streaming_profiler
+
+namespace tt::tt_metal::experimental::streaming_profiler::detail {
+int64_t host_to_steady_ns(int64_t host) noexcept {
+    return tt::tt_metal::streaming_profiler::SteadyView::mono_ns(
+        host_clock::tsc(host_clock::time_point(host_clock::duration(host))));
+}
+}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
