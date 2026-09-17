@@ -77,20 +77,16 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
-_DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES = 4 * 1024 * 1024
+_PREFILL_L1_TENSOR_MAX_BYTES = 4 * 1024 * 1024
 
 
 def prefill_tensor_memcfg(numel: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
     """L1 if ``numel * dtype_bytes`` fits the prefill L1 budget, else DRAM.
 
     Used for post-embed Tilize and RoPE slice outputs so short ISL stays in L1
-    without OOMing long prefill. ``GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES`` overrides
-    the 4 MiB default; ``0`` forces DRAM.
+    without OOMing long prefill.
     """
-    max_bytes = int(os.environ.get("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", str(_DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES)))
-    if max_bytes <= 0:
-        return ttnn.DRAM_MEMORY_CONFIG
-    if int(numel) * int(dtype_bytes) <= max_bytes:
+    if int(numel) * int(dtype_bytes) <= _PREFILL_L1_TENSOR_MAX_BYTES:
         return ttnn.L1_MEMORY_CONFIG
     return ttnn.DRAM_MEMORY_CONFIG
 

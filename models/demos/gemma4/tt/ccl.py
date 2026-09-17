@@ -123,12 +123,8 @@ def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
     """Workers per link for the sync reduce-scatter half.
 
     Decode / short prefill stay latency-bound at ``w=1``. Tall prefill
-    (``h >= 2048``) is bandwidth-bound and wants ``w=2``. Override with
-    ``GEMMA4_CCL_SYNC_RS_WORKERS``.
+    (``h >= 2048``) is bandwidth-bound and wants ``w=2``.
     """
-    env = os.environ.get("GEMMA4_CCL_SYNC_RS_WORKERS")
-    if env is not None and str(env).strip() != "":
-        return max(1, int(env))
     if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
         return 2
     return 1
@@ -138,11 +134,7 @@ def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
     """Chunks per sync for the sync reduce-scatter half.
 
     Decode / short prefill stay at ``c=1``; tall prefill uses ``c=2``.
-    Override with ``GEMMA4_CCL_SYNC_RS_CHUNKS``.
     """
-    env = os.environ.get("GEMMA4_CCL_SYNC_RS_CHUNKS")
-    if env is not None and str(env).strip() != "":
-        return max(1, int(env))
     if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
         return 2
     return 1
@@ -343,20 +335,12 @@ def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
         shape = tensor.shape
         if len(shape) != 4:
             return None
-        from models.demos.gemma4.tt.rms_norm import (
-            activation_physical_height,
-            prefill_mlp_island_enabled,
-            sharded_norm_enabled,
-            width_shard_input_memcfg,
-        )
+        from models.demos.gemma4.tt.rms_norm import activation_physical_height, width_shard_input_memcfg
 
-        if not sharded_norm_enabled():
-            return None
         padded_height = activation_physical_height(shape)
-        # Decode always gathers into the one-tile residual island. Short
-        # prefill (M<=128) does the same when the LN/residual island is on.
-        # Gathering at height<=1024 without the island hung T3K warmup.
-        if padded_height != ttnn.TILE_SIZE and not prefill_mlp_island_enabled(padded_height):
+        # Decode always gathers into the one-tile residual island. Gathering at
+        # height<=1024 hung T3K warmup, so restrict this to the single tile.
+        if padded_height != ttnn.TILE_SIZE:
             return None
         return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], padded_height)
     except (AttributeError, RuntimeError, TypeError, ValueError) as error:

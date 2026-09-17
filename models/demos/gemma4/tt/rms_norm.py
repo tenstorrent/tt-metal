@@ -1,53 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 from torch import nn
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
-_PREFILL_ISLAND_MAX_HEIGHT = 128
-_SHARDED_NORM_MAX_HEIGHT = _PREFILL_ISLAND_MAX_HEIGHT
+_SHARDED_NORM_MAX_HEIGHT = 128
 # In+out bf16 shards plus RMSNorm scratch must fit L1. 26B at height=1024 on
 # an 8-core Wormhole grid overflows before scratch.
 _SHARDED_NORM_MAX_PER_CORE_BYTES = 1024 * 1024
-
-
-def sharded_norm_enabled() -> bool:
-    """Width-sharded RMSNorm fast path. Default ON; ``GEMMA4_SHARDED_NORM=0`` disables it."""
-    return os.environ.get("GEMMA4_SHARDED_NORM", "1").lower() not in ("0", "false", "no")
-
-
-def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enable_moe: bool = False) -> bool:
-    """Width-sharded AR→LN island for short prefill (M<=128).
-
-    Default OFF: it costs more accuracy than it buys. Measured on a real T3K,
-    12B, bit-reproducible (paired runs agreed to every decimal, and survived a
-    board reset), island ON -> OFF:
-
-        full_model        1x8  0.8953 -> 0.9507   (bare main 0.9505)
-        full_model_decode 1x8  0.9459 -> 0.9647   (base 0.9735)
-        full_model        1x2  0.9188 -> 0.9780
-
-    What it buys is short-prefill TTFT only: 12B batch-1 66.8 -> 75.4 ms
-    (+13%), 31B batch-1 104.9 -> 121.9 ms (+16%), both means of 2 reps. It is
-    inert at 4k (byte-identical output, TTFT within 0.3%) and costs nothing in
-    decode throughput (<0.5% across 8 runs). Trading 0.056 of 1x8 PCC for 9 ms
-    of TTFT is the wrong side of "max perf without degrading accuracy", so it
-    is opt-in via GEMMA4_PREFILL_ISLAND=1 for anyone who wants that trade.
-
-    Disabled for MoE and batched prefill regardless.
-    """
-    if enable_moe or batch_size > 1:
-        return False
-    if os.environ.get("GEMMA4_PREFILL_ISLAND", "0").lower() in ("0", "false", "no"):
-        return False
-    if not sharded_norm_enabled():
-        return False
-    return 1 <= int(padded_height) <= _PREFILL_ISLAND_MAX_HEIGHT
 
 
 def activation_physical_height(shape) -> int:
@@ -249,20 +212,13 @@ class RMSNorm(nn.Module):
             ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
-            # Width-sharded fast path for decode (one tile) and an explicit
-            # short-prefill island. Auto-sharding every prefill ≤1024 hung T3K
-            # at ISL=128.
+            # Width-sharded fast path for decode (one tile) and short
+            # prefill. Auto-sharding every prefill ≤1024 hung T3K at ISL=128.
             padded_height = activation_physical_height(x.shape) if len(x.shape) == 4 else 0
             use_sharded_norm = padded_height == ttnn.TILE_SIZE or (
-                keep_sharded and 1 <= padded_height <= _PREFILL_ISLAND_MAX_HEIGHT
+                keep_sharded and 1 <= padded_height <= _SHARDED_NORM_MAX_HEIGHT
             )
-            if (
-                sharded_norm_enabled()
-                and self.with_scale
-                and self.tt_weight is not None
-                and len(x.shape) == 4
-                and use_sharded_norm
-            ):
+            if self.with_scale and self.tt_weight is not None and len(x.shape) == 4 and use_sharded_norm:
                 dim = x.shape[-1]
                 if self._sharded_cfg is None or self._sharded_dim != dim or self._sharded_height != padded_height:
                     self._sharded_dim = dim

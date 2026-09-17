@@ -213,38 +213,22 @@ def single_tile_matmul_ckc(m, dest_acc=None):
     instead of four on matmuls that run four times per layer per token.
 
     ``dest_acc`` carries the per-model decision (None = take the default).
-    Override everything with ``GEMMA4_SINGLE_TILE_FIDELITY``: ``hifi2`` /
-    ``hifi3`` / ``hifi4``, each optionally suffixed ``_fp32`` to add fp32
-    dest-accumulation, or ``auto`` (return None and let ttnn decide).
     """
     if int(m) > TILE_SIZE:
         return None
     # ``dest_acc=False`` keeps the fidelity raise and drops only the fp32
     # accumulation, for the models measured to be hurt by it (see
-    # Gemma4Precision.single_tile_dest_acc). The env var still wins, so sweeps
-    # can force any arm regardless of the model's setting.
+    # Gemma4Precision.single_tile_dest_acc).
     if dest_acc is None:
         from models.demos.gemma4.tt.precision import default_single_tile_dest_acc
 
         dest_acc = default_single_tile_dest_acc()
-    default_mode = "hifi3_fp32" if dest_acc else "hifi3"
-    mode = os.environ.get("GEMMA4_SINGLE_TILE_FIDELITY", default_mode).strip().lower()
     global _SINGLE_TILE_FID_LOGGED
     if not _SINGLE_TILE_FID_LOGGED:
-        logger.info(f"Gemma4 single-tile matmul fidelity={mode}")
+        logger.info(f"Gemma4 single-tile matmul fidelity=hifi3{'_fp32' if dest_acc else ''}")
         _SINGLE_TILE_FID_LOGGED = True
-    if mode in ("auto", "none", "off", "0"):
-        return None
-    dest_acc = mode.endswith("_fp32")
-    fidelity = {
-        "hifi2": ttnn.MathFidelity.HiFi2,
-        "hifi3": ttnn.MathFidelity.HiFi3,
-        "hifi4": ttnn.MathFidelity.HiFi4,
-    }.get(mode[: -len("_fp32")] if dest_acc else mode)
-    if fidelity is None:
-        raise ValueError(f"GEMMA4_SINGLE_TILE_FIDELITY={mode!r} — expected auto/hifi2/hifi3/hifi4, optionally +_fp32")
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
         math_approx_mode=False,
         fp32_dest_acc_en=dest_acc,
         packer_l1_acc=not dest_acc,
@@ -393,8 +377,6 @@ def decode_progcfg(m, k, n, dtype=None):
 # 31B qkv wants 8, and raising 31B qkv-global from 4 to 8 costs 11%), so this
 # is a table of measurements rather than a heuristic. A shape that is not
 # listed keeps today's behaviour exactly.
-#
-# Set GEMMA4_WH_T3K_DECODE_MM=0 to fall back to the pre-sweep configs.
 _WH_T3K_DECODE_1D = {
     # (k, n): (grid_x, grid_y, in0_block_w, per_core_N, out_subblock_w)
     (3840, 1024): (8, 4, 4, 1, 1),
@@ -416,8 +398,6 @@ def wh_t3k_decode_enabled(mesh_device) -> bool:
     where the 8x5 / 8x8 grids below would be illegal. Blackhole keeps its
     DRAM-sharded path untouched.
     """
-    if os.environ.get("GEMMA4_WH_T3K_DECODE_MM", "1").lower() in ("0", "false", "no"):
-        return False
     if is_blackhole():
         return False
     try:
@@ -719,14 +699,10 @@ def prefill_progcfg_1d(m, k, n, cores=None, in0_block_w=None, grid_size=None, fu
 
 
 def _interleaved_mlp_prefill_config(m, k, n):
-    env = os.environ.get("GEMMA4_PREFILL_1D_MLP", "1").lower()
-    if env in ("0", "false", "no"):
-        return None, None, None
     if not in_prefill_l1_matmul_band(m):
         return None, None, None
-    # Default is M<=128 and K<5376 (12B short prefill). Do not enable 1D for
-    # K>=5376 — hung decode. Opt in with GEMMA4_PREFILL_1D_MLP=all.
-    if env not in ("all", "full") and (int(m) > 128 or int(k) >= 5376):
+    # M<=128 and K<5376 (12B short prefill). 1D at K>=5376 hung decode.
+    if int(m) > 128 or int(k) >= 5376:
         return None, None, None
     # For TP-sharded widths (31B TP=8 → n=5376). Full-width TP=1 fused
     # gate+up (n≈43k) overflows Wormhole L1 CBs and falls back dirty.
@@ -769,27 +745,14 @@ def wide_vocab_lm_head_ckc(weight):
     ``single_tile_matmul_ckc``: against a BFP8_B weight raising fidelity here
     measured as nothing (0.98328 -> 0.98330).
 
-    ``GEMMA4_WIDE_LM_HEAD_FIDELITY`` = ``hifi3_fp32`` (default) / ``hifi4`` /
-    ``hifi2`` / ``auto``.
     """
     if weight is None or weight.dtype != ttnn.bfloat16:
         return None
-    mode = os.environ.get("GEMMA4_WIDE_LM_HEAD_FIDELITY", "hifi3_fp32").strip().lower()
-    if mode in ("auto", "none", "off", "0"):
-        return None
-    if mode == "hifi3_fp32":
-        fidelity, dest_acc = ttnn.MathFidelity.HiFi3, True
-    elif mode == "hifi4":
-        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
-    elif mode == "hifi2":
-        fidelity, dest_acc = ttnn.MathFidelity.HiFi2, False
-    else:
-        raise ValueError(f"GEMMA4_WIDE_LM_HEAD_FIDELITY={mode!r} — expected auto/hifi2/hifi3_fp32/hifi4")
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=fidelity,
+        math_fidelity=ttnn.MathFidelity.HiFi3,
         math_approx_mode=False,
-        fp32_dest_acc_en=dest_acc,
-        packer_l1_acc=not dest_acc,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
     )
 
 

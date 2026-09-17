@@ -45,13 +45,7 @@ import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
-from models.demos.gemma4.tt.rms_norm import (
-    RMSNorm,
-    activation_physical_height,
-    decode_width_shard_memcfg,
-    prefill_mlp_island_enabled,
-    width_shard_input_memcfg,
-)
+from models.demos.gemma4.tt.rms_norm import RMSNorm, decode_width_shard_memcfg
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -270,20 +264,6 @@ class Gemma4DecoderLayer:
         stream_memcfg = None
         if is_decode and not self.enable_moe_block and not self.hidden_size_per_layer_input:
             stream_memcfg = decode_width_shard_memcfg(self.mesh_device, hidden_states.shape[-1])
-            if stream_memcfg is not None and not hidden_states.is_sharded():
-                sharded_hidden_states = ttnn.to_memory_config(hidden_states, stream_memcfg)
-                hidden_states.deallocate(True)
-                hidden_states = sharded_hidden_states
-        elif not is_decode and prefill_mlp_island_enabled(
-            activation_physical_height(hidden_states.shape),
-            batch_size=batch_size,
-            enable_moe=self.enable_moe_block,
-        ):
-            stream_memcfg = width_shard_input_memcfg(
-                self.mesh_device,
-                hidden_states.shape[-1],
-                activation_physical_height(hidden_states.shape),
-            )
             if stream_memcfg is not None and not hidden_states.is_sharded():
                 sharded_hidden_states = ttnn.to_memory_config(hidden_states, stream_memcfg)
                 hidden_states.deallocate(True)

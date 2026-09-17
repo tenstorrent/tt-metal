@@ -290,7 +290,6 @@ def test_wh_t3k_decode_gate_only_full_unharvested_t3k(monkeypatch):
     """12B/31B swept decode configs must not fire on BH, N150, or harvested WH."""
     from models.demos.gemma4.tt.dram_sharded import wh_t3k_decode_enabled, wh_t3k_decode_progcfg
 
-    monkeypatch.delenv("GEMMA4_WH_T3K_DECODE_MM", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.dram_sharded.is_blackhole", lambda: False)
     assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is True
     assert wh_t3k_decode_progcfg(_FakeMesh(8), 3840, 1024) is not None
@@ -305,8 +304,6 @@ def test_wh_t3k_decode_gate_only_full_unharvested_t3k(monkeypatch):
     assert wh_t3k_decode_enabled(_FakeMesh(2, (8, 8))) is False  # N300
     assert wh_t3k_decode_enabled(_FakeMesh(4, (8, 8))) is False
     assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 7))) is False  # x2-harvested
-    monkeypatch.setenv("GEMMA4_WH_T3K_DECODE_MM", "0")
-    assert wh_t3k_decode_enabled(_FakeMesh(8, (8, 8))) is False
 
 
 def _dense_decode_kn(

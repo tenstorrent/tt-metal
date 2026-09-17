@@ -445,14 +445,6 @@ def test_demo_text(
     if _decode_trace is not None:
         enable_trace = _decode_trace.lower() in ("1", "true", "yes")
         logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
-    elif (not is_blackhole()) and max_seq_len >= 256 * 1024:
-        # Decode trace fits at 256k on the 90 MB WH default, but only with the
-        # tail pool off -- 12B and 31B both capture and replay on a real T3K.
-        # What OOM'd 31B at the last global V cache was the 192 MB trace region
-        # *plus* the tail pool, so keep both off: do not raise
-        # GEMMA4_TRACE_REGION_SIZE here, and do not restore the pool.
-        os.environ.setdefault("GEMMA4_TAIL_POOL_SLOTS", "0")
-        logger.info(f"WH max_seq_len={max_seq_len}: GEMMA4_TAIL_POOL_SLOTS default 0 (256k DRAM headroom)")
 
     # ── Speculative-decoding dispatch ────────────────────────────────────────
     # `--speculative` reroutes the demo through the it-assistant drafter +
@@ -686,12 +678,7 @@ def test_demo_text(
     # Default ON. Safe because with on-device sampling the device already commits
     # the sampled id into the next step's feedback buffer, so the host-side read is
     # observational: generated text is byte-identical with it on.
-    # GEMMA4_DECODE_PIPELINE=0 restores the blocking read.
-    pipeline_reads = (
-        device_sampling_params is not None
-        and enable_trace
-        and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in ("1", "true", "yes")
-    )
+    pipeline_reads = device_sampling_params is not None and enable_trace
     pending_reads = []
 
     def _fold_tokens(tokens):
@@ -806,7 +793,7 @@ def test_demo_text(
         logger.info("Decode: n/a (no steady-state decode iterations recorded)")
     # Wall-clock decode, valid for BOTH the blocking and the pipelined path.
     # The per-step sum above measures only what the host spends inside each
-    # step; with GEMMA4_DECODE_PIPELINE=1 the host enqueues and returns before
+    # step; with pipelined reads the host enqueues and returns before
     # the device finishes, so device time escapes those timers entirely and the
     # per-step figure understates the cost badly. Do NOT compare pipelined and
     # blocking arms on it. This brackets the whole loop, drain included, minus

@@ -28,24 +28,6 @@ def pytest_configure(config):
         "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
     )
 
-    # WH 256k: free the DRAM the decode trace needs by dropping the tail pool.
-    # ``_device_params()`` is evaluated at collection, so this must run first.
-    # Tail-pool skip for 256k is also in ``Gemma4Attention`` (max_seq_len).
-    # The trace region keeps its 90 MB WH default here -- see the 256k branch in
-    # ``text_demo_v2.test_demo_text`` for why that fits and 192 MB did not.
-    kw = str(getattr(config.option, "keyword", None) or "")
-    args = " ".join(str(a) for a in (getattr(config, "args", None) or ()))
-    if "long-context-256k" not in kw and "long-context-256k" not in args:
-        return
-    try:
-        from models.common.utility_functions import is_blackhole
-
-        if is_blackhole():
-            return
-    except Exception:
-        pass
-    os.environ.setdefault("GEMMA4_TAIL_POOL_SLOTS", "0")
-
 
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
