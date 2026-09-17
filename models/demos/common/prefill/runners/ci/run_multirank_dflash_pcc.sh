@@ -136,6 +136,7 @@ mkdir -p "${TTRUN_CWD}"
 
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 TCP_IFACE="${PREFILL_TCP_IFACE:-ens5f0np0}"
+MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 # ttrun writes the allocated hosts here in CI, rank 0 first -- the same file the sibling KV leg reads.
 if [ -z "${PREFILL_HOSTS:-}" ] && [ -f "${TTRUN_DIR:-/etc/ttop}/hostfile" ]; then
   PREFILL_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR:-/etc/ttop}/hostfile" | sed 's/,$//')
@@ -237,15 +238,28 @@ done
 
 # Fail loudly on a build whose cross-stage merge still drops the drafter: without the dflash_* configs the
 # producer reports only the verifier number and this leg would "pass" while testing nothing new.
-python3 - "${TABLE_PATH}" <<'PY'
+#
+# On a rank host, not here: the ttnn wheel is installed per-node over MPI, so the launcher has no bindings.
+# It does not fail closed either -- PYTHONPATH's ttnn/ source directory carries no __init__.py, so an import
+# there resolves to an empty namespace package and succeeds into a ttnn with no .experimental. The table
+# lives on shared scratch, so any rank can read it.
+CHECK_PY="${TTRUN_CWD}/check_table_configs.py"
+cat > "${CHECK_PY}" <<'PY'
 import sys, ttnn
-t = ttnn.experimental.disaggregation.import_from_protobuf_file(sys.argv[1])
-names = [t.config_name(i) for i in range(t.num_configs())]
-n = sum(1 for x in names if x.startswith("dflash_"))
-print(f"[dflash-ci] table configs: {len(names)} total, {n} drafter -> {[x for x in names if x.startswith('dflash_')][:4]}...")
-if n == 0:
+
+table = ttnn.experimental.disaggregation.import_from_protobuf_file(sys.argv[1])
+names = [table.config_name(i) for i in range(table.num_configs())]
+dflash = [x for x in names if x.startswith("dflash_")]
+print(f"[dflash-ci] table configs: {len(names)} total, {len(dflash)} drafter -> {dflash[:4]}...")
+if not dflash:
     sys.exit("[dflash-ci] FATAL: merged table carries no dflash_* configs; the drafter half would be skipped")
 PY
+"${MPIRUN}" \
+  --host "${HOSTS%%,*}:1" -n 1 --bind-to none --tag-output --allow-run-as-root \
+  -x PATH -x LD_LIBRARY_PATH \
+  bash -lc "cd '${TT_METAL_HOME}'; \
+    export PYTHONPATH='${TT_METAL_HOME}'; \
+    exec python3 '${CHECK_PY}' '${TABLE_PATH}'"
 
 # The producer's rank order MUST match ttrun's actual placement, not PREFILL_HOSTS. ttrun assigns ranks
 # from its own topology discovery and freely reorders the host list, so rank 0 of the RUNNER (the only
@@ -273,7 +287,6 @@ cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
 RANKFILE_REL="generated/ttrun/producer_rankfile"
 echo "producer host order from tt-run discovery: ${PRODUCER_HOSTS} (PREFILL_HOSTS was ${HOSTS})"
 
-MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 set +e
 # --mca btl_tcp_if_include is REQUIRED, not tuning: without it MPI_Init never completes and every rank
 # logs "applied manifest" then goes silent forever (no error). ttrun passes the same transport args to
