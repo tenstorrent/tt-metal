@@ -169,7 +169,7 @@ def recommended_dflash_block_size(
     ctx_len_hint: int | None,
     checkpoint_block_size: int,
     *,
-    long_context_threshold: int = int(_os.environ.get("GEMMA4_DFLASH_LONG_CTX_THRESHOLD", 6000)),
+    long_context_threshold: int = int(_os.environ.get("GEMMA4_DFLASH_LONG_CTX_THRESHOLD", 2048)),
     long_context_block_size: int = 8,
 ) -> int:
     """Heuristic ``block_size`` (K) pick for sessions whose context is long enough
@@ -179,24 +179,33 @@ def recommended_dflash_block_size(
     ``config.py``) -- an earlier version of this function used that as the
     threshold, but a real T3K A/B sweep (block_size=8 vs. the checkpoint's own
     default 16, across the same ISL buckets as models/demos/gemma4/README.md's
-    "Full ISL sweep" table) falsified it: at ISL 3,808 (already past the
-    2048-token window), block_size=8 measured 36.9 tok/s vs. block_size=16's
+    "Full ISL sweep" table) falsified it as a *mechanism*: at ISL 3,808 with a
+    quote-extraction task, block_size=8 measured 36.9 tok/s vs. block_size=16's
     ~92 tok/s -- a 60% REGRESSION, not an improvement, because that bucket's
     mean-accepted-drafts/iteration is actually its best of any measured bucket
     (8.56, vs. 5.67 at ISL 44) at the checkpoint's default block_size. Only at
-    ISL 7,548+ does block_size=8 measure a net win (+7-16% tok/s; mean accepted
-    drops in absolute terms -- e.g. 2.81 vs. 3.02 at ISL 7,548 -- but rises as a
-    fraction of the smaller block, and the shorter per-iteration verify more
-    than compensates). So the true inflection sits somewhere between ISL 3,808
-    and 7,548 -- NOT bracketed any tighter than that by real measurement, and
-    not something ``sliding_window`` (or any other architectural constant)
-    predicts; ``long_context_threshold``'s default (6000) is simply the
-    midpoint of the two measured points, overridable via
-    ``GEMMA4_DFLASH_LONG_CTX_THRESHOLD`` pending a real sweep to narrow it down
-    further. The original ~5.1/7-vs-~2.9/7 reference comparison motivating
-    block_size=8 as an alternative geometry at all (see the
-    ``GEMMA4_DFLASH_BLOCK`` comment a few lines below this function) does not
-    state what ISL it was measured at, so it cannot resolve this either.
+    ISL 7,548+ does block_size=8 measure a net win for that task (+7-16% tok/s).
+
+    However, a *different* task (code generation) measured a severe FAILURE at
+    that same ISL 3,797-3,808 with block_size=16, not just a smaller win: four
+    independent Fibonacci-prompt runs there (two instruction phrasings, two
+    source passages) all collapsed to 0.64-3.33 mean-accepted/iter and produced
+    degenerate/blank output, and forcing block_size=8 fixed it completely (see
+    models/demos/gemma4/README.md's "Fibonacci-prompt ISL sweep" section). So
+    the two task types disagree in the ISL 2048-6000 range: quote-extraction
+    wants 16, code-generation needs 8. ``long_context_threshold`` is set to
+    2048 (matching the single-chunk prefill-trace boundary,
+    ``demo/dflash_fused_decoder_demo.py``'s ``PREFILL_CHUNK_SIZE``) so that
+    range defaults to block_size=8 -- deliberately trading the quote-extraction
+    task's measured regression there (a slower but still-correct answer) for
+    avoiding code-generation's measured failure mode (no usable output at all).
+    Workloads that know they're quote-extraction/document-analysis-style and
+    want the faster block_size=16 in this range should pass
+    ``GEMMA4_DFLASH_BLOCK=16`` explicitly. The original ~5.1/7-vs-~2.9/7
+    reference comparison motivating block_size=8 as an alternative geometry at
+    all (see the ``GEMMA4_DFLASH_BLOCK`` comment a few lines below this
+    function) does not state what ISL it was measured at, so it cannot resolve
+    this either.
 
     Only applies when the caller has an upfront ``ctx_len_hint`` for the whole
     session (e.g. a benchmark/demo script that knows its target ISL before

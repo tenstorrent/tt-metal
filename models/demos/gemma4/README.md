@@ -272,6 +272,37 @@ the z-lab dFlash drafter snapshot in the HF cache (auto-discovered) or `GEMMA4_D
 `GEMMA4_DFLASH_SHARD_ARGMAX=1` is required — it routes dFlash's own on-device argmax around a
 known TTSampling multi-row broadcast limitation (see the demo's module docstring).
 
+#### PCC correctness validation
+
+Each pipeline stage validated against a real torch reference (real checkpoint weights, real
+context/noise inputs, real RoPE tables) on T3K (1×8), `pcc=0.97` threshold throughout:
+
+| Stage | Test | PCC |
+|---|---|---:|
+| Layer 0 (context+noise K/V concat attention + MLP) | `test_dflash_layer.py` | 0.9996 |
+| Context extraction (target → 6-layer tap → fc/hidden_norm) | `test_dflash_context.py` | 0.9984 |
+| Full 5-layer drafter chain | `test_dflash_drafter.py` | 0.9988 |
+| Final norm + LM head + softcap + argmax | `test_dflash_logits.py` | 0.9988 |
+| End-to-end draft → verify → accept/reject | `test_dflash_verify.py` | 0.9950 |
+
+All 5/5 pass (`pytest models/demos/gemma4/tests/dflash/test_dflash_{layer,context,drafter,logits,verify}.py -k 1x8 -s`).
+`test_dflash_layer.py` and `test_dflash_verify.py` were previously failing for reasons unrelated
+to PCC/correctness — both fixed as part of validating this table, not pre-existing passes:
+
+- `test_dflash_layer.py` was stale relative to `GEMMA4_DFLASH_PAD_NOISE_CONCAT` (the noise-block
+  K/V tile-padding optimization, default on): it built its attention mask at the unpadded key
+  width while the K/V it was checked against were padded, tripping `TT_FATAL: mask_shape[3] ==
+  k_shape[2]`. Fixed by making the host-side `build_attention_mask_additive` padding-aware
+  (mirroring its already-padding-aware on-device siblings) and updating the test to size its
+  mask identically to what `dflash_attention_forward` actually builds.
+- `test_dflash_verify.py` hit a real `NameError` in production code: `attention/decode.py`'s
+  `_kv_fused_write_enabled` path called `_packed_kv_user_mem`, a helper that was never actually
+  defined in this branch's `decode.py` — only referenced in its own docstring, assuming it
+  already existed. Fixed by porting just that one small, self-contained memory-layout helper
+  from `ign/gemma4_dflash_wh_changes`'s version of the same file (not the larger, unrelated
+  `packed_decode_forward` changes — a P-as-batch SDPA fast path and MTP call-site compatibility
+  plumbing — that came with it there).
+
 #### Op-level fixes (all default ON)
 
 Four op-level fixes to the target model's `decode_forward` / the drafter's own attention /
@@ -434,7 +465,7 @@ below). Re-measured after syncing this branch's L1-budget/prefill-fidelity infra
 | `batch-1` | 128 / 44 | 1 | 93.7 | 43.41 | 23.03 | 16 | 2,161 | 16.42 | 60.9 |
 | `batch-8` | 128 | 8 | 692.8 | 48.93 | 20.44 | — | not supported — DFlash has no concurrent-batch mode | | |
 | `batch-32` | 128 | 32 | 2,770.7 | 63.53 | 15.74 | — | not supported — DFlash has no concurrent-batch mode | | |
-| `long-context-4k` | 4k / 3,808 | 1 | 1,577.9 | 45.63 | 21.91 | 16 | 2,404 | 11.06 | 90.4 |
+| `long-context-4k` | 4k / 3,808 | 1 | 1,577.9 | 45.63 | 21.91 | 16\* | 2,404 | 11.06 | 90.4 |
 | ~8k (DFlash-only) | 7,548 | 1 | — not measured at this ISL — | | | 8 | 3,954 | 24.69 | 40.5 |
 | ~16k (DFlash-only) | 14,780 | 1 | — not measured at this ISL — | | | 8 | 14,447 | 29.68 | 33.7 |
 | ~24k (DFlash-only) | 22,145 | 1 | — not measured at this ISL — | | | 8 | 20,285 | 33.11 | 30.2 |
@@ -446,6 +477,14 @@ below). Re-measured after syncing this branch's L1-budget/prefill-fidelity infra
 `batch-1`/`long-context-4k` show two ISL values (baseline / DFlash) since the two paths' prompt
 sets don't land on exactly the same token count for these "equivalent" rows.
 
+\* This row's `block_size=16` and 90.4 tok/s are quote-extraction-task numbers, and no longer what
+this bucket defaults to: `GEMMA4_DFLASH_LONG_CTX_THRESHOLD` was subsequently lowered to 2048 (see
+the auto-tuning note below), so `long-context-4k` now defaults to `block_size=8` instead —
+reproducing this row's 90.4 tok/s requires `GEMMA4_DFLASH_BLOCK=16` explicitly. The default
+`block_size=8` measures ~50.5 tok/s for a code-generation task at this same ISL (see the
+Fibonacci-prompt sweep below) but was ~15.8-40.3 tok/s (frequently degenerate output) for that
+same task at `block_size=16` — the threshold was lowered specifically to fix that failure mode.
+
 The DFlash 4k row was originally measured at TTFT=80.2s — a clear outlier, *longer* than the 8k
 row's TTFT despite half the tokens. Confirmed as a one-time kernel/cache-build tax, not a real
 cost: an isolated 2-pass re-run hit it AGAIN on the first (cold) pass — 81.8s — then dropped to a
@@ -455,18 +494,69 @@ inflated. The table above reports the warm number.
 
 **`block_size` (K) auto-tuning:** `DFlashDrafter` now shrinks its default speculative block from
 the checkpoint's own 16 to 8 once the caller's upfront `ctx_len_hint` exceeds
-`GEMMA4_DFLASH_LONG_CTX_THRESHOLD` (default 6000; `demo/dflash_fused_decoder_demo.py` passes its
-own `MAX_SEQ_LEN` as the hint). `GEMMA4_DFLASH_BLOCK`, if set, still overrides this
+`GEMMA4_DFLASH_LONG_CTX_THRESHOLD` (default **2048**; `demo/dflash_fused_decoder_demo.py` passes
+its own `MAX_SEQ_LEN` as the hint). `GEMMA4_DFLASH_BLOCK`, if set, still overrides this
 unconditionally, and any caller that doesn't pass `ctx_len_hint` (e.g. `generator_vllm.py`'s
 serving path) is unaffected. The threshold is real-hardware-calibrated, not derived from the
-drafter's architectural `sliding_window` (2048) — an earlier version used `sliding_window` as
-the cutoff, but a real T3K A/B sweep (`block_size=8` vs. the default 16, same buckets as above)
-falsified that: at ISL 3,808 (already past the window), `block_size=8` measured 36.9 tok/s vs.
-`block_size=16`'s ~90 tok/s, a 60% regression, because that bucket's mean-accepted-drafts/
-iteration is already the best of any measured bucket (8.56) at the default block_size. Only ISL
-7,548+ shows a real win from `block_size=8` (+7 to +16% tok/s in the table above). 6000 is simply
-the midpoint of the two measured bracketing points (3,808 good at 16, 7,548 good at 8) — not
-verified tighter than that; narrowing it further needs measurement at ISL between those two.
+drafter's architectural `sliding_window` (2048, though it lands on the same number by
+coincidence — see below) — an earlier version used `sliding_window` as the cutoff for the same
+reasoning-from-first-principles mistake this paragraph is about to describe again, one level up:
+
+For the quote-extraction task, a T3K A/B sweep (`block_size=8` vs. the default 16, same buckets
+as above) found: at ISL 3,808, `block_size=8` measured 36.9 tok/s vs. `block_size=16`'s ~90 tok/s,
+a 60% regression, because that bucket's mean-accepted-drafts/iteration is already the best of any
+measured bucket (8.56) at the default block_size. Only ISL 7,548+ showed a real win from
+`block_size=8` for that task (+7 to +16% tok/s). Taken alone, that data argued for a *higher*
+threshold (something between 3,808 and 7,548 — 6000 was this function's threshold for a while).
+
+But the Fibonacci-prompt sweep below found the opposite problem in that exact ISL 2048–7548 range,
+for a *different* task: code generation at ISL 3,797–3,808 doesn't just regress with
+`block_size=16`, it fails outright (0.64–3.33 mean-accepted/iter, degenerate/blank output, four
+independent reproductions). `block_size=8` fixes it completely. So the two task types disagree
+over ISL 2048–6000: quote-extraction wants 16 there, code-generation needs 8. The threshold is
+set to **2048** (deliberately as low as it can go without touching the ISL-34 `short` bucket) so
+that range defaults to the safer failure mode — a slower-but-correct quote-extraction answer,
+rather than code-generation producing no usable output at all. Quote-extraction/document-analysis
+workloads that want the faster `block_size=16` back in this range should pass
+`GEMMA4_DFLASH_BLOCK=16` explicitly; there's no single default that's fastest for both.
+
+##### Fibonacci-prompt ISL sweep: `block_size`'s workload dependence
+
+Same DFlash ISL buckets as the table above, but with a fixed code-generation task ("Write a
+Python function that computes the nth Fibonacci number...") instead of the quote-extraction task
+used there. `short` uses that instruction directly as the prompt; `4k`/`8k`/`16k`/`24k` reuse the
+same Gutenberg filler text scaled to each ISL target (so ISL matches the table above), with the
+tail instruction swapped from quote-extraction to the Fibonacci task:
+
+| ISL bucket | ISL | `block_size` | TTFT | DFlash ms/tok | DFlash tok/s/user | Mean accepted/iter | Output |
+|---|---:|:-:|---:|---:|---:|---:|:-:|
+| `batch-1`-equiv | 34 | 16 (default) | 2.14s | 18.56 | 53.9 | 4.98 | correct |
+| `long-context-4k`-equiv | 3,797 | ~~16~~ (old default, pre-fix) | 2.41–2.47s | 24.8–63.4 | **15.8–40.3** | **0.64–3.33** | **degenerate — no code, or blank/whitespace only** |
+| `long-context-4k`-equiv | 3,797 | **8 (current default)** | 2.44s | 19.80 | **50.5** | **3.59** | correct |
+| ~8k-equiv | 7,516 | 8 (default) | 5.30s | 20.43 | 49.0 | 3.65 | correct |
+| ~16k-equiv | 14,748 | 8 (default) | 8.83s | 19.73 | 50.6 | 3.98 | correct |
+| ~24k-equiv | 22,113 | 8 (default) | 11.59s | 19.01 | 52.7 | 4.55 | correct |
+
+The 3,797-token row was run four times at `block_size=16` (the checkpoint's own default, and what
+`recommended_dflash_block_size` returned there before this threshold was lowered) — two different
+instruction phrasings (an explicit "ignore everything above" framing, and a plain
+continuation-style framing) and two different Gutenberg passages (the same one used above, and a
+different passage from the same book) — and **all four failed** the same way: the drafter's
+acceptance rate collapsed (0.64–3.33 mean-accepted/iter, vs. 8.56 for the quote-extraction task at
+this exact same ISL) and generation produced no usable code. `block_size=8` fixed it completely —
+correct code, 50.5 tok/s, and the best mean-accepted/iter of the whole Fibonacci sweep.
+
+This means `block_size`'s long-context threshold is **workload-dependent, not just
+length-dependent**: the quote-extraction task measured its best acceptance rate of any bucket
+(8.56/iter) at this same 3,808-token length with `block_size=16` (see above), while the
+code-generation task fails outright with `block_size=16` at that length and needs `block_size=8`.
+`GEMMA4_DFLASH_LONG_CTX_THRESHOLD` is now **2048**, so `recommended_dflash_block_size` defaults to
+8 across ISL 2048–∞ (previously 8 only kicked in past 6000) — trading the quote-extraction task's
+measured regression in the 2048–6000 range (slower, but still correct) for avoiding
+code-generation's measured failure mode (no usable output at all) in that same range.
+**Quote-extraction/document-analysis workloads in the 2048–6000 range that want the faster
+`block_size=16` back should pass `GEMMA4_DFLASH_BLOCK=16` explicitly** — there's no single default
+that's fastest for both task types there.
 
 #### Acceptance rate depends on prompt *structure*, not just ISL
 
