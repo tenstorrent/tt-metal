@@ -18,6 +18,7 @@ CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_pingpong)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_pingpong_fabric)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_eth_ptp_link)
 
 add_custom_target(
     profiler_examples
@@ -26,4 +27,5 @@ add_custom_target(
         test_streaming_profiler_zones
         test_streaming_profiler_pingpong
         test_streaming_profiler_pingpong_fabric
+        test_eth_ptp_link
 )

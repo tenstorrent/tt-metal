@@ -289,6 +289,20 @@ inline __attribute__((always_inline)) void record_hw(uint64_t value, uint32_t ro
     const Instant t = read_instant();
     kernel_profiler::ring_write_clock(kernel_profiler::ppfmt::CLOCK_LINK_PTP, value, t.wall_lo, t.wall_hi, round, role);
 }
+#elif defined(ETH_PTP_LINK_TABLE)
+// The acceptance test's sink (programming_examples/profiler/test_eth_ptp_link): a count word at ETH_PTP_LINK_TABLE,
+// then {round, role, value lo, value hi} rows, ETH_PTP_LINK_TABLE_ROWS of them.
+constexpr uint32_t kRoleT0 = 0, kRoleT1 = 1, kRoleT1B = 2, kRoleT2 = 3;
+inline bool room(uint32_t records) { return rd(ETH_PTP_LINK_TABLE) + records <= ETH_PTP_LINK_TABLE_ROWS; }
+inline void record_hw(uint64_t value, uint32_t round, uint32_t role) {
+    const uint32_t n = rd(ETH_PTP_LINK_TABLE);
+    volatile uint32_t* row = reinterpret_cast<volatile uint32_t*>(ETH_PTP_LINK_TABLE + 4 + n * 16);
+    row[0] = round;
+    row[1] = role;
+    row[2] = static_cast<uint32_t>(value);
+    row[3] = static_cast<uint32_t>(value >> 32);
+    wr(ETH_PTP_LINK_TABLE, n + 1);
+}
 #else
 constexpr uint32_t kRoleT0 = 0, kRoleT1 = 0, kRoleT1B = 0, kRoleT2 = 0;
 inline bool room(uint32_t) { return false; }
