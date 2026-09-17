@@ -1267,7 +1267,10 @@ class LTXDistilledPipeline(LTXPipeline):
     def _upsampler_weight_addresses(self) -> tuple:
         return tuple(p.data.buffer_address() for _, p in self.upsampler.named_parameters() if p.data is not None)
 
-    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    # prep_run: nothing else compiles the transition's collectives and reshards, and a kernel build
+    # inside the capture trips the mesh workload's !is_capturing_trace. The eager pre-run happens at
+    # warmup, right after the stage captures, in the same fresh state gen#0's eager transition ran in.
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=True)
     def _stage_transition(
         self,
         *,
