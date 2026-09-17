@@ -20,7 +20,7 @@
 
 #include "hostdev/profiler_zone_id.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
-#include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "llrt/zone_meta.hpp"
 

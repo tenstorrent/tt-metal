@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
-#include "impl/streaming_profiler/streaming_profiler_link_sync.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
@@ -882,8 +882,8 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
         named_args["CODE_PROFILING_BUFFER_ADDR"] = 0;
     }
 
-    // The streaming profiler's link sync: this core's part in it (streaming_profiler_link_sync.hpp), its L1 at the top
-    // of the unreserved region, and the round period (hostdev/streaming_profiler_common.h).
+    // The streaming profiler's link sync: this core's part in it (streaming_profiler_sync_devices.hpp), its L1 at the
+    // top of the unreserved region, and the round period (hostdev/streaming_profiler_common.h).
     namespace link_sync = tt::tt_metal::streaming_profiler::link_sync;
     link_sync::Role role = link_sync::Role::None;
     if (rtoptions.get_streaming_profiler_enabled() && link_sync::enabled()) {
