@@ -233,6 +233,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                      static_cast<uint32_t>(r.end_coord.x),
                      static_cast<uint32_t>(r.end_coord.y)});
             }
+            pd.kernel_order.push_back(kd.id);
             pd.kernels.emplace(kd.id, std::move(kd));
         }
 

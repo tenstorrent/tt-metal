@@ -244,6 +244,7 @@ struct EmuleProgramDescriptor {
     ProgramConfig config;
     std::vector<KernelGroupDescriptor> kernel_groups;
     std::unordered_map<KernelHandle, KernelDescriptor> kernels;  // union of get_kernels(pct)
+    std::vector<KernelHandle> kernel_order;  // get_kernels(pct) order across pcts (collect_kernels drives on it)
     std::vector<CoreDescriptor> cores;                           // logical_cores()
     std::vector<SemaphoreDescriptor> semaphores;                 // semaphores()
     // SocView is device-scoped (program-invariant) -> build once, pass alongside.
