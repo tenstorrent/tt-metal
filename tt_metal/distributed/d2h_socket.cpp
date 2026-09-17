@@ -16,7 +16,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/l2cpu_lim.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
-#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
+#include "emulated_program_runner.hpp"  // emule::pump_device (moved to tt-emule::runtime)
 #endif
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>

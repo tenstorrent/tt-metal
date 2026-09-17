@@ -18,7 +18,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"                     // moved to tt-emule::runtime
-#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split (still in tt-metal)
+#include "emulated_program_runner.hpp"  // emule mesh register/run split (moved to tt-emule::runtime)
 #endif
 #include <utility>
 #include <unordered_set>
