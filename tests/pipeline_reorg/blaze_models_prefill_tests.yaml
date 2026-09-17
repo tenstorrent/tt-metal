@@ -297,6 +297,7 @@
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
+  # Stage the prebuilt cache on worker-local disk before serial tensor loading.
   # Paths:
   #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
   #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
@@ -312,7 +313,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_7, transformer]
@@ -339,6 +340,7 @@
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
   #
+  # Stage the prebuilt cache on worker-local disk before serial tensor loading.
   # Paths:
   #   KIMI_K2_7_HF_MODEL         -> HF checkpoint (config + safetensors index; needed by weight_cache_path fixture)
   #   TT_KIMI_PREFILL_TTNN_CACHE -> prebuilt .tensorbin cache (…/kimi_k2_7_bh_32dev/8x4); required —
@@ -353,7 +355,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+      python3 models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py -- models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_7, transformer]

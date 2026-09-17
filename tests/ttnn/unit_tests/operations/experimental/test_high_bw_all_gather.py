@@ -267,7 +267,6 @@ def _profile_high_bw_all_gather(mesh_device, run):
         mesh_device,
         run,
         collect_all=True,
-        drain_before_run=True,
         record_timeout_seconds=5.0,
     )
     programs = {}
