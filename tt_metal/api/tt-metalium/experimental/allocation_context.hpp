@@ -19,6 +19,10 @@ bool trace_allocation_tracking_enabled();
 bool trace_allocation_diagnostics_enabled();
 bool trace_allocation_skip_program_cache_enabled();
 
+// Allocation contexts with this prefix identify program-cache-owned buffers, which
+// TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE excludes from unsafe-allocation accounting.
+inline constexpr std::string_view kProgramCacheAllocationContextPrefix = "program_cache:";
+
 void push_allocation_context(std::string_view ctx);
 void pop_allocation_context();
 const std::string& current_allocation_context();
