@@ -35,6 +35,7 @@
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_typecast_fp32_to_uint16.h"
+#include "sfpu/ckernel_sfpu_typecast_int32_fp16b.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
 // selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
@@ -350,6 +351,13 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
             // rather than letting HW imply them, so it needs implied math format disabled.
             // Walks Dest through ADDR_MOD_7 + _incr_counters_ instead of ADDR_MOD_6.
             SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_typecast_fp32_to_uint16_, (ITERATIONS), dst_index, VectorMode::RC);
+        }
+        else if constexpr (TYPECAST_IN_FORMAT == DataFormat::Int32 && TYPECAST_OUT_FORMAT == DataFormat::Float16_b)
+        {
+            // Dedicated TTI kernel: names the INT32 load and FP16B store formats explicitly
+            // rather than letting HW imply them, so it needs implied math format disabled.
+            // Walks Dest through ADDR_MOD_7 + _incr_counters_ instead of ADDR_MOD_6.
+            SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_typecast_int32_to_fp16b_, (ITERATIONS), dst_index, VectorMode::RC);
         }
         else
         {
