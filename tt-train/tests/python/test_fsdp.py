@@ -85,18 +85,11 @@ def _detect_arch() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _close_device_quietly() -> None:
+def _reset_metal_env_quietly() -> None:
+    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh) and
+    drop the MetalEnv, swallowing errors so teardown never masks a real failure."""
     try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so teardown never masks a real failure."""
-    try:
-        ttml.close_device_mesh()
+        ttml.reset_metal_env()
     except Exception:  # noqa: BLE001
         pass
 
@@ -152,12 +145,15 @@ def fsdp_mesh(skip_if_host_too_small):
     skip_if_host_too_small(shape, "FSDP tests")
     previous_mgd = _ensure_mgd_path(shape)
 
-    _close_device_quietly()
+    # After the MGD is settled, not before: the host-size check above already built a
+    # MetalEnv against whatever descriptor was set then, and a MetalEnv never re-reads
+    # TT_MESH_GRAPH_DESC_PATH.
+    ttml.reset_metal_env()
     try:
         m = ttml.Mesh(shape, ("dp", "fsdp"))
         ttml.open_device_mesh(m)
     except Exception:  # noqa: BLE001
-        _close_device_mesh_quietly()
+        _reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
 
@@ -167,7 +163,7 @@ def fsdp_mesh(skip_if_host_too_small):
     # single-device handle if they need to. The global ``ttml._mesh._mesh``
     # is reset so ``ttml.mesh()`` doesn't return a handle to a closed
     # device for any test that runs after this module.
-    _close_device_mesh_quietly()
+    _reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 

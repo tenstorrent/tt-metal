@@ -73,11 +73,11 @@ def _detect_arch() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so it is safe on the pre-open and teardown paths."""
+def _reset_metal_env_quietly() -> None:
+    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh) and
+    drop the MetalEnv, swallowing errors so it is safe on the teardown path."""
     try:
-        ttml.close_device_mesh()
+        ttml.reset_metal_env()
     except Exception:  # noqa: BLE001
         pass
 
@@ -145,11 +145,14 @@ def _open_mesh_or_skip(shape: tuple[int, ...], skip_if_host_too_small: Callable[
     """
     _skip_if_unsupported(shape, skip_if_host_too_small)
     previous_mgd = _ensure_mgd_path(shape)
-    _close_device_mesh_quietly()
+    # After the MGD is settled, not before. A MetalEnv reads TT_MESH_GRAPH_DESC_PATH once,
+    # when it is constructed, so switching descriptors between meshes in one session only
+    # takes effect if the env built under the old descriptor is dropped first.
+    ttml.reset_metal_env()
     try:
         ttml.open_device_mesh(shape)
     except Exception:  # noqa: BLE001
-        _close_device_mesh_quietly()
+        _reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
     return previous_mgd
@@ -160,7 +163,7 @@ def ccl_mesh(skip_if_host_too_small):
     """Open the default 2x2 mesh used by the main test classes."""
     previous_mgd = _open_mesh_or_skip(MESH_SHAPE_2X2, skip_if_host_too_small)
     yield ttml.mesh()
-    _close_device_mesh_quietly()
+    _reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 

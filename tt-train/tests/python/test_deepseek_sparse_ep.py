@@ -103,9 +103,10 @@ pytestmark = [
 ]
 
 
-def _close_device_quietly() -> None:
+def _reset_metal_env_quietly() -> None:
+    """Close the mesh and drop the MetalEnv, swallowing errors so teardown never masks a real failure."""
     try:
-        ttml.autograd.AutoContext.get_instance().close_device()
+        ttml.reset_metal_env()
     except Exception:  # noqa: BLE001
         pass
 
@@ -139,23 +140,20 @@ def ep_mesh(skip_if_host_too_small):
     skip_if_host_too_small(shape, f"sparse_ep tests ('ep' axis = {EP_AXIS_SIZE})")
     previous_mgd = _ensure_mgd_path(shape)
 
-    _close_device_quietly()
+    # After the MGD is settled, not before: the host-size check above already built a
+    # MetalEnv against whatever descriptor was set then, and a MetalEnv never re-reads
+    # TT_MESH_GRAPH_DESC_PATH.
+    ttml.reset_metal_env()
     try:
         ttml.open_device_mesh(ttml.Mesh(shape, ("dp", "ep")))
     except Exception:  # noqa: BLE001
-        _close_device_quietly()
+        _reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
 
     yield ttml.mesh()
 
-    _close_device_quietly()
-    try:
-        import ttml._mesh as _mesh_mod  # type: ignore[import-not-found]
-
-        _mesh_mod._mesh = None
-    except Exception:  # noqa: BLE001
-        pass
+    _reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 

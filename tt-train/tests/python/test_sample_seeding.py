@@ -116,18 +116,11 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
 
 
-def _close_device_quietly() -> None:
+def _reset_metal_env_quietly() -> None:
+    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh) and
+    drop the MetalEnv, swallowing errors so teardown never masks a real failure."""
     try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so teardown never masks a real failure."""
-    try:
-        ttml.close_device_mesh()
+        ttml.reset_metal_env()
     except Exception:  # noqa: BLE001
         pass
 
@@ -149,18 +142,22 @@ def seeding_mesh(skip_if_host_too_small):
     skip_if_host_too_small(shape, "sample-seeding tests")
 
     previous_mgd = _ensure_mgd_path(shape)
-    _close_device_quietly()
+    # After the MGD is settled, not before: the host-size check above already built a
+    # MetalEnv against whatever descriptor was set then, and a MetalEnv never re-reads
+    # TT_MESH_GRAPH_DESC_PATH. Without this the control plane is built from the wrong
+    # descriptor and the fabric routers never sync with the mesh we open below.
+    ttml.reset_metal_env()
     try:
         ttml.open_device_mesh(shape)
     except BaseException:  # noqa: BLE001
-        _close_device_mesh_quietly()
+        _reset_metal_env_quietly()
         _restore_mgd_path(previous_mgd)
         raise
 
     ttml.autograd.AutoContext.get_instance().set_seed(SEED)
     yield shape
 
-    _close_device_mesh_quietly()
+    _reset_metal_env_quietly()
     _restore_mgd_path(previous_mgd)
 
 

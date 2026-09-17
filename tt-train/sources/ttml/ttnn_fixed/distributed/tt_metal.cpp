@@ -11,9 +11,9 @@
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "tt-metalium/experimental/fabric/fabric.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace ttml::ttnn_fixed::distributed {
 
@@ -99,24 +99,22 @@ void enable_fabric(uint32_t num_devices) {
     auto mgd_path = get_mgd_path(num_devices);
 
     if (mgd_path.has_value()) {
-        // If the mgd changes between tests in a single process, problems can occur
-        // if we don't explicitly refresh MetalEnvImpl::custom_mesh_graph_desc_path_
-        // through calling set_custom_fabric_topology.
-        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(mgd_path.value(), {});
-
         // Infer the fabric config from the MGD's dim_types (LINE vs RING per axis)
         // This automatically selects FABRIC_2D, FABRIC_2D_TORUS_X, FABRIC_2D_TORUS_Y, or FABRIC_2D_TORUS_XY
         auto fabric_config = infer_fabric_config_from_mgd(mgd_path.value());
         tt::tt_fabric::SetFabricConfig(fabric_config);
     } else {
         // No MGD available, use default FABRIC_2D over the auto-discovered topology.
-        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 }
 
 void disable_fabric() {
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+}
+
+void release_metal_env() {
+    tt::tt_metal::detail::ReleaseOwnership();
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

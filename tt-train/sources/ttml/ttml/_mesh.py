@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import functools, operator, os, re
+import functools, gc, operator, os, re
 from typing import Iterable
 import ttnn
 import ttml
@@ -210,6 +210,35 @@ def close_device_mesh() -> None:
         ttml.autograd.AutoContext.get_instance().close_device()
     finally:
         _mesh = None
+
+
+def reset_metal_env() -> None:
+    """Close the device mesh and drop the process-global ``MetalEnv``.
+
+    A ``MetalEnv`` snapshots ``TT_MESH_GRAPH_DESC_PATH`` when it is constructed and
+    never re-reads it, and it is constructed by the first thing in the process that
+    touches the cluster -- including a bare ``ttnn.get_num_devices()``. So a process
+    that opens one mesh, points ``TT_MESH_GRAPH_DESC_PATH`` at a second descriptor and
+    opens another keeps building its control plane from the first descriptor, and the
+    fabric routers never sync against the mesh that was actually opened
+    ("Fabric Router Sync: Timeout after 10000 ms on Device 0").
+
+    Dropping the env is the only supported way to pick up a different descriptor: call
+    this after setting the env var and before opening the next mesh. The next device
+    access rebuilds the env, re-reading the environment.
+
+    The collections are load-bearing, not hygiene. A closed ``ttnn.MeshDevice`` whose
+    Python handle is still alive in a reference cycle keeps a populated program cache,
+    and ``~MeshDeviceImpl`` walks it (``~ProgramImpl`` -> ``deallocate_circular_buffers``)
+    against whatever context id 0 resolves to at finalization time. Ids are recycled, so
+    if such a handle outlives the env it lands in the *next* env's context and segfaults.
+    Finalizing it here, while its own env is still standing, is what keeps that from
+    happening.
+    """
+    gc.collect()
+    close_device_mesh()
+    gc.collect()
+    ttml.core.distributed.release_metal_env()
 
 
 def maybe_mesh() -> Mesh | None:

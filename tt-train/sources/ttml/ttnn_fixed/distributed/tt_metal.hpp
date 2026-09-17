@@ -26,4 +26,16 @@ void enable_fabric(uint32_t num_devices);
 // during the failure path of open_device_mesh().
 void disable_fabric();
 
+// Destroy the process-global MetalContext and the MetalEnv it owns; the next
+// access recreates both from the current environment.
+//
+// A MetalEnv snapshots TT_MESH_GRAPH_DESC_PATH (and the rest of RunTimeOptions)
+// when it is constructed and never re-reads it, so a process that opens meshes
+// under two different mesh graph descriptors keeps building its control plane
+// from whichever descriptor happened to be set when the first device query ran.
+// Dropping the env between meshes is the only supported way to pick up a new one.
+//
+// All devices must be closed first; this throws otherwise.
+void release_metal_env();
+
 }  // namespace ttml::ttnn_fixed::distributed
