@@ -42,6 +42,10 @@ Jul-15, Aug-15 and Sep-15 milestones.
 | Sep-15 | v0.78.0 | 4 | 3 | 1 (AIIPSW-53) |
 | **Total** | | **12** | **10** | **2** |
 
+Of the three Sep-15 requirements with tests recorded, **AIIPSW-54 has no Quasar
+test** - the automated test supplied for it runs on Wormhole or Blackhole only.
+Counting only Quasar coverage, Sep-15 is 2 of 4.
+
 ## Milestones
 
 | **Milestone** | **Requirement (ticket)** | **Existing Quasar tests** | **Team** | **Manager (escalation)** |
@@ -57,13 +61,30 @@ Jul-15, Aug-15 and Sep-15 milestones.
 | Sep-15 | **TTNN/Kernel Ops: Quasar ResNet with conv2D, pool and linear** (AIIPSW-16) | End-to-end model test on a two-compute-node (2x3) grid, plus the individual op tests used for debugging. `models/demos/vision/classification/resnet50/quasar/tests/ops/` now holds **50** op tests, up from 45 at v0.76.0. Commands and environment are given in full below. Verified on `main` at commit `5c73430ac16`. | Trinity | [@Borys Bradel](https://tenstorrent.enterprise.slack.com/team/U084B1CES7M) |
 | Sep-15 | **Debug tools: Exalens advanced debugging** (AIIPSW-52) | `rocket_step_test.py` (step-by-step debugging) and `rocket_callstack_test/rocket_callstack_test.py` (call-stack retrieval), both in `tenstorrent/tt-exalens` on branch `adjordjevic/release_testing`. See the note on test location below. | Debug Tools | [@Aleksandar Đorđević](https://tenstorrent.enterprise.slack.com/team/U082G4QEVGV) |
 | Sep-15 | **LLK: Qwen3-VL-2B related LLK features** (AIIPSW-53) | _to be filled out._ No PRs and no test evidence supplied at the v0.78.0 cut-off. Qwen3-VL op tests for Quasar do exist (PRs 54588, 54625) but were not offered as evidence for this requirement. | Trinity | [@Filip Vranic](https://tenstorrent.enterprise.slack.com/team/U08AU2A435Z) |
-| Sep-15 | **Debug tools: dynamic visualizer / NPE support** (AIIPSW-54) | SoC-descriptor dump: `pytest tests/tt_metal/tools/profiler/test_device_profiler.py::test_noc_event_profiler`. Visualizer compatibility with the new SoC-descriptor information in the timeline file was verified manually, not by an automated test. | Debug Tools | [@Sohaib Nadeem](https://tenstorrent.enterprise.slack.com/team/U08M5PK2492) · [@Denis Kartashevsky](https://tenstorrent.enterprise.slack.com/team/U05BL8X4BED) |
+| Sep-15 | **Debug tools: dynamic visualizer / NPE support** (AIIPSW-54) | **Not Quasar coverage - see the note below.** SoC-descriptor dump: `pytest tests/tt_metal/tools/profiler/test_device_profiler.py::test_noc_event_profiler`, which runs on Wormhole or Blackhole only. Visualizer compatibility with the new SoC-descriptor information in the timeline file was verified manually, not by an automated test. | Debug Tools | [@Sohaib Nadeem](https://tenstorrent.enterprise.slack.com/team/U08M5PK2492) · [@Denis Kartashevsky](https://tenstorrent.enterprise.slack.com/team/U05BL8X4BED) |
 
 ## Sep-15 test detail
 
 ### AIIPSW-16 — Quasar ResNet Kernel Ops with conv2D, pool and linear
 
-End-to-end model test on a two-compute-node grid (2x3). Takes at least ~25 minutes:
+End-to-end model test on a two-compute-node grid (2x3). Takes at least ~25 minutes.
+
+**Use the recipe documented in the test itself.** `test_resnet50_e2e.py` carries a
+`REQUIRES` note: until the K-spill `0x10000` hazard has its full fix, the run needs
+the DPRINT mask on, so that the K-spill matmul's `mm_partials` wait-then-pop hazard
+stays masked. The `copy_tile` interpose is only a partial fix. Its own run recipe is:
+
+```
+unset TT_METAL_LLK_ASSERTS
+TT_METAL_DPRINT_CORES=all TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 TT_METAL_FORCE_JIT_COMPILE=1 \
+TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}' \
+pytest -q models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py
+```
+
+The command supplied as release evidence was the shorter form below. It omits the
+DPRINT mask, the Quasar split path, forced JIT and the fast-runtime-mode override,
+so it does not reproduce the validated setup and can hit the K-spill hazard. It is
+recorded for traceability; prefer the recipe above:
 
 ```
 RESNET_PCC_LOG=1 TT_METAL_SLOW_DISPATCH_MODE=1 pytest -q models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py::test_resnet50_e2e[pretrained-device_params0]
@@ -128,3 +149,8 @@ validated against **tt-exalens 0.3.31**, available from
 - **One test in this release is manual.** Visualizer compatibility with the new
   SoC-descriptor timeline information (AIIPSW-54) was checked by hand. It has no
   automated coverage yet.
+- **AIIPSW-54 has no Quasar test.** The automated test supplied for the
+  SoC-descriptor dump, `test_noc_event_profiler`, asserts that `ARCH_NAME` is one
+  of `grayskull`, `wormhole_b0` or `blackhole`, so it cannot run on Quasar. The
+  feature itself is architecture-neutral and the test does validate the descriptor
+  it emits, but Quasar coverage for this requirement is still outstanding.
