@@ -245,6 +245,7 @@ private:
     struct AttachedStream;
     struct Attached;
     struct Parked;
+    class StreamWalker;
     class ConsumerLoop;
     class SyncLoop;
     void consumer_thread(Consumer& c);

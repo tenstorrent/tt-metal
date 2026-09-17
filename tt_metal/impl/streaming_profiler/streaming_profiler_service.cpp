@@ -330,120 +330,74 @@ void Service::open_stream(AttachedStream& s, const CaptureContext& ctx, const Pr
     s.dec.dev = ps.dev;
 }
 
-// The sync engine's thread: the eth pushers' streams of every attached producer, walked and decoded for the clock
-// samples their decoders route to the engine; the records are decoded into scratch and dropped. Attached before and
-// detached before any consumer, so the covers the consumers wait for exist first and are final when they flush.
-class Service::SyncLoop {
+// A reader thread over every attached producer's streams: the attach and detach requests the Service posts, the
+// walk of each stream's new frames up to the ingest's position, and the idle loop. The consumer thread and the sync
+// engine's thread are the two; they differ in which streams they open and what a walked batch becomes.
+class Service::StreamWalker {
 public:
-    explicit SyncLoop(Service& service) :
-        service_(service),
-        frames_buf_(std::make_unique_for_overwrite<std::byte[]>(kFramesBytes)),
-        zones_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
-        events_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
-        data_(std::make_unique_for_overwrite<uint8_t[]>(kDataScratchBytes)) {}
+    virtual ~StreamWalker() = default;
 
     void run() {
-        tracy::SetThreadName("sp-sync");
-        set_os_thread_name("sp-sync");
+        tracy::SetThreadName(name_.c_str());
+        set_os_thread_name(name_);
+        t_in_consumer = true;
         IdleBackoff backoff(0);
         for (;;) {
             const uint32_t seen = service_.wake_token();
-            if (service_.sync_control_.pending.load(std::memory_order_acquire)) {
-                service_.sync_control_.pending.store(false, std::memory_order_release);
-                handle_control();
+            if (control_.pending.load(std::memory_order_acquire)) {
+                control_.pending.store(false, std::memory_order_release);
+                handle_control(true);
             }
             bool any = false;
             for (auto& a : attached_) {
                 any |= pass(*a);
             }
+            any |= idle_pass();
             if (any) {
                 backoff.reset();
                 continue;
+            }
+            if (stop_ != nullptr && stop_->load(std::memory_order_acquire)) {
+                break;
             }
             if (backoff.spin()) {
                 continue;
             }
             service_.wait_wake(seen);
         }
+        stopping();
+        attached_.clear();
+        handle_control(false);
     }
 
-private:
+protected:
+    // A null `stop`: the thread runs for the process.
+    StreamWalker(Service& service, ControlQueue& control, std::string name, const std::atomic<bool>* stop) :
+        service_(service),
+        frames_buf_(std::make_unique_for_overwrite<std::byte[]>(kFramesBytes)),
+        control_(control),
+        name_(std::move(name)),
+        stop_(stop) {}
+
     static constexpr size_t kFramesBytes = size_t{kBatchFrames} * profiler::kSpscMaxFrameWords * 4;
-    // One frame's records, the most a frame can decode to.
-    static constexpr size_t kRecScratchBytes =
-        (profiler::kSpscMaxFrameWords / 2 + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
-    static constexpr size_t kDataScratchBytes = kRecScratchBytes + profiler::kSpscMaxFrameWords * 4 + 32;
 
-    void handle_control() {
-        std::vector<std::pair<Producer*, bool>> control;
-        {
-            std::lock_guard<std::mutex> lk(service_.sync_control_.mu);
-            control.swap(service_.sync_control_.items);
-        }
-        for (const auto& [p, is_attach] : control) {
-            is_attach ? attach(p) : detach(p);
-        }
-        std::lock_guard<std::mutex> lk(service_.mu_);
-        service_.pending_acks_ -= control.size();
-        service_.ack_cv_.notify_all();
-    }
+    // Which of a producer's streams this reader opens.
+    virtual bool wants(const ProducerStream& ps) const = 0;
+    // A producer's streams are open, before their first pass.
+    virtual void opened(Attached& a, const CaptureContext& ctx) = 0;
+    // One batch of one stream: walked, and whatever this reader makes of it. False when there was nothing new.
+    virtual bool read(Attached& a, AttachedStream& s, uint32_t index) = 0;
+    // A producer's streams are drained: release them, finish_stream included.
+    virtual void closed(Attached& a, Producer* p) = 0;
+    // Work between passes that reads no stream; true when it did some.
+    virtual bool idle_pass() { return false; }
+    // Stopped with producers still attached.
+    virtual void stopping() {}
 
-    void attach(Producer* p) {
-        auto a = std::make_unique<Attached>();
-        a->producer = p;
-        const CaptureContext& ctx = p->capture_context();
-        const auto streams = p->streams();
-        for (uint32_t si = 0; si < streams.size(); si++) {
-            if (!streams[si].eth) {
-                continue;
-            }
-            auto s = std::make_unique<AttachedStream>();
-            open_stream(*s, ctx, streams[si], si);
-            s->dec.clock_ctx = service_.sync_.get();
-            s->dec.clock_fn = [](void* engine, const ClockSample& cs) {
-                static_cast<SyncEngine*>(engine)->on_clock(cs);
-            };
-            a->streams.push_back(std::move(s));
-        }
-        service_.sync_->on_attach(ctx);
-        attached_.push_back(std::move(a));
-    }
-
-    void detach(Producer* p) {
-        auto it = std::find_if(attached_.begin(), attached_.end(), [&](const auto& a) { return a->producer == p; });
-        if (it == attached_.end()) {
-            return;
-        }
-        Attached& a = **it;
-        while (pass(a)) {
-        }
-        service_.sync_->on_capture_end(p->capture_context());
-        for (const auto& s : a.streams) {
-            if (s->dropped != 0) {
-                log_warning(
-                    tt::LogMetal,
-                    "[streaming profiler] the sync engine missed {} bytes of chip {}'s clock stream",
-                    s->dropped,
-                    s->chip);
-            }
-            p->finish_stream(s->stream, s->dropped, s->dec.stats);
-        }
-        attached_.erase(it);
-    }
-
-    bool pass(Attached& a) {
-        bool any = false;
-        for (auto& s : a.streams) {
-            any |= read(a, *s);
-        }
-        return any;
-    }
-
-    // One batch of frames from the stream, decoded frame by frame into the scratch. False when the stream had
-    // nothing new.
-    bool read(Attached& a, AttachedStream& s) {
+    // The stream's new frames, up to the ingest's walk, into frames_buf_ and frame_words_; false when there are none.
+    bool walk(Attached& a, AttachedStream& s, Walked& w) {
         const ProducerStream& ps = a.producer->streams()[s.stream];
-        const Walked w = walk_frames(
+        w = walk_frames(
             ps.fifo,
             s.cursor,
             ps.walked->load(std::memory_order_acquire),
@@ -456,13 +410,6 @@ private:
         }
         s.cursor = w.cursor;
         s.dropped += w.dropped;
-        const std::byte* p = frames_buf_.get();
-        for (uint32_t i = 0; i < w.frames; i++) {
-            s.dec.decode_frame(
-                reinterpret_cast<const uint32_t*>(p), frame_words_[i], {zones_.get(), events_.get(), data_.get()});
-            p += size_t{frame_words_[i]} * 4;
-        }
-        s.dec.commit();
         return true;
     }
 
@@ -470,66 +417,13 @@ private:
     std::vector<std::unique_ptr<Attached>> attached_;
     std::array<uint32_t, kBatchFrames> frame_words_{};
     std::unique_ptr<std::byte[]> frames_buf_;
-    std::unique_ptr<uint8_t[]> zones_, events_, data_;
-};
-
-void Service::sync_thread() { SyncLoop(*this).run(); }
-
-// One consumer's thread: a producer's frames walked and decoded into batches, each parked until the sync covers
-// its records, then delivered to the callback in decode order and released.
-class Service::ConsumerLoop {
-public:
-    ConsumerLoop(Service& service, Consumer& c) :
-        service_(service),
-        c_(c),
-        map_(service.sync_->map()),
-        zones_arena_(kZonesArenaBytes),
-        events_arena_(kEventsArenaBytes),
-        data_arena_(kDataArenaBytes),
-        frames_buf_(std::make_unique_for_overwrite<std::byte[]>(kFramesBytes)) {}
-
-    void run() {
-        const std::string name = "sp-con:" + c_.name;
-        tracy::SetThreadName(name.c_str());
-        set_os_thread_name(name);
-        t_in_consumer = true;
-        IdleBackoff backoff(0);
-        for (;;) {
-            const uint32_t seen = service_.wake_token();
-            if (c_.control.pending.load(std::memory_order_acquire)) {
-                c_.control.pending.store(false, std::memory_order_release);
-                handle_control(true);
-            }
-            if (pass_all()) {
-                backoff.reset();
-                continue;
-            }
-            if (c_.stop.load(std::memory_order_acquire)) {
-                break;
-            }
-            if (backoff.spin()) {
-                continue;
-            }
-            service_.wait_wake(seen);
-        }
-        // Stopped mid-capture: the readers go before the queues they read.
-        for (const auto& a : attached_) {
-            for (const auto& s : a->streams) {
-                c_.dropped.fetch_add(s->dropped, std::memory_order_relaxed);
-            }
-        }
-        attached_.clear();
-        handle_control(false);
-    }
 
 private:
-    static constexpr size_t kFramesBytes = size_t{kBatchFrames} * profiler::kSpscMaxFrameWords * 4;
-
     void handle_control(bool run) {
         std::vector<std::pair<Producer*, bool>> control;
         {
-            std::lock_guard<std::mutex> lk(c_.control.mu);
-            control.swap(c_.control.items);
+            std::lock_guard<std::mutex> lk(control_.mu);
+            control.swap(control_.items);
         }
         if (run) {
             for (const auto& [p, is_attach] : control) {
@@ -547,11 +441,14 @@ private:
         const CaptureContext& ctx = p->capture_context();
         const auto streams = p->streams();
         for (uint32_t si = 0; si < streams.size(); si++) {
+            if (!wants(streams[si])) {
+                continue;
+            }
             auto s = std::make_unique<AttachedStream>();
             open_stream(*s, ctx, streams[si], si);
             a->streams.push_back(std::move(s));
         }
-        a->capture = ++c_.captures;
+        opened(*a, ctx);
         attached_.push_back(std::move(a));
     }
 
@@ -563,33 +460,8 @@ private:
         Attached& a = **it;
         while (pass(a)) {
         }
-        // The producer's waiting batches go out now: the sync engine detached first, so their covers are final.
-        for (auto& sp : a.streams) {
-            for (Parked* pk : sp->pending) {
-                deliver(*pk);
-            }
-            sp->pending.clear();
-        }
-        release_delivered();
-        for (Parked& pk : parked_) {
-            if (pk.a == &a) {
-                pk.a = nullptr;
-            }
-        }
-        for (size_t i = 0; i < a.streams.size(); i++) {
-            c_.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);
-            p->finish_stream(a.streams[i]->stream, a.streams[i]->dropped, a.streams[i]->dec.stats);
-        }
+        closed(a, p);
         attached_.erase(it);
-    }
-
-    bool pass_all() {
-        bool any = false;
-        for (auto& a : attached_) {
-            any |= pass(*a);
-        }
-        any |= drain();
-        return any;
     }
 
     // One batch per stream per pass, so no stream's ring laps while an earlier one is drained to empty.
@@ -601,23 +473,97 @@ private:
         return any;
     }
 
-    // One batch of up to kBatchFrames frames from the stream, read in place up to the ingest's walk position and
-    // decoded into the arenas. False when the stream had nothing new.
-    bool read(Attached& a, AttachedStream& s, uint32_t attached_index) {
-        const ProducerStream& ps = a.producer->streams()[s.stream];
-        const Walked w = walk_frames(
-            ps.fifo,
-            s.cursor,
-            ps.walked->load(std::memory_order_acquire),
-            ps.marks,
-            std::span<std::byte>(frames_buf_.get(), kFramesBytes),
-            frame_words_,
-            [&] { return a.producer->live_head(s.stream); });
-        if (w.cursor == s.cursor) {
+    ControlQueue& control_;
+    const std::string name_;
+    const std::atomic<bool>* stop_;
+};
+
+// The sync engine's thread: the eth pushers' streams, decoded for the clock samples their decoders route to the
+// engine, the records dropped. Attached before and detached before any consumer, so the covers the consumers wait
+// for exist first and are final when they flush.
+class Service::SyncLoop : public StreamWalker {
+public:
+    explicit SyncLoop(Service& service) :
+        StreamWalker(service, service.sync_control_, "sp-sync", nullptr),
+        zones_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
+        events_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
+        data_(std::make_unique_for_overwrite<uint8_t[]>(kDataScratchBytes)) {}
+
+private:
+    // One frame's records, the most a frame can decode to.
+    static constexpr size_t kRecScratchBytes =
+        (profiler::kSpscMaxFrameWords / 2 + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
+    static constexpr size_t kDataScratchBytes = kRecScratchBytes + profiler::kSpscMaxFrameWords * 4 + 32;
+
+    bool wants(const ProducerStream& ps) const override { return ps.eth; }
+
+    void opened(Attached& a, const CaptureContext& ctx) override {
+        for (auto& s : a.streams) {
+            s->dec.clock_ctx = service_.sync_.get();
+            s->dec.clock_fn = [](void* engine, const ClockSample& cs) {
+                static_cast<SyncEngine*>(engine)->on_clock(cs);
+            };
+        }
+        service_.sync_->on_attach(ctx);
+    }
+
+    bool read(Attached& a, AttachedStream& s, uint32_t) override {
+        Walked w;
+        if (!walk(a, s, w)) {
             return false;
         }
-        s.cursor = w.cursor;
-        s.dropped += w.dropped;
+        const std::byte* p = frames_buf_.get();
+        for (uint32_t i = 0; i < w.frames; i++) {
+            s.dec.decode_frame(
+                reinterpret_cast<const uint32_t*>(p), frame_words_[i], {zones_.get(), events_.get(), data_.get()});
+            p += size_t{frame_words_[i]} * 4;
+        }
+        s.dec.commit();
+        return true;
+    }
+
+    void closed(Attached& a, Producer* p) override {
+        service_.sync_->on_capture_end(p->capture_context());
+        for (const auto& s : a.streams) {
+            if (s->dropped != 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] the sync engine missed {} bytes of chip {}'s clock stream",
+                    s->dropped,
+                    s->chip);
+            }
+            p->finish_stream(s->stream, s->dropped, s->dec.stats);
+        }
+    }
+
+    std::unique_ptr<uint8_t[]> zones_, events_, data_;
+};
+
+void Service::sync_thread() { SyncLoop(*this).run(); }
+
+// One consumer's thread: a producer's frames decoded into batches, each parked until the sync covers its records,
+// then delivered to the callback in decode order and released.
+class Service::ConsumerLoop : public StreamWalker {
+public:
+    ConsumerLoop(Service& service, Consumer& c) :
+        StreamWalker(service, c.control, "sp-con:" + c.name, &c.stop),
+        c_(c),
+        map_(service.sync_->map()),
+        zones_arena_(kZonesArenaBytes),
+        events_arena_(kEventsArenaBytes),
+        data_arena_(kDataArenaBytes) {}
+
+private:
+    bool wants(const ProducerStream&) const override { return true; }
+
+    void opened(Attached& a, const CaptureContext&) override { a.capture = ++c_.captures; }
+
+    // A batch decoded into the arenas and parked behind the stream's earlier ones.
+    bool read(Attached& a, AttachedStream& s, uint32_t attached_index) override {
+        Walked w;
+        if (!walk(a, s, w)) {
+            return false;
+        }
         size_t words = 0;
         for (uint32_t i = 0; i < w.frames; i++) {
             words += frame_words_[i];
@@ -658,6 +604,37 @@ private:
         s.pending.push_back(&parked_.back());
         s.stalls_reported = s.dec.stall_zones;
         return true;
+    }
+
+    // The producer's waiting batches go out now: the sync engine detached first, so their covers are final.
+    void closed(Attached& a, Producer* p) override {
+        for (auto& sp : a.streams) {
+            for (Parked* pk : sp->pending) {
+                deliver(*pk);
+            }
+            sp->pending.clear();
+        }
+        release_delivered();
+        for (Parked& pk : parked_) {
+            if (pk.a == &a) {
+                pk.a = nullptr;
+            }
+        }
+        for (const auto& s : a.streams) {
+            c_.dropped.fetch_add(s->dropped, std::memory_order_relaxed);
+            p->finish_stream(s->stream, s->dropped, s->dec.stats);
+        }
+    }
+
+    bool idle_pass() override { return drain(); }
+
+    // Stopped mid-capture: the readers go before the queues they read.
+    void stopping() override {
+        for (const auto& a : attached_) {
+            for (const auto& s : a->streams) {
+                c_.dropped.fetch_add(s->dropped, std::memory_order_relaxed);
+            }
+        }
     }
 
     // Room for a batch of `words` frame words in every arena; the oldest waiting batch goes out when the arenas are
@@ -789,15 +766,11 @@ private:
             std::max(c_.unplaced_age_ns.load(std::memory_order_relaxed), age), std::memory_order_relaxed);
     }
 
-    Service& service_;
     Consumer& c_;
     const PlacementMap& map_;
-    std::vector<std::unique_ptr<Attached>> attached_;
     Arena zones_arena_, events_arena_, data_arena_;
     std::deque<Parked> parked_;  // every undelivered or unreleased batch, in decode order
     uint64_t covers_seen_ = ~0ull;
-    std::array<uint32_t, kBatchFrames> frame_words_{};
-    std::unique_ptr<std::byte[]> frames_buf_;
 };
 
 void Service::consumer_thread(Consumer& c) { ConsumerLoop(*this, c).run(); }
