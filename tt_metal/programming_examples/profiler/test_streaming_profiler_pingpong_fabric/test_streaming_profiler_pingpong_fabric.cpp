@@ -303,9 +303,9 @@ int main(int argc, char** argv) {
             (s.tx ? e.first : e.second).push_back(s.zone);
         }
     }
-    auto tsc_of = [](const sp::Zone& z) { return z.start_time<sp::tsc_clock>().time_since_epoch().count(); };
+    auto tsc_of = [](const sp::Zone& z) { return z.start_time().time_since_epoch().count(); };
     auto ns_of = [](int64_t ticks) {
-        return static_cast<double>(sp::tsc_clock::to_ns(sp::tsc_clock::duration(ticks)).count());
+        return static_cast<double>(ticks) / 10.0;  // host_clock units to ns
     };
     std::printf(
         "pair        rounds   one-way A->B ns (p10 / min / mean / sd)   one-way B->A ns (p10 / min / mean / sd)   "

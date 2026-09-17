@@ -219,7 +219,7 @@ int main() {
         SyncCorrections::published(1),
         SyncCorrections::published(2));
 
-    // A record's placement: its eth wall tick through the chip's series, as Record::host_time<tsc_clock> does.
+    // A record's placement: its eth wall tick through the chip's series, as the service places a record at release.
     const auto placed_ns = [&](int c, double tau) {
         const int64_t t = SyncCorrections::lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)));
         return (static_cast<double>(t) - tsc(tau)) / kTicksPerNs;  // ns from the truth
@@ -263,6 +263,31 @@ int main() {
                 placed_ns(c, tau),
                 SyncCorrections::lookup_error_ns(static_cast<uint32_t>(c), std::llround(wall(c, tau))));
         }
+    }
+    // The composed placement the service stamps records with must be the two-level lookup, everywhere: across chip
+    // 0's step, across the host nodes, on the open tangents, on every chip.
+    {
+        double worst = 0.0;
+        size_t n = 0;
+        for (int c = 0; c < 3; c++) {
+            for (double tau = 0.001; tau < 0.999; tau += 0.00037) {
+                const int64_t w = std::llround(wall(c, tau));
+                const int64_t two = SyncCorrections::lookup_tsc(static_cast<uint32_t>(c), w);
+                const int64_t one = SyncCorrections::place_host(static_cast<uint32_t>(c), w);
+                if (two == 0 || one == 0) {
+                    continue;
+                }
+                const int64_t two_units = api::host_clock::from_tsc(two).time_since_epoch().count();
+                worst = std::max(worst, std::fabs(static_cast<double>(one - two_units)) / 10.0);
+                n++;
+            }
+        }
+        // The reference is rounded to a whole TSC tick and the composed value to a host_clock unit.
+        const double tick_ns = static_cast<double>(api::host_clock::from_tsc(1).time_since_epoch().count() -
+                                                   api::host_clock::from_tsc(0).time_since_epoch().count()) /
+                               10.0;
+        std::snprintf(what, sizeof what, "composed placement vs two-level lookup over %zu instants (ns)", n);
+        check_near(what, worst, 0.0, tick_ns + 0.1);
     }
     if (SyncCorrections::published(2) == 0) {
         std::printf("FAIL (d) chip2 published 0 nodes: the leaf never reached the root\n");

@@ -27,8 +27,8 @@ class Service;
 // context per (chip, core). Constructing it registers; destroying it unregisters. Everything after construction
 // runs on the callback's thread.
 //
-// Records are read in tsc_clock, the counter Tracy's own timer is: a record's timeline position is its TSC tick
-// through Tracy's calibrated multiplier, with no second clock and no map between them.
+// Record host times are host_clock, the TSC scaled: a record's timeline position is its TSC count through Tracy's
+// calibrated multiplier, with no second clock and no map between them.
 class TracySink {
 public:
     explicit TracySink(Service& service);

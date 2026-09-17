@@ -374,11 +374,10 @@ void Service::consumer_thread(Consumer& c) {
             s->state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
             s->state.core_of_xy.load(dev.core_xy);
             s->lanes.reserve(dev.lanes.size());
-            const double ghz = p->clock(ps.dev).frequency_ghz;
             for (size_t li = 0; li < dev.lanes.size(); li++) {
                 const size_t core = li / profiler::kSpscNRiscDecode;
                 const int64_t offset = core < dev.tile_offset.size() ? dev.tile_offset[core] : 0;
-                s->lanes.push_back(record_consts(dev.lanes[li], ghz, offset));
+                s->lanes.push_back(record_consts(dev.lanes[li], offset));
             }
             s->dec.st = &s->state;
             s->dec.lanes = s->lanes.data();
@@ -397,7 +396,29 @@ void Service::consumer_thread(Consumer& c) {
         a->capture = ++c.captures;
         attached.push_back(std::move(a));
     };
+    // Placement, where the cover guarantee holds: each record's host times over the tile offset the decoder left in
+    // its host_time_ slot. A batch released before the sync covered it lands on the newest tangent, as counted.
+    auto place = [&](Parked& pk) {
+        const uint32_t chip = pk.a->streams[pk.stream]->chip;
+        for (uint32_t i = 0; i < pk.n.zones; i++) {
+            api::Record& r = reinterpret_cast<api::Zone*>(pk.zones)[i];
+            const int64_t wall = static_cast<int64_t>(r.timestamp_) + r.host_time_;
+            r.host_time_ = SyncCorrections::place_host(chip, wall);
+            r.host_end_ = SyncCorrections::place_host(chip, wall + static_cast<int64_t>(r.duration_));
+        }
+        for (uint32_t i = 0; i < pk.n.events; i++) {
+            api::Record& r = reinterpret_cast<api::Event*>(pk.events)[i];
+            r.host_time_ = SyncCorrections::place_host(chip, static_cast<int64_t>(r.timestamp_) + r.host_time_);
+        }
+        for (uint8_t* p = pk.data; p < pk.data + pk.n.data_bytes;) {
+            api::TimestampedData& d = *reinterpret_cast<api::TimestampedData*>(p);
+            api::Record& r = d;
+            r.host_time_ = SyncCorrections::place_host(chip, static_cast<int64_t>(r.timestamp_) + r.host_time_);
+            p += d.size_bytes();
+        }
+    };
     auto deliver = [&](Parked& pk) {
+        place(pk);
         api::Batch<api::RecordType::All> b;
         b.zones_ = std::span<const api::Zone>(reinterpret_cast<const api::Zone*>(pk.zones), pk.n.zones);
         b.events_ = std::span<const api::Event>(reinterpret_cast<const api::Event*>(pk.events), pk.n.events);

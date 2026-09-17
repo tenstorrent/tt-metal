@@ -68,13 +68,11 @@ struct CaptureContext {
     uint32_t root_dev = 0;  // index into `devices`: the chip the host probe reads and every link path leads to
 };
 
-// What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip,
-// RISC, frequency and offset fields), in the record's byte layout. `offset` takes the lane's ticks into the chip's
-// eth wall domain: the tile offset for a worker lane, 0 for an eth lane.
-inline profiler::SpscRecConsts record_consts(
-    const experimental::streaming_profiler::Core& core, double frequency_ghz, int64_t offset) {
-    const auto hz = static_cast<uint32_t>(
-        std::clamp<int64_t>(std::llround(frequency_ghz * 1e9), 1, std::numeric_limits<uint32_t>::max()));
+// What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip and
+// RISC fields, and its host_time_ slot), in the record's byte layout. `offset` takes the lane's ticks into the chip's
+// eth wall domain: the tile offset for a worker lane, 0 for an eth lane; the service reads it from the slot at
+// release and writes the record's host time over it.
+inline profiler::SpscRecConsts record_consts(const experimental::streaming_profiler::Core& core, int64_t offset) {
     return profiler::SpscRecConsts{
         .coords =
             {static_cast<uint32_t>(core.logical.x & 0xFFFFu) | (static_cast<uint32_t>(core.logical.y & 0xFFFFu) << 16),
@@ -82,7 +80,7 @@ inline profiler::SpscRecConsts record_consts(
                  (static_cast<uint32_t>(core.physical.y & 0xFFFFu) << 16)},
         .tail = {
             (core.chip_id & 0xFFFFu) | (static_cast<uint32_t>(core.risc) << 16),
-            hz,
+            0u,
             static_cast<uint32_t>(static_cast<uint64_t>(offset)),
             static_cast<uint32_t>(static_cast<uint64_t>(offset) >> 32)}};
 }

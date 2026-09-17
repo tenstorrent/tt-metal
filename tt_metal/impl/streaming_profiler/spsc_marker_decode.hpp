@@ -106,7 +106,7 @@ struct SpanDecodeState {
 // kind's region of the batch buffer; Data payload elements go to the batch's arena. Stores are cached, not NT: the
 // consumer reads the buffers immediately. Block kernels write their last quad whole, so a region needs
 // kSpscSinkSlackRecs of slack past cap.
-inline constexpr uint32_t kSpscRecBytes = 48;
+inline constexpr uint32_t kSpscRecBytes = 56;
 inline constexpr uint32_t kSpscSinkSlackRecs = 8;
 // A lane's record constants in record byte order: dwords 6-7 (the coordinates) and the tail.
 struct SpscRecConsts {

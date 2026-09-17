@@ -131,31 +131,34 @@ constexpr RecordType accepted_batch() {
     }
 }
 
-int64_t sync_place_tsc(uint16_t chip_id, int64_t wall) noexcept;
-int64_t sync_error_ns(uint16_t chip_id, int64_t wall) noexcept;
-int64_t tsc_to_steady_ns(int64_t tsc) noexcept;
-double sync_rate_ghz(uint16_t chip_id, int64_t wall) noexcept;
+int64_t host_to_steady_ns(int64_t host) noexcept;
 }  // namespace detail
 
-/** @brief The host's time-stamp counter, in ticks: the clock records are placed in and the clock Tracy's timeline runs
- * on. */
-struct tsc_clock {
+/**
+ * @brief The clock every record's host time is in: the host's time-stamp counter, in tenths of a nanosecond.
+ *
+ * steady_time() converts to the OS clock; it is std::chrono::clock_cast<std::chrono::steady_clock> for this clock,
+ * spelled out because the C++20 chrono conversions need libstdc++ 13.
+ */
+struct host_clock {
     using rep = int64_t;
-    using period = std::ratio<1>;  // one tick, not a second: convert with to_ns
+    using period = std::ratio<1, 10'000'000'000>;
     using duration = std::chrono::duration<rep, period>;
-    using time_point = std::chrono::time_point<tsc_clock>;
+    using time_point = std::chrono::time_point<host_clock>;
     static constexpr bool is_steady = true;
-    /** @brief The counter now. */
+    /** @brief The clock now. */
     static time_point now() noexcept;
-    /** @brief A tick duration in nanoseconds. */
-    static std::chrono::nanoseconds to_ns(duration d) noexcept;
-    /** @brief The counter's rate. */
-    static double ticks_per_second() noexcept;
+    /** @brief The time-stamp counter's count at a time point. */
+    static int64_t tsc(time_point t) noexcept;
+    /** @brief The time point of a time-stamp counter count. */
+    static time_point from_tsc(int64_t ticks) noexcept;
 };
 
-/** @brief A clock records can be read in: std::chrono::steady_clock or tsc_clock. */
-template <typename Clock>
-concept record_clock = std::same_as<Clock, std::chrono::steady_clock> || std::same_as<Clock, tsc_clock>;
+/** @brief A host_clock time point on std::chrono::steady_clock. */
+inline std::chrono::steady_clock::time_point steady_time(host_clock::time_point t) noexcept {
+    return std::chrono::steady_clock::time_point(
+        std::chrono::nanoseconds(detail::host_to_steady_ns(t.time_since_epoch().count())));
+}
 
 /** @brief Base class of every record: its site, core, program id and clock. */
 class Record {
@@ -172,32 +175,9 @@ public:
     }
     /** @brief Host runtime ID of the program. */
     uint32_t runtime_id() const { return runtime_id_; }
-    /** @brief The uncertainty of this record's host time against records of other chips. */
-    std::chrono::nanoseconds host_time_error() const {
-        return std::chrono::nanoseconds(detail::sync_error_ns(chip_id_, static_cast<int64_t>(timestamp_) + offset_));
-    }
-    /** @brief The chip's clock frequency in GHz at this record's instant. */
-    double frequency_ghz() const {
-        const double ghz = detail::sync_rate_ghz(chip_id_, static_cast<int64_t>(timestamp_) + offset_);
-        return ghz > 0.0 ? ghz : frequency_hz_ * 1e-9;
-    }
 
 protected:
-    std::chrono::nanoseconds ticks_to_ns(uint64_t ticks) const {
-        return std::chrono::nanoseconds(static_cast<int64_t>(static_cast<double>(ticks) / frequency_ghz()));
-    }
-    // The record's tick in its chip's eth wall domain (a worker lane's ticks plus the chip's constant tile offset),
-    // placed on the host TSC by the chip's frozen nodes, then read in the requested clock.
-    template <record_clock Clock>
-    typename Clock::time_point host_time(uint64_t ticks) const {
-        const int64_t tsc = detail::sync_place_tsc(chip_id_, static_cast<int64_t>(ticks) + offset_);
-        if constexpr (std::same_as<Clock, tsc_clock>) {
-            return tsc_clock::time_point(tsc_clock::duration(tsc));
-        } else {
-            return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(detail::tsc_to_steady_ns(tsc)));
-        }
-    }
-
+    friend class tt::tt_metal::streaming_profiler::Service;  // writes host_time_ and host_end_ at release
     uint64_t timestamp_;
     union {
         uint64_t duration_;     // Zone
@@ -208,10 +188,14 @@ protected:
     uint16_t logical_x_, logical_y_, physical_x_, physical_y_;
     uint16_t chip_id_;
     uint8_t risc_;
-    uint32_t frequency_hz_;
-    int64_t offset_;
+    uint32_t reserved_;
+    // The record's instant (a zone's start) and a zone's end on host_clock, written by the service when the batch is
+    // released to its consumer. Until then host_time_ holds the lane's tile offset, which takes its ticks into the
+    // chip's eth wall domain, the input of that placement.
+    int64_t host_time_;
+    int64_t host_end_;
 };
-static_assert(sizeof(Record) == 48);
+static_assert(sizeof(Record) == 56);
 
 /**
  * @brief One closed DeviceZoneScopedN scope.
@@ -225,34 +209,23 @@ public:
     uint64_t start_timestamp() const { return timestamp_; }
     /** @brief End of the zone in device clock ticks. */
     uint64_t end_timestamp() const { return timestamp_ + duration_; }
+    /** @brief Start of the zone on the host clock. */
+    host_clock::time_point start_time() const { return host_clock::time_point(host_clock::duration(host_time_)); }
+    /** @brief End of the zone on the host clock. */
+    host_clock::time_point end_time() const { return host_clock::time_point(host_clock::duration(host_end_)); }
+    /** @brief Start and end of the zone on the host clock. */
+    std::pair<host_clock::time_point, host_clock::time_point> host_span() const { return {start_time(), end_time()}; }
     /** @brief Length of the zone on the host clock. */
     std::chrono::nanoseconds duration() const {
-        const int64_t s = detail::sync_place_tsc(chip_id_, static_cast<int64_t>(timestamp_) + offset_);
-        const int64_t e = detail::sync_place_tsc(chip_id_, static_cast<int64_t>(timestamp_ + duration_) + offset_);
-        if (s != 0 && e >= s) {
-            return tsc_clock::to_ns(tsc_clock::duration(e - s));
-        }
-        return ticks_to_ns(duration_);
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(end_time() - start_time());
     }
-    /** @brief Start of the zone on the host clock. */
-    template <record_clock Clock = std::chrono::steady_clock>
-    typename Clock::time_point start_time() const {
-        return host_time<Clock>(timestamp_);
-    }
-    /** @brief End of the zone on the host clock. */
-    template <record_clock Clock = std::chrono::steady_clock>
-    typename Clock::time_point end_time() const {
-        return host_time<Clock>(timestamp_ + duration_);
-    }
-    /** @brief Start and end of the zone on the host clock. */
-    template <record_clock Clock = std::chrono::steady_clock>
-    std::pair<typename Clock::time_point, typename Clock::time_point> host_span() const {
-        const auto s = host_time<Clock>(timestamp_);
-        const auto e = host_time<Clock>(timestamp_ + duration_);
-        return {s, e < s ? s : e};
+    /** @brief The chip's clock frequency over the zone in GHz: its device ticks over its host length. */
+    double frequency_ghz() const {
+        const int64_t host = host_end_ - host_time_;
+        return host > 0 ? static_cast<double>(duration_) * 10.0 / static_cast<double>(host) : 0.0;
     }
 };
-static_assert(sizeof(Zone) == 48 && std::is_standard_layout_v<Zone>);
+static_assert(sizeof(Zone) == 56 && std::is_standard_layout_v<Zone>);
 
 /**
  * @brief One DeviceTimestampedData marker with its values.
@@ -267,10 +240,7 @@ public:
     /** @brief When the marker was recorded, in device clock ticks. */
     uint64_t timestamp() const { return timestamp_; }
     /** @brief When the marker was recorded, on the host clock. */
-    template <record_clock Clock = std::chrono::steady_clock>
-    typename Clock::time_point time() const {
-        return host_time<Clock>(timestamp_);
-    }
+    host_clock::time_point time() const { return host_clock::time_point(host_clock::duration(host_time_)); }
     /** @brief The marker's values. */
     std::span<const uint64_t> payload() const {
         return std::span<const uint64_t>(reinterpret_cast<const uint64_t*>(this + 1), value_count_);
@@ -304,7 +274,7 @@ public:
         const std::byte* p_ = nullptr;
     };
 };
-static_assert(sizeof(TimestampedData) == 48 && std::is_standard_layout_v<TimestampedData>);
+static_assert(sizeof(TimestampedData) == 56 && std::is_standard_layout_v<TimestampedData>);
 
 /** @brief One DeviceRecordEvent marker. */
 class Event : public Record {
@@ -312,12 +282,9 @@ public:
     /** @brief When the marker was recorded, in device clock ticks. */
     uint64_t timestamp() const { return timestamp_; }
     /** @brief When the marker was recorded, on the host clock. */
-    template <record_clock Clock = std::chrono::steady_clock>
-    typename Clock::time_point time() const {
-        return host_time<Clock>(timestamp_);
-    }
+    host_clock::time_point time() const { return host_clock::time_point(host_clock::duration(host_time_)); }
 };
-static_assert(sizeof(Event) == 48 && std::is_standard_layout_v<Event>);
+static_assert(sizeof(Event) == 56 && std::is_standard_layout_v<Event>);
 
 /**
  * @brief The records of each type in K, in the order the device emitted them.

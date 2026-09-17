@@ -33,7 +33,7 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
         completed++;
         op.k_start = std::min(op.k_start, z.start_timestamp());
         op.k_end = std::max(op.k_end, z.end_timestamp());
-        const auto [hs, he] = z.host_span<api::tsc_clock>();
+        const auto [hs, he] = z.host_span();
         const int64_t start = hs.time_since_epoch().count(), end = he.time_since_epoch().count();
         if (start == 0 || end == 0) {
             continue;  // released before the sync covered it: no host span
@@ -67,7 +67,9 @@ void OpsCsvConsumer::write_csv() {
         const auto& [chip, prog, exec] = key;
         auto ns = [](int64_t start, int64_t end) {
             return end > start && start != INT64_MAX
-                       ? static_cast<double>(api::tsc_clock::to_ns(api::tsc_clock::duration(end - start)).count())
+                       ? static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                 api::host_clock::duration(end - start))
+                                                 .count())
                        : 0.0;
         };
         double core_min = 0.0, core_max = 0.0, core_sum = 0.0;

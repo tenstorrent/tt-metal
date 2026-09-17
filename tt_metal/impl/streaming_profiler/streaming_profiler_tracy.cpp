@@ -132,22 +132,20 @@ void TracySink::on_batch(const Batch& batch) {
 }
 
 void TracySink::emit_zone(const api::Zone& z) {
-    const auto [start, end] = z.host_span<api::tsc_clock>();
     push_zone(
         z.core(),
         z.site().name,
-        start.time_since_epoch().count(),
-        end.time_since_epoch().count(),
+        api::host_clock::tsc(z.start_time()),
+        api::host_clock::tsc(z.end_time()),
         z.site().name == api::STALL_ZONE_NAME ? kStallColor : 0);
 }
 
 void TracySink::emit_data(const api::TimestampedData& d) {
-    push_marker(
-        d.core(), d.site().name, d.time<api::tsc_clock>().time_since_epoch().count(), d.runtime_id(), d.payload());
+    push_marker(d.core(), d.site().name, api::host_clock::tsc(d.time()), d.runtime_id(), d.payload());
 }
 
 void TracySink::emit_event(const api::Event& e) {
-    push_marker(e.core(), e.site().name, e.time<api::tsc_clock>().time_since_epoch().count(), e.runtime_id(), {});
+    push_marker(e.core(), e.site().name, api::host_clock::tsc(e.time()), e.runtime_id(), {});
 }
 
 // The contexts are populated with cpuTime = anchor_tracy_ and gpuTime = origin_margin_ns_, so a timestamp of

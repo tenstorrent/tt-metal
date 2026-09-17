@@ -321,6 +321,57 @@ int64_t SyncCorrections::lookup_tsc(uint32_t chip_id, int64_t wall) noexcept {
     return std::llrint(tsc);
 }
 
+namespace {
+// host_clock units per TSC tick.
+double units_per_tsc() {
+    static const double u = 10.0 / tsc_ticks_per_ns();
+    return u;
+}
+// One chip's composed placement line: wall -> host_clock units, the chip segment (wall -> root refclk) multiplied by
+// the host segment (root refclk -> TSC), valid over [a, b] in wall ticks where both hold. Anchored at the record that
+// built it so a 1e15 value stays exact in the double.
+struct Composed {
+    uint32_t gen_c = 0, gen_h = 0;
+    int64_t a = std::numeric_limits<int64_t>::max(), b = std::numeric_limits<int64_t>::min();
+    int64_t origin = 0;
+    double value = 0.0, slope = 0.0;
+};
+constinit thread_local Composed t_composed[SyncCorrections::kMaxChips];
+}  // namespace
+
+int64_t SyncCorrections::place_host(uint32_t chip_id, int64_t wall) noexcept {
+    if (chip_id >= kMaxChips) {
+        return 0;
+    }
+    Composed& k = t_composed[chip_id];
+    if (wall >= k.a && wall <= k.b && k.gen_c == logs()[chip_id].gen.load(std::memory_order_relaxed) &&
+        k.gen_h == host_log().gen.load(std::memory_order_relaxed)) {
+        return std::llround(k.value + k.slope * static_cast<double>(wall - k.origin));
+    }
+    double root = 0.0, tsc = 0.0;
+    if (!place_root(chip_id, wall, root) || !place(host_log(), t_host_cursor, root, tsc)) {
+        return 0;
+    }
+    const Cursor<int64_t>& cc = t_cursors[chip_id];
+    const Cursor<double>& hc = t_host_cursor;
+    const double u = units_per_tsc();
+    k.gen_c = cc.gen;
+    k.gen_h = hc.gen;
+    k.origin = wall;
+    k.value = tsc * u;
+    k.slope = cc.slope * hc.slope * u;
+    // The range both cursors cover; a cursor past its cover caches nothing and neither does the composition.
+    k.a = std::numeric_limits<int64_t>::max();
+    k.b = std::numeric_limits<int64_t>::min();
+    if (cc.a <= cc.b && hc.a <= hc.b && cc.slope > 0.0) {
+        const double wa = static_cast<double>(cc.origin) + (hc.a - cc.value) / cc.slope;
+        const double wb = static_cast<double>(cc.origin) + (hc.b - cc.value) / cc.slope;
+        k.a = std::max(cc.a, static_cast<int64_t>(std::ceil(wa)));
+        k.b = std::min(cc.b, static_cast<int64_t>(std::floor(wb)));
+    }
+    return std::llround(k.value);
+}
+
 int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t wall) noexcept {
     double root = 0.0;
     if (chip_id >= kMaxChips || !place_root(chip_id, wall, root)) {
@@ -329,15 +380,6 @@ int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t wall) noexcep
     const Cursor<int64_t>& c = t_cursors[chip_id];
     const double e = kSigmas * static_cast<double>(c.sigma) + g_asymmetry_ns.load(std::memory_order_relaxed);
     return static_cast<int64_t>(std::ceil(e));
-}
-
-double SyncCorrections::lookup_rate_ghz(uint32_t chip_id, int64_t wall) noexcept {
-    double root = 0.0;
-    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root)) {
-        return 0.0;
-    }
-    const double slope = t_cursors[chip_id].slope;  // root refclk ticks per wall tick
-    return slope > 0.0 ? 50e6 * 1e-9 / slope : 0.0;
 }
 
 void SyncCorrections::set_asymmetry_ns(double ns) noexcept { g_asymmetry_ns.store(ns, std::memory_order_relaxed); }
@@ -428,27 +470,24 @@ void SyncPlots::wait_complete(std::chrono::milliseconds timeout) {
 }  // namespace tt::tt_metal::streaming_profiler
 
 namespace tt::tt_metal::experimental::streaming_profiler {
-tsc_clock::time_point tsc_clock::now() noexcept {
-    return time_point(duration(tt::tt_metal::streaming_profiler::tsc_now()));
+namespace {
+double units_per_tsc() {
+    static const double u = 10.0 / tt::tt_metal::streaming_profiler::tsc_ticks_per_ns();
+    return u;
 }
-std::chrono::nanoseconds tsc_clock::to_ns(duration d) noexcept {
-    return std::chrono::nanoseconds(
-        static_cast<int64_t>(static_cast<double>(d.count()) / tt::tt_metal::streaming_profiler::tsc_ticks_per_ns()));
+}  // namespace
+host_clock::time_point host_clock::now() noexcept { return from_tsc(tt::tt_metal::streaming_profiler::tsc_now()); }
+int64_t host_clock::tsc(time_point t) noexcept {
+    return std::llround(static_cast<double>(t.time_since_epoch().count()) / units_per_tsc());
 }
-double tsc_clock::ticks_per_second() noexcept { return tt::tt_metal::streaming_profiler::tsc_ticks_per_ns() * 1e9; }
+host_clock::time_point host_clock::from_tsc(int64_t ticks) noexcept {
+    return time_point(duration(std::llround(static_cast<double>(ticks) * units_per_tsc())));
+}
 }  // namespace tt::tt_metal::experimental::streaming_profiler
 
 namespace tt::tt_metal::experimental::streaming_profiler::detail {
-int64_t sync_place_tsc(uint16_t chip_id, int64_t wall) noexcept {
-    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_tsc(chip_id, wall);
-}
-int64_t sync_error_ns(uint16_t chip_id, int64_t wall) noexcept {
-    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_error_ns(chip_id, wall);
-}
-int64_t tsc_to_steady_ns(int64_t tsc) noexcept {
-    return tt::tt_metal::streaming_profiler::SyncCorrections::tsc_to_mono_ns(tsc);
-}
-double sync_rate_ghz(uint16_t chip_id, int64_t wall) noexcept {
-    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_rate_ghz(chip_id, wall);
+int64_t host_to_steady_ns(int64_t host) noexcept {
+    return tt::tt_metal::streaming_profiler::SyncCorrections::tsc_to_mono_ns(
+        host_clock::tsc(host_clock::time_point(host_clock::duration(host))));
 }
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail
