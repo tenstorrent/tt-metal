@@ -186,24 +186,7 @@ Devices::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 Devices::Devices() = default;
 Devices::~Devices() = default;
 
-std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    context_id_ = mesh_device->impl().get_context_id();
-    auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    const auto& hal = MetalContext::instance(context_id_).hal();
-    const auto& rtopts = MetalContext::instance(context_id_).rtoptions();
-
-    if (cluster.arch() != tt::ARCH::BLACKHOLE) {
-        log_debug(tt::LogMetal, "[streaming profiler] not Blackhole; skipping relay capture.");
-        return {};
-    }
-    // The relay is a DRISC: one DM RISC-V on a DRAM core, which today exists only on Blackhole.
-    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] no DRAM programmable cores (card FW below the DRISC gate?); producers stay unarmed "
-            "and markers are DROPPED");
-        return {};
-    }
+bool Devices::carve_relay_l1(const Hal& hal) {
     prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     drisc_l1_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     drisc_l1_noc_ = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
@@ -213,7 +196,7 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     l1_.n_stage = std::min(region > fixed ? (region - fixed) / slot_bytes_ : 0u, kMaxStageSlots);
     if (l1_.n_stage < kMinStageSlots) {
         log_warning(tt::LogMetal, "[streaming profiler] DRISC L1 too small for a relay; skipping");
-        return {};
+        return false;
     }
     l1_.stage_base = drisc_l1_base_;
     l1_.core_records = l1_.stage_base + l1_.n_stage * slot_bytes_;
@@ -221,13 +204,15 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     l1_.stop = l1_.done + kernel_profiler::kRelayCtrlWordStride;
     l1_.cfg = drisc_l1_base_ + region - kCfgReserve;
     TT_FATAL(l1_.stop + kernel_profiler::kRelayCtrlWordStride <= l1_.cfg, "DRISC L1 layout overlaps the socket config");
+    return true;
+}
 
-    // Idle-eth pushers: carved from the top of IDLE_ETH UNRESERVED down -- socket config, ctrl words, one frame slot
-    // (the same slot geometry as a relay, since the eth core is enumerated as a standard 5-lane core). Too small a
-    // region, or no such core type, disables the eth pushers only; the relays are unaffected.
+// Carved from the top of IDLE_ETH UNRESERVED down: socket config, ctrl words, one frame slot (the same slot geometry
+// as a relay, since the eth core is enumerated as a standard 5-lane core), the linked-core scratch, the tile table,
+// the sample ring.
+void Devices::carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& aeth_unres_size) {
     eth_ok_ = false;
     aeth_ok_ = false;
-    uint32_t aeth_unreserved = 0, aeth_unres_size = 0;
     if (hal.has_programmable_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
         try {
             aeth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
@@ -263,6 +248,31 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
                 need);
         }
     }
+}
+
+std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    context_id_ = mesh_device->impl().get_context_id();
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    const auto& hal = MetalContext::instance(context_id_).hal();
+    const auto& rtopts = MetalContext::instance(context_id_).rtoptions();
+
+    if (cluster.arch() != tt::ARCH::BLACKHOLE) {
+        log_debug(tt::LogMetal, "[streaming profiler] not Blackhole; skipping relay capture.");
+        return {};
+    }
+    // The relay is a DRISC: one DM RISC-V on a DRAM core, which today exists only on Blackhole.
+    if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] no DRAM programmable cores (card FW below the DRISC gate?); producers stay unarmed "
+            "and markers are DROPPED");
+        return {};
+    }
+    if (!carve_relay_l1(hal)) {
+        return {};
+    }
+    uint32_t aeth_unreserved = 0, aeth_unres_size = 0;
+    carve_eth_l1(hal, aeth_unreserved, aeth_unres_size);
 
     sync_ = std::make_unique<SyncDevices>(context_id_, eth_l1_, aeth_unreserved, aeth_unres_size);
     std::vector<CapturedDevice> out;
@@ -495,6 +505,33 @@ void Devices::reserve_spool() {
     spool_bytes_ = bytes;
 }
 
+// The relay kernel's geometry: its L1 layout, its socket, its share of the unicast VCs and the spool.
+std::unordered_map<std::string, uint32_t> Devices::relay_compile_args(uint32_t chip, uint32_t d) const {
+    const std::unordered_map<std::string, uint32_t> cargs = {
+        {"stage_base", l1_.stage_base},
+        {"n_stage", l1_.n_stage},
+        {"core_records", l1_.core_records},
+        {"done_addr", l1_.done},
+        {"stop_addr", l1_.stop},
+        {"socket_config_addr", l1_.cfg},
+        {"max_cores", kMaxRelayCores},
+        // d&2 splits the pushers across two of the four unicast request VCs.
+        {"write_vc", (d & 2u) ? 0u : 1u},
+        // The bounce slots cost a staging generation, so a smaller L1 falls back to direct push rather than
+        // tripping the kernel's geometry static_asserts.
+        {"spool_base", spool_addr_},
+        {"spool_bytes", l1_.n_stage >= kMaxStageSlots ? spool_bytes_ : 0u}};
+    if (spool_bytes_ != 0 && l1_.n_stage < kMaxStageSlots) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] Device {}: only {} staging slots fit, too few for the spool's bounce "
+            "buffers; relay {} runs direct push",
+            chip,
+            l1_.n_stage,
+            d);
+    }
+    return cargs;
+}
 
 bool Devices::launch_relay(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -550,29 +587,7 @@ bool Devices::launch_relay(
         hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::PROFILER));
 
     auto program = std::make_unique<Program>(CreateProgram());
-    const std::unordered_map<std::string, uint32_t> cargs = {
-        {"stage_base", l1_.stage_base},
-        {"n_stage", l1_.n_stage},
-        {"core_records", l1_.core_records},
-        {"done_addr", l1_.done},
-        {"stop_addr", l1_.stop},
-        {"socket_config_addr", l1_.cfg},
-        {"max_cores", kMaxRelayCores},
-        // d&2 splits the pushers across two of the four unicast request VCs.
-        {"write_vc", (d & 2u) ? 0u : 1u},
-        // The bounce slots cost a staging generation, so a smaller L1 falls back to direct push rather than
-        // tripping the kernel's geometry static_asserts.
-        {"spool_base", spool_addr_},
-        {"spool_bytes", l1_.n_stage >= kMaxStageSlots ? spool_bytes_ : 0u}};
-    if (spool_bytes_ != 0 && l1_.n_stage < kMaxStageSlots) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] Device {}: only {} staging slots fit, too few for the spool's bounce "
-            "buffers; relay {} runs direct push",
-            chip,
-            l1_.n_stage,
-            d);
-    }
+    const std::unordered_map<std::string, uint32_t> cargs = relay_compile_args(chip, d);
     auto relay_id = CreateKernel(
         *program,
         "tt_metal/tools/profiler/kernels/streaming_profiler_relay.cpp",

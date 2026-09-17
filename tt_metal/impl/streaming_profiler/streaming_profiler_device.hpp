@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -32,6 +33,7 @@ class D2HSocket;
 }  // namespace distributed
 class Program;
 class IDevice;
+class Hal;
 
 namespace streaming_profiler {
 
@@ -123,6 +125,11 @@ private:
         uint32_t stage_base = 0, n_stage = 0, core_records = 0, done = 0, stop = 0, cfg = 0;
     };
 
+    // The DRISC L1 layout every relay shares; false when the region cannot hold a relay.
+    bool carve_relay_l1(const Hal& hal);
+    // The idle-eth pusher's carve and the ACTIVE_ETH region the link ends own; a region too small leaves the eth
+    // side off and the relays unaffected.
+    void carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& aeth_unres_size);
     bool boot_device(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         DeviceCtx& ctx,
@@ -137,6 +144,7 @@ private:
     // mode. False: no relay can run on this device.
     bool choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
     void reserve_spool();
+    std::unordered_map<std::string, uint32_t> relay_compile_args(uint32_t chip, uint32_t d) const;
     // False means capture must be abandoned for this device.
     bool launch_relay(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
