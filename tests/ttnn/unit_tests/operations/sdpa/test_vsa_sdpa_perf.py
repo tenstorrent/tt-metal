@@ -84,10 +84,29 @@ MODES = {
 }
 
 
+def bstride_order(n, kind):
+    """'bstrideR.S': the sequence in S equal segments, runs of R consecutive blocks from each segment interleaved
+    (MiniMaxH3VSAGeometry.stream_order's construction without the text prefix); identity otherwise."""
+    if not kind or kind == "identity":
+        return None
+    r_len, n_seg = (int(x) for x in kind[len("bstride") :].split("."))
+    seg_len = (n + n_seg - 1) // n_seg
+    keys = []
+    for slot in range(n):
+        seg, off = slot // seg_len, slot % seg_len
+        keys.append((off // r_len) * n_seg * r_len + seg * r_len + (off % r_len))
+    return torch.tensor(sorted(range(n), key=lambda i: keys[i]), dtype=torch.int32)
+
+
 def bench(device, args, m=None, iters=8, streaming=False, **kw):
     q, k, v, idx, counts, flops = args
     if m is not None:
         kw["k_chunk_blocks"] = m
+    order = os.environ.get("VSA_ORDER")  # VSA_ORDER=bstride4.16: permuted stream order (streaming kernel)
+    if streaming and order and order != "identity":
+        n_blocks = counts.shape[-1]
+        perm = bstride_order(n_blocks, order).reshape(1, 1, 1, -1)
+        kw["stream_order"] = ttnn.from_torch(perm, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
     out = ttnn.transformer.vsa_sdpa(q, k, v, idx, counts, streaming=streaming, **kw)  # compile
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()

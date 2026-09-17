@@ -124,14 +124,42 @@ Dealt deal_units_by_cost(
 }
 
 struct StreamSchedule {
-    uint32_t head = 0;
+    uint32_t head = 0;  // this core's head (a leader: the group's first head)
     bool is_leader = false;
     uint32_t group_first = 0;  // core id of the group's leader
-    uint32_t n_workers = 0;
-    uint32_t worker_index = 0;  // valid when !is_leader
+    uint32_t n_workers = 0;    // workers in the group (all heads)
+    uint32_t worker_index = 0;   // valid when !is_leader; 0.. n_workers-1 in group order
+    uint32_t head0 = 0;          // the group's first head
+    uint32_t n_group_heads = 1;  // heads streamed by the group's leader
+    uint32_t workers_per_head = 0;
+    uint32_t head_offset = 0;  // worker: head - head0
 };
 
-StreamSchedule core_schedule(uint32_t core, uint32_t num_cores, uint32_t heads) {
+// hpg heads per group (hpg > 1: one pure-streaming leader interleaves the heads' blocks for hpg x wph workers;
+// the group count is ceil(heads / hpg), every group gets the same core count, surplus cores idle)
+StreamSchedule core_schedule(uint32_t core, uint32_t num_cores, uint32_t heads, uint32_t hpg) {
+    if (hpg > 1) {
+        const uint32_t n_groups = (heads + hpg - 1) / hpg;
+        const uint32_t cpg = num_cores / n_groups;
+        uint32_t g = core / cpg;
+        if (g >= n_groups) {
+            g = n_groups - 1;  // surplus core: an idle worker of the last group
+        }
+        const uint32_t c0 = g * cpg;
+        const uint32_t nh = std::min<uint32_t>(hpg, heads - g * hpg);
+        const uint32_t wph = (cpg - 1) / nh;
+        StreamSchedule s;
+        s.head0 = g * hpg;
+        s.n_group_heads = nh;
+        s.workers_per_head = wph;
+        s.group_first = c0;
+        s.n_workers = wph * nh;
+        s.is_leader = core == c0;
+        s.worker_index = s.is_leader ? 0u : core - c0 - 1;
+        s.head_offset = s.is_leader ? 0u : std::min<uint32_t>(s.worker_index / std::max<uint32_t>(wph, 1), nh - 1);
+        s.head = s.head0 + s.head_offset;
+        return s;
+    }
     uint32_t head = static_cast<uint32_t>((static_cast<uint64_t>(core) * heads) / num_cores);
     while ((static_cast<uint64_t>(head + 1) * num_cores) / heads <= core) {
         ++head;
@@ -141,7 +169,17 @@ StreamSchedule core_schedule(uint32_t core, uint32_t num_cores, uint32_t heads) 
     }
     const uint32_t c0 = static_cast<uint32_t>((static_cast<uint64_t>(head) * num_cores) / heads);
     const uint32_t c1 = static_cast<uint32_t>((static_cast<uint64_t>(head + 1) * num_cores) / heads);
-    return StreamSchedule{head, core == c0, c0, c1 - c0 - 1, core - c0 - 1};
+    StreamSchedule s;
+    s.head = head;
+    s.is_leader = core == c0;
+    s.group_first = c0;
+    s.n_workers = c1 - c0 - 1;
+    s.worker_index = core - c0 - 1;
+    s.head0 = head;
+    s.n_group_heads = 1;
+    s.workers_per_head = s.n_workers;
+    s.head_offset = 0;
+    return s;
 }
 
 uint32_t active_workers(uint32_t group_workers, uint32_t n_q_tiles) {
@@ -269,7 +307,39 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     }
     // Kernel row arrays (pending/listing/own_np, the dirty mask, the 8-bit row_slot) hold 32 resident rows.
     TT_FATAL(rmax >= 1 && rmax <= 32 && stream_depth >= 8 && stream_depth % 2 == 0, "bad rmax/depth");
-    const uint32_t log_depth = stream_depth + 8;  // arrival-log ring must exceed the slot ring + sentinel slack
+    // TT_VSA_DECOUPLE=1: the leader's slot ring is a cache (k-th-slowest gate, DRAM fallback for laggards; see
+    // kernels/dataflow/vsa_decouple.hpp). The log ring then holds a whole pass (every block entry + the sentinel).
+    // TT_VSA_V2=1: the decoupled design as a whole -- pure-streaming leader whose unused compute buffers become extra
+    // stream slots (address-carrying log entries), free-slot workers, k-th-slowest gate with DRAM fallback, fetch
+    // lag 8, rows balanced to +-1 over the workers.
+    const bool v2 = [] {
+        const char* e = std::getenv("TT_VSA_V2");
+        return e != nullptr && e[0] == '1';
+    }();
+    const bool decouple = v2 || [] {
+        const char* e = std::getenv("TT_VSA_DECOUPLE");
+        return e != nullptr && e[0] == '1';
+    }();
+    // TT_VSA_HPG=<n>: heads per leader (needs v2: the leader computes nothing and streams the heads interleaved)
+    const uint32_t hpg = [] {
+        const char* e = std::getenv("TT_VSA_HPG");
+        return (e != nullptr && e[0] != '\0') ? static_cast<uint32_t>(std::max(1, std::atoi(e))) : 1u;
+    }();
+    TT_FATAL(hpg == 1 || v2, "TT_VSA_HPG > 1 needs TT_VSA_V2=1");
+    TT_FATAL(!(hpg > 1 && ring_mode), "TT_VSA_HPG > 1 is not implemented for vsa_ring_sdpa");
+    TT_FATAL(!(decouple && ring_mode), "TT_VSA_DECOUPLE is not implemented for vsa_ring_sdpa yet");
+    // TT_VSA_FREE_SLOTS=1: workers pull into any free slot and run up to 8 windows ahead of their compute (the
+    // two-half design refilled a half only after the compute returned the previous window's credits)
+    const bool free_slots = v2 || [] {
+        const char* e = std::getenv("TT_VSA_FREE_SLOTS");
+        return e != nullptr && e[0] == '1';
+    }();
+    TT_FATAL(!(v2 && (ring_mode || attrs.distributed)), "TT_VSA_V2: streaming single-device kernel only for now");
+    TT_FATAL(
+        !(free_slots && (ring_mode || attrs.distributed)),
+        "TT_VSA_FREE_SLOTS: streaming single-device kernel only for now");
+    // arrival-log ring: must exceed the slot ring + sentinel slack; a whole pass when decoupled
+    const uint32_t log_depth = decouple ? n_kv_blocks + 1 : stream_depth + 8;
     const bool dist = attrs.distributed;
     // widest visit (blocks) = qk region width; the streaming kernel's windows are half the ring, the
     // distributed kernel's visits are capped at 6 regardless of ring depth
@@ -314,7 +384,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     std::set<tt::tt_metal::CoreRange> leader_ranges, worker_ranges;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord c = lcore(i);
-        if (core_schedule(i, num_cores, H).is_leader) {
+        if (core_schedule(i, num_cores, H, hpg).is_leader) {
             leader_ranges.insert(tt::tt_metal::CoreRange(c, c));
         } else {
             worker_ranges.insert(tt::tt_metal::CoreRange(c, c));
@@ -360,7 +430,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     // cb_ctrl: a window emits one VISIT per resident row plus a WINDOW message (up to rmax + 1 pages); the
     // reader blocks in reserve_back until the compute pops, so 8 pages could stall a window's emission.
     cb(ctrl_page_bytes, dist ? 32 : 64, bf);            // cb_ctrl
-    cb(16, dist ? 32 : stream_depth, bf);               // cb_kreq
+    cb(16, dist ? 32 : stream_depth + 8, bf);           // cb_kreq (free-slot worker: pulls of every slot + 8 markers)
     cb(16, dist ? 32 : stream_depth, bf);               // cb_kack
     cb(16, dist ? 128 : stream_depth + 2, bf);          // cb_free
     cb(16, 2, bf);                                      // cb_qdone
@@ -382,6 +452,36 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     const uint32_t cb_stiles = cb(tile_bytes, 14, bf);                     // cb_stiles (14: fits 22 resident rows)
     const uint32_t cb_sumback = cb(tile_bytes, 2 * Sqt, bf);               // cb_sumback
     const uint32_t cb_sacc = cb(((rmax * 64 * 8 + 31) / 32) * 32, 1, bf);  // cb_sacc: int64[rmax][64]
+    // free-slot worker: pending visit entries of up to 8 in-flight windows, [rec][row][bin] uint16 (placeholder
+    // otherwise)
+    const uint32_t cb_wpend = cb(free_slots ? ((8 * 32 * chunk_slots * 2 + 31) / 32) * 32 : 32u, 1, bf);  // cb_wpend
+    // v2: the leader computes nothing, so its resident-row and scratch CBs are carved into extra stream slots
+    // (K block + V block pairs); the log entries carry L1 addresses, so workers need no layout knowledge.
+    constexpr uint32_t kMaxLeaderSlots = 40;                    // kernel table bound
+    std::vector<std::pair<uint32_t, uint32_t>> leader_regions;  // (cb, bytes)
+    uint32_t leader_depth = stream_depth;
+    if (v2) {
+        const uint32_t kb = k_tile_bytes * k_tiles_per_block, vb = v_tile_bytes * v_tiles_per_block;
+        const std::vector<std::pair<uint32_t, uint32_t>> cand = {
+            {cb_q_res, q_tile_bytes * rmax * q_tiles_per_row},
+            {cb_o_res, tile_bytes * rmax * out_tiles_per_row},
+            {cb_qk, tile_bytes * 2 * chunk_slots * Skt * Sqt},
+            {cb_max_res, tile_bytes * rmax * 2 * Sqt},
+            {cb_corr, tile_bytes * rmax * Sqt},
+            {cb_out, out_tile_bytes * 2 * out_tiles_per_row}};
+        for (const auto& [id, bytes] : cand) {
+            const uint32_t pairs = std::min<uint32_t>(bytes / (kb + vb), kMaxLeaderSlots - leader_depth);
+            if (pairs == 0) {
+                continue;
+            }
+            leader_regions.emplace_back(id, bytes);
+            leader_depth += pairs;
+        }
+        if (const char* e = std::getenv("TT_VSA_LEADER_DEPTH"); e != nullptr && e[0] != '\0') {
+            leader_depth = std::clamp<uint32_t>(static_cast<uint32_t>(std::atoi(e)), stream_depth, leader_depth);
+        }
+    }
+    TT_FATAL(leader_depth <= kMaxLeaderSlots, "vsa_sdpa v2: leader depth {} exceeds the kernel table", leader_depth);
 
     // ---- compile-time args ----
     std::vector<uint32_t> reader_ct = {
@@ -415,6 +515,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         reader_ct.push_back(id);
     }
     reader_ct.push_back(sem_arrivals);
+    reader_ct.push_back(cb_wpend);
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.v.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
@@ -438,6 +539,9 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         writer_ct.push_back(id);
     }
     for (uint32_t v : {cb_shdr, cb_stiles, cb_sumback, cb_sacc, Sqt}) {  // row-sum service (args 18..22)
+        writer_ct.push_back(v);
+    }
+    for (uint32_t v : {stream_depth, static_cast<uint32_t>(cb_log), log_depth}) {  // decoupled K pulls (args 23..25)
         writer_ct.push_back(v);
     }
     std::vector<uint32_t> writer_crt;
@@ -497,6 +601,38 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         probe_defines["VSA_NO_SUMS"] = "1";  // timing-only: no exact row-sum traffic (garbage output)
     }
     probe_defines["VSA_ROW_CHUNK_LOG2"] = std::to_string(std::bit_width(kRowChunk) - 1);
+    if (free_slots) {
+        probe_defines["VSA_FREE_SLOTS"] = "1";
+    }
+    if (v2 && std::getenv("TT_VSA_FETCH_LAG") == nullptr) {
+        probe_defines["VSA_FETCH_LAG"] = "8";  // the deep leader ring hides the DRAM latency with 8 blocks in flight
+    }
+    if (const char* e = std::getenv("TT_VSA_MCAST_LOG"); e != nullptr && e[0] == '1') {
+        probe_defines["VSA_MCAST_LOG"] = "1";  // leader publishes log entries by multicast strips (not unicasts)
+    }
+    if (const char* e = std::getenv("TT_VSA_DEC_MARGIN"); e != nullptr && e[0] != '\0') {
+        probe_defines["VSA_DEC_MARGIN"] = e;  // decoupled protocol: arrivals of slack in the slot-safety check
+    }
+    if (const char* e = std::getenv("TT_VSA_OWN_WIN"); e != nullptr && e[0] != '\0') {
+        probe_defines["VSA_OWN_WIN"] = e;  // arrivals per leader-as-worker window (default stream_depth / 2)
+    }
+    if (const char* e = std::getenv("TT_VSA_FETCH_LAG"); e != nullptr && e[0] != '\0') {
+        probe_defines["VSA_FETCH_LAG"] = e;  // leader DRAM fetch pipeline depth in blocks (default 4; even, <= 8)
+    }
+    if (const char* e = std::getenv("TT_VSA_RDR_TIMERS"); e != nullptr && e[0] == '1') {
+        probe_defines["VSA_RDR_TIMERS"] = "1";  // triage: reader wall-clock laps (leader; free-slot worker) via DPRINT
+    }
+    if (decouple) {
+        probe_defines["VSA_DECOUPLE"] = "1";
+        // TT_VSA_GATE_LAG=<n>: workers allowed to lag behind the slot gate (default n_workers / 2 in the kernel;
+        // >= n_workers: the leader never waits for a worker)
+        if (const char* e = std::getenv("TT_VSA_GATE_LAG"); e != nullptr && e[0] != '\0') {
+            probe_defines["VSA_GATE_LAG"] = e;
+        }
+        if (const char* e = std::getenv("TT_VSA_DECOUPLE_DPRINT"); e != nullptr && e[0] == '1') {
+            probe_defines["VSA_DECOUPLE_DPRINT"] = "1";  // triage: per-worker DRAM fallback counts
+        }
+    }
 
     if (dist) {
         const char* sl = std::getenv("TT_VSA_SLICE");  // owned blocks per peer per window
@@ -626,7 +762,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         ring_signaler->fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
         ring_signaler->fused_op_receiver_cores_noc.clear();
         for (uint32_t i = 0; i < num_cores; ++i) {
-            if (core_schedule(i, num_cores, H).is_leader) {
+            if (core_schedule(i, num_cores, H, hpg).is_leader) {
                 ring_signaler->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(lcore(i)));
             }
         }
@@ -700,11 +836,11 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     std::vector<std::vector<std::vector<uint32_t>>> dist_bins;  // [pass][peer] -> rows
     uint32_t dist_n_peers = 0, dist_n_passes = 0;
     if (dist) {
-        const auto sched0 = core_schedule(0, num_cores, H);
+        const auto sched0 = core_schedule(0, num_cores, H, hpg);
         dist_n_peers = std::min<uint32_t>(sched0.n_workers + 1, kMaxPeers);
         // every group has the same size to within one core; use the smallest so peers exist everywhere
         for (uint32_t i = 0; i < num_cores; ++i) {
-            const auto sc = core_schedule(i, num_cores, H);
+            const auto sc = core_schedule(i, num_cores, H, hpg);
             if (sc.is_leader) {
                 dist_n_peers = std::min<uint32_t>(dist_n_peers, sc.n_workers + 1);
             }
@@ -732,7 +868,11 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     // least-loaded consumer -- the leader's slot gate runs the group at its slowest core's pace, so an
     // exempt (dense) row must not stack onto a core that already holds one. Keyed by consumer count.
     std::map<uint32_t, Dealt> stream_deal;  // n_consumers -> bins[pass][consumer]
-    const auto stream_deal_for = [&](uint32_t n_consumers) -> const Dealt& {
+    const uint32_t leader_row_cap = [] {
+        const char* e = std::getenv("TT_VSA_LEADER_ROWS");
+        return (e != nullptr && e[0] != '\0') ? static_cast<uint32_t>(std::max(0, std::atoi(e))) : 0u;
+    }();
+    const auto stream_deal_for = [&](uint32_t n_consumers, bool leader_is_consumer) -> const Dealt& {
         auto it = stream_deal.find(n_consumers);
         if (it != stream_deal.end()) {
             return it->second;
@@ -754,16 +894,64 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         const uint32_t n_sparse = n_q_tiles - static_cast<uint32_t>(std::count(dense.begin(), dense.end(), true));
         std::vector<std::vector<uint32_t>> per_consumer(n_consumers);
         {
+            // TT_VSA_DEAL_ROWS=<n>: rows per dealt chunk (default kRowChunk; 1 = row-interleaved dealing, every
+            // consumer sees the same per-window work profile at the cost of more pull traffic)
+            uint32_t deal_chunk = kRowChunk;
+            if (const char* e = std::getenv("TT_VSA_DEAL_ROWS"); e != nullptr && e[0] != '\0') {
+                deal_chunk = std::max(1, std::atoi(e));
+            }
             uint32_t chunk = 0, in_chunk = 0;
             for (uint32_t r = 0; r < n_q_tiles; ++r) {
                 if (dense[r]) {
                     continue;
                 }
                 per_consumer[chunk % n_consumers].push_back(r);
-                if (++in_chunk == kRowChunk) {
+                if (++in_chunk == deal_chunk) {
                     in_chunk = 0;
                     ++chunk;
                 }
+            }
+        }
+        // TT_VSA_LEADER_ROWS=<n> (n > 0): cap the leader's (last consumer's) sparse rows at n per pass x passes;
+        // the surplus is dealt round-robin to the workers (the leader's compute shares the stream ring with its
+        // fetch, so a light leader keeps the stream flowing). Only when the leader is a consumer.
+        if (leader_row_cap > 0 && leader_is_consumer && n_consumers >= 2) {
+            auto& lrows = per_consumer[n_consumers - 1];
+            uint32_t rr = 0;
+            while (lrows.size() > leader_row_cap) {
+                per_consumer[rr % (n_consumers - 1)].push_back(lrows.back());
+                lrows.pop_back();
+                ++rr;
+            }
+            for (uint32_t c = 0; c + 1 < n_consumers; ++c) {
+                std::sort(per_consumer[c].begin(), per_consumer[c].end());
+            }
+        }
+        // v2 (or TT_VSA_DEAL_BALANCE=1): every consumer within one row of the others -- the kernel ends with its
+        // busiest consumer; chunk-cyclic dealing leaves the first consumers a whole chunk heavier.
+        const bool balance = v2 || [] {
+            const char* e = std::getenv("TT_VSA_DEAL_BALANCE");
+            return e != nullptr && e[0] == '1';
+        }();
+        if (balance) {
+            for (;;) {
+                uint32_t hi = 0, lo = 0;
+                for (uint32_t c = 1; c < n_consumers; ++c) {
+                    if (per_consumer[c].size() > per_consumer[hi].size()) {
+                        hi = c;
+                    }
+                    if (per_consumer[c].size() < per_consumer[lo].size()) {
+                        lo = c;
+                    }
+                }
+                if (per_consumer[hi].size() <= per_consumer[lo].size() + 1) {
+                    break;
+                }
+                per_consumer[lo].push_back(per_consumer[hi].back());
+                per_consumer[hi].pop_back();
+            }
+            for (auto& v : per_consumer) {
+                std::sort(v.begin(), v.end());
             }
         }
         uint32_t max_rows = 0;
@@ -877,6 +1065,56 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
                 }
             }
         }
+        if (balance) {
+            // Balance the total COST per consumer (a dense row ~7 sparse rows; the kernel ends with its heaviest
+            // consumer): move sparse rows from the heaviest consumer to the lightest, into any pass with room.
+            std::vector<uint64_t> tot(n_consumers, 0);
+            for (uint32_t pass = 0; pass < d.n_passes; ++pass) {
+                for (uint32_t c = 0; c < n_consumers; ++c) {
+                    tot[c] += load[pass * n_consumers + c];
+                }
+            }
+            for (uint32_t iter = 0; iter < 4 * n_q_tiles; ++iter) {
+                uint32_t hi = 0, lo = 0;
+                for (uint32_t c = 1; c < n_consumers; ++c) {
+                    if (tot[c] > tot[hi]) {
+                        hi = c;
+                    }
+                    if (tot[c] < tot[lo]) {
+                        lo = c;
+                    }
+                }
+                if (tot[hi] - tot[lo] <= sparse_cost) {
+                    break;
+                }
+                bool moved = false;
+                for (uint32_t pass = 0; pass < d.n_passes && !moved; ++pass) {
+                    auto& src = d.bins[pass][hi];
+                    for (uint32_t s = static_cast<uint32_t>(src.size()); s > 0 && !moved; --s) {
+                        if (dense[src[s - 1]]) {
+                            continue;
+                        }
+                        // the lightest consumer's bin of the same pass first, else any of its passes with room
+                        for (uint32_t p2 = 0; p2 < d.n_passes && !moved; ++p2) {
+                            const uint32_t pp = (pass + p2) % d.n_passes;
+                            if (d.bins[pp][lo].size() >= rmax) {
+                                continue;
+                            }
+                            d.bins[pp][lo].push_back(src[s - 1]);
+                            src.erase(src.begin() + (s - 1));
+                            load[pass * n_consumers + hi] -= sparse_cost;
+                            load[pp * n_consumers + lo] += sparse_cost;
+                            tot[hi] -= sparse_cost;
+                            tot[lo] += sparse_cost;
+                            moved = true;
+                        }
+                    }
+                }
+                if (!moved) {
+                    break;
+                }
+            }
+        }
         for (auto& pass : d.bins) {
             for (auto& bin : pass) {
                 std::sort(bin.begin(), bin.end());
@@ -908,7 +1146,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = lcore(i);
-        const auto sched = core_schedule(i, num_cores, H);
+        const auto sched = core_schedule(i, num_cores, H, hpg);
         if (dist) {
             const uint32_t my_peer = sched.is_leader ? 0u : sched.worker_index + 1;
             const bool idle = my_peer >= dist_n_peers;
@@ -992,16 +1230,28 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         // Consumer 0 always holds the most rows under chunk-cyclic dealing. Small shapes are
         // excluded: with few rows per consumer the leader's extra serial work outweighs its
         // compute contribution (measured on the 5s/10s shards).
-        const bool leader_computes = n_q_tiles >= 20 * (n_active + 1);
-        const uint32_t n_consumers = n_active + (leader_computes ? 1u : 0u);
-        const Dealt& dealt = stream_deal_for(n_consumers);
+        // TT_VSA_LEADER_ROWS=0: a pure streaming leader (A/B for the decoupled protocol)
+        const bool leader_rows_off = [] {
+            const char* e = std::getenv("TT_VSA_LEADER_ROWS");
+            return e != nullptr && e[0] == '0';
+        }();
+        const bool leader_computes = n_q_tiles >= 20 * (n_active + 1) && !leader_rows_off && !v2;
+        // hpg > 1: rows of each head are dealt over that head's workers only
+        const uint32_t n_consumers = hpg > 1 ? sched.workers_per_head : n_active + (leader_computes ? 1u : 0u);
+        TT_FATAL(
+            hpg == 1 || n_active == sched.n_workers,
+            "vsa_sdpa: too few q tiles for {} workers per group",
+            sched.n_workers);
+        const Dealt& dealt = stream_deal_for(n_consumers, leader_computes);
         const uint32_t n_passes = is_idle ? 0 : dealt.n_passes;
         // Chunked round-robin placement: 4-row contiguous chunks dealt cyclically across the
         // group's workers. Adjacent rows share most of their index sets (spatial correlation plus
         // the exempt prefix), so intra-chunk contiguity feeds the engine's multi-row batching,
         // while dealing chunks cyclically spreads the fully-dense exempt-query rows -- a purely
         // contiguous split piles them all onto worker 0 (measured 3x worst-shard regression).
-        const uint32_t consumer_index = sched.is_leader ? n_active : sched.worker_index;
+        const uint32_t consumer_index = sched.is_leader ? n_active
+                                        : hpg > 1 ? sched.worker_index - sched.head_offset * sched.workers_per_head
+                                                  : sched.worker_index;
         const bool consumes = !is_idle && (leader_computes || !sched.is_leader);
         std::vector<uint32_t> my_rows, my_pass_rows;
         for (uint32_t p = 0; p < n_passes; ++p) {
@@ -1044,6 +1294,15 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         reader_rt.push_back(t.stream_order.has_value() ? t.stream_order->buffer()->address() : 0u);
         reader_rt.push_back(cb_order);
         reader_rt.push_back(order_bytes);
+        // leader stream ring depth (>= stream_depth: extra slots carved from the regions below) and the regions
+        reader_rt.push_back(leader_depth);
+        reader_rt.push_back(static_cast<uint32_t>(leader_regions.size()));
+        for (const auto& [id, bytes] : leader_regions) {
+            reader_rt.push_back(id);
+            reader_rt.push_back(bytes);
+        }
+        reader_rt.push_back(sched.n_group_heads);  // heads interleaved in the group's stream, first head
+        reader_rt.push_back(sched.head0);
         if (sched.is_leader) {
             // The group's workers are consecutive logical core ids in a row-major grid: they span
             // at most ceil(n/grid.x)+1 row segments, each a height-1 multicast rectangle. The
@@ -1117,6 +1376,14 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         for (uint32_t r : my_rows) {
             writer_rt.push_back(r);
         }
+        writer_rt.push_back(leader_depth);
+        writer_rt.push_back(static_cast<uint32_t>(leader_regions.size()));
+        for (const auto& [id, bytes] : leader_regions) {
+            writer_rt.push_back(id);
+            writer_rt.push_back(bytes);
+        }
+        writer_rt.push_back(sched.n_group_heads);
+        writer_rt.push_back(sched.head0);
         if (sched.is_leader) {
             writer_leader_desc.emplace_runtime_args(core, writer_rt);
         } else {

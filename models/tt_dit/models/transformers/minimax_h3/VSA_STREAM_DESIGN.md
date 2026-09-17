@@ -745,3 +745,77 @@ two-pass depth-10 structure and gather contention -- compute, not overlap.
 multi-worker all_gather_async kernels): plain head-split K and V in, two persistent buffers, MUX workers per link,
 and a token-major page walk with a stride between heads -- the same wire order the flat layout gave, without the
 0.9 ms of flatten + concat. Standalone two-op 26.15 vs ring 20.13 ms; traced block 62.30 -> 59.48 ms.
+
+## 15. Decoupled design (v2): theory, experiments, and what actually moved (2026-09-16)
+
+Theory going in (per-unit cycle budget, 15 s median shard, ~5.7k block-row units per core, 237 cycles/unit = 1 ms):
+matmul ~1.0k, MATH thread ~1.5k, PACK thread ~1.8k (exp + packs, the engine floor), measured compute-busy ~2.8k,
+measured kernel ~4.1-4.6k. The gap busy -> kernel (idle 22-45% per core) was attributed to two couplings: the
+leader's min-over-workers slot gate (convoy) and the leader's publish cadence. Plan: leader ring as a cache
+(k-th-slowest gate, DRAM fallback for laggards), then cadence, then wider windows.
+
+**What the probes showed (synthetic "median 15s model", baseline 16.5 ms host, all knobs env-selected, uncommitted):**
+- `TT_VSA_DECOUPLE=1` (k-th gate + fallback + whole-pass log ring): 16.4-16.5 ms, no change, even with the leader
+  never waiting for a worker; 44% of pulls then found their slot recycled. The leader was far ahead: the worker gate
+  was not the coupling.
+- `TT_VSA_FREE_SLOTS=1` (workers pull into any free slot, 8 windows in flight): 16.5 ms, no change. Worker pipeline
+  depth was not the coupling either.
+- Reader wall-clock timers (`TT_VSA_RDR_TIMERS=1`) found it: the LEADER-AS-WORKER. Its reader spends 46-58% of the
+  kernel in `own_wait_at` (its own compute's credits) and its compute idles 36-43%: fetch and compute on the leader
+  are serialized because the 18-slot ring minus 4-8 in-flight fetches leaves less than one window of run-ahead, and
+  every worker spins on the leader's log 33-81% of its time. Smaller leader windows (`TT_VSA_OWN_WIN=6`) and a deeper
+  fetch (`TT_VSA_FETCH_LAG=8`) made it worse (the fetch just waits longer on the same credits).
+- Pure-streaming leader (`TT_VSA_LEADER_ROWS=0`): workers become compute-bound (idle 8-17%) but one consumer per
+  group is lost; the 8-core groups' 7 workers carry 32-34 rows and set the kernel: 17.3-19.8 ms.
+
+**v2 (`TT_VSA_V2=1`):** decouple + free slots + pure-streaming leader whose unused compute CBs (q/o/qk/max/corr/out,
+~600 KB) are carved into 19 extra stream slots (ring 37; log entries carry the K/V L1 addresses so workers need no
+layout knowledge) + rows balanced to +-1 + fetch lag 8. Bit-exact for the fallback path (decouple alone == baseline);
+the balanced dealing changes rounding by <= 5e-3 (co-residency-dependent chunking in the compute, equally exact,
+deterministic). Result 16.9 ms: the 7-worker groups (20.9 M ticks) vs the 8-worker groups (17.5 M).
+A decouple race worth remembering: the slot-safety check derives "the leader may be refilling slot n" from the
+arrival index with the leader's fetch lag; a hardcoded lag of 4 against a leader running lag 8 made v2
+nondeterministic on the 5 s shape (unit shapes passed). `vsa_dec::kFetchLag` now IS `VSA_FETCH_LAG`.
+
+**Two heads per leader (`TT_VSA_HPG=2`):** 7 groups of 17 cores, one leader interleaving both heads' blocks
+((A, b), (B, b) pairs; log word 0 = block | head_sel << 16), 8 workers per head, worker bins of 18 arrivals (9 own-head
+blocks, the same visit partition). Every group now ends within 2% and all 112 workers are within 10% busy -- but 16.8
+ms: workers idle 22-29% spinning on the leader, the leader gated 41% on the MEDIAN worker whose reader has all 18
+slots full. Gate permissiveness (`TT_VSA_GATE_LAG` 8/12/16) is flat or worse (16 = never wait: 17.4, a DRAM fallback
+storm); interleaved dealing (`TT_VSA_DEAL_ROWS=1`) neutral; a deeper worker pool via fewer rows (8/22) worse (18.9,
+more passes). The per-head ring depth (37 slots for 2 heads ~ 18 arrivals of lead) is the wall, and the leader's L1
+is full.
+
+**Stream order is the lever that compounds with decoupling.** `VSA_ORDER=bstride4.16` (16 segments, runs of 4)
+spreads any popular stretch of the sequence over the whole stream so per-window demand is smooth and the median
+worker's slots rarely fill: v2 + HPG=2 + bstride4.16 = **14.47 ms (-12.6%)**; bstride2.32 14.48, 8.8 14.74, 4.32
+14.63. The same order on the baseline kernel is worth 1% (16.39) -- the old design was gated on the leader's own
+compute regardless of order. Deterministic; diff vs baseline 5e-3 (order + dealing rounding). Timers at the best
+point: every core ends within 2% (17.5-17.8 M ticks = 13 ms device), busiest worker busy 16.1 M (idle 9-17%,
+median 13%), leader 62% active (publish 28% = 16 unicasts per pair, V issue 26%) + 29% gated, fallback 19% of pulls
+with 11.8k blocking repairs. Next: multicast publish (`TT_VSA_MCAST_LOG=1`, built), contiguous K/V pages for the
+leader's reads, and the real-selection shard (dump being regenerated: `/data/cglagovich/vsa_scratch/dump15`).
+
+**Multicast publish (`TT_VSA_MCAST_LOG=1`):** 14.28 ms synthetic (-13.7% vs baseline), bit-exact with the unicast
+version.
+
+**Real selections (dump regenerated: `VSA_DUMP_INDICES` on the 15 s e2e test, 2 steps; `test_vsa_sdpa_real_perf.py`,
+ms, order identity / bstride4.16):** dev 5: baseline 21.10 / 18.50, v2+HPG2+mcast 21.71 / 18.09, + cost-balanced
+dealing 20.87 / 17.92 (-15% vs the baseline); dev 0: 21.23 / 18.83 vs 21.30 / 18.81; dev 14: 21.01 / 18.61 vs
+21.13 / 18.23. On real rows the stream order carries most of the gain (-12%) and the decoupled design adds 2-3%.
+Timers (dev 5, v2, bstride): per-worker compute busy 12.8 / 14.7 / 19.2 M ticks (min / med / max) -- the dense rows
+(~7 sparse rows of work each, 2-3 per device, hinted as the 4-row union) make 2 of 8 workers per head 30% heavier;
+leader gated 45-49% on the median worker; fallback 42% of pulls. The v2 dealer now balances total cost per consumer
+(`TT_VSA_DEAL_BALANCE`, on in v2), worth ~1% more; splitting a dense row's key range over two workers would remove
+the rest of that imbalance.
+
+**Traced 15 s block (random uniform selections, 20 replays):** baseline identity 62.60, baseline bstride 61.75,
+v2+HPG2+mcast+bstride 61.63 ms per block. Uniform random rows have no bursts to smooth, so the block test does not
+reproduce the standalone gains; the e2e denoise step with real weights is the metric (running).
+
+**End to end (15 s / 768p, real weights, 8 steps, denoise seconds):** baseline identity 21.8 (2.72 s/step), baseline
+bstride4.16 21.1, v2+HPG2+mcast+bstride4.16 20.9 (2.61 s/step, -4.1%). Consistent with a ~15% kernel gain on an op
+that is ~27% of the block. (Four of the five e2e attempts died at device init or weight upload with bus errors while
+another user was on the machine; the galaxy needed `tt-smi -glx_reset` each time.) Gates after the changes: 22
+streaming unit cases, determinism, trace cache-hit loops (6), ring medium (2) all pass; the default path's log entry
+now carries K/V addresses and the kreq layout changed, everything else is behind the TT_VSA_* knobs.

@@ -135,6 +135,7 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
         distributed=os.environ.get("VSA_DIST", "0") == "1",  # distributed-window vsa_sdpa kernel
         ring=os.environ.get("VSA_RING_BLOCK", "0") == "1",  # vsa_ring_sdpa: fused K/V ring all-gather
         ring_gather=os.environ.get("VSA_RING_GATHER", "ring_attention"),  # its gather backend (| fused_kv)
+        **({"stream_order": os.environ["VSA_BLOCK_STREAM_ORDER"]} if os.environ.get("VSA_BLOCK_STREAM_ORDER") else {}),
     )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,

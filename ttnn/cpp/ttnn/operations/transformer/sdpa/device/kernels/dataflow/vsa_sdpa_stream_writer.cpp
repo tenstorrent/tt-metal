@@ -17,6 +17,7 @@
 #include "sparse_sdpa_msa_gather.hpp"
 #include "dataflow_common.hpp"
 #include "vsa_sum_service.hpp"
+#include "vsa_decouple.hpp"
 #include "api/debug/dprint.h"
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;
@@ -46,8 +47,11 @@ void kernel_main() {
     constexpr uint32_t cb_sumback = get_compile_time_arg_val(20);
     constexpr uint32_t cb_sacc = get_compile_time_arg_val(21);
     constexpr uint32_t Sqt = get_compile_time_arg_val(22);
+    constexpr uint32_t stream_depth = get_compile_time_arg_val(23);  // decoupled K pulls (vsa_decouple.hpp)
+    constexpr uint32_t cb_log = get_compile_time_arg_val(24);
+    constexpr uint32_t log_depth = get_compile_time_arg_val(25);
 
-    constexpr auto out_args = TensorAccessorArgs<23, 0>();
+    constexpr auto out_args = TensorAccessorArgs<26, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
     constexpr auto q_args =
@@ -69,6 +73,15 @@ void kernel_main() {
     const uint32_t kRowsArg = 12 + n_passes;  // ... then the row list (q tiles, pass-major)
     (void)row_start;
     (void)row_stride;
+    // after the rows: the leader stream ring depth and the CB regions its extra slots are carved from (v2)
+    const uint32_t ldepth = get_arg_val<uint32_t>(kRowsArg + row_count);
+    const uint32_t n_regions = get_arg_val<uint32_t>(kRowsArg + row_count + 1);
+    const uint32_t region_argi = kRowsArg + row_count + 2;
+    const uint32_t n_group_heads = get_arg_val<uint32_t>(region_argi + 2 * n_regions);
+    const uint32_t head0 = get_arg_val<uint32_t>(region_argi + 2 * n_regions + 1);
+    (void)n_group_heads;
+    constexpr uint32_t kMaxLeaderSlots = 40;
+    constexpr uint32_t k_block_bytes = k_tiles_per_block * k_tile_bytes;
 
     Noc noc;
     vsa_sum::Service sums{cb_shdr, cb_stiles, cb_sumback, get_write_ptr(cb_sacc), R_MAX, Sqt};
@@ -91,7 +104,9 @@ void kernel_main() {
         // trid barrier (already landed with the pipeline full) instead of a DRAM round trip.
         // kAckLag stays BELOW the reader's fetch lag: the reader waits for block N's ack after
         // sending kreqs N..N+3 only, so an ack gated on kreq N+4 would deadlock.
-        constexpr uint32_t kAckLag = 2;  // the reader publishes PAIRS: it needs acks within lag 2 of its fetches
+        constexpr uint32_t kAckLag =
+            vsa_dec::kFetchLag - 2;  // the reader publishes PAIRS: acks within lag 2 of its fetches
+        static_assert(kAckLag + 1 <= 8, "K blocks in flight need one trid each");
 #if defined(VSA_PROBE) && VSA_PROBE == 7
         return;  // probe 7: no K fetches, no acks (the reader skips its kack waits too)
 #endif
@@ -114,6 +129,31 @@ void kernel_main() {
         const uint32_t k_gath_base = head * ht_total * dht;   // and gathered buffer
         (void)k_base;
 #endif
+        // slot -> K address, the same table as the reader leader's: slots [0, stream_depth) in the stream CB, the
+        // rest carved from the given regions as {K block, V block} pairs in order (the V block size equals K's here)
+        uint32_t slot_k[kMaxLeaderSlots];
+        {
+            const uint32_t kb0 = k_cb.get_write_ptr();
+            for (uint32_t s = 0; s < stream_depth; ++s) {
+                slot_k[s] = kb0 + s * k_block_bytes;
+            }
+            uint32_t ns = stream_depth;
+            constexpr uint32_t pair_bytes = 2 * k_block_bytes;
+            for (uint32_t r = 0; r < n_regions; ++r) {
+                const uint32_t cbid = get_arg_val<uint32_t>(region_argi + 2 * r);
+                const uint32_t bytes = get_arg_val<uint32_t>(region_argi + 2 * r + 1);
+                const uint32_t base = get_write_ptr(cbid);
+                for (uint32_t off = 0; off + pair_bytes <= bytes && ns < ldepth; ++ns) {
+                    slot_k[ns] = base + off;
+                    off += pair_bytes;
+                }
+            }
+            if (ns != ldepth || ldepth > kMaxLeaderSlots) {
+                for (;;) {  // host/kernel carve mismatch
+                    invalidate_l1_cache();
+                }
+            }
+        }
         uint32_t nfetch = 0, nacked = 0;
         const auto ack_oldest = [&]() {
             experimental::async_read_barrier_with_trid(noc, (nacked % 8) + 1);
@@ -124,40 +164,35 @@ void kernel_main() {
         constexpr uint32_t kNoBlock = 0xFFFFFFFEu;
         const auto fetch_one = [&](uint32_t block_id, uint32_t slot) {
             experimental::set_read_trid(noc, (nfetch % 8) + 1);
+            const uint32_t dst = slot_k[slot];
 #ifdef VSA_RING
             // head-split layout: a block's K tiles are contiguous pages of this head; own shard from the local
             // tensor (local block id), every other shard from the gathered buffer (global block id)
             if (block_id / blocks_per_shard == ring_index) {
                 const uint32_t k_tile0 = k_local_base + (block_id - ring_index * blocks_per_shard) * k_tiles_per_block;
                 for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                    noc.async_read(
-                        k,
-                        k_cb,
-                        k_tile_bytes,
-                        {.page_id = k_tile0 + i},
-                        {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+                    noc_async_read(k.get_noc_addr(k_tile0 + i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
                 }
             } else {
                 const uint32_t k_tile0 = k_gath_base + block_id * k_tiles_per_block;
                 for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                    noc.async_read(
-                        gk,
-                        k_cb,
-                        k_tile_bytes,
-                        {.page_id = k_tile0 + i},
-                        {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+                    noc_async_read(
+                        gk.get_noc_addr(k_tile0 + i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
                 }
             }
 #else
-            const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
+            // block_id: block | head_sel << 16 (the leader interleaves the group's heads)
+            const uint32_t k_tile0 =
+                (head0 + (block_id >> 16)) * k_head_stride + (block_id & 0xFFFFu) * k_tiles_per_block;
+            (void)k_base;
+#if defined(VSA_PROBE) && VSA_PROBE == 12
+            // layout probe: one contiguous read per block (wrong bytes; see the reader's leader)
+            noc_async_read(k.get_noc_addr(k_tile0), dst, k_block_bytes, noc.get_noc_id());
+#else
             for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
-                noc.async_read(
-                    k,
-                    k_cb,
-                    k_tile_bytes,
-                    {.page_id = k_tile0 + i},
-                    {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+                noc_async_read(k.get_noc_addr(k_tile0 + i), dst + i * k_tile_bytes, k_tile_bytes, noc.get_noc_id());
             }
+#endif
 #endif
             experimental::set_read_trid(noc, 0);
             ++nfetch;
@@ -258,6 +293,7 @@ void kernel_main() {
     }
 
     const uint32_t k_l1_base = k_cb.get_write_ptr();
+    const uint32_t k_base_w = head * k_head_stride;  // this head's K pages (DRAM fallback of the decoupled protocol)
 
     uint32_t drained = 0;
     uint32_t pass_base = 0;
@@ -270,6 +306,40 @@ void kernel_main() {
     uint32_t pull_idx[2] = {0, 0};  // pulls issued in the open window of each half
     uint32_t ack_pending[4];        // FIFO of marker halves awaiting their lazy ack
     uint32_t ack_head = 0, ack_tail = 0;
+    // Decoupled protocol (vsa_decouple.hpp): per-window record of the window's pulls {arrival, slot, from DRAM},
+    // validated before the window's ack (a slot the leader may have refilled since is re-read from DRAM).
+    constexpr uint32_t half_slots = stream_depth / 2;
+#ifdef VSA_FREE_SLOTS
+    constexpr uint32_t kRecs = 8;  // window records in flight (the reader's kMaxWin); K trid = 1 + rec
+#else
+    constexpr uint32_t kRecs = 2;  // the two halves
+#endif
+    struct KPull {
+        uint32_t n, slot, dram, b;
+    };
+    KPull kp[kRecs][half_slots > 0 ? half_slots : 1];
+    uint32_t kp_n[kRecs] = {};
+    uint32_t pull_idx_rec[kRecs] = {};
+    uint32_t ack_pending_rec[kRecs];
+    (void)pull_idx_rec;
+    (void)ack_pending_rec;
+    vsa_dec::View dec{get_write_ptr(cb_log), log_depth, 1, 0, ldepth};
+    const auto block_of_arrival = [&](uint32_t n) -> uint32_t {  // from the (published) log entry
+        invalidate_l1_cache();
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                   dec.log_l1 + (dec.log_of_arrival(n) % log_depth) * vsa_dec::kEntryWords * 4) &
+               0xFFFFu;  // block | head_sel << 16
+    };
+    const auto read_k_from_dram = [&](uint32_t b, uint32_t slot) {
+        for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
+            noc.async_read(
+                k,
+                k_cb,
+                k_tile_bytes,
+                {.page_id = k_base_w + b * k_tiles_per_block + i},
+                {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+        }
+    };
     const auto khalf_landed = [&](uint32_t h) {
         for (uint32_t t = 0; t < 4; ++t) {
             if (!ncrisc_noc_read_with_transaction_id_flushed(noc.get_noc_id(), h * 4 + 1 + t)) {
@@ -278,46 +348,149 @@ void kernel_main() {
         }
         return true;
     };
+#ifdef VSA_FREE_SLOTS
+    // Free-slot pipeline: one K trid per window record (1 + rec), acks in marker (= record) order.
     auto serve_kreq_if_any = [&]() {
-        while (ack_head != ack_tail && khalf_landed(ack_pending[ack_head & 3])) {
+        while (ack_head != ack_tail &&
+               ncrisc_noc_read_with_transaction_id_flushed(noc.get_noc_id(), 1 + ack_pending_rec[ack_head % kRecs])) {
+            const uint32_t rec = ack_pending_rec[ack_head % kRecs];
+#ifdef VSA_DECOUPLE
+            bool fixed = false;
+            for (uint32_t i = 0; i < kp_n[rec]; ++i) {
+                if (kp[rec][i].dram == 0 && dec.slot_unsafe(kp[rec][i].n)) {
+                    read_k_from_dram(kp[rec][i].b, kp[rec][i].slot);
+                    fixed = true;
+                }
+            }
+            if (fixed) {
+                noc.async_read_barrier();
+            }
+#endif
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
             ++ack_head;
         }
         while (cb_pages_available_at_front(cb_kreq, 1)) {
             kreq_cb.wait_front(1);
-            uint32_t leader_slot, slot, khalf;
+            uint32_t leader_slot, w1, w2, w3;
+            {
+                volatile tt_l1_ptr uint32_t* rq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
+                invalidate_l1_cache();
+                leader_slot = rq[0];
+                w1 = rq[1];
+                w2 = rq[2];
+                w3 = rq[3];
+            }
+            kreq_cb.pop_front(1);
+            if (leader_slot == 0xFFFFFFFFu) {  // window end {0xFFFFFFFF, 0, rec}
+                const uint32_t rec = w2;
+                ASSERT(rec < kRecs);
+                ack_pending_rec[ack_tail % kRecs] = rec;
+                ++ack_tail;
+                kp_n[rec] = pull_idx_rec[rec];
+                pull_idx_rec[rec] = 0;
+                continue;
+            }
+            // pull {leader_slot, slot | rec << 8 | from_dram << 12, arrival, pass_len}
+            const uint32_t slot = w1 & 0xffu;
+            const uint32_t rec = (w1 >> 8) & 0xfu;
+            const bool from_dram = ((w1 >> 12) & 1u) != 0;
+            const uint32_t n = w2;
+            dec.pass_len = w3 ? w3 : 1;
+            dec.total = n_passes * dec.pass_len;
+            const uint32_t b = block_of_arrival(n);  // the entry is still valid: the reader just read it
+            if (pull_idx_rec[rec] < half_slots) {
+                kp[rec][pull_idx_rec[rec]] = {n, slot, from_dram ? 1u : 0u, b};
+            }
+            ++pull_idx_rec[rec];
+            experimental::set_read_trid(noc, 1 + rec);
+            if (from_dram) {
+                read_k_from_dram(b, slot);
+            } else {
+                noc_async_read(
+                    get_noc_addr(leader_x, leader_y, leader_slot /* the leader's K address */, noc.get_noc_id()),
+                    k_l1_base + slot * k_tiles_per_block * k_tile_bytes,
+                    k_tiles_per_block * k_tile_bytes,
+                    noc.get_noc_id());
+            }
+            experimental::set_read_trid(noc, 0);
+        }
+    };
+#else
+    auto serve_kreq_if_any = [&]() {
+        while (ack_head != ack_tail && khalf_landed(ack_pending[ack_head & 3])) {
+            const uint32_t h = ack_pending[ack_head & 3];
+#ifdef VSA_DECOUPLE
+            bool fixed = false;
+            for (uint32_t i = 0; i < kp_n[h]; ++i) {
+                if (kp[h][i].dram == 0 && dec.slot_unsafe(kp[h][i].n)) {
+                    read_k_from_dram(kp[h][i].b, kp[h][i].slot);
+                    fixed = true;
+                }
+            }
+            if (fixed) {
+                noc.async_read_barrier();
+            }
+#else
+            (void)h;
+#endif
+            kack_cb.reserve_back(1);
+            kack_cb.push_back(1);
+            ++ack_head;
+        }
+        while (cb_pages_available_at_front(cb_kreq, 1)) {
+            kreq_cb.wait_front(1);
+            uint32_t leader_slot, w1, w2, w3;
             {
                 volatile tt_l1_ptr uint32_t* rq =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
                 invalidate_l1_cache();  // page written by NCRISC: bypass this RISC's stale L1 read cache
                 leader_slot = rq[0];
-                slot = rq[1];
-                khalf = rq[2];
+                w1 = rq[1];
+                w2 = rq[2];
+                w3 = rq[3];
             }
             kreq_cb.pop_front(1);
-            if (leader_slot == 0xFFFFFFFFu) {  // window end: queue the lazy ack
-                ASSERT(khalf < 2);             // indexes pull_idx[] and the per-half trid groups
+            if (leader_slot == 0xFFFFFFFFu) {  // window end {0xFFFFFFFF, 0, half}: queue the lazy ack
+                const uint32_t khalf = w2;
+                ASSERT(khalf < 2);  // indexes pull_idx[] and the per-half trid groups
                 ack_pending[ack_tail & 3] = khalf;
                 ++ack_tail;
+                kp_n[khalf] = pull_idx[khalf];
                 pull_idx[khalf] = 0;
                 continue;
             }
+            // pull {leader_slot, slot | half << 8 | from_dram << 9, arrival, pass_len}
+            const uint32_t slot = w1 & 0xffu;
+            const uint32_t khalf = (w1 >> 8) & 1u;
+            const bool from_dram = ((w1 >> 9) & 1u) != 0;
+            const uint32_t n = w2;
+            dec.pass_len = w3 ? w3 : 1;
+            dec.total = n_passes * dec.pass_len;
             const uint32_t trid = khalf * 4 + 1 + (pull_idx[khalf] & 3);
             if (pull_idx[khalf] >= 4) {
                 experimental::async_read_barrier_with_trid(noc, trid);  // reuse within this window
             }
+            const uint32_t b = block_of_arrival(n);
+            if (pull_idx[khalf] < half_slots) {
+                kp[khalf][pull_idx[khalf]] = {n, slot, from_dram ? 1u : 0u, b};
+            }
             ++pull_idx[khalf];
             experimental::set_read_trid(noc, trid);
-            noc_async_read(
-                get_noc_addr(
-                    leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes, noc.get_noc_id()),
-                k_l1_base + slot * k_tiles_per_block * k_tile_bytes,
-                k_tiles_per_block * k_tile_bytes,
-                noc.get_noc_id());
+            if (from_dram) {
+                read_k_from_dram(b, slot);
+            } else {
+                noc_async_read(
+                    get_noc_addr(leader_x, leader_y, leader_slot /* the leader's K address */, noc.get_noc_id()),
+                    k_l1_base + slot * k_tiles_per_block * k_tile_bytes,
+                    k_tiles_per_block * k_tile_bytes,
+                    noc.get_noc_id());
+            }
             experimental::set_read_trid(noc, 0);
         }
     };
+#endif  // VSA_FREE_SLOTS
 
     while (pass_base < row_count || drained < row_count) {
         if (pass_base < row_count && drained >= pass_base) {
