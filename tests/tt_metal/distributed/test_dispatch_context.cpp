@@ -4,7 +4,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <iostream>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -14,7 +17,9 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/shape.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -29,6 +34,7 @@
 
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
 #include <umd/device/types/arch.hpp>
@@ -40,6 +46,7 @@ protected:
     void TearDown() override { experimental::DispatchContext::get().reset(); }
 };
 
+// conditions for using fd manual switching
 namespace {
 
 std::optional<std::string> fd_preflight_skip_reason() {
@@ -57,6 +64,8 @@ std::optional<std::string> fd_preflight_skip_reason() {
     return std::nullopt;
 }
 
+// Confirms that the chip is Blackhole, the dispatch core axis is a column (DispatchCoreAxis::COL),
+// each chip is MMIO-accessible, and the compute grid has at least 13 columns and 2 rows (grid.x > 12 && grid.y > 1)
 bool has_expected_dispatch_column(const MeshDevice& mesh) {
     // DispatchCoreConfig's axis is resolved only when MeshDevice::create
     // initializes the MetalContext, so this validation must happen afterwards.
@@ -76,6 +85,7 @@ bool has_expected_dispatch_column(const MeshDevice& mesh) {
     return grid.x > 12 && grid.y > 1;
 }
 
+// tries to call initialize_fast_dispatch(mesh) inside a try/catch
 std::string capture_default_fd_refusal(MeshDevice* mesh) {
     try {
         experimental::DispatchContext::get().initialize_fast_dispatch(mesh);
@@ -89,6 +99,7 @@ std::string capture_default_fd_refusal(MeshDevice* mesh) {
     return {};
 }
 
+// Creates a BufferShardingArgs spec specifically targeting the two dispatch cores: CoreRange({12, 0}, {12, 1})
 BufferShardingArgs two_dispatch_core_sharding_args(uint32_t page_size) {
     CoreRangeSet shard_grid(CoreRange({12, 0}, {12, 1}));
     ShardSpecBuffer shard_spec(
@@ -100,8 +111,146 @@ BufferShardingArgs two_dispatch_core_sharding_args(uint32_t page_size) {
     return BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
 }
 
+// Same shape as above (one page per core, HEIGHT_SHARDED, lockstep) but on an arbitrary grid.
+BufferShardingArgs one_page_per_core_sharding_args(const CoreRangeSet& shard_grid, uint32_t page_size) {
+    ShardSpecBuffer shard_spec(
+        shard_grid,
+        /*shard_shape=*/{page_size, 1},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{page_size, 1},
+        /*tensor2d_shape_in_pages=*/{shard_grid.num_cores(), 1});
+    return BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+}
+
+// Window ends for CQ0 exactly as the guard derives them from the live DispatchMemMap. Never hardcode
+// these: the base moved 0x1B380 -> 0x1B400 -> 0x1B440 across recent pins and the build measured on
+// Sep 16 sits at 0x1B400 / 0x7CFC0 / 0x15CFC0 / 0xA4000.
+struct FdWindowEnds {
+    DeviceAddr prefetch_write_only;  // (12,0): command-data queue + pinned-write scratch
+    DeviceAddr prefetch_full;        // (12,0): plus the ring buffer used by reads and program launches
+    DeviceAddr dispatch;             // (12,1): dispatch CB + dispatch_s CB (DPRINT off)
+};
+
+FdWindowEnds fd_window_ends_cq0() {
+    const auto& mem_map = MetalContext::instance().dispatch_mem_map();
+    const DeviceAddr cmddat_end = mem_map.cmddat_q_base(0) + mem_map.cmddat_q_size();
+    const DeviceAddr scratch_end = mem_map.scratch_db_base(0) + mem_map.scratch_db_size();
+    const DeviceAddr ringbuffer_end = mem_map.scratch_db_base(0) + mem_map.ringbuffer_size();
+    return FdWindowEnds{
+        .prefetch_write_only = std::max(cmddat_end, scratch_end),
+        .prefetch_full = std::max(scratch_end, ringbuffer_end),
+        .dispatch = mem_map.dispatch_s_buffer_end(0)};
+}
+
+// The allocator base is wherever a bottom-up L1 allocation lands. Read it from a throwaway buffer rather
+// than a HAL constant so the tests follow the allocator, not the documentation.
+DeviceAddr allocator_l1_base(MeshDevice* mesh) {
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig probe_cfg{.page_size = page_size, .buffer_type = BufferType::L1, .bottom_up = true};
+    ReplicatedBufferConfig probe_global{.size = page_size};
+    auto probe = MeshBuffer::create(probe_global, probe_cfg, mesh);
+    return probe->address();
+}
+
+// One 4 KB page per core on `grid`, lockstep or per-core, filled with a counter pattern from `salt`.
+struct PlantedResident {
+    std::shared_ptr<MeshBuffer> buffer;
+    std::vector<uint32_t> pattern;
+};
+
+PlantedResident plant_one_page_per_core(
+    MeshDevice* mesh, const CoreRangeSet& grid, bool bottom_up, bool per_core, uint32_t salt) {
+    constexpr uint32_t page_size = 4096;
+    auto sharding_args = one_page_per_core_sharding_args(grid, page_size);
+    if (per_core) {
+        experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
+    DeviceLocalBufferConfig cfg{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = sharding_args, .bottom_up = bottom_up};
+    ReplicatedBufferConfig global{.size = grid.num_cores() * page_size};
+
+    PlantedResident resident;
+    resident.buffer = MeshBuffer::create(global, cfg, mesh);
+    resident.pattern.resize(grid.num_cores() * page_size / sizeof(uint32_t));
+    std::iota(resident.pattern.begin(), resident.pattern.end(), salt);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident.buffer, resident.pattern);
+    Finish(mesh->mesh_command_queue());
+    return resident;
+}
+
+// Ground truth for every "allowed" verdict: force the session past the guard, push 2 MB of DRAM traffic
+// through the dispatch cores (the canary's blast radius grows under traffic), tear down.
+void run_forced_session_with_traffic(MeshDevice* mesh, bool write_only) {
+    constexpr uint32_t page_size = 4096;
+    constexpr uint32_t traffic_pages = 512;
+    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig dram_global{.size = traffic_pages * page_size};
+    std::vector<uint32_t> payload(traffic_pages * page_size / sizeof(uint32_t));
+    std::iota(payload.begin(), payload.end(), 1);
+
+    experimental::FastDispatchSetupOptions force{.allow_destructive = true, .write_only = write_only};
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh, force);
+    auto traffic = MeshBuffer::create(dram_global, dram, mesh);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), traffic, payload);
+    Finish(mesh->mesh_command_queue());
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh);
+}
+
+void expect_resident_intact(MeshDevice* mesh, const PlantedResident& resident, const char* what) {
+    for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh->mesh_command_queue(), dst, resident.buffer, coord);
+        EXPECT_EQ(dst, resident.pattern) << what << " changed at " << coord;
+    }
+}
+
+// Which bytes of `expected`, written raw at `base` on `core`, changed. Reads back with no allocator involved.
+struct ChangedRange {
+    bool any = false;
+    DeviceAddr lo = 0;
+    DeviceAddr hi = 0;
+    size_t words = 0;
+};
+
+ChangedRange raw_l1_diff(
+    IDevice* device, const CoreCoord& core, DeviceAddr base, const std::vector<uint32_t>& expected) {
+    std::vector<uint32_t> got;
+    ::tt::tt_metal::detail::ReadFromDeviceL1(
+        device, core, static_cast<uint32_t>(base), static_cast<uint32_t>(expected.size() * sizeof(uint32_t)), got);
+    ChangedRange changed;
+    for (size_t i = 0; i < expected.size() && i < got.size(); i++) {
+        if (got[i] == expected[i]) {
+            continue;
+        }
+        const DeviceAddr addr = base + i * sizeof(uint32_t);
+        if (!changed.any) {
+            changed.lo = addr;
+            changed.any = true;
+        }
+        changed.hi = addr + sizeof(uint32_t);
+        changed.words++;
+    }
+    return changed;
+}
+
+void print_changed_range(const char* core_name, const ChangedRange& changed, DeviceAddr window_end) {
+    std::cout << "[fd footprint] " << core_name << ": ";
+    if (!changed.any) {
+        std::cout << "unchanged";
+    } else {
+        std::cout << std::hex << "changed [0x" << changed.lo << ", 0x" << changed.hi << ") (" << std::dec
+                  << changed.words << " words)";
+    }
+    std::cout << std::hex << "; guard window end 0x" << window_end << std::dec << std::endl;
+}
+
 }  // namespace
 
+// WHAT: a plain (interleaved) L1 buffer allocated bottom-up, so it sits at the very bottom of L1 on
+//       every core, inside the window on both dispatch cores.
+// WHY:  the basic case: something is in the way. The guard must say so before any firmware is written,
+//       name every chip and both roles, and leave slow dispatch usable afterwards.
+// EXPECT: refused; a DRAM write/read still works; freeing the buffer lets a later session succeed.
 TEST_F(DispatchContextFixture, RefusesWhenResidentL1InsideDispatchFootprint) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -146,6 +295,11 @@ TEST_F(DispatchContextFixture, RefusesWhenResidentL1InsideDispatchFootprint) {
     ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
 }
 
+// WHAT: a tensor on (12,0)/(12,1) at the bottom of L1, but the session is started with
+//       allow_destructive = true.
+// WHY:  the override must mean "go ahead and accept the damage". Reading the data back afterwards
+//       proves the damage is real: this is the #2019 corruption reproduced on purpose.
+// EXPECT: no exception, and the data read back differs from what was written.
 TEST_F(DispatchContextFixture, AllowDestructiveProceedsAndOverwritesResidentL1) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -180,6 +334,10 @@ TEST_F(DispatchContextFixture, AllowDestructiveProceedsAndOverwritesResidentL1) 
     EXPECT_NE(dst, src) << "The destructive override did not expose the expected dispatch-core overwrite.";
 }
 
+// WHAT: a PER-CORE tensor (the router's shape) on (12,0)/(12,1) at the bottom of L1.
+// WHY:  per-core allocations are recorded only in the chip's allocator, in one list per core. This is
+//       the exact #2019 shape, so the guard must read that per-core list. Needs HYBRID=1.
+// EXPECT: refused, with the chip ledger named and a [dispatch] line.
 TEST_F(DispatchContextFixture, RefusesPerCoreResidentL1InsideDispatchFootprint) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -209,6 +367,11 @@ TEST_F(DispatchContextFixture, RefusesPerCoreResidentL1InsideDispatchFootprint) 
     EXPECT_NE(error.find("[dispatch]"), std::string::npos);
 }
 
+// WHAT: a per-core tensor on (12,0) whose lowest byte is above the command-data queue but inside the
+//       scratch area that pinned writes use. Session started with write_only = true.
+// WHY:  write_only shrinks the prefetcher's window, but not below the scratch area, so the guard must
+//       still refuse here. Needs HYBRID=1.
+// EXPECT: refused with a [prefetch] line and no [dispatch] line.
 TEST_F(DispatchContextFixture, WriteOnlyStillChecksPinnedWriteScratchRegion) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -257,6 +420,10 @@ TEST_F(DispatchContextFixture, WriteOnlyStillChecksPinnedWriteScratchRegion) {
     EXPECT_EQ(error.find("[dispatch]"), std::string::npos);
 }
 
+// WHAT: a persistent-arena region on (12,1), booked in the MESH allocator's arena.
+// WHY:  arena regions are not buffers and are not in the allocator's free lists; the guard must read
+//       the arena separately or it misses them.
+// EXPECT: refused, naming the mesh arena ledger and [dispatch].
 TEST_F(DispatchContextFixture, RefusesPersistentArenaResidentL1InsideDispatchFootprint) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -278,6 +445,11 @@ TEST_F(DispatchContextFixture, RefusesPersistentArenaResidentL1InsideDispatchFoo
     EXPECT_NE(error.find("[dispatch]"), std::string::npos);
 }
 
+// WHAT: a plain (interleaved) L1 buffer allocated top-down, so it sits at the top of L1, above the window.
+// WHY:  the guard must stay quiet when nothing is in the way. NOTE: this encodes the ADDRESS-CHECK
+//       policy. An interleaved buffer has a page on every core including (12,0)/(12,1), so the
+//       buffer-walk design would refuse it. Kept out of the sweep's suite gate for that reason.
+// EXPECT: not refused.
 TEST_F(DispatchContextFixture, AllowsResidentL1AboveDispatchFootprint) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
@@ -294,6 +466,713 @@ TEST_F(DispatchContextFixture, AllowsResidentL1AboveDispatchFootprint) {
 
     ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
     ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// HOW TO READ THE GUARD TESTS (this one and everything below it)
+//
+// Fast dispatch (FD) borrows two cores of the last grid column, (12,0) and (12,1), and writes its own
+// queues into a fixed range of their L1: "the window", from the allocator base up to an end address
+// the memory map gives us. Anything a test puts there before the session gets overwritten. The
+// guard's job is to raise BEFORE the session if something is in the way, and to stay quiet otherwise.
+//
+// Two ways to write that guard are on the table:
+//   - address check (what is built today): asks the allocator "what is the lowest address in use on
+//     this core?" and raises if it is inside the window.
+//   - buffer walk (the alternative): looks at every allocated buffer and raises if one has a shard
+//     on (12,0) or (12,1), at any address.
+// Most tests must pass under BOTH. Where a test can only pass under one, its comment says so.
+//
+// Many tests use the same two steps:
+//   1. ground truth: force the session with allow_destructive=true, push traffic through it, read the
+//      planted data back. This shows what the firmware REALLY did, independent of the guard.
+//   2. verdict: run the session with default options and check whether the guard raised.
+//
+// Every test has exactly one fixed expectation. Nothing is reinterpreted based on which guard is
+// compiled in.
+// ---------------------------------------------------------------------------------------------------
+
+// WHAT: put a tensor on cores (0,0)-(1,1), far from the dispatch cores, but at the very bottom of L1
+//       (bottom_up = true). Lockstep allocation books that address range on EVERY core, including
+//       (12,0)/(12,1), even though the data is only on the four corner cores.
+// WHY:  this is where the two guard designs disagree. The address check sees "something in use at the
+//       bottom of (12,1)" and raises: a false alarm, no data is there. The buffer walk sees the shard
+//       grid, finds no dispatch core in it, and lets the session through.
+// EXPECT: not refused. Step 1 proves the tensor survives a forced session. Step 2 requires no raise.
+//       With the address check built (today) this test FAILS at the last EXPECT and prints the
+//       refusal. With the buffer walk it passes. Same result with HYBRID on or off.
+TEST_F(DispatchContextFixture, AllowsLockstepResidentWithNoDataOnDispatchCores) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    const CoreRangeSet control_grid(CoreRange({0, 0}, {1, 1}));  // no dispatch core in here
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = one_page_per_core_sharding_args(control_grid, page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = control_grid.num_cores() * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+
+    // The mechanism under test, stated as an assertion: bank (12,1) reports this buffer's address
+    // as its lowest occupied address even though the buffer has no shard on (12,1). This is what
+    // the address-window predicate reads, and why it cannot tell reservation from data.
+    {
+        const auto& mesh_allocator = *mesh->allocator_impl();
+        const uint32_t bank = mesh_allocator.get_bank_ids_from_logical_core(BufferType::L1, CoreCoord(12, 1)).at(0);
+        const auto lowest = mesh_allocator.get_lowest_occupied_l1_address(bank);
+        ASSERT_TRUE(lowest.has_value());
+        ASSERT_EQ(*lowest, resident->address())
+            << "expected the lockstep reservation to be visible on bank (12,1); the premise of this test is wrong";
+    }
+
+    std::vector<uint32_t> src(control_grid.num_cores() * page_size / sizeof(uint32_t));
+    std::iota(src.begin(), src.end(), 0x20190000);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident, src);
+    Finish(mesh->mesh_command_queue());
+
+    // 1. Ground truth, independent of which predicate is compiled in: force the session, push DRAM
+    //    traffic through the dispatch cores (the canary's blast radius grows under traffic), tear
+    //    down, and read the resident back on every device. It must be untouched.
+    constexpr uint32_t traffic_pages = 512;  // 2 MB per device, enough to cycle the command-data queue
+    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig dram_global{.size = traffic_pages * page_size};
+    std::vector<uint32_t> payload(traffic_pages * page_size / sizeof(uint32_t));
+    std::iota(payload.begin(), payload.end(), 1);
+
+    experimental::FastDispatchSetupOptions force{.allow_destructive = true};
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get(), force));
+    auto traffic = MeshBuffer::create(dram_global, dram, mesh.get());
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), traffic, payload);
+    Finish(mesh->mesh_command_queue());
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+
+    for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh->mesh_command_queue(), dst, resident, coord);
+        ASSERT_EQ(dst, src) << "resident with no data on a dispatch core was corrupted at " << coord
+                            << "; the premise of this test is wrong, re-check the footprint model";
+    }
+
+    // 2. The verdict. A resident the firmware cannot touch must not block the session.
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    EXPECT_TRUE(error.empty()) << "false positive: the preflight refused a resident that has no data on any "
+                                  "dispatch core (lockstep reservation mistaken for data):\n"
+                               << error;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The tests from here down were added after the guard scope audit (Sep 16). Reading guide: see the
+// block above AllowsLockstepResidentWithNoDataOnDispatchCores.
+// ---------------------------------------------------------------------------------------------------
+
+// WHAT: put a per-core tensor on the REST of the dispatch column, (12,2) down to (12,9) including the
+//       sender core, at the bottom of L1. Nothing on (12,0) or (12,1).
+// WHY:  the question "if I put stuff on cores other than the two fast dispatch needs, does the guard
+//       stay quiet?" Per-core allocation books L1 only on those cores, so both guard designs see an
+//       empty (12,0)/(12,1) and must allow.
+// EXPECT: not refused, and the tensor is intact after a forced session with traffic. Needs HYBRID=1
+//       because per-core allocation does not exist without it.
+TEST_F(DispatchContextFixture, PerCoreResidentOnColumn12NonDispatchCoresIsAllowed) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "Per-core L1 allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    const CoreRangeSet rest_of_column(CoreRange({12, 2}, {12, 9}));
+    auto resident =
+        plant_one_page_per_core(mesh.get(), rest_of_column, /*bottom_up=*/true, /*per_core=*/true, 0x20190200);
+
+    run_forced_session_with_traffic(mesh.get(), /*write_only=*/false);
+    expect_resident_intact(mesh.get(), resident, "per-core resident on (12,2)-(12,9)");
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    EXPECT_TRUE(error.empty()) << "refused a per-core resident that has no data on (12,0)/(12,1):\n" << error;
+}
+
+// WHAT: same cores, (12,2)-(12,9), but a normal lockstep tensor placed at the TOP of L1 (the default).
+// WHY:  lockstep books the address on every core, but the top of L1 is above the window, so even the
+//       address check has nothing to complain about; the buffer walk sees no dispatch core in the grid.
+// EXPECT: not refused, tensor intact. Passes under both designs, HYBRID on or off. (The same tensor at
+//       the BOTTOM of L1 is the disagreement case, AllowsLockstepResidentWithNoDataOnDispatchCores.)
+TEST_F(DispatchContextFixture, LockstepResidentOnColumn12NonDispatchCoresAtTopIsAllowed) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    const CoreRangeSet rest_of_column(CoreRange({12, 2}, {12, 9}));
+    auto resident =
+        plant_one_page_per_core(mesh.get(), rest_of_column, /*bottom_up=*/false, /*per_core=*/false, 0x20190300);
+
+    run_forced_session_with_traffic(mesh.get(), /*write_only=*/false);
+    expect_resident_intact(mesh.get(), resident, "lockstep resident on (12,2)-(12,9) at the top of L1");
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    EXPECT_TRUE(error.empty()) << "refused a lockstep resident above the window with no data on (12,0)/(12,1):\n"
+                               << error;
+}
+
+// WHAT: reserve a small "persistent arena" region (the allocator's per-core reservation mechanism, used
+//       by PrefetcherPipe) on (12,2), (12,3) and (12,9). Arena regions are tracked per core, so this
+//       really is only on those cores.
+// WHY:  same question as above, for the third kind of allocation. Also the one-queue partner of
+//       TwoCqSessionChecksSecondDispatchPair: with one command queue, (12,2)/(12,3) are ordinary cores.
+// EXPECT: not refused.
+TEST_F(DispatchContextFixture, ArenaResidentOnColumn12NonDispatchCoresIsAllowed) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    auto& arena = mesh->allocator_impl()->persistent_l1();
+    const auto allocation = arena.allocate(
+        CoreRangeSet(std::vector<CoreRange>{CoreRange({12, 2}), CoreRange({12, 3}), CoreRange({12, 9})}),
+        /*size=*/4096,
+        /*alignment=*/64);
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    arena.deallocate(allocation.id);
+    EXPECT_TRUE(error.empty()) << "refused an arena resident that is not on (12,0)/(12,1):\n" << error;
+}
+
+// WHAT: allocate the tensor on the ROOT mesh, on (12,0)/(12,1) at the bottom of L1, then start the
+//       session from a 1x1 SUBMESH of that root.
+// WHY:  blaze does exactly this: tensors can live in the root's allocator while two_phase_upload is
+//       called with a stage submesh. Each mesh object has its own allocator, so the guard must walk up
+//       to the root and look there too. With HYBRID off, the root's allocator is the ONLY place this
+//       tensor is recorded.
+// EXPECT: refused, naming both roles and the submesh's chip.
+TEST_F(DispatchContextFixture, ResidentOnRootRefusedWhenSessionEnteredFromSubmesh) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+    auto submesh = mesh->create_submesh(MeshShape(1, 1));
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = two_dispatch_core_sharding_args(page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, mesh.get());  // owned by the ROOT
+
+    const std::string error = capture_default_fd_refusal(submesh.get());  // session from the SUBMESH
+    ASSERT_FALSE(error.empty()) << "a root-owned resident on the dispatch cores was not seen from a submesh session";
+    EXPECT_NE(error.find("[prefetch]"), std::string::npos);
+    EXPECT_NE(error.find("[dispatch]"), std::string::npos);
+    const ChipId chip = submesh->get_devices()[0]->id();
+    EXPECT_NE(error.find("chip " + std::to_string(chip) + " "), std::string::npos) << error;
+}
+
+// WHAT: the reverse: tensor allocated on a 1x1 submesh, session started from the root.
+// WHY:  the guard must walk DOWN into every submesh as well. Also checks the message is per chip: the
+//       one chip holding the tensor is named, chips that hold nothing are not.
+// EXPECT: refused; only the submesh's chip appears in the message.
+TEST_F(DispatchContextFixture, ResidentOnSubmeshRefusedWhenSessionEnteredFromRoot) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+    auto submesh = mesh->create_submesh(MeshShape(1, 1));
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = two_dispatch_core_sharding_args(page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, submesh.get());  // owned by the SUBMESH
+
+    const std::string error = capture_default_fd_refusal(mesh.get());  // session from the ROOT
+    ASSERT_FALSE(error.empty()) << "a submesh-owned resident on the dispatch cores was not seen from a root session";
+    EXPECT_NE(error.find("[prefetch]"), std::string::npos);
+    EXPECT_NE(error.find("[dispatch]"), std::string::npos);
+
+    // The report must be per chip: the chip holding the resident is named, no other chip is.
+    const ChipId resident_chip = submesh->get_devices()[0]->id();
+    EXPECT_NE(error.find("chip " + std::to_string(resident_chip) + " "), std::string::npos) << error;
+    for (IDevice* device : mesh->get_devices()) {
+        if (device->id() != resident_chip) {
+            EXPECT_EQ(error.find("chip " + std::to_string(device->id()) + " "), std::string::npos)
+                << "chip " << device->id() << " holds no resident but was reported:\n"
+                << error;
+        }
+    }
+}
+
+// WHAT: two 1x1 submeshes on different chips. Tensor on submesh B, session started from submesh A.
+// WHY:  the session flashes fast-dispatch firmware onto EVERY active chip, not just the caller's, so a
+//       tensor on another stage's chip is just as much at risk. This is blaze's multi-stage layout
+//       (pipeline_builder/submesh_partition.py).
+// EXPECT: refused, naming B's chip and not A's.
+TEST_F(DispatchContextFixture, ResidentOnSiblingSubmeshRefused) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+    if (mesh->num_devices() < 2) {
+        GTEST_SKIP() << "This test needs at least two devices.";
+    }
+    auto siblings = mesh->create_submeshes(MeshShape(1, 1));
+    ASSERT_GE(siblings.size(), 2u);
+    auto& session_mesh = siblings[0];
+    auto& resident_mesh = siblings[1];
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = two_dispatch_core_sharding_args(page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, resident_mesh.get());
+
+    const std::string error = capture_default_fd_refusal(session_mesh.get());
+    ASSERT_FALSE(error.empty()) << "a resident owned by a sibling submesh was not seen";
+    const ChipId resident_chip = resident_mesh->get_devices()[0]->id();
+    const ChipId session_chip = session_mesh->get_devices()[0]->id();
+    EXPECT_NE(error.find("chip " + std::to_string(resident_chip) + " "), std::string::npos) << error;
+    EXPECT_EQ(error.find("chip " + std::to_string(session_chip) + " "), std::string::npos)
+        << "the session's own chip holds nothing but was reported:\n"
+        << error;
+}
+
+// WHAT: a submesh of a submesh (root -> 2-chip middle -> 1-chip leaf). Tensor on the leaf, session from
+//       the root.
+// WHY:  the pipeline builder (pipeline_builder/fork.py) creates nested submeshes, so the guard's walk
+//       must recurse all the way down.
+// EXPECT: refused, naming the leaf's chip.
+TEST_F(DispatchContextFixture, ResidentOnNestedSubmeshRefused) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+    if (mesh->num_devices() < 2) {
+        GTEST_SKIP() << "This test needs at least two devices.";
+    }
+    const MeshShape middle_shape = mesh->num_cols() >= 2 ? MeshShape(1, 2) : MeshShape(2, 1);
+    auto middle = mesh->create_submesh(middle_shape);
+    auto leaf = middle->create_submesh(MeshShape(1, 1));
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = two_dispatch_core_sharding_args(page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, leaf.get());
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "a resident owned by a submesh-of-a-submesh was not seen from a root session";
+    const ChipId leaf_chip = leaf->get_devices()[0]->id();
+    EXPECT_NE(error.find("chip " + std::to_string(leaf_chip) + " "), std::string::npos) << error;
+}
+
+// WHAT: an arena region on the PREFETCH core (12,0), booked in the CHIP's allocator rather than the
+//       mesh's. (The existing arena test covers the mesh allocator and the dispatcher core (12,1).)
+// WHY:  arena regions are not Buffer objects. A buffer-walk implementation that forgets to also read the
+//       arena would let this through. Checks the role and chip in the message, not the ledger wording,
+//       so the test is fair to both designs.
+// EXPECT: refused with a [prefetch] line for chip 0 and no [dispatch] line.
+TEST_F(DispatchContextFixture, ChipArenaResidentOnPrefetchCoreRefused) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    IDevice* device = mesh->get_devices()[0];
+    auto& arena = device->allocator_impl()->persistent_l1();
+    const auto allocation = arena.allocate(CoreRangeSet(CoreRange({12, 0})), /*size=*/4096, /*alignment=*/64);
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    arena.deallocate(allocation.id);
+    ASSERT_FALSE(error.empty()) << "a chip-arena resident on the prefetch core was not refused";
+    EXPECT_NE(error.find("chip " + std::to_string(device->id()) + " core (12,0) [prefetch]"), std::string::npos)
+        << error;
+    EXPECT_EQ(error.find("[dispatch]"), std::string::npos) << "nothing was planted on (12,1):\n" << error;
+}
+
+// WHAT: a tensor sharded the "ND" way (BufferDistributionSpec) with one page on (12,0) and one on
+//       (12,1), at the bottom of L1.
+// WHY:  ND-sharded buffers have no classic shard spec; their core list lives in
+//       buffer_distribution_spec(). A buffer walk that only looks at shard_spec() would miss this
+//       shape (or crash on it). The address check does not care how the buffer is described. Both
+//       designs must refuse.
+// EXPECT: refused. Then a forced session must actually overwrite the page on (12,1), proving the
+//       refusal protected real data. Written and read back raw, so the ND read path is not involved.
+TEST_F(DispatchContextFixture, NdShardedResidentWithDataOnDispatchCoresRefused) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    const CoreRangeSet dispatch_pair(CoreRange({12, 0}, {12, 1}));
+    BufferDistributionSpec nd_spec(Shape({2, 1}), Shape({1, 1}), dispatch_pair, ShardOrientation::ROW_MAJOR);
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(nd_spec),
+        .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "an ND-sharded resident with shards on both dispatch cores was not refused";
+    EXPECT_NE(error.find("[prefetch]"), std::string::npos);
+    EXPECT_NE(error.find("[dispatch]"), std::string::npos);
+
+    // Ground truth: the page at the resident's address on (12,1) of chip 0 really is inside the footprint.
+    IDevice* device = mesh->get_devices()[0];
+    std::vector<uint32_t> pattern(page_size / sizeof(uint32_t));
+    std::iota(pattern.begin(), pattern.end(), 0x20190400);
+    ::tt::tt_metal::detail::WriteToDeviceL1(
+        device, CoreCoord(12, 1), static_cast<uint32_t>(resident->address()), pattern);
+    run_forced_session_with_traffic(mesh.get(), /*write_only=*/false);
+    const ChangedRange changed = raw_l1_diff(device, CoreCoord(12, 1), resident->address(), pattern);
+    EXPECT_TRUE(changed.any) << "the forced session left the ND-sharded page on (12,1) untouched; the refusal "
+                                "above would be conservative rather than protective";
+}
+
+// WHAT: open the mesh with TWO command queues instead of one. The second queue gets its own prefetcher
+//       and dispatcher, expected on (12,2)/(12,3). Reserve arena regions there.
+// WHY:  the guard must ask the dispatch core manager which cores are in use for EVERY queue instead of
+//       assuming (12,0)/(12,1). ArenaResidentOnColumn12NonDispatchCoresIsAllowed shows the same cores
+//       are fine with one queue.
+// EXPECT: refused, naming (12,2) [prefetch] and (12,3) [dispatch]. Skips if a two-queue slow-dispatch
+//       mesh cannot be opened here; that has never been tried on silicon before this test.
+// TODO: this test can probably get removed, I think there's always only 1 queue
+TEST_F(DispatchContextFixture, TwoCqSessionChecksSecondDispatchPair) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    std::shared_ptr<MeshDevice> mesh;
+    try {
+        mesh = MeshDevice::create(
+            MeshDeviceConfig(system_shape), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/2);
+    } catch (const std::exception& exception) {
+        GTEST_SKIP() << "Could not open a two-CQ slow-dispatch mesh here: " << exception.what();
+    }
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+    ASSERT_EQ(mesh->num_hw_cqs(), 2);
+
+    auto& arena = mesh->allocator_impl()->persistent_l1();
+    const auto allocation = arena.allocate(
+        CoreRangeSet(std::vector<CoreRange>{CoreRange({12, 2}), CoreRange({12, 3})}), /*size=*/4096, /*alignment=*/64);
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    arena.deallocate(allocation.id);
+    ASSERT_FALSE(error.empty()) << "arena residents on the second command queue's dispatch cores were not refused";
+    EXPECT_NE(error.find("core (12,2) [prefetch]"), std::string::npos) << error;
+    EXPECT_NE(error.find("core (12,3) [dispatch]"), std::string::npos) << error;
+}
+
+// WHAT: two ways to put bytes in L1 WITHOUT telling the allocator: (a) a buffer created at a fixed
+//       address, (b) a raw write (WriteToDeviceL1). Do both on the dispatch cores, plus the raw write on
+//       (12,5) as a control. Then run the session with default options.
+// WHY:  this is the honest limit of any allocator-based guard, whichever design: it can only see what
+//       went through the allocator. Blaze does neither of these today, but both exist in tt-metal.
+//       Writing the limit down as a test means we notice if it ever changes.
+// EXPECT: NOT refused (the guard is blind), the bytes inside the window on (12,0)/(12,1) are destroyed,
+//       (12,5) is untouched, and nothing above the guard's window ends was written. The test prints the
+//       measured footprint per core, so the window numbers are checked on real hardware every run.
+TEST_F(DispatchContextFixture, LedgerGuardIsBlindToFixedAddressAndRawWrites) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    IDevice* device = mesh->get_devices()[0];
+    const DeviceAddr base = allocator_l1_base(mesh.get());
+    const FdWindowEnds ends = fd_window_ends_cq0();
+    const DeviceAddr l1_top = mesh->l1_size_per_core();
+    ASSERT_LT(base, ends.dispatch);
+    ASSERT_LE(std::max(ends.prefetch_full, ends.dispatch), l1_top);
+
+    // (a) A fixed-address MeshBuffer on (12,1) at the base appears in no ledger.
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig fixed_cfg{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = one_page_per_core_sharding_args(CoreRangeSet(CoreRange({12, 1})), page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig fixed_global{.size = page_size};
+    auto fixed = MeshBuffer::create(fixed_global, fixed_cfg, mesh.get(), /*address=*/base);
+    ASSERT_NE(fixed, nullptr);
+    {
+        const auto& mesh_allocator = *mesh->allocator_impl();
+        const auto& chip_allocator = *device->allocator_impl();
+        const uint32_t mesh_bank =
+            mesh_allocator.get_bank_ids_from_logical_core(BufferType::L1, CoreCoord(12, 1)).at(0);
+        const uint32_t chip_bank =
+            chip_allocator.get_bank_ids_from_logical_core(BufferType::L1, CoreCoord(12, 1)).at(0);
+        const auto mesh_lowest = mesh_allocator.get_lowest_occupied_l1_address(mesh_bank);
+        const auto chip_lowest = chip_allocator.get_lowest_occupied_l1_address(chip_bank);
+        EXPECT_TRUE(!mesh_lowest.has_value() || *mesh_lowest > base)
+            << "the fixed-address buffer is visible in the mesh ledger; this blind spot closed, update the test";
+        EXPECT_TRUE(!chip_lowest.has_value() || *chip_lowest > base)
+            << "the fixed-address buffer is visible in the chip ledger; this blind spot closed, update the test";
+    }
+
+    // (b) Raw-write a counter pattern from the base to just past the highest window end on both dispatch
+    //     cores and on a control core of the same column.
+    const DeviceAddr span_end = std::min<DeviceAddr>(std::max(ends.prefetch_full, ends.dispatch) + 0x10000, l1_top);
+    std::vector<uint32_t> pattern(static_cast<size_t>((span_end - base) / sizeof(uint32_t)));
+    std::iota(pattern.begin(), pattern.end(), 0x5A000000);
+    const CoreCoord prefetch_core(12, 0);
+    const CoreCoord dispatch_core(12, 1);
+    const CoreCoord control_core(12, 5);
+    for (const CoreCoord& core : {prefetch_core, dispatch_core, control_core}) {
+        ::tt::tt_metal::detail::WriteToDeviceL1(device, core, static_cast<uint32_t>(base), pattern);
+    }
+
+    // (c) The default session is NOT refused: none of the above is in a ledger.
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
+    {
+        constexpr uint32_t traffic_pages = 512;
+        DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+        ReplicatedBufferConfig dram_global{.size = traffic_pages * page_size};
+        std::vector<uint32_t> payload(traffic_pages * page_size / sizeof(uint32_t));
+        std::iota(payload.begin(), payload.end(), 1);
+        auto traffic = MeshBuffer::create(dram_global, dram, mesh.get());
+        EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), traffic, payload);
+        Finish(mesh->mesh_command_queue());
+    }
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+
+    // (d) Footprint map: what the firmware actually wrote, against the ends the guard uses.
+    const ChangedRange on_prefetch = raw_l1_diff(device, prefetch_core, base, pattern);
+    const ChangedRange on_dispatch = raw_l1_diff(device, dispatch_core, base, pattern);
+    const ChangedRange on_control = raw_l1_diff(device, control_core, base, pattern);
+    print_changed_range("(12,0) prefetch", on_prefetch, ends.prefetch_full);
+    print_changed_range("(12,1) dispatch", on_dispatch, ends.dispatch);
+    print_changed_range("(12,5) control", on_control, 0);
+
+    EXPECT_FALSE(on_control.any) << "the session changed L1 on (12,5), a core it should never touch";
+    EXPECT_TRUE(on_dispatch.any)
+        << "(12,1) untouched: the dispatcher did not write its queues; the footprint model is wrong";
+    EXPECT_TRUE(on_prefetch.any) << "(12,0) untouched under 2 MB of traffic; the prefetcher window may be a no-op here";
+    if (on_dispatch.any) {
+        EXPECT_LT(on_dispatch.lo, ends.dispatch) << "bytes destroyed on (12,1) were not inside the guard's window";
+        EXPECT_LE(on_dispatch.hi, ends.dispatch) << "the firmware wrote ABOVE the dispatcher window end the guard uses";
+    }
+    if (on_prefetch.any) {
+        EXPECT_LE(on_prefetch.hi, ends.prefetch_full)
+            << "the firmware wrote ABOVE the prefetcher window end the guard uses";
+    }
+}
+
+// WHAT: a tensor WITH data on (12,0)/(12,1), but at the top of L1, above the window. Force the session
+//       and check it survives.
+// WHY:  this is the fact the design choice hinges on. The address check allows this tensor (DSv3/K2.6
+//       weights and the blaze canary's 46-row victim live here, measured intact on Sep 16); the buffer
+//       walk would refuse it as a matter of policy. The verdict is not asserted here, only the physical
+//       fact, so the test holds under either design.
+// EXPECT: intact after a forced session with traffic.
+TEST_F(DispatchContextFixture, ResidentAboveWindowOnDispatchCoresSurvivesForcedSession) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    const FdWindowEnds ends = fd_window_ends_cq0();
+    auto resident = plant_one_page_per_core(
+        mesh.get(), CoreRangeSet(CoreRange({12, 0}, {12, 1})), /*bottom_up=*/false, /*per_core=*/false, 0x20190500);
+    ASSERT_GE(resident.buffer->address(), std::max(ends.prefetch_full, ends.dispatch))
+        << "top-down placement landed inside the window; L1 is not empty enough for this test";
+
+    run_forced_session_with_traffic(mesh.get(), /*write_only=*/false);
+    expect_resident_intact(mesh.get(), resident, "resident above the window on (12,0)/(12,1)");
+}
+
+// WHAT: a per-core tensor on (12,0) whose lowest byte sits just inside the prefetcher's ring-buffer
+//       band: above the part that host->device writes use, below the top of the part that only reads
+//       and program launches use.
+// WHY:  blaze passes write_only=True and relies on that band never being written during an upload.
+//       Two checks: (1) with the default write_only=false the tensor is inside the full window and both
+//       designs must refuse; (2) a forced write-only session with traffic must leave it intact. The
+//       write_only=true VERDICT (address check allows, buffer walk refuses) is on purpose not tested.
+// EXPECT: refused with default options ([prefetch] only); intact after the forced write-only session.
+//       Needs HYBRID=1.
+TEST_F(DispatchContextFixture, WriteOnlySessionLeavesPrefetchRingbufferBandIntact) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "Per-core L1 allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    const FdWindowEnds ends = fd_window_ends_cq0();
+    ASSERT_LT(ends.prefetch_write_only, ends.prefetch_full) << "no ring-buffer band on this configuration";
+    constexpr uint32_t page_size = 4096;
+    const DeviceAddr l1_top = mesh->l1_size_per_core();
+    // First page boundary at least one page inside the band; top-down placement lands the buffer there.
+    const DeviceAddr start = (ends.prefetch_write_only + 2 * page_size - 1) / page_size * page_size;
+    ASSERT_LT(start, ends.prefetch_full);
+    const uint32_t per_core_size = static_cast<uint32_t>(l1_top - start);
+    ASSERT_EQ(per_core_size % page_size, 0u);
+
+    CoreRangeSet prefetch_only(CoreRange({12, 0}));
+    ShardSpecBuffer shard_spec(
+        prefetch_only,
+        /*shard_shape=*/{per_core_size, 1},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{page_size, 1},
+        /*tensor2d_shape_in_pages=*/{per_core_size / page_size, 1});
+    auto sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    DeviceLocalBufferConfig band_l1{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = sharding_args, .bottom_up = false};
+    ReplicatedBufferConfig band_global{.size = per_core_size};
+    auto resident = MeshBuffer::create(band_global, band_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+    {
+        // Premise: the resident's lowest byte is where we meant it (top-down on an otherwise empty bank).
+        const auto& chip_allocator = *mesh->get_devices()[0]->allocator_impl();
+        const uint32_t bank = chip_allocator.get_bank_ids_from_logical_core(BufferType::L1, CoreCoord(12, 0)).at(0);
+        const auto lowest = chip_allocator.get_lowest_occupied_l1_address(bank);
+        ASSERT_TRUE(lowest.has_value());
+        ASSERT_EQ(*lowest, start) << "the resident did not land at the intended band start";
+    }
+    std::vector<uint32_t> pattern(per_core_size / sizeof(uint32_t));
+    std::iota(pattern.begin(), pattern.end(), 0x20190600);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident, pattern);
+    Finish(mesh->mesh_command_queue());
+
+    // (1) Full-window session: invariant refuse, prefetch role only.
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "a resident inside the ring-buffer band was not refused with write_only=false";
+    EXPECT_NE(error.find("[prefetch]"), std::string::npos) << error;
+    EXPECT_EQ(error.find("[dispatch]"), std::string::npos) << "nothing was planted on (12,1):\n" << error;
+
+    // (2) Ground truth: write-only traffic does not reach the band.
+    run_forced_session_with_traffic(mesh.get(), /*write_only=*/true);
+    for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+        std::vector<uint32_t> dst;
+        ReadShard(mesh->mesh_command_queue(), dst, resident, coord);
+        EXPECT_EQ(dst, pattern) << "a write-only session wrote into the ring-buffer band on (12,0) at " << coord
+                                << "; blaze's write_only=True is not safe";
+    }
+}
+
+// WHAT: open a single chip as a "unit mesh" (what ttnn.CreateDevice does) and start a session from it,
+//       with nothing planted.
+// WHY:  measured on Sep 16 (fd_guard_run_20260916_024735/08_service_core_regression.log): today the
+//       guard throws "SubDeviceManagerTracker is not initialized" here, which broke three upstream
+//       ServiceCore tests. The parent mesh that create_unit_meshes builds is never initialized, so it
+//       has no allocator; the guard must skip it instead of asking it questions, while still walking
+//       its initialized unit submeshes.
+// EXPECT: no exception. This test FAILS until that one-line guard fix lands.
+TEST_F(DispatchContextFixture, UnitMeshSessionDoesNotThrowTrackerError) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const auto chip_ids = MetalContext::instance().get_cluster().all_chip_ids();
+    ASSERT_FALSE(chip_ids.empty());
+    std::map<int, std::shared_ptr<MeshDevice>> unit_meshes;
+    try {
+        unit_meshes = MeshDevice::create_unit_meshes(std::vector<int>{static_cast<int>(*chip_ids.begin())});
+    } catch (const std::exception& exception) {
+        GTEST_SKIP() << "Could not open a unit mesh here: " << exception.what();
+    }
+    ASSERT_EQ(unit_meshes.size(), 1u);
+    std::shared_ptr<MeshDevice> unit = unit_meshes.begin()->second;
+    ASSERT_NE(unit->get_parent_mesh(), nullptr);
+    // Documents the cause: the parent view exists and has local devices, but was never initialized.
+    EXPECT_FALSE(unit->get_parent_mesh()->is_initialized());
+    EXPECT_FALSE(unit->get_parent_mesh()->get_view().get_devices().empty());
+
+    std::string error;
+    try {
+        experimental::DispatchContext::get().initialize_fast_dispatch(unit.get());
+    } catch (const std::runtime_error& exception) {
+        error = exception.what();
+    }
+    if (error.empty()) {
+        experimental::DispatchContext::get().terminate_fast_dispatch(unit.get());
+    }
+    EXPECT_TRUE(error.empty()) << "fast-dispatch setup from a unit mesh threw:\n" << error;
 }
 
 TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {

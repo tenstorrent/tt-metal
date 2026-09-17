@@ -132,6 +132,9 @@ std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts
     std::function<void(distributed::MeshDevice*)> collect_views = [&](distributed::MeshDevice* mesh) {
         // A remote-only view (including one not yet fully initialized) has no
         // local devices, SubDeviceManagerTracker, or allocator on this host.
+        if (mesh->is_initialized() && !mesh->get_view().get_devices().empty()) {
+            mesh_views.push_back(mesh);
+        }
         if (!mesh->get_view().get_devices().empty()) {
             mesh_views.push_back(mesh);
         }
@@ -207,6 +210,16 @@ std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts
         }
     }
     return conflicts;
+
+    // Walk the actual allocated tensor objects:
+    // for (Buffer* buf : alloc.get_allocated_buffers()) {
+    //     if (buf->buffer_type() != BufferType::L1) continue;
+
+    //     // Check the tensor's actual physical shard grid:
+    //     if (buf->shard_spec().grid().contains(core)) {
+    //         throw std::runtime_error("Physical conflict on dispatch core!");
+    //     }
+    // }
 }
 
 std::string DispatchContext::format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) const {
