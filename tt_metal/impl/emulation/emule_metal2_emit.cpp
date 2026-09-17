@@ -52,6 +52,29 @@ Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel)
     return s;
 }
 
+Metal2BindingsSnapshot snapshot_from_bindings(const tt_emule::Bindings& b) {
+    Metal2BindingsSnapshot s;
+    s.is_metal2 = b.is_metal2;
+    s.runtime_arg_names = b.rta_names;
+    s.common_runtime_arg_names = b.crta_names;
+    for (const auto& d : b.dfb) {
+        s.dfb_accessors[d.name] = d.dfb_id;
+        s.dfb_accessor_is_relay[d.name] = d.is_relay;
+        s.dfb_accessor_prefetcher_pipe_id[d.name] = d.prefetcher_pipe;
+    }
+    for (const auto& sm : b.sem) {
+        s.sem_accessors[sm.name] = {
+            sm.sem_id, static_cast<SemScope>(static_cast<uint8_t>(sm.scope)), sm.total_binder_harts};
+    }
+    for (const auto& t : b.tensor) {
+        s.ta_accessors.push_back({t.name, t.cta_offset, t.addr_crta_offset});
+    }
+    for (const auto& sp : b.scratch) {
+        s.scratch_accessors.push_back({sp.name, sp.size_bytes, sp.addr_crta_word});
+    }
+    return s;
+}
+
 void emit_metal2_namespaces(
     std::ostream& f,
     const Metal2BindingsSnapshot& s,

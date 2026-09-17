@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "impl/kernels/kernel.hpp"  // Kernel, SemScope, SemaphoreBindingHandle, SemBindingEntry, emit_semaphore_binding_tokens
+#include "emule_program_descriptor.hpp"  // tt_emule::Bindings
 
 namespace tt::tt_metal::emule {
 
@@ -80,6 +81,10 @@ struct Metal2BindingsSnapshot {
 };
 
 Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel);
+
+// Stage 2b consumer path: build the same snapshot from the marshalled POD bindings,
+// reading no private tt-metal Kernel. Equivalent to build_metal2_snapshot.
+Metal2BindingsSnapshot snapshot_from_bindings(const tt_emule::Bindings& b);
 
 // Emits args::/dfb::/sem::/tensor:: namespaces into the JIT wrapper, replacing
 // kernel_args_generated.h + kernel_bindings_generated.h that upstream's JIT

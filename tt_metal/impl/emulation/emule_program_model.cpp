@@ -133,7 +133,15 @@ void collect_kernels(
 
             // Metal 2.0 bindings — same across this Kernel's TRISC variants, so
             // capture the cache-key suffix once and append it to every variant key.
-            Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
+            Metal2BindingsSnapshot bindings = snapshot_from_bindings(kd.bindings);
+            {  // STAGE 2b diff-guard: POD-built snapshot vs the private-read build
+                Metal2BindingsSnapshot _priv_b = build_metal2_snapshot(*kernel);
+                TT_FATAL(
+                    bindings.cache_key_suffix() == _priv_b.cache_key_suffix() &&
+                        bindings.is_metal2 == _priv_b.is_metal2,
+                    "emule descriptor diff-guard: metal2 bindings mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
             for (const auto& [sem_name, h] : bindings.sem_accessors) {
                 TT_FATAL(
                     h.scope != SemScope::DM_LOCAL_CACHED,
