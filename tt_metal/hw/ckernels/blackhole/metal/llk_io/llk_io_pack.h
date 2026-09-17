@@ -12,7 +12,6 @@
 #include "stream_io_map.h"
 #include "llk_assert.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/synchronization_event_profiler.hpp"
 
 using namespace ckernel;
 
