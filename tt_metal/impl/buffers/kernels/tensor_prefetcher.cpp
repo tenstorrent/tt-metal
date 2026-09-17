@@ -367,28 +367,18 @@ void kernel_main() {
         const uint32_t num_receivers =
             is_pipe ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(target_state_addr)[REMOTE_DFB_CFG_NUM_RECEIVERS]
                     : state->num_receivers;
-        // Bank-local slab index of this sender's first receiver. When two DRISC cores
-        // split a bank's receivers, the second core's local receiver r maps to bank-local
-        // slab (recv_index_base + r). 0 for a single sender. Receiver-contiguous only.
-        const uint32_t recv_index_base = req->prefetch.recv_index_base;
-        // Each layout slot in the page is the geometry struct immediately followed by this target's
-        // per-sender streaming rotation table, sized for the largest sender (max_num_receivers) so
-        // the slot stride is uniform across senders. Recover that stride to index the slot table.
-        const uint32_t layout_stride =
-            sizeof(TensorPrefetcherTensorLayout) + req->prefetch.max_num_receivers * sizeof(uint32_t);
-
-        // Entries follow the header (grow forward); the deduplicated layout table grows
-        // backward from the end of the payload, so layout slot i lives at read_ptr +
-        // kRequestPageBytes - (i+1)*layout_stride. See tensor_prefetcher_request.hpp.
+        // Entries follow the header (grow forward); the deduplicated layout slots grow backward
+        // from the end of the payload, and each entry names its own slot by byte offset from the
+        // page start -- so how the host packed the slots stays host business. See
+        // tensor_prefetcher_request.hpp.
         volatile tt_l1_ptr TensorPrefetcherEntry* entries = reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherEntry*>(
             socket.read_ptr + sizeof(TensorPrefetcherRequestHeader));
-        const uint32_t layout_table_end = socket.read_ptr + kRequestPageBytes;
 
         for (uint32_t e = 0; e < req_num_entries; ++e) {
             const uint32_t tensor_base = entries[e].bank_local_base;
             volatile tt_l1_ptr TensorPrefetcherTensorLayout* g =
                 reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherTensorLayout*>(
-                    layout_table_end - (entries[e].layout_index + 1) * layout_stride);
+                    socket.read_ptr + entries[e].layout_offset);
             const uint32_t t_num_sub = g->num_sub;
             const uint32_t t_M = g->M;
             const uint32_t t_rows_per_sub = g->rows_per_sub;
@@ -402,6 +392,11 @@ void kernel_main() {
             const uint32_t t_target_per_visit = g->target_per_visit_pages;
             const uint32_t t_recv_stride = g->recv_stride_bytes;
             const uint32_t t_block_count = g->block_count;
+            // Bank-local slab index of this sender's first receiver. When two DRISC cores split a
+            // bank's receivers, the second core's local receiver r maps to bank-local slab
+            // (recv_index_base + r). 0 for a single sender. Receiver-contiguous only. Per-sender
+            // rather than per-tensor, but it is patched into every slot of this sender's page.
+            const uint32_t recv_index_base = g->recv_index_base;
             // Streaming (receiver-contiguous only) is a per-tensor layout attribute: deliver
             // this tensor's blocks in ring-rotated order so the matmul can consume them FIFO.
             const bool streaming = g->streaming != 0;

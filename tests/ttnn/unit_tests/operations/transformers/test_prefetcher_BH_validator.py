@@ -690,13 +690,19 @@ def test_validator_pipe_multi_set_switching(device, K, N, dtype, recv_per_bank):
         _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_size)
 
 
-def test_validator_pipe_mixed_num_receivers(device):
+@pytest.mark.parametrize("dual_senders", [False, True], ids=["single_sender", "dual_senders"])
+def test_validator_pipe_mixed_num_receivers(device, dual_senders):
     """Two pipe sets with DIFFERENT receiver counts share one prefetcher.
 
     A sender reads num_receivers out of the config page each request names, so a request against
     the three-receiver set must not walk the two-receiver set's NOC XY table, or vice versa. Sizes
     are derived from the bank count so both sets work whatever the part's DRAM harvest. The pipe
     twin of test_validator_dram_sender_mixed_num_receivers.
+
+    With dual senders the two sets also split their banks differently -- 1/1 against 2/1 -- so a
+    bank's trailing sender holds a different bank-local slab base in each set. Those bases travel
+    on the pipes, and each request stamps the ones belonging to the set it names, so the same
+    DRISC core serving both sets in turn must pick up a different base each time.
     """
     K, dtype = 448, ttnn.bfloat8_b
     num_dram_banks = device.dram_grid_size().x
@@ -705,9 +711,11 @@ def test_validator_pipe_mixed_num_receivers(device):
     # transport takes receiver-contiguous only). N covers 6 = lcm(2, 3) receivers per bank so both
     # ring sizes divide it.
     N = num_dram_banks * 6 * 2 * ttnn.TILE_SIZE
-    tt_weight_a, pipes_a, _push_a, ring_a = _setup_weight_and_pipes_recv_contig(device, K, N, dtype, recv_per_bank=2)
+    tt_weight_a, pipes_a, _push_a, ring_a = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank=2, dual_senders=dual_senders
+    )
     tt_weight_b, pipes_b, _push_b, ring_b = _setup_weight_and_pipes_recv_contig(
-        device, K, N, dtype, recv_per_bank=3, row_offset=_receiver_rows(num_dram_banks, 2)
+        device, K, N, dtype, recv_per_bank=3, row_offset=_receiver_rows(num_dram_banks, 2), dual_senders=dual_senders
     )
     with tensor_prefetcher_session(device):
         _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_a)
@@ -716,40 +724,47 @@ def test_validator_pipe_mixed_num_receivers(device):
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
-def test_pipe_list_order_is_enforced(device, K, N, dtype, recv_per_bank, expect_error):
-    """A delivery target is a list of pipes, so a caller can hand over one the factory never built.
+def test_pipe_list_order_is_not_semantic(device, K, N, dtype, recv_per_bank, expect_error):
+    """A pipe carries the bank-local slabs its sender owns, so the request list's order does not.
 
-    Order is not decoration: a pipe's position in the list is what assigns its sender a bank-local
-    slab base, derived by accumulating receiver counts within a run of one bank. Each list below
-    would silently deliver a tensor's blocks to the wrong receivers, so queueing has to reject it.
+    What the list must still be is the pipes of a single
+    create_prefetcher_pipes_for_tensor_prefetcher call, each appearing once. Every call numbers a
+    bank's slabs from 0, so two calls' pipes for one bank claim the same slabs however they are
+    ordered, and a repeated pipe delivers to a receiver twice.
     """
+    num_dram_banks = device.dram_grid_size().x
     tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, dual_senders=True
     )
     assert len(pipes) > len({p.sender_core().x for p in pipes}), "this case needs a bank with two senders"
+    # A second set on its own receiver rows, so its pipes clash with the first set's only over
+    # slabs -- their receivers are disjoint.
+    _tt_weight_b, pipes_b, _push_b, _ring_b = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, dual_senders=True, row_offset=_receiver_rows(num_dram_banks, recv_per_bank)
+    )
 
     def queue(pipe_list):
         ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipe_list)
 
     with tensor_prefetcher_session(device):
-        # Every bank appears twice, so its second run duplicates a bank already delivered to.
-        with expect_error(RuntimeError, "appear once"):
+        # Every pipe listed twice, so every receiver is delivered to twice.
+        with expect_error(RuntimeError, "disjoint receiver sets"):
             queue(pipes + pipes)
-        # Interleaved: each bank's two senders are split apart, so no bank's pipes are adjacent,
-        # and every bank opens a second run.
-        with expect_error(RuntimeError, "appear once"):
-            queue(pipes[::2] + pipes[1::2])
-        # One bank's senders swapped: the trailing pipe would take slab base 0.
+        # Each set's leading pipe for bank 0: disjoint receivers, but both own that bank's slabs
+        # from 0, so one DRISC sender would be told to deliver two sets into the same slabs.
+        with expect_error(RuntimeError, "disjoint bank-local"):
+            queue([pipes[0], pipes_b[0]])
+        # Interleaved: no bank's two pipes are adjacent any more. Each keeps its own slab base, so
+        # delivery is unchanged.
+        _queue_and_validate_pipes(device, tt_weight, pipes[::2] + pipes[1::2], ring_size)
+        # Bank 0's two senders swapped. Delivery follows the pipes' own bases, so it is unchanged;
+        # the validator derives its expectation from list position, so it takes the factory order.
         swapped = list(pipes)
         swapped[0], swapped[1] = swapped[1], swapped[0]
-        with expect_error(RuntimeError, "not in sender order"):
-            queue(swapped)
-        # A trailing sender cannot open a bank, even when no other pipe follows it in that bank.
-        with expect_error(RuntimeError, "not in sender order"):
-            queue(pipes[1:])
-        # Apply the same guard to later banks, not just the first pipe in the list.
-        with expect_error(RuntimeError, "not in sender order"):
-            queue(pipes[:2] + pipes[3:])
+        queue(swapped)
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device, tt_weight, num_layers=1, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
+        )
         # The list as the factory returned it still works, on the same prefetcher.
         _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
 
