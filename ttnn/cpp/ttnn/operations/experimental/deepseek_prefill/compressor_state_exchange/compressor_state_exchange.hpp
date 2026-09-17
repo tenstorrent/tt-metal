@@ -24,6 +24,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> compressor_state_exchange(
     uint32_t cluster_axis = 0,
     ::ttnn::ccl::Topology topology = ::ttnn::ccl::Topology::Linear);
 
+// Preserve active ranks' outgoing states and copy the last active rank's state
+// to every trailing rank whose local slab contains no valid tokens.
+ttnn::Tensor propagate_compressor_state(
+    const ttnn::Tensor& local_state,
+    uint32_t seq_len_actual,
+    uint32_t local_seq_len,
+    uint32_t cluster_axis = 0,
+    ::ttnn::ccl::Topology topology = ::ttnn::ccl::Topology::Linear);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::compressor_state_exchange
 
 namespace ttnn {

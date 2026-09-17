@@ -11,7 +11,7 @@ void kernel_main() {
     const uint32_t initial_addr = get_arg_val<uint32_t>(1);
     const uint32_t output_addr = get_arg_val<uint32_t>(2);
     const uint32_t output_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t rank = get_arg_val<uint32_t>(4);
+    const bool use_initial = get_arg_val<uint32_t>(4);
     const uint32_t source_offset = get_arg_val<uint32_t>(5);
 
     constexpr auto gathered_args = TensorAccessorArgs<0>();
@@ -27,7 +27,7 @@ void kernel_main() {
     scratch.reserve_back(1);
 
     for (uint32_t tile = 0; tile < output_tiles; ++tile) {
-        if (rank == 0) {
+        if (use_initial) {
             noc.async_read(initial, scratch, tile_bytes, {.page_id = tile}, {.offset_bytes = 0});
         } else {
             noc.async_read(gathered, scratch, tile_bytes, {.page_id = source_offset + tile}, {.offset_bytes = 0});

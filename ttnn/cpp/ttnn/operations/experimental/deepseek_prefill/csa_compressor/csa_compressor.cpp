@@ -33,7 +33,12 @@ std::tuple<Tensor, Tensor, Tensor> csa_compressor(
 
     auto result = ttnn::prim::csa_compress(
         kv, gate, position_bias, predecessor_kv, predecessor_score, seq_len_actual, first_token_position, cluster_axis);
-    return {result[0], result[1], result[2]};
+    const uint32_t local_seq_len = kv.logical_shape()[-2];
+    auto outgoing_kv = compressor_state_exchange::propagate_compressor_state(
+        result[1], seq_len_actual, local_seq_len, cluster_axis, topology);
+    auto outgoing_score = compressor_state_exchange::propagate_compressor_state(
+        result[2], seq_len_actual, local_seq_len, cluster_axis, topology);
+    return {result[0], outgoing_kv, outgoing_score};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::csa_compressor
