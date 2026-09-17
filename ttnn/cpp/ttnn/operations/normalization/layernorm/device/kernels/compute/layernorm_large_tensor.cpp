@@ -113,7 +113,6 @@ void kernel_main() {
     const DataflowBuffer dfb_x(dfb_x_id);
 #endif
 #else
-    constexpr auto dfb_x_id = dfb_in_id;
     DataflowBuffer& dfb_x = dfb_in;
 #endif
 
