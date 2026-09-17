@@ -19,7 +19,7 @@ from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VS
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.video import Audio, export_video_audio_yuv
-from .common import GALAXY_MESHES
+from .common import GALAXY_MESHES, MESH_4X8_RING
 from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, run_warm_generation, weights_dir
 
 NUM_INFERENCE_STEPS = 5
@@ -29,10 +29,22 @@ ASPECT_RATIO = (16, 9)
 DURATIONS_S = [5, 10, 15]
 VSA_SPARSITY = 0.9
 
+# 4x8's parameters carry no trace region -- only the quad's, for `trace_denoise` -- so the audio vocoder has
+# nowhere to capture into. Reserving costs address space rather than working DRAM, and this is the size
+# `test_audio_decode_squeeze.py` captures this same vocoder graph in.
+_MESH_4X8_TRACE = pytest.param(
+    MESH_4X8_RING.values[0],
+    {**MESH_4X8_RING.values[1], "trace_region_size": 1_200_000_000},
+    id=MESH_4X8_RING.id,
+)
+SERVING_MESHES = [_MESH_4X8_TRACE, *GALAXY_MESHES[1:]]
+
 
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
-@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES[:1], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), SERVING_MESHES[:1], indirect=["mesh_device", "device_params"]
+)
 def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
     lora_path = os.environ.get("MINIMAX_H3_LORA_PATH")
     if not lora_path:

@@ -145,10 +145,18 @@ _DEFAULT_AUDIO_PACK = "5:2,6:4"
 _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
 # Conv split mode of the audio decoder when the caller passes none ("full" = main's accurate default).
 _AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
+# Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
+# stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
+_AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
 # Dtype of the video VAE's tile blend when the caller passes none. "fp32" is the gated default; "bf16" keeps the
 # precision the decoder emits and halves the bytes through unpatchify, the gathers and the blend.
 _VAE_BLEND_DTYPE_ENV = "MINIMAX_H3_VAE_BLEND_DTYPE"
 _DEFAULT_VAE_BLEND_DTYPE = "fp32"
+
+
+def _audio_trace_enabled() -> bool:
+    """Explicit kwarg wins; else MINIMAX_H3_AUDIO_TRACE; else off."""
+    return os.environ.get(_AUDIO_TRACE_ENV, "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _vae_blend_dtype() -> str:
@@ -347,6 +355,7 @@ class MiniMaxH3Pipeline:
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
         vae_blend_dtype: str | None = None,
+        audio_trace: bool | None = None,
     ) -> None:
         # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
         # untouched; a MiniMaxH3VSAConfig selects the sparse path and runs the whole packed
@@ -405,6 +414,7 @@ class MiniMaxH3Pipeline:
                 f"audio_split_mode must be 'off', 'weight', 'act', 'full' or 'stack', got {audio_split_mode!r}"
             )
         self.audio_split_mode = audio_split_mode
+        self.audio_trace = _audio_trace_enabled() if audio_trace is None else bool(audio_trace)
         # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > default 8, then the
         # 8->4->1 fallback (32 opt-in); logged before decode.
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(audio_t_factor)
@@ -503,6 +513,7 @@ class MiniMaxH3Pipeline:
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
         vae_blend_dtype: str | None = None,
+        audio_trace: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -534,6 +545,7 @@ class MiniMaxH3Pipeline:
             lora_path=lora_path,
             lora_strength=lora_strength,
             audio_split_mode=audio_split_mode,
+            audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
             vae_output_type=vae_output_type,
             vae_stitch_exchange=vae_stitch_exchange,
@@ -1514,7 +1526,8 @@ class MiniMaxH3Pipeline:
                 resampler_split_mode=_audio_resampler_split_mode(),
             )
             logger.info(
-                f"Audio conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
+                f"Audio trace: {'on' if self.audio_trace else 'off'} ({_AUDIO_TRACE_ENV}); "
+                f"conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
                 f"({_AUDIO_PACK_ENV}); resampler split {decoder.resampler_split_mode or 'same'} "
                 f"({_AUDIO_RESAMPLER_SPLIT_ENV})"
             )
@@ -2039,6 +2052,9 @@ class MiniMaxH3Pipeline:
         A trace holds device buffers for the whole request and nothing else drops them. A no-op when
         nothing was traced.
         """
+        decoder = self._audio_decoder
+        if decoder is not None:
+            decoder.release_trace()
         transformer = self._transformer
         if transformer is None:
             return
@@ -2309,6 +2325,8 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents)
+        # The first call at a shape captures and every later one replays, so the warm-up generation
+        # pays the capture and the measured one does not. Each served length gets its own trace.
+        waveform = audio_decoder(latents, traced=self.audio_trace)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)
