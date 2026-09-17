@@ -803,6 +803,121 @@ def test_dispatch_fabric2d_tile_refusals(mesh_device, device_params, num_links):
             fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, subdevice_id=exact_sd)
 
 
+def _draw_into(fx, profile):
+    """Give a fixture one of the gate's own routing profiles, in place of its in-group draw.
+
+    The point of contrast with `_skew_the_ring`: that one idles half the ring to manufacture the
+    largest drift this geometry allows, which is not a distribution the gate produces. These are, and
+    they leave every stream with traffic from every origin -- which is what couples the ring, since a
+    reader cannot finish until its upstream has sent, and that upstream cannot send its relayed pages
+    until its own reader has drained.
+    """
+    share, hot_weight = ROUTING_PROFILES[profile]
+    fx.indices = _draw_indices(fx.G, fx.H, fx.seq_len_per_chip, fx.topk, fx.num_routed_experts, share, hot_weight)
+    fx.rebuild()
+    return fx
+
+
+def _skew_the_ring(fx):
+    """Rewrite a fixture's draw so half the ring is idle and the other half is saturated.
+
+    The forwarding region is reused at the same offsets every launch, and nothing back-pressures a
+    chip that is a launch ahead: it writes into its neighbour's region and bumps the arrival counter
+    whether or not that neighbour has consumed the previous launch. What bounds it is only how far
+    ahead a chip can get, and chips drift apart when they are given different amounts of work.
+
+    So the low half of the ring routes everything to its OWN experts -- no cable traffic, a launch
+    that is little more than the prologue -- while the high half routes everything to the chip
+    diametrically opposite, the longest path the schedule has. The idle half then runs ahead of the
+    busy half by as much as this geometry allows.
+    """
+    G, H, m = fx.G, fx.H, fx.H // 2
+    for g in range(G):
+        experts_on = {row: [e for e in range(fx.num_routed_experts) if int(fx.table[g, e]) == row] for row in range(H)}
+        for origin in range(H):
+            target = origin if origin < H // 2 else (origin + m) % H
+            picks = experts_on[target][: fx.topk]
+            assert len(picks) == fx.topk, f"row {target} hosts {len(picks)} experts, need {fx.topk}"
+            fx.indices[g, origin, :, :] = torch.tensor(picks, dtype=torch.int64)
+    fx.rebuild()
+    return fx
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-2link",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
+@pytest.mark.parametrize("sync_between", [True, False], ids=lambda s: "synced" if s else "overlapped")
+@pytest.mark.parametrize("draw", ["degenerate", "hottest"], ids=lambda d: d)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_region_reuse_under_skew(mesh_device, device_params, num_links, fanout, sync_between, draw):
+    """Does a chip running ahead overwrite forwarding pages its neighbour has not read yet?
+
+    The arrival counter is safe across launches now, but the REGION is not obviously so: it is reused
+    at the same offsets every launch, and a chip is free to start filling its neighbour's copy while
+    that neighbour is still draining the previous one. Nothing returns a credit upstream -- every
+    stream's fabric connection points downstream -- so the only thing standing between the two is how
+    far apart they drift.
+
+    Unlike the counter race this fails as WRONG BYTES rather than as a deadlock, which is what makes
+    it safe to provoke: an overwritten page is read and delivered, so the byte-exact gate catches it
+    and no board is left wedged.
+
+    The probe maximises drift rather than volume: `_skew_the_ring` idles half the ring and saturates
+    the other half, and the launches are queued with nothing between them so the gap compounds over
+    a run instead of being reset by a host sync every time. Each launch carries its own draw, because
+    an overwrite between two identical launches writes back the bytes that were already there.
+
+    A pass bounds the hazard at this geometry rather than disproving it. The model's regions are far
+    larger and its launches far longer, and the two move the window in opposite directions.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    launches = 24
+    # `degenerate` manufactures the largest drift the geometry allows and is not a distribution the gate
+    # produces; `hottest` is the most concentrated one it does. Whether the hazard needs the first is the
+    # whole question -- it decides if this is a constraint to document or a protocol to build.
+    if draw == "degenerate" and not sync_between:
+        # The one combination that does NOT hold, recorded rather than hidden: a chip given almost no
+        # work runs a whole launch ahead and refills a region its neighbour is still reading. Not
+        # strict, because it is a race -- it has reproduced every time so far, but a run that happened
+        # to stay in step would be a pass, not a reason to fail the suite.
+        pytest.xfail("region reuse under a drift no realistic draw produces; see the hottest arm")
+
+    prepare = _skew_the_ring if draw == "degenerate" else (lambda fx: _draw_into(fx, draw))
+    draws = [
+        prepare(_Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=40 + i))
+        for i in range(4)
+    ]
+    order = [draws[i % len(draws)] for i in range(launches)]
+
+    # The synced arm is the control, and it is the whole experiment: it runs the SAME draws through the
+    # SAME region in the same order, differing only in whether the launches may overlap. If it passes
+    # where the overlapped arm fails, the difference is the overlap and nothing else -- not a draw the
+    # reference disagrees with, not a capacity the fixture got wrong.
+    results = []
+    for fx in order:
+        results.append(fx.run(cfg.sp_axis, num_links, fanout=fanout))
+        if sync_between:
+            ttnn.synchronize_device(mesh_device)
+    arm = "synced" if sync_between else "overlapped"
+    for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
+        fx.check(payload, metadata, f"launch {i} of {launches}, {draw} draw, {arm}")
+    logger.info(
+        f"region reuse [{draw}/{arm}]: {launches} launches byte-exact "
+        f"({'multicast' if fanout else 'unicast'})"
+    )
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
