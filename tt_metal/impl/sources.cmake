@@ -171,24 +171,7 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         IMPL_SRC
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_deferred_mesh_dispatch.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_multi_rank_runtime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_descriptor_builder.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_diagnostics.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_tile_geometry.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_metal2_emit.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_device_map.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_noc_bridge.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fabric.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_kernel_defines.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_jit.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_program_model.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_cb_dfb_setup.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_engine.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
     )
 endif()
