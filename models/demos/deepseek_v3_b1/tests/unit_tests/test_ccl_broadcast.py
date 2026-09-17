@@ -29,6 +29,7 @@ ENV_MAX_PAYLOAD_SIZE = "CCL_BROADCAST_MAX_PAYLOAD_SIZE_BYTES"
 MAX_PAYLOAD_SIZE = get_env_int(ENV_MAX_PAYLOAD_SIZE, 15232)
 
 BCAST_CORE = ttnn.CoreCoord(10, 8)
+NUM_DEVICES = 8
 
 
 def _validate_broadcast_num_links(num_links: int) -> None:
@@ -88,6 +89,7 @@ def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration
     ],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast(
     bh_2d_mesh_device,
     mesh_rows,
@@ -206,6 +208,7 @@ def test_ccl_broadcast(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_loop(
     bh_2d_mesh_device,
     mesh_rows,
