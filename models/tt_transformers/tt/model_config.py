@@ -3184,6 +3184,12 @@ class ModelArgs:
         # runs on 32 of 110 cores. Viewing the block as 2 column chunks doubles the rows (and
         # cores) and halves the per-core chunk walk, with no data movement. 0 disables.
         self.sampling_topk_row_split = 2
+        # Precision path into the sampling top-k (a sort has no math fidelity of its own):
+        # the LM head wrote bf8_b logits that the sampler then upcast to bf16 with a separate
+        # full-width Typecast program every token. Emit bf16 from the LM head directly -- the
+        # matmul is weight-bandwidth bound, so the wider output write is free -- and the
+        # sampler's typecast becomes a no-op. Strictly more precise logits, never less.
+        self.lm_head_dtype = ttnn.bfloat16
 
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
