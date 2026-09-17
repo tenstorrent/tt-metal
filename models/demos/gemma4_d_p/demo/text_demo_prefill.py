@@ -5,7 +5,6 @@
 
 import functools
 import hashlib
-import json
 import os
 import pathlib
 import time
@@ -17,7 +16,8 @@ from safetensors.torch import load_file
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
-from models.demos.gemma4_d_p.demo.kv_pcc_report import KvPccRun, digest, select_reference_blocks
+from models.demos.gemma4_d_p.demo.kv_pcc_data import KvPccDataset
+from models.demos.gemma4_d_p.demo.kv_pcc_report import KvPccRun, digest
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
@@ -36,9 +36,6 @@ MODEL_DTYPE = ttnn.bfloat16
 GEMMA4_SLIDING_WINDOW_TOKENS = 1024
 PREFILL_CHUNK_SIZES = (4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
-KV_PCC_REFERENCE_DIR = pathlib.Path(
-    "/mnt/models/huggingface/gpu_traces/gemma4_d_p/google--gemma-4-31B-it/hf-gemma4-31b-36db66e9-262144tok"
-)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -215,7 +212,6 @@ def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, c
             # Sliding K/V have separate caches; global K/V share one packed cache.
             if full is None:
                 full = ttnn.to_torch(tensor, mesh_composer=composer).float()
-            scores = []
             for block_idx, block in enumerate(kv_streams[layer_idx]):
                 start, end = block["row_start"], min(block["row_end"], tokens.shape[-1])
                 path = ref_dir / block["path"]
@@ -252,12 +248,7 @@ def _measure_kv_pcc(model, mesh_device, ref_dir, kv_streams, metadata, tokens, c
                         "rel_l2": error,
                     }
                 )
-                scores.append(value)
                 logger.info(f"[kv_pcc] layer={layer_idx} {part} rows=[{start},{end}) pcc={value:.6f} relL2={error:.6f}")
-            logger.info(
-                f"[kv_pcc] layer={layer_idx} {part} mean={sum(scores) / len(scores):.6f} "
-                f"min={min(scores):.6f} max={max(scores):.6f}"
-            )
             if not packed:
                 full = None
         # Release the global packed readback before loading the next layer.
@@ -322,10 +313,12 @@ def test_prefill_long_context_traced(
 ):
     """Measure all prefill chunks using one replayed ring-attention trace.
 
-    Pass --kv-pcc to report per-layer K/V PCC and relative L2 instead of
-    performance, using the fixed GPU trace directory. Input token IDs must match the
-    reference prefix; index.json locates its blocks. Save JSON measurements and
-    fail when a block regresses beyond the approved baseline tolerances.
+    Pass --kv-pcc to report K/V PCC and relative L2 for each layer and reference
+    chunk instead of performance, using input.txt, GPU traces, and baseline.json
+    from one dataset.
+    Input token IDs must exactly match the GPU reference token IDs. If the reference
+    is longer than the requested context, compare against its first context_len tokens.
+    Save JSON measurements and fail when a block regresses beyond the approved baseline tolerances.
     """
 
     mesh_config = _mesh_config(mesh_device)
@@ -341,38 +334,6 @@ def test_prefill_long_context_traced(
     if context_len % chunk_size != 0:
         pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
 
-    kv_ref_dir = KV_PCC_REFERENCE_DIR if request.config.getoption("--kv-pcc") else None
-    kv_metadata = None
-    kv_run = None
-    if kv_ref_dir is not None:
-        for name in ("metadata.json", "index.json"):
-            path = kv_ref_dir / name
-            if not path.is_file():
-                raise FileNotFoundError(f"Missing GPU KV reference: {path}")
-        kv_metadata = json.loads((kv_ref_dir / "metadata.json").read_text())
-        index = json.loads((kv_ref_dir / "index.json").read_text())
-        assert context_len <= len(kv_metadata["token_ids"]), "KV reference is shorter than the requested context"
-        kv_streams = select_reference_blocks(index, kv_metadata["n_layers"], context_len)
-        for blocks in kv_streams:
-            for block in blocks:
-                path = kv_ref_dir / block["path"]
-                assert path.is_file(), f"Missing KV reference: {path}"
-        configuration = {
-            "model": _model_path(),
-            "mesh_shape": list(mesh_device.shape),
-            "chunk_size": chunk_size,
-            "context_len": context_len,
-            "token_source": token_source,
-            "token_ids_sha256": digest(kv_metadata["token_ids"][:context_len]),
-            "reference_metadata_sha256": digest(kv_metadata),
-            "reference_index_sha256": digest(index),
-            "layer_types": kv_metadata["layer_types"],
-            "cache_comparison": "global_effective_k_and_packed_v_sliding_reordered_k_v1",
-        }
-        kv_run = KvPccRun(
-            configuration, request.node.nodeid, baseline_path=request.config.getoption("--kv-pcc-baseline")
-        )
-
     model_path = _model_path()
     n_chunks = context_len // chunk_size
     model_args, model, kv_cache = _build_prefill_model(
@@ -382,14 +343,40 @@ def test_prefill_long_context_traced(
         context_len=context_len,
     )
 
-    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
-    if kv_metadata is not None:
-        assert kv_metadata["n_layers"] == len(model.layers), "KV reference layer count differs from model"
-        reference_tokens = torch.tensor(kv_metadata["token_ids"][:context_len], dtype=torch.int64).unsqueeze(0)
-        assert torch.equal(
-            tokens_all.to(torch.int64), reference_tokens
-        ), "GPU traces and the device model implementation must use the same input"
-        logger.info(f"[kv_pcc] Input tokens match {kv_ref_dir}; performance reporting disabled")
+    dataset = KvPccDataset(request.config.getoption("--kv-pcc-data")) if request.config.getoption("--kv-pcc") else None
+    kv_ref_dir = dataset.directory if dataset is not None else None
+    kv_metadata = None
+    kv_run = None
+    tokens_all = None
+    if dataset is not None:
+        if token_source != "text":
+            raise ValueError("--kv-pcc uses the selected dataset's input.txt; token_source must be text")
+        kv_metadata = dataset.metadata
+        index = dataset.index
+        kv_streams = dataset.reference_blocks(context_len)
+        configuration = {
+            "model": model_path,
+            "mesh_shape": list(mesh_device.shape),
+            "chunk_size": chunk_size,
+            "context_len": context_len,
+            "token_source": token_source,
+            "input_text_sha256": dataset.input_text_sha256,
+            "token_ids_sha256": digest(kv_metadata["token_ids"][:context_len]),
+            "reference_metadata_sha256": digest(kv_metadata),
+            "reference_index_sha256": digest(index),
+            "layer_types": kv_metadata["layer_types"],
+            "cache_comparison": "global_effective_k_and_packed_v_sliding_reordered_k_v1",
+        }
+        kv_run = KvPccRun(configuration, request.node.nodeid, baseline_path=dataset.baseline_path)
+        tokens_all = torch.tensor(
+            dataset.token_ids(model_path, context_len, model_n_layers=len(model.layers)),
+            dtype=torch.int32,
+        ).unsqueeze(0)
+        assert int(tokens_all.min()) >= 0 and int(tokens_all.max()) < model_args.vocab_size, "Input token outside vocab"
+        logger.info("[kv_pcc] Performance reporting disabled")
+
+    if tokens_all is None:
+        tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
     host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
