@@ -379,7 +379,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // L1-bound: the CB budget must hold num_passes resident Q chunks + state-FIFO entries. The
     // caller's program config is responsible for picking (q_chunk, k_chunk, segs) that fit; an
     // oversized combination fails CB allocation at program build.
-    constexpr uint32_t kMaxPasses = 3;
+    // Raised from 3 for SD3.5 (2 x 38 head instances on 10 rows -> 8 passes, segs_per_head = 1).
+    // The bound is L1 (resident Q chunk + state-FIFO entry per pass); the streamed-Q fallback
+    // below still applies when the resident set does not fit.
+    constexpr uint32_t kMaxPasses = 10;
     TT_FATAL(
         num_passes <= kMaxPasses,
         "Exp ring joint SDPA supports at most {} head-segments per core row. "
