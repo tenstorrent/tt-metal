@@ -449,3 +449,28 @@ def test_wh_t3k_decode_table_hits_only_12b_tp8():
     assert s31["o_proj_slide"] not in keys
     assert s31["o_proj_global"] not in keys
     assert s31["qkv_global"] not in keys
+
+
+def test_linear_pin_is_wormhole_only(monkeypatch):
+    """The dense Linear pin must not follow the model onto Blackhole.
+
+    It exists for one measured Wormhole fault (Ring's reduction order loops 31B
+    128k decode on a WH T3K). Blackhole ships Ring for n>=8 in main and was
+    never part of that evidence; leaving the pin ungated moved the P150x8 31B
+    vLLM job (max_model_len 262144) onto Linear for ~7% TTFT it need not pay.
+    MoE keeps Linear on every arch.
+    """
+    import ttnn as _ttnn
+    from models.demos.gemma4.tt import ccl as _ccl
+
+    linear = _ttnn.Topology.Linear
+
+    monkeypatch.setattr(_ccl, "is_blackhole", lambda: False)
+    assert _ccl.effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=131072) == linear
+    assert _ccl.effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=65536) is None
+
+    monkeypatch.setattr(_ccl, "is_blackhole", lambda: True)
+    assert _ccl.effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=131072) is None
+    assert _ccl.effective_pinned_ccl_topology(linear, is_moe=False, max_seq_len=262144) is None
+    # MoE is unaffected by the arch gate.
+    assert _ccl.effective_pinned_ccl_topology(linear, is_moe=True, max_seq_len=131072) == linear

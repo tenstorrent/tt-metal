@@ -147,13 +147,23 @@ LINEAR_PIN_MIN_SEQ_LEN = 128 * 1024
 
 
 def effective_pinned_ccl_topology(pinned, *, is_moe: bool, max_seq_len):
-    """Drop a dense-model Linear pin when ``max_seq_len`` is below 128k.
+    """Drop a dense-model Linear pin on Blackhole, or below 128k on Wormhole.
 
     ``pinned`` is a ``ttnn.Topology`` or ``None``. MoE keeps Linear at every
-    length. ``None`` lets ``CCLManager`` take the arch default.
+    length and on every arch. ``None`` lets ``CCLManager`` take the arch default.
+
+    The dense Linear pin exists for one measured Wormhole problem: Ring's
+    reduction order loops 31B's 128k decode on a WH T3K. Blackhole was never
+    part of that evidence -- it has 32 GB/ASIC and main ships Ring there for
+    n>=8 (its own sweep: Ring ~28.8s vs Linear ~31.0s TTFT at 31B/128k). Left
+    ungated, the pin silently moved the P150x8 31B vLLM job (max_model_len
+    262144) off Ring and onto Linear, costing ~7% for a fault it does not have.
+    Do not extend this pin to Blackhole without a Blackhole measurement.
     """
     if pinned != ttnn.Topology.Linear or is_moe:
         return pinned
+    if is_blackhole():
+        return None
     if max_seq_len is None or int(max_seq_len) >= LINEAR_PIN_MIN_SEQ_LEN:
         return pinned
     return None
