@@ -5,6 +5,9 @@
 #include <ranges>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -68,6 +71,29 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     };
 }
 
+// Lowest L1 address occupied by an allocator-managed buffer that actually lands on `cores`.
+//
+// MeshDevice::lowest_occupied_compute_l1_address() is the minimum across *every* bank, so a buffer
+// sharded onto cores the mux never touches drags it down just as hard as one sitting on a mux core.
+// Sizing the mux off that aggregate costs fabric buffering for collisions that cannot happen. The
+// mux only cares about its own cores, so ask about those: interleaved L1 buffers span every bank and
+// therefore always count, while a sharded buffer counts only if its grid meets `cores`.
+std::optional<tt::tt_metal::DeviceAddr> lowest_occupied_l1_on_cores(
+    const MeshDevice& mesh_device, const CoreRangeSet& cores) {
+    std::optional<tt::tt_metal::DeviceAddr> lowest;
+    for (const auto* buffer : mesh_device.allocator()->get_allocated_buffers()) {
+        if (buffer->buffer_type() != tt::tt_metal::BufferType::L1) {
+            continue;  // L1_SMALL is the top slice; it can never be the lowest occupied address.
+        }
+        if (buffer->has_shard_spec() && !buffer->shard_spec().grid().intersects(cores)) {
+            continue;
+        }
+        const tt::tt_metal::DeviceAddr address = buffer->address();
+        lowest = lowest.has_value() ? std::min<tt::tt_metal::DeviceAddr>(*lowest, address) : address;
+    }
+    return lowest;
+}
+
 tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
     const uint32_t num_full_size_channels,
     const uint32_t num_header_only_channels,
@@ -121,7 +147,8 @@ auto launch_mux_workers(
     const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
+    // Keyed on the mux's own cores, not the device-wide aggregate -- see lowest_occupied_l1_on_cores.
+    const auto occupied_l1_tensor_addr = lowest_occupied_l1_on_cores(mesh_device, mux_core_range_set);
 
     auto mux_kernel_config = get_fabric_mux_config(
         num_full_size_channels,
@@ -131,6 +158,21 @@ auto launch_mux_workers(
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address,
         occupied_l1_tensor_addr);
+
+    // TEMP PROBE #54864 -- remove before merge.
+    log_warning(
+        tt::LogOp,
+        "[54864][combine-mux] l1_unreserved_base=0x{:x} lowest_occupied_compute_l1=0x{:x} "
+        "mux_memory_map_end=0x{:x} mux_cores={}",
+        l1_unreserved_base_address,
+        occupied_l1_tensor_addr.value_or(0),
+        mux_kernel_config.get_memory_map_end_address(),
+        mux_core_range_set.str());
+    log_warning(
+        tt::LogOp,
+        "[54864][combine-mux] aggregate_lowest=0x{:x} mux_cores_lowest=0x{:x}",
+        mesh_device.lowest_occupied_compute_l1_address().value_or(0),
+        occupied_l1_tensor_addr.value_or(0));
 
     // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
     const uint32_t needed_cores = num_links * neighbors.size();

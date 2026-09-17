@@ -530,9 +530,21 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 0,
+            "l1_small_size": 0,
+        },
+        # #54864 probe: with l1_small_size > 0, reduce_scatter_minimal_direct parks its
+        # GlobalSemaphores in L1_SMALL (the *top* slice of L1) instead of falling back to
+        # BufferType::L1. The combine op's fabric mux carves its region out of raw L1 growing
+        # *up* from the allocator base, so L1_SMALL is structurally out of its reach. If the
+        # hang clears only in this arm, the mux is aliasing the writer_gen semaphore.
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 0,
+            "l1_small_size": 16384,
         },
     ],
-    ids=["fabric_1D_ring"],
+    ids=["fabric_1D_ring", "fabric_1D_ring_l1small"],
     indirect=True,
 )
 def test_optimized_moe_decode_block(
@@ -1079,6 +1091,12 @@ def test_optimized_moe_decode_block(
     tt_output_tensors = []
     if enable_trace:
         logger.info(f"Begin compiling op")
+        run_op(0)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
+        # #54864 experiment: second warmup so any program-cache miss caused by L1 occupancy
+        # changing during the first pass (reduce_scatter allocates its semaphores last) is
+        # serviced HERE, not inside trace capture where rebuilds hit
+        # "Reads are not supported during trace capture".
         run_op(0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info(f"Done compiling op")
