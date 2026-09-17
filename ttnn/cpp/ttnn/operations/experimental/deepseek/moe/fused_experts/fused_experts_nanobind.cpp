@@ -19,20 +19,22 @@ void bind_fused_experts(nb::module_& mod) {
         into a single device operation. Expert selection/scaling is derived on-device (no host-side
         expert-id list) from the router's own output: ``routing_indices`` (each token's selected
         expert ids) together with ``routing_scores`` (the unbiased score row those ids index), both
-        consumed unmodified in TILE layout. The op gathers each token's k scores, normalizes them to
+        consumed unmodified -- indices in TILE, scores in TILE or (decode, B == 1) ROW_MAJOR.
+        The op gathers each token's k scores, normalizes them to
         sum to 1, scales by ``routed_scaling_factor``, and derives the hit ids and per-token weights
         from that. This is the form the op uses internally, so a caller never has to widen the
         selection into an E-wide weight row -- a temporary built by a scatter + normalize + relayout
         chain purely for this op to scan it straight back down to k values.
 
-        Returns a [1, B, H] BFLOAT16 TILE tensor (the B token rows padded to a 32-row tile), where
+        Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE, or ROW_MAJOR when B == 1):
         act = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit), [gate, up] = x @ gate_up_w[hit_ids[i]],
         and output[b] = sum_i w[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]); hit_ids are the
         routing-selected experts in ascending order and w the normalized weights above. The gate_up
         weights must be DRAM ND-sharded so each shard is one core's [H, 128] slice (gate/up columns
         interleaved at tile granularity), and the down weights DRAM ND-sharded so each shard is one
         core's [I, H/64] slice — both read in a single NoC read. The SwiGLU activation is gathered
-        onto core {0,0} and broadcast to every core for the down matmul.
+        onto, and broadcast from, two hubs (the compute rectangle's opposite corners; core {0,0} is
+        always one of them) so the down matmul can read it on every core.
 
         Batching: the B tokens are the rows of dim -2 and share one 32-row tile, so a [1, B, S, H]
         activation must be folded into [1, 1, B*S, H] first. The expert ids are the deduplicated
@@ -48,12 +50,15 @@ void bind_fused_experts(nb::module_& mod) {
         once — at the cost of one gather/broadcast synchronization per block.
 
         Args:
-            input_tensor: Activations, [1, 1, B, H] with B <= 32 token rows.
+            input_tensor: Activations, [1, 1, B, H] with B <= 32 token rows. TILE, or ROW_MAJOR
+                when B == 1 (decode; loaded as 1x32 compute tiles, no tilize). The output uses the
+                same layout.
             routing_indices: Selected expert ids, [1, 1, B, top_k] TILE. Either uint16 (the index
                 output of ``ttnn.topk``, passed through unmodified) or bfloat16 (a ``ttnn.embedding``
                 gather from a frozen id table -- the only dtype that op gathers, and exact for
                 E <= 256).
-            routing_scores: Unbiased per-expert scores, [1, 1, B, E] (TILE bfloat16), the tensor
+            routing_scores: Unbiased per-expert scores, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR
+                when B == 1 (decode; LinearDecode stick, no tilize). The tensor
                 ``routing_indices`` indexes into. If the selection ranked by a bias-corrected copy,
                 pass the uncorrected scores here -- those are the ones that become weights.
             top_k: Ids per token row, at most 16. 0 (the default) reads it from ``routing_indices``.
@@ -71,6 +76,11 @@ void bind_fused_experts(nb::module_& mod) {
                 ``num_experts``, reproducing the single-block pipeline exactly. Because blocking
                 double-buffers the activation block so consecutive blocks pipeline, the largest
                 usable block is about half the largest usable single block.
+            two_hub_gather: Split the per-block activation gather + broadcast across two hubs, the
+                two opposite corners of the compute rectangle, each multicasting half the SwiGLU I
+                dim on its own NoC. Halves the gather ingress and the broadcast egress per hub; set
+                False for the original single-hub pipeline (one gather target, one multicast
+                sender). Defaults to True.
             memory_config: Optional output memory config.
         )doc",
         &ttnn::experimental::deepseek::moe::fused_experts,
@@ -87,6 +97,7 @@ void bind_fused_experts(nb::module_& mod) {
         nb::arg("routed_scaling_factor") = 1.0F,
         nb::arg("routing_eps") = 0.0F,
         nb::arg("experts_block_size") = 0,
+        nb::arg("two_hub_gather") = true,
         nb::arg("memory_config") = std::nullopt);
 }
 

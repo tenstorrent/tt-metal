@@ -297,14 +297,16 @@ def test_moe_real_weights_pcc(device, reset_seeds, moe_layer, batch_size: int, s
     }
     block = DeepSeekV4SparseMoeBlock(cfg, weights, device, experts=experts)
 
-    # The ttnn block takes [B, S, 1, H] (the reference's [B, S, H] with the tile row axis) and flattens
-    # the tokens internally; x_flat mirrors that so the router below sees exactly what it will.
+    # The block's token-batched decode path flattens dim 0 onto the token axis, so the
+    # prefill batch is handed over as one row per token; x_flat mirrors that so the router
+    # below sees exactly what it will.
     hidden_tt = ttnn.from_torch(hidden.unsqueeze(2), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    hidden_tt = ttnn.reshape(hidden_tt, [batch_size * seq_len, 1, 1, cfg.hidden_size])
     x_flat = ttnn.reshape(hidden_tt, [1, 1, flat.shape[0], cfg.hidden_size])
 
     # Drive the fp32 reference with the *device* router's routing so the PCC
     # compares expert / shared arithmetic on identical routing. The router still
-    # runs on device (here and again inside ``block.forward``, deterministically);
+    # runs on device (here and again inside ``block.decode_static``, deterministically);
     # bf16 top-k *selection* divergence vs fp32 is reported separately below
     # because it is an inherent dtype effect, not a port bug.
     #
@@ -315,7 +317,7 @@ def test_moe_real_weights_pcc(device, reset_seeds, moe_layer, batch_size: int, s
 
     reference = _torch_experts_and_shared(flat, dense_w, experts, shared, cfg).reshape(hidden.shape)
 
-    out_tt = block.forward(hidden_tt)
+    out_tt = block.decode_static(hidden_tt)
     out_torch = ttnn.to_torch(out_tt).reshape(reference.shape).to(torch.float32)
 
     # Routing-agreement diagnostic: how often the bf16 device router picks the
