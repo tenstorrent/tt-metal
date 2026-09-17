@@ -73,7 +73,7 @@ on:
       additional_test_categories:
         description: >
           Additional test categories to run (comma-separated, e.g.,
-          conv,pool,sdpa,eltwise,kernel_lib,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)
+          conv,pool,sdpa,eltwise,kernel_lib,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused,dp_op_unit_tests)
         required: false
         type: string
         default: ""
@@ -155,7 +155,7 @@ jobs:
             l2_nightly_skus+=("wh_n150" "wh_n300" "wh_n150_civ2" "wh_n300_civ2" "sim_wh_n150" "wh_galaxy")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p150b_civ2_viommu" "sim_bh_p150" "bh_p300" "bh_quietbox_2" "bh_galaxy")
+            l2_nightly_skus+=("bh_p100" "bh_p150b_civ2" "bh_p150b_civ2_viommu" "sim_bh_p150" "bh_p300" "bh_quietbox_2" "bh_loudbox" "bh_galaxy")
           fi
           l2_nightly_skus_str=$(IFS=,; echo "${l2_nightly_skus[*]}")
           echo "l2-nightly-skus=$l2_nightly_skus_str" >> $GITHUB_OUTPUT
@@ -477,6 +477,35 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # =============================================================================
+  # Models team
+  # =============================================================================
+  # Disaggregated-prefill op unit tests. Gated by the `dp_op_unit_tests` category
+  # tag in the shared `additional_test_categories` input (same pattern as
+  # `ttsim-unit-tests`/`compute_fused` and `ops-integration-tests`/`ops_docs_check`).
+  disaggregated-prefill-op-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
+        github.event_name == 'schedule' ||
+        contains(format(',{0},', inputs.additional_test_categories), ',dp_op_unit_tests,')
+      )
+    secrets: inherit
+    uses: ./.github/workflows/ops-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
+      tests-yaml-path: ./tests/pipeline_reorg/disaggregated_prefill_op_tests.yaml
+      # Schedule runs pin the category so the impl's jq filter keeps the rows;
+      # dispatch runs forward whatever the user typed (must include dp_op_unit_tests).
+      additional_test_categories: >-
+        ${{ github.event_name == 'schedule' && 'dp_op_unit_tests'
+        || inputs.additional_test_categories }}
+      summary-scope: dp_op_unit_tests
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
+  # =============================================================================
   # AI run summary
   # =============================================================================
   # Aggregates the per-leg ai-job-summary artifacts into one run-level report.
@@ -514,6 +543,7 @@ jobs:
       - tt-train-perf-finetuning-tests
       - triage-tests
       - llk-unit-tests
+      - disaggregated-prefill-op-tests
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
