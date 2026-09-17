@@ -37,6 +37,25 @@ HIDDEN_SIZE = Llama31_8BConfig.EMB_SIZE
 NUM_Q_HEADS = Llama31_8BConfig.NUM_ATTENTION_HEADS
 NUM_KV_HEADS = Llama31_8BConfig.NUM_KEY_VALUE_HEADS
 LOCAL_Q_HEADS = NUM_Q_HEADS // TP
+
+# Fidelity bar for the ring attention path.
+#
+# Production reads the cache through ring_joint_scaled_dot_product_attention, and that op's cache-read
+# rotation (kv_actual_isl) asserts the streaming compute path -- ring_joint_sdpa_program_factory.cpp
+# rejects fp32_dest_acc_en=true outright -- so the running max and sum of the softmax merge live in
+# BF16 registers where the gather route accumulated in FP32. The cost was measured, not assumed:
+# against the FP32 route over one shared cache the ring holds PCC 0.99993-0.99996 at NL2 0.010-0.015,
+# and against this suite's torch reference the worst case is the repeated-BOS fixture at PCC 0.9959 /
+# NL2 0.126, where near-identical keys make the softmax weights nearly uniform and every row is
+# therefore sensitive to the running sum. No knob recovers it: packer_l1_acc and every q/k chunk pair
+# return bit-identical output (tests/unit/test_ring_attention_accuracy.py).
+#
+# This bar applies only to comparisons the ring cannot hold to 0.999. Where it can -- the positive
+# pulse fixture below keeps a 0.998 floor -- the tighter gate stays, because that is where the
+# suite's mutation sensitivity lives: an omitted or shifted pulse lands at PCC <= 0.99703, so a 0.99
+# floor there would stop separating a wrong answer from a right one. Each NL2 ceiling is the smallest
+# round value that clears the measured worst case for its own comparison.
+RING_PCC = 0.99
 RAW_SCENARIOS = (
     (0, 0, 0, 1, 0),
     (1, 13, 0, 33, 1),
@@ -404,7 +423,7 @@ def _run_attention_case(
     output_shards = ttnn.get_device_tensors(output)
     per_device = {}
     errors = []
-    pcc_limit, nl2_limit = (0.999, 0.02) if cache_dtype == ttnn.bfloat16 else (0.999, 0.03)
+    pcc_limit, nl2_limit = (RING_PCC, 0.06)
     for sp_coord in range(SP):
         valid_rows = [row for row, position in enumerate(owned[sp_coord]) if position < end]
         expected_rows = [position - start for position in owned[sp_coord] if position < end]
@@ -450,6 +469,17 @@ def _assert_attention_readiness(mesh_device, attention, cache, cache_dtype):
     assert attention.compute_kernel_config.fp32_dest_acc_en is True
     grid = mesh_device.compute_with_storage_grid_size()
     assert attention.program_config.compute_with_storage_grid_size == ttnn.CoreCoord(grid.x - 1, grid.y)
+    # Production runs the ring, so pin its configuration too. FP32 accumulation is not a choice here:
+    # the cache-read rotation rejects it, and asserting that keeps the reason visible if the op ever
+    # gains an FP32 streaming path and someone wonders why this is off.
+    assert tuple(attention.ring_k.shape) == (1, 1, MAX_SEQ_LEN, HEAD_DIM)
+    assert tuple(attention.ring_v.shape) == (1, 1, MAX_SEQ_LEN, HEAD_DIM)
+    assert set(_addresses(attention.ring_k)).isdisjoint(_addresses(attention.ring_v))
+    assert attention.ring_k.dtype == cache_dtype and attention.ring_v.dtype == cache_dtype
+    assert attention.ring_program_config.exp_approx_mode is False
+    assert attention.ring_program_config.compute_with_storage_grid_size == ttnn.CoreCoord(grid.x - 1, grid.y)
+    assert attention.ring_compute_kernel_config.fp32_dest_acc_en is False
+    assert len(attention.ring_semaphores) == 3
     edges = []
     for tp_coord in range(TP):
         for sp_coord in range(SP):
@@ -902,7 +932,7 @@ def test_real_token_derived_attention_composition(mesh_device):
         cache = allocate_kv_cache(mesh_device, mesh_config, cache_dtype=cache_dtype)
         _assert_attention_readiness(mesh_device, attention, cache, cache_dtype)
         dtype_results = []
-        pcc_limit, nl2_limit = (0.999, 0.03) if cache_dtype == ttnn.bfloat16 else (0.995, 0.05)
+        pcc_limit, nl2_limit = (RING_PCC, 0.15)
 
         for stream_mode, slot, layer, start, end, prompt, populate_prefix in scenarios:
             key = (stream_mode, prompt)
@@ -1024,7 +1054,7 @@ def test_zero_score_positive_pulse_prefix_average(mesh_device):
                 alternative = mutated[:, h0 : h0 + LOCAL_Q_HEADS, expected_rows]
                 mutation_metrics[exposed_sp * TP + tp_coord] = _metrics(wanted, alternative)
             assert len(mutation_metrics) == TP and all(
-                pcc < 0.999 or nl2 > 0.03 for pcc, nl2 in mutation_metrics.values()
+                pcc < 0.998 or nl2 > 0.02 for pcc, nl2 in mutation_metrics.values()
             ), f"{mutation_name} causal pulse at {pulse_position} did not fail every exposed TP shard"
 
     mesh_config = MeshConfig(MESH_SHAPE, TP)
@@ -1055,7 +1085,7 @@ def test_zero_score_positive_pulse_prefix_average(mesh_device):
                 NUM_Q_HEADS // NUM_KV_HEADS, dim=1
             )[:, :, start:end]
             owned = _owned_positions(start)
-            pcc_limit, nl2_limit = (0.999, 0.02) if cache_dtype == ttnn.bfloat16 else (0.999, 0.03)
+            pcc_limit, nl2_limit = (0.998, 0.02) if cache_dtype == ttnn.bfloat16 else (0.998, 0.03)
             case_metrics = {}
             for device_idx, actual in actual_by_device.items():
                 sp_coord, tp_coord = divmod(device_idx, TP)
@@ -1682,7 +1712,7 @@ def test_full_causal_attention_matches_stock_causal_on_raw_scenarios(mesh_device
                     metrics = _diagnostic_metrics(expected, actual)
                     assert all(math.isfinite(value) for value in metrics.values())
                     per_chip[str(device_idx)] = metrics
-                    if metrics["pcc"] < 0.9999 or metrics["nl2"] > 0.01:
+                    if metrics["pcc"] < RING_PCC or metrics["nl2"] > 0.06:
                         failures.append(
                             f"{dtype_name}-s{slot}-l{layer}-{start}-{end}-p{prompt} chip={device_idx}: "
                             f"PCC={metrics['pcc']:.7f}, NL2={metrics['nl2']:.7f}"
