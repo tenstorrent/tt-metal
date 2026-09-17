@@ -17,13 +17,7 @@ subject.
 Nothing is seeded. The attention owns its state and allocates it zeroed (``TtHCA.alloc_state``), so
 the run starts at token 0 with an empty cache and builds it as it goes; the golden's cache is a
 comparison target, never an input.
-
-The ceiling is measured, not assumed: on layer 3 at 512 tokens the CPU reference loaded from the
-same checkpoint reproduces the golden to PCC 0.99993, so what the device loses below that is its
-own. The residual is the golden's fp8 KV cache and its bf16 storage.
 """
-
-import os
 
 import pytest
 import torch
@@ -48,17 +42,16 @@ SEQ_CACHE = 55 * 1024  # 56320, the length the golden was captured at
 # The golden is Pro's, so the variant is fixed here and the rows carry the layer instead.
 _VARIANT = DeepSeekV4ProConfig
 
-# One row per (layer, attention, MoE) the device can build, spelled out so no index has to be read
-# for it. No CSA row: layers 2, 4, 6 ... are compressed_sparse_attention and have no device
-# implementation yet.
+# One row per (layer, attention, MoE) the device can build.
+# TODO add a CSA row once CSA has a device implementation: layers 2, 4, 6 ... are CSA, so that kind
+# is entirely ungraded today.
 _CASES = [
     pytest.param(1, "heavily_compressed_attention", "hash_moe", id="L1-hca-hash"),
     pytest.param(3, "heavily_compressed_attention", "moe", id="L3-hca-topk"),
 ]
 
-# Measured at the full 56320: L1 0.99857, L3 0.99658, against a 0.9999 reference ceiling, and flat
-# to 4e-4 across chunk counts.
 _BLOCK_PCC = 0.99
+_CACHE_PCC = 0.999
 
 
 def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_kind, mlp_kind, n_chunks):
@@ -151,32 +144,17 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_
     ).float()[0, 0, :entries]
     golden_cache = trace.compressed_entries(layer_idx, entries)
     nope = config.head_dim - config.qk_rope_head_dim  # 448, the golden's kv_nope_dim
+    # pe_interleave=False: V4's compressed rope is natively interleaved on both sides, so the golden
+    # needs no re-basing (build_rope_table repeat_interleaves the table it uploads).
     nope_pcc, pe_pcc = cache_half_pccs(golden_cache, device_cache, nope, pe_interleave=False)
-    _, pe_interleaved = cache_half_pccs(golden_cache, device_cache, nope, pe_interleave=True)
-    # A rope rotation preserves each row's norm, so norms that agree while values do not says the two
-    # sides differ by a basis or a rotation and not by the quantity itself.
-    norms = (
-        torch.linalg.norm(device_cache[:, nope:], dim=-1) / torch.linalg.norm(golden_cache[:, nope:], dim=-1)
-    ).median()
     logger.info(
-        f"[v4 chunked L{layer_idx}] compressed cache over {entries} entries: nope={nope_pcc} "
-        f"pe={pe_pcc} pe_interleaved={pe_interleaved} pe_norm_ratio={norms:.5f}"
+        f"[v4 chunked L{layer_idx}] compressed cache PCC over {entries} entries: "
+        f"nope={nope_pcc:.6f} pe={pe_pcc:.6f}"
     )
-    dump = os.getenv("V4_CACHE_DUMP")
-    if dump:
-        torch.save({"golden": golden_cache, "device": device_cache, "nope": nope}, f"{dump}/L{layer_idx}.pt")
-        logger.info(f"  dumped both caches to {dump}/L{layer_idx}.pt")
 
-    assert pcc >= _BLOCK_PCC, f"chunked block output PCC {pcc} < {_BLOCK_PCC}"
-    # UNRESOLVED, and only the nope half is asserted because of it: the pe half measures 0.19 against
-    # this golden, and no simple relation explains it. It is the same quantity -- per-row norms agree
-    # to 3e-4 and 19 of 440 rows match outright -- rotated by something unidentified: 0.009 through
-    # interleave_pe, 0.34 under an entry-to-token position shift (127 * entry), 0.13 under +-1.
-    # The compressor ropes each entry before the write (compressor.forward:359, positioned by
-    # first_window_position // compress_rate), so the cleanest fix is a golden captured at that same
-    # point, which is how GLM's cache compares directly. `V4_CACHE_DUMP=<dir>` writes both halves out
-    # for a host-side hunt without re-running the mesh.
-    assert nope_pcc >= _BLOCK_PCC, f"compressed cache nope PCC {nope_pcc} < {_BLOCK_PCC}"
+    worst_half = min(nope_pcc, pe_pcc)
+    assert pcc >= _BLOCK_PCC, f"chunked block output PCC {pcc:.6f} < {_BLOCK_PCC}"
+    assert worst_half >= _CACHE_PCC, f"compressed cache PCC {worst_half:.6f} < {_CACHE_PCC}"
 
 
 @pytest.mark.parametrize(
@@ -195,8 +173,6 @@ def run_chunked_block_v4(mesh_device, device_params, num_links, layer_idx, attn_
     ],
     indirect=["mesh_device", "device_params"],
 )
-# The golden's whole 56320, which is what the GLM teacher-forced row runs. Shorter runs measured the
-# same to 4e-4, so they graded nothing the full one does not.
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
 @pytest.mark.parametrize("layer_idx, attn_kind, mlp_kind", _CASES)
 @pytest.mark.skipif(not is_blackhole(), reason="V4 attention is Blackhole-only")
