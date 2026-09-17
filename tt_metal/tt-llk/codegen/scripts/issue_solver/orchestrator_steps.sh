@@ -673,13 +673,13 @@ PY
     # Counters + limits.
     ss COMPILATION_ATTEMPTS  0 --json
     ss DEBUG_CYCLES          0 --json
-    ss MAX_DEBUG_CYCLES      5 --json
+    ss MAX_DEBUG_CYCLES      8 --json
     ss TESTS_TOTAL           0 --json
     ss TESTS_PASSED          0 --json
     ss PERF_RETRIES          0 --json
-    ss MAX_PERF_RETRIES      2 --json
+    ss MAX_PERF_RETRIES      4 --json
     ss REVIEW_RETRIES        0 --json
-    ss MAX_REVIEW_RETRIES    2 --json
+    ss MAX_REVIEW_RETRIES    4 --json
     ss PERF_GOAL             "$PERF_GOAL"
     if [ "$RUN_KIND" = "review" ]; then ss PREVIOUS_AGENT "addresser"; else ss PREVIOUS_AGENT "analyzer"; fi
     ss VERIFY_DEFERRED       0 --json
