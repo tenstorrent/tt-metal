@@ -159,7 +159,7 @@ NoC: `Noc noc; noc.async_write(cb, s, nbytes, {.offset_bytes=..}, {.page_id=.., 
 | `log_debug` many-arg build fail (`TT_LOG_FOR_EACH_AGAIN`) | old tt-logger caps macro args | keep `log_debug` ≤ 12 args |
 | `R_RISCV_HI20 has no matching LO12` at load (source uses `%` and `/`) | tt-2xx crt0 emits two `lui %hi` for `__tdata_lma`; relaxation sinks the 2nd, XIPify orphans it | pin once with `asm volatile` |
 | halo build: `flush_l2_cache_range` undeclared on WH/BH | it's tt-2xx (Quasar)-only (declared in `internal/tt-2xx/risc_common.h`) | `#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)` guard in `halo_gather.cpp` |
-| halo: `MEM_ZEROS_BASE` undefined on Quasar | Quasar memory map lacks the WH/BH zeros region | zero via the runtime `async_write_zeros()` (no `MEM_ZEROS_BASE` on Quasar) |
+| halo: `MEM_ZEROS_BASE` undefined on Quasar | Quasar memory map lacks the WH/BH zeros region | call `noc.async_write_zeros(...)`, then `noc.write_zeros_l1_barrier()` before any other NoC write |
 | reduce JIT fails: `sfpu_reduce` unresolved | `reduce_helpers_compute.inl` WH/BH-only SFPU path unguarded | `#ifndef ARCH_QUASAR` guard (3 sites) |
 | `Semaphore::get_l1_addr()` is private | a kernel reads the raw semaphore L1 value | use the public `wait`/`wait_min`/`set`; drop the raw-pointer poll (it's redundant after `wait_min`) |
 | arch reports `"invalid"` | `get_string_lowercase` missing QUASAR case | add the case |
