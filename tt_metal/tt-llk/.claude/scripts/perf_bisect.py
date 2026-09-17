@@ -242,6 +242,7 @@ def patch_runner(
     split_into=None,
     slice_group=1,
     run_count=None,
+    dist=None,
 ):
     """Reshape one perf runner script for a controlled experiment.
 
@@ -253,6 +254,14 @@ def patch_runner(
     """
     import re
 
+    if dist is not None:
+        # LoadScheduling hands the next chunk to whoever is free, so the partition
+        # moves with worker timing. A scope-based mode assigns whole files, and
+        # with 12 modules over 15 workers each module starts on its own worker --
+        # so a test's predecessors are the same in every run.
+        body = body.replace(
+            '-m "perf and not accuracy"', f'--dist {dist} -m "perf and not accuracy"'
+        )
     if run_count is not None:
         body = body.replace(
             "mkdir -p perf_data",
@@ -404,6 +413,7 @@ def runner_opts_of(args):
         "test_filter": getattr(args, "test_filter", None),
         "split_into": getattr(args, "split_into", None),
         "run_count": getattr(args, "run_count", None),
+        "dist": getattr(args, "dist", None),
     }
     if not any(v is not None for v in opts.values()):
         return None
@@ -426,6 +436,7 @@ def variant_key(sha, args):
         ("split_into", "s"),
         ("slice_group", "g"),
         ("run_count", "rc"),
+        ("dist", "d"),
         ("test_filter", "k"),
     ):
         v = getattr(args, name, None)
@@ -457,6 +468,7 @@ def push_branch(
             ("s", "split_into"),
             ("g", "slice_group"),
             ("rc", "run_count"),
+            ("d", "dist"),
         ):
             if runner_opts.get(key) is not None:
                 suffix += f"-{tag}{runner_opts[key]}"
@@ -867,6 +879,14 @@ def main(argv=None):
         type=int,
         help="replace the shard split; group 1 runs that slice and every other "
         "group exits, so one card runs one sequence",
+    )
+    ap.add_argument(
+        "--dist",
+        choices=("load", "loadscope", "loadfile", "loadgroup", "worksteal"),
+        help="xdist distribution mode. The default `load` hands the next chunk to "
+        "whichever worker is free, so which tests precede a measurement on a core "
+        "shifts with timing; `loadfile` assigns whole files instead, which makes "
+        "that sequence the same in every run",
     )
     ap.add_argument(
         "--run-count",
