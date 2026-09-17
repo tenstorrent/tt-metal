@@ -408,6 +408,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     const KernelSpecName COMPUTE{"compute"};
 
     const DFBSpecName IN0_DFB{"in0"};
+    const DFBSpecName IN0_RELAY_DFB{"in0_relay"};
     const DFBSpecName IN1_DFB{"in1"};
     const DFBSpecName IN0_SHARDED_DFB{"in0_sharded"};
     const DFBSpecName BIAS_DFB{"bias"};
@@ -610,9 +611,35 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         intermed0_reload_alias_dfb_spec.advanced_options.alias_with = std::move(alias_aliases);
     }
 
+    // The in0 multicast relay buffer.
+    //
+    // in0 itself is a plain per-node FIFO: the sender fills a slot (the payload arrives by NoC, from
+    // this node or another in the row) and compute drains it. The nodes that own a K-slice but no
+    // output block have no compute, so they are not part of that FIFO -- but they still multicast
+    // into it, and a multicast writes one L1 offset on every destination. The sender derives that
+    // offset from a local cursor it advances in step with the receivers, so its buffer must sit at
+    // in0's offset: hence a second DFB, self-looped by the sender on those nodes, with the same
+    // geometry as in0.
+    //
+    // The two offsets coincide because this pair is declared before any other DFB, so each starts
+    // at its own allocator's base. That is the allocator's behaviour, not a declared property --
+    // inserting any DFB on the work nodes ahead of in0 would part them by that DFB's size. Metal 2.0
+    // has no way to state the requirement yet (alias_with is the mechanism, but it requires members
+    // to cover identical nodes); until it does, KEEP THIS PAIR FIRST.
+    DataflowBufferSpec in0_relay_dfb_spec{
+        .unique_id = IN0_RELAY_DFB,
+        .entry_size = in0_aligned_tile_size,
+        .num_entries = in0_num_entries,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    };
+
     Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.reserve(8);
+    dataflow_buffers.reserve(9);
     dataflow_buffers.push_back(std::move(in0_dfb_spec));
+    if (has_in0_mcast_no_work_kernel) {
+        dataflow_buffers.push_back(std::move(in0_relay_dfb_spec));
+    }
     dataflow_buffers.push_back(std::move(in1_dfb_spec));
     if (in0_block_sharded) {
         // The resident in0 block shard the sender extracts its multicast blocks from.
@@ -1033,9 +1060,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         // Both block-sharded senders run the same source over disjoint node sets, differing only in
         // the two compile-time flags that say whether the node produces output work and whether it
         // sits inside the multicast receiver grid.
+        // in0_dfb is the multicast staging buffer this sender writes through: in0 itself on the
+        // nodes that feed compute, the co-located relay on the nodes that only send. The accessor
+        // name is "in0" either way, so the kernel source does not distinguish them.
         auto make_block_sharded_sender = [&](const KernelSpecName& id,
                                              uint32_t core_has_output_block_work,
-                                             uint32_t core_in_in0_receiver_mcast_grid) {
+                                             uint32_t core_in_in0_receiver_mcast_grid,
+                                             const DFBSpecName& in0_dfb) {
             uint32_t num_x = in0_sender_num_cores_along_width;
             uint32_t num_y = 1;
             if (transpose_mcast) {
@@ -1051,7 +1082,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 .dfb_bindings =
                     {
                         DFBBinding{
-                            .dfb_spec_name = IN0_DFB,
+                            .dfb_spec_name = in0_dfb,
                             .accessor_name = "in0",
                             .endpoint_type = DFBEndpointType::PRODUCER,
                         },
@@ -1116,13 +1147,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             };
             return k;
         };
-        kernels.push_back(make_block_sharded_sender(IN0_SENDER, 1, 1));
+        kernels.push_back(make_block_sharded_sender(IN0_SENDER, 1, 1, IN0_DFB));
         if (has_in0_mcast_no_work_kernel) {
-            // These nodes only forward their shard into the receiver grid: nothing downstream drains
-            // their in0 buffer, so this kernel holds both of its endpoints.
-            KernelSpec no_work = make_block_sharded_sender(IN0_MCAST_NO_WORK, 0, 0);
+            // These nodes own a K-slice but no output block, so no compute drains what they stage.
+            // They work the relay buffer instead, holding both of its endpoints: it exists only to
+            // carry a write cursor at in0's L1 offset for the multicast destination address.
+            KernelSpec no_work = make_block_sharded_sender(IN0_MCAST_NO_WORK, 0, 0, IN0_RELAY_DFB);
             no_work.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = IN0_DFB,
+                .dfb_spec_name = IN0_RELAY_DFB,
                 .accessor_name = "in0",
                 .endpoint_type = DFBEndpointType::CONSUMER,
             });

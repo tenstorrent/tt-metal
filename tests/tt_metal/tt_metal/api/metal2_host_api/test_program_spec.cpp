@@ -31,6 +31,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <cstdint>
 #include <filesystem>
 #include <numeric>
 #include <optional>
@@ -3367,6 +3368,292 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelSelfLoopOnGen1Succeeds) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// ============================================================================
+// SCRATCH EXPERIMENT (not for merge): matmul 2D mcast, in0 BLOCK_SHARDED, in0
+// shard grid wider along the mcast axis than the output's column blocks.
+//
+// 4x2 node grid. Output needs one column of blocks, so work lives on x=0.
+// in0's K-slices also live on x=1..3; those nodes relay their slice into the
+// receiver grid and compute nothing.
+// ============================================================================
+namespace mm_relay {
+
+inline NodeRange WorkNodes() { return NodeRange({0, 0}, {0, 1}); }
+inline NodeRange RelayNodes() { return NodeRange({1, 0}, {3, 1}); }
+
+// Both in0 senders are the same source with different compile-time flags; the factory
+// puts them on RISCV_1. The relay drain in the "blank compute" shape is a compute kernel.
+inline KernelSpec Sender(const std::string& name) {
+    return MakeMinimalGen1DMKernel(name, DataMovementProcessor::RISCV_1);
+}
+
+// The resident in0 shard, self-looped by both senders. Present in every shape below;
+// included to confirm it is not itself a problem.
+inline void AddShardedDFB(ProgramSpec& spec, std::vector<KernelSpec*> senders) {
+    auto sharded = MakeMinimalDFB("in0_sharded");
+    for (KernelSpec* k : senders) {
+        k->dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_sharded"}, "in0_sharded"));
+        k->dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_sharded"}, "in0_sharded"));
+    }
+    spec.dataflow_buffers.push_back(std::move(sharded));
+}
+
+}  // namespace mm_relay
+
+// Shape A -- what the port builds today: one in0 DFB spanning both node sets.
+TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_A_SingleDFB) {
+    using namespace mm_relay;
+    ProgramSpec spec;
+    spec.name = "mm_relay_a";
+
+    auto in0_sender = Sender("in0_sender");
+    auto no_work = Sender("in0_mcast_no_work");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+
+    auto in0 = MakeMinimalDFB("in0");
+    in0.data_format_metadata = tt::DataFormat::Float16_b;
+    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+
+    spec.dataflow_buffers = {in0};
+    AddShardedDFB(spec, {&in0_sender, &no_work});
+    spec.kernels = {in0_sender, no_work, compute};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
+        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mixing compute and data-movement kinds")));
+}
+
+// Shape B -- split: in0 is DM->compute on the work nodes; a second DFB carries the
+// relay nodes' self-loop. Legal under today's rules. Addresses are printed, because
+// the multicast destination address is derived from the relay's local write pointer.
+TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_B_SplitDFB) {
+    using namespace mm_relay;
+    ProgramSpec spec;
+    spec.name = "mm_relay_b";
+
+    auto in0_sender = Sender("in0_sender");
+    auto no_work = Sender("in0_mcast_no_work");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+
+    auto in0 = MakeMinimalDFB("in0");
+    in0.data_format_metadata = tt::DataFormat::Float16_b;
+    auto relay = MakeMinimalDFB("in0_relay");
+    relay.data_format_metadata = tt::DataFormat::Float16_b;
+
+    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+    // Same kernel-side accessor name; different DFB. Kernel source is unchanged.
+    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
+    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
+
+    spec.dataflow_buffers = {in0, relay};
+    AddShardedDFB(spec, {&in0_sender, &no_work});
+    spec.kernels = {in0_sender, no_work, compute};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
+        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
+
+    ASSERT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto& impl = program.impl();
+    const auto& dfbs = impl.dataflow_buffers();
+    const std::uint32_t in0_addr = dfbs[impl.get_dfb_handle("in0")]->uniform_alloc_addr();
+    const std::uint32_t relay_addr = dfbs[impl.get_dfb_handle("in0_relay")]->uniform_alloc_addr();
+    const std::uint32_t in0_slot = dfbs[impl.get_dfb_handle("in0")]->device_slot;
+    const std::uint32_t relay_slot = dfbs[impl.get_dfb_handle("in0_relay")]->device_slot;
+    std::cout << "[SCRATCH] in0 @ " << in0_addr << ", in0_relay @ " << relay_addr
+              << (in0_addr == relay_addr ? "  -> MATCH" : "  -> MISMATCH") << "; device slots " << in0_slot << " / "
+              << relay_slot << (in0_slot == relay_slot ? "  -> SHARED" : "  -> DISTINCT") << std::endl;
+}
+
+// Shape B2 -- as B, but with one more DFB allocated on the work nodes ahead of in0
+// (the real factory has in1 / out / intermed0 there). The relay nodes carry no such
+// DFB, so the two stacks diverge and the addresses no longer coincide.
+TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_B2_SplitDFBAddressIsOrderDependent) {
+    using namespace mm_relay;
+    ProgramSpec spec;
+    spec.name = "mm_relay_b2";
+
+    auto in0_sender = Sender("in0_sender");
+    auto no_work = Sender("in0_mcast_no_work");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    auto in1_writer = MakeMinimalGen1DMKernel("in1_sender_writer", DataMovementProcessor::RISCV_0);
+
+    auto in0 = MakeMinimalDFB("in0");
+    in0.data_format_metadata = tt::DataFormat::Float16_b;
+    auto relay = MakeMinimalDFB("in0_relay");
+    relay.data_format_metadata = tt::DataFormat::Float16_b;
+    auto in1 = MakeMinimalDFB("in1");
+    in1.data_format_metadata = tt::DataFormat::Float16_b;
+
+    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
+    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
+    in1_writer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in1"}, "in1"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in1"}, "in1"));
+
+    // in1 declared ahead of in0, as a stand-in for any DFB that stacks on the work nodes.
+    spec.dataflow_buffers = {in1, in0, relay};
+    AddShardedDFB(spec, {&in0_sender, &no_work});
+    spec.kernels = {in0_sender, no_work, compute, in1_writer};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute", "in1_sender_writer"}),
+        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto& impl = program.impl();
+    const auto& dfbs = impl.dataflow_buffers();
+    const std::uint32_t in0_addr = dfbs[impl.get_dfb_handle("in0")]->uniform_alloc_addr();
+    const std::uint32_t relay_addr = dfbs[impl.get_dfb_handle("in0_relay")]->uniform_alloc_addr();
+    std::cout << "[SCRATCH] with in1 declared first: in0 @ " << in0_addr << ", in0_relay @ " << relay_addr
+              << (in0_addr == relay_addr ? "  -> MATCH" : "  -> MISMATCH (multicast would corrupt)") << std::endl;
+}
+
+// Shape B' -- as B, but asking for the two to share an address via alias_with.
+TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_Bprime_SplitDFBAliased) {
+    using namespace mm_relay;
+    ProgramSpec spec;
+    spec.name = "mm_relay_b_alias";
+
+    auto in0_sender = Sender("in0_sender");
+    auto no_work = Sender("in0_mcast_no_work");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+
+    auto in0 = MakeMinimalDFB("in0");
+    in0.data_format_metadata = tt::DataFormat::Float16_b;
+    in0.advanced_options.alias_with = {DFBSpecName{"in0_relay"}};
+    auto relay = MakeMinimalDFB("in0_relay");
+    relay.data_format_metadata = tt::DataFormat::Float16_b;
+    relay.advanced_options.alias_with = {DFBSpecName{"in0"}};
+
+    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
+    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
+
+    spec.dataflow_buffers = {in0, relay};
+    AddShardedDFB(spec, {&in0_sender, &no_work});
+    spec.kernels = {in0_sender, no_work, compute};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
+        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
+
+    try {
+        MakeProgramFromSpec(*mesh_device_, spec);
+        std::cout << "[SCRATCH] alias across disjoint node sets: ACCEPTED" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "[SCRATCH] alias across disjoint node sets REJECTED: " << e.what() << std::endl;
+    }
+}
+
+// Shape B3 -- the B2 layout (in1 stacked on the work nodes ahead of in0) with the alias
+// declared. The address must now be pinned across the two disjoint node sets, and a DFB
+// declared afterwards on the relay nodes must stack above the reserved region rather than
+// landing on top of it.
+TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_B3_ColocatedSplitDFB) {
+    using namespace mm_relay;
+    ProgramSpec spec;
+    spec.name = "mm_relay_b3";
+
+    auto in0_sender = Sender("in0_sender");
+    auto no_work = Sender("in0_mcast_no_work");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    auto in1_writer = MakeMinimalGen1DMKernel("in1_sender_writer", DataMovementProcessor::RISCV_0);
+    // A second DM kernel on the relay nodes, carrying a DFB declared after the alias group.
+    auto relay_extra = MakeMinimalGen1DMKernel("relay_extra", DataMovementProcessor::RISCV_0);
+
+    auto in0 = MakeMinimalDFB("in0");
+    in0.data_format_metadata = tt::DataFormat::Float16_b;
+    in0.advanced_options.alias_with = {DFBSpecName{"in0_relay"}};
+    auto relay = MakeMinimalDFB("in0_relay");
+    relay.data_format_metadata = tt::DataFormat::Float16_b;
+    relay.advanced_options.alias_with = {DFBSpecName{"in0"}};
+    auto in1 = MakeMinimalDFB("in1");
+    in1.data_format_metadata = tt::DataFormat::Float16_b;
+    auto after = MakeMinimalDFB("declared_after_on_relay_nodes");
+
+    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
+    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
+    in1_writer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in1"}, "in1"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in1"}, "in1"));
+    relay_extra.dfb_bindings.push_back(ProducerOf(DFBSpecName{"declared_after_on_relay_nodes"}, "x"));
+    relay_extra.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"declared_after_on_relay_nodes"}, "x"));
+
+    spec.dataflow_buffers = {in1, in0, relay, after};
+    AddShardedDFB(spec, {&in0_sender, &no_work});
+    spec.kernels = {in0_sender, no_work, compute, in1_writer, relay_extra};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute", "in1_sender_writer"}),
+        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work", "relay_extra"})};
+
+    // Needs the step-two prototype (alias_with relaxed to identical-or-disjoint node coverage).
+    // Without it the spec is rejected at program_spec.cpp:1705, which is the stock behaviour --
+    // report rather than fail, so this file is runnable on either build.
+    try {
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        auto& impl = program.impl();
+        const auto& dfbs = impl.dataflow_buffers();
+        const std::uint32_t in0_addr = dfbs[impl.get_dfb_handle("in0")]->uniform_alloc_addr();
+        const std::uint32_t relay_addr = dfbs[impl.get_dfb_handle("in0_relay")]->uniform_alloc_addr();
+        const std::uint32_t after_addr = dfbs[impl.get_dfb_handle("declared_after_on_relay_nodes")]->uniform_alloc_addr();
+        const std::uint32_t relay_size = 1024 * 2;
+        std::cout << "[SCRATCH] co-located: in0 @ " << in0_addr << ", in0_relay @ " << relay_addr
+                  << (in0_addr == relay_addr ? "  -> MATCH" : "  -> MISMATCH") << "; later relay-node DFB @ "
+                  << after_addr
+                  << (after_addr >= relay_addr + relay_size ? "  -> clears the reserved region"
+                                                            : "  -> OVERLAPS the reserved region")
+                  << std::endl;
+        EXPECT_EQ(in0_addr, relay_addr);
+        EXPECT_GE(after_addr, relay_addr + relay_size);
+    } catch (const std::exception& e) {
+        std::cout << "[SCRATCH] co-located shape REJECTED (step-two patch not applied): " << e.what() << std::endl;
+    }
+}
+
+// Shape C -- keep one in0 DFB, and give the relay nodes a compute kernel whose only job
+// is to drain it, so both roles are kind-uniform. No Metal 2.0 change needed.
+TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_C_BlankComputeDrain) {
+    using namespace mm_relay;
+    ProgramSpec spec;
+    spec.name = "mm_relay_c";
+
+    auto in0_sender = Sender("in0_sender");
+    auto no_work = Sender("in0_mcast_no_work");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
+    auto drain = MakeMinimalGen1ComputeKernel("in0_drain");
+
+    auto in0 = MakeMinimalDFB("in0");
+    in0.data_format_metadata = tt::DataFormat::Float16_b;
+    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
+    drain.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
+
+    spec.dataflow_buffers = {in0};
+    AddShardedDFB(spec, {&in0_sender, &no_work});
+    spec.kernels = {in0_sender, no_work, compute, drain};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
+        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work", "in0_drain"})};
+
+    try {
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        std::cout << "[SCRATCH] blank-compute-drain shape: ACCEPTED" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "[SCRATCH] blank-compute-drain shape REJECTED: " << e.what() << std::endl;
+    }
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsDifferentProcessorsSucceeds) {
