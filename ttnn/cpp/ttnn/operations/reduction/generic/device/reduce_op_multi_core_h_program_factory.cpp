@@ -105,7 +105,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // reduction via SFPU mul_unary_tile inside the compute kernel.
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
-    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
+    // Int32 max/min/sum and bf16 min use the SFPU reduce path; fp32 only for the accurate opt-in.
     const bool is_sfpu_reduce =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
@@ -599,8 +599,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     uint32_t compute_Wt = use_width_sharding ? (num_cols_per_core_group_1 / NC) : num_cols_per_core_group_1;
     uint32_t compute_NC = use_width_sharding ? NC : 1;
 
-    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); fast-mode float/bf16 MIN
-    // uses -MAX(-x) in reduce_h_neg.
+    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); every other MIN
+    // (bfloat8_b, fast-mode fp32, Quasar bf16) uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
