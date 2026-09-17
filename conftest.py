@@ -850,8 +850,7 @@ def _check_required_num_devices(request, ttnn):
 
     if available_devices < required_devices:
         pytest.skip(
-            f"Test requires at least {required_devices} devices, "
-            f"but only {available_devices} are available"
+            f"Test requires at least {required_devices} devices, " f"but only {available_devices} are available"
         )
 
 
