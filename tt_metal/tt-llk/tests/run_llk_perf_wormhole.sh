@@ -43,6 +43,6 @@ PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
 pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
   --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" "$@"
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 15 -x -m "perf and not accuracy" --timeout=60 \
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer -n 8 -x -m "perf and not accuracy" --timeout=60 \
   --junitxml="pytest-report-wormhole-${GROUP}-run.xml" "$@"
 junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
