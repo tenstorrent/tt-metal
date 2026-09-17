@@ -21,6 +21,7 @@ Tensor fused_experts(
     float routed_scaling_factor,
     float routing_eps,
     uint32_t experts_block_size,
+    bool two_hub_gather,
     const std::optional<MemoryConfig>& memory_config) {
     return ttnn::prim::fused_experts(
         input_tensor,
@@ -35,6 +36,7 @@ Tensor fused_experts(
         routed_scaling_factor,
         routing_eps,
         experts_block_size,
+        two_hub_gather,
         memory_config);
 }
 

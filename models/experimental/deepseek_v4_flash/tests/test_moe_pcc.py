@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Per-layer PCC test for the ttnn ``DeepSeekV4SparseMoeBlock`` (prefill).
+"""Per-layer PCC test for the ttnn ``DeepSeekV4SparseMoeBlock`` (prefill tokens).
+
+The block has one entry point, ``decode_static``, which the model's prefill reaches by
+replaying it one token at a time; this test hands the prefill tokens over as that many
+single-token rows and checks the whole sequence in one call.
 
 This single file plays two roles (same split as ``test_attention_pcc.py``):
 
@@ -266,9 +270,11 @@ def test_moe_pcc(device, reset_seeds, tmp_path, batch_size: int, seq_len: int, w
     experts = DeepSeekV4PreloadedExperts(cfg, _provider, device, dtype=weight_dtype)
     moe = DeepSeekV4SparseMoeBlock(cfg, state_dict, device, experts=experts)
 
-    # The ttnn block takes [B, S, 1, H] (the reference's [B, S, H] with the tile row axis).
-    hidden_tt = _to_tt(bundle["hidden"].unsqueeze(2), device)
-    out_tt = moe.forward(hidden_tt)
+    # The block's only entry point is the token-batched (trace-captured) decode path,
+    # which flattens dim 0 onto the token axis; the prefill T tokens are handed over as
+    # T single-token rows, in order, and the result is reshaped back to [B, S, 1, H].
+    hidden_tt = _to_tt(bundle["hidden"].unsqueeze(2), device).reshape([batch_size * seq_len, 1, 1, -1])
+    out_tt = moe.decode_static(hidden_tt)
     out_torch = ttnn.to_torch(out_tt).reshape(bundle["output"].shape).to(torch.float32)
 
     reference = bundle["output"].to(torch.float32)

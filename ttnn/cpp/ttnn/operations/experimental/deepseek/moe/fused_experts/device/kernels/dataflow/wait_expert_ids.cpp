@@ -43,12 +43,20 @@
 //   21: experts_block (experts per block; the activation block held in L1 at once)
 //   22: gate_up_reserve_tiles (pages a gate_up slice reserves in cb_weights)
 //   23: down_reserve_tiles    (pages a down slice reserves in cb_weights)
-//   24+: TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
+//   ... routing-scalar geometry / cores / reduce (indices 24-32)
+//   33: split_col (first act tile of each expert that hub1 owns; == i_tiles when there is one hub)
+//   34: num_hubs  (1, or 2 for the two-hub gather/broadcast)
+//   35+: TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
 //
 // Runtime args:
 //   0: core_index      (this core's flat grid index, x*8 + y)
-//   1: leader_noc_x    2: leader_noc_y (core {0,0}, for the per-block slot-free ack)
+//   1: hub0_noc_x      2: hub0_noc_y (the gather/broadcast hub this core's group broadcasts from)
+//   3: group_mcast_start_x    4: group_mcast_start_y
+//   5: group_mcast_end_x      6: group_mcast_end_y
+//   7: group_num_dests
+//   8: hub_role   (0 = plain, 1 = hub0, 2 = hub1)
+//   9: hub1_noc_x     10: hub1_noc_y
 void kernel_main() {
     constexpr uint32_t sem_id = get_compile_time_arg_val(0);
     constexpr uint32_t sem_input_id = get_compile_time_arg_val(1);
@@ -85,8 +93,10 @@ void kernel_main() {
     constexpr uint32_t num_expert_groups = get_compile_time_arg_val(31);
     constexpr uint32_t sem_reduce_id = get_compile_time_arg_val(32);
     constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(33);
+    constexpr uint32_t split_col = get_compile_time_arg_val(34);
+    constexpr uint32_t num_hubs = get_compile_time_arg_val(35);
 
-    constexpr auto gate_up_args = TensorAccessorArgs<34>();
+    constexpr auto gate_up_args = TensorAccessorArgs<36>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
     // in the compile-time args, indexed by the runtime-selected expert id.
@@ -94,14 +104,18 @@ void kernel_main() {
     constexpr uint32_t kDownAddrBase = kGateUpAddrBase + num_weights;
 
     const uint32_t core_index = get_arg_val<uint32_t>(0);
-    const uint32_t leader_noc_x = get_arg_val<uint32_t>(1);
-    const uint32_t leader_noc_y = get_arg_val<uint32_t>(2);
+    const uint32_t hub0_noc_x = get_arg_val<uint32_t>(1);
+    const uint32_t hub0_noc_y = get_arg_val<uint32_t>(2);
     const uint32_t group_mcast_start_x = get_arg_val<uint32_t>(3);
     const uint32_t group_mcast_start_y = get_arg_val<uint32_t>(4);
     const uint32_t group_mcast_end_x = get_arg_val<uint32_t>(5);
     const uint32_t group_mcast_end_y = get_arg_val<uint32_t>(6);
     const uint32_t group_num_dests = get_arg_val<uint32_t>(7);
-    const bool is_group_leader = get_arg_val<uint32_t>(8) != 0;
+    const uint32_t hub_role = get_arg_val<uint32_t>(8);
+    const uint32_t hub1_noc_x = get_arg_val<uint32_t>(9);
+    const uint32_t hub1_noc_y = get_arg_val<uint32_t>(10);
+
+    const ActGatherConfig gather{hub_role, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
 
     // Activation arrived via multicast: publish it to the compute kernel.
     Semaphore<>(sem_input_id).wait(1);
@@ -143,8 +157,6 @@ void kernel_main() {
         experts_block,
         gate_up_reserve_tiles,
         down_reserve_tiles,
-        leader_noc_x,
-        leader_noc_y,
         rscalar_tile_h,
         rscalar_face_r_dim,
         rscalar_num_face_rows,
@@ -153,7 +165,7 @@ void kernel_main() {
         shards_per_core,
         i_shards_per_core,
         num_expert_groups,
-        is_group_leader,
+        gather,
         sem_reduce_id,
         cb_reduce_id);
 }
