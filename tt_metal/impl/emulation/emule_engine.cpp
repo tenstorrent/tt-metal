@@ -714,7 +714,8 @@ static void dispatch_to_device(
 
     auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
     std::vector<CoreSetup> core_setups;
-    setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, emule_desc, core_setups);
+    setup_core_state(
+        impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, emule_soc, emule_desc, core_setups);
 
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 

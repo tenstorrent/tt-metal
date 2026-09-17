@@ -31,7 +31,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>  // is_2d_fabric_config
+#include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
+#include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id
 #include <tt_stl/assert.hpp>                           // TT_FATAL
 
 namespace tt_emule {
@@ -100,13 +101,19 @@ SocView build_soc_view(IDevice* device) {
         auto ct = hw.get_programmable_core_type(pct);
         PctInfo p;
         p.core_type = static_cast<uint32_t>(ct);
-        // TODO(stage2): kernel_config_addr / _size / default_unreserved_addr / routing_table_addr.
-        // These dev-addr/size reads are per-pct CONDITIONAL — e.g. get_dev_size(KERNEL_CONFIG)
-        // asserts for TENSIX ("start of unreserved memory") — so mirror the guarded reads in
-        // prepare_program / setup_core_state / check_program_metadata_size when consumers need them.
+        // routing_table_addr: only the TENSIX read is consumed today (setup_core_state fabric
+        // identity write). get_dev_addr(ROUTING_TABLE) for other core types may be undefined, so
+        // fill it only where a consumer needs it. kernel_config_addr / _size / default_unreserved
+        // stay TODO(stage2): those dev-addr/size reads are per-pct CONDITIONAL (e.g.
+        // get_dev_size(KERNEL_CONFIG) asserts for TENSIX) — mirror the guarded reads when needed.
+        if (ct == HalProgrammableCoreType::TENSIX) {
+            p.routing_table_addr = static_cast<uint32_t>(hw.get_dev_addr(ct, HalL1MemAddrType::ROUTING_TABLE));
+        }
         v.pcts.push_back(p);
     }
-    // TODO(stage2): mesh_id/chip_id via get_control_plane().get_fabric_node_id_from_physical_chip_id.
+    const auto fabric_node = ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
+    v.mesh_id = static_cast<uint32_t>(*fabric_node.mesh_id);
+    v.chip_id = static_cast<uint32_t>(fabric_node.chip_id);
     return v;
 }
 
