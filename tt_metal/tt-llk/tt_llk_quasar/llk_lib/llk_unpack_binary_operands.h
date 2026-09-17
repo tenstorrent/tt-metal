@@ -28,21 +28,26 @@ inline void _llk_unpack_binary_operands_mop_config_(
     if (num_faces != NUM_FACES && num_faces != 1)
     {
         // A tiny face is one HW tile. Match the sparse eight-row face slots used by math and pack.
-        const std::uint32_t dest_tile_idx_inc = tensor_shape.face_r_dim < (FACE_R_DIM >> 1) ? (FACE_R_DIM >> (rows_log2(tensor_shape.face_r_dim) + 1)) : 1;
+        const std::uint32_t dest_tile_idx_inc = quasar_tiny_face_stride(tensor_shape);
 
-        // Reset both source-register offsets for every SW tile, including batched unpack calls.
-        load_replay_buf<0, 2>(
-            []
-            {
-                TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
-                TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
-            });
+        const std::uint32_t MOP_INNER_LOOP = num_faces - 1;
         ckernel_template temp(
             num_tiles,
-            num_faces - 1,
+            MOP_INNER_LOOP,
             TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc, 1 /*Src Tile Idx*/, buf_desc_id_0, 0 /*Set Dvalid*/),
             TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc, 1 /*Src Tile Idx*/, buf_desc_id_1, 0 /*Set Dvalid*/));
-        temp.set_start_op(TT_OP_REPLAY(0, 2, 0, 0, 0, 0));
+        if (num_tiles > 1)
+        {
+            // Reset both unpacker destination counters for each SW tile in a batch.
+            // Single-tile calls use the counter reset in _llk_unpack_binary_operands_.
+            load_replay_buf<0, 2>(
+                []
+                {
+                    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+                    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
+                });
+            temp.set_start_op(TT_OP_REPLAY(0, 2, 0, 0, 0, 0));
+        }
         // Publish each operand only after its last face is loaded.
         temp.set_end_ops(
             TT_OP_UNPACR0_TILE_INC(dest_tile_idx_inc, 1 /*Src Tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/),
@@ -74,10 +79,12 @@ inline void _llk_unpack_binary_operands_mop_config_(
  * @param tensor_shape: Shape shared by both operands.
  * @note On the math thread, pair with @ref _llk_math_eltwise_binary_init_ (T1); on the pack thread, pair with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_unpack_binary_operands_ is the matching execute call on this thread.
+ * @note Use full-height faces for four-face tiles, matching the math and pack layout.
  */
 inline void _llk_unpack_binary_operands_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
+    LLK_ASSERT(tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Binary unpack four-face tiles require 16-row faces");
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_binary_operands_init_", tensor_shape);
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
