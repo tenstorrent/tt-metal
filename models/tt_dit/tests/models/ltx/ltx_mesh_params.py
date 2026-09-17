@@ -124,8 +124,10 @@ _ring_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 500_000_
 LTX_DISTILLED_MESH_PARAMS_DL = [
     _with_dynamic_load(_2x2sp0tp1nl2_line_is_fsdp1, False),
     _with_dynamic_load(_2x4sp0tp1nl1_line_is_fsdp1, True),
-    # BH on 2x4: L1_SMALL scratch for the vocoder conv taps.
-    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_l1small), True),
+    # BH on 2x4 (production loudbox): L1_SMALL scratch for the vocoder conv taps + trace region for the traced
+    # decode -- the same device params the I2V and audio lists already give this id, so the distilled e2e runs
+    # the served (traced) path here too.
+    _with_dynamic_load(_override_base_device_params(_2x4sp1tp0nl2_line_is_fsdp0, _line_trace), True),
     # WH (ring) on 4x8: bigger worker L1 for RingAttention.
     _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl4_ring_is_fsdp1, _ring_worker_l1), True),
     # BH (linear) on 4x8: L1_SMALL for the vocoder conv taps (without it every tap filter OOMs on the
