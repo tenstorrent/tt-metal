@@ -143,6 +143,12 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             optional_output_tensor.value().layout() == Layout::ROW_MAJOR,
             "Output tensor must have ROW_MAJOR layout, got {}",
             optional_output_tensor.value().layout());
+        const auto expected_shape = ttnn::Shape(get_output_shape(input_tensor_a, args.dim, args.keepdim));
+        TT_FATAL(
+            optional_output_tensor.value().logical_shape() == expected_shape,
+            "Preallocated output tensor has incorrect shape! Got : {}, expected: {}",
+            optional_output_tensor.value().logical_shape(),
+            expected_shape);
     }
 
     if (args.dim.has_value()) {
