@@ -56,7 +56,9 @@ active value, so existing callers remain static. Changing configuration requires
 stopping and restarting the prefetcher, but does not require another Metal/TTNN
 build. Sender synchronization defaults on. It may be disabled for static
 comparisons, but dynamic ordinary-operation weights require it because that MPFE
-slot is shared by both senders.
+slot is shared by both senders. Such dynamic policies also require a dual-sender
+GCB on every targeted bank; single-sender requests are rejected because they
+cannot coordinate restoration of the shared slot with work on the peer.
 
 ## Benchmark controls
 

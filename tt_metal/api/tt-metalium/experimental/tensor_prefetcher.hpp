@@ -100,7 +100,8 @@ struct TensorPrefetcherInput {
 //
 // Each queued GCB selects which of the provisioned senders receive its PREFETCH
 // requests. Single-sender GCBs leave the second sender for each bank idle; dual-sender
-// GCBs use both.
+// GCBs use both. A policy that dynamically changes the shared ordinary-operation
+// weight requires dual senders on every targeted bank.
 //
 // Receiver count is owned by each GCB (read from the per-GCB sender state
 // block on every request), so a single prefetcher can serve GCBs with

@@ -201,6 +201,7 @@ private:
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;
     bool synchronize_senders_ = true;
+    bool dynamic_ordinary_mpfe_weight_ = false;
 
     // One program per IDevice in the mesh; programs_[d].
     std::vector<std::unique_ptr<Program>> programs_;

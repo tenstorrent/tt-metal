@@ -618,6 +618,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         mpfe_policy.idle.ordinary,
         mpfe_policy.active.ordinary);
     synchronize_senders_ = config.synchronize_senders;
+    dynamic_ordinary_mpfe_weight_ = mpfe_policy.idle.ordinary != mpfe_policy.active.ordinary;
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
@@ -742,6 +743,12 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         }
         return result;
     }();
+    TT_FATAL(
+        !dynamic_ordinary_mpfe_weight_ ||
+            std::all_of(synchronize_sender.begin(), synchronize_sender.end(), [](bool synchronize) {
+                return synchronize;
+            }),
+        "Dynamic ordinary-operation MPFE weights require every targeted bank to use both Tensor Prefetcher senders");
     uint32_t total_receivers = 0;
     for (const auto& [_sender, receivers] : mapping) {
         total_receivers += receivers.num_cores();
@@ -1370,6 +1377,7 @@ void TensorPrefetcherManager::stop() {
     num_senders_ = 0;
     num_banks_ = 0;
     synchronize_senders_ = true;
+    dynamic_ordinary_mpfe_weight_ = false;
     active_ = false;
 }
 
