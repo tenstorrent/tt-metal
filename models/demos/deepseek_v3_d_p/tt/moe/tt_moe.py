@@ -286,7 +286,7 @@ class TtMoe(LightweightModule):
             rms_norm_eps: eps for that latent norm. Passed explicitly because
                 TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
             routed_expert_activation: GLU activation the fused routed-expert kernel runs.
-                Defaults to SiLU (DeepSeek / K2.6 / GLM). Kimi-K3 passes SituGlu. Routed only --
+                Defaults to SiLU (DeepSeek / K2.7 / GLM). Kimi-K3 passes SituGlu. Routed only --
                 the shared expert takes shared_expert_activation, which is a separate knob.
             routed_expert_hybrid_token_threshold: split the routed experts across BOTH
                 routed-expert ops by load. None (default) keeps the single-op path. An int T
