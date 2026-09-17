@@ -36,13 +36,26 @@ _MAX_ULP = {
 }
 
 # test_unary_category1_bfloat16.py::test_bessel_ops gates ttnn.i0 separately, at
-# assert_with_ulp(..., 1) over an exhaustive bfloat16 sweep of [-10, 10] -- a
-# stricter, pre-existing 1-ULP budget this file does not share. Measured on
-# Blackhole p150b at this head: Max ULP Delta = 1.0, i.e. it still passes but with
-# no headroom left. The two budgets disagree because they build the golden
-# differently -- that test calls torch.i0 directly on a bfloat16-dtype tensor,
-# while _quantise below rounds to bfloat16 then calls torch.special.i0 in float32
-# -- not because the device output differs between the two runs.
+# assert_with_ulp(..., ulp_threshold=1) over an exhaustive bfloat16 sweep of
+# [-10, 10]. It measures 1.0 and passes.
+#
+# That 1.0 and the 0.91 above are not the same measurement, and comparing them
+# directly is a mistake. comp_ulp only resolves below 1 ULP when the golden is
+# higher precision than the output: test_bessel_ops compares a bfloat16 golden
+# against a bfloat16 output, and two bfloat16 values are always a whole number of
+# bfloat16 ULPs apart. So on that ruler 1.0 means "never more than one bfloat16
+# step off" -- the tightest it can express short of bit-exactness, not a near-miss.
+# The 0.91 is the distance from the float32 reference, on a ruler fine enough to
+# see fractions. The device output is the same in both cases.
+#
+# Measured together on one build, bfloat16 output throughout:
+#   bfloat16 golden, [-10, 10]   1.00   (worst at x = 6.03125)
+#   bfloat16 golden, all bfloat16 1.00  (same worst point)
+#   float32  golden, all bfloat16 0.91  (worst at x = 63.25)
+#   float32  golden, [-10, 10]   0.87   (worst at x = 8.8125)
+# The two bfloat16-golden rows share a worst case at x = 6.03125, just past the
+# |x| = 6 region split -- the poly and asymptotic branches disagree by one step
+# there, which is where this kernel's accuracy is tightest.
 
 
 def _quantise(x, dtype):
