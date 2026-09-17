@@ -14,7 +14,12 @@ import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.ccl import CCLManager
-from models.demos.gemma4.tt.dflash.attention import build_attention_mask_additive, project_and_cache_context_delta
+from models.demos.gemma4.tt.dflash.attention import (
+    _dflash_pad_noise_concat_enabled,
+    _tile_pad_len,
+    build_attention_mask_additive,
+    project_and_cache_context_delta,
+)
 from models.demos.gemma4.tt.dflash.config import Gemma4DFlashDrafterConfig
 from models.demos.gemma4.tt.dflash.layer import dflash_layer_forward
 from models.demos.gemma4.tt.dflash.weights import load_gemma4_dflash_weights
@@ -65,7 +70,16 @@ def test_dflash_layer0_t3k(mesh_device, device_params):
     cos_noise_tt = ttnn.slice(cos_full_tt, [0, 0, ctx_len, 0], [1, 1, ctx_len + block_size, head_dim])
     sin_noise_tt = ttnn.slice(sin_full_tt, [0, 0, ctx_len, 0], [1, 1, ctx_len + block_size, head_dim])
 
-    mask_torch = build_attention_mask_additive(ctx_len, block_size, is_causal, sliding_window)
+    # dflash_attention_forward pads the noise block's K/V to a tile boundary before
+    # concatenating onto the context cache when this flag is on (default) -- this test
+    # calls dflash_layer_forward directly, bypassing dflash_drafter_forward's own
+    # padding-aware mask_for closure, so it must size its own mask identically or the
+    # mask's key axis silently disagrees with the concat's actual width (TT_FATAL:
+    # mask_shape[3] == k_shape[2]). See build_attention_mask_additive's docstring.
+    q_len_padded = _tile_pad_len(block_size) if _dflash_pad_noise_concat_enabled() else None
+    mask_torch = build_attention_mask_additive(
+        ctx_len, block_size, is_causal, sliding_window, q_len_padded=q_len_padded
+    )
     mask_tt = to_tt(mask_torch)
 
     num_local_heads = config.num_attention_heads // mesh_config.tp

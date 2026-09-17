@@ -137,6 +137,43 @@ def _rope_expand_gather_enabled() -> bool:
     return os.environ.get("GEMMA4_ROPE_EXPAND_GATHER", "1").lower() not in ("0", "false", "no")
 
 
+_PACKED_KV_MEM_CACHE: dict = {}
+
+
+def _packed_kv_user_mem(q_sharded_mem):
+    """HEIGHT_SHARDED, batch=1, K-on-one-core/V-on-the-neighbor-core memory
+    layouts for a fused K+V cache write (``ttnn.experimental.paged_fused_update_cache``),
+    keyed/cached by ``q_sharded_mem``'s shard shape (the spec only depends on shape, not
+    on which call site is asking).
+
+    Ported from ``ign/gemma4_dflash_wh_changes``'s ``attention/decode.py`` (same file,
+    other branch) rather than reimplemented -- this branch's ``_kv_fused_write_enabled``
+    (below) was written assuming this helper already existed here, but it never was
+    ported over; only this one small, self-contained function is pulled in, not that
+    branch's surrounding ``packed_decode_forward`` changes (a P-as-batch SDPA fast path
+    and MTP call-site compatibility plumbing), which are unrelated, larger, and
+    unverified on this branch.
+    """
+    shard_shape = tuple(q_sharded_mem.shard_spec.shape)
+    cached = _PACKED_KV_MEM_CACHE.get(shard_shape)
+    if cached is not None:
+        return cached
+    k_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    v_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    k_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(k_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    v_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(v_grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    _PACKED_KV_MEM_CACHE[shard_shape] = (k_mem, v_mem)
+    return k_mem, v_mem
+
+
 def _kv_fused_write_enabled() -> bool:
     """Use ``ttnn.experimental.paged_fused_update_cache`` (one launch covering
     both K and V) instead of two separate ``paged_update_cache`` calls in the
@@ -145,12 +182,10 @@ def _kv_fused_write_enabled() -> bool:
     page-table row, written one at a time to avoid a same-tile read-modify-write
     race across candidates).
 
-    The fused op is already used elsewhere in this file for the unrelated
-    packed-verify KV write (``_write_packed_kv_sequential`` /
-    ``_packed_fused_kv_enabled``, default on there) — this reuses the identical
-    kernel and the identical K/V-on-separate-single-cores memory layout
-    (``_packed_kv_user_mem``) for DFlash's own batch-alias loop, which still
-    used the older two-call form.
+    Uses the same fused kernel and the same K/V-on-separate-single-cores memory
+    layout (``_packed_kv_user_mem``, above) as ``ign/gemma4_dflash_wh_changes``'s
+    unrelated packed-verify KV write -- this branch doesn't carry that other write
+    path, only the shared memory-layout helper.
 
     Only valid when the cache's own allocation view already matches this
     layer's view (``eff_bs == cache.padded_shape[2]`` and ``num_local_kv_heads

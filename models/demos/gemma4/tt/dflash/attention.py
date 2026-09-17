@@ -78,7 +78,7 @@ def _tile_pad_len(n: int, tile: int = _TILE_HEIGHT) -> int:
 
 
 def build_attention_mask_additive(
-    ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None
+    ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None, q_len_padded: int | None = None
 ) -> torch.Tensor:
     """Host torch additive mask [1,1,q_len,ctx_len+q_len], ported from the reference
     Qwen3DFlashAttention's _attention_mask (dflash.py). 0.0 where visible, -inf where not.
@@ -86,9 +86,19 @@ def build_attention_mask_additive(
     Query row i is the (ctx_len+i)-th absolute position (queries are the tail of the
     combined [context, noise] sequence) -- so context columns (< ctx_len) are always
     visible under causal masking, and only the noise-vs-noise sub-block is restricted.
+
+    ``q_len_padded``: same meaning as ``build_attention_mask_additive_device`` -- when
+    given (> q_len), extends the key axis to ``ctx_len + q_len_padded`` instead of
+    ``ctx_len + q_len``, with the extra trailing columns forced invisible. Any direct
+    caller of ``dflash_attention_forward`` (bypassing ``dflash_drafter_forward``'s own
+    padding-aware ``mask_for`` closure) MUST pass this when
+    ``_dflash_pad_noise_concat_enabled()`` is on, or the mask's key axis silently
+    disagrees with the K/V ``ttnn.concat``'s actual (padded) width -- see that function's
+    docstring.
     """
-    total = ctx_len + q_len
-    query_position = (total - q_len) + torch.arange(q_len)[:, None]
+    total_real = ctx_len + q_len
+    total = ctx_len + (q_len_padded if q_len_padded else q_len)
+    query_position = (total_real - q_len) + torch.arange(q_len)[:, None]
     key_position = torch.arange(total)[None, :]
     visible = torch.ones((q_len, total), dtype=torch.bool)
     if is_causal:
@@ -97,6 +107,8 @@ def build_attention_mask_additive(
         visible &= (query_position - key_position) < sliding_window
         if not is_causal:
             visible &= (key_position - query_position) < sliding_window
+    if total > total_real:
+        visible &= key_position < total_real
     # -1e4 (not -inf): matches the established bf16-safe convention elsewhere in this repo
     # (ttnn_gated_attention.py's segmented_attn_mask) -- large enough to zero out via softmax
     # without the NaN risk -inf carries in bfloat16.
