@@ -128,13 +128,14 @@ FORCE_INLINE void prefetcher_write_chunk(
     }
 }
 
-// `local_pages_stride` is the byte stride between a sender's per-receiver counter pairs in its own
-// L1, with pages_acked half a stride above pages_sent. A DRAM-sender GlobalCircularBuffer packs
-// them at uint32 stride (REMOTE_CB_LOCAL_PAGES_STRIDE); a DRAM-sender PrefetcherPipe keeps the
-// 2 * L1_ALIGNMENT stride its worker-sender counterpart uses (kPipeLocalCountersStride). The
-// remote stride is 2 * L1_ALIGNMENT either way, and the credit unit is the same
+// `local_pages_stride` and `remote_pages_stride` are the byte steps from one receiver's credit
+// counter to the next, in this sender's own L1 and on the receivers' side respectively. A
+// DRAM-sender GlobalCircularBuffer interleaves its local pages_sent/pages_acked at uint32 stride
+// (REMOTE_CB_LOCAL_PAGES_STRIDE) and addresses 2 * L1_ALIGNMENT-strided pairs on the receivers; a
+// DRAM-sender PrefetcherPipe keeps sent and acked in separate blocks, so a receiver's step is one
+// L1_ALIGNMENT at both ends. The credit unit is the same either way
 // (REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == L1_ALIGNMENT), so the two transports differ only in
-// this one value. It is an argument rather than a template parameter so the sender loop is emitted
+// these values. They are arguments rather than template parameters so the sender loop is emitted
 // once -- DRISC text is the tight resource -- and carries no per-iteration transport branch.
 template <bool skip_ptr_update>
 FORCE_INLINE void prefetcher_finalize_block(
@@ -142,7 +143,8 @@ FORCE_INLINE void prefetcher_finalize_block(
     uint32_t page_bytes_per_recv,
     uint32_t num_receivers,
     uint8_t noc,
-    uint32_t local_pages_stride) {
+    uint32_t local_pages_stride,
+    uint32_t remote_pages_stride) {
     uint32_t len_bytes = page_bytes_per_recv;
     uint32_t next_wr_ptr = iface.fifo_wr_ptr + page_bytes_per_recv;
     if (next_wr_ptr >= iface.fifo_limit_page_aligned) {
@@ -164,7 +166,7 @@ FORCE_INLINE void prefetcher_finalize_block(
         const uint64_t remote_sent_addr = get_noc_addr_helper(remote_noc_xy, remote_sent_base);
         noc_semaphore_inc<skip_ptr_update>(remote_sent_addr, fifo_pages_sent, noc);
         local_pages_sent += local_pages_stride / sizeof(uint32_t);
-        remote_sent_base += 2 * L1_ALIGNMENT;
+        remote_sent_base += remote_pages_stride;
         recv_xy_ptr += 2;
     }
     iface.fifo_wr_ptr = next_wr_ptr;
@@ -174,13 +176,17 @@ FORCE_INLINE void prefetcher_finalize_block(
 // across receivers, used by the recv-contig batched main loop to size the next round. The ring
 // capacity is the only thing this adds to the shared scan, and it lives in the config page.
 // REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE is L1_ALIGNMENT, so an aligned page is a credit unit.
-FORCE_INLINE uint32_t
-poll_min_free_aligned_pages(const RemoteSenderCBInterface& iface, uint32_t num_receivers, uint32_t local_pages_stride) {
+FORCE_INLINE uint32_t poll_min_free_aligned_pages(
+    const RemoteSenderCBInterface& iface,
+    uint32_t num_receivers,
+    uint32_t local_acked_base,
+    uint32_t local_pages_stride) {
     const uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[3];
     return experimental::dram_sender_min_free_units(
         iface.aligned_pages_sent_ptr,
-        num_receivers,
+        local_acked_base,
         local_pages_stride,
+        num_receivers,
         fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE);
 }
 
@@ -200,8 +206,8 @@ FORCE_INLINE void load_pipe_sender_state(
     iface.fifo_start_addr = ctx.fifo_start_addr;
     iface.fifo_page_size = entry_size;
     iface.receiver_noc_xy_ptr = ctx.receiver_noc_xy_ptr;
-    iface.aligned_pages_sent_ptr = ctx.local_counters_ptr;
-    iface.num_receivers_and_remote_pages_sent_ptr = remote_cb_pack(ctx.num_receivers, ctx.remote_counters_base);
+    iface.aligned_pages_sent_ptr = ctx.local_sent_base;
+    iface.num_receivers_and_remote_pages_sent_ptr = remote_cb_pack(ctx.num_receivers, ctx.remote_sent_base);
     iface.fifo_limit_page_aligned = ctx.fifo_start_addr + (ctx.ring_bytes - ctx.ring_bytes % entry_size);
     iface.fifo_wr_ptr = ctx.fifo_start_addr + experimental::pipe_sender_wr_offset(ctx, 0);
 }
@@ -307,11 +313,14 @@ void kernel_main() {
             // which the next program is free to reuse.
             if (loaded_target == LoadedTarget::PrefetcherPipe) {
                 // remote_cb_sender_barrier is the GlobalCircularBuffer's spelling of this and
-                // assumes the packed DRISC counter stride, so a pipe drains on the shared one.
+                // assumes its interleaved DRISC counters, so a pipe drains on the shared one. The
+                // ACKED block base comes off the config page the last request loaded, which is the
+                // same page iface.aligned_pages_sent_ptr points into.
                 experimental::dram_sender_barrier(
                     iface.aligned_pages_sent_ptr,
-                    remote_cb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr),
-                    experimental::kPipeLocalCountersStride);
+                    experimental::pipe_local_acked_base(iface.config_ptr),
+                    L1_ALIGNMENT,
+                    remote_cb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr));
             } else if (loaded_target == LoadedTarget::GlobalCircularBuffer) {
                 experimental::remote_cb_sender_barrier(remote_cb_id);
             }
@@ -353,15 +362,20 @@ void kernel_main() {
 
         // Which kind of target the state address above points at.
         const bool is_pipe = req->prefetch.transport == tt::tt_metal::TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
-        // The only thing the credit loops need from the transport; hoisted here so they stay
-        // branch-free (see prefetcher_finalize_block).
-        const uint32_t local_pages_stride =
-            is_pipe ? experimental::kPipeLocalCountersStride : experimental::REMOTE_CB_LOCAL_PAGES_STRIDE;
+        // All the credit loops need from the transport; hoisted here so they stay branch-free (see
+        // prefetcher_finalize_block).
+        const uint32_t local_pages_stride = is_pipe ? L1_ALIGNMENT : experimental::REMOTE_CB_LOCAL_PAGES_STRIDE;
+        const uint32_t remote_pages_stride = is_pipe ? L1_ALIGNMENT : 2 * L1_ALIGNMENT;
 
         if (!is_pipe) {
             load_sender_state(state, iface);
         }
         loaded_target = is_pipe ? LoadedTarget::PrefetcherPipe : LoadedTarget::GlobalCircularBuffer;
+        // Where this sender reads its receivers' acks: a pipe keeps them in a second block of its
+        // config page, a GlobalCircularBuffer interleaves them with pages_sent.
+        const uint32_t local_acked_base =
+            is_pipe ? experimental::pipe_local_acked_base(target_state_addr)
+                    : iface.aligned_pages_sent_ptr + experimental::REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET;
         // num_receivers lives inside the target's per-sender state. Reading it per request lets a
         // single prefetcher serve targets with different receiver counts.
         const uint32_t num_receivers =
@@ -553,7 +567,12 @@ void kernel_main() {
                     if (sb + 1 == t_num_sub && ch + 1 == t_M) {
                         noc_async_posted_writes_flushed();
                         prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                            iface, t_page_bytes_per_recv, num_receivers, noc_index, local_pages_stride);
+                            iface,
+                            t_page_bytes_per_recv,
+                            num_receivers,
+                            noc_index,
+                            local_pages_stride,
+                            remote_pages_stride);
                     } else {
                         // The ping-pong DMA can reuse this stage slot two chunks later.
                         // Make sure all posted writes sourced from it have departed first.
@@ -612,7 +631,7 @@ void kernel_main() {
                     PROF_TICK(t_poll_start);
                     do {
                         const uint32_t min_free_aligned =
-                            poll_min_free_aligned_pages(iface, num_receivers, local_pages_stride);
+                            poll_min_free_aligned_pages(iface, num_receivers, local_acked_base, local_pages_stride);
                         min_free_blocks = min_free_aligned / fifo_pages_per_block;
                     } while (min_free_blocks == 0);
                     PROF_TICK(t_poll_end);
@@ -839,7 +858,12 @@ void kernel_main() {
                     PROF_DECL_TS(t_fn1);
                     PROF_TICK(t_fn0);
                     prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                        iface, B * t_page_bytes_per_recv, num_receivers, noc_index, local_pages_stride);
+                        iface,
+                        B * t_page_bytes_per_recv,
+                        num_receivers,
+                        noc_index,
+                        local_pages_stride,
+                        remote_pages_stride);
                     PROF_TICK(t_fn1);
                     PROF_ACC(prof_finalize, t_fn1, t_fn0);
                     pages_sent_global += B;
