@@ -38,46 +38,12 @@
 #endif
 
 #include <array>
-
-#if defined(PROFILE_STREAMING)
 #include "tools/profiler/sync/eth_ptp_link.hpp"
 // The streaming profiler's device-to-device sync rides on this link when the host chose it (LINK_SYNC_ROLE): one end
-// sends the frames, the other echoes them (eth_ptp_link.hpp), from ERISC 0, in steps of ~1 us at most taken every
-// few loop turns. Its L1 is the LINK_SYNC_ADDR region the config left clear at the top of the unreserved space, and
-// its stamps go out through this core's profiler ring, which the idle eth core's pusher drains.
-namespace link_sync {
-constexpr bool kActive = MY_ERISC_ID == 0 && link_sync_role != 0;
-static tt::tt_metal::eth_ptp::LinkEnd<link_sync_role == 1, ENABLE_RISC_CPU_DATA_CACHE> g_end;
-FORCE_INLINE void open() {
-    if constexpr (kActive) {
-        g_end.open();
-    }
-}
-FORCE_INLINE void start() {
-    if constexpr (kActive) {
-        g_end.start(
-            link_sync_addr, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset, tt::tt_metal::eth_ptp::kPaceTicks);
-    }
-}
-FORCE_INLINE void step() {
-    if constexpr (kActive) {
-        g_end.step();
-    }
-}
-FORCE_INLINE void stop() {
-    if constexpr (kActive) {
-        g_end.stop();
-    }
-}
-}  // namespace link_sync
-#else
-namespace link_sync {
-FORCE_INLINE void open() {}
-FORCE_INLINE void start() {}
-FORCE_INLINE void step() {}
-FORCE_INLINE void stop() {}
-}  // namespace link_sync
-#endif
+// sends the frames, the other echoes them, from ERISC 0, in steps of ~1 us at most taken every few loop turns. Its L1
+// is the LINK_SYNC_ADDR region the config left clear at the top of the unreserved space, and its stamps go out through
+// this core's profiler ring, which the idle eth core's pusher drains.
+static tt::tt_metal::eth_ptp::RouterHook<MY_ERISC_ID == 0 ? link_sync_role : 0u, ENABLE_RISC_CPU_DATA_CACHE> link_sync;
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -2659,7 +2625,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
             if ((fabric_heartbeat_counter & 0xF) == 0) {
-                link_sync::step();
+                link_sync.step();
             }
 
             if constexpr (enable_context_switch) {
@@ -3815,8 +3781,7 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
-    link_sync::open();
-    link_sync::start();
+    link_sync.start(link_sync_addr);
     run_fabric_edm_main_loop<
         NUM_RECEIVER_CHANNELS,
         RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
@@ -3840,7 +3805,7 @@ void kernel_main() {
 #endif  // FABRIC_2D_VC2_SERVICED
         port_direction_table,
         local_sender_channel_free_slots_stream_ids);
-    link_sync::stop();
+    link_sync.stop();
     WAYPOINT("LPDN");
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(

@@ -12,6 +12,22 @@
 #include <type_traits>
 
 #include "hostdev/streaming_profiler_common.h"
+
+namespace tt::tt_metal::eth_ptp {
+
+// The end a fabric router hosts (fabric_erisc_router.cpp), by its LINK_SYNC_ROLE: 0 is no end and compiles to
+// nothing, as does any role on a part without the timestamping hardware; 1 sends, 2 echoes (below).
+template <uint32_t Role, bool DataCache>
+struct RouterHook {
+    void start(uint32_t) {}
+    void step() {}
+    void stop() {}
+};
+
+}  // namespace tt::tt_metal::eth_ptp
+
+#if defined(ARCH_BLACKHOLE)
+
 #include "internal/ethernet/eth_ptp.hpp"
 #if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
 #include "tools/profiler/kernel_profiler.hpp"
@@ -607,4 +623,24 @@ private:
 template <bool Sender, bool DataCache>
 using LinkEnd = std::conditional_t<Sender, SenderLink<DataCache>, ReceiverLink<DataCache>>;
 
+// A router's end over its LINK_SYNC_ADDR region, at the product's pace.
+template <bool Sender, bool DataCache>
+struct HostedEnd {
+    LinkEnd<Sender, DataCache> end;
+    // All three always inline: as out-of-line members they shift the compiler's inlining of the router's own callees
+    // and cost it 528 B of text, past the active-eth kernel-config budget.
+    __attribute__((always_inline)) void start(uint32_t l1) {
+        end.open();
+        end.start(l1, l1 + kCtlOffset, kPaceTicks);
+    }
+    __attribute__((always_inline)) void step() { end.step(); }
+    __attribute__((always_inline)) void stop() { end.stop(); }
+};
+template <bool DataCache>
+struct RouterHook<1, DataCache> : HostedEnd<true, DataCache> {};
+template <bool DataCache>
+struct RouterHook<2, DataCache> : HostedEnd<false, DataCache> {};
+
 }  // namespace tt::tt_metal::eth_ptp
+
+#endif  // ARCH_BLACKHOLE
