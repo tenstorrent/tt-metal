@@ -3457,6 +3457,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     const KernelSpecName COMPUTE{"compute"};
 
     const DFBSpecName IN0_DFB{"in0"};
+    const DFBSpecName IN0_RELAY_DFB{"in0_relay"};
     const DFBSpecName IN1_DFB{"in1"};
     const DFBSpecName IN0_SHARDED_DFB{"in0_sharded"};
     const DFBSpecName OUT_DFB{"out"};
@@ -3603,14 +3604,51 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         return others;
     };
 
+    // Which in0 senders land on nodes that own a shard but produce no output block. Computed here
+    // because the relay buffer below is conditional on it; reused at the kernel-spec sites.
+    const bool has_in0_no_work_in_receiver_kernel =
+        in0_is_sharded && in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0;
+    const bool has_in0_no_work_not_in_receiver_kernel =
+        in0_is_sharded && in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0;
+    const bool has_in0_relay_dfb = has_in0_no_work_in_receiver_kernel || has_in0_no_work_not_in_receiver_kernel;
+
     // in0
-    dataflow_buffers.push_back(DataflowBufferSpec{
+    DataflowBufferSpec in0_dfb_spec{
         .unique_id = IN0_DFB,
         .entry_size = in0_aligned_tile_size,
         .num_entries = in0_dfb_size / in0_aligned_tile_size,
         .data_format_metadata = in0_data_format,
         .tile_format_metadata = in0_tile,
-    });
+    };
+
+    // The in0 multicast relay buffer.
+    //
+    // in0 is a plain per-node FIFO: the sender fills a slot (the payload arrives by NoC, from this
+    // node or a peer) and compute drains it. The nodes that own a K-slice but no output block have
+    // no compute, so they are not part of that FIFO -- yet they still multicast into it, and a
+    // multicast writes one L1 offset on every destination. The sender derives that offset from a
+    // local cursor it advances in step with the receivers, so its buffer must sit at in0's offset.
+    // Hence a second DFB, self-looped by the senders on those nodes, with in0's geometry.
+    //
+    // The two offsets coincide because this pair is declared before any other DFB, so each starts at
+    // its own allocator's base. That is the allocator's behaviour, not a declared property --
+    // inserting any DFB on the work nodes ahead of in0 would part them by that DFB's size. Metal 2.0
+    // cannot state the requirement yet (alias_with is the mechanism, but it requires members to
+    // cover identical nodes; #56887 lifts that); until it can, KEEP THIS PAIR FIRST.
+    //
+    // Both no-work senders share this one relay: they run the same source on disjoint node sets, so
+    // its producer and consumer sets are equal and every node still hosts exactly one of each.
+    DataflowBufferSpec in0_relay_dfb_spec{
+        .unique_id = IN0_RELAY_DFB,
+        .entry_size = in0_dfb_spec.entry_size,
+        .num_entries = in0_dfb_spec.num_entries,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    };
+    dataflow_buffers.push_back(std::move(in0_dfb_spec));
+    if (has_in0_relay_dfb) {
+        dataflow_buffers.push_back(std::move(in0_relay_dfb_spec));
+    }
 
     // in1
     dataflow_buffers.push_back(DataflowBufferSpec{
@@ -3723,23 +3761,27 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                        : "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
                          "reader_bmm_tile_layout_in0_sender_padding_metal2.cpp";
 
-    // Common bindings for every instance of the in0 sender.
-    auto in0_sender_dfb_bindings = [&](bool core_has_output_block_work) {
+    // Common bindings for every instance of the in0 sender. in0_dfb is the multicast staging buffer
+    // this instance works through: in0 itself on the nodes that feed compute, the co-located relay on
+    // the nodes that only send. The accessor name is "in0" either way, so the kernel source does not
+    // distinguish them.
+    auto in0_sender_dfb_bindings = [&](bool core_has_output_block_work, const DFBSpecName& in0_dfb) {
         Group<DFBBinding> b = {
             DFBBinding{
-                .dfb_spec_name = IN0_DFB,
+                .dfb_spec_name = in0_dfb,
                 .accessor_name = "in0",
                 .endpoint_type = DFBEndpointType::PRODUCER,
             },
         };
         if (!core_has_output_block_work) {
-            // These nodes run no compute and no writer, so nothing downstream drains in0. The sender
-            // pops its own tiles instead (the `if constexpr (!core_has_output_block_work)` pop at the
-            // bottom of the block loop), which keeps the write pointer in lockstep with the cores
-            // that do have work -- the multicast depends on every participant agreeing on it. One
-            // toucher doing both halves is a self-loop.
+            // These nodes run no compute and no writer, so nothing downstream drains the buffer. The
+            // sender pops its own tiles instead (the `if constexpr (!core_has_output_block_work)` pop
+            // at the bottom of the block loop), which keeps the write pointer in lockstep with the
+            // cores that do have work -- the multicast depends on every participant agreeing on it.
+            // One toucher doing both halves is a self-loop, which is why this is the relay buffer and
+            // not in0: in0's consumer is compute, and a role cannot mix kernel kinds.
             b.push_back(DFBBinding{
-                .dfb_spec_name = IN0_DFB,
+                .dfb_spec_name = in0_dfb,
                 .accessor_name = "in0",
                 .endpoint_type = DFBEndpointType::CONSUMER,
             });
@@ -3830,8 +3872,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
     // The block-sharded source reads shard_width/height and the mcast lists; the interleaved one
     // reads the in0 tensor. Only the interleaved source binds a tensor accessor.
-    auto make_in0_sender_spec =
-        [&](const KernelSpecName& unique_id, bool core_has_output_block_work, bool core_in_receiver_grid) {
+    auto make_in0_sender_spec = [&](const KernelSpecName& unique_id,
+                                    bool core_has_output_block_work,
+                                    bool core_in_receiver_grid,
+                                    const DFBSpecName& in0_dfb) {
             KernelSpec k{
                 .unique_id = unique_id,
                 .source = in0_sender_source,
@@ -3839,7 +3883,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                     {
                         .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in0_sender_writer_defines),
                     },
-                .dfb_bindings = in0_sender_dfb_bindings(core_has_output_block_work),
+                .dfb_bindings = in0_sender_dfb_bindings(core_has_output_block_work, in0_dfb),
                 .semaphore_bindings = in0_mcast_sem_bindings,
                 .compile_time_args = make_in0_sender_cta(core_has_output_block_work, core_in_receiver_grid),
                 .hw_config = in0_sender_hw_config,
@@ -3871,17 +3915,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             return k;
         };
 
-    kernels.push_back(make_in0_sender_spec(IN0_SENDER, true, true));
+    kernels.push_back(make_in0_sender_spec(IN0_SENDER, true, true, IN0_DFB));
 
-    const bool has_in0_no_work_in_receiver_kernel =
-        in0_is_sharded && in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0;
+    // Both no-work senders work the relay buffer, not in0 (see its declaration above).
     if (has_in0_no_work_in_receiver_kernel) {
-        kernels.push_back(make_in0_sender_spec(IN0_NO_WORK_IN_RECV, false, true));
+        kernels.push_back(make_in0_sender_spec(IN0_NO_WORK_IN_RECV, false, true, IN0_RELAY_DFB));
     }
-    const bool has_in0_no_work_not_in_receiver_kernel =
-        in0_is_sharded && in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0;
     if (has_in0_no_work_not_in_receiver_kernel) {
-        kernels.push_back(make_in0_sender_spec(IN0_NO_WORK_NOT_IN_RECV, false, false));
+        kernels.push_back(make_in0_sender_spec(IN0_NO_WORK_NOT_IN_RECV, false, false, IN0_RELAY_DFB));
     }
 
     // ---- in0 receiver ----------------------------------------------------
