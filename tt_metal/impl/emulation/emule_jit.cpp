@@ -48,11 +48,6 @@ bool emit_named_args_header(
 #error "TT_EMULE_INCLUDE_DIR must be defined by CMake"
 #endif
 
-namespace tt::tt_metal::experimental::blaze {
-std::string emit_named_args_header(
-    const NamedCTArgNamespaces& named_ct_arg_namespaces, const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces);
-}  // namespace tt::tt_metal::experimental::blaze
-
 namespace tt::tt_metal::emule {
 
 std::mutex g_jit_cache_mutex;

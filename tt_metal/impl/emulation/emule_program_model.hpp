@@ -22,9 +22,6 @@ struct SocView;
 
 namespace tt::tt_metal::emule {
 
-// Mirrors RTA_CRTA_NO_ARGS_SENTINEL in tt_metal/hw/inc/hostdev/rta_constants.h.
-constexpr uint16_t kRtaCrtaNoArgsSentinel = 0xFFFF;
-
 struct PendingKernelInfo {
     // Parallels KernelInfo::variants but holds cache keys pending compile-resolution.
     std::vector<std::string> variant_cache_keys;
@@ -34,8 +31,8 @@ struct PendingKernelInfo {
     bool is_tensix = false;
     uint32_t num_threads = 1;
     uint32_t kernel_config_base = 0;
-    uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
-    uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    uint16_t rta_offset_in_kc = tt_emule::kRtaCrtaNoArgsSentinel;
+    uint16_t crta_offset_in_kc = tt_emule::kRtaCrtaNoArgsSentinel;
     // Runtime-arg values (unique + common); buffer L1 addresses appear verbatim, so
     // Object-Intent uses them to find this kernel's I/O tensors (§12).
     std::vector<uint32_t> rt_arg_values;

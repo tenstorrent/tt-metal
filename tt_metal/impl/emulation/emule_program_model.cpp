@@ -104,7 +104,7 @@ void collect_kernels(
         Metal2BindingsSnapshot bindings = snapshot_from_bindings(kd.bindings);
         for (const auto& [sem_name, h] : bindings.sem_accessors) {
             TT_FATAL(
-                h.scope != SemScope::DM_LOCAL_CACHED,
+                h.scope != tt_emule::SemScope::DM_LOCAL_CACHED,
                 "Internal error: semaphore '{}' resolved to DM_LOCAL_CACHED under emule, but the emule "
                 "backend does not model the cached pool (no seeder is emitted); the classifier "
                 "(ResolveSemaphoreScope) must never pick the cached tier for this backend.",
@@ -281,8 +281,8 @@ void collect_kernels(
                         }
                     }
                     uint32_t kernel_config_base = ck ? ck->kernel_config_base : 0;
-                    uint16_t rta_off = ck ? ck->rta_offset : kRtaCrtaNoArgsSentinel;
-                    uint16_t crta_off = ck ? ck->crta_offset : kRtaCrtaNoArgsSentinel;
+                    uint16_t rta_off = ck ? ck->rta_offset : tt_emule::kRtaCrtaNoArgsSentinel;
+                    uint16_t crta_off = ck ? ck->crta_offset : tt_emule::kRtaCrtaNoArgsSentinel;
                     // Runtime-arg values (unique + common) for this kernel on this core; the
                     // Object-Intent check uses them to find its I/O tensors. Build once, copy.
                     std::vector<uint32_t> rt_arg_values;

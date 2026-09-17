@@ -13,8 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "impl/kernels/kernel.hpp"  // Kernel, SemScope, SemaphoreBindingHandle, SemBindingEntry, emit_semaphore_binding_tokens
-#include "emule_program_descriptor.hpp"  // tt_emule::Bindings
+#include "emule_program_descriptor.hpp"  // tt_emule::Bindings, tt_emule::SemScope
 
 namespace tt::tt_metal::emule {
 
@@ -35,6 +34,12 @@ struct Metal2BindingsSnapshot {
         uint32_t size_bytes;
         uint32_t addr_crta_word;
     };
+    // Semaphore binding accessor, flattened from the POD Bindings (no private Kernel type).
+    struct SemAccessor {
+        uint16_t id = 0;
+        tt_emule::SemScope scope = tt_emule::SemScope::LOCAL_NONATOMIC;
+        uint32_t total_binder_harts = 0;
+    };
 
     bool is_metal2 = false;
     std::vector<std::string> runtime_arg_names;
@@ -42,7 +47,7 @@ struct Metal2BindingsSnapshot {
     std::map<std::string, uint32_t> dfb_accessors;
     std::map<std::string, bool> dfb_accessor_is_relay;
     std::map<std::string, uint8_t> dfb_accessor_prefetcher_pipe_id;
-    std::map<std::string, SemaphoreBindingHandle> sem_accessors;
+    std::map<std::string, SemAccessor> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
 

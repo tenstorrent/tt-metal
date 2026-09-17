@@ -5,6 +5,8 @@
 
 #include <algorithm>  // std::sort
 
+#include "jit_build/jit_build_settings.hpp"  // SemScope, SemBindingEntry, emit_semaphore_binding_tokens
+
 namespace tt::tt_metal::emule {
 
 Metal2BindingsSnapshot snapshot_from_bindings(const tt_emule::Bindings& b) {
@@ -18,8 +20,7 @@ Metal2BindingsSnapshot snapshot_from_bindings(const tt_emule::Bindings& b) {
         s.dfb_accessor_prefetcher_pipe_id[d.name] = d.prefetcher_pipe;
     }
     for (const auto& sm : b.sem) {
-        s.sem_accessors[sm.name] = {
-            sm.sem_id, static_cast<SemScope>(static_cast<uint8_t>(sm.scope)), sm.total_binder_harts};
+        s.sem_accessors[sm.name] = {sm.sem_id, sm.scope, sm.total_binder_harts};
     }
     for (const auto& t : b.tensor) {
         s.ta_accessors.push_back({t.name, t.cta_offset, t.addr_crta_offset});
@@ -39,7 +40,7 @@ void emit_metal2_namespaces(
     std::vector<tt::tt_metal::SemBindingEntry> sem_entries;
     sem_entries.reserve(s.sem_accessors.size());
     for (const auto& [name, h] : s.sem_accessors) {
-        sem_entries.push_back({name, h.id, h.scope});
+        sem_entries.push_back({name, h.id, static_cast<SemScope>(static_cast<uint8_t>(h.scope))});
     }
     if (has_args) {
         f << "#include \"experimental/kernel_args.h\"\n";

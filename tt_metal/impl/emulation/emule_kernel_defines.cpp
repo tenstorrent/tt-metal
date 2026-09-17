@@ -12,7 +12,6 @@
 #include "emule_device_map.hpp"     // NUM_NOCS
 #include "emule_sanitizers.hpp"     // EMULE_NUM_CBS
 #include "emule_tile_geometry.hpp"  // resolve_tile_geometry, ResolvedTileGeometry
-#include <tt-metalium/experimental/fabric/fabric.hpp>  // is_2d_fabric_config
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tile.hpp>

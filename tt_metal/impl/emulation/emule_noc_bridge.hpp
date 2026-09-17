@@ -28,6 +28,10 @@ inline void emule_require_self(const char* fn) {
 // emule_noc_bridge.cpp.
 extern thread_local uint8_t my_x[NUM_NOCS];
 extern thread_local uint8_t my_y[NUM_NOCS];
+// Silicon-named per-core LOGICAL coords (firmware globals), restored per fiber swap-in. Global
+// scope + unmangled for dlopen(-rdynamic) JIT symbol resolution — see the .cpp.
+extern thread_local uint8_t my_logical_x_;
+extern thread_local uint8_t my_logical_y_;
 
 // Declared for the runner's internal callers (e.g. the fabric deliver path calls
 // __emule_fiber_wake). Kernels resolve all of these by dlsym, not via this header.

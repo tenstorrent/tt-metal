@@ -11,6 +11,7 @@
 #include "emule_sanitizers.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"  // ::dfb::TENSIX_RISC_OFFSET
 #include <tt-metalium/device.hpp>
+#include <tt_stl/assert.hpp>    // TT_FATAL
 #include <tt-metalium/hal.hpp>  // HalProgrammableCoreType
 #include "hostdevcommon/fabric_common.h"
 #include "umd/device/chip/sw_emule_chip.hpp"
@@ -285,7 +286,7 @@ void setup_core_state(
         bool has_tc_dfbs = !cd->dfbs.empty() && soc.has_tile_counter_registers;
         std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, soc, cd->dfbs);
 
-        uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
+        uint32_t sem_region_size = soc.num_semaphores * EMULE_SEM_ALIGN;
         core_setups.push_back(
             {logical_core,
              core,

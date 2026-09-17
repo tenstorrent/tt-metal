@@ -6,9 +6,6 @@
 // metal_SocDescriptor, HAL); the interpretation modules consume the POD alone. Reads mirror
 // silicon's extraction 1:1 so the POD carries exactly what silicon feeds. Every consumer
 // (program_model / kernel_defines / metal2_emit / device_map / cb_dfb_setup) reads this POD.
-// The only fields still left default with TODO(stage2) are the PctInfo kernel_config addr/size
-// and default-unreserved addr — no current consumer needs them (their dev-addr/size reads are
-// per-pct conditional; add them behind a guarded read when one does).
 
 #include "emule_descriptor_builder.hpp"
 
@@ -82,17 +79,18 @@ ProcIdList compute_proc_ids_and_thread_count(
 
 }  // namespace
 
-// ── SocView: mirrors populate_bank_mapping (1184-1284) + build_worker_coord_maps
-//    (1289-1319) + the HAL/arch reads scattered in build_kernel_defines / setup_core_state.
-SocView build_soc_view(IDevice* device) {
+// ── SocView: SoC geometry, bank maps, and the HAL/arch reads the interpretation modules need.
+SocView build_soc_view(IDevice* device, Program& program) {
     auto& ctx = MetalContext::instance();
+    // Fabric routing identity (mesh/chip id + ROUTING_TABLE addr) is per program-context; the rest
+    // of the SoC view is program-invariant.
+    auto& prog_ctx = MetalContext::instance(program.impl().get_context_id());
     auto& cluster = ctx.get_cluster();
     const auto& msoc = cluster.get_soc_desc(device->id());
     const auto& hw = ctx.hal();
 
     SocView v;
     v.arch = static_cast<uint32_t>(cluster.arch());
-    v.fabric_config = static_cast<uint32_t>(ctx.get_fabric_config());
     v.fabric_2d = tt::tt_fabric::is_2d_fabric_config(ctx.get_fabric_config());
 
     // DRAM views: per-view [NOC0,NOC1] preferred worker coord + address offset.
@@ -120,22 +118,10 @@ SocView build_soc_view(IDevice* device) {
         v.l1_banks.push_back(bank);
     }
 
-    // Worker logical->virtual col/row maps (padded to 64, matching build_worker_coord_maps).
-    auto grid = device->compute_with_storage_grid_size();
-    v.worker_grid_x = grid.x;
-    v.worker_grid_y = grid.y;
-    for (uint32_t lx = 0; lx < grid.x && lx < 64; ++lx) {
-        v.worker_col_to_virt[lx] =
-            device->virtual_core_from_logical_core(tt::tt_metal::CoreCoord(lx, 0), tt::CoreType::WORKER).x;
-    }
-    for (uint32_t ly = 0; ly < grid.y && ly < 64; ++ly) {
-        v.worker_row_to_virt[ly] =
-            device->virtual_core_from_logical_core(tt::tt_metal::CoreCoord(0, ly), tt::CoreType::WORKER).y;
-    }
-
     v.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     v.l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     v.arch_num_circular_buffers = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    v.num_semaphores = tt::tt_metal::NUM_SEMAPHORES;
     v.has_tile_counter_registers = hw.has_tile_counter_registers();
 
     const uint32_t pct_count = hw.get_programmable_core_type_count();
@@ -143,17 +129,15 @@ SocView build_soc_view(IDevice* device) {
         auto ct = hw.get_programmable_core_type(pct);
         PctInfo p;
         p.core_type = static_cast<uint32_t>(ct);
-        // routing_table_addr: only the TENSIX read is consumed today (setup_core_state fabric
-        // identity write). get_dev_addr(ROUTING_TABLE) for other core types may be undefined, so
-        // fill it only where a consumer needs it. kernel_config_addr / _size / default_unreserved
-        // stay TODO(stage2): those dev-addr/size reads are per-pct CONDITIONAL (e.g.
-        // get_dev_size(KERNEL_CONFIG) asserts for TENSIX) — mirror the guarded reads when needed.
+        // Only the TENSIX routing-table addr is consumed (setup_core_state's fabric-identity write);
+        // get_dev_addr(ROUTING_TABLE) may be undefined for other core types. Program-context addr.
         if (ct == HalProgrammableCoreType::TENSIX) {
-            p.routing_table_addr = static_cast<uint32_t>(hw.get_dev_addr(ct, HalL1MemAddrType::ROUTING_TABLE));
+            p.routing_table_addr =
+                static_cast<uint32_t>(prog_ctx.hal().get_dev_addr(ct, HalL1MemAddrType::ROUTING_TABLE));
         }
         v.pcts.push_back(p);
     }
-    const auto fabric_node = ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
+    const auto fabric_node = prog_ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
     v.mesh_id = static_cast<uint32_t>(*fabric_node.mesh_id);
     v.chip_id = static_cast<uint32_t>(fabric_node.chip_id);
     return v;
@@ -168,7 +152,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     EmuleProgramDescriptor pd;
     pd.config.program_id = static_cast<uint64_t>(impl.get_id());
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
-    pd.config.config_sizes = impl.get_program_config_sizes();
 
     // Per (logical core) -> the kernels placed there with resolved launch offsets + unique RTA;
     // stitched into each CoreDescriptor below. Keyed by (logical_x, logical_y).
@@ -283,25 +266,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             }
             pd.kernel_order.push_back(kd.id);
             pd.kernels.emplace(kd.id, std::move(kd));
-        }
-
-        for (auto& kg : impl.get_kernel_groups(pct)) {
-            if (!kg) {
-                continue;
-            }
-            KernelGroupDescriptor g;
-            g.pct = pct;
-            g.kernel_ids.assign(kg->kernel_ids.begin(), kg->kernel_ids.end());
-            for (const auto& r : kg->core_ranges.ranges()) {
-                g.core_ranges.push_back(
-                    {static_cast<uint32_t>(r.start_coord.x),
-                     static_cast<uint32_t>(r.start_coord.y),
-                     static_cast<uint32_t>(r.end_coord.x),
-                     static_cast<uint32_t>(r.end_coord.y)});
-            }
-            // KernelGroupDescriptor.kernel_config_base/proc_offsets are resolved per (kernel, core)
-            // into CoreKernel below (the firmware launch_msg read), so collect_kernels needs no KG access.
-            pd.kernel_groups.push_back(std::move(g));
         }
 
         // Resolve each (kernel, core) launch offset + unique RTA — the KernelGroup launch_msg read,
