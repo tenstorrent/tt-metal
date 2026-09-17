@@ -13,11 +13,8 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_HYBRID_ROUTED_EXPERT_FFN_API_HEADERS
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_HYBRID_ROUTED_EXPERT_FFN_SRCS
     device/hybrid_half_merge.cpp
     device/hybrid_routed_expert_ffn_device_operation.cpp
-    device/moe_fused_swiglu_device_operation.cpp
     device/moe_fused_swiglu_geometry.cpp
-    device/moe_fused_swiglu_program_factory.cpp
-    device/unified_routed_expert_ffn_device_operation.cpp
-    device/unified_routed_expert_ffn_program_factory.cpp
+    device/hybrid_program_factory.cpp
     hybrid_routed_expert_ffn.cpp
 )
 

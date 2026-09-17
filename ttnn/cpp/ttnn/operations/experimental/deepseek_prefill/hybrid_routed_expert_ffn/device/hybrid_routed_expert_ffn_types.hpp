@@ -15,6 +15,17 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
+// The worker rectangle both passes run on. Rows 0-1 are reserved for the combine op and one
+// column goes to dispatch, so 11x8 starting at y=2 is the whole grid this op may take.
+//
+// These are also the shard grid of the L1 arena, which is why they are named once rather than
+// written at each use: the arena is HEIGHT_SHARDED one row per core, so a shard grid that does
+// not match the rectangle hands some core an arena it does not own -- and the kernels address
+// their buffers by a common offset, so that reads as corruption rather than a fault.
+inline constexpr uint32_t kOriginY = 2;
+inline constexpr uint32_t kGridX = 11;
+inline constexpr uint32_t kGridY = 8;
+
 using unified::RoutedExpertActivation;
 
 struct HybridRoutedExpertFfnParams {
@@ -38,9 +49,9 @@ struct HybridRoutedExpertFfnParams {
     // so the merged binaries are the same shape either way.
     uint32_t hybrid_token_threshold = 0;
 
-    uint32_t origin_y = 2;
-    uint32_t grid_x = 11;
-    uint32_t grid_y = 8;
+    uint32_t origin_y = kOriginY;
+    uint32_t grid_x = kGridX;
+    uint32_t grid_y = kGridY;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",

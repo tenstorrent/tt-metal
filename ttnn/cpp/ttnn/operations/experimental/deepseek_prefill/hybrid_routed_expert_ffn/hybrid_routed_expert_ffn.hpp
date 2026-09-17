@@ -18,29 +18,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert
 
 using unified::RoutedExpertActivation;
 
-// Drives ONLY the carried unified half, on its own, with the signature the standalone
-// unified_routed_expert_moe takes.
-//
-// This exists so the descriptor port can be graded against the op it was ported from: same inputs
-// through both, outputs compared bit-for-bit. It is not the merged op and does not select between
-// the two implementations.
-ttnn::Tensor hybrid_unified_routed_expert_moe(
-    const ttnn::Tensor& dispatched_buffer,
-    const ttnn::Tensor& expert_region_offsets,
-    const ttnn::Tensor& expert_token_counts,
-    const ttnn::Tensor& global_expert_idx_table,
-    const std::vector<ttnn::Tensor>& gate_projs,
-    const std::vector<ttnn::Tensor>& up_projs,
-    const std::vector<ttnn::Tensor>& down_projs,
-    uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    RoutedExpertActivation activation = RoutedExpertActivation::Silu,
-    const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
-    const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt,
-    uint32_t min_active_tokens = 0,
-    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
-
 // The merged op: ONE dispatch carrying both routed-expert implementations.
 //
 // `hybrid_token_threshold` is the model's measured split, applied per expert against the
@@ -69,5 +46,4 @@ ttnn::Tensor hybrid_routed_expert_moe(
 
 namespace ttnn {
 using operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::hybrid_routed_expert_moe;
-using operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::hybrid_unified_routed_expert_moe;
 }  // namespace ttnn
