@@ -9,8 +9,6 @@ from loguru import logger
 from safetensors.torch import load_file
 
 import ttnn
-from models.demos.gemma4_d_p.demo.kv_pcc_data import KvPccDataset
-from models.demos.gemma4_d_p.demo.kv_pcc_report import KvPccRun, digest
 from models.demos.gemma4_d_p.demo.text_demo_prefill import (
     TRACE_REGION_SIZE,
     _build_prefill_model,
@@ -19,6 +17,8 @@ from models.demos.gemma4_d_p.demo.text_demo_prefill import (
     _run_traced_prefill,
     _validate_prefill_shape,
 )
+from models.demos.gemma4_d_p.tests.kv_pcc.data import KvPccDataset
+from models.demos.gemma4_d_p.tests.kv_pcc.report import KvPccRun, digest
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
 
 

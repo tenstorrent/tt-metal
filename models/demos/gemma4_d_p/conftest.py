@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from models.demos.gemma4_d_p.demo.kv_pcc_data import DEFAULT_DATASET
+from models.demos.gemma4_d_p.tests.kv_pcc.data import DEFAULT_DATASET
 
 
 def pytest_addoption(parser):
