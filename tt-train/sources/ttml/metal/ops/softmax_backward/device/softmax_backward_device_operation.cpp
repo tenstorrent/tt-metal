@@ -21,10 +21,12 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         softmax_output.logical_shape() == upstream_grad.logical_shape(),
         "Softmax output and upstream gradient tensors must have the same shape");
-    check_device_tensor(
-        softmax_output, "SoftmaxBackward", "softmax_output", {.dtypes = {DataType::BFLOAT16, DataType::FLOAT32}});
-    check_device_tensor(
-        upstream_grad, "SoftmaxBackward", "upstream_grad", {.dtypes = {DataType::BFLOAT16, DataType::FLOAT32}});
+    // The kernels address every tensor through TensorAccessor, so any memory layout is accepted, and the output
+    // inherits the input's memory config.
+    const DeviceTensorRequirements any_memory_layout{
+        .dtypes = {DataType::BFLOAT16, DataType::FLOAT32}, .memory_layout = std::nullopt};
+    check_device_tensor(softmax_output, "SoftmaxBackward", "softmax_output", any_memory_layout);
+    check_device_tensor(upstream_grad, "SoftmaxBackward", "upstream_grad", any_memory_layout);
     check_same_device(upstream_grad, softmax_output, "SoftmaxBackward", "upstream_grad", "softmax_output");
     TT_FATAL(
         upstream_grad.dtype() == softmax_output.dtype(),

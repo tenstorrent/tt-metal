@@ -15,12 +15,13 @@ namespace ttml::metal {
 
 // What a device op requires of one of its tensors. The defaults are the tt-train norm: bf16, TILE,
 // interleaved, any buffer type. Override single fields with designated initializers, e.g.
-// `{.dtypes = {DataType::UINT32}, .layout = Layout::ROW_MAJOR}` for an index tensor, or
-// `{.buffer_type = BufferType::DRAM}` for a kernel that addresses DRAM directly.
+// `{.dtypes = {DataType::UINT32}, .layout = Layout::ROW_MAJOR}` for an index tensor,
+// `{.buffer_type = BufferType::DRAM}` for a kernel that addresses DRAM directly, or
+// `{.memory_layout = std::nullopt}` for an op whose kernels go through TensorAccessor and take any memory layout.
 struct DeviceTensorRequirements {
     std::vector<tt::tt_metal::DataType> dtypes = {tt::tt_metal::DataType::BFLOAT16};
     tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
-    tt::tt_metal::TensorMemoryLayout memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+    std::optional<tt::tt_metal::TensorMemoryLayout> memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     std::optional<tt::tt_metal::BufferType> buffer_type = std::nullopt;
 };
 
@@ -58,13 +59,15 @@ inline void check_device_tensor(
         op,
         name,
         enchantum::to_string(tensor.dtype()));
-    TT_FATAL(
-        tensor.memory_config().memory_layout() == req.memory_layout,
-        "{}: {} requires {} memory layout. Got: {}",
-        op,
-        name,
-        enchantum::to_string(req.memory_layout),
-        enchantum::to_string(tensor.memory_config().memory_layout()));
+    if (req.memory_layout.has_value()) {
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == *req.memory_layout,
+            "{}: {} requires {} memory layout. Got: {}",
+            op,
+            name,
+            enchantum::to_string(*req.memory_layout),
+            enchantum::to_string(tensor.memory_config().memory_layout()));
+    }
 }
 
 // Checks that `tensor` lives on the same device as `reference`. Kernels are handed raw buffer addresses,
