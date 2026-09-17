@@ -12,11 +12,13 @@ import os
 import torch
 from loguru import logger
 from tqdm import tqdm
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
@@ -229,6 +231,26 @@ class Qwen36Model:
             self.mtp = Qwen36MTP(
                 mesh_device, args, state_dict, parent=self, tensor_cache_path=tensor_cache_path, tt_ccl=self.tt_ccl
             )
+        # Traced MTP draft chain (QWEN36_TRACED_DRAFT). Declared here so the spec loop can test
+        # `model._drf_trace_id is not None` without a getattr dance; everything is filled in by
+        # alloc_draft_buffers / capture_draft_trace and torn down by release_draft_trace.
+        self._drf_trace_id = None  # None => the eager SpeculativeDecoder._draft runs
+        self._drf_ids_out = None  # [1,K,1] uint32 (or a list of K [1,1,1]) — the trace's output
+        self._drf_K = None
+        self._drf_pt = None  # BORROWED: the drafter's own constant page table
+        self._drf_h0_buf = None  # BORROWED: SpeculativeDecoder._hp_buf, the anchor hidden
+        self._drf_tok0_buf = None
+        self._drf_pos_buf = None
+        self._drf_cos_buf = None
+        self._drf_sin_buf = None
+        self._drf_ids_concat = False
+        self._drf_warmed = False  # alloc_draft_buffers + draft_warmup_eager ran for the handles above
+        # Release hooks for traces the SPEC DECODER cut against buffers this model owns (today: the
+        # reseed trace, which bakes in _vfy_rows_out and the MTP paged KV). capture_verify_trace and
+        # free_kv_caches run every one of them next to release_commit_traces / release_draft_trace,
+        # so a caller that re-captures or frees never has to know which decoder is attached. Hooks
+        # register themselves at capture, de-register on release, and are idempotent.
+        self._spec_trace_release_hooks = []
 
     def init_vision_model(self, reference_visual=None, vision_args=None, dtype=ttnn.bfloat8_b, debug=False):
         """Build and attach the TT vision tower (DropInVisionTransformer).
@@ -1316,7 +1338,7 @@ class Qwen36Model:
         # cast per iteration). ttnn.argmax needs ROW_MAJOR input (a TILE tensor takes a single-core
         # internal untilize that is hopeless at this vocab width), so untilize first. No 32-row pad:
         # the multicore argmax is correct below a full tile of rows, and padding T=11 -> 32 would
-        # nearly triple the bytes untilize and argmax touch (see SpeculativeDecoder._argmax_last).
+        # nearly triple the bytes untilize and argmax touch (see mtp.argmax_last).
         u = ttnn.untilize(logits, use_multicore=True)
         ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,T] uint32 ROW_MAJOR
         # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
@@ -1358,6 +1380,14 @@ class Qwen36Model:
         # The commit traces bake in the address of the GDN layers' _verify_states_buf, which the
         # capture below re-allocates, so they cannot outlive the verify trace they were cut against.
         self.release_commit_traces()
+        # Same for the draft trace: it is cut LAST, after this one, so a verify re-capture always
+        # invalidates it. keep_buffers=True — its four inputs are independent of the verify trace,
+        # and their programs were compiled against exactly those specs before ANY capture.
+        self.release_draft_trace(keep_buffers=True)
+        # Same again for the spec decoder's own traces (the reseed trace bakes in _vfy_rows_out,
+        # re-allocated below). Iterate over a COPY: the hooks de-register themselves.
+        for _release in list(self._spec_trace_release_hooks):
+            _release()
         if getattr(self, "_vfy_trace_id", None) is not None:
             ttnn.release_trace(dev, self._vfy_trace_id)
             self._vfy_trace_id = None
@@ -1543,6 +1573,351 @@ class Qwen36Model:
         for tid in ids.values():
             ttnn.release_trace(self.device, tid)
         self._commit_trace_ids = None
+
+    # --------------------------------------------------------------------- #
+    # Traced MTP draft chain (QWEN36_TRACED_DRAFT) — "Plan A"
+    #
+    # SpeculativeDecoder._draft dispatches the WHOLE K-step drafter chain from python every
+    # iteration: K x (embedding, two pre-fc gather-norms, fc, a full attention block, the head norm,
+    # an fp32 151k LM head + its vocab all-gather, untilize, argmax). Nothing about that sequence
+    # varies with the iteration — every tensor in it is fixed-shape at TP=8 — so it captures as ONE
+    # trace and replays once per speculative iteration, exactly like the verify / commit / reseed
+    # traces already do for the other three phases. Only the host dispatch goes away: the device work
+    # and the drafter KV writes are identical, and the cos/sin the chain consumes are byte-identical
+    # to what rot_mats_decode builds eagerly (_rope_tp_cos_sin_decode_torch adds rope_delta itself,
+    # where ttnn_mtp_decode_forward adds it at its rot_mats_decode call site — same numbers).
+    #
+    # What makes it capturable, input by input:
+    #   * step-0 hidden  — SpeculativeDecoder._hp_buf, the persistent anchor buffer _set_anchor
+    #     refills IN PLACE at the end of every iteration, so its address is stationary. Borrowed
+    #     here, never allocated or freed here.
+    #   * step-0 token   — a [1,1] uint32 buffer staged per replay.
+    #   * positions      — one [K] int32 buffer, sliced per step (the position is a runtime-arg
+    #     TENSOR for both paged_update_cache and the decode SDPA, so replaying at a different
+    #     absolute position does not recompile anything).
+    #   * cos/sin        — one [1,K,1,rope_head_dim] table each, sliced per step.
+    #   * page table     — the drafter's own constant mtp_pt, borrowed.
+    # The K steps chain on device (hidden and token both stay on device between steps), which the
+    # eager _draft already does; the trace additionally removes the per-step python.
+    # --------------------------------------------------------------------- #
+    def _draft_slice_k(self, k):
+        """(pos, cos, sin, sliced) for draft chain step ``k``, cut out of the persistent tables.
+
+        A FULL-SPAN ttnn.slice returns an ALIAS of its input, which must never be deallocated, so at
+        K == 1 the tables ARE the step-0 inputs and no slice is issued (``sliced`` False says so).
+        SliceDeviceOperation folds slice_start / slice_end into its program hash, so every k is its
+        own program and all 3K of them have to be compiled by the eager warm pass BEFORE any
+        begin_trace_capture — see draft_warmup_eager.
+        """
+        if self._drf_K == 1:
+            return self._drf_pos_buf, self._drf_cos_buf, self._drf_sin_buf, False
+        rd = self.args.rope_head_dim
+        # [K] int32 ROW_MAJOR -> [1]: the same 1-D position slice TPAttention.forward_decode issues
+        # per row on the aliased-KV-write path, so the shape is a proven one.
+        pos_k = ttnn.slice(self._drf_pos_buf, (k,), (k + 1,))
+        # [1,K,1,rd] TILE -> [1,1,1,rd]: the two tiled dims (-2,-1) stay full-span, so this is a
+        # whole-tile copy and never a sub-tile read.
+        cos_k = ttnn.slice(self._drf_cos_buf, (0, k, 0, 0), (1, k + 1, 1, rd))
+        sin_k = ttnn.slice(self._drf_sin_buf, (0, k, 0, 0), (1, k + 1, 1, rd))
+        return pos_k, cos_k, sin_k, True
+
+    def _draft_body(self):
+        """The whole K-step MTP draft chain as one device-op sequence: the trace body.
+
+        Reads ONLY fixed-address tensors (the five _drf_* handles plus the MTP page table and the
+        drafter's paged KV), so it is capturable; every intermediate is deallocated here, which is
+        legal inside a capture because the device was opened with trace_region_size > 0.
+        Returns the K drafted ids as [1,K,1] uint32 ROW_MAJOR, or — when the on-device id concat is
+        unavailable (see _probe_draft_id_concat, which answers False at K == 1) — the raw list of
+        K [1,1,1] tensors.
+        """
+        K = self._drf_K
+        h, tok = self._drf_h0_buf, self._drf_tok0_buf
+        ids, toks = [], []
+        for k in range(K):
+            pos_k, cos_k, sin_k, sliced = self._draft_slice_k(k)
+            # Exactly the call ttnn_mtp_decode_forward makes (sharded_lm_head=False, need_logits=True,
+            # alias_kv_write left at its False default: B == 1, so there is nothing to alias), with
+            # the four host-built inputs replaced by device slices of the persistent tables.
+            logits, h_next = self.mtp.forward_decode(
+                h,
+                tok,
+                pos_k,
+                cos_k,
+                sin_k,
+                self._drf_pt,
+                sharded_lm_head=False,
+                need_logits=True,
+            )
+            if sliced:
+                for t in (pos_k, cos_k, sin_k):
+                    ttnn.deallocate(t)
+            # The eager _draft's own pick, through the same dispatcher (SpeculativeDecoder.
+            # _draft_argmax calls it too), so QWEN36_DRAFT_SHARDED_ARGMAX switches both at once.
+            # Under the flag `logits` is THIS device's [1,1,1,vocab/tp] fp32 shard (forward_decode
+            # skipped the vocab all-gather) and the pick is two 32-lane all-gathers plus int32 mask
+            # arithmetic; every op in it is fixed-shape with no host readback and its two constants
+            # were allocated in Qwen36MTP.__init__, so it captures exactly like the gathered form.
+            idx = draft_argmax(self.mtp, logits)  # [1,1,1] uint32 ROW_MAJOR
+            ttnn.deallocate(logits)
+            if h is not self._drf_h0_buf:
+                ttnn.deallocate(h)
+            h = h_next
+            ids.append(idx)
+            # [1,1,1] -> [1,1] keeps the last dim (and therefore the page) intact, so ttnn.reshape
+            # returns a metadata ALIAS at the same buffer address: `tok` and `idx` are two handles on
+            # ONE buffer and must be deallocated exactly once between them. The eager _draft frees
+            # the reshape handle; so does this, after the concat has copied the ids out.
+            tok = ttnn.reshape(idx, (1, 1))
+            if self._drf_ids_concat:  # only the concat path frees them; the list path returns `ids`
+                toks.append(tok)
+        assert h is not self._drf_h0_buf, "draft chain produced no new hidden"
+        ttnn.deallocate(h)
+        if not self._drf_ids_concat:
+            return ids
+        out = ttnn.concat(ids, dim=-2)  # [1,K,1] uint32 ROW_MAJOR
+        for t in toks:  # aliases of `ids`: one deallocate per underlying buffer
+            ttnn.deallocate(t)
+        return out
+
+    def _probe_draft_id_concat(self, K):
+        """Can the K argmax ids be gathered on device into ONE [1,K,1] readback?
+
+        ttnn.concat REFUSES a ROW_MAJOR concat on the LAST dim whose per-tensor row bytes are not
+        buffer-aligned ("Current concat implementation requires aligned last dim when concatting on
+        last dim") — and a [1,1,1] uint32 id is 4 bytes. Hence dim=-2, which carries no such guard.
+        It is still a 4-byte-page row-major concat, so probe it once HERE, eagerly, where a
+        validation throw is recoverable and cannot land inside a capture. The probe doubles as the
+        program warm-up: same K, same dim, same input specs as the real body.
+        False costs nothing but correctness-neutral host time — draft_traced then reads K
+        one-element tensors back, which is exactly what the eager _draft already does.
+        """
+        if K == 1:
+            return False
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        probe, ok = [], False
+        try:
+            # Appended one at a time (not a comprehension) so a throw part-way still leaves every
+            # allocated probe on the list the finally below frees.
+            for _ in range(K):
+                probe.append(
+                    ttnn.from_torch(
+                        torch.zeros(1, 1, 1, dtype=torch.int32),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=dev,
+                        mesh_mapper=rep,
+                    )
+                )
+            out = ttnn.concat(probe, dim=-2)
+            ttnn.deallocate(out)
+            ok = True
+        except Exception as e:  # noqa: BLE001 - any validation refusal means "use the list form"
+            logger.info(f"[spec] traced draft: on-device id concat unavailable ({e}); reading {K} ids separately")
+        finally:
+            for t in probe:
+                ttnn.deallocate(t)
+        ttnn.synchronize_device(dev)
+        return ok
+
+    def _log_trace_region(self, when):
+        """Log the trace region's running total in the spec log's style.
+
+        Purely informational, and the one number that explains a failed capture: a device opened
+        with too small a trace_region_size runs out here, not at replay. Called by both spec
+        captures (the reseed one from SpeculativeDecoder) on either side of their capture window.
+        """
+        try:
+            _mv = ttnn.get_memory_view(self.device, ttnn.BufferType.TRACE)
+            _mb = _mv.total_bytes_allocated_per_bank * _mv.num_banks / 1e6
+            logger.info(f"[spec] trace region {when}: {_mb:.1f} MB")
+        except Exception as e:  # noqa: BLE001 - purely informational
+            logger.info(f"[spec] trace region usage unavailable ({when}): {e}")
+
+    def alloc_draft_buffers(self, K, mtp_pt, h0_buf, warm_start):
+        """Allocate the traced draft chain's persistent inputs and resolve its id-readback form.
+
+        Call this (and draft_warmup_eager) BEFORE the first begin_trace_capture. The buffers'
+        ADDRESSES are what capture_draft_trace bakes in, and every program the body issues — the 3K
+        offset-specific slices and the K-input concat included — has to compile while nothing is
+        parked: a program that first compiles with a trace parked lands its kernel binaries in memory
+        the replayed trace writes over.
+
+        ``h0_buf`` is the step-0 hidden: SpeculativeDecoder._hp_buf, the persistent anchor buffer the
+        loop refills in place. ``mtp_pt`` is the drafter's own constant page table. Both are BORROWED
+        — never allocated and never freed here or by release_draft_trace.
+        ``warm_start``: the absolute position the eager warm passes write drafter KV at, for
+        warm_start .. warm_start+K-1. Point it at the loop's own first anchor so the first real draft
+        overwrites every one of those slots (see SpeculativeDecoder._draft_warmup).
+        """
+        assert self.mtp is not None, "MTP head not built (has_mtp/config?)"
+        assert int(K) >= 1, f"draft chain needs K >= 1, got {K}"
+        self.release_draft_trace()
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        K = int(K)
+        self._drf_K = K
+        self._drf_pt = mtp_pt
+        self._drf_h0_buf = h0_buf
+        # Step-0 token: [1,1] uint32 ROW_MAJOR, the shape Qwen36MTP.forward_decode's embedding wants
+        # (and the shape the chain's own reshape(idx, (1,1)) produces for steps 1..K-1).
+        self._drf_tok0_buf = ttnn.from_torch(
+            torch.zeros(1, 1, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+        # One [K] position table, sliced per step. Doubles as the paged_update_cache write index and
+        # the decode SDPA's cur_pos, both of which read it as a runtime arg.
+        pos = torch.arange(warm_start, warm_start + K, dtype=torch.int32)
+        self._drf_pos_buf = ttnn.from_torch(
+            pos,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=rep,
+        )
+        # Per-ROW decode rope for positions warm_start..warm_start+K-1: row k is byte-identical to
+        # what rot_mats_decode(position=warm_start+k) builds inside ttnn_mtp_decode_forward (this
+        # helper adds rope_delta itself; that call site adds it to the position it passes).
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        self._drf_cos_buf = ttnn.from_torch(
+            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        self._drf_sin_buf = ttnn.from_torch(
+            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
+        )
+        self._drf_ids_concat = self._probe_draft_id_concat(K)
+        self._drf_warmed = False  # draft_warmup_eager still has to run against these buffers
+
+    def draft_warmup_eager(self):
+        """Run the traced chain's body ONCE eagerly, to compile every program in it.
+
+        Must happen BEFORE the first begin_trace_capture — the same rule _reseed_warmup and
+        capture_verify_trace's commit_warmup follow — because capture_draft_trace is necessarily the
+        LAST of the captures (it is a trace, and captures do not nest), so a compile inside its own
+        warm pass would happen with the verify, commit and reseed traces already parked.
+        Side effect: throwaway drafter KV at warm_start..warm_start+K-1, which the first real draft
+        overwrites slot for slot. That includes the drafter's argmax pick in whichever form
+        QWEN36_DRAFT_SHARDED_ARGMAX selected: _draft_body goes through mtp.draft_argmax, so the
+        sharded sequence's ops compile here as well (SpeculativeDecoder._draft_warmup already ran
+        them once outside the chain).
+        """
+        assert self._drf_K is not None, "call alloc_draft_buffers first"
+        w = self._draft_body()
+        for t in w if isinstance(w, list) else [w]:
+            ttnn.deallocate(t)
+        ttnn.synchronize_device(self.device)
+        self._drf_warmed = True  # capture_draft_trace refuses to capture without this
+
+    def capture_draft_trace(self, K, mtp_pt, h0_buf):
+        """Capture the K-step MTP draft chain as ONE trace; replay it with draft_traced.
+
+        Ordering: LAST, after capture_verify_trace, capture_commit_traces() and the reseed capture.
+        Allocates nothing and warms nothing: by this point three traces are parked, so a program
+        that first compiles here — or a buffer that first appears here — lands in memory the replays
+        write over. alloc_draft_buffers + draft_warmup_eager have to have run already, against
+        exactly this (K, anchor, page table); SpeculativeDecoder._draft_warmup is where they do.
+        Re-capture reuses those buffers: a verify re-capture drops the draft TRACE but not them.
+        """
+        dev = self.device
+        assert self._drf_warmed and self._drf_K == int(K) and self._drf_h0_buf is h0_buf and self._drf_pt is mtp_pt, (
+            f"traced draft not warmed for this (K={K}, anchor, page table): alloc_draft_buffers + "
+            "draft_warmup_eager must run before ANY begin_trace_capture (see "
+            "SpeculativeDecoder._draft_warmup)"
+        )
+        self.release_draft_trace(keep_buffers=True)
+        # Four traces end up in the trace region (verify, T-1 commits, reseed, draft); if the device
+        # was opened with too small a trace_region_size, this capture is where it shows up.
+        self._log_trace_region("before the draft capture")
+        ttnn.synchronize_device(dev)
+        self._drf_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        # The ids outlive the capture window on purpose: the replay rewrites that exact address and
+        # draft_traced reads them out before any other trace runs, so they are not a leak.
+        with trace_allocation_tracker.corruptible_allocation_scope(dev):
+            self._drf_ids_out = self._draft_body()
+        ttnn.end_trace_capture(dev, self._drf_trace_id, cq_id=0)
+        self._log_trace_region("after the draft capture")
+        logger.info(
+            f"Draft trace (K={self._drf_K}) captured successfully! "
+            f"ids={'concat [1,K,1]' if self._drf_ids_concat else f'{self._drf_K} separate readbacks'}"
+        )
+
+    def draft_traced(self, pending_tok, p):
+        """Replay the captured draft chain at anchor position ``p``; returns the K drafted ids.
+
+        Identical device work and identical drafter KV writes to SpeculativeDecoder._draft; the host
+        side drops to four copy_host_to_device_tensor stages plus one execute_trace. The step-0
+        HIDDEN is not staged: the trace baked in the decoder's persistent anchor buffer, which
+        _set_anchor refilled in place at the end of the previous iteration (the loop asserts the
+        anchor it drafts from IS that buffer).
+        """
+        assert getattr(self, "_drf_trace_id", None) is not None, "call capture_draft_trace first"
+        dev = self.device
+        K = self._drf_K
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        _h = ttnn.from_torch(
+            torch.tensor([[int(pending_tok)]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None,
+            mesh_mapper=rep,
+        )
+        ttnn.copy_host_to_device_tensor(_h, self._drf_tok0_buf)
+        pos = torch.arange(p, p + K, dtype=torch.int32)
+        _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._drf_pos_buf)
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._drf_cos_buf)
+        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, self._drf_sin_buf)
+        ttnn.execute_trace(dev, self._drf_trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(dev)
+        # Replicated ids (the chain argmaxed the vocab-gathered, therefore replicated, logits): one
+        # replica is the whole answer, and it is K uint32 instead of K x vocab floats. Its own
+        # readback rather than SpeculativeDecoder._id_to_host: the concat form is one [1,K,1] tensor,
+        # so all K ids come back in a SINGLE to_torch (the list form is that helper, K times).
+        out = self._drf_ids_out
+        if isinstance(out, list):
+            return [int(ttnn.to_torch(ttnn.get_device_tensors(t)[0]).reshape(-1)[0]) for t in out]
+        ids = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1)
+        return [int(v) for v in ids[:K]]
+
+    def release_draft_trace(self, keep_buffers=False):
+        """Drop the captured draft trace, and unless ``keep_buffers`` its persistent inputs too.
+
+        The trace bakes in the drafter's paged KV, the MTP page table, the caller's anchor buffer and
+        the four input buffers below, so it must not outlive any of them: released next to
+        release_commit_traces (before a verify re-capture, and in free_kv_caches) and at the end of
+        SpeculativeDecoder.generate, where the anchor buffer is freed. ``_drf_h0_buf`` / ``_drf_pt``
+        are BORROWED and never deallocated here. ``keep_buffers=True`` is for the verify re-capture,
+        which invalidates the draft trace's place in the trace region but not the buffers the
+        pre-capture warm-up compiled its programs against (so it leaves ``_drf_warmed`` set; a full
+        release clears it, and capture_draft_trace refuses to capture without it).
+        """
+        if getattr(self, "_drf_trace_id", None) is not None:
+            ttnn.release_trace(self.device, self._drf_trace_id)
+        self._drf_trace_id = None
+        out = getattr(self, "_drf_ids_out", None)
+        if out is not None:
+            for t in out if isinstance(out, list) else [out]:
+                ttnn.deallocate(t)
+        self._drf_ids_out = None
+        if keep_buffers:
+            return
+        for _name in ("_drf_tok0_buf", "_drf_pos_buf", "_drf_cos_buf", "_drf_sin_buf"):
+            _t = getattr(self, _name, None)
+            if _t is not None:
+                ttnn.deallocate(_t)
+            setattr(self, _name, None)
+        self._drf_h0_buf = None
+        self._drf_pt = None
+        self._drf_K = None
+        self._drf_ids_concat = False
+        self._drf_warmed = False
 
     def _snapshot_gdn_verify(self, gdn):
         """Host-roundtrip snapshot of the durable GDN state (rec_state + conv_states) across all TP
@@ -3549,6 +3924,13 @@ class Qwen36Model:
         # Commit traces write the GDN layers' rec_state / _conv_win_buf, which the next
         # allocate_kv_caches re-allocates (reset_state), so they must not survive this.
         self.release_commit_traces()
+        # The draft trace writes the MTP paged KV this frees below (and baked in the decoder's anchor
+        # buffer, which its generate() already dropped), so it cannot survive either. Same for the
+        # spec decoder's own traces (the reseed trace writes that KV too) — over a COPY, since the
+        # hooks de-register themselves.
+        self.release_draft_trace()
+        for _release in list(self._spec_trace_release_hooks):
+            _release()
         if self._deltanet_external_states is None:
             return
         if getattr(self, "_chunked_trace_id", None) is not None:
