@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <memory>
 #include <optional>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -14,25 +13,14 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
-// A device buffer the op allocates for itself, never initialises and never reads back on the host.
-// The workload holds the owner so it survives a program-cache hit, which is what lets the kernels
-// address it by a runtime argument the framework rewrites per dispatch.
-struct OwnedScratch {
-    std::shared_ptr<ttnn::Tensor> owner;
-    tt::tt_metal::Buffer* buffer = nullptr;
-};
-
-// Where a TILE input's tokens end up, one row-major page each, so the stream cores address a token by
-// page index exactly as they do a row-major input.
-//
-// Typed UINT32 rather than BFLOAT16 so the page is the token page EXACTLY rather than that rounded up
-// to an alignment -- the untilizer writes rows at a token-page stride and the reader reads them at
-// one, and a page that disagreed would shear every token after the first of a stripe.
-OwnedScratch allocate_staging_buffer(ttnn::MeshDevice* mesh, uint32_t seq_len_per_chip, uint32_t token_bytes);
-
 // Everything every core of the untilizer pool is told, which is everything except which stripes it
 // takes. Built only for a TILE input; `plan_untilize` returns nothing for a row-major one, and that
 // absence is what the rest of the program factory branches on.
+//
+// The two formats are the two tensors: the tiles arrive in the input's and the rows leave in the
+// payload's, and the packer converts between them as it writes. They are equal today because the op
+// takes a BFLOAT16 input and pages a BFLOAT16 payload, and keeping them apart is what leaves room for
+// the fp8 payload the sibling `dispatch` already packs this way.
 struct UntilizePlan {
     uint32_t num_stripes = 0;
     uint32_t tiles_per_row = 0;
@@ -40,7 +28,8 @@ struct UntilizePlan {
     uint32_t tile_bytes = 0;
     uint32_t token_bytes = 0;
     uint32_t sem_addr = 0;
-    tt::DataFormat data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat tile_format = tt::DataFormat::Float16_b;
+    tt::DataFormat row_format = tt::DataFormat::Float16_b;
     tt::tt_metal::Buffer* input = nullptr;
     tt::tt_metal::Buffer* staging = nullptr;
 };
