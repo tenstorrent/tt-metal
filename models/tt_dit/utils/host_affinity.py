@@ -12,6 +12,9 @@ generation (ring replay 6.6-7.1 s unpinned vs 6.1-6.3 s pinned, 4/4 runs; a thre
 did nothing). Restricting the affinity mask to one sibling per core removes the sharing.
 
 ``LTX_PIN_CORES=0`` disables it; on hosts without SMT (or without the sysfs topology) it is a no-op.
+
+Apply it BEFORE the mesh is opened: tt-metal places its dispatch and reader threads at device open from
+the mask it sees then; re-pinning those threads afterwards measured worse than not pinning at all.
 """
 
 from __future__ import annotations

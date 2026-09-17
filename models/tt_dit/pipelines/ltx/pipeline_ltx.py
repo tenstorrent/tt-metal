@@ -38,6 +38,12 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils.fuse_loras import LoraSpec
 from ...utils.host_affinity import pin_one_thread_per_core
+
+# Pin at import, i.e. before the mesh is opened: tt-metal places its dispatch and reader threads at device
+# open from the mask it sees then, and re-pinning them afterwards measured worse than no pin at all
+# (galaxy ring replay 7.5 s vs 6.6 s unpinned vs 6.2 s pinned before open). Both the tests (collection
+# precedes the mesh fixture) and the server import this module before opening devices.
+pin_one_thread_per_core("LTX pipeline (import)")
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
@@ -240,9 +246,8 @@ class LTXPipeline:
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
     ):
-        # The stage hand-offs, the VAE frame readback and the audio chain are host-latency work even when
-        # every stage replays a trace; on SMT hosts two of those threads sharing a core cost ~0.5 s of a
-        # 6 s traced generation. One hardware thread per core (LTX_PIN_CORES=0 disables).
+        # Idempotent: the import-time call above did the pinning; this only covers a process that imported
+        # the module with LTX_PIN_CORES=0 and flipped it before constructing (threads created since inherit).
         pin_one_thread_per_core("LTX pipeline")
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
