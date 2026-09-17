@@ -557,6 +557,7 @@ class MiniMaxH3Vae:
             "units": 0,
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
             # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
+            "yuv_extract": 0.0,
             "readback_each": [],
             "device_each": [],
             # Only populated under `profile`: each needs a synchronize to be separable.
@@ -632,7 +633,7 @@ class MiniMaxH3Vae:
             f"({self.mesh_device.get_num_devices()} devices, "
             f"{units / waves if waves else 0:.1f} units/wave)"
         )
-        phases = ("decoder", "assemble", "yuv_prep", "yuv_convert", "yuv_dma", "yuv_scatter")
+        phases = ("decoder", "assemble", "yuv_prep", "yuv_convert", "yuv_dma", "yuv_extract", "yuv_scatter")
         if any(p.get(name) for name in phases):
             logger.info("    phase split (profile=True serializes these; shares, not a warm total):")
             for name in phases:
