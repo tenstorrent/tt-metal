@@ -59,10 +59,32 @@ void collect_kernels(
             // the private read while both paths coexist.
             const auto& kd = desc.kernels.at(kernel_id);
 
-            const auto& ksrc = kernel->kernel_source();
-            std::string src_path = resolve_kernel_source_path(ksrc, inline_src_temps);
-            if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-                src_path = resolve_emule_kernel_source_shadow(src_path, impl.get_context_id());
+            {  // STAGE 2b diff-guard: SourceRef + context_id byte-exact vs the private reads
+                const auto& ksrc = kernel->kernel_source();
+                const bool priv_is_file = (ksrc.source_type_ == KernelSource::FILE_PATH);
+                TT_FATAL(
+                    kd.source.is_file == priv_is_file,
+                    "emule descriptor diff-guard: source is_file mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+                if (priv_is_file) {
+                    TT_FATAL(
+                        kd.source.path == ksrc.path_.string(),
+                        "emule descriptor diff-guard: source path mismatch (kernel {})",
+                        static_cast<uint32_t>(kernel_id));
+                } else {
+                    TT_FATAL(
+                        kd.source.inline_src == ksrc.source_,
+                        "emule descriptor diff-guard: inline source mismatch (kernel {})",
+                        static_cast<uint32_t>(kernel_id));
+                }
+                TT_FATAL(
+                    desc.config.context_id == static_cast<uint32_t>(impl.get_context_id().get()),
+                    "emule descriptor diff-guard: context_id mismatch (kernel {})",
+                    static_cast<uint32_t>(kernel_id));
+            }
+            std::string src_path = resolve_kernel_source_path(kd.source, inline_src_temps);
+            if (kd.source.is_file) {
+                src_path = resolve_emule_kernel_source_shadow(src_path, desc.config.context_id);
             }
 
             // Thread each kernel's configured include roots into its JIT -I flags.
@@ -250,11 +272,11 @@ void collect_kernels(
             // iteration of named_compile_args and defines for key stability).
             auto compute_cache_key = [&](const std::map<std::string, std::string>& defs) -> std::string {
                 std::string key;
-                if (ksrc.source_type_ == KernelSource::FILE_PATH) {
+                if (kd.source.is_file) {
                     key = src_path;
                 } else {
                     char hex[FNV_HEX_BUF_SIZE];
-                    std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(ksrc.source_));
+                    std::snprintf(hex, sizeof(hex), "%016lx", fnv1a_hash(kd.source.inline_src));
                     key = std::string("inline:") + hex;
                 }
                 for (auto v : compile_args) {
@@ -327,7 +349,7 @@ void collect_kernels(
                 } else if (
                     resolved_fns.find(key) == resolved_fns.end() &&
                     deferred_compiles.find(key) == deferred_compiles.end()) {
-                    std::string mtime_path = (ksrc.source_type_ == KernelSource::FILE_PATH) ? src_path : "";
+                    std::string mtime_path = kd.source.is_file ? src_path : "";
                     auto disk_fn = disk_cache_lookup(key, mtime_path);
                     if (disk_fn) {
                         resolved_fns[key] = disk_fn;

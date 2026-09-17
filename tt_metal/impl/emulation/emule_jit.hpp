@@ -16,6 +16,7 @@
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "emule_metal2_emit.hpp"
+#include "emule_program_descriptor.hpp"  // tt_emule::SourceRef
 
 namespace tt::tt_metal::emule {
 
@@ -44,8 +45,8 @@ extern std::unordered_map<std::string, std::function<void()>> g_jit_cache;
 std::uint64_t fnv1a_hash(const std::string& s);
 std::function<void()> disk_cache_lookup(const std::string& cache_key, const std::string& src_path);
 std::string get_extra_include_flags();
-std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std::string>& inline_src_temps);
-std::string resolve_emule_kernel_source_shadow(const std::string& src_path, ContextId context_id);
+std::string resolve_kernel_source_path(const tt_emule::SourceRef& src, std::vector<std::string>& inline_src_temps);
+std::string resolve_emule_kernel_source_shadow(const std::string& src_path, uint32_t context_id);
 void jit_compile_pending(
     std::map<std::string, DeferredCompile>& deferred_compiles,
     std::unordered_map<std::string, std::function<void()>>& resolved_fns,
