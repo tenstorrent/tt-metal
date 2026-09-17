@@ -136,6 +136,20 @@ depends on the target architecture. On Wormhole, Blackhole & Quasar this is
 a vector of 32 32-bit values. Users should be aware that vector length
 may change with future architectures.
 
+Floating point operations are not IEEE conformant, due to hardware
+restictions. The following does not claim to be a complete list of
+differences.
+
+  * ``-0.0`` and ``+0.0`` are different.
+  * Comparisions involving NaNs do not behave as IEEE specifies.
+  * Conversions of NaNs to non-floating point type produce an
+    unspecified value.
+  * Other operations on NaNs produce a NaN result of unspecified sign.
+  * Some rounding is towards nearest, with ties rounding to the larger
+    magnitude result.
+
+Comparison behavior is described in more detail below.
+
 User Visible Constants
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -145,11 +159,7 @@ Constant registers are implemented as objects which can be referenced wherever a
   * ``vConstFloatPrgm0``, ``vConstIntPrgm0``
   * ``vConstFloatPrgm1``, ``vConstIntPrgm1``
   * ``vConstFloatPrgm2``, ``vConstIntPrgm2``
-
-Note: previously the vector constants ``1.0f``, ``0.0f``, ``-1.0f``
-and ``0.8373f`` were also available as named constants. Just use the
-floating literals (possibly converted to ``vFloat``), the compiler
-knows what to do.
+  * ``vConstFloatPrgm3``, ``vConstIntPrgm3`` Quasar only
 
 User Visible Objects
 ^^^^^^^^^^^^^^^^^^^^
@@ -564,12 +574,16 @@ may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
 
 .. code-block:: c++
 
-   impl_::FloatInt round (vFloat v);
+   impl_::FloatInt round (vFloat v, RoundIntMode mode = RoundIntMode::Unbiased);
 
-Round v to nearest integer, ties round to nearest even. This returns a
-tuple that may be implicitly converted to either ``vFloat`` or
+Round v to nearest integer, ties round to nearest even.  This returns
+a tuple that may be implicitly converted to either ``vFloat`` or
 ``vInt``, if you want exactly one result object.  Or it may be used in
-a structured binding, if you want both:
+a structured binding, if you want both a ``vFloat`` and a ``vInt``.
+The integral result is only valid for non-negative values less than
+2^22.  You may specify the mode as ``RoundIntMode::Biased`, if you
+only care about the correctness of the lower 21 bits of the integral
+result.
 
 .. code-block:: c++
 
