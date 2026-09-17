@@ -8,7 +8,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 _PREFIX = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_"
@@ -17,22 +17,42 @@ _PREFIX = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_"
 @dataclass(frozen=True)
 class MpfeBenchmarkWeights:
     name: str
-    weights: tuple[int, int, int]
+    weights: tuple[Optional[int], Optional[int], Optional[int]]
+
+    def start_kwargs(self) -> dict[str, int]:
+        free_sender, noc1_sender, ordinary = self.weights
+        return {
+            name: weight
+            for name, weight in (
+                ("free_sender_mpfe_weight", free_sender),
+                ("noc1_sender_mpfe_weight", noc1_sender),
+                ("ordinary_mpfe_weight", ordinary),
+            )
+            if weight is not None
+        }
 
 
-def _weight(name: str, default: int) -> int:
-    value = os.environ.get(f"{_PREFIX}{name}", str(default))
+def _weight(name: str) -> Optional[int]:
+    value = os.environ.get(f"{_PREFIX}{name}")
+    if value is None:
+        return None
     assert len(value) == 1 and "0" <= value <= "7", f"{name} must be one digit in [0, 7], got {value!r}"
     return int(value)
 
 
 def resolve_mpfe_benchmark_weights() -> MpfeBenchmarkWeights:
     weights = (
-        _weight("FREE_SENDER_WEIGHT", 0),
-        _weight("NOC1_SENDER_WEIGHT", 1),
-        _weight("ORDINARY_WEIGHT", 5),
+        _weight("FREE_SENDER_WEIGHT"),
+        _weight("NOC1_SENDER_WEIGHT"),
+        _weight("ORDINARY_WEIGHT"),
     )
-    return MpfeBenchmarkWeights(name=f"static-{''.join(str(weight) for weight in weights)}", weights=weights)
+    if all(weight is None for weight in weights):
+        name = "default"
+    elif all(weight is not None for weight in weights):
+        name = f"static-{''.join(str(weight) for weight in weights)}"
+    else:
+        name = f"override-{''.join('-' if weight is None else str(weight) for weight in weights)}"
+    return MpfeBenchmarkWeights(name=name, weights=weights)
 
 
 def append_benchmark_jsonl(result: dict[str, Any]) -> None:

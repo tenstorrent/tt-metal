@@ -41,6 +41,15 @@ def _require_tensor_prefetcher(device):
 _GCB_DEPTH_PAGES = 4  # small ring so the validator stresses reserve_back/wait_front handshakes
 
 
+@pytest.mark.parametrize(
+    "weight_name",
+    ["free_sender_mpfe_weight", "noc1_sender_mpfe_weight", "ordinary_mpfe_weight"],
+)
+def test_tensor_prefetcher_rejects_invalid_mpfe_weight(device, expect_error, weight_name):
+    with expect_error(RuntimeError, "MPFE weights must be in"):
+        ttnn.experimental.start_tensor_prefetcher(device, **{weight_name: 8})
+
+
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int, row_offset: int = 0):
     """CoreRangeSet for bank `bank_idx`'s receivers, laid out row-major on a
     ring_cols-wide grid. Matches the bench's gather_in0 receiver layout."""

@@ -48,12 +48,22 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
+                free_sender_mpfe_weight (Optional[int]): MPFE weight override for the coordinator sender.
+                noc1_sender_mpfe_weight (Optional[int]): MPFE weight override for the NOC1 sender.
+                ordinary_mpfe_weight (Optional[int]): MPFE weight override for ordinary-operation traffic.
+
+            MPFE weight overrides must be in [0, 7] and remain fixed until the prefetcher is stopped.
+            None selects the default.
 
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
         )doc",
         &start_tensor_prefetcher,
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("free_sender_mpfe_weight") = nb::none(),
+        nb::arg("noc1_sender_mpfe_weight") = nb::none(),
+        nb::arg("ordinary_mpfe_weight") = nb::none());
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,

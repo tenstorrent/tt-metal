@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <utility>
 #include <vector>
 
@@ -47,74 +46,22 @@ constexpr uint32_t kRemoteCBId = 31;
 constexpr uint32_t kNumGddrSubchannelsPerBank = 3;
 constexpr uint32_t kFirstMpfePort = 1;
 constexpr uint32_t kMpfePortSum = 1 + 2 + 3;
-constexpr uint32_t kProductionFreeSenderMpfeWeight = 0;
-constexpr uint32_t kProductionNoc1SenderMpfeWeight = 1;
-constexpr uint32_t kProductionOrdinaryMpfeWeight = 5;
-constexpr const char* kBenchmarkFreeSenderWeightEnv =
-    "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FREE_SENDER_WEIGHT";
-constexpr const char* kBenchmarkNoc1SenderWeightEnv =
-    "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_NOC1_SENDER_WEIGHT";
-constexpr const char* kBenchmarkOrdinaryWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT";
+constexpr uint32_t kDefaultFreeSenderMpfeWeight = 0;
+constexpr uint32_t kDefaultNoc1SenderMpfeWeight = 1;
+constexpr uint32_t kDefaultOrdinaryMpfeWeight = 5;
+constexpr uint32_t kMaxMpfeWeight = 7;
 
 constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
 
-uint32_t get_benchmark_mpfe_weight(const char* env_name, uint32_t default_weight) {
-    const char* value = std::getenv(env_name);
-    if (value == nullptr) {
-        return default_weight;
-    }
-    TT_FATAL(
-        value[0] >= '0' && value[0] <= '7' && value[1] == '\0',
-        "{} must be one digit from 0 through 7, got '{}'",
-        env_name,
-        value);
-    return static_cast<uint32_t>(value[0] - '0');
-}
-
-struct MpfeWeights {
-    uint32_t free_sender;
-    uint32_t noc1_sender;
-    uint32_t ordinary;
-};
-
-MpfeWeights get_mpfe_weights() {
-    return {
-        .free_sender =
-            get_benchmark_mpfe_weight(kBenchmarkFreeSenderWeightEnv, kProductionFreeSenderMpfeWeight),
-        .noc1_sender =
-            get_benchmark_mpfe_weight(kBenchmarkNoc1SenderWeightEnv, kProductionNoc1SenderMpfeWeight),
-        .ordinary = get_benchmark_mpfe_weight(kBenchmarkOrdinaryWeightEnv, kProductionOrdinaryMpfeWeight),
-    };
-}
-
-uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, uint32_t bank_id, const CoreCoord& sender_logical_core) {
-    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
-    TT_FATAL(
-        num_subchannels == kNumGddrSubchannelsPerBank,
-        "Tensor prefetcher expected {} GDDR subchannels for bank {}, found {}",
-        kNumGddrSubchannelsPerBank,
-        bank_id,
-        num_subchannels);
-
+uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, const CoreCoord& sender_logical_core) {
     const CoreCoord sender_physical = soc_desc.get_physical_dram_core_from_logical(sender_logical_core);
-    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
-    for (uint32_t subchannel = 0; subchannel < num_subchannels; ++subchannel) {
-        const tt::umd::CoreCoord subchannel_physical = soc_desc.get_dram_core_for_channel(
-            static_cast<int>(channel), static_cast<int>(subchannel), tt::CoordSystem::TRANSLATED);
-        if (subchannel_physical.x == sender_physical.x && subchannel_physical.y == sender_physical.y) {
-            // MPFE P0 is the tied-off native port. GDDR subchannels 0..2 enter through P1..P3.
-            return kFirstMpfePort + subchannel;
-        }
-    }
-
-    TT_THROW(
-        "Tensor prefetcher could not map logical DRAM sender ({}, {}) in bank {} to an MPFE port",
-        sender_logical_core.x,
-        sender_logical_core.y,
-        bank_id);
-    return 0;
+    const tt::umd::CoreCoord sender_subchannel = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(sender_physical.x, sender_physical.y, tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED),
+        tt::CoordSystem::LOGICAL);
+    // MPFE P0 is the tied-off native port. GDDR subchannels 0..2 enter through P1..P3.
+    return kFirstMpfePort + sender_subchannel.y;
 }
 
 // Largest `page` (multiple of tile_size, <= max_page_size) such that num_tiles*tile_size
@@ -562,7 +509,8 @@ void TensorPrefetcherManager::allocate_sockets() {
     }
 }
 
-void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size) {
+void TensorPrefetcherManager::build_and_launch_programs(
+    uint32_t stage_ring_base, uint32_t stage_ring_size, const MpfeWeights& mpfe_weights) {
     // Sockets must already be allocated so each kernel can be given its
     // socket_config_addr as a runtime arg.
     TT_FATAL(sockets_.size() == devices_.size() * num_senders_, "sockets must be allocated before programs");
@@ -570,8 +518,6 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
-    const MpfeWeights mpfe_weights = get_mpfe_weights();
-
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>();
@@ -582,37 +528,23 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
             CoreType::DRAM);
         const auto& soc_desc =
             MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().get_soc_desc(devices_[d]->id());
+        TT_FATAL(
+            soc_desc.get_grid_size(tt::CoreType::DRAM).y == kNumGddrSubchannelsPerBank,
+            "Tensor prefetcher expected {} GDDR subchannels, found {}",
+            kNumGddrSubchannelsPerBank,
+            soc_desc.get_grid_size(tt::CoreType::DRAM).y);
 
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
             const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
             const uint32_t bank_sender_base = 2 * bank_id;
-            TT_FATAL(
-                bank_sender_base + 1 < sender_logical_cores_.size() &&
-                    sender_logical_cores_[bank_sender_base].x == bank_id &&
-                    sender_logical_cores_[bank_sender_base + 1].x == bank_id,
-                "Tensor prefetcher sender slots for bank {} are not a contiguous pair",
-                bank_id);
 
-            const uint32_t first_sender_port =
-                get_mpfe_port(soc_desc, bank_id, sender_logical_cores_[bank_sender_base]);
-            const uint32_t second_sender_port =
-                get_mpfe_port(soc_desc, bank_id, sender_logical_cores_[bank_sender_base + 1]);
-            TT_FATAL(
-                first_sender_port != second_sender_port,
-                "Tensor prefetcher senders for bank {} both map to MPFE port {}",
-                bank_id,
-                first_sender_port);
-            const uint32_t own_mpfe_port = get_mpfe_port(soc_desc, bank_id, sender_logical);
-            const uint32_t ordinary_operation_mpfe_port = kMpfePortSum - first_sender_port - second_sender_port;
-            TT_FATAL(
-                ordinary_operation_mpfe_port >= 1 && ordinary_operation_mpfe_port <= 3,
-                "Tensor prefetcher senders for bank {} map to invalid MPFE ports {} and {}",
-                bank_id,
-                first_sender_port,
-                second_sender_port);
-
+            const uint32_t first_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
+            const uint32_t second_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
             const bool is_coordinator = s == bank_sender_base;
+            const uint32_t own_mpfe_port = is_coordinator ? first_sender_port : second_sender_port;
+            const uint32_t ordinary_operation_mpfe_port = kMpfePortSum - first_sender_port - second_sender_port;
+
             const CoreCoord peer_logical = sender_logical_cores_[is_coordinator ? s + 1 : s - 1];
             const CoreCoord peer_noc = devices_[d]->virtual_core_from_logical_core(peer_logical, CoreType::DRAM);
 
@@ -648,9 +580,22 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     }
 }
 
-void TensorPrefetcherManager::start() {
+void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
     TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
+    const MpfeWeights mpfe_weights{
+        .free_sender = config.free_sender_mpfe_weight.value_or(kDefaultFreeSenderMpfeWeight),
+        .noc1_sender = config.noc1_sender_mpfe_weight.value_or(kDefaultNoc1SenderMpfeWeight),
+        .ordinary = config.ordinary_mpfe_weight.value_or(kDefaultOrdinaryMpfeWeight),
+    };
+    TT_FATAL(
+        mpfe_weights.free_sender <= kMaxMpfeWeight && mpfe_weights.noc1_sender <= kMaxMpfeWeight &&
+            mpfe_weights.ordinary <= kMaxMpfeWeight,
+        "Tensor prefetcher MPFE weights must be in [0, {}], got {}/{}/{}",
+        kMaxMpfeWeight,
+        mpfe_weights.free_sender,
+        mpfe_weights.noc1_sender,
+        mpfe_weights.ordinary);
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
@@ -729,7 +674,7 @@ void TensorPrefetcherManager::start() {
     stage_third_ = stage_ring_size_ / 3;
 
     allocate_sockets();
-    build_and_launch_programs(stage_ring_base_, stage_ring_size_);
+    build_and_launch_programs(stage_ring_base_, stage_ring_size_, mpfe_weights);
 
     // Launch programs (non-blocking — kernels park on the socket immediately).
     for (uint32_t d = 0; d < devices_.size(); ++d) {
@@ -762,19 +707,19 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     // GCB with a different receiver count. total_receivers (== ring_size) and
     // receivers_per_bank are independent of how many DRISC senders drive a bank.
     const auto& mapping = gcb.sender_receiver_core_mapping();
-    TT_FATAL(
-        target_sender_indices.size() == mapping.size(),
-        "Tensor prefetcher has {} target sender indices for {} GCB sender mappings",
-        target_sender_indices.size(),
-        mapping.size());
-    std::vector<bool> synchronize_sender(mapping.size(), false);
-    for (uint32_t s = 0; s < target_sender_indices.size(); ++s) {
-        const uint32_t sender_index = target_sender_indices[s];
-        const uint32_t peer_index = (sender_index % 2 == 0) ? sender_index + 1 : sender_index - 1;
-        synchronize_sender[s] =
-            std::find(target_sender_indices.begin(), target_sender_indices.end(), peer_index) !=
-            target_sender_indices.end();
-    }
+    // mapping.size() flags, one per GCB sender, indicating whether its bank peer participates and must synchronize.
+    const std::vector<bool> synchronize_sender = [&] {
+        std::vector<bool> selected_sender(num_senders_, false);
+        for (uint32_t sender_index : target_sender_indices) {
+            selected_sender[sender_index] = true;
+        }
+        std::vector<bool> result(mapping.size(), false);
+        // Sender indices are adjacent [free, NOC1] pairs for each bank.
+        for (uint32_t s = 0; s < target_sender_indices.size(); ++s) {
+            result[s] = selected_sender[target_sender_indices[s] ^ 1u];
+        }
+        return result;
+    }();
     uint32_t total_receivers = 0;
     for (const auto& [_sender, receivers] : mapping) {
         total_receivers += receivers.num_cores();
@@ -1417,9 +1362,9 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
     return hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
-void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig&) {
+void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.start();
+    manager.start(config);
 }
 
 void QueueTensorPrefetcherRequest(

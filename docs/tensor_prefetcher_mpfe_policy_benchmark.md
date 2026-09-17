@@ -1,7 +1,7 @@
 # Tensor Prefetcher MPFE weight benchmark
 
 The Blackhole Device-side Tensor Prefetcher holds static GDDR MPFE weights from
-startup until shutdown. Production defaults, in free-sender / NOC1-sender /
+startup until shutdown. Defaults, in free-sender / NOC1-sender /
 ordinary-operation order, are:
 
 ```text
@@ -15,9 +15,39 @@ the repeated-request contention benchmark improved by approximately 1–1.6%.
 
 Stopping the Tensor Prefetcher restores all three hardware weights to `0/0/0`.
 
+## MPFE controls
+
+The weights are optional Tensor Prefetcher configuration overrides:
+
+```cpp
+tt::tt_metal::experimental::TensorPrefetcherConfig config{
+    .free_sender_mpfe_weight = 0,
+    .noc1_sender_mpfe_weight = 1,
+    .ordinary_mpfe_weight = 5,
+};
+tt::tt_metal::experimental::StartTensorPrefetcher(mesh_device, config);
+```
+
+Python callers can pass the equivalent keyword arguments:
+
+```python
+ttnn.experimental.start_tensor_prefetcher(
+    device,
+    free_sender_mpfe_weight=0,
+    noc1_sender_mpfe_weight=1,
+    ordinary_mpfe_weight=5,
+)
+```
+
+Each value must be an integer from 0 through 7. The weights are fixed from
+startup until shutdown; changing them requires stopping and restarting the
+prefetcher, but does not require another Metal/TTNN build. Omitted fields (or
+Python `None`) select the defaults.
+
 ## Benchmark controls
 
-Override any weight for benchmark experiments:
+The benchmark runners accept environment variables as a process-launch
+convenience:
 
 ```bash
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_FREE_SENDER_WEIGHT=0
@@ -25,9 +55,10 @@ TT_METAL_BENCHMARK_TENSOR_PREFETCHER_NOC1_SENDER_WEIGHT=1
 TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ORDINARY_WEIGHT=5
 ```
 
-Each value must be an integer from 0 through 7. The Tensor Prefetcher reads the
-variables when it starts, so each configuration must run in a fresh process.
-Changing weights does not require another Metal/TTNN build.
+The Python benchmark helper validates set values and passes them explicitly to
+`start_tensor_prefetcher`; unset values are omitted so the defaults apply. The
+Tensor Prefetcher implementation does not read benchmark environment
+variables.
 
 ## Validation and contention
 
@@ -37,7 +68,7 @@ After building, run the compact sanity matrix:
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_sanity.sh
 ```
 
-It covers the production default, `000`, `014`, `037`, and `777`. Every case
+It covers the default, `000`, `014`, `037`, and `777`. Every case
 performs initial and final byte validation and verifies clean shutdown.
 
 Run one contention measurement directly:

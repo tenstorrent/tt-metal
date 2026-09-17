@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "internal/tt-1xx/blackhole/gddr_mc_regs.h"
+#include "experimental/gddr_mc.h"
 
 void kernel_main() {
     const uint32_t result_l1_addr = get_arg_val<uint32_t>(3);

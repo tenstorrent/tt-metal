@@ -436,7 +436,8 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         )
 
     # One long-lived DRISC stream: 1 warmup/correctness layer + trace_repeats traced layers.
-    ttnn.experimental.start_tensor_prefetcher(device)
+    mpfe_weights = resolve_mpfe_benchmark_weights()
+    ttnn.experimental.start_tensor_prefetcher(device, **mpfe_weights.start_kwargs())
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, ring_size)] * num_prefetch_layers,
@@ -472,7 +473,6 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     # Use unpadded K in the TFLOP/s formula so it's comparable across paths (worker-core uses
     # _K directly; padding to ring-aligned K is wasted work that doesn't count as useful flops).
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
-    mpfe_weights = resolve_mpfe_benchmark_weights()
     logger.info(
         f"[dram_core][{op_name}] mpfe={mpfe_weights.weights} "
         f"trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
@@ -559,11 +559,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
         receivers_by_y: dict = {}
         for sx, sy in ordered_senders:
             receivers_by_y.setdefault(sy, []).extend(raw_mapping[(sx, sy)])
-        ring_cores = [
-            core
-            for y in sorted(receivers_by_y)
-            for core in sorted(receivers_by_y[y])
-        ]
+        ring_cores = [core for y in sorted(receivers_by_y) for core in sorted(receivers_by_y[y])]
     else:
         # A harvested device has fewer logical DRAM banks. Keep eight receivers per
         # available bank and form a compact logical grid whose row-major order is the
@@ -702,7 +698,8 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # Centralized recv-contig param + cross-check: returns the validated block_count
     # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
-    ttnn.experimental.start_tensor_prefetcher(device)
+    mpfe_weights = resolve_mpfe_benchmark_weights()
+    ttnn.experimental.start_tensor_prefetcher(device, **mpfe_weights.start_kwargs())
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, block_count)] * num_prefetch_layers,
@@ -739,7 +736,6 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     weight_bytes = k_padded * _N * _DTYPE_BYTES
     gbps = weight_bytes * trace_repeats / elapsed / 1e9
     dist_id = "shard_contiguous" if is_shard_contiguous else "round_robin"
-    mpfe_weights = resolve_mpfe_benchmark_weights()
     logger.info(
         f"[dram_core_rc][{op_name}] mpfe={mpfe_weights.weights} "
         f"banks={num_dram_banks} ring={ring_size} dist={dist_id} dual_senders={dual_senders} "

@@ -34,8 +34,13 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-// Reserved for future prefetcher-wide options.
-struct TensorPrefetcherConfig {};
+// MPFE weight overrides are fixed for the lifetime of the prefetcher and must be in [0, 7].
+// std::nullopt selects the default.
+struct TensorPrefetcherConfig {
+    std::optional<uint32_t> free_sender_mpfe_weight = std::nullopt;
+    std::optional<uint32_t> noc1_sender_mpfe_weight = std::nullopt;
+    std::optional<uint32_t> ordinary_mpfe_weight = std::nullopt;
+};
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
 // programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
@@ -95,10 +100,13 @@ struct TensorPrefetcherInput {
 // block on every request), so a single prefetcher can serve GCBs with
 // different num_receivers values.
 //
+// `config` selects the MPFE arbitration weights used until StopTensorPrefetcher.
+//
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
 //   - DRAM programmable cores are available on this mesh (Blackhole with firmware
 //     >= 19.12.0.0).
+//   - Every provided MPFE weight override is in [0, 7].
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.

@@ -220,9 +220,9 @@ def test_mpfe_priority_contention(device):
     against that bank. The first and last layers are byte-validated; only cached
     contention-consumer trace replays are timed.
 
-    Override the free-sender, NOC1-sender, and ordinary-operation weights with
-    the corresponding TT_METAL_BENCHMARK_TENSOR_PREFETCHER_*_WEIGHT variables.
-    Run each tuple in a fresh process.
+    The benchmark helper reads the corresponding
+    TT_METAL_BENCHMARK_TENSOR_PREFETCHER_*_WEIGHT variables and passes the
+    resolved weights explicitly when starting the prefetcher.
     """
     if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") is not None:
         pytest.skip("MPFE contention benchmark requires fast dispatch")
@@ -251,9 +251,7 @@ def test_mpfe_priority_contention(device):
     bank_to_receivers = [
         (
             bank,
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, recv_per_bank - 1))}
-            ),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, recv_per_bank - 1))}),
         )
         for bank in range(num_dram_banks)
     ]
@@ -285,7 +283,7 @@ def test_mpfe_priority_contention(device):
         f"K={K} N={N} ring={ring_size} repeats={trace_repeats}"
     )
 
-    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.start_tensor_prefetcher(device, **mpfe_weights.start_kwargs())
     ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 0)
 
     logger.info("[mpfe_contention] validating initial prefetched layer")

@@ -30,7 +30,7 @@
 #include "api/socket_api.h"
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
-#include "internal/tt-1xx/blackhole/gddr_mc_regs.h"
+#include "experimental/gddr_mc.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
@@ -67,11 +67,6 @@ using tt::tt_metal::TensorPrefetcherTensorLayout;
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace {
-
-FORCE_INLINE void set_mpfe_weight(uint32_t port, uint32_t weight) {
-    gddr_mc_write_mpfe_weight(port, weight);
-    ASSERT(gddr_mc_read_mpfe_weight(port) == weight, DebugAssertTripped);
-}
 
 template <bool single_row, bool single_page>
 FORCE_INLINE void prefetcher_write_chunk(
@@ -261,8 +256,8 @@ void kernel_main() {
     experimental::drisc_set_stream_mode();
     // Hold the selected weights for the lifetime of the Tensor Prefetcher. Each
     // sender owns its MPFE slot; the ordinary-operation slot is shared.
-    set_mpfe_weight(ordinary_operation_mpfe_port, ordinary_mpfe_weight);
-    set_mpfe_weight(own_mpfe_port, own_mpfe_weight);
+    gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_mpfe_weight);
+    gddr_mc_write_mpfe_weight(own_mpfe_port, own_mpfe_weight);
 
     const uint32_t sender_sync_semaphore_addr = get_semaphore<ProgrammableCoreType::DRAM>(sender_sync_semaphore_id);
     volatile tt_l1_ptr uint32_t* sender_sync_semaphore =
@@ -307,15 +302,10 @@ void kernel_main() {
             // Each sender owns its MPFE slot. The coordinator waits until its peer
             // has also drained and restored before returning the shared ordinary-
             // operation slot to the hardware default.
-            set_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+            gddr_mc_write_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
             if (is_coordinator) {
                 noc_semaphore_wait(sender_sync_semaphore, handshake_target);
-                set_mpfe_weight(ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
-                ASSERT(
-                    gddr_mc_read_mpfe_weight(1) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
-                        gddr_mc_read_mpfe_weight(2) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
-                        gddr_mc_read_mpfe_weight(3) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT,
-                    DebugAssertTripped);
+                gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
                 noc_semaphore_inc(peer_sender_sync_semaphore, 1);
                 noc_async_atomic_barrier();
             } else {

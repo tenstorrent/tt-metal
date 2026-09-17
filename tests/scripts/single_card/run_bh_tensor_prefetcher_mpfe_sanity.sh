@@ -20,7 +20,7 @@ cd "$TT_METAL_HOME"
 # name|free sender|NOC1 sender|ordinary;
 # "-" leaves that setting unset.
 CASES=(
-    "production-default|-|-|-"
+    "default|-|-|-"
     "static-000|0|0|0"
     "static-014|0|1|4"
     "static-037|0|3|7"
