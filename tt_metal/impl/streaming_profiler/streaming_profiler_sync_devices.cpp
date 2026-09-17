@@ -130,11 +130,7 @@ void SyncDevices::start_probe() {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     for (uint32_t di = 0; di < devices_.size(); di++) {
         if (!devices_[di].d.eth.empty()) {
-            host_probe_ = std::make_shared<HostProbe>(
-                cluster,
-                devices_[di].d.chip_id,
-                service().sync().map(),
-                MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_d2d_csv_path());
+            host_probe_ = std::make_shared<HostProbe>(cluster, devices_[di].d.chip_id, service().sync().map());
             root_dev_ = di;
             break;
         }
@@ -292,31 +288,6 @@ std::vector<double> SyncDevices::solve_tiles(uint32_t di, const char* when) {
         const int32_t pth = path_of(o);
         return x_of(o.t) - x_of(o.s) + (pth >= 0 ? x[static_cast<size_t>(pth)] : 0.0);
     };
-    if (const std::string& csv = MetalContext::instance(context_id_).rtoptions().get_streaming_profiler_d2d_csv_path();
-        !csv.empty()) {
-        const std::string path = fmt::format("{}.tiles.{}.chip{}.csv", csv, when, d.chip_id);
-        if (std::FILE* f = std::fopen(path.c_str(), "w"); f != nullptr) {
-            std::fprintf(f, "src,src_x,src_y,tile,tile_x,tile_y,value,solved,residual,rtt0,rtt1,ddiff\n");
-            for (const Obs& o : obs) {
-                std::fprintf(
-                    f,
-                    "%u,%u,%u,%d,%u,%u,%lld,%.2f,%.2f,%u,%u,%d\n",
-                    o.src,
-                    static_cast<uint32_t>(o.from.x),
-                    static_cast<uint32_t>(o.from.y),
-                    o.t,
-                    static_cast<uint32_t>(o.to.x),
-                    static_cast<uint32_t>(o.to.y),
-                    static_cast<long long>(o.r.value),
-                    fit_of(o),
-                    static_cast<double>(o.r.value) - fit_of(o),
-                    o.r.rtt0,
-                    o.r.rtt1,
-                    o.r.ddiff);
-            }
-            std::fclose(f);
-        }
-    }
     const double ns_per_tick = 1.0 / d.frequency_ghz;
 
     const auto [xlo, xhi] = std::minmax_element(x.begin(), x.begin() + nt);

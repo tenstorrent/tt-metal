@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -45,8 +44,7 @@ struct HostLine {
 class HostProbe {
 public:
     // Writes the host series of `map` while it runs.
-    // `csv_path` non-empty: the bursts are written to <csv_path>.probe.csv when the probe stops.
-    HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map, std::string csv_path);
+    HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map);
     ~HostProbe();
     HostProbe(const HostProbe&) = delete;
     HostProbe& operator=(const HostProbe&) = delete;
@@ -61,7 +59,7 @@ private:
     struct BurstPoint {
         double tsc, refclk;  // means of the kept reads
         uint32_t kept;
-        int64_t rtt_min_ticks, rtt_p50_ticks;
+        int64_t rtt_min_ticks;
     };
     void run();
     uint32_t read_cfr_lo();
@@ -72,7 +70,6 @@ private:
     tt::Cluster& cluster_;
     const uint32_t chip_id_;
     PlacementMap& map_;
-    const std::string csv_path_;
     uint32_t pcie_x_ = 0, pcie_y_ = 0;  // translated
     tt::umd::TlbWindow* window_ = nullptr;
     uint32_t cfr_hi_ = 0, cfr_lo_last_ = 0;

@@ -24,7 +24,7 @@ namespace tt::tt_metal::streaming_profiler {
 // multiple k8 and the count of samples behind the line in the record's round word. The newest point of the open
 // segment stands for it; a CLOSE point ends a segment at its last on-line sample; a new multiple, or a point after
 // a close, opens the next; and consecutive segments meet where their lines cross. The raw samples the pusher sends
-// around a transition are counted here and kept by the consumer for its CSV dump only.
+// around a transition are only counted.
 class LocalClockModel {
 public:
     static constexpr double kRefclkHz = 50e6;
@@ -36,15 +36,14 @@ public:
 
     struct Run {
         double k8 = 0.0;                     // wall ticks per refclk tick, in eighths
-        double ax = 0.0, ay = 0.0;           // the newest point: refclk, wall
         double r_first = 0.0, r_last = 0.0;  // the first and the newest point's refclk
-        double w_first = 0.0;                // the first point's wall, the segment's key in wall order
+        double w_first = 0.0, w_last = 0.0;  // their walls; w_first is the segment's key in wall order
         uint32_t n = 0;                      // samples behind the line
         bool closed = false;
         double slope() const { return k8 / 8.0; }
         bool settled() const { return n >= kSettledCount; }
-        double wall_of_refclk(double r) const { return ay + slope() * (r - ax); }
-        double refclk_of_wall(double w) const { return ax + (w - ay) / slope(); }
+        double wall_of_refclk(double r) const { return w_last + slope() * (r - r_last); }
+        double refclk_of_wall(double w) const { return r_last + (w - w_last) / slope(); }
         // A sample is the wall tick of one refclk update, caught to within a cycle; the intercept is their mean.
         double residual_ticks() const { return 1.0; }
         double se_ticks(double) const { return n > 0 ? residual_ticks() / std::sqrt(static_cast<double>(n)) : 0.0; }
@@ -72,9 +71,8 @@ public:
         if (r < cur.r_last) {
             return;
         }
-        cur.ax = r;
-        cur.ay = w;
         cur.r_last = r;
+        cur.w_last = w;
         cur.n = n;
         cur.closed = close;
     }
@@ -95,7 +93,7 @@ public:
         if (!(std::abs(ds) > 1e-9)) {
             return std::nullopt;
         }
-        const double r_x = (b.ay - b.slope() * b.ax - a.ay + a.slope() * a.ax) / ds;
+        const double r_x = (b.w_last - b.slope() * b.r_last - a.w_last + a.slope() * a.r_last) / ds;
         if (std::isfinite(r_x) && r_x >= a.r_last - kKnotSlackTicks && r_x <= b.r_first + kKnotSlackTicks) {
             return r_x;
         }
@@ -161,15 +159,9 @@ public:
 
 private:
     PlacementMap map_;
-    struct LocalState {
-        LocalClockModel model;
-        std::vector<std::pair<uint64_t, uint64_t>>
-            samples;  // the raw transition samples (refclk, wall), for the CSV dump
-    };
-    // One end's stamp of a round: the reading, in quarter-ns of the refclk domain, and the eth core's wall clock when
-    // it was recorded.
+    // One end's stamp of a round: the reading, in quarter-ns of the refclk domain.
     struct Stamp {
-        uint64_t value = 0, wall = 0;
+        uint64_t value = 0;
         bool have = false;
     };
     // A round under the number the sender gave it, with both ends' stamps: the sender's frame egress and echo
@@ -239,8 +231,6 @@ private:
     std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
     void publish_all();
     void log_summary() const;
-    void dump_csv() const;
-    void publish_rate_plots();
     void publish_error_plots() const;
     // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
     // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
@@ -254,11 +244,6 @@ private:
         int64_t& tsc_a,
         double& err,
         RoundTerms* terms = nullptr) const;
-    // Per link, the round errors computed with the corrections as they stood when the round's last stamp arrived:
-    // what a sink converting records on arrival actually applied, against the final map publish_error_plots uses.
-    std::vector<std::vector<SyncPlotPoint>> live_err_;
-    std::vector<size_t> live_done_;
-
     // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
     // was placed at, tangent the run's rate on the root (root refclk ticks per wall tick), the map past the newest
     // node, and sigma the standard deviation of `root` in ns (the run's line at r and the link solutions the chip
@@ -283,10 +268,7 @@ private:
         size_t dropped = 0;   // nodes refused: behind the frozen series, or not a correction below one ns per ns
         size_t extended = 0;  // frontier samples that only advanced the cover
     };
-    struct Published {
-        Series linked;
-    };
-    std::map<uint32_t, Published> published_;
+    std::map<uint32_t, Series> published_;
     // The host series as last read, for the checks' own root -> TSC step.
     mutable std::vector<HostNode> host_nodes_;
     mutable size_t host_seen_ = 0;
@@ -310,7 +292,7 @@ private:
     void freeze_append(Series& s, uint32_t chip, const Node& n);
     void push_node(Series& s, uint32_t chip, const Node& n);
     CaptureContext ctx_;
-    std::map<uint32_t, LocalState> local_;  // device index -> local fit
+    std::map<uint32_t, LocalClockModel> local_;  // device index -> local fit
     std::vector<LinkRounds> links_;         // per ctx_.links index
     // (device index, decoder core index) -> the link the core stamps for, and whether as its sender.
     std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;

@@ -66,8 +66,8 @@ double tsc_ticks_per_ns() {
     return rate;
 }
 
-HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map, std::string csv_path) :
-    cluster_(cluster), chip_id_(chip_id), map_(map), csv_path_(std::move(csv_path)) {
+HostProbe::HostProbe(tt::Cluster& cluster, uint32_t chip_id, PlacementMap& map) :
+    cluster_(cluster), chip_id_(chip_id), map_(map) {
     ticks_per_ns_ = tsc_ticks_per_ns();
     const auto pcie =
         cluster_.get_driver()->get_soc_descriptor(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
@@ -147,12 +147,6 @@ bool HostProbe::burst(BurstPoint& out) {
     for (const Read& r : reads) {
         rtt_min = std::min(rtt_min, r.rtt);
     }
-    std::vector<int64_t> rtts;
-    rtts.reserve(reads.size());
-    for (const Read& r : reads) {
-        rtts.push_back(r.rtt);
-    }
-    std::nth_element(rtts.begin(), rtts.begin() + rtts.size() / 2, rtts.end());
     const int64_t cut = rtt_min + static_cast<int64_t>(kRttSlackNs * ticks_per_ns_);
     const int64_t tsc_ref = reads.front().mid;
     const uint64_t ref_ref = reads.front().refclk;
@@ -170,12 +164,7 @@ bool HostProbe::burst(BurstPoint& out) {
     if (n == 0) {
         return false;
     }
-    out = BurstPoint{
-        static_cast<double>(tsc_ref) + st / n,
-        static_cast<double>(ref_ref) + sr / n,
-        n,
-        rtt_min,
-        rtts[rtts.size() / 2]};
+    out = BurstPoint{static_cast<double>(tsc_ref) + st / n, static_cast<double>(ref_ref) + sr / n, n, rtt_min};
     return true;
 }
 
@@ -282,12 +271,6 @@ void HostProbe::run() {
     // The first bursts come quickly so a line exists before records need it; then one every 100 ms, a cadence the
     // refclk period's ramp on the TSC (~0.05 ppm/s) keeps the line's prediction within tens of ns of.
     static constexpr int64_t kSchedule[] = {0, 100, 200, 300};
-    struct Trail {
-        double t_s, refclk, tsc;
-        uint32_t kept;
-        double rtt_min_ns, rtt_p50_ns, period_ns, resid_ns, pred_err_ns;
-    };
-    std::vector<Trail> trail;
     const auto t_start = std::chrono::steady_clock::now();
     size_t k = 0;
     int64_t next_pair_ms = 0;
@@ -295,7 +278,7 @@ void HostProbe::run() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_start)
             .count();
     };
-    const auto take = [&](int64_t now_ms) {
+    const auto take = [&] {
         HostLine before = line();
         BurstPoint p{};
         if (!burst(p)) {
@@ -325,16 +308,6 @@ void HostProbe::run() {
                 .tangent = l.b,
                 .sigma_ns = static_cast<float>(l.sigma_ns)});
         }
-        trail.push_back(Trail{
-            now_ms / 1e3,
-            p.refclk,
-            p.tsc,
-            p.kept,
-            static_cast<double>(p.rtt_min_ticks) / ticks_per_ns_,
-            static_cast<double>(p.rtt_p50_ticks) / ticks_per_ns_,
-            l.ok ? l.b / ticks_per_ns_ : 0.0,
-            l.sigma_ns,
-            pred_err_ns});
     };
     while (!stop_.load(std::memory_order_acquire)) {
         const int64_t now_ms = elapsed_ms();
@@ -342,7 +315,7 @@ void HostProbe::run() {
                                                      : kSchedule[std::size(kSchedule) - 1] +
                                                            100 * static_cast<int64_t>(k + 1 - std::size(kSchedule));
         if (now_ms >= due) {
-            take(now_ms);
+            take();
             k++;
         }
         if (now_ms >= next_pair_ms) {
@@ -357,27 +330,7 @@ void HostProbe::run() {
         if (const HostLine l = line(); l.ok && l.bursts >= 3) {
             break;
         }
-        take(elapsed_ms());
-    }
-    if (!csv_path_.empty()) {
-        if (std::FILE* f = std::fopen((csv_path_ + ".probe.csv").c_str(), "w"); f != nullptr) {
-            std::fprintf(f, "t_s,refclk,tsc,kept,rtt_min_ns,rtt_p50_ns,period_ns,resid_ns,pred_err_ns\n");
-            for (const Trail& t : trail) {
-                std::fprintf(
-                    f,
-                    "%.3f,%.1f,%.0f,%u,%.0f,%.0f,%.6f,%.1f,%.1f\n",
-                    t.t_s,
-                    t.refclk,
-                    t.tsc,
-                    t.kept,
-                    t.rtt_min_ns,
-                    t.rtt_p50_ns,
-                    t.period_ns,
-                    t.resid_ns,
-                    t.pred_err_ns);
-            }
-            std::fclose(f);
-        }
+        take();
     }
     log_info(
         tt::LogMetal,

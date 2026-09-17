@@ -1068,8 +1068,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_STREAMING_PROFILER_D2D_CSV
-        // Path prefix for the device sync's diagnostics: the placement map, the host probe's bursts and the tile
-        // clock readings, one CSV each next to it. Empty writes nothing.
+        // Path prefix for the device sync's diagnostics: per link, every round's placement error against the final
+        // map with the stamps' own terms, in <prefix>.err_<b>_<a>.csv. Empty writes nothing.
         // Default: "" (off)
         // Usage: export TT_METAL_STREAMING_PROFILER_D2D_CSV=/tmp/d2d.csv
         case EnvVarID::TT_METAL_STREAMING_PROFILER_D2D_CSV:
