@@ -279,18 +279,35 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def _forward_fabric_agmm(self, x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype) -> ttnn.Tensor:
+    def _forward_fabric_agmm(
+        self,
+        x,
+        weight,
+        fabric_cfg,
+        parallel_config,
+        compute_kernel_config,
+        dtype,
+        addcmul_a=None,
+        addcmul_b=None,
+        addcmul_scalar: float = 1.0,
+    ) -> ttnn.Tensor:
         """Optimized fabric-bound TP all-gather-matmul via strided_all_gather_minimal_matmul_async.
 
         The matmul runs on ``fabric_cfg.mm_core_grid`` (lower rows); the strided all-gather workers
         run on the rows starting at ``fabric_cfg.ag_core_grid_offset`` (disjoint region). Returns the
-        single (chunks==1) matmul output; the op's first output is the gathered-K scratch.
+        matmul output (a list of per-chunk outputs when ``self.chunks > 1``); the op's first output is
+        the gathered-K scratch.
+
+        ``addcmul_a`` / ``addcmul_b`` fuse the gated residual ``a + scalar * matmul * b`` into the
+        op's ternary epilogue (``b`` is either a broadcast ``[1, N]`` row or a full ``[M, N]`` map),
+        as the ``all_gather_minimal_matmul_async`` path does with its addcmul inputs.
 
         Under fused SwiGLU the weight is the packed [gate|up] matrix, so ``fabric_cfg`` blocks on the
         doubled width and the returned tensor is half as wide. The op has no dtype override, so the
         output follows the input/weight dtype rather than the caller's requested one.
         """
         mesh_axis = parallel_config.tensor_parallel.mesh_axis
+        chunks = self.chunks if self.chunks is not None else 1
         # The op gathers on dim 3 and fatals unless padded_shape[0] and [1] are both 1, but model
         # activations are rank 3 ([1, seq, K]), whose [1] is the sequence length. Widen here and
         # restore the caller's rank on the way out so this stays a drop-in for the non-fabric path.
@@ -314,6 +331,16 @@ class ColParallelLinear(Module):
         ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(x.shape, 3, mesh_axis, dtype=x.get_dtype())
         ag_global_semaphores = self.ccl_manager.get_strided_ag_mm_semaphore(mesh_axis, fabric_cfg.num_workers_per_link)
         dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        ternary_kwargs = {}
+        if addcmul_a is not None:
+            if self.fused_activation_fn is not None or self.fuse_swiglu:
+                msg = "fused addcmul is not supported alongside a fused activation on the strided AGMM path"
+                raise ValueError(msg)
+            ternary_kwargs = {
+                "fused_ternary_input_a": addcmul_a,
+                "fused_ternary_input_b": addcmul_b,
+                "fused_ternary_scalar": addcmul_scalar,
+            }
         outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
             x,
             weight,
@@ -333,14 +360,15 @@ class ColParallelLinear(Module):
             num_workers_per_link=fabric_cfg.num_workers_per_link,
             num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
             read_local_slice_from_input=True,
-            chunks=1,
+            chunks=chunks,
             fuse_swiglu=self.fuse_swiglu,
+            **ternary_kwargs,
         )
-        # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
-        out = _apply_activation_fn(outputs[1], self.activation_fn)
+        # Op returns [all_gather_output, matmul_chunk_0, ...]; drop the gathered-K scratch.
+        outs = [_apply_activation_fn(o, self.activation_fn) for o in outputs[1:]]
         if orig_rank != 4:
-            out = ttnn.reshape(out, tuple(out.shape)[-orig_rank:])
-        return out
+            outs = [ttnn.reshape(o, tuple(o.shape)[-orig_rank:]) for o in outs]
+        return outs if chunks > 1 else outs[0]
 
     def forward(
         self,
@@ -397,14 +425,26 @@ class ColParallelLinear(Module):
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
             # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op.
-            # N is the weight width, so a fused-SwiGLU layer keys on its packed [gate|up] width.
-            # Restricted to chunks==1; other shapes fall through to the all_gather_minimal_matmul_async
-            # path below. The op gathers on dim 3 of a rank-4 input, so every dim above the matmul's
-            # (M, K) must be unit; _forward_fabric_agmm widens rank-3 activations to satisfy that.
+            # N is the weight width, so a fused-SwiGLU layer keys on its packed [gate|up] width, and
+            # the table is keyed on chunks as well. Shapes without an entry fall through to the
+            # all_gather_minimal_matmul_async path below. The op gathers on dim 3 of a rank-4 input,
+            # so every dim above the matmul's (M, K) must be unit; _forward_fabric_agmm widens rank-3
+            # activations to satisfy that (a batched [1, B, M, K] activation has to be flattened to
+            # [1, 1, B*M, K] by the caller, together with any addcmul operands).
             fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
-            if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
-                return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
+            if fabric_cfg is not None and has_unit_batch:
+                return self._forward_fabric_agmm(
+                    x,
+                    weight,
+                    fabric_cfg,
+                    parallel_config,
+                    compute_kernel_config,
+                    dtype,
+                    addcmul_a=addcmul_a,
+                    addcmul_b=addcmul_b,
+                    addcmul_scalar=addcmul_scalar,
+                )
 
             # The op transposes the core grid when force_transpose is set or the output is wide
             # (M > N), and puts its in0 muxes on whichever axis the worker grid leaves free -- so
@@ -716,12 +756,17 @@ class RowParallelLinear(Module):
             input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             dim=3,
-            multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
+            # The fused op has its own semaphore pool: sharing the plain reduce_scatter's pool with a
+            # model that also runs reduce_scatter_minimal_async (SD3.5's prompt stream) corrupted the
+            # fused output history-dependently (2026-09-17).
+            multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore_fused(self.mesh_axis),
             **mmrs_params,
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-            if use_l1_handoff
-            else self.mm_memory_config,
+            memory_config_mm=(
+                ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+                if use_l1_handoff
+                else self.mm_memory_config
+            ),
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,
