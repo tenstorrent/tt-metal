@@ -32,9 +32,9 @@ from models.demos.gemma4_d_p.tt.variable_chunk_prefill import VariableChunkPrefi
 
 # Buckets: one that a short prompt fills exactly, one that is the 256k throughput optimum.
 # See models/demos/gemma4_d_p/tt/chunk_buckets.py for why these two.
-CHUNK_BUCKETS = tuple(int(c) for c in os.environ.get("GEMMA4_CHUNK_BUCKETS", "4096,32768").split(","))
+CHUNK_BUCKETS = tuple(int(c) for c in os.environ.get("GEMMA4_CHUNK_BUCKETS", "4096,8192,32768").split(","))
 # Two captured 60-layer traces instead of one.
-TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_VARIABLE_TRACE_REGION_SIZE", 600_000_000))
+TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_VARIABLE_TRACE_REGION_SIZE", 900_000_000))
 PCC_THRESHOLD = 0.99
 # Padding and replay must be exact, not merely close: both are the same arithmetic.
 PADDING_PCC_THRESHOLD = 0.9999
@@ -156,44 +156,72 @@ def test_variable_chunk_prefill_is_correct_within_a_width(mesh_device, reset_see
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Gemma4 CP prefill is not chunk-width invariant on this branch: one sliding layer over an "
-        "EMPTY KV history already gives PCC 0.871 between chunk 8192 and 32768. Pre-existing and "
-        "unrelated to per-request bucketing -- it equally invalidates the shipped 8192->32768 "
-        "throughput recommendation. See tech_reports/Gemma4VariableChunkSize/. XPASS here means "
-        "the op was fixed: drop the xfail and raise the depth."
+        "KNOWN BUG in this implementation: a model built with several widths does not reproduce a "
+        "single-width build's answer at a width they share. Measured PCC 0.869 (max_abs_diff 29.9) "
+        "for chunk 8192 between a (8192,) build and a (4096,8192,32768) build, one layer, identical "
+        "ring_cache geometry. Lead: the single-width 8192 result matches the multi-build's 4096 "
+        "result, so per-width resources look bound by position-in-tuple or by prefill_chunk_sizes[-1] "
+        "rather than by the requested width -- suspect capture() baking overlapping trace addresses, "
+        "or the per-width RoPE tables. Until this XPASSes, per-request bucketing is NOT correct and "
+        "no cross-width measurement from a multi-width build can be trusted. "
+        "See tech_reports/Gemma4VariableChunkSize/ §4."
     ),
 )
-def test_prefill_is_chunk_width_invariant(mesh_device, reset_seeds):
-    """One decoder layer, one prompt, two chunk widths. The answer should not depend on the width.
+def test_multi_width_build_matches_single_width_build(mesh_device, reset_seeds):
+    """A width's answer must not depend on which other widths the model was built with.
 
-    Deliberately ONE layer: at that depth nothing has had a chance to amplify, so a failure is a
-    first-order difference in the attention itself rather than accumulated drift. (Measured: PCC
-    rises from 0.871 at 1 layer to 0.969 at 16 before collapsing to 0.576 at 60, which is not the
-    monotone decay amplification would produce.)
+    This is the control that the earlier version of this suite was missing, and running it
+    retracted three published claims. It needs two processes to be airtight (two models of this
+    size will not co-reside), so the in-test version compares against a reference captured by
+    ``GEMMA4_REFERENCE_PT`` -- produced by running this same test with ``GEMMA4_WIDTHS`` set to a
+    single width. Without that file it skips rather than pretending to check anything.
+
+    ``ring_cache_capacity`` is ``max(max_seq_len, 2*max(C))``, which saturates at ``max_seq_len``
+    for every width set used here, so the KV geometry is identical between builds and cannot
+    explain a difference.
     """
+    reference_pt = os.environ.get("GEMMA4_REFERENCE_PT")
+    save_pt = os.environ.get("GEMMA4_SAVE_PT")
+    if not reference_pt and not save_pt:
+        pytest.skip(
+            "two-process control. First: GEMMA4_WIDTHS=8192 GEMMA4_SAVE_PT=/tmp/ref.pt (records the "
+            "single-width reference). Then: GEMMA4_REFERENCE_PT=/tmp/ref.pt (compares a multi-width "
+            "build against it). Two models this size cannot co-reside, hence two processes."
+        )
+    widths = tuple(int(c) for c in os.environ.get("GEMMA4_WIDTHS", ",".join(map(str, CHUNK_BUCKETS))).split(","))
+    shared = int(os.environ.get("GEMMA4_SHARED_WIDTH", 8192))
+    prompt_len = shared
+
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", 65536))
-    mesh_config, model_args, model, model_path = _build(mesh_device, max_seq_len)
-    narrow, wide = CHUNK_BUCKETS[0], CHUNK_BUCKETS[-1]
-    prompt_len = max(CHUNK_BUCKETS)
+    mesh_config, model_args, model, model_path = _build(mesh_device, max_seq_len, chunk_sizes=widths)
     tokens_all = _get_prefill_tokens(model_path, max_seq_len, model_args.vocab_size)
-
     model.layers = model.layers[:1]
-    with VariableChunkPrefill(model, mesh_config).capture(logger=logger) as driver:
-        rows = {}
-        for chunk_size in (narrow, wide):
-            chunks = []
-            driver.prefill(
-                tokens_all[0, :prompt_len],
-                chunk_size=chunk_size,
-                on_chunk=lambda _i, out: chunks.append(
-                    cp_gather_torch(out, mesh_config).reshape(-1, model.hidden_size)
-                ),
-            )
-            rows[chunk_size] = torch.cat(chunks, dim=0)[:prompt_len].clone()
 
-    passing, pcc = comp_pcc(rows[narrow], rows[wide], PCC_THRESHOLD)
-    logger.info(f"[variable_chunk] 1-layer width invariance {narrow} vs {wide}: PCC {pcc}")
-    assert passing, f"one {model_args.layer_types[0]} layer differs between chunk {narrow} and {wide}: PCC {pcc}"
+    with VariableChunkPrefill(model, mesh_config).capture(logger=logger) as driver:
+        chunks = []
+        driver.prefill(
+            tokens_all[0, :prompt_len],
+            chunk_size=shared,
+            on_chunk=lambda _i, out: chunks.append(cp_gather_torch(out, mesh_config).reshape(-1, model.hidden_size)),
+        )
+        mine = torch.cat(chunks, dim=0)[:prompt_len].clone()
+
+    if save_pt:
+        torch.save({"widths": widths, "out": {shared: mine}}, save_pt)
+        logger.info(f"[variable_chunk] saved reference for widths={widths} chunk={shared} -> {save_pt}")
+        if not reference_pt:
+            pytest.skip(f"reference recorded to {save_pt}; re-run with GEMMA4_REFERENCE_PT to compare")
+
+    reference = torch.load(reference_pt)["out"][shared]
+    passing, pcc = comp_pcc(reference, mine, PADDING_PCC_THRESHOLD)
+    logger.info(
+        f"[variable_chunk] build {widths} vs reference at chunk {shared}: PCC {pcc} "
+        f"max_abs_diff {float((reference - mine).abs().max()):.3e}"
+    )
+    assert passing, (
+        f"chunk {shared} differs between a single-width build and a {widths} build (PCC {pcc}). "
+        f"A width's answer must not depend on which other widths were configured."
+    )
 
 
 # ── performance ───────────────────────────────────────────────────────────────
