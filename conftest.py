@@ -836,6 +836,7 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     with bh_2d_mesh_device_context(device_params) as mesh_device:
         yield mesh_device
 
+
 def _check_required_num_devices(request, ttnn):
     marker = request.node.get_closest_marker("requires_num_devices")
     if marker is None:
