@@ -519,10 +519,25 @@ def start_runs(sha, count, args_ns=None):
     return ids
 
 
+def run_view(run_id, fields):
+    """Ask GitHub about a run, tolerating a blip.
+
+    A poll loop that dies on one i/o timeout throws away however many hours of
+    card time are already in flight, so a transient failure returns None and the
+    caller tries again on the next tick.
+    """
+    try:
+        return json.loads(
+            sh("gh", "run", "view", str(run_id), "--repo", REPO, "--json", fields)
+        )
+    except RuntimeError as err:
+        print(f"  (transient: {str(err).splitlines()[-1][:80]})")
+        return None
+
+
 def run_conclusion(run_id):
-    return json.loads(
-        sh("gh", "run", "view", str(run_id), "--repo", REPO, "--json", "conclusion")
-    )["conclusion"]
+    info = run_view(run_id, "conclusion")
+    return info["conclusion"] if info else None
 
 
 def wait_for(run_ids):
@@ -530,19 +545,8 @@ def wait_for(run_ids):
     pending = set(run_ids)
     while pending and time.time() < deadline:
         for rid in sorted(pending):
-            info = json.loads(
-                sh(
-                    "gh",
-                    "run",
-                    "view",
-                    str(rid),
-                    "--repo",
-                    REPO,
-                    "--json",
-                    "status,conclusion",
-                )
-            )
-            if info["status"] == "completed":
+            info = run_view(rid, "status,conclusion")
+            if info and info["status"] == "completed":
                 print(f"  run {rid}: {info['conclusion']}")
                 pending.discard(rid)
         if pending:
