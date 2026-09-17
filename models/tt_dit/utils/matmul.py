@@ -664,6 +664,42 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     )
 
 
+_logged_ring_safe_k_block_signatures = set()
+
+
+def _ring_safe_k_block(config, M, K, N, cluster_size):
+    """Shrink `K_block_size` to the largest divisor of the per-device K tiles when it does not divide them.
+
+    `all_gather_minimal_matmul_async` on a Ring topology asserts `K_tiles_per_device % K_block_size == 0`
+    (its bidirectional half-block scheme has no tail block), where `K_tiles_per_device = K / 32 / TP`. The
+    generic (8, 8, 8) fallback satisfies that at TP=4 for this repo's swept shapes only by luck of the
+    dimensions -- at TP=8 a 5376-wide input is 21 K tiles per device and the op throws on the first
+    matmul, 20 minutes into a weight load. Only the generic fallback is adjusted here: a swept table
+    entry or a caller-supplied `default_block_size` was chosen for a specific TP and is left alone.
+    """
+    k_tiles_per_device = K // 32 // max(cluster_size, 1)
+    k_block = config.K_block_size
+    if k_tiles_per_device <= 0 or k_tiles_per_device % k_block == 0:
+        return config
+    safe = max(d for d in range(1, min(k_block, k_tiles_per_device) + 1) if k_tiles_per_device % d == 0)
+    signature = (M, K, N, cluster_size)
+    if signature not in _logged_ring_safe_k_block_signatures:
+        logger.warning(
+            f"AGMM generic fallback for (M, K, N) = ({M}, {K}, {N}) at TP={cluster_size}: K_block {k_block} does not "
+            f"divide the {k_tiles_per_device} K tiles per device the ring delivers; using K_block {safe}. Sweep the "
+            f"shape with sweep_mm_block_sizes.py and add a table entry to replace this."
+        )
+        _logged_ring_safe_k_block_signatures.add(signature)
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=config.M_block_size,
+        K_block_size=safe,
+        N_block_size=config.N_block_size,
+        subblock_h=config.subblock_h,
+        subblock_w=config.subblock_w,
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+    )
+
+
 _logged_agmm_v3_signatures = set()
 
 
@@ -732,6 +768,7 @@ def get_agmm_config(
         )
     if v3 is None:
         config = get_matmul_config(M, K, N, legacy_grid)  # legacy warned generic fallback
+        config = _ring_safe_k_block(config, M, K, N, cluster_size)
         return legacy_grid, config, legacy_workers
 
     grid_x, grid_y = v3["core_grid"]
