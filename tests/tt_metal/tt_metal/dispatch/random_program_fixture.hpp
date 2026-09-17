@@ -299,6 +299,7 @@ private:
         defines.emplace("KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds));
         // NUM_DFBS would collide with the firmware's dfb::NUM_DFBS constant.
         defines.emplace("NUM_TEST_DFBS", std::to_string(entry_sizes.size()));
+        defines.emplace("NUM_TEST_SEMS", std::to_string(sem_ids.size()));
 
         // Gen2 rejects a data-movement kernel bound as both ends of a DFB, so the kernel under test
         // produces and a blank compute kernel consumes. Nothing is pushed through the buffers, as on
@@ -328,10 +329,16 @@ private:
         }
 
         Group<SemaphoreSpec> semaphores;
+        Group<KernelSpec::SemaphoreBinding> semaphore_bindings;
         for (uint32_t sem_id : sem_ids) {
+            const SemaphoreSpecName sem_name{"sem_" + std::to_string(sem_id)};
             semaphores.push_back(SemaphoreSpec{
-                .unique_id = SemaphoreSpecName{"sem_" + std::to_string(sem_id)},
+                .unique_id = sem_name,
                 .target_nodes = cores,
+            });
+            semaphore_bindings.push_back(KernelSpec::SemaphoreBinding{
+                .semaphore_spec_name = sem_name,
+                .accessor_name = sem_name.get(),
             });
         }
 
@@ -343,6 +350,7 @@ private:
             .num_threads = 1,
             .compiler_options = {.defines = std::move(defines)},
             .dfb_bindings = producer_bindings,
+            .semaphore_bindings = semaphore_bindings,
             .compile_time_args =
                 {{"num_unique_rt_args", num_unique_rt_args},
                  {"num_common_rt_args", static_cast<uint32_t>(common_rt_args.size())},
