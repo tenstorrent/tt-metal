@@ -50,10 +50,13 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 
     // Validate data formats. The program factory sizes every input CB for BFLOAT16 tiles,
     // so any other dtype would overrun CB pages and silently corrupt gradients.
-    check_device_tensor(grad_output, "SDPABackwardKV", "grad_output");
-    check_device_tensor(query, "SDPABackwardKV", "query");
-    check_device_tensor(key, "SDPABackwardKV", "key");
-    check_device_tensor(value, "SDPABackwardKV", "value");
+    // Activations and the mask go through TensorAccessor and were never required to be interleaved; only the
+    // intermediates are.
+    const DeviceTensorRequirements any_memory_layout{.memory_layout = std::nullopt};
+    check_device_tensor(grad_output, "SDPABackwardKV", "grad_output", any_memory_layout);
+    check_device_tensor(query, "SDPABackwardKV", "query", any_memory_layout);
+    check_device_tensor(key, "SDPABackwardKV", "key", any_memory_layout);
+    check_device_tensor(value, "SDPABackwardKV", "value", any_memory_layout);
 
     // Validate device placement
     TT_FATAL(
@@ -62,7 +65,10 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(tensor_args.u_scaler.device() == query.device(), "u_scaler must be on the same device as query");
     check_device_tensor(
-        tensor_args.u_scaler, "SDPABackwardKV", "u_scaler", {.dtypes = {tt::tt_metal::DataType::FLOAT32}});
+        tensor_args.u_scaler,
+        "SDPABackwardKV",
+        "u_scaler",
+        {.dtypes = {tt::tt_metal::DataType::FLOAT32}, .memory_layout = std::nullopt});
 
     const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
 
@@ -152,7 +158,7 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
     // Validate mask shape if provided - must be (1, 1, S, S)
     if (tensor_args.attn_mask.has_value()) {
         const auto& mask = tensor_args.attn_mask.value();
-        check_device_tensor(mask, "SDPABackwardKV", "attn_mask");
+        check_device_tensor(mask, "SDPABackwardKV", "attn_mask", any_memory_layout);
         TT_FATAL(mask.device() == query.device(), "Attention mask must be on the same device as query");
         auto mask_shape = mask.logical_shape();
         auto [mB, mH, mS1, mS2] = mask_shape.to_array_4D();
