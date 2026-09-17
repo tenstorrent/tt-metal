@@ -25,6 +25,22 @@ pytest.importorskip("vllm")
 from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashContractForCausalLM as CT
 
 
+def _plugin_has_num_valid():
+    """DraftOutput.num_valid arrives with the plugin's contract stack.
+
+    That stack lands separately from this adapter, so a checkout can have the
+    adapter and not the field. The adapter feature-detects it; these
+    assertions cannot, so they skip rather than fail against a plugin that
+    predates it.
+    """
+    from vllm_tt_plugin.spec_decode import DraftOutput
+
+    return "num_valid" in getattr(DraftOutput, "__dataclass_fields__", {})
+
+
+needs_num_valid = pytest.mark.skipif(not _plugin_has_num_valid(), reason="plugin DraftOutput has no num_valid yet")
+
+
 class _Dec:
     """Fused decoder stub: one replay yields (drafts, posterior)."""
 
@@ -146,6 +162,7 @@ def test_propose_returns_int32_drafts_of_width_k():
     assert out.draft_scores is None
 
 
+@needs_num_valid
 def test_propose_without_a_session_proposes_nothing():
     """A declined row says so with num_valid, not with its ids.
 
@@ -292,6 +309,7 @@ def test_propose_selects_the_width_for_the_new_position():
 # ── adaptive on the contract rail: solo speculates, batched does not ────────
 
 
+@needs_num_valid
 def test_a_batched_step_proposes_nothing_and_drops_the_session():
     """The fused verify packs its candidate positions into ONE batch row, so it
     cannot speculate for several requests. Declining every row is how this rail
@@ -465,6 +483,7 @@ def test_column_zero_narrowing_leaves_an_already_narrow_step_alone():
     assert kwargs["start_pos"].tolist() == [1, 2]
 
 
+@needs_num_valid
 def test_a_solo_proposal_declines_every_other_row():
     """The block's rows are the wire bucket, and only row 0 has a drafter.
 

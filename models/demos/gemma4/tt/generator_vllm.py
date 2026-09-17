@@ -1484,19 +1484,33 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return [i for i, lt in enumerate(layer_types) if lt == "sliding_attention"]
 
     def _bounded_sliding_physical_blocks(self, block_size: int) -> int | None:
-        """Demo-parity sliding pool size: ``(sliding_window/block_size) * B``.
+        """Sliding pool size: ``(ring/block_size) * B``.
 
         Used when ``bounded_sliding`` is on so hybrid-OFF UniformType specs
         (full ``num_blocks`` for every layer) do not allocate ~256k-length
         sliding buffers and OOM at long ISL.
+
+        Sized from the RING, not the bare ``sliding_window``. The ring is what
+        positions wrap into (``bounded_ring_modulo``), and on the speculative
+        path it is larger than the window so candidate writes at p+1..p+K land
+        outside the live window instead of evicting history a candidate query
+        still needs. Allocating from the window while wrapping modulo the ring
+        writes past the pool, which is why setting the headroom env alone was
+        never enough -- allocation, page tables and modulo have to move
+        together.
         """
         if not self._bounded_sliding_kv_cache or block_size <= 0:
             return None
         sliding_window = getattr(self._text_config(), "sliding_window", None)
-        if sliding_window is None or int(sliding_window) % block_size != 0:
+        if sliding_window is None:
+            return None
+        from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+        ring = bounded_ring_modulo(int(sliding_window))
+        if ring is None or int(ring) % block_size != 0:
             return None
         max_batch = int(self.model_args[0].max_batch_size)
-        return (int(sliding_window) // block_size) * max_batch
+        return (int(ring) // block_size) * max_batch
 
     def _release_decode_traces_for_fresh_wave(self) -> None:
         """Release captured decode traces (see fresh-wave comment at call site)."""
@@ -2232,6 +2246,45 @@ def _assistant_default_snapshot(hf_model):
     return hit if hit else cand
 
 
+def _reserve_spec_ring_headroom(sliding_window, verify_width, where):
+    """Reserve bounded-ring headroom for speculative candidate writes.
+
+    A ring of exactly ``sliding_window`` is correct for plain decode, but a
+    packed verify writes candidates at p+1..p+K BEFORE attention runs, and slot
+    (p+j)%W holds position p+j-W, which is still inside the live window. Those
+    writes evict history that an earlier candidate query in the SAME forward
+    still needs, and masking future candidates cannot bring it back.
+
+    The ring must stay a power of two (chunk starts must be multiples of both
+    the ring and SDPA's q_chunk_size), so the smallest legal ring larger than
+    the window is twice the window -- which also clears any K up to the window.
+    Set through the env because the ring is read process-wide by
+    ``bounded_ring_modulo`` from the model and trace paths, which do not know
+    whether speculation is on. ``setdefault`` leaves an operator's own value
+    alone.
+
+    Only the demo used to set this, so a SERVER ran bounded sliding plus
+    speculation on an exact-window ring and corrupted from the first token at
+    K>1 (tt-metal#56048 review 3).
+    """
+    from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
+
+    if sliding_window is None:
+        return
+    window = int(sliding_window)
+    if window <= 0 or window % _RING_HEADROOM_BLOCK:
+        return
+    if os.environ.get(SPEC_RING_HEADROOM_ENV):
+        return
+    blocks = window // _RING_HEADROOM_BLOCK
+    os.environ[SPEC_RING_HEADROOM_ENV] = str(blocks)
+    logger.info(
+        f"{where}: reserved {blocks} bounded-ring headroom blocks "
+        f"(ring {window} -> {window * 2}) so verify candidates at p+1..p+{verify_width} "
+        "do not evict in-window history"
+    )
+
+
 class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
     """Gemma4 with the z-lab dFlash block-diffusion drafter, serving at B=1.
 
@@ -2466,6 +2519,10 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # Tokens produced past a step's block width, delivered on the next step.
         self._spec_carry = []
         self._spec_horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
+        if self._bounded_sliding_kv_cache:
+            _reserve_spec_ring_headroom(
+                getattr(self._text_config(), "sliding_window", None), self._SPEC_N, "Gemma4DFlash"
+            )
         # WIDTH SET (vllm-tt-plugin#110 s.8, tt-metal#56048 review step 3): the
         # verify widths are derived from max_model_len at CONFIG time and every
         # one is captured in warmup, so serving never captures and no captured
@@ -2796,6 +2853,11 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # allocating/freeing a fresh decoder's buffers (which fragments DRAM).
         # A bucket change (different prompt length band) releases + re-captures.
         dec = self._spec_decoder
+        # A carry never crosses sessions, and this must happen BEFORE any branch
+        # below can return: the width-set reseed path returns early, so a reset
+        # placed only on the capture path let request B open with tokens dFlash
+        # produced for request A.
+        self._spec_carry = []
         # Cross-request decoder reuse: DEFAULT OFF, conservatively -- the two
         # paths are now EQUIVALENT, so OFF is simply the unchanged behaviour and
         # not a considered preference.
@@ -2876,7 +2938,6 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_active = True
         self._spec_active_owner = self._spec_pt_identity(page_table)
         self._spec_first_step = True
-        self._spec_carry = []  # a carry never crosses sessions
         self._spec_last_pt = None
         # verify masks/tables were sized for this horizon; past it the packed
         # verify would attend past its capture -- end the request cleanly then.
@@ -3190,10 +3251,15 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_pending = None
         self._spec_pending_owner = None
         self._spec_active = False  # session inactive, decoder retained for reuse
+        # The retained decoder is reused across requests, so anything request
+        # SCOPED must die here: a carry left behind is emitted as the next
+        # request's first tokens.
+        self._spec_carry = []
 
     def release_persistent_capture(self) -> None:
         self._spec_pending = None
         self._spec_pending_owner = None
+        self._spec_carry = []
         self._spec_release_decoder()
 
 
@@ -3322,7 +3388,6 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         ``hidden`` is None by contract for an on-device handoff: the drafter
         reads the taps the verify left in place.
         """
-        from vllm_tt_plugin.spec_decode import DraftOutput
 
         del hidden  # on-device handoff: the taps are already in place
         k = int(num_drafts)
@@ -3379,7 +3444,24 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         # speak for.
         valid = torch.zeros(rows, dtype=torch.int32)
         valid[0] = len(self._ct_drafts)
-        return DraftOutput(draft_token_ids=out, num_valid=valid)
+        return self._draft_output(out, valid)
+
+    @staticmethod
+    def _draft_output(draft_token_ids, num_valid):
+        """A ``DraftOutput``, carrying per-row counts when the plugin has them.
+
+        ``DraftOutput.num_valid`` arrives with the plugin's speculative
+        contract stack, which lands separately from this adapter (the block
+        rail is the default meanwhile). Passing it unconditionally makes this
+        module import-incompatible with a plugin that predates it, so it is
+        feature-detected: without it the runner records every row, which is the
+        behaviour a drafter that always fills its block already had.
+        """
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        if "num_valid" in getattr(DraftOutput, "__dataclass_fields__", {}):
+            return DraftOutput(draft_token_ids=draft_token_ids, num_valid=num_valid)
+        return DraftOutput(draft_token_ids=draft_token_ids)
 
     @staticmethod
     def _contract_no_drafts(rows, k):
@@ -3392,11 +3474,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashForCausalLM):
         read: a row the runner recorded nothing for carries
         ``num_valid_drafts`` 0 into the next verify.
         """
-        from vllm_tt_plugin.spec_decode import DraftOutput
-
-        return DraftOutput(
-            draft_token_ids=torch.zeros((rows, int(k)), dtype=torch.int32),
-            num_valid=torch.zeros(rows, dtype=torch.int32),
+        return Gemma4DFlashContractForCausalLM._draft_output(
+            torch.zeros((rows, int(k)), dtype=torch.int32),
+            torch.zeros(rows, dtype=torch.int32),
         )
 
     # -- contract: verify -----------------------------------------------------
@@ -3726,6 +3806,8 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             "yes",
         )
         self._spec_warm = False
+        if self._bounded_sliding_kv_cache:
+            _reserve_spec_ring_headroom(getattr(self._text_config(), "sliding_window", None), self._SPEC_N, "Gemma4MTP")
         self._spec_horizon = int(os.environ.get("GEMMA4_MTP_SERVE_HORIZON", "2048"))
         logger.info(
             f"Gemma4MTP serving: K={self._SPEC_K} (N={self._SPEC_N}/step), "
@@ -4020,9 +4102,20 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
                 "releasing it and serving this one as plain baseline"
             )
             self._spec_release_session()
-        if self._spec is None:
+        if self._spec is None or self._spec_cur is None:
             # No session for this row (batched prefill, or a dropped non-owner
             # session): serve plain baseline, matching the reserved width.
+            #
+            # _spec and _spec_cur are DIFFERENT things: _spec is the capture,
+            # _spec_cur is the active request's (token, position). A warm
+            # release keeps the capture -- the warmup traces are a process
+            # artifact, not a per-session one, and freeing them would leave no
+            # captured widths and no way to recapture -- and nulls _spec_cur
+            # only. Gating on _spec alone therefore let an ordinary batch-to-solo
+            # transition fall through to `cur_token, cur_pos = self._spec_cur`
+            # and raise TypeError. Nothing below can arm it: the pending
+            # bootstrap is above, so a None here means no request owns the
+            # capture.
             return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         # Re-stage the fused verify's page tables when vLLM's block table for
         # this request CHANGES. The KV manager allocates a block only every

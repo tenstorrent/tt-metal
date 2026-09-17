@@ -73,10 +73,33 @@ def _model(monkeypatch, script, block=8, carry=None, budget=10**9):
     m._spec_width_ladder = [4096]
     m._spec_budget_end = budget
     m._spec_carry = list(carry or [])
+    m._spec_horizon = 2048
+    m._spec_decoder_bucket = None
     m._spec_last_pt = None
     m._bounded_sliding_kv_cache = False
     m.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
     return m
+
+
+def _bootstrap_via_width_set(m, anchor=11, start=100):
+    """Arm a session through the REAL _spec_bootstrap width-set branch.
+
+    That branch returns early, which is why it needs its own coverage: a reset
+    placed only on the capture path never ran for it.
+    """
+    m._spec_decoder.width_for = lambda pos: 4096
+    m._spec_decoder.prefill_ingest = lambda taps, n: None
+    m._spec_decoder.reseed = lambda a, s: None
+    m._spec_pending = (object(), int(start))
+    m._spec_pending_owner = None
+    DF._spec_bootstrap(
+        m,
+        anchor,
+        start,
+        torch.zeros((1, 8), dtype=torch.int32),
+        None,
+        page_tables_per_layer=None,
+    )
 
 
 def _run(m, pos=100):
@@ -130,13 +153,41 @@ def test_eos_still_stops_and_fills_the_tail(monkeypatch):
     assert m._spec_decoder.calls == 1
 
 
-def test_a_carry_never_crosses_a_session(monkeypatch):
-    """_spec_bootstrap clears it: the next request's KV has none of it."""
+def test_release_request_drops_a_carry(monkeypatch):
+    """Teardown must drop it: the retained decoder outlives the request.
+
+    The decoder is deliberately kept alive across requests for reuse, so
+    anything request-scoped has to die in release_request. A carry left behind
+    is emitted as the NEXT request's first tokens.
+    """
     m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
     assert m._spec_carry == [77]
-    m._spec_carry = []  # what bootstrap does
+    DF.release_request(m, 0)
+    assert m._spec_carry == []
+
+
+def test_a_carry_never_crosses_a_session(monkeypatch):
+    """Through the REAL release and bootstrap, with no manual reset.
+
+    Both paths matter: release_request ends request A, and the width-set
+    branch of _spec_bootstrap arms request B and returns early -- a reset
+    placed only on the capture path left that branch leaking A's tokens into
+    B's first block.
+    """
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    assert m._spec_carry == [77]
+    DF.release_request(m, 0)
+    _bootstrap_via_width_set(m)
     out = _run(m)
+    assert m._spec_carry == [] or 77 not in m._spec_carry
     assert 77 not in out[0].tolist()
+
+
+def test_the_width_set_bootstrap_branch_clears_the_carry(monkeypatch):
+    """The early-returning branch specifically, since it is the one that leaked."""
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    _bootstrap_via_width_set(m)
+    assert m._spec_carry == []
 
 
 @pytest.mark.parametrize("width", [2, 4, 16, 64])

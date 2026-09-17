@@ -254,3 +254,36 @@ def test_page_tables_are_restaged_when_the_block_table_changes(monkeypatch):
     )
     assert len(session.restaged) == 2
     assert session.restaged[-1].reshape(-1).tolist() == [3, 4, 5, 9]
+
+
+def test_a_warm_capture_with_no_active_request_serves_baseline(monkeypatch):
+    """The batch-to-solo transition with _spec_warm=True.
+
+    A warm release deliberately KEEPS the capture -- the warmup traces are a
+    process artifact, and freeing them would leave no captured widths and no
+    way to recapture -- and nulls the active request only. Gating on `_spec`
+    alone therefore fell through to `cur_token, cur_pos = self._spec_cur` and
+    raised TypeError on an ordinary two-requests-to-one transition.
+    """
+    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
+    owner = tuple(pt.reshape(-1).tolist())
+    h = _live_session_instance(monkeypatch, [[21, 22, 23]], owner)
+    h._spec_warm = True
+
+    # Step 1: two real requests -> release the session, keep the warm capture.
+    batched = h.decode_forward(
+        tokens=torch.tensor([[11], [12]], dtype=torch.int32),
+        start_pos=torch.tensor([[100], [100]], dtype=torch.int32),
+        page_table=pt,
+    )
+    assert batched == "baseline-out"
+    assert h._spec is not None, "a warm capture must survive the release"
+    assert h._spec_cur is None, "but no request owns it any more"
+
+    # Step 2: back to one request, no new prefill -> baseline, not TypeError.
+    solo = h.decode_forward(
+        tokens=torch.tensor([[11]], dtype=torch.int32),
+        start_pos=torch.tensor([[101]], dtype=torch.int32),
+        page_table=pt,
+    )
+    assert solo == "baseline-out"
