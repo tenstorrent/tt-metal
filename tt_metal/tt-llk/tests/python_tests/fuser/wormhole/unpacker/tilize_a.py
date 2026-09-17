@@ -8,7 +8,6 @@ from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
-from fuser.golden.state import OutputLayout
 from fuser.golden.unpack.tilize_a import tilize_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
@@ -16,8 +15,6 @@ from fuser.l1_operation import L1Operation
 
 class UnpackerTilizeA(Unpacker):
     granularity = InvocationGranularity.TILE
-
-    output_layout = OutputLayout.TILED
 
     golden_fn = staticmethod(tilize_a_golden)
 

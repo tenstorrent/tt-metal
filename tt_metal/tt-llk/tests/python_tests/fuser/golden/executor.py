@@ -13,7 +13,6 @@ from .state import (
     GoldenState,
     Inputs,
     OperandTiles,
-    OutputLayout,
     finalize_output,
     tile_dimensions,
 )
@@ -45,18 +44,6 @@ class GoldenExecutor:
                         else operand.master_golden
                     )
                     self.views[(node, slot)] = OperandTiles(operand, source)
-
-    def _output_layout(self, node: PackNode) -> OutputLayout:
-        if node.packer.output_layout != OutputLayout.ROW_MAJOR:
-            return node.packer.output_layout
-        for math_node in self.operation.math_nodes:
-            if (
-                isinstance(math_node, FpuNode)
-                and math_node.unpacker is not None
-                and math_node.unpacker.output_layout != OutputLayout.ROW_MAJOR
-            ):
-                return math_node.unpacker.output_layout
-        return OutputLayout.ROW_MAJOR
 
     def _dest_size(self, planned: PlannedBlock) -> int:
         if not self.operation.custom_op:
@@ -99,11 +86,15 @@ class GoldenExecutor:
     def _run_pack(self, planned: PlannedBlock, bank, state: GoldenState) -> None:
         for node in self.operation.pack_nodes:
             if isinstance(node, SfpuNode):
+                self.config.sentinel.configure_golden(
+                    self.config, self.operation, node, output_format=self.output_format
+                )
                 self._run_node(planned.plan(node, "sfpu"), bank, state)
                 continue
             self.config.sentinel.configure_golden(
                 self.config,
                 self.operation,
+                node,
                 output_format=node.output.data_format,
                 set_math_format=False,
             )
@@ -112,6 +103,7 @@ class GoldenExecutor:
 
     def run(self, blocks) -> None:
         operation, config = self.operation, self.config
+        config.sentinel.prepare_operation(config, operation, blocks)
         config.sentinel.configure_golden(
             config, operation, output_format=self.output_format
         )
@@ -134,9 +126,7 @@ class GoldenExecutor:
                 self._run_pack(planned, bank, state)
 
         for node in self.pack_nodes:
-            result = finalize_output(
-                self._output_layout(node), self.buffers[id(node.output)], node.output
-            )
+            result = finalize_output(self.buffers[id(node.output)], node.output)
             if self.golden_type == GoldenType.L1_GOLDEN:
                 node.output.l1_golden = result
             else:

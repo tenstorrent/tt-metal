@@ -16,6 +16,7 @@ from fuser.l1_operation import L1Operation
 class MatmulFpu(Fpu):
     granularity = InvocationGranularity.BLOCK
     per_block_init = True
+    supports_dest_offset = False
     golden_fn = staticmethod(matmul_golden)
 
     def get_headers(self) -> List[str]:

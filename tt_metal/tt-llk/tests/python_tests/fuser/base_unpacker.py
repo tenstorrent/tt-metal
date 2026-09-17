@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from .fpu_node import FpuNode
     from .block_data import BlockData
 
-from .golden.state import OutputLayout
 from .indexing import InvocationGranularity
 
 
@@ -45,8 +44,6 @@ class Unpacker:
     granularity = InvocationGranularity.NONE
     per_block_init: bool = False
     reverse_operands: bool = False
-
-    output_layout = OutputLayout.ROW_MAJOR
 
     def physical_order(self, src_a, src_b):
         return (src_b, src_a) if self.reverse_operands else (src_a, src_b)

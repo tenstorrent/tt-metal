@@ -7,7 +7,6 @@ from typing import List
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
 from fuser.golden.pack.untilize import untilize_golden
-from fuser.golden.state import OutputLayout
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.operand import BfdResource, bfd_current
@@ -18,8 +17,6 @@ from .packer import Packer
 
 class PackUntilize(Packer):
     granularity = InvocationGranularity.ROW
-
-    output_layout = OutputLayout.UNTILIZE
 
     golden_fn = staticmethod(untilize_golden)
 

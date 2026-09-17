@@ -4,7 +4,6 @@
 
 from collections import deque
 from copy import copy
-from enum import Enum, auto
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 import torch
@@ -42,7 +41,6 @@ class OperandTiles:
             num_faces=self.num_faces,
             tile_dimensions=self.tile_dims,
         ).view(operand.tile_count, -1)
-        self._row_major = None
 
     def tile(self, index: int) -> torch.Tensor:
         return untilize_block(
@@ -53,69 +51,47 @@ class OperandTiles:
             num_faces=self.num_faces,
         ).reshape(self.tile_dims)
 
-    def tilized_tile(self, index: int) -> torch.Tensor:
-        return self._tiles[index].reshape(self.tile_dims).clone()
+    def strided_tile(self, index: int) -> torch.Tensor:
+        row, col = divmod(index, self.operand.tile_count_x)
+        rows, cols = self.tile_dims
+        return self._tiles.reshape(self.operand.dimensions)[
+            row * rows : (row + 1) * rows, col * cols : (col + 1) * cols
+        ].clone()
 
-    def tilized_region(self, rows: slice, cols: slice) -> torch.Tensor:
-        return self._tiles.reshape(self.operand.dimensions)[rows, cols].clone()
-
-    def row_major_region(self, rows: slice, cols: slice) -> torch.Tensor:
-        if self._row_major is None:
-            self._row_major = untilize_block(
-                self._tiles.flatten(),
-                self.operand.data_format,
-                self.operand.dimensions,
-                tile_dimensions=self.tile_dims,
-                num_faces=self.num_faces,
-            )
-        return self._row_major[rows, cols].contiguous()
-
-
-class OutputLayout(Enum):
-    ROW_MAJOR = auto()  # untilize the whole tile grid (also the L1-accumulation path)
-    TILED = auto()  # tile-concatenated L1 result (tilize unpack path)
-    UNTILIZE = auto()  # arrange tiles spatially, untilize once (untilize packer)
+    def block(self, index: int, rows: int, cols: int) -> torch.Tensor:
+        indices = [
+            index + row * self.operand.tile_count_x + col
+            for row in range(rows)
+            for col in range(cols)
+        ]
+        return untilize_block(
+            self._tiles[indices].flatten(),
+            self.operand.data_format,
+            (rows * self.tile_dims[0], cols * self.tile_dims[1]),
+            tile_dimensions=self.tile_dims,
+            num_faces=self.num_faces,
+        )
 
 
 def finalize_output(
-    layout: OutputLayout, buffer: Dict[int, List[torch.Tensor]], operand: "Operand"
+    buffer: Dict[int, List[torch.Tensor]], operand: "Operand"
 ) -> torch.Tensor:
-    tile_dims = tile_dimensions(operand.tile_shape)
-    num_faces = operand.tile_shape.total_num_faces()
-    data_format = operand.data_format
-    dtype = format_dict[data_format]
-
-    def summed(index: int) -> torch.Tensor:
-        tiles = buffer.get(index)
-        if not tiles:
-            return torch.zeros(tile_dims, dtype=dtype)
-        total = tiles[0]
-        for tile in tiles[1:]:
-            total = total + tile
-        return total.reshape(tile_dims)
-
-    tiles = torch.stack([summed(i) for i in range(operand.tile_count)])
-    if layout == OutputLayout.TILED:
-        return tiles.reshape(operand.dimensions)
-
-    rows, cols = tile_dims
-    tile_grid = (
-        tiles.to(dtype)
-        .reshape(operand.tile_count_y, operand.tile_count_x, rows, cols)
-        .permute(0, 2, 1, 3)
-        .reshape(operand.dimensions)
+    result = torch.zeros(
+        operand.dimensions[0] * operand.dimensions[1],
+        dtype=format_dict[operand.data_format],
     )
-
-    if layout == OutputLayout.UNTILIZE:
-        return untilize_block(
-            tile_grid.flatten(),
-            data_format,
-            operand.dimensions,
-            tile_dimensions=tile_dims,
-            num_faces=num_faces,
-        )
-
-    return tile_grid
+    for offset, writes in buffer.items():
+        total = writes[0]
+        for value in writes[1:]:
+            total = total + value
+        result[offset : offset + total.numel()] = total.flatten()
+    return untilize_block(
+        result,
+        operand.data_format,
+        operand.dimensions,
+        tile_dimensions=tile_dimensions(operand.tile_shape),
+        num_faces=operand.tile_shape.total_num_faces(),
+    )
 
 
 class SourceRegisters:
@@ -156,8 +132,6 @@ class DestBank:
     ):
         self.tile_dims = tile_dims
         self.num_faces = num_faces
-        # Actual extents of the region this bank holds, so block/row-granular
-        # goldens can locate a call's row/column within the block (remainder aware).
         self.block_tiles_x = block_tiles_x
         self.block_tiles_y = block_tiles_y
         self._tiles = [torch.zeros(tile_dims, dtype=dtype) for _ in range(tiles)]
@@ -182,7 +156,7 @@ class DestBank:
             tile_dimensions=self.tile_dims,
         ).flatten()
 
-    def update_from_tilized(self, tensor: torch.Tensor, data_format) -> None:
+    def update_from_tilized(self, tensor: torch.Tensor, data_format, indices) -> None:
         rows, cols = self.tile_dims
         tiles = untilize_block(
             tensor,
@@ -191,7 +165,8 @@ class DestBank:
             tile_dimensions=self.tile_dims,
             num_faces=self.num_faces,
         ).reshape(len(self), rows, cols)
-        self._tiles = list(tiles.unbind())
+        for index in indices:
+            self._tiles[index] = tiles[index].clone()
 
 
 class Inputs:

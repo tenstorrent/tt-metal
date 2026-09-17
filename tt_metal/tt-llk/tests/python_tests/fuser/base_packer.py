@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from .block_data import BlockData
     from .pack_node import PackNode
 
-from .golden.state import OutputLayout
 from .indexing import InvocationGranularity
 
 
@@ -39,8 +38,6 @@ class Packer:
     per_block_init: bool = False
 
     pack_mode: str = "PackMode::Default"
-
-    output_layout = OutputLayout.ROW_MAJOR
 
     requires_dest_remap: bool = False
 

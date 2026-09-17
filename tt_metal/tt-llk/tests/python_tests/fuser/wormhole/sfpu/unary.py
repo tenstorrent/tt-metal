@@ -79,7 +79,7 @@ class UnarySfpu(Sfpu):
             f"test_utils::call_unary_sfpu_operation<"
             f"{dest_sync}, {dest_acc}, "
             f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
-            f">({block.tile_id_dest}, {config.sentinel.math_format}, {self.fill_const_value});\n"
+            f">({block.tile_id_dest}, {config.sentinel.sfpu_format}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

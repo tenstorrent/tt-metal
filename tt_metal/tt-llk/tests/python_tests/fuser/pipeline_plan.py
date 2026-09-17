@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from itertools import chain
 from typing import TYPE_CHECKING, List, Tuple, Union
 
@@ -73,7 +73,7 @@ class PlannedNode:
         banks = tuple(banks)
         return set().union(*(self._tiles(banks, slot) for slot in slots))
 
-    def _tiles(self, banks, slot, operand=None, operation=None) -> set:
+    def _tiles(self, banks, slot, operand=None) -> set:
         if slot not in self.loop.slots:
             return set()
 
@@ -87,22 +87,23 @@ class PlannedNode:
             rows, cols = self.block.block_rows, self.block.block_cols
             stride = operand.tile_count_x if operand is not None else cols
             if self.role == "unpack" and operand is not None:
-                # Matmul's in0 selects an output block, which reads complete K slices.
-                output_cols = (
-                    operation.max_output_dimensions[1]
-                    // self.node.src_b.tile_shape.total_col_dim()
-                )
-                row, col = divmod(call.in0, output_cols)
+                # Matmul reads complete K slices from each operand's tile origin.
                 if slot == "in0":
-                    start, cols = row * stride, stride
+                    cols = operand.tile_count_x
                 else:
-                    start, rows = col, operand.tile_count_y
+                    rows = operand.tile_count_y
             for row in range(rows):
                 first = start + row * stride
                 result.update(range(first, first + cols))
         return result
 
-    def check_bounds(self, operation, banks, dest_capacity: int) -> None:
+    def check_bounds(self, banks, dest_capacity: int) -> None:
+        if self.role == "math" and not self.unit.supports_dest_offset:
+            _check_tile_bounds(
+                (call.dest for bank in banks for call in self.loop.calls(bank)),
+                1,
+                f"{type(self.unit).__name__} dest origin",
+            )
         operands = {}
         if self.role == "unpack":
             operands = {"in0": self.node.src_a, "in1": self.node.src_b}
@@ -118,7 +119,7 @@ class PlannedNode:
             else:
                 continue
             _check_tile_bounds(
-                self._tiles(banks, slot, operand, operation),
+                self._tiles(banks, slot, operand),
                 capacity,
                 f"{type(self.unit).__name__} {slot} {label}",
             )
@@ -129,6 +130,7 @@ class PlannedBlock:
     region: BlockRegion
     bank: LoopPlan
     nodes: Tuple[PlannedNode, ...]
+    dest_sources: dict[Node, set[FpuNode]] = field(default_factory=dict, repr=False)
 
     def plan(self, node: Node, role: str) -> PlannedNode:
         return next(
@@ -150,30 +152,50 @@ class PlannedBlock:
             block_rows=rows,
         )
 
-    def check_dest_reads(self) -> None:
-        valid = set()
-        banks = self.bank.bank_assignments()
-        for planned in self.nodes:
-            if planned.role == "unpack":
-                continue
-            reads = ()
-            if planned.role == "pack":
-                reads = ("dest",)
-            elif (
-                planned.role == "math"
-                and planned.node.reuse_dest != EltwiseBinaryReuseDestType.NONE
-            ):
-                reads = ("dest",)
-            elif planned.role == "sfpu":
-                reads = ("src0", "src1") if planned.unit.input_count == 2 else ("dest",)
-            missing = planned.dest_tiles(banks, reads) - valid
+    def trace_dest_sources(self) -> dict[Node, set[FpuNode]]:
+        def read(node, tiles, values):
+            missing = tiles - values.keys()
             if missing:
                 raise ValueError(
-                    f"{type(planned.node).__name__} reads dest tiles {sorted(missing)} "
+                    f"{type(node).__name__} reads dest tiles {sorted(missing)} "
                     "that no earlier node writes"
                 )
-            if planned.role != "pack":
-                valid |= planned.dest_tiles(banks, ("dest",))
+            return set().union(*(values[tile] for tile in tiles))
+
+        def trace_sfpu(planned, bank, values):
+            sources = set()
+            slots = ("src0", "src1") if planned.unit.input_count == 2 else ("dest",)
+            for call in planned.loop.calls(bank):
+                producers = read(
+                    planned.node, {getattr(call, slot) for slot in slots}, values
+                )
+                sources.update(producers)
+                values[call.dest] = producers
+            return sources
+
+        sources = {}
+        for bank in self.bank.bank_assignments():
+            values = {}
+            for planned in self.nodes:
+                if planned.role == "unpack":
+                    continue
+                node = planned.node
+                if planned.role == "sfpu":
+                    sources.setdefault(node, set()).update(
+                        trace_sfpu(planned, bank, values)
+                    )
+                    continue
+
+                tiles = planned.dest_tiles((bank,), ("dest",))
+                if (
+                    planned.role == "pack"
+                    or node.src_a is None
+                    or node.reuse_dest != EltwiseBinaryReuseDestType.NONE
+                ):
+                    sources.setdefault(node, set()).update(read(node, tiles, values))
+                if planned.role == "math" and node.src_a is not None:
+                    values.update({tile: {node} for tile in tiles})
+        return sources
 
 
 def apply_loop_spec(plan: LoopPlan, loop_spec: "LoopSchema") -> LoopPlan:
@@ -240,9 +262,7 @@ def _node_units(math_nodes, pack_nodes):
             yield node, "pack", node.packer
 
 
-def _plan_node(
-    operation, planned: PlannedBlock, node: Node, role: str, unit: Unit
-) -> PlannedNode:
+def _plan_node(planned: PlannedBlock, node: Node, role: str, unit: Unit) -> PlannedNode:
     if unit.granularity == InvocationGranularity.NONE:
         raise ValueError(f"{type(unit).__name__} has no granularity set")
 
@@ -254,11 +274,6 @@ def _plan_node(
             if operand is not None
         }
         slots = [*row_tiles, "dest"]
-        if unit.granularity == InvocationGranularity.BLOCK:
-            row_tiles["in0"] = (
-                operation.max_output_dimensions[1]
-                // node.src_b.tile_shape.total_col_dim()
-            )
     elif role == "pack":
         row_tiles["out"] = node.output.tile_count_x
         slots = ["dest", "out"]
@@ -273,6 +288,17 @@ def _plan_node(
         node.block_tiles_x,
         node.block_tiles_y,
     )
+    if role in ("unpack", "math") and unit.granularity == InvocationGranularity.BLOCK:
+        indices = dict(plan.slots)
+        for slot, axis, stride in (
+            ("in0", planned.region.y, node.src_a.tile_count_x),
+            ("in1", planned.region.x, 1),
+        ):
+            indices[slot] = SlotIndex(
+                base=axis.origin * stride,
+                multipliers={axis.var: stride} if axis.looped else {},
+            )
+        plan = replace(plan, slots=indices)
     if role == "pack" and node.pack_l1_accumulation == L1Accumulation.Yes:
         indices = dict(plan.slots)
         indices["out"] = SlotIndex(
@@ -326,15 +352,14 @@ def plan_pipeline(
         bank = LoopPlan(bank_levels=region.bank_levels)
         planned = PlannedBlock(region, bank, ())
         nodes = tuple(
-            _plan_node(operation, planned, node, role, unit)
-            for node, role, unit in units
+            _plan_node(planned, node, role, unit) for node, role, unit in units
         )
         if operation.custom_op:
             bank = LoopPlan(bank_levels=(Level(BANK_VAR, _num_banks(nodes)),))
         planned = replace(planned, bank=bank, nodes=nodes)
         banks = planned.bank.bank_assignments()
         for node in nodes:
-            node.check_bounds(operation, banks, dest_capacity)
-        planned.check_dest_reads()
+            node.check_bounds(banks, dest_capacity)
+        planned = replace(planned, dest_sources=planned.trace_dest_sources())
         result.append(planned)
     return result

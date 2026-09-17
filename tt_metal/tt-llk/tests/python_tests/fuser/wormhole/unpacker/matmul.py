@@ -95,10 +95,6 @@ class MatmulUnpacker(Unpacker):
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        output_ct_dim = (
-            operation.max_output_dimensions[1]
-            // compute_unit.src_b.tile_shape.total_col_dim()
-        )
         operand_a, operand_b = self.physical_operands(compute_unit)
         src_a_partial_face = str(operand_a.tile_shape.total_row_dim() < 32).lower()
         src_b_partial_face = str(operand_b.tile_shape.total_row_dim() < 32).lower()
@@ -107,11 +103,9 @@ class MatmulUnpacker(Unpacker):
 
         return (
             f"    {{\n"
-            f"        std::uint32_t row = ({block.tile_id_src_a}) / {output_ct_dim};\n"
-            f"        std::uint32_t col = ({block.tile_id_src_a}) % {output_ct_dim};\n"
             f"        for (std::uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
-            f"            std::uint32_t srca_tile_idx = row * {kt_dim} + kt;\n"
-            f"            std::uint32_t srcb_tile_idx = kt * {full_ct_dim} + col;\n"
+            f"            std::uint32_t srca_tile_idx = ({block.tile_id_src_a}) + kt;\n"
+            f"            std::uint32_t srcb_tile_idx = ({block.tile_id_src_b}) + kt * {full_ct_dim};\n"
             f"            _llk_unpack_AB_matmul_<>(\n"
             f"                L1_ADDRESS({buffer_a}[0]), L1_ADDRESS({buffer_b}[0]),\n"
             f"                srca_tile_idx, srcb_tile_idx,\n"

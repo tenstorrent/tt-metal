@@ -89,18 +89,12 @@ class MatmulUnpacker(Unpacker):
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        output_ct_dim = (
-            operation.max_output_dimensions[1]
-            // compute_unit.src_b.tile_shape.total_col_dim()
-        )
 
         return (
             f"{{\n"
-            f"    std::uint32_t row = ({block.tile_id_src_a}) / {output_ct_dim};\n"
-            f"    std::uint32_t col = ({block.tile_id_src_a}) % {output_ct_dim};\n"
             f"    for (std::uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
-            f"        std::uint32_t srca_tile_idx = row * {kt_dim} + kt;\n"
-            f"        std::uint32_t srcb_tile_idx = kt * {full_ct_dim} + col;\n"
+            f"        std::uint32_t srca_tile_idx = ({block.tile_id_src_a}) + kt;\n"
+            f"        std::uint32_t srcb_tile_idx = ({block.tile_id_src_b}) + kt * {full_ct_dim};\n"
             f"        _llk_unpack_matmul_({ct_dim}, {rt_dim}, {kt_dim}, srca_tile_idx, srcb_tile_idx);\n"
             f"    }}\n"
             f"}}\n"

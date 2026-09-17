@@ -83,8 +83,17 @@ class L1Operation:
     def _all_same_operand_formats(self, ops: List[FpuNode]) -> bool:
         def signature(op: FpuNode):
             return (
-                op.src_a.data_format if op.src_a is not None else None,
-                op.src_b.data_format if op.src_b is not None else None,
+                tuple(
+                    (
+                        (src.data_format, src.tile_shape.tile_dims)
+                        if src is not None
+                        else None
+                    )
+                    for src in (op.src_a, op.src_b)
+                ),
+                type(op.unpacker),
+                op.reuse_dest,
+                op.unpack_to_dest,
             )
 
         return len({signature(op) for op in ops}) <= 1
@@ -128,6 +137,7 @@ class L1Operation:
         return code
 
     def unpack(self, config: "GlobalConfig") -> str:
+        config.sentinel.prepare_operation(config, self)
         unpack_ops = [
             cu
             for cu in self.math_nodes
@@ -196,6 +206,7 @@ class L1Operation:
         return code
 
     def do_math(self, config: "GlobalConfig") -> str:
+        config.sentinel.prepare_operation(config, self)
         code = f"// Operation {self.stage_id}: Math Setup\n"
         fpu_ops = [cu for cu in self.math_nodes if isinstance(cu, FpuNode)]
         hoist = len(fpu_ops) == 1
@@ -238,12 +249,15 @@ class L1Operation:
                     if not hoist:
                         body += cu.fpu_uninit(self, config, block)
                 elif isinstance(cu, SfpuNode):
-                    body += cu.sfpu_init(self, config, block)
+                    init = cu.sfpu_init(self, config, block)
+                    body += config.sentinel.sfpu_math_reconfig(config)
+                    body += init
                     body += planned.plan(cu, "sfpu").emit_calls(
                         constants,
                         partial(cu.sfpu_call, self, config, block),
                     )
                     body += cu.sfpu_uninit(self, config, block)
+                    body += config.sentinel.sfpu_math_reconfig(config, restore=True)
             if not hoist_reconfig and not config.skip_math_init:
                 body += config.sentinel.configure_math(config, self, fpu_ops[0])
             body += fpu_common.math_dest_section_done(config, self)
@@ -262,18 +276,19 @@ class L1Operation:
 
         return code
 
-    def _all_same_pack_formats(self) -> bool:
-        pack_only = self._get_pack_nodes()
-        if len(pack_only) <= 1:
-            return True
-        first_fmt = pack_only[0].output.data_format
-        return all(pn.output.data_format == first_fmt for pn in pack_only[1:])
+    def _all_same_pack_formats(self, config) -> bool:
+        formats = {
+            config.sentinel._resolve_pack_formats(config, self, node)
+            for node in self._get_pack_nodes()
+        }
+        return len(formats) <= 1
 
     def pack(self, config: "GlobalConfig") -> str:
+        config.sentinel.prepare_operation(config, self)
         code = f"// Operation {self.stage_id}: Packer\n"
         pack_only = self._get_pack_nodes()
         hoist = len(pack_only) == 1 and len(self.pack_nodes) == 1
-        hoist_reconfig = hoist or self._all_same_pack_formats()
+        hoist_reconfig = hoist or self._all_same_pack_formats(config)
 
         init_code = config.sentinel.hw_configure_pack(config, self, pack_only)
         if hoist_reconfig and pack_only:

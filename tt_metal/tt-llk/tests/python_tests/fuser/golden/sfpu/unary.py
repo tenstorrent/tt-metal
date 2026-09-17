@@ -23,4 +23,7 @@ def unary_golden(call, state, node, operation, config):
         skip_tilize=True,
         tile_dimensions=tile_dims,
     )
-    state.dest.update_from_tilized(result, data_format)
+    tile_elements = tile_dims[0] * tile_dims[1]
+    span = (node.sfpu.iterations * 32 + tile_elements - 1) // tile_elements
+    indices = range(call.dest, min(call.dest + span, tile_count))
+    state.dest.update_from_tilized(result, data_format, indices)

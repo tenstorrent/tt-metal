@@ -40,6 +40,7 @@ class Fpu:
     # Controls the tile iteration pattern for the math loop.
     granularity = InvocationGranularity.NONE
     per_block_init: bool = False
+    supports_dest_offset: bool = True
 
     def init(
         self,

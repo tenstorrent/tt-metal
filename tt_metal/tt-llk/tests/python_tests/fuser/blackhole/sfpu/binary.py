@@ -48,7 +48,7 @@ class BinarySfpu(Sfpu):
     def _format_arg(self, config: GlobalConfig) -> str:
         if self.operation == MathOperation.SfpuAddTopRow:
             return "0"
-        return config.sentinel.math_format
+        return config.sentinel.sfpu_format
 
     @staticmethod
     def _vector_mode(operation: L1Operation) -> str:

@@ -29,6 +29,7 @@ class SfpuNode:
     ):
         if config.skip_math_init:
             return ""
+        config.sentinel.configure_sfpu(config, operation, self)
         return self.sfpu.init(operation, config, self, block)
 
     def sfpu_call(
