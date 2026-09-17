@@ -69,9 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    {
-        _llk_unpack_bcastA_B_uninit_(formats.unpack_A_dst);
-    }
+    _llk_unpack_bcastA_B_uninit_(formats.unpack_A_dst);
 }
 
 #endif

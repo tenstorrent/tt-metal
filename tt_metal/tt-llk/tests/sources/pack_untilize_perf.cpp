@@ -208,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
-                    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::PACK);
+                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }
@@ -227,9 +227,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    {
-        _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
-    }
+
+    _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
 }
 
 #endif

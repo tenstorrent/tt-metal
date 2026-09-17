@@ -239,7 +239,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "Block tile index exceeds maximum destination tiles");
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
-                    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::PACK);
+                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }

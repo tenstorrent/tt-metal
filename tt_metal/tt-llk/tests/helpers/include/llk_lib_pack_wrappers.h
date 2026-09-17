@@ -29,6 +29,11 @@ inline constexpr PackMode pack_exec_mode_v = untilize ? PackMode::Untilize : Pac
 
 #ifdef ARCH_WORMHOLE
 
+inline void _llk_pack_isolate_stallwait_pack_wrapper_()
+{
+    TTI_STALLWAIT(ckernel::p_stall::STALL_THREAD, ckernel::p_stall::PACK);
+}
+
 inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const std::uint32_t pack_src_format)
 {
     // Wormhole does not need the Blackhole-specific tilize workaround, so the
@@ -152,6 +157,10 @@ inline void _llk_pack_untilize_uninit_wrapper_(
 }
 
 #elif defined(ARCH_BLACKHOLE)
+
+inline void _llk_pack_isolate_stallwait_pack_wrapper_()
+{
+}
 
 inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_(const std::uint32_t pack_src_format)
 {

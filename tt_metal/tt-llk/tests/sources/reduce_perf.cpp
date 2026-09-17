@@ -215,7 +215,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
-                    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::PACK);
+                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }

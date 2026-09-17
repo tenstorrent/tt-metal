@@ -177,6 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, PERF_ADDRESS(PERF_OUTPUT, i));
                 }
+                _llk_pack_isolate_stallwait_pack_wrapper_();
             }
         }
         else // L1_TO_L1

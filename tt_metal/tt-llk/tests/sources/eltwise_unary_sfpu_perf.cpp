@@ -340,7 +340,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
                     }
-                    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::PACK);
+                    _llk_pack_isolate_stallwait_pack_wrapper_();
                 }
             }
         }

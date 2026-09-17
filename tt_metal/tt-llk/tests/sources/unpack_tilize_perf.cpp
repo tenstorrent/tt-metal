@@ -262,7 +262,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     // Match the real pipeline's destination-batch completion
                     // cadence without adding its math semaphore or ZEROACC work.
-                    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::PACK);
+                    _llk_pack_isolate_stallwait_pack_wrapper_();
                     remaining_tiles -= num_tiles;
                 }
             }
