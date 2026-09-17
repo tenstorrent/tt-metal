@@ -609,7 +609,8 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
-    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
+    const auto emule_soc = tt_emule::build_soc_view(device);
+    populate_bank_mapping(sw_emu, device, device_id, emule_soc, dram_core, num_dram_channels, num_l1_banks);
 
     std::string worker_col_map_str, worker_row_map_str;
     build_worker_coord_maps(device, worker_col_map_str, worker_row_map_str);
@@ -705,7 +706,8 @@ static void dispatch_to_device(
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
-    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
+    const auto emule_soc = tt_emule::build_soc_view(device);
+    populate_bank_mapping(sw_emu, device, device_id, emule_soc, dram_core, num_dram_channels, num_l1_banks);
 
     auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
     std::vector<CoreSetup> core_setups;
@@ -731,11 +733,10 @@ void execute_program_emulated(IDevice* device, Program& program) {
     auto device_id = device->id();
     log_debug(tt::LogMetal, "execute_program_emulated: device {} starting", device_id);
 
-    // STAGE 1: build + discard (validation); consumers land in Stage 2.
+    // STAGE 1: build + discard the full descriptor (validation); its consumers land in later 2b units.
+    // SocView is now consumed for real by populate_bank_mapping (prepare_program / dispatch_to_device).
     auto _emule_desc = tt_emule::build_emule_descriptor(program, device);
-    auto _emule_soc = tt_emule::build_soc_view(device);
     (void)_emule_desc;
-    (void)_emule_soc;
     // Mark the fabric connection-route table stale: the next op's first connection record clears it, so
     // routes stay scoped to the current op (this op's builds already recorded before this launch).
     g_conn_route_dirty.store(true, std::memory_order_relaxed);
