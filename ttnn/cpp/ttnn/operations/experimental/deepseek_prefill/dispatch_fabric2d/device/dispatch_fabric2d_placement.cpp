@@ -177,9 +177,8 @@ MeshPlacement decide_placement(
     return placement;
 }
 
-// The cores of the universe this op does NOT use for a stream, in universe order. Under a TILE input
-// they are the untilizer pool; there is nothing else on them, which is what lets the untilize CBs take
-// most of their L1.
+// The cores of the universe this op does NOT use for a stream, in universe order. There is nothing
+// else on them, which is what lets the untilize CBs take most of an untilizer's L1.
 std::vector<tt::tt_metal::CoreCoord> spare_cores(
     const tt::tt_metal::CoreRangeSet& universe, const StreamPlacements& streams) {
     std::set<tt::tt_metal::CoreCoord> taken;

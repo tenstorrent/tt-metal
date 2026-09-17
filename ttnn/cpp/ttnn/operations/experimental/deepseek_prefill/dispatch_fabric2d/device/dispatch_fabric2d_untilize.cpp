@@ -33,6 +33,83 @@ uint32_t untilize_block_ct_dim(uint32_t tiles_per_row) {
 constexpr const char* kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/kernels/";
 
+// Which spare cores take the pool. Round-robin over the streams' columns, each stream taking the
+// nearest free core in the row under it in turn, so every stream gets untilizers under it before any
+// gets a second: the traffic those untilizers add stays as close to the columns the streams already use
+// as the row allows, instead of clustering at one end of it.
+std::vector<tt::tt_metal::CoreCoord> decide_untilizer_cores(
+    const CoreRangeSet& universe,
+    const StreamPlacements& streams,
+    uint32_t num_stripes,
+    UntilizerPoolFallback* fallback) {
+    const auto spare = spare_cores(universe, streams);
+    const std::size_t num_links = streams.size() / 2u;  // two streams per link
+    // No point in more cores than stripes; a core with no stripes would still pay its program build.
+    const std::size_t want = std::min<std::size_t>(UNTILIZERS_PER_LINK * num_links, num_stripes);
+
+    // A displaced stream can sit a row lower than the rest; the pool goes under all of them.
+    std::size_t lowest_stream_row = 0;
+    std::vector<std::size_t> stream_cols;
+    for (const auto& [stream, placement] : streams) {
+        lowest_stream_row = std::max(lowest_stream_row, placement.worker_logical.y);
+        stream_cols.push_back(placement.worker_logical.x);
+    }
+    std::sort(stream_cols.begin(), stream_cols.end());
+    stream_cols.erase(std::unique(stream_cols.begin(), stream_cols.end()), stream_cols.end());
+    const std::size_t pool_row = lowest_stream_row + 1;
+
+    std::vector<tt::tt_metal::CoreCoord> below;
+    for (const auto& core : spare) {
+        if (core.y == pool_row) {
+            below.push_back(core);
+        }
+    }
+    if (below.empty()) {
+        // Nothing under the streams: the old pool, every spare core up to one per stripe, no cap.
+        *fallback = UntilizerPoolFallback::kNoRowBelow;
+        const std::size_t n = std::min<std::size_t>(spare.size(), num_stripes);
+        return std::vector<tt::tt_metal::CoreCoord>(spare.begin(), spare.begin() + n);
+    }
+
+    std::vector<tt::tt_metal::CoreCoord> pool;
+    std::vector<bool> taken(below.size(), false);
+    const auto distance = [](std::size_t a, std::size_t b) { return a > b ? a - b : b - a; };
+    while (pool.size() < want) {
+        bool progressed = false;
+        for (const std::size_t col : stream_cols) {
+            if (pool.size() == want) {
+                break;
+            }
+            std::size_t best = below.size();
+            for (std::size_t i = 0; i < below.size(); i++) {
+                if (!taken[i] && (best == below.size() || distance(below[i].x, col) < distance(below[best].x, col))) {
+                    best = i;
+                }
+            }
+            if (best < below.size()) {
+                taken[best] = true;
+                pool.push_back(below[best]);
+                progressed = true;
+            }
+        }
+        if (!progressed) {
+            break;  // the row is exhausted
+        }
+    }
+    if (pool.size() < want) {
+        *fallback = UntilizerPoolFallback::kRowTooNarrow;
+        for (const auto& core : spare) {
+            if (pool.size() == want) {
+                break;
+            }
+            if (core.y != pool_row) {
+                pool.push_back(core);  // everything in pool_row is already taken, so this cannot repeat one
+            }
+        }
+    }
+    return pool;
+}
+
 }  // namespace
 
 std::optional<UntilizePlan> plan_untilize(
@@ -75,16 +152,16 @@ std::optional<UntilizePlan> plan_untilize(
     return plan;
 }
 
-void add_untilizer_pool(
+UntilizerPoolFallback add_untilizer_pool(
     tt::tt_metal::ProgramDescriptor& desc,
     const StreamPlacements& streams,
     const CoreRangeSet& universe,
     const UntilizePlan& plan) {
-    const auto spare = spare_cores(universe, streams);
-    TT_FATAL(!spare.empty(), "dispatch_fabric2d: a TILE input needs at least one core beside the streams");
-    // No point in more cores than stripes; a core with no stripes would still pay its program build.
-    const uint32_t pool_size = std::min<uint32_t>(static_cast<uint32_t>(spare.size()), plan.num_stripes);
-    const CoreRangeSet pool_cores(ttsl::Span<const tt::tt_metal::CoreCoord>(spare.data(), pool_size));
+    UntilizerPoolFallback fallback = UntilizerPoolFallback::kNone;
+    const auto pool = decide_untilizer_cores(universe, streams, plan.num_stripes, &fallback);
+    TT_FATAL(!pool.empty(), "dispatch_fabric2d: a TILE input needs at least one core beside the streams");
+    const uint32_t pool_size = static_cast<uint32_t>(pool.size());
+    const CoreRangeSet pool_cores(ttsl::Span<const tt::tt_metal::CoreCoord>(pool.data(), pool_size));
 
     // Tiled stripe, reader -> compute. A whole number of block_ct_dim blocks deep, so a block never
     // straddles the ring wrap, and two blocks deep so the reader runs ahead of the packer.
@@ -171,20 +248,21 @@ void add_untilizer_pool(
         tt::tt_metal::KernelDescriptor::RTArgList rdr_rt;
         rdr_rt.push_back(i);
         rdr_rt.push_back(plan.input);
-        rdr.emplace_runtime_args(spare[i], rdr_rt);
+        rdr.emplace_runtime_args(pool[i], rdr_rt);
 
         tt::tt_metal::KernelDescriptor::RTArgList cmp_rt;
         cmp_rt.push_back(i);
-        cmp.emplace_runtime_args(spare[i], cmp_rt);
+        cmp.emplace_runtime_args(pool[i], cmp_rt);
 
         tt::tt_metal::KernelDescriptor::RTArgList wtr_rt;
         wtr_rt.push_back(i);
         wtr_rt.push_back(plan.staging);
-        wtr.emplace_runtime_args(spare[i], wtr_rt);
+        wtr.emplace_runtime_args(pool[i], wtr_rt);
     }
     desc.kernels.push_back(std::move(rdr));
     desc.kernels.push_back(std::move(cmp));
     desc.kernels.push_back(std::move(wtr));
+    return fallback;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

@@ -80,7 +80,9 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   what the reader packs a bucket index into.
             subdevice_id          must contain the worker nearest each stream's eth core, and hold at
                                   least 2 * num_links cores -- one more again for a TILE input, which
-                                  needs somewhere to put an untilizer.
+                                  needs somewhere to put an untilizer. A TILE input places up to
+                                  5 * num_links untilizers and wants them in the row under the
+                                  streams: a one-row carve runs correctly and slower.
             input_tensor layout   ROW_MAJOR, or TILE with emb_dim a multiple of 32.
             all six inputs        interleaved DRAM, and every one but input_tensor ROW_MAJOR; the
                                   output memory config must be interleaved too.
