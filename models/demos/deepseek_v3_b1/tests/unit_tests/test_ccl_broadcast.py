@@ -294,6 +294,7 @@ def test_ccl_broadcast_loop(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)}],
     indirect=True,
 )
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_host_iter_stamped_chunks(
     bh_2d_mesh_device,
     mesh_rows,
@@ -378,6 +379,7 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("chunk_size_bytes", [4352])
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_remainder_chunk(
     bh_2d_mesh_device,
     mesh_rows,
@@ -457,6 +459,7 @@ def test_ccl_broadcast_remainder_chunk(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_ccl_broadcast_auto_chunk(
     bh_2d_mesh_device,
     mesh_rows,
