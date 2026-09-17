@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -77,22 +78,24 @@ public:
 private:
     static constexpr uint32_t kMaxRelays = 8;
 
-    struct Relay {
-        // Launched outside the command queue: a DRAM-only program touches no fast-dispatch resource, so it stays
-        // resident across every workload, while going through the CQ would deadlock the first Finish().
+    // One D2H drainer of a device, a DRISC relay or the idle-eth pusher: a resident program on a core no workload
+    // uses, its own socket, and two control words the host drives it with. Launched outside the command queue: a
+    // DRAM-only or idle-eth program touches no fast-dispatch resource, so it stays up across every workload, while
+    // going through the CQ would deadlock the first Finish().
+    struct Drainer {
         std::unique_ptr<Program> program;
-        CoreCoord logical;
-        CoreCoord virt;
+        CoreCoord logical, virt;
+        uint32_t sock_idx = 0;    // into CapturedDevice::sockets
+        uint64_t state_addr = 0;  // the Drained/Done word as the host addresses it; the heartbeat is the word after
+        uint64_t stop_addr = 0;
     };
     struct WorkerCore {
         CoreCoord logical, physical, virt;
     };
-    // An idle-eth core that pushes its own profiler ring (and its linked active eth core) over its own socket.
-    // Out of the relay roster entirely; enumerated to the decoder as a standard 5-lane core with idle siblings.
-    struct EthPusher {
-        CoreCoord logical, virt, phys;
-        std::unique_ptr<Program> program;
-        uint32_t sock_idx = 0;  // index into out.sockets, after the relays
+    // The idle-eth core that pushes its own profiler ring and its linked active eth cores' over its own socket. Out
+    // of the relay roster entirely; enumerated to the decoder as a standard 5-lane core with idle siblings.
+    struct EthPusher : Drainer {
+        CoreCoord phys;
         // The chip's active eth cores this pusher drains (their rings are NoC-read, their heads written back):
         // they run the fabric router and can spend no cycles on egress, so the idle sibling carries them.
         struct Linked {
@@ -107,9 +110,8 @@ private:
         IDevice* device = nullptr;
         CapturedDevice out;
         std::vector<WorkerCore> cores;  // the compute grid, row-major, so a relay's band is a contiguous run
-        Relay relays[kMaxRelays];
-        uint32_t n_relays = 0;
-        std::vector<EthPusher> eth;                  // idle-eth clock pushers, one socket each
+        std::vector<Drainer> relays;    // at most kMaxRelays; their sockets are the prefix of out.sockets
+        std::optional<EthPusher> eth;
         std::vector<SyncDevices::EthCore> idle_eth;  // every idle eth core, the pusher first
 
         DeviceCtx();
@@ -145,8 +147,11 @@ private:
     bool launch_eth_pusher(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         DeviceCtx& ctx,
-        const distributed::MeshCoordinate& coord,
-        uint32_t k);
+        const distributed::MeshCoordinate& coord);
+    // Stops one drainer through its stop word and reports Drained, then Done, through `on_state`; one that does not
+    // finish within 10 s is a fault.
+    void stop_drainer(
+        uint32_t device_index, const DeviceCtx& ctx, const Drainer& r, const char* what, const RelayStateFn& on_state);
     void write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
     // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
     // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.

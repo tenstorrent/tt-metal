@@ -221,6 +221,30 @@ bool relay_heartbeat_advanced(
     return false;
 }
 
+std::unique_ptr<distributed::D2HSocket> make_socket(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const distributed::MeshCoordinate& coord,
+    const CoreCoord& sender_phys,
+    uint32_t fifo_bytes,
+    uint32_t cfg_addr,
+    HalProgrammableCoreType sender_core_type) {
+    auto socket = std::make_unique<distributed::D2HSocket>(
+        mesh_device,
+        distributed::MeshCoreCoord{coord, sender_phys},
+        fifo_bytes,
+        distributed::D2HSocket::ExternalConfigBuffer{.address = cfg_addr, .sender_core_type = sender_core_type},
+        distributed::D2HSocket::ProcessScope::InProcess);
+    socket->set_page_size(kPageSize);
+    return socket;
+}
+
+// Compiles, writes the runtime args and launches without waiting: the drainers and the sync's kernels are resident.
+void launch_resident(IDevice* device, Program& program) {
+    detail::CompileProgram(device, program, /*force_slow_dispatch=*/true);
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/true);
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+}
+
 }  // namespace
 
 Devices::DeviceCtx::DeviceCtx() = default;
@@ -374,27 +398,23 @@ bool Devices::boot_device(
     const uint32_t si = sync_->add_device(std::move(sd));
     // The tile clocks are measured now, with nothing else of ours on the NoC: the relays and pushers launch after.
     ctx.out.ctx.tile_offset.assign(ctx.out.ctx.core_xy.size(), 0);
-    if (!ctx.eth.empty()) {
+    if (ctx.eth) {
         sync_->measure_tiles(si, ctx.out.ctx);
     }
     reserve_spool();
-    for (uint32_t d = 0; d < ctx.n_relays; d++) {
+    for (uint32_t d = 0; d < ctx.relays.size(); d++) {
         if (!launch_relay(mesh_device, ctx, coord, d)) {
             return false;
         }
     }
     ctx.out.n_relay_sockets = static_cast<uint32_t>(ctx.out.sockets.size());
-    // Idle-eth pushers come up after the relays so their sockets follow the relay sockets (the receiver indexes
-    // sockets as a contiguous prefix in launch order). A pusher that fails is dropped and the capture continues.
-    for (uint32_t k = 0; k < ctx.eth.size();) {
-        if (launch_eth_pusher(mesh_device, ctx, coord, k)) {
-            k++;
-        } else {
-            ctx.eth.erase(ctx.eth.begin() + k);
-        }
+    // The pusher comes up after the relays so its socket follows theirs (the receiver indexes sockets as a
+    // contiguous prefix in launch order). A pusher that fails is dropped and the capture continues.
+    if (ctx.eth && !launch_eth_pusher(mesh_device, ctx, coord)) {
+        ctx.eth.reset();
     }
     set_producers_armed(ctx, true);
-    ctx.out.ctx.has_eth_tracker = !ctx.eth.empty();
+    ctx.out.ctx.has_eth_tracker = ctx.eth.has_value();
     return true;
 }
 
@@ -467,7 +487,7 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
     }
 
     // One relay per DRAM view, up to the relay cap.
-    ctx.n_relays = std::min<uint32_t>(kMaxRelays, nbanks);
+    ctx.relays.resize(std::min<uint32_t>(kMaxRelays, nbanks));
 
     std::vector<uint32_t> banks;
     for (const uint32_t b : kRelayBankRoster) {
@@ -476,22 +496,22 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
         }
     }
     TT_FATAL(
-        banks.size() >= ctx.n_relays,
+        banks.size() >= ctx.relays.size(),
         "streaming profiler needs {} relay banks but only {} usable DRAM views are in the roster (part has {} "
         "views)",
-        ctx.n_relays,
+        ctx.relays.size(),
         banks.size(),
         nbanks);
 
     std::vector<CoreCoord> relay_cores;
-    for (uint32_t d = 0; d < ctx.n_relays; d++) {
+    for (uint32_t d = 0; d < ctx.relays.size(); d++) {
         ctx.relays[d].logical = mesh_device->impl().pick_unused_dram_logical_core(ctx.device, banks[d]);
         relay_cores.push_back(ctx.relays[d].logical);
     }
     // pick_unused_dram_logical_core() reserves per view and cannot see two views resolving to one physical port
     // (views 0 and 7 have both come back as NoC core 0-0); two relays on one L1 would silently overlap, so refuse.
-    for (uint32_t a = 0; a < ctx.n_relays; a++) {
-        for (uint32_t b = a + 1; b < ctx.n_relays; b++) {
+    for (uint32_t a = 0; a < ctx.relays.size(); a++) {
+        for (uint32_t b = a + 1; b < ctx.relays.size(); b++) {
             TT_FATAL(
                 relay_cores[a] != relay_cores[b],
                 "streaming profiler: DRISC {} (DRAM view {}) and DRISC {} (DRAM view {}) both resolve to logical "
@@ -509,7 +529,7 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
     // the view it was asked for, but a channel carved into several views has one endpoint set per view, so the
     // free subchannel of one view can still be another's -- and firmware keeps that NIU in NOC2AXI, where the
     // relay's reads would never issue. Capture off rather than a relay whose gathers go nowhere.
-    for (uint32_t d = 0; d < ctx.n_relays; d++) {
+    for (uint32_t d = 0; d < relay_cores.size(); d++) {
         const CoreCoord translated = soc.get_physical_dram_core_from_logical(relay_cores[d]);
         const uint8_t noc2axi_mask = soc.get_dram_endpoint_noc_mask(translated);
         if (noc2axi_mask != 0) {
@@ -556,13 +576,13 @@ bool Devices::launch_relay(
     const auto& rtopts = MetalContext::instance(context_id_).rtoptions();
     const uint32_t chip = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(chip);
-    Relay& relay = ctx.relays[d];
+    Drainer& relay = ctx.relays[d];
 
     // Contiguous bands in the host's grid order: a core belongs to exactly one relay, and the integer prefix
     // split assigns every core once.
     const uint32_t num_cores = static_cast<uint32_t>(ctx.cores.size());
-    const uint32_t lo = static_cast<uint32_t>((static_cast<uint64_t>(num_cores) * d) / ctx.n_relays);
-    const uint32_t hi = static_cast<uint32_t>((static_cast<uint64_t>(num_cores) * (d + 1)) / ctx.n_relays);
+    const uint32_t lo = static_cast<uint32_t>((static_cast<uint64_t>(num_cores) * d) / ctx.relays.size());
+    const uint32_t hi = static_cast<uint32_t>((static_cast<uint64_t>(num_cores) * (d + 1)) / ctx.relays.size());
     const uint32_t my_cores = hi - lo;
     if (my_cores > kMaxRelayCores) {
         log_error(
@@ -575,7 +595,7 @@ bool Devices::launch_relay(
             kMaxRelayCores,
             num_cores,
             (num_cores + kMaxRelayCores - 1) / kMaxRelayCores,
-            ctx.n_relays);
+            ctx.relays.size());
         return false;
     }
     if (my_cores == 0) {
@@ -587,15 +607,16 @@ bool Devices::launch_relay(
     relay.virt = ctx.device->virtual_core_from_logical_core(relay.logical, CoreType::DRAM);
     const tt_cxy_pair drisc(chip, relay.virt);
 
+    relay.state_addr = relay_noc_addr(l1_.done);
+    relay.stop_addr = relay_noc_addr(l1_.stop);
     try {
-        auto socket = std::make_unique<distributed::D2HSocket>(
+        auto socket = make_socket(
             mesh_device,
-            distributed::MeshCoreCoord{coord, CoreCoord(phys.x, phys.y)},
+            coord,
+            CoreCoord(phys.x, phys.y),
             (rtopts.get_streaming_profiler_fifo_mb() << 20) / kPageSize * kPageSize,
-            distributed::D2HSocket::ExternalConfigBuffer{
-                .address = l1_.cfg, .sender_core_type = HalProgrammableCoreType::DRAM},
-            distributed::D2HSocket::ProcessScope::InProcess);
-        socket->set_page_size(kPageSize);
+            l1_.cfg,
+            HalProgrammableCoreType::DRAM);
 
         // Zero the relay core's own profiler ring: the relay is built with PROFILE_KERNEL, firmware writes zone
         // markers into this ring on every launch, nothing drains it, and the SPSC backend blocks on a full ring, so
@@ -610,7 +631,7 @@ bool Devices::launch_relay(
         // A stale done, heartbeat or stop word from the previous run reads as this run's live state (teardown leaves
         // stop at 1 or 2, and the relay loop exits on nonzero stop).
         uint32_t zero_words[2 * kernel_profiler::kRelayCtrlWordStride / sizeof(uint32_t)] = {};
-        cluster.write_core(zero_words, sizeof(zero_words), drisc, relay_noc_addr(l1_.done));
+        cluster.write_core(zero_words, sizeof(zero_words), drisc, relay.state_addr);
 
         auto program = std::make_unique<Program>(CreateProgram());
         const std::unordered_map<std::string, uint32_t> cargs = {
@@ -651,15 +672,12 @@ bool Devices::launch_relay(
             rt.push_back(ctx.out.ctx.core_xy[ci]);
         }
         SetRuntimeArgs(*program, relay_id, relay.logical, rt);
-
-        detail::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
-        detail::WriteRuntimeArgsToDevice(ctx.device, *program, /*force_slow_dispatch=*/true);
-        detail::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-
-        if (!relay_heartbeat_advanced(cluster, chip, relay.virt, relay_noc_addr(l1_.done) + 4, d)) {
+        launch_resident(ctx.device, *program);
+        if (!relay_heartbeat_advanced(cluster, chip, relay.virt, relay.state_addr + 4, d)) {
             return false;
         }
         TT_FATAL(d == ctx.out.sockets.size(), "sockets must form a contiguous prefix");
+        relay.sock_idx = d;
         ctx.out.sockets.push_back(std::move(socket));
         relay.program = std::move(program);
     } catch (const std::exception& e) {
@@ -775,29 +793,21 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
         }
     }
     cap.n_eth_cores = 1u + static_cast<uint32_t>(e.linked.size());
-    ctx.eth.push_back(std::move(e));
+    ctx.eth = std::move(e);
 }
 
 bool Devices::launch_eth_pusher(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     DeviceCtx& ctx,
-    const distributed::MeshCoordinate& coord,
-    uint32_t k) {
+    const distributed::MeshCoordinate& coord) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const uint32_t chip = ctx.chip_id;
-    EthPusher& e = ctx.eth[k];
+    EthPusher& e = *ctx.eth;
+    e.state_addr = eth_l1_.ctrl;
+    e.stop_addr = eth_l1_.ctrl + 64;
     try {
-        // Same pattern as the relay socket: an external config buffer in the sender's own L1, the sender addressed
-        // by its physical NoC coordinate and core type (d2h_socket applies that type's L1 NoC offset).
-        auto socket = std::make_unique<distributed::D2HSocket>(
-            mesh_device,
-            distributed::MeshCoreCoord{coord, e.phys},
-            kEthFifoBytes,
-            distributed::D2HSocket::ExternalConfigBuffer{
-                .address = eth_l1_.cfg, .sender_core_type = HalProgrammableCoreType::IDLE_ETH},
-            distributed::D2HSocket::ProcessScope::InProcess);
-        socket->set_page_size(kPageSize);
-
+        auto socket =
+            make_socket(mesh_device, coord, e.phys, kEthFifoBytes, eth_l1_.cfg, HalProgrammableCoreType::IDLE_ETH);
         // A stale done, heartbeat or stop word from the previous run reads as this run's live state.
         uint32_t zero_words[kEthCtrlBytes / sizeof(uint32_t)] = {};
         cluster.write_core(zero_words, sizeof(zero_words), tt_cxy_pair(chip, e.virt), eth_l1_.ctrl);
@@ -830,10 +840,8 @@ bool Devices::launch_eth_pusher(
             rt.push_back(ln.prof_l1);
         }
         SetRuntimeArgs(*program, kid, e.logical, rt);
-        detail::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
-        detail::WriteRuntimeArgsToDevice(ctx.device, *program, /*force_slow_dispatch=*/true);
-        detail::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-        if (!relay_heartbeat_advanced(cluster, chip, e.virt, eth_l1_.ctrl + 4, 100 + k)) {
+        launch_resident(ctx.device, *program);
+        if (!relay_heartbeat_advanced(cluster, chip, e.virt, e.state_addr + 4, 100)) {
             return false;
         }
         e.sock_idx = static_cast<uint32_t>(ctx.out.sockets.size());
@@ -870,8 +878,8 @@ void Devices::set_producers_armed(const DeviceCtx& ctx, bool armed) {
     for (const WorkerCore& c : ctx.cores) {
         write_ctrl_word(ctx, c.virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
     }
-    for (const EthPusher& e : ctx.eth) {
-        write_eth_ctrl_word(ctx, e.virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
+    if (ctx.eth) {
+        write_eth_ctrl_word(ctx, ctx.eth->virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
     }
     // The linked ACTIVE eth cores are deliberately left UNARMED. Their sync-kernel link stamps are non-blocking, and
     // unarmed the FW-level blocking zone writes overwrite rather than wait, so an active core can never wedge on a
@@ -883,9 +891,43 @@ void Devices::release_eth_pushers() {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     const uint32_t go = 1;
     for (const DeviceCtx& ctx : devices_) {
-        for (const EthPusher& e : ctx.eth) {
-            cluster.write_core(&go, sizeof(go), tt_cxy_pair(ctx.chip_id, e.virt), eth_l1_.ctrl + 8);
+        if (ctx.eth) {
+            cluster.write_core(&go, sizeof(go), tt_cxy_pair(ctx.chip_id, ctx.eth->virt), eth_l1_.ctrl + 8);
         }
+    }
+}
+
+void Devices::stop_drainer(
+    uint32_t device_index, const DeviceCtx& ctx, const Drainer& r, const char* what, const RelayStateFn& on_state) {
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    const tt_cxy_pair core(ctx.chip_id, r.virt);
+    const uint32_t stop_word = kernel_profiler::kRelayStopQuiesce;
+    cluster.write_core(&stop_word, sizeof(stop_word), core, r.stop_addr);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    bool drained = false;
+    for (;;) {
+        uint32_t state = 0;
+        cluster.read_core(&state, sizeof(state), core, r.state_addr);
+        state &= kernel_profiler::kRelayDoneMask;
+        if (state == kernel_profiler::kRelayDoneWord) {
+            break;
+        }
+        if (!drained && on_state && state == kernel_profiler::kRelayDrainedWord) {
+            on_state(device_index, r.sock_idx, RelayState::Drained);
+            drained = true;
+        }
+        TT_FATAL(
+            std::chrono::steady_clock::now() < deadline,
+            "streaming profiler: device {} {} {} did not finish within 10 s of its stop (state {:#x})",
+            ctx.chip_id,
+            what,
+            r.sock_idx,
+            state);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (on_state) {
+        // Done follows the drainer's socket barrier, so the host has already acked every byte this socket carries.
+        on_state(device_index, r.sock_idx, RelayState::Done);
     }
 }
 
@@ -896,47 +938,13 @@ void Devices::quiesce(const RelayStateFn& on_state) {
     }
     for (uint32_t di = 0; di < devices_.size(); di++) {
         const DeviceCtx& ctx = devices_[di];
-        const auto write_stop = [&](uint32_t d, uint32_t word) {
-            cluster.write_core(
-                &word, sizeof(word), tt_cxy_pair(ctx.chip_id, ctx.relays[d].virt), relay_noc_addr(l1_.stop));
-        };
-        for (uint32_t d = 0; d < ctx.n_relays; d++) {
-            const tt_cxy_pair drisc(ctx.chip_id, ctx.relays[d].virt);
-            write_stop(d, kernel_profiler::kRelayStopQuiesce);
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-            bool drained = false;
-            for (;;) {
-                uint32_t state = 0;
-                cluster.read_core(&state, sizeof(state), drisc, relay_noc_addr(l1_.done));
-                state &= kernel_profiler::kRelayDoneMask;
-                if (state == kernel_profiler::kRelayDoneWord) {
-                    break;
-                }
-                if (!drained && on_state && state == kernel_profiler::kRelayDrainedWord) {
-                    on_state(di, d, RelayState::Drained);
-                    drained = true;
-                }
-                TT_FATAL(
-                    std::chrono::steady_clock::now() < deadline,
-                    "streaming profiler: device {} relay {} did not finish within 10 s of its stop (state {:#x})",
-                    ctx.chip_id,
-                    d,
-                    state);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            if (on_state) {
-                // done follows the relay's socket barrier, so the host has already acked every byte this socket will
-                // carry.
-                on_state(di, d, RelayState::Done);
-            }
+        for (const Drainer& r : ctx.relays) {
+            stop_drainer(di, ctx, r, "relay", on_state);
         }
-        // Idle-eth pushers: the relay's stop word and done protocol, minus the NIU release (eth L1 never leaves the
-        // host's view). One that does not finish is a fault, like a relay that does not.
-        for (uint32_t k = 0; k < ctx.eth.size(); k++) {
-            const EthPusher& e = ctx.eth[k];
+        if (ctx.eth) {
             // Diagnostic: each linked core lane state as the pusher last left it (tail 0 = that core never
             // published; head < tail = words the pusher has not drained).
-            for (const EthPusher::Linked& ln : e.linked) {
+            for (const EthPusher::Linked& ln : ctx.eth->linked) {
                 std::vector<uint32_t> lcv(kernel_profiler::SPSC_CONTROL_END, 0);
                 cluster.read_core(
                     lcv.data(),
@@ -960,36 +968,7 @@ void Devices::quiesce(const RelayStateFn& on_state) {
                     lcv[kernel_profiler::SPSC_RING_HEAD_0 + 1],
                     lcv[kernel_profiler::PROFILER_ARMED]);
             }
-            const tt_cxy_pair core(ctx.chip_id, e.virt);
-            const uint32_t stop_word = kernel_profiler::kRelayStopQuiesce;
-            cluster.write_core(&stop_word, sizeof(stop_word), core, eth_l1_.ctrl + 64);
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-            bool drained = false;
-            for (;;) {
-                uint32_t state = 0;
-                cluster.read_core(&state, sizeof(state), core, eth_l1_.ctrl);
-                state &= kernel_profiler::kRelayDoneMask;
-                if (state == kernel_profiler::kRelayDoneWord) {
-                    break;
-                }
-                if (!drained && on_state && state == kernel_profiler::kRelayDrainedWord) {
-                    on_state(di, e.sock_idx, RelayState::Drained);
-                    drained = true;
-                }
-                TT_FATAL(
-                    std::chrono::steady_clock::now() < deadline,
-                    "streaming profiler: device {} idle-eth pusher {} did not finish within 10 s of its stop (state "
-                    "{:#x})",
-                    ctx.chip_id,
-                    k,
-                    state);
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-            if (on_state) {
-                on_state(di, e.sock_idx, RelayState::Done);
-            }
-        }
-        if (!ctx.eth.empty()) {
+            stop_drainer(di, ctx, *ctx.eth, "idle-eth pusher", on_state);
             sync_->recheck_tiles(di);
         }
         // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.
