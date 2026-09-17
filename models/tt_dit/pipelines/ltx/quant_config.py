@@ -225,7 +225,10 @@ def apply_quant_config_to_block(block, config: QuantConfig, arch, has_audio: boo
     def _quant_self_attn(attn):
         if attn is None:
             return
-        _apply_linear_quant(attn.to_qkv, config.self_attn_qkv)
+        # A fused gate rides in to_qkv as extra columns; the gate must stay bf16 (its logits feed a
+        # sigmoid the reference runs at working precision), so a fused to_qkv is left unquantized.
+        if not getattr(attn, "fuse_gate", False):
+            _apply_linear_quant(attn.to_qkv, config.self_attn_qkv)
         _apply_linear_quant(attn.to_out, config.self_attn_out)
         attn.mm_compute_kernel_config = qkv_compute
         attn.sdpa_compute_kernel_config = sdpa_compute

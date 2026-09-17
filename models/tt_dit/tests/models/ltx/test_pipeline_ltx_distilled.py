@@ -346,6 +346,11 @@ def test_pipeline_distilled(
             run(prompt=prompt, number=1, seed=seed)
             check_output_with_clip(prompt, 1)
             check_output_with_vbench(prompt, 1)
+            # LTX_E2E_EXTRA_REPLAYS=N: N more pure replays of the same gen, so a served queue's
+            # steady-state step time (not only the first replay after capture) is on the record.
+            for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
+                logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay) ===")
+                run(prompt=prompt, number=extra + 2, seed=seed)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
