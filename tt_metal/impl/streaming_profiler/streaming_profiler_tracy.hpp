@@ -21,6 +21,8 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
+struct SyncPlot;
+
 class Service;
 
 // The built-in Tracy sink: registers for every record type and pushes each record onto Tracy's device timeline, one
@@ -35,6 +37,9 @@ public:
     ~TracySink();
     TracySink(const TracySink&) = delete;
     TracySink& operator=(const TracySink&) = delete;
+
+    // The sync engine's series for the capture just ended, placed on the device timeline; from the Service at detach.
+    void emit_plots(std::vector<SyncPlot> plots);
 
 private:
     using Batch = experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>;
@@ -72,7 +77,6 @@ private:
     void push_marker(
         const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
     const char* intern_name(const std::string& name);
-    void emit_plots();
     void plot_point(const char* name, double value, int64_t tsc);
 
     Service& service_;

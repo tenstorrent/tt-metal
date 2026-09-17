@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
-#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 
 #include <algorithm>
 #include <array>
@@ -145,35 +145,32 @@ int64_t now_ns() {
 struct Service::Consumer {
     std::string name;
     BatchCallback cb;
-    ConsumerHooks hooks;
     uint64_t captures = 0;  // producers attached so far; the capture number its callback sees
     ConsumerHandle handle = 0;
     std::thread thread;
     std::atomic<bool> stop{false};
-    std::atomic<bool> control_pending{false};
-    std::mutex control_mu;
-    std::vector<std::pair<Producer*, bool>> control;  // (producer, attach), in order
+    ControlQueue control;
     std::atomic<uint64_t> dropped{0};
     std::atomic<uint64_t> unplaced{0};       // batches delivered before the sync covered them
     std::atomic<uint64_t> unplaced_full{0};  // of those, delivered to make arena room
     std::atomic<int64_t> unplaced_age_ns{0};  // the furthest such a batch was behind its cover
 };
 
-Service::Service() : sync_(std::make_shared<D2dSyncConsumer>()) { init_site_registry(); }
+Service::Service() : sync_(std::make_unique<SyncEngine>()) { init_site_registry(); }
 
-D2dSyncConsumer& Service::sync() { return *sync_; }
+SyncEngine& Service::sync() { return *sync_; }
 
 Service& service() {
     static ttsl::Indestructible<Service> instance;
     return instance.get();
 }
 
-void Service::post_control(Consumer& c, Producer* producer, bool attach) {
+void Service::post_control(ControlQueue& q, Producer* producer, bool attach) {
     {
-        std::lock_guard<std::mutex> lk(c.control_mu);
-        c.control.emplace_back(producer, attach);
+        std::lock_guard<std::mutex> lk(q.mu);
+        q.items.emplace_back(producer, attach);
     }
-    c.control_pending.store(true, std::memory_order_release);
+    q.pending.store(true, std::memory_order_release);
     pending_acks_++;
     wake_consumers();
 }
@@ -183,21 +180,16 @@ void Service::wait_acks(std::unique_lock<std::mutex>& lk) {
 }
 
 ConsumerHandle Service::add_consumer(std::string name, BatchCallback cb) {
-    return add_consumer(std::move(name), std::move(cb), ConsumerHooks{});
-}
-
-ConsumerHandle Service::add_consumer(std::string name, BatchCallback cb, ConsumerHooks hooks) {
     TT_FATAL(!t_in_consumer, "streaming profiler: add_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> topo(topology_mu_);
     auto c = std::make_unique<Consumer>();
     c->name = std::move(name);
     c->cb = std::move(cb);
-    c->hooks = std::move(hooks);
     Consumer& ref = *c;
     std::unique_lock<std::mutex> lk(mu_);
     ref.handle = next_handle_++;
     for (Producer* p : producers_) {
-        post_control(ref, p, true);
+        post_control(ref.control, p, true);
     }
     consumers_.push_back(std::move(c));
     ref.thread = std::thread(&Service::consumer_thread, this, std::ref(ref));
@@ -230,33 +222,37 @@ void Service::attach_producer(Producer& producer) {
         std::find(producers_.begin(), producers_.end(), &producer) == producers_.end(),
         "streaming profiler: producer attached twice");
     producers_.push_back(&producer);
-    for (const bool waits : {false, true}) {
-        for (auto& c : consumers_) {
-            if (c->hooks.waits_for_sync == waits) {
-                post_control(*c, &producer, true);
-            }
-        }
-        wait_acks(lk);
+    if (!sync_thread_.joinable()) {
+        sync_thread_ = std::thread(&Service::sync_thread, this);
     }
+    post_control(sync_control_, &producer, true);
+    wait_acks(lk);
+    for (auto& c : consumers_) {
+        post_control(c->control, &producer, true);
+    }
+    wait_acks(lk);
 }
 
 void Service::detach_producer(Producer& producer) {
     std::lock_guard<std::mutex> topo(topology_mu_);
     bool last = false;
+    std::vector<SyncPlot> plots;
     {
         std::unique_lock<std::mutex> lk(mu_);
         auto it = std::find(producers_.begin(), producers_.end(), &producer);
         TT_FATAL(it != producers_.end(), "streaming profiler: detaching a producer that is not attached");
-        for (const bool waits : {false, true}) {
-            for (auto& c : consumers_) {
-                if (c->hooks.waits_for_sync == waits) {
-                    post_control(*c, &producer, false);
-                }
-            }
-            wait_acks(lk);
+        post_control(sync_control_, &producer, false);
+        wait_acks(lk);
+        for (auto& c : consumers_) {
+            post_control(c->control, &producer, false);
         }
+        wait_acks(lk);
         producers_.erase(it);
         last = producers_.empty();
+        plots = sync_->take_plots();
+    }
+    if (tracy_) {
+        tracy_->emit_plots(std::move(plots));
     }
     if (last) {
         {
@@ -302,19 +298,6 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
         if (rtoptions.get_streaming_profiler_tracy_enabled()) {
             tracy_ = std::make_unique<TracySink>(*this);
         }
-        {
-            // The empty batch callback is deliberate: the decode pass routes this consumer's clock samples.
-            auto c = sync_;
-            add_consumer(
-                "d2d-sync",
-                [](const api::Batch<api::RecordType::All>&, uint64_t) {},
-                ConsumerHooks{
-                    .on_attach = [c](const CaptureContext& ctx) { c->on_attach(ctx); },
-                    .clock_sink = [c](const ClockSample& cs) { c->on_clock(cs); },
-                    .on_capture_end = [c](const CaptureContext& ctx) { c->on_capture_end(ctx); },
-                    .waits_for_sync = false,
-                    .eth_streams_only = true});
-        }
         auto add_public = [&]<typename C>(const char* name, const std::shared_ptr<C>& c) {
             using B = typename C::Batch;
             add_consumer(name, [c](const api::Batch<api::RecordType::All>& full, uint64_t) {
@@ -333,6 +316,169 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
         }
     });
 }
+
+void Service::open_stream(AttachedStream& s, const CaptureContext& ctx, const ProducerStream& ps, uint32_t index) {
+    s.stream = index;
+    s.cursor = ps.walked->load(std::memory_order_acquire);
+    const CaptureContext::Device& dev = ctx.devices[ps.dev];
+    s.chip = dev.chip_id;
+    s.state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
+    s.state.core_of_xy.load(dev.core_xy);
+    s.lanes.reserve(dev.lanes.size());
+    for (size_t li = 0; li < dev.lanes.size(); li++) {
+        const size_t core = li / profiler::kSpscNRiscDecode;
+        const int64_t offset = core < dev.tile_offset.size() ? dev.tile_offset[core] : 0;
+        s.lanes.push_back(record_consts(dev.lanes[li], offset));
+    }
+    s.dec.st = &s.state;
+    s.dec.lanes = s.lanes.data();
+    s.dec.dev = ps.dev;
+}
+
+// The sync engine's thread: the eth pushers' streams of every attached producer, walked and decoded for the clock
+// samples their decoders route to the engine; the records are decoded into scratch and dropped. Attached before and
+// detached before any consumer, so the covers the consumers wait for exist first and are final when they flush.
+class Service::SyncLoop {
+public:
+    explicit SyncLoop(Service& service) :
+        service_(service),
+        frames_buf_(std::make_unique_for_overwrite<std::byte[]>(kFramesBytes)),
+        zones_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
+        events_(std::make_unique_for_overwrite<uint8_t[]>(kRecScratchBytes)),
+        data_(std::make_unique_for_overwrite<uint8_t[]>(kDataScratchBytes)) {}
+
+    void run() {
+        tracy::SetThreadName("sp-sync");
+        set_os_thread_name("sp-sync");
+        IdleBackoff backoff(0);
+        for (;;) {
+            const uint32_t seen = service_.wake_token();
+            if (service_.sync_control_.pending.load(std::memory_order_acquire)) {
+                service_.sync_control_.pending.store(false, std::memory_order_release);
+                handle_control();
+            }
+            bool any = false;
+            for (auto& a : attached_) {
+                any |= pass(*a);
+            }
+            if (any) {
+                backoff.reset();
+                continue;
+            }
+            if (backoff.spin()) {
+                continue;
+            }
+            service_.wait_wake(seen);
+        }
+    }
+
+private:
+    static constexpr size_t kFramesBytes = size_t{kBatchFrames} * profiler::kSpscMaxFrameWords * 4;
+    // One frame's records, the most a frame can decode to.
+    static constexpr size_t kRecScratchBytes =
+        (profiler::kSpscMaxFrameWords / 2 + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
+    static constexpr size_t kDataScratchBytes = kRecScratchBytes + profiler::kSpscMaxFrameWords * 4 + 32;
+
+    void handle_control() {
+        std::vector<std::pair<Producer*, bool>> control;
+        {
+            std::lock_guard<std::mutex> lk(service_.sync_control_.mu);
+            control.swap(service_.sync_control_.items);
+        }
+        for (const auto& [p, is_attach] : control) {
+            is_attach ? attach(p) : detach(p);
+        }
+        std::lock_guard<std::mutex> lk(service_.mu_);
+        service_.pending_acks_ -= control.size();
+        service_.ack_cv_.notify_all();
+    }
+
+    void attach(Producer* p) {
+        auto a = std::make_unique<Attached>();
+        a->producer = p;
+        const CaptureContext& ctx = p->capture_context();
+        const auto streams = p->streams();
+        for (uint32_t si = 0; si < streams.size(); si++) {
+            if (!streams[si].eth) {
+                continue;
+            }
+            auto s = std::make_unique<AttachedStream>();
+            open_stream(*s, ctx, streams[si], si);
+            s->dec.clock_ctx = service_.sync_.get();
+            s->dec.clock_fn = [](void* engine, const ClockSample& cs) {
+                static_cast<SyncEngine*>(engine)->on_clock(cs);
+            };
+            a->streams.push_back(std::move(s));
+        }
+        service_.sync_->on_attach(ctx);
+        attached_.push_back(std::move(a));
+    }
+
+    void detach(Producer* p) {
+        auto it = std::find_if(attached_.begin(), attached_.end(), [&](const auto& a) { return a->producer == p; });
+        if (it == attached_.end()) {
+            return;
+        }
+        Attached& a = **it;
+        while (pass(a)) {
+        }
+        service_.sync_->on_capture_end(p->capture_context());
+        for (const auto& s : a.streams) {
+            if (s->dropped != 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] the sync engine missed {} bytes of chip {}'s clock stream",
+                    s->dropped,
+                    s->chip);
+            }
+            p->finish_stream(s->stream, s->dropped, s->dec.stats);
+        }
+        attached_.erase(it);
+    }
+
+    bool pass(Attached& a) {
+        bool any = false;
+        for (auto& s : a.streams) {
+            any |= read(a, *s);
+        }
+        return any;
+    }
+
+    // One batch of frames from the stream, decoded frame by frame into the scratch. False when the stream had
+    // nothing new.
+    bool read(Attached& a, AttachedStream& s) {
+        const ProducerStream& ps = a.producer->streams()[s.stream];
+        const Walked w = walk_frames(
+            ps.fifo,
+            s.cursor,
+            ps.walked->load(std::memory_order_acquire),
+            ps.marks,
+            std::span<std::byte>(frames_buf_.get(), kFramesBytes),
+            frame_words_,
+            [&] { return a.producer->live_head(s.stream); });
+        if (w.cursor == s.cursor) {
+            return false;
+        }
+        s.cursor = w.cursor;
+        s.dropped += w.dropped;
+        const std::byte* p = frames_buf_.get();
+        for (uint32_t i = 0; i < w.frames; i++) {
+            s.dec.decode_frame(
+                reinterpret_cast<const uint32_t*>(p), frame_words_[i], {zones_.get(), events_.get(), data_.get()});
+            p += size_t{frame_words_[i]} * 4;
+        }
+        s.dec.commit();
+        return true;
+    }
+
+    Service& service_;
+    std::vector<std::unique_ptr<Attached>> attached_;
+    std::array<uint32_t, kBatchFrames> frame_words_{};
+    std::unique_ptr<std::byte[]> frames_buf_;
+    std::unique_ptr<uint8_t[]> zones_, events_, data_;
+};
+
+void Service::sync_thread() { SyncLoop(*this).run(); }
 
 // One consumer's thread: a producer's frames walked and decoded into batches, each parked until the sync covers
 // its records, then delivered to the callback in decode order and released.
@@ -355,8 +501,8 @@ public:
         IdleBackoff backoff(0);
         for (;;) {
             const uint32_t seen = service_.wake_token();
-            if (c_.control_pending.load(std::memory_order_acquire)) {
-                c_.control_pending.store(false, std::memory_order_release);
+            if (c_.control.pending.load(std::memory_order_acquire)) {
+                c_.control.pending.store(false, std::memory_order_release);
                 handle_control(true);
             }
             if (pass_all()) {
@@ -387,8 +533,8 @@ private:
     void handle_control(bool run) {
         std::vector<std::pair<Producer*, bool>> control;
         {
-            std::lock_guard<std::mutex> lk(c_.control_mu);
-            control.swap(c_.control);
+            std::lock_guard<std::mutex> lk(c_.control.mu);
+            control.swap(c_.control.items);
         }
         if (run) {
             for (const auto& [p, is_attach] : control) {
@@ -406,36 +552,9 @@ private:
         const CaptureContext& ctx = p->capture_context();
         const auto streams = p->streams();
         for (uint32_t si = 0; si < streams.size(); si++) {
-            const ProducerStream& ps = streams[si];
-            if (c_.hooks.eth_streams_only && !ps.eth) {
-                continue;
-            }
             auto s = std::make_unique<AttachedStream>();
-            s->stream = si;
-            s->cursor = ps.walked->load(std::memory_order_acquire);
-            const CaptureContext::Device& dev = ctx.devices[ps.dev];
-            s->chip = dev.chip_id;
-            s->state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
-            s->state.core_of_xy.load(dev.core_xy);
-            s->lanes.reserve(dev.lanes.size());
-            for (size_t li = 0; li < dev.lanes.size(); li++) {
-                const size_t core = li / profiler::kSpscNRiscDecode;
-                const int64_t offset = core < dev.tile_offset.size() ? dev.tile_offset[core] : 0;
-                s->lanes.push_back(record_consts(dev.lanes[li], offset));
-            }
-            s->dec.st = &s->state;
-            s->dec.lanes = s->lanes.data();
-            s->dec.dev = ps.dev;
-            if (c_.hooks.clock_sink) {
-                s->dec.clock_ctx = &c_;
-                s->dec.clock_fn = [](void* ctx, const ClockSample& cs) {
-                    static_cast<Consumer*>(ctx)->hooks.clock_sink(cs);
-                };
-            }
+            open_stream(*s, ctx, streams[si], si);
             a->streams.push_back(std::move(s));
-        }
-        if (c_.hooks.on_attach) {
-            c_.hooks.on_attach(ctx);
         }
         a->capture = ++c_.captures;
         attached_.push_back(std::move(a));
@@ -449,7 +568,7 @@ private:
         Attached& a = **it;
         while (pass(a)) {
         }
-        // The producer's waiting batches go out now: the sync's consumer detached first, so their covers are final.
+        // The producer's waiting batches go out now: the sync engine detached first, so their covers are final.
         for (auto& sp : a.streams) {
             for (Parked* pk : sp->pending) {
                 deliver(*pk);
@@ -461,9 +580,6 @@ private:
             if (pk.a == &a) {
                 pk.a = nullptr;
             }
-        }
-        if (c_.hooks.on_capture_end) {
-            c_.hooks.on_capture_end(p->capture_context());
         }
         for (size_t i = 0; i < a.streams.size(); i++) {
             c_.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);
@@ -543,7 +659,7 @@ private:
             .n = n,
             .dropped = w.dropped,
             .stalls = s.dec.stall_zones - s.stalls_reported,
-            .parked_at_ns = c_.hooks.waits_for_sync ? now_ns() : 0});
+            .parked_at_ns = now_ns()});
         s.pending.push_back(&parked_.back());
         s.stalls_reported = s.dec.stall_zones;
         return true;
@@ -568,10 +684,10 @@ private:
             for (Parked& pk : parked_) {
                 if (!pk.delivered) {
                     AttachedStream& s = *pk.a->streams[pk.stream];
-                    if (c_.hooks.waits_for_sync && pk.n.newest_ticks > map_.cover_ticks(s.chip)) {
+                    if (pk.n.newest_ticks > map_.cover_ticks(s.chip)) {
                         c_.unplaced.fetch_add(1, std::memory_order_relaxed);
                         c_.unplaced_full.fetch_add(1, std::memory_order_relaxed);
-                        note_unplaced(pk.parked_at_ns != 0 ? now_ns() - pk.parked_at_ns : 0);
+                        note_unplaced(now_ns() - pk.parked_at_ns);
                     }
                     deliver(pk);
                     s.pending.pop_front();
@@ -597,7 +713,7 @@ private:
                 bool reread = !moved;
                 while (!s.pending.empty()) {
                     Parked& pk = *s.pending.front();
-                    if (c_.hooks.waits_for_sync && pk.n.newest_ticks > s.cover_seen) {
+                    if (pk.n.newest_ticks > s.cover_seen) {
                         if (!reread) {
                             s.cover_seen = map_.cover_ticks(s.chip);
                             reread = true;

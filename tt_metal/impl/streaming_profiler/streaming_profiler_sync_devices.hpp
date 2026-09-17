@@ -54,7 +54,7 @@ KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreC
 // The device-to-device sync's use of the devices. At boot it measures each chip's tile clock offsets before any
 // relay or pusher is on the NoC and plans the eth links; once the receiver drains the sockets it launches the link
 // ends (resident kernels, or the fabric routers' roles) and the host probe; at quiesce it stops them. The stamps and
-// clock samples travel the D2H path like every record and are consumed by D2dSyncConsumer.
+// clock samples travel the D2H path like every record and are consumed by the SyncEngine.
 class SyncDevices {
 public:
     struct Device {

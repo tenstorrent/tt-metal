@@ -189,26 +189,7 @@ using BatchCallback = std::function<void(
     const experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>&,
     uint64_t capture)>;
 
-struct ClockSample;
-// Optional hooks a consumer carries besides its batch callback, both run on the consumer's own thread.
-// clock_sink: every PP_CLOCK sample this consumer's decoders route (idle-eth trackers, link stamps); the other
-// consumers' decoders drop them. on_capture_end: once a producer's last frame is decoded, before its streams
-// are finished -- where a fit over the whole capture belongs.
-struct ConsumerHooks {
-    std::function<void(const CaptureContext&)> on_attach;  // a producer's context, before its first batch
-    std::function<void(const ClockSample&)> clock_sink;
-    std::function<void(const CaptureContext&)> on_capture_end;
-    // Whether the consumer's batches wait until the d2d sync covers their records, so every record it converts to
-    // host time lies between frozen correction nodes. The sync's own consumer does not wait; it is also attached
-    // first and detached first, so its covers exist before the others' batches and its final publish precedes their
-    // drain.
-    bool waits_for_sync = true;
-    // Attach to the eth pushers' streams only. The sync engine's inputs all travel on those, and a consumer that
-    // decodes the worker streams too runs behind them under load.
-    bool eth_streams_only = false;
-};
-
-class D2dSyncConsumer;
+class SyncEngine;
 
 class Service {
 public:
@@ -216,24 +197,26 @@ public:
     Service(const Service&) = delete;
     Service& operator=(const Service&) = delete;
 
-    // The callback runs on the consumer's own thread, one call at a time, for every attached producer. Not from
-    // inside a consumer callback.
+    // The callback runs on the consumer's own thread, one call at a time, for every attached producer, with every
+    // record placed on the host clock: a batch waits until the sync engine's covers reach its newest record. Not
+    // from inside a consumer callback.
     ConsumerHandle add_consumer(std::string name, BatchCallback cb);
-    ConsumerHandle add_consumer(std::string name, BatchCallback cb, ConsumerHooks hooks);
     // Returns once the callback can no longer run.
     void remove_consumer(ConsumerHandle handle);
 
-    // Returns once every consumer reads the producer's queues, so nothing published afterwards is missed.
+    // Returns once the sync engine and every consumer read the producer's queues, so nothing published afterwards
+    // is missed. The engine attaches first, so its covers exist before any consumer parks a batch on them.
     void attach_producer(Producer& producer);
-    // Returns once every consumer has drained the producer's queues and released its readers. Detaching the last
-    // producer writes the file sinks.
+    // Returns once the engine and every consumer have drained the producer's queues and released its readers: the
+    // engine first, so its final publish makes every cover final before the consumers flush what they parked; then
+    // the engine's plots go to the Tracy sink. Detaching the last producer writes the file sinks.
     void detach_producer(Producer& producer);
     bool is_active() const;
 
     // The Tracy sink and the CSV writers rtoptions select; subsequent calls do nothing.
     void register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions);
     // The device<->device sync engine, owner of the placement map.
-    D2dSyncConsumer& sync();
+    SyncEngine& sync();
 
     // A producer calls this once after a pass that published. A reader takes wake_token() before checking the queues
     // and, finding nothing, wait_wake()s on it, so a bump between the two returns at once: wait() returns without
@@ -252,15 +235,26 @@ public:
     }
 
 private:
+    // Attach and detach requests to a reader thread, in order; the thread acks each through pending_acks_.
+    struct ControlQueue {
+        std::atomic<bool> pending{false};
+        std::mutex mu;
+        std::vector<std::pair<Producer*, bool>> items;  // (producer, attach)
+    };
     struct Consumer;
     struct AttachedStream;
     struct Attached;
     struct Parked;
     class ConsumerLoop;
+    class SyncLoop;
     void consumer_thread(Consumer& c);
-    void post_control(Consumer& c, Producer* producer, bool attach);
+    // The sync engine's thread: the eth pushers' streams decoded for their clock samples, nothing delivered.
+    void sync_thread();
+    void post_control(ControlQueue& q, Producer* producer, bool attach);
     void wait_acks(std::unique_lock<std::mutex>& lk);
     static void warn_missed(const Consumer& c);
+    // A reader of one of a producer's streams, positioned at the ingest's walk.
+    static void open_stream(AttachedStream& s, const CaptureContext& ctx, const ProducerStream& ps, uint32_t index);
 
     // Serializes add/remove/attach/detach against each other; never taken by a consumer thread.
     std::mutex topology_mu_;
@@ -273,7 +267,9 @@ private:
     std::vector<std::unique_ptr<Consumer>> consumers_;
     std::vector<Producer*> producers_;
     std::vector<std::function<void()>> file_sinks_;
-    std::shared_ptr<D2dSyncConsumer> sync_;
+    std::unique_ptr<SyncEngine> sync_;
+    ControlQueue sync_control_;
+    std::thread sync_thread_;  // started at the first attach
     std::unique_ptr<TracySink> tracy_;
     ConsumerHandle next_handle_ = 1;
     std::once_flag builtins_once_;

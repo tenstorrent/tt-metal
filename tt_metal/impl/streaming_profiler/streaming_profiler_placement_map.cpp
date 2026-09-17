@@ -14,11 +14,8 @@
 #include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
 #include "tt_metal/common/indexed_ring.hpp"
 
-#include <condition_variable>
 #include <limits>
-#include <mutex>
 #include <string>
-#include <utility>
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -311,65 +308,6 @@ int64_t PlacementMap::place_host(uint32_t chip_id, int64_t wall) const noexcept 
         k.b = std::min(cc.b, static_cast<int64_t>(std::floor(wb)));
     }
     return std::llround(k.value);
-}
-
-namespace {
-std::mutex& plots_mutex() {
-    static std::mutex m;
-    return m;
-}
-std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>>& plots_store() {
-    static std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>> v;
-    return v;
-}
-}  // namespace
-
-void SyncPlots::publish(std::string name, std::vector<SyncPlotPoint> points) {
-    std::lock_guard<std::mutex> g(plots_mutex());
-    auto& v = plots_store();
-    for (auto& e : v) {
-        if (e.first == name) {
-            e.second = std::move(points);
-            return;
-        }
-    }
-    v.emplace_back(std::move(name), std::move(points));
-}
-
-std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>> SyncPlots::drain() {
-    std::lock_guard<std::mutex> g(plots_mutex());
-    auto out = std::move(plots_store());
-    plots_store().clear();
-    return out;
-}
-
-namespace {
-std::condition_variable& plots_cv() {
-    static std::condition_variable cv;
-    return cv;
-}
-bool& plots_pending() {
-    static bool pending = false;
-    return pending;
-}
-}  // namespace
-
-void SyncPlots::expect() {
-    std::lock_guard<std::mutex> g(plots_mutex());
-    plots_pending() = true;
-}
-
-void SyncPlots::complete() {
-    {
-        std::lock_guard<std::mutex> g(plots_mutex());
-        plots_pending() = false;
-    }
-    plots_cv().notify_all();
-}
-
-void SyncPlots::wait_complete(std::chrono::milliseconds timeout) {
-    std::unique_lock<std::mutex> lk(plots_mutex());
-    plots_cv().wait_for(lk, timeout, [] { return !plots_pending(); });
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

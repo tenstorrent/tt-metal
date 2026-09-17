@@ -5,7 +5,6 @@
 #pragma once
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -81,25 +80,6 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-};
-
-// A named (host TSC tick, value) series a consumer computes once a capture is complete -- the d2d sync's error per
-// link and each chip's AICLK -- for a plotting sink to place on the device timeline. Not a hot path: published once
-// at capture end, drained once by the sink.
-struct SyncPlotPoint {
-    int64_t tsc = 0;
-    double value = 0.0;
-};
-class SyncPlots {
-public:
-    static void publish(std::string name, std::vector<SyncPlotPoint> points);
-    static std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>> drain();
-    // The computing consumer and the draining sink run on their own threads: the consumer declares its series
-    // pending at attach and complete after its final publish, and a sink drains only once they are complete (or the
-    // wait runs out).
-    static void expect();
-    static void complete();
-    static void wait_complete(std::chrono::milliseconds timeout);
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

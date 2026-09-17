@@ -13,12 +13,24 @@
 #include <utility>
 #include <vector>
 
+#include <string>
+
 #include "hostdev/streaming_profiler_common.h"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
+
+// A named (host TSC tick, value) series for a plotting sink to place on the device timeline.
+struct SyncPlotPoint {
+    int64_t tsc = 0;
+    double value = 0.0;
+};
+struct SyncPlot {
+    std::string name;
+    std::vector<SyncPlotPoint> points;
+};
 
 // The chip's AICLK wall clock against its refclk, as its idle-eth pusher models it (eth_clock_pusher.cpp): one
 // segment per PLL multiple, each a line the pusher sends POINTS of -- (refclk r, the line's wall at r) with the
@@ -144,8 +156,9 @@ public:
 // where R_x(T) inverts the constant-rate run holding wall tick T, A_x/H_x are the chip's boot anchor (tick, host ns),
 // P_x its refclk period taken as k_mean/hz so it is consistent with that anchor, and link() maps c's refclk onto r's by
 // the solved offset and rate about the burst midpoint. Published incrementally for live sinks, finally at capture end.
-// Runs entirely on its consumer's thread.
-class D2dSyncConsumer {
+// Driven from the Service's sync thread, which decodes the eth pushers' streams and hands it every clock sample in
+// order; a capture is on_attach, the samples, on_capture_end. The unit test drives it the same way.
+class SyncEngine {
 public:
     void on_attach(const CaptureContext& ctx);
     void on_clock(const ClockSample& s);
@@ -154,6 +167,8 @@ public:
     // host series.
     PlacementMap& map() { return map_; }
     const PlacementMap& map() const { return map_; }
+    // The series on_capture_end computed for a plotting sink (each chip's AICLK, the sync error per link), once.
+    std::vector<SyncPlot> take_plots() { return std::exchange(plots_, {}); }
 
 private:
     PlacementMap map_;
@@ -225,9 +240,9 @@ private:
     std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
     void publish_all();
     void log_summary() const;
-    void publish_error_plots() const;
+    void publish_error_plots();
     // Each chip's AICLK in GHz, a point at either end of every segment of its clock model.
-    void publish_clock_plots() const;
+    void publish_clock_plots();
     // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
     // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
     // abscissa. False when a chip has no fitted run or no node to place a stamp with.
@@ -235,11 +250,7 @@ private:
         double wall_a = 0, wall_b = 0, root_a = 0, root_b = 0;
     };
     bool round_error(
-        const CaptureContext::Link& L,
-        const Round& r,
-        int64_t& tsc_a,
-        double& err,
-        RoundTerms* terms = nullptr) const;
+        const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;
     // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
     // was placed at, tangent the run's rate on the root (root refclk ticks per wall tick), the map past the newest
     // node.
@@ -279,11 +290,12 @@ private:
     void push_node(Series& s, uint32_t chip, const Node& n);
     CaptureContext ctx_;
     std::map<uint32_t, LocalClockModel> local_;  // device index -> local fit
-    std::vector<LinkRounds> links_;         // per ctx_.links index
+    std::vector<LinkRounds> links_;              // per ctx_.links index
     // (device index, decoder core index) -> the link the core stamps for, and whether as its sender.
     std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;
-    std::vector<LinkSolution> solved_;                         // per ctx_.links index
+    std::vector<LinkSolution> solved_;  // per ctx_.links index
     uint64_t dropped_kind_ = 0;
+    std::vector<SyncPlot> plots_;
     static constexpr double kNsPerRefclk = 1e9 / kernel_profiler::kEthRefclkHz;
     // Refclk ticks per stamp unit: the kernels report a round's stamp averages in kLinkSyncStampUnitsPerNs per ns.
     static constexpr double kRefclkPerStampUnit = 1.0 / (kernel_profiler::kLinkSyncStampUnitsPerNs * kNsPerRefclk);

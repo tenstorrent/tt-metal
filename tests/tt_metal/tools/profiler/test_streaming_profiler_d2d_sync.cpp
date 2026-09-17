@@ -27,7 +27,7 @@
 #include <vector>
 
 #include "impl/streaming_profiler/spsc_packet.h"
-#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
 #include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
@@ -107,7 +107,7 @@ int main() {
     ctx.links.push_back(CaptureContext::Link{
         .dev_a = 1, .dev_b = 2, .chip_a = 1, .chip_b = 2, .core_a = 1, .core_b = 0, .eth_a = e1, .eth_b = e0});
     ctx.root_dev = 0;
-    D2dSyncConsumer sync;
+    SyncEngine sync;
     // The host series as the probe would write it: exact nodes at two bursts, so the checks cross a node and run
     // out along a tangent.
     for (double tau : {0.0, 0.6}) {

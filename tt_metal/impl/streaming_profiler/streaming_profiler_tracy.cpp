@@ -18,6 +18,7 @@
 #endif
 
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "impl/streaming_profiler/streaming_profiler_placement_map.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -80,10 +81,7 @@ TracySink::TracySink(Service& service) :
     anchor_tracy_(tracy_anchor_now()),
     origin_margin_ns_(origin_margin_ns(anchor_tracy_)),
     srcloc_table_(kSrclocTableInitial) {
-    handle_ = service_.add_consumer(
-        "tracy",
-        [this](const Batch& b, uint64_t) { on_batch(b); },
-        ConsumerHooks{.on_capture_end = [this](const CaptureContext&) { emit_plots(); }});
+    handle_ = service_.add_consumer("tracy", [this](const Batch& b, uint64_t) { on_batch(b); });
 }
 
 TracySink::~TracySink() {
@@ -326,13 +324,10 @@ void TracySink::plot_point([[maybe_unused]] const char* name, [[maybe_unused]] d
 #endif
 }
 
-// The series the d2d consumer computes at capture end (each chip's AICLK, the sync error per link) run on its own
-// thread, so its final publish is waited for.
-void TracySink::emit_plots() {
-    SyncPlots::wait_complete(std::chrono::seconds(10));
-    for (auto& [name, pts] : SyncPlots::drain()) {
-        [[maybe_unused]] const char* nm = intern_name(name);
-        for ([[maybe_unused]] const SyncPlotPoint& p : pts) {
+void TracySink::emit_plots(std::vector<SyncPlot> plots) {
+    for (const SyncPlot& plot : plots) {
+        [[maybe_unused]] const char* nm = intern_name(plot.name);
+        for ([[maybe_unused]] const SyncPlotPoint& p : plot.points) {
             plot_point(nm, p.value, p.tsc);
         }
     }

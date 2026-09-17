@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -22,7 +22,7 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
+void SyncEngine::on_attach(const CaptureContext& ctx) {
     ctx_ = ctx;
     local_.clear();
     links_.assign(ctx.links.size(), LinkRounds{});
@@ -60,10 +60,10 @@ void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
             map_.finish(d.chip_id);
         }
     }
-    SyncPlots::expect();
+    plots_.clear();
 }
 
-void D2dSyncConsumer::on_clock(const ClockSample& s) {
+void SyncEngine::on_clock(const ClockSample& s) {
     if (s.kind == PP_CLOCK_LOCAL_REFCLK) {
         LocalClockModel& l = local_[s.dev];
         if (s.role == PP_CLOCK_LOCAL_RAW) {
@@ -106,7 +106,7 @@ void D2dSyncConsumer::on_clock(const ClockSample& s) {
     }
 }
 
-void D2dSyncConsumer::try_solve_links(bool final) {
+void SyncEngine::try_solve_links(bool final) {
     for (size_t li = 0; li < ctx_.links.size(); li++) {
         LinkSolution& out = solved_[li];
         const CaptureContext::Link& L = ctx_.links[li];
@@ -182,15 +182,15 @@ void D2dSyncConsumer::try_solve_links(bool final) {
     }
 }
 
-double D2dSyncConsumer::mid_a_refclk(const Round& r) {
+double SyncEngine::mid_a_refclk(const Round& r) {
     return 0.5 * (static_cast<double>(r.t0.units) + static_cast<double>(r.t2.units)) * kRefclkPerStampUnit;
 }
 
-double D2dSyncConsumer::mid_b_refclk(const Round& r) {
+double SyncEngine::mid_b_refclk(const Round& r) {
     return 0.5 * (static_cast<double>(r.t1.units) + static_cast<double>(r.t1b.units)) * kRefclkPerStampUnit;
 }
 
-double D2dSyncConsumer::path_median(const std::vector<Round>& rounds, size_t begin, size_t n) {
+double SyncEngine::path_median(const std::vector<Round>& rounds, size_t begin, size_t n) {
     if (n <= begin) {
         return std::numeric_limits<double>::quiet_NaN();
     }
@@ -210,8 +210,7 @@ double D2dSyncConsumer::path_median(const std::vector<Round>& rounds, size_t beg
 // relaxation over the links (few devices, so O(links^2) is nothing) fills them from the root outward; a device
 // no path reaches keeps its own anchor and the local term alone. `used`, when given, marks the links the tree
 // took; the others close loops and their disagreement with the tree is path asymmetry (see log_summary).
-std::vector<D2dSyncConsumer::LinkSolution> D2dSyncConsumer::pair_solutions(
-    std::vector<std::vector<size_t>>* members) const {
+std::vector<SyncEngine::LinkSolution> SyncEngine::pair_solutions(std::vector<std::vector<size_t>>* members) const {
     std::vector<LinkSolution> out;
     std::vector<std::vector<size_t>> groups;
     for (size_t li = 0; li < solved_.size(); li++) {
@@ -269,7 +268,7 @@ std::vector<D2dSyncConsumer::LinkSolution> D2dSyncConsumer::pair_solutions(
     return out;
 }
 
-size_t D2dSyncConsumer::pair_size(size_t li) const {
+size_t SyncEngine::pair_size(size_t li) const {
     size_t n = 0;
     for (const LinkSolution& s : solved_) {
         n += s.ok && s.dev_snd == solved_[li].dev_snd && s.dev_rcv == solved_[li].dev_rcv;
@@ -277,8 +276,7 @@ size_t D2dSyncConsumer::pair_size(size_t li) const {
     return n;
 }
 
-std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
-    uint32_t root, std::vector<bool>* used) const {
+std::map<uint32_t, SyncEngine::RootXf> SyncEngine::root_transforms(uint32_t root, std::vector<bool>* used) const {
     std::map<uint32_t, RootXf> to_root;
     to_root[root] = RootXf{1.0, 0.0, true};
     if (used != nullptr) {
@@ -322,7 +320,7 @@ std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
     return to_root;
 }
 
-D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
+SyncEngine::Fresh SyncEngine::fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf) const {
     const std::vector<LocalClockModel::Run>& runs = fit.runs;
     // A node places one instant of a run on the root: its eth wall tick (the key every record of the chip is looked
     // up by, worker lanes through their tile offset) and the root's refclk at that instant, via the chip's refclk
@@ -334,7 +332,8 @@ D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const Local
         if (!(tangent > 0.0 && tangent < 1.0)) {
             log_warning(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync: a node at refclk {:.0f} is not a rate; its segment [{:.0f}, {:.0f}] has "
+                "[streaming profiler] d2d sync: a node at refclk {:.0f} is not a rate; its segment [{:.0f}, {:.0f}] "
+                "has "
                 "{} samples, k8 {:.0f}; root scale {:.9f}",
                 r,
                 run.r_first,
@@ -404,7 +403,7 @@ D2dSyncConsumer::Fresh D2dSyncConsumer::fresh_nodes(const Series& s, const Local
     return out;
 }
 
-void D2dSyncConsumer::push_node(Series& s, uint32_t chip, const Node& n) {
+void SyncEngine::push_node(Series& s, uint32_t chip, const Node& n) {
     const int64_t wall = static_cast<int64_t>(std::llround(n.H));
     if (!s.nodes.empty() && wall <= static_cast<int64_t>(std::llround(s.nodes.back().H))) {
         return;  // within the tick of the last node: the placement cannot differ measurably there
@@ -421,7 +420,7 @@ void D2dSyncConsumer::push_node(Series& s, uint32_t chip, const Node& n) {
 // at most on a frontier, a few ns at a knot). Shifting fresh nodes to meet the frozen tail and fading that shift over
 // a quarter second is worse: every discrepancy at a join becomes a level the map carries for 250 ms, 30-60 ns during
 // DVFS dithering at 1 ms.
-void D2dSyncConsumer::freeze_append(Series& s, uint32_t chip, const Node& n) {
+void SyncEngine::freeze_append(Series& s, uint32_t chip, const Node& n) {
     const double frontier_H = std::max(s.nodes.empty() ? -1.0 : s.nodes.back().H, s.cover_H);
     if (n.H >= frontier_H && n.H < frontier_H + 1.0) {
         return;  // the series' end re-derived, or a knot within the tick of it: the same node
@@ -449,7 +448,7 @@ void D2dSyncConsumer::freeze_append(Series& s, uint32_t chip, const Node& n) {
     push_node(s, chip, n);
 }
 
-bool D2dSyncConsumer::advance(Series& s, uint32_t chip, Fresh fresh) {
+bool SyncEngine::advance(Series& s, uint32_t chip, Fresh fresh) {
     const double cover_before = s.cover_H;
     for (const Node& k : fresh.knots) {
         freeze_append(s, chip, k);
@@ -474,7 +473,7 @@ bool D2dSyncConsumer::advance(Series& s, uint32_t chip, Fresh fresh) {
     return s.cover_H > cover_before;
 }
 
-bool D2dSyncConsumer::publish_dev(uint32_t dev) {
+bool SyncEngine::publish_dev(uint32_t dev) {
     const auto st = local_.find(dev);
     if (st == local_.end() || st->second.runs.empty() || dev >= ctx_.devices.size()) {
         return false;
@@ -497,7 +496,7 @@ bool D2dSyncConsumer::publish_dev(uint32_t dev) {
     return advance(series, ctx_.devices[dev].chip_id, fresh_nodes(series, st->second, xf->second));
 }
 
-void D2dSyncConsumer::publish_all() {
+void SyncEngine::publish_all() {
     for (const auto& kv : local_) {
         publish_dev(kv.first);
     }
@@ -506,7 +505,7 @@ void D2dSyncConsumer::publish_all() {
     }
 }
 
-void D2dSyncConsumer::log_summary() const {
+void SyncEngine::log_summary() const {
     for (const auto& [dev, l] : local_) {
         size_t nb = 0;
         double smin = std::numeric_limits<double>::max(), smax = 0.0;
@@ -648,7 +647,7 @@ void D2dSyncConsumer::log_summary() const {
 // The link solve: receiver refclk = sender refclk + offset + rate * (sender refclk - mean midpoint), a straight line
 // through the rounds' (midpoint, receiver minus midpoint) points with two passes of 3-sigma trimming. A solution
 // that is not finite, beyond 100 ppm or a millisecond of residual is refused and the previous one stands.
-bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const {
+bool SyncEngine::solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const {
     if (pts.size() < 4) {
         return false;
     }
@@ -729,7 +728,7 @@ bool D2dSyncConsumer::solve_link(const CaptureContext::Link& L, std::vector<Roun
     return true;
 }
 
-bool D2dSyncConsumer::round_error(
+bool SyncEngine::round_error(
     const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms) const {
     if (L.dev_a >= ctx_.devices.size() || L.dev_b >= ctx_.devices.size()) {
         return false;
@@ -765,7 +764,7 @@ bool D2dSyncConsumer::round_error(
 // placed on the host timeline exactly as the sink places a record from each chip's eth core, against the final map.
 // The worst rounds are logged with their distance to the nearest correction node, since the map's residual lives at
 // the transitions.
-void D2dSyncConsumer::publish_error_plots() const {
+void SyncEngine::publish_error_plots() {
     for (size_t li = 0; li < ctx_.links.size(); li++) {
         const CaptureContext::Link& L = ctx_.links[li];
         const std::vector<Round>& rounds = links_[li].rounds;
@@ -975,11 +974,12 @@ void D2dSyncConsumer::publish_error_plots() const {
                 std::fclose(ef);
             }
         }
-        SyncPlots::publish(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), std::move(pts));
+        plots_.push_back(
+            SyncPlot{fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), std::move(pts)});
     }
 }
 
-void D2dSyncConsumer::publish_clock_plots() const {
+void SyncEngine::publish_clock_plots() {
     for (const auto& [dev, fit] : local_) {
         const auto ps = published_.find(dev);
         if (ps == published_.end() || ps->second.nodes.empty() || dev >= ctx_.devices.size()) {
@@ -998,18 +998,17 @@ void D2dSyncConsumer::publish_clock_plots() const {
             }
         }
         if (!pts.empty()) {
-            SyncPlots::publish(fmt::format("AICLK chip{} (GHz)", chip), std::move(pts));
+            plots_.push_back(SyncPlot{fmt::format("AICLK chip{} (GHz)", chip), std::move(pts)});
         }
     }
 }
 
-void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
+void SyncEngine::on_capture_end(const CaptureContext& ctx) {
     (void)ctx;
     try_solve_links(/*final=*/true);
     publish_all();
     publish_error_plots();
     publish_clock_plots();
-    SyncPlots::complete();
     log_summary();
     // The published corrections stay for the sinks that write at process end; the next attach starts fresh.
     local_.clear();

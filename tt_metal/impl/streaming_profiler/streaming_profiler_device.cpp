@@ -40,7 +40,6 @@
 #include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
 #include "llrt/tt_cluster.hpp"
 #include "impl/streaming_profiler/streaming_profiler_link_sync.hpp"
-#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 #include "hostdev/streaming_profiler_common.h"

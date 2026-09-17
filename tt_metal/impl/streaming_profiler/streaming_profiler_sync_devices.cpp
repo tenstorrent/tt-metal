@@ -26,7 +26,7 @@
 
 #include "context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "impl/streaming_profiler/streaming_profiler_link_sync.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "llrt/tt_cluster.hpp"
