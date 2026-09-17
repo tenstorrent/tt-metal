@@ -2071,7 +2071,7 @@ def qsfp_rev_crosscheck(checks: list[Check], detected_rev: str | None, gating: b
     """
     found = next((c for c in checks if c.name == QSFP_REV_CHECK), None)
     dump_rev = (found.data or {}).get("rev") if found else None
-    if detected_rev is None or dump_rev is None:
+    if detected_rev is None or dump_rev in (None, "unknown"):
         missing = "the tt-smi snapshot" if detected_rev is None else "the dump"
         payload = {
             "name": "board_rev_agrees",
