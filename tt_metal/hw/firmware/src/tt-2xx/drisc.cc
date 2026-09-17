@@ -5,6 +5,7 @@
 #include "internal/firmware_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/hw_thread.h"
+#include "internal/tt-2xx/risc_common.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/ring_buffer.h"
 #include "hostdev/dev_msgs.h"
@@ -107,7 +108,8 @@ extern "C" uint32_t _start1() {
                 asm("nop; nop; nop; nop; nop");
             }
             WAYPOINT("R1");
-            // Kernel launch is a later slice. Handshake only: GO -> DONE.
+            // Host DRAM kernels are a single processor (hart 0). Subordinates stay in the GO/DONE
+            // handshake until per-hart CCE kernels exist.
             WAYPOINT("D1");
             *subordinate_sync_slot(hartid) = RUN_SYNC_MSG_DONE;
         }
@@ -122,9 +124,27 @@ extern "C" uint32_t _start1() {
         while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
         }
         WAYPOINT("GD");
-        // Mailbox-only bring-up: wait for GO and immediately DONE.
-        // start_subordinate_kernel_run_early() around a kernel is a later slice.
+
+        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        launch_msg_t* launch_msg = &mailboxes->launch[launch_msg_rd_ptr];
+        uint32_t enables = launch_msg->kernel_config.enables;
+        firmware_config_init(mailboxes, ProgrammableCoreType::DRAM, hartid);
+        start_subordinate_kernel_run_early(enables);
+
+        WAYPOINT("R");
+        if (enables & 1u) {
+            uintptr_t kernel_lma = launch_msg->kernel_config.kernel_text_offset[0];
+            invalidate_l1_icache();
+            reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+        }
+        WAYPOINT("D");
+
+        wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
+            launch_msg->kernel_config.enables = 0;
+            mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+        }
         WAYPOINT("GW");
     }
 

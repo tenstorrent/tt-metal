@@ -159,10 +159,11 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
             }
             break;
         case HalProgrammableCoreType::DRAM:
-            if (!params.is_fw) {
-                TT_THROW("CCE kernel JIT is not implemented yet");
+            if (params.is_fw) {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/drisc.cc");
+            } else {
+                srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/drisck.cc");
             }
-            srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/drisc.cc");
             break;
         default:
             TT_ASSERT(
