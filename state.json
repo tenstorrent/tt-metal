@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35168710637",
-    "timestamp": "2026-09-17T01:04:00Z"
+    "run_id": "35190856437",
+    "timestamp": "2026-09-17T06:44:35Z"
   },
-  "run_id": "35168710637",
+  "run_id": "35190856437",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -161,7 +161,11 @@
       "issue": 55681,
       "status": "open, behind main, doc-only low-risk fix, unchanged"
     },
-    "56808_typecast_int32_negative": "opened this run (test-only fix, branch repo-assist/fix-issue-56808-typecast-int32-negative-stimuli); adds test_eltwise_unary_typecast_int32_negative parametrized over Int32-input typecast pairs, sampling [-255,255] (or [-15,15] w/ block-float output) packed via pack_int32's sign-magnitude default; verified against current ckernel_sfpu_typecast.h (WH/BH/Quasar) that Int32 typecast kernels expect sign-magnitude Dest, matching the issue's own diagnosis. CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally."
+    "56808_typecast_int32_negative": "opened this run (test-only fix, branch repo-assist/fix-issue-56808-typecast-int32-negative-stimuli); adds test_eltwise_unary_typecast_int32_negative parametrized over Int32-input typecast pairs, sampling [-255,255] (or [-15,15] w/ block-float output) packed via pack_int32's sign-magnitude default; verified against current ckernel_sfpu_typecast.h (WH/BH/Quasar) that Int32 typecast kernels expect sign-magnitude Dest, matching the issue's own diagnosis. CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally.",
+    "56817": {
+      "issue": 56808,
+      "status": "CI FAILED on original commit (Int32->Float32 dest_acc=Yes typecast_int32_negative test found a real kernel bug: calculate_typecast_int32_to_fp32/_to_fp16b on WH/BH used SFPABS_MOD1_INT two's-complement abs on sign-magnitude Int32 data). Pushed a fix commit switching to SFPABS_MOD1_FLOAT (clear sign bit) in both WH and BH kernels; verified mod1 semantics against ISA docs via DeepWiki and against tt_llk_quasar's own calculate_abs which already uses the named constant with the same caution comment. Posted explanatory comment on PR. CI re-running on new commit, check next run."
+    }
   },
   "issues_labeled": [
     "52178:bug",
@@ -1319,6 +1323,11 @@
   },
   "run_history": [
     {
+      "run_id": "35190856437",
+      "date": "2026-09-17T06:44:35Z",
+      "summary": "Task5 (CI check follow-up on own PR): investigated CI failure on PR #56817 (test-only fix opened last run for issue #56808). The new test_eltwise_unary_typecast_int32_negative[Int32->Float32, dest_acc=Yes] caught a genuine WH/BH kernel defect: calculate_typecast_int32_to_fp32/_to_fp16b used TTI_SFPABS(mod1=0) (two's-complement int abs) on Int32 data that is sign-magnitude in hardware. Verified via DeepWiki against tt-isa-documentation (SFPABS.md/SFPCAST_IntFloat.md) and cross-checked against tt_llk_quasar's own calculate_abs (already uses the correctly-named SFPABS_MOD1_FLOAT constant with an identical warning comment). Pushed a fix (both WH/BH, both plain-loop and SFPLOADMACRO variants) switching to SFPABS_MOD1_FLOAT; posted explanatory comment on the PR. Re-verified other tracked PRs (56714/56598/56529/56428, rest of ~19 total) all green, no regressions. Task8: rewrote monthly summary #55015 (had regrown to 165KB) with current suggested actions + this run's entry."
+    },
+    {
       "run_id": "35168710637",
       "date": "2026-09-17T01:04:00Z",
       "summary": "Task1/2/3: investigated fresh issue #56808 (LLK typecast test never samples negative Int32 stimuli); verified the issue's sign-magnitude claim against current ckernel_sfpu_typecast.h across WH/BH/Quasar (SFPCAST/SFPABS+SFPSETSGN comments explicitly confirm sign-magnitude Dest encoding, matching pack_int32's default); opened test-only fix PR adding test_eltwise_unary_typecast_int32_negative parametrized over Int32-input typecast pairs; commented on #56808 linking the PR. Task5: re-verified all ~19 tracked repo-assist PRs -- no CI regressions or new maintainer activity; confirmed #56375 is superseded by merged #56676 (flagged for maintainer to close). Task8: rewrote monthly summary #55015 (body had grown to ~159KB from repeated appended history; trimmed to current suggested actions + this run's entry)."
@@ -1452,9 +1461,10 @@
     }
   },
   "task5_maintain_2026_09_14": "replied to bbradelTT question on PR #55670 (confirmed ready, triggered /codeowners ping); re-verified CI green on #56428/#56396 (no reviews yet), no other new maintainer activity found on 55847/55435/53690/52106/53113/54792/54246/54666/54862",
-  "task8_last_update": "2026-09-17T01:04:00Z",
+  "task8_last_update": "2026-09-17T06:44:35Z",
   "task5_maintain_2026_09_15": "re-verified all 17 tracked PRs via pull_request_read/get_check_runs; posted CI-green comment on #56529 (new since 09-14 18:34 run); no other new maintainer activity found",
   "task5_maintain_2026_09_15b": "addressed maintainer /repo-assist request on PR #56396 (mateusznowakTT asked for explicit input==0 unit test): added test_bw_pow_zero_input_finite_gradient (exponents 1.0/2.0/3.0) to test_backward_pow.py, verified against golden function in unary_backward.py:912-925, pushed via push_to_pull_request_branch, posted explanatory comment; discovered previously-untracked PR #56598 (isclose_init fix, opened prior run, CI green 5/5, added to open_prs tracking); re-verified all other tracked PRs (55435/56375/55670/56428/54932/54792/56195/53113/51868/53690/54666/54246/54862/52106) - no new maintainer feedback requiring action beyond what is already addressed",
   "task5_maintain_2026_09_16": "re-verified PR #56706 (pow_bw fix, closes #56383/via #56396) CI 9/9 green; PRs 56529 (logical_not -0.0), 56598 (isclose_init), 56428 (quantize per-tensor scale) unchanged from prior run (still open, no new activity, checks previously confirmed green per prior memory).",
-  "task5_maintain_2026_09_17": "re-verified all ~19 tracked repo-assist PRs via pull_request_read/get_check_runs (55688/54932/54792/53113/54666/54862/52106/51868/55670/56195/56790/56714/56598/56529/56428/56396/55435/53690/54246) -- no CI regressions, no new maintainer activity since last check; confirmed #56375 (dispatch log fix) remains superseded by merged #56676 (issue #56348 closed), flagged in monthly summary for maintainer to close since repo-assist should not close unilaterally without confirming maintainer intent."
+  "task5_maintain_2026_09_17": "re-verified all ~19 tracked repo-assist PRs via pull_request_read/get_check_runs (55688/54932/54792/53113/54666/54862/52106/51868/55670/56195/56790/56714/56598/56529/56428/56396/55435/53690/54246) -- no CI regressions, no new maintainer activity since last check; confirmed #56375 (dispatch log fix) remains superseded by merged #56676 (issue #56348 closed), flagged in monthly summary for maintainer to close since repo-assist should not close unilaterally without confirming maintainer intent.",
+  "task5_maintain_2026_09_17b": "Investigated #56817 CI failure (test_eltwise_unary_typecast_int32_negative[Int32->Float32, dest_acc=Yes] failing on both WH and BH smoke tests, run 35170670299): confirmed a genuine kernel defect, not a test bug -- calculate_typecast_int32_to_fp32/_to_fp16b used TTI_SFPABS(...,mod1=0) (SFPABS_MOD1_INT, two's-complement abs) on Int32 data that is actually sign-magnitude in hardware (matching pack_int32's default and this same file's SFPCAST/SFPSETSGN conventions). Verified via DeepWiki against tt-isa-documentation (SFPABS.md, SFPCAST_IntFloat.md) and cross-checked against tt_llk_quasar's calculate_abs which already uses the correctly-named SFPABS_MOD1_FLOAT constant with an identical warning comment. Pushed a fix (both WH and BH, both the DISABLE_SFPLOADMACRO plain-loop and SFPLOADMACRO fast-path variants) switching to SFPABS_MOD1_FLOAT; posted explanatory comment on PR #56817. Also re-verified other tracked PRs (56714/56598/56529/56428) all green, no regressions. Re-verified rest of ~19 tracked PRs unchanged from prior run's 2026-09-17 check."
 }
