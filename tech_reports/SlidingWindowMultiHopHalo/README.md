@@ -60,6 +60,17 @@ Three conclusions a follow-up session should not re-derive:
 3. **What makes small chunks expensive is a ~69 ms fixed per-chunk floor** (~1.15 ms per layer over
    60 layers), paid no matter how few tokens the chunk holds. That is the only real lever left.
 
+## 3b. The follow-up: why the chunk-size tradeoff looks the way it does
+
+The chunk-size table above says *what* each chunk size costs. A follow-up investigation answers
+*why*, and in particular why chunk 2048 is **2.09x** slower than 8192 over a 256k prompt:
+**two independent ~2x effects in different layers** — a ~70 ms per-chunk floor paid 4x more often
+(84% of it the 50 sliding layers, by count), and a prefix-attention term that leaves **71% of the
+core grid idle** at chunk 2048 (100% of it the 10 full-attention layers). It also establishes that
+the global attention op is **MAC-throughput-bound, not fabric-bound**, correcting an earlier claim.
+
+→ **[`../Gemma4PrefillChunkSize/`](../Gemma4PrefillChunkSize/README.md)**
+
 ## 4. The documents
 
 | file | what is in it |
