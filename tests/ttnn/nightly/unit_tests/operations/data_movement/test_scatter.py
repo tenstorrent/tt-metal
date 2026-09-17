@@ -140,6 +140,100 @@ def test_scatter_partial(
     assert device.num_program_cache_entries() == expected_num_cache_entries
 
 
+# A rank > 4 input used to be collapsed to 4D by merging its leading (rank - 3) dims, and the index
+# tensor was collapsed the same way but with its own extents. The reader maps an input stick
+# coordinate straight onto the index tensor's axes, so once the leading dims were fused into one
+# linear id the two no longer referred to the same element whenever any interior leading dim
+# differed between input and index - scatter then wrote the wrong source row and skipped a valid one,
+# silently. Legal input: scatter only requires index_shape[d] <= input_shape[d] for d != dim.
+# See issue #56876.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_shape, source_shape",
+    [
+        # dim == -1, so no transpose: the leading dims reach the kernel exactly as given.
+        ([2, 3, 4, 5, 6], -1, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),  # one interior leading dim differs
+        ([2, 3, 4, 5, 6], -1, [2, 2, 3, 5, 6], [2, 2, 3, 5, 6]),  # two interior leading dims differ
+        ([4, 5, 6, 7, 8], -1, [3, 2, 3, 7, 8], [3, 2, 3, 7, 8]),  # every leading dim differs
+        ([2, 3, 4, 5, 6], -1, [2, 2, 4, 5, 6], [3, 4, 5, 6, 7]),  # source larger than index
+        ([2, 3, 4, 5, 6, 7], -1, [2, 3, 2, 5, 6, 7], [2, 3, 2, 5, 6, 7]),  # rank 6
+        ([2, 3, 2, 3, 2, 3, 2, 3], -1, [2, 2, 2, 2, 2, 2, 2, 3], [2, 2, 2, 2, 2, 2, 2, 3]),  # rank 8
+        # dim != -1, so the op transposes dim to the last axis first - the mismatched leading dim
+        # ends up in a different position than it started in.
+        ([2, 3, 4, 5, 6], 2, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6], 0, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6], -2, [2, 2, 4, 5, 6], [2, 2, 4, 5, 6]),
+        # Interior leading dim of 1 on the index side: broadcast-looking but not broadcast.
+        ([2, 3, 4, 5, 6], -1, [2, 1, 4, 5, 6], [2, 1, 4, 5, 6]),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype, index_dtype, layout",
+    [
+        (ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
+        (ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
+        (ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE),
+    ],
+)
+def test_scatter_high_rank_unequal_leading_dims(
+    input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout, device
+):
+    torch.manual_seed(0)
+    torch_dtype = select_torch_dtype(input_dtype)
+    torch_index_dtype = select_torch_dtype(index_dtype)
+
+    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=input_dtype, layout=layout, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_shape, dtype=torch_index_dtype)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=index_dtype, layout=layout, device=device)
+
+    torch_src = torch.randn(source_shape, dtype=torch_dtype)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=input_dtype, layout=layout, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    if torch_dtype is torch.float32:
+        assert_allclose(torch_result_from_ttnn, torch_result, rtol=1e-3)
+    else:
+        assert_allclose(torch_result_from_ttnn, torch_result)
+
+
+# Same defect, exercised through the separate bfloat16 reduction program factory / reader kernel,
+# which carries its own copy of the coordinate walk. See issue #56876.
+@pytest.mark.parametrize(
+    "input_shape, dim, index_and_source_shape",
+    [
+        ([2, 3, 4, 5, 6], -1, [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6], 2, [2, 2, 4, 5, 6]),
+        ([2, 3, 4, 5, 6, 7], -1, [2, 3, 2, 5, 6, 7]),
+    ],
+)
+@pytest.mark.parametrize("reduction", ["add", "multiply"])
+def test_scatter_reduction_high_rank_unequal_leading_dims(input_shape, dim, index_and_source_shape, reduction, device):
+    torch.manual_seed(0)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_index = torch.randint(0, input_shape[dim], index_and_source_shape, dtype=torch.int64)
+    ttnn_index = ttnn.from_torch(torch_index, dtype=ttnn.int32, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_src = torch.randn(index_and_source_shape, dtype=torch.bfloat16)
+    ttnn_src = ttnn.from_torch(torch_src, dtype=ttnn.bfloat16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    torch_result = torch.scatter(torch_input, dim, index=torch_index, src=torch_src, reduce=reduction)
+    ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src, reduce=reduction)
+
+    torch_result_from_ttnn = ttnn.to_torch(ttnn_result)
+    assert torch_result_from_ttnn.shape == torch_result.shape
+    assert torch_result_from_ttnn.dtype == torch_result.dtype
+    assert_allclose(torch_result_from_ttnn, torch_result)
+
+
 @pytest.mark.parametrize(
     "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries",
     [
