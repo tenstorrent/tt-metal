@@ -39,7 +39,6 @@ class SD35JointAttention(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
-        quant_config=None,
     ):
         super().__init__()
 
@@ -56,20 +55,6 @@ class SD35JointAttention(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
-
-        self.quant_config = quant_config
-        # Quantized projections (to_qkv / add_qkv_proj) and the bf16-carved output projections
-        # (to_out / to_add_out) get their dtype/activation/compute-fidelity from the quant profile;
-        # a None profile leaves every kwarg dict empty => the unquantized bf16 model.
-        _mm_cc = quant_config.mm_compute_config(mesh_device.arch()) if quant_config is not None else None
-        _qkv_q = dict(quant_config.qkv_linear_kwargs()) if quant_config is not None else {}
-        _out_q = dict(quant_config.out_linear_kwargs()) if quant_config is not None else {}
-        if _mm_cc is not None:
-            _qkv_q["compute_kernel_config"] = _mm_cc
-            _out_q["compute_kernel_config"] = _mm_cc
-        self._sdpa_input_dtype = quant_config.sdpa_input_dtype if quant_config is not None else None
-        # Narrow the TP attention-output gathers to bf8 when activations are quantized (None => bf16).
-        self._ag_dtype = quant_config.activation_dtype if quant_config is not None else None
 
         self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
 
@@ -93,7 +78,6 @@ class SD35JointAttention(Module):
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            **_qkv_q,
         )
 
         # Implementing joint attention
@@ -103,7 +87,6 @@ class SD35JointAttention(Module):
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            **_qkv_q,
         )
 
         self.to_out = ColParallelLinear(
@@ -112,7 +95,6 @@ class SD35JointAttention(Module):
             bias=out_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            **_out_q,
         )
 
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -123,7 +105,6 @@ class SD35JointAttention(Module):
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                **_out_q,
             )
 
         self.norm_added_q = RMSNorm(**rms_kwargs)
@@ -212,25 +193,6 @@ class SD35JointAttention(Module):
                 weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
                 state["to_add_out.weight"] = weight.T
 
-    def _ag_tp(self, x):
-        """All-gather ``x`` on the TP feature axis (dim=3), narrowing to bf8 when activations are
-        quantized so the collective moves half the bytes. None ``_ag_dtype`` => original bf16 gather."""
-        axis = self.parallel_config.tensor_parallel.mesh_axis
-        if self._ag_dtype is not None:
-            x = ttnn.typecast(x, self._ag_dtype)
-        return ttnn.experimental.all_gather_async(
-            x,
-            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, 3, axis, dtype=self._ag_dtype or ttnn.bfloat16
-            ),
-            dim=3,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(axis),
-            num_links=self.ccl_manager.num_links,
-            topology=self.ccl_manager.topology,
-            cluster_axis=axis,
-            **self.ccl_manager.get_ag_hyperparams(x.shape),
-        )
-
     def forward(self, spatial_1BND, prompt_1BLD, N):
         """
         Inputs are replicated
@@ -253,16 +215,6 @@ class SD35JointAttention(Module):
         add_q_BHLE = self.norm_added_q(add_q_BHLE)
         add_k_BHLE = self.norm_added_k(add_k_BHLE)
 
-        # Narrow SDPA inputs to bf8 when activations are quantized: shrinks the ring KV all-gather
-        # payload and the attention feed. SDPA math stays HiFi2 (only the inputs narrow).
-        if self._sdpa_input_dtype is not None:
-            q_BHNE = ttnn.typecast(q_BHNE, self._sdpa_input_dtype)
-            k_BHNE = ttnn.typecast(k_BHNE, self._sdpa_input_dtype)
-            v_BHNE = ttnn.typecast(v_BHNE, self._sdpa_input_dtype)
-            add_q_BHLE = ttnn.typecast(add_q_BHLE, self._sdpa_input_dtype)
-            add_k_BHLE = ttnn.typecast(add_k_BHLE, self._sdpa_input_dtype)
-            add_v_BHLE = ttnn.typecast(add_v_BHLE, self._sdpa_input_dtype)
-
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_BHNE,
@@ -272,16 +224,10 @@ class SD35JointAttention(Module):
                 add_k_BHLE,
                 add_v_BHLE,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape,
-                    2,
-                    self.parallel_config.sequence_parallel.mesh_axis,
-                    dtype=self._sdpa_input_dtype or ttnn.bfloat16,
+                    k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape,
-                    2,
-                    self.parallel_config.sequence_parallel.mesh_axis,
-                    dtype=self._sdpa_input_dtype or ttnn.bfloat16,
+                    v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
                 ),
                 joint_strategy="rear",
                 logical_n=N,
@@ -315,7 +261,20 @@ class SD35JointAttention(Module):
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
         if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_1BND = self._ag_tp(spatial_1BND)
+            spatial_1BND = ttnn.experimental.all_gather_async(
+                spatial_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
+            )
 
         spatial_1BND = self.to_out(spatial_1BND)
 
@@ -324,7 +283,20 @@ class SD35JointAttention(Module):
             prompt_1BLD = ttnn.transformer.concatenate_heads(prompt_BHLE)
             prompt_1BLD = ttnn.unsqueeze(prompt_1BLD, 0)
             if self.parallel_config.tensor_parallel.factor > 1:
-                prompt_1BLD = self._ag_tp(prompt_1BLD)
+                prompt_1BLD = ttnn.experimental.all_gather_async(
+                    prompt_1BLD,
+                    persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                        prompt_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                    ),
+                    dim=3,
+                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                        self.parallel_config.tensor_parallel.mesh_axis
+                    ),
+                    num_links=self.ccl_manager.num_links,
+                    topology=self.ccl_manager.topology,
+                    cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                    **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
+                )
             prompt_1BLD = self.to_add_out(prompt_1BLD)
             prompt_out = prompt_1BLD
 

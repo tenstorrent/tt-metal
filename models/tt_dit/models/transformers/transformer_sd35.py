@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 import torch
 from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
-from loguru import logger
 
 import ttnn
 
@@ -19,11 +18,9 @@ from ...layers.linear import ColParallelLinear, Linear, prepare_chunked_linear_o
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, LayerNorm
 from ...utils import cache
-from ...utils.matmul import register_matmul_configs
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
 from .attention_sd35 import SD35JointAttention
-from .sd35_quant_config import SD35QuantProfile
 
 if TYPE_CHECKING:
     from ...parallel.config import DiTParallelConfig
@@ -43,7 +40,6 @@ class SD35TransformerBlock(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
-        quant_config=None,
     ):
         super().__init__()
 
@@ -57,16 +53,6 @@ class SD35TransformerBlock(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
-        self.quant_config = quant_config
-        # LoFi (or profile) matmul compute config, forwarded to the FFN matmuls (the attention linears
-        # take theirs at construction). None => the FFN keeps its per-dtype default compute config.
-        self._ff_compute_config = (
-            quant_config.mm_compute_config(mesh_device.arch()) if quant_config is not None else None
-        )
-        _ffn_q = quant_config.ffn_kwargs() if quant_config is not None else {}
-        # When activations are quantized, narrow the TP activation gathers to bf8 so the collective
-        # moves half the bytes (bf8 tiles are 1088 B vs bf16's 2048 B). None => gather stays bf16.
-        self._ag_dtype = quant_config.activation_dtype if quant_config is not None else None
 
         # TODO: Shuffle norm linear weights to match tensor parallelism
         self.norm1_linear = ColParallelLinear(
@@ -117,7 +103,6 @@ class SD35TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
-            quant_config=quant_config,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -137,7 +122,6 @@ class SD35TransformerBlock(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            **_ffn_q,
         )
 
         self.norm2_context = None
@@ -160,7 +144,6 @@ class SD35TransformerBlock(Module):
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                **_ffn_q,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -185,29 +168,6 @@ class SD35TransformerBlock(Module):
             prefix="norm1_context_linear",
             device_count=self.parallel_config.tensor_parallel.factor,
             chunks=2 if self.context_pre_only else 6,
-        )
-
-    def _ag_tp(self, x):
-        """All-gather ``x`` on the TP feature axis (dim=3).
-
-        If activations are quantized (``self._ag_dtype`` set), narrow ``x`` to bf8 first so the
-        collective moves half the bytes; the ping-pong buffer is allocated at the same dtype. A None
-        ``_ag_dtype`` reproduces the original bf16 gather exactly.
-        """
-        axis = self.parallel_config.tensor_parallel.mesh_axis
-        if self._ag_dtype is not None:
-            x = ttnn.typecast(x, self._ag_dtype)
-        return ttnn.experimental.all_gather_async(
-            x,
-            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, 3, axis, dtype=self._ag_dtype or ttnn.bfloat16
-            ),
-            dim=3,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(axis),
-            num_links=self.ccl_manager.num_links,
-            topology=self.ccl_manager.topology,
-            cluster_axis=axis,
-            **self.ccl_manager.get_ag_hyperparams(x.shape),
         )
 
     def forward(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N):
@@ -256,8 +216,34 @@ class SD35TransformerBlock(Module):
 
         if self.parallel_config.tensor_parallel.factor > 1:
             # Gather spatial, prompt before attention
-            spatial_normed_1BND = self._ag_tp(spatial_normed_1BND)
-            prompt_normed_1BLD = self._ag_tp(prompt_normed_1BLD)
+            spatial_normed_1BND = ttnn.experimental.all_gather_async(
+                spatial_normed_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
+            )
+            prompt_normed_1BLD = ttnn.experimental.all_gather_async(
+                prompt_normed_1BLD,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    prompt_normed_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
+            )
 
         spatial_attn_1BLD, prompt_attn_1BLD = self.attn(spatial_normed_1BND, prompt_normed_1BLD, N)
         spatial_attn_1BLD = spatial_attn_1BLD * spatial_gate_attn
@@ -271,9 +257,22 @@ class SD35TransformerBlock(Module):
         )
 
         if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_normed_1BND = self._ag_tp(spatial_normed_1BND)
+            spatial_normed_1BND = ttnn.experimental.all_gather_async(
+                spatial_normed_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_normed_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
+            )
 
-        spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self._ff_compute_config)
+        spatial_ff_1BND = self.ff(spatial_normed_1BND)
         spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
 
         spatial_1BND += spatial_ff_1BND
@@ -288,9 +287,22 @@ class SD35TransformerBlock(Module):
         )
 
         if self.parallel_config.tensor_parallel.factor > 1:
-            prompt_normed_1BLD = self._ag_tp(prompt_normed_1BLD)
+            prompt_normed_1BLD = ttnn.experimental.all_gather_async(
+                prompt_normed_1BLD,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    prompt_normed_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
+            )
 
-        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD, compute_kernel_config=self._ff_compute_config)
+        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD)
         prompt_ff_1BLD = prompt_ff_1BLD * prompt_gate_ff
 
         prompt_1BLD += prompt_ff_1BLD
@@ -322,11 +334,9 @@ class SD35Transformer2DModel(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
-        quant_config=None,
     ):
         super().__init__()
 
-        self.quant_config = quant_config
         self.sample_size = sample_size
         self.patch_size = patch_size
         self.in_channels = in_channels
@@ -386,7 +396,6 @@ class SD35Transformer2DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
-                quant_config=quant_config,
             )
             self.transformer_blocks.append(block)
 
@@ -537,25 +546,6 @@ class SD35Checkpoint:
         else:
             padding_config = None
 
-        quant_config = SD35QuantProfile.from_env()
-        if quant_config is not None:
-            logger.info(f"SD3.5 DiT quantization enabled: {quant_config}")
-            # Device-swept block sizes for the dominant per-device spatial DiT matmuls on the 4-chip
-            # 2x2 (11x10 grid) config. These have no swept entry and otherwise fall to the generic
-            # 8x8x8 fallback; the swept blockings are ~1.4-1.6x faster in isolation. The 8-tile
-            # subblocks require bf16 dest (fp32_dest_acc=False), which every quant profile uses, so
-            # they are only registered on a quantized run (the bf16/HiFi path keeps its 4-tile dest).
-            register_matmul_configs(
-                {
-                    "11x10": {
-                        (2048, 2432, 3648): (4, 4, 12, (2, 4)),  # to_qkv spatial — 1.64x
-                        (2048, 2432, 4864): (4, 8, 16, (1, 8)),  # ff1 spatial    — 1.41x
-                        (2048, 4864, 2432): (4, 8, 8, (1, 8)),  # ff2 spatial    — 1.56x
-                        (2048, 2432, 1216): (6, 4, 8, (1, 8)),  # to_out spatial — 1.16x
-                    },
-                }
-            )
-
         model = SD35Transformer2DModel(
             sample_size=c.sample_size,
             patch_size=c.patch_size,
@@ -573,7 +563,6 @@ class SD35Checkpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
-            quant_config=quant_config,
         )
         cache.load_model(
             tt_model=model,
