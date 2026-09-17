@@ -1352,3 +1352,63 @@ def test_the_sweep_metric_matches_local_step_at_the_top_of_the_range(dtype):
     swept = float(local_ulp(np.array([largest]), fmt)[0])
     assert math.isfinite(swept)
     assert swept == pytest.approx(local_step(largest, dtype))
+
+
+def test_the_near_zero_band_is_scoped_to_the_lanes_under_judgement():
+    """``dynamic_range`` is the only verdict input that is not elementwise, so an unscoped
+    max let a large golden in a lane the caller masked *out* widen the band applied to the
+    lanes it masked *in* -- the first place an excluded lane could change a judged lane's
+    verdict.
+
+    The measured case: the excluded lane's ``1e6`` puts the relative cut at ``1e4``, so a
+    judged lane at ``1.0`` that is 167772 steps over budget gets rescued by the floor.
+    Scoped to the judged lane the cut is ``0.01`` and it fails, which is the right answer.
+    ``mask`` plus ``near_zero_atol`` is what the budget registry wants, and nothing
+    combined the two before."""
+    golden = torch.tensor([1e6, 1.0], dtype=torch.float32)
+    result = torch.tensor([1e6, 1.02], dtype=torch.float32)
+    mask = torch.tensor([False, True])
+
+    assert int(ulp_distance(golden, result)[1]) > 100000
+    ok, _ = within_ulp(golden, result, 0, near_zero_atol=0.05, mask=mask)
+    assert not ok, "the excluded lane must not widen the band for the judged one"
+
+    # Unmasked, the same tensors legitimately reach the wide band -- so the fix is the
+    # scoping, not a change to the rule.
+    is_valid, _, rescued = ulp_elementwise_valid(golden, result, 0, near_zero_atol=0.05)
+    assert bool(is_valid.all()) and bool(rescued[1])
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16], ids=str)
+def test_the_near_zero_cuts_are_compared_in_float32_not_the_tensor_dtype(dtype):
+    """Both cuts are Python floats, so a 16-bit ``golden.abs()`` promoted them onto the
+    tensor's own lattice and rounded each edge to a representable value -- narrowing the
+    relative ``<`` edge and widening the absolute ``<=`` one. A lane sitting exactly on a
+    rounded edge then got a different verdict than the unrounded cut, and than the
+    identical call on fp32.
+
+    Probing at plus or minus 10% of the cut cannot see this; the lane has to sit on the
+    edge. So this picks a dynamic range whose 1% cut is *not* representable in *dtype*,
+    puts a lane at the value that rounding would move across it, and requires the verdict
+    to match fp32's."""
+    # 1% of this is 0.13, which is not a bf16/fp16 value; the neighbours straddle it.
+    dynamic_range = 13.0
+    cut = NEAR_ZERO_FRACTION * dynamic_range
+    rounded = float(torch.tensor(cut, dtype=dtype))
+    assert rounded != cut, "pick a cut that the dtype cannot represent"
+
+    # A lane between the true cut and the rounded one: judged differently iff the compare
+    # happens in the narrow dtype.
+    edge = (cut + rounded) / 2.0
+    golden = torch.tensor([dynamic_range, edge], dtype=dtype)
+    result = golden.clone()
+    result[1] = float(_step_up(float(golden[1]), dtype, 4)[0])
+
+    narrow = within_ulp(golden, result, 0, near_zero_atol=1.0)[0]
+    wide = within_ulp(
+        golden.to(torch.float32), result.to(torch.float32), 0, near_zero_atol=1.0
+    )[0]
+    assert narrow == wide, (
+        f"{dtype} disagreed with float32 for a lane on the rounded band edge "
+        f"(cut {cut!r}, rounded {rounded!r}, lane {edge!r})"
+    )

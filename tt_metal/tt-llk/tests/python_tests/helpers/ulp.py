@@ -4,10 +4,10 @@
 """Integer ULP distance: the metric an SFPU accuracy assertion can be written against.
 
 Host-only — no device, no kernel, no ``ttnn``. ``passed_test(max_ulp=...)`` is the gate
-built on it (``utils.py`` imports :func:`ulp_elementwise_valid`, :func:`ulp_dtype`,
-:func:`has_ulp_gate`, :func:`ulp_verdict_message` and
-:func:`warn_if_threshold_unmeaningful` from here), and the per-op budget registry sits on
-top of that. The metric stays separable from the verdict so each layer is pinned by its
+built on it (``utils.py`` imports :data:`MANTISSA_BITS_FOR_ULP`, :func:`ulp_dtype`,
+:func:`ulp_elementwise_valid`, :func:`ulp_verdict_message` and
+:func:`warn_if_threshold_unmeaningful` from here; :func:`has_ulp_gate` is
+``accuracy_metrics``'s), and the per-op budget registry sits on top of that. The metric stays separable from the verdict so each layer is pinned by its
 own host tests.
 
 Why an *integer* distance and not the fractional ``|err| / ulp(golden)`` that
@@ -119,6 +119,20 @@ ULP_FORMATS: Tuple[DataFormat, ...] = (
 # op belongs on the tolerance arm's lattice compare. Charging for it is the deliberate
 # choice: the alternative, ORing the lattice verdict in, would mean ``max_ulp`` was not
 # the enforced maximum for this format.
+#
+# **One open caveat, latent until an op carries a Bfp8_b budget.** The gate's flush model
+# and the golden's do not agree for this format. bf16 proxy space collapses only the bf16
+# subnormal band, below 2**-126 (1.18e-38), while a Bfp8_b golden is flushed at
+# ``golden_generators._FTZ_THRESHOLD``'s ``1e-37`` default -- there is no Bfp8_b row --
+# and ``unpack._bfp_to_float_block`` does not flush the read-back at all. Measured: a
+# Bfp8_b pack/unpack round trip of ``2**-124``, and of ``2**-126`` itself, comes back
+# non-zero. So a lane in ``[1.18e-38, 1e-37)`` would have a golden of exactly 0 against a
+# normal bf16 result and be charged steps for a value the harness's own FTZ model calls
+# zero. Whether *silicon* zeroes that window is a separate question this round trip cannot
+# settle, since the unpack is a model; no current stimulus domain reaches it, and every
+# Bfp8_b budget in the registry is on an integer-valued domain far above it. Float32 and
+# Float16_b flush at ``finfo.tiny``, matching the clamp, and Float16 keeps subnormals on
+# both sides, so Bfp8_b is the only gateable format where the two disagree.
 #
 # Bfp4_b (3 magnitude bits, so 2 fractional) and Bfp2_b (1, so 0) are deliberately absent:
 # their lattices are so much coarser than bf16's that a bf16 step count would read every
@@ -394,6 +408,7 @@ def ulp_elementwise_valid(
     near_zero_atol: Optional[float] = None,
     near_zero_fraction: float = NEAR_ZERO_FRACTION,
     flush_subnormals: Optional[bool] = None,
+    selected: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Per-element ULP verdict, shaped like the mask ``passed_test`` already prints.
 
@@ -448,17 +463,33 @@ def ulp_elementwise_valid(
         # near_zero_fraction of the reference. Above it the forgiven error is under 1% of
         # the golden, so the reference has not collapsed and the step budget owns the lane.
         absolute_cut = near_zero_atol / near_zero_fraction
-        finite_golden = golden[torch.isfinite(golden)]
+        # In float32, like the error compare below. Both cuts are Python floats, so a
+        # bf16/fp16 `golden.abs()` would promote them onto the tensor's own lattice and
+        # round each edge to a representable value -- narrowing the relative `<` edge and
+        # widening the absolute `<=` one, so a lane sitting exactly on a rounded edge got
+        # a different verdict than the unrounded cut, and than the identical call on fp32.
+        magnitude = golden.abs().to(torch.float32)
+        # Scoped to the lanes under judgement. `dynamic_range` is the only verdict input
+        # that is not elementwise, so an unscoped max let a large golden in a lane the
+        # caller masked *out* widen the band applied to the lanes it masked *in* --
+        # measured: golden [1e6, 1.0], result [1e6, 1.02], mask [False, True], max_ulp=0,
+        # near_zero_atol=0.05 rescued a lane 167772 steps over budget, because the cut
+        # became 0.01 * 1e6 rather than 0.01 * 1.0. The band describes the stimulus under
+        # judgement, not the buffer it arrived in.
+        in_scope = torch.isfinite(golden)
+        if selected is not None:
+            in_scope = in_scope & selected
+        finite_golden = magnitude[in_scope]
         if finite_golden.numel() == 0:
             near_zero = torch.zeros_like(valid)
         else:
-            dynamic_range = float(finite_golden.abs().max())
+            dynamic_range = float(finite_golden.max())
             near_zero = (
                 torch.ones_like(valid)
                 if dynamic_range == 0.0
-                else golden.abs() < near_zero_fraction * dynamic_range
+                else magnitude < near_zero_fraction * dynamic_range
             )
-            near_zero = near_zero & (golden.abs() <= absolute_cut)
+            near_zero = near_zero & (magnitude <= absolute_cut)
         # In float32 so a bf16 comparison does not round the error into or out of budget.
         absolute_error = (result.to(torch.float32) - golden.to(torch.float32)).abs()
         rescued = near_zero & (absolute_error <= near_zero_atol) & ~in_budget
@@ -789,11 +820,12 @@ def within_ulp(
             f"{tuple(result.shape)}"
         )
     if fmt is not None:
-        # Not just a display label. format_dict collapses Bfp8_b/Bfp4_b/Bfp2_b, every Mx*
-        # and Fp8_e4m3 onto torch.bfloat16 and Tf32 onto torch.float32, so the dtype check
-        # in ulp_distance cannot tell them apart: without this, a verdict labelled
-        # "Bfp8_b" would come back measured in bfloat16 steps, which is exactly the
-        # measurement ulp_dtype exists to refuse.
+        # Not just a display label. format_dict collapses Bfp4_b/Bfp2_b, every Mx* and
+        # Fp8_e4m3 onto torch.bfloat16 and Tf32 onto torch.float32, so the dtype check in
+        # ulp_distance cannot tell them apart: without this, a verdict labelled "Bfp2_b"
+        # would come back measured in bfloat16 steps, which is exactly the measurement
+        # ulp_dtype exists to refuse. Bfp8_b is the one block float ulp_dtype now accepts,
+        # in bfloat16 proxy space on purpose -- see _ULP_PROXY_DTYPES.
         expected = ulp_dtype(fmt)
         if golden.dtype != expected:
             # Allowlisting the format is not enough on its own: two float32 tensors
@@ -822,6 +854,7 @@ def within_ulp(
         near_zero_atol=near_zero_atol,
         near_zero_fraction=near_zero_fraction,
         flush_subnormals=flush_subnormals,
+        selected=selected,
     )
     # Rank only the lanes actually under judgement, excluding any the near-zero floor
     # accepted -- those hold the biggest step counts by construction.

@@ -570,3 +570,96 @@ def test_a_tight_budget_does_not_warn_about_the_tolerance_it_replaces(captured_l
     golden = _tile(1.0, fmt)
     assert passed_test(golden, _step(golden, 3), fmt, max_ulp=4)
     assert "looser than the rtol" not in "\n".join(captured_logs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bounds on the arguments, not just on the result
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("budget", [-1, -128], ids=str)
+def test_a_negative_budget_is_refused_rather_than_failing_every_lane(budget):
+    """``distance <= max_ulp`` is false on every lane for a negative budget, so a
+    bit-identical pair failed with ``max 0 ULP @ [0] (budget -1)`` -- which reads as a
+    harness bug rather than a bad argument, and ``-1`` is exactly ``UNMEASURABLE``.
+    ``max_ulp=0`` stays legal: that is the bit-exact gate."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="must not be negative"
+    ):
+        passed_test(golden, golden.clone(), fmt, max_ulp=budget)
+    assert passed_test(golden, golden.clone(), fmt, max_ulp=0)
+
+
+def test_a_floor_looser_than_the_atol_it_replaces_warns(captured_logs):
+    """``near_zero_atol`` *is* the atol half of the ``isclose`` this arm replaces,
+    reintroduced inside the band -- so a floor above it makes the gate strictly looser
+    than what it displaced for every lane in the band, with PCC no longer behind it and
+    the lane kept out of the log by ``ranked = ~ulp_rescued``.
+
+    The measured case: bf16, ``max_ulp=1``, ``near_zero_atol=0.2``, tile max 100.0, one
+    lane ``golden=0.5`` against ``result=0.7``. That is 51 steps, well over budget, but
+    the lane is inside the band and its error is inside the floor, so it is rescued --
+    where the tolerance it replaced would have rejected it at
+    ``0.05 + 0.05 * 0.6992 = 0.085``. A silent 40%-relative-error pass, and neither
+    existing warning fires. The absolute cut cannot close it: that cut scales with
+    ``near_zero_atol``, so both intervals are anchored at zero and always overlap.
+    """
+    fmt = DataFormat.Float16_b
+    golden = _tile(100.0, fmt)
+    result = golden.clone()
+    golden[-1], result[-1] = 0.5, 0.7
+
+    assert int(ulp_distance(golden, result).max()) > 1
+    assert passed_test(golden, result, fmt, max_ulp=1, near_zero_atol=0.2)
+    logged = "\n".join(captured_logs)
+    assert "near_zero_atol=0.2 is looser than the atol=0.05" in logged, logged[:400]
+
+    # A floor at or under the atol it replaces is the intended use and stays quiet.
+    assert "is looser than the atol" not in "\n".join(
+        _logs_for(
+            lambda: passed_test(golden, result, fmt, max_ulp=1, near_zero_atol=0.05)
+        )
+    )
+
+
+def _logs_for(call):
+    """Every loguru record emitted by *call*, for a test that needs two verdicts."""
+    from loguru import logger as loguru_logger
+
+    records = []
+    sink = loguru_logger.add(records.append, level="TRACE", format="{message}")
+    try:
+        call()
+    finally:
+        loguru_logger.remove(sink)
+    return records
+
+
+def test_an_empty_tensor_is_refused_before_any_verdict_is_logged(captured_logs):
+    """The refusal used to sit after the verdict and the reporting block, so a DEBUG run
+    emitted "ULP within budget — no measurable lane" and only then raised -- recording a
+    passing accuracy datapoint for an input that compared nothing."""
+    empty = torch.zeros(0, dtype=torch.bfloat16)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="nothing to compare"
+    ):
+        passed_test(empty, empty.clone(), DataFormat.Float16_b, max_ulp=0)
+    logged = "\n".join(captured_logs)
+    assert "ULP within budget" not in logged, logged[:300]
+    assert "no measurable lane" not in logged, logged[:300]
+
+
+def test_the_displaced_figure_is_floored_so_it_cannot_read_as_equal(captured_logs):
+    """Bfp8_b's ``displaced`` is 25.6, and ``{:.0f}`` printed the minimal triggering
+    budget of 26 as looser than "~26 steps" -- a budget called looser than a figure it is
+    shown equal to. It is the only gateable format whose displaced rounds up, and the one
+    this arm newly enrols."""
+    fmt = DataFormat.Bfp8_b
+    golden = _tile(1.0, fmt)
+    passed_test(golden, golden.clone(), fmt, max_ulp=26)
+    logged = "\n".join(captured_logs)
+    assert "max_ulp=26 is looser" in logged, logged[:300]
+    assert "~25.6 steps" in logged, logged[:300]
+    assert "~26 steps" not in logged

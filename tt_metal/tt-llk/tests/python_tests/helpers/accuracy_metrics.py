@@ -16,6 +16,14 @@ def local_ulp(golden: np.ndarray, out_fmt: DataFormat) -> np.ndarray:
     # it gates (Bfp8_b in bfloat16 space) are measured here too. Probing a private copy
     # of the native set left the sweep writing NaN for exactly the format the gate can
     # judge.
+    #
+    # For Bfp8_b the value returned is a *bfloat16* step, not a Bfp8_b one, so the
+    # docstring's "gap to the next representable number in out_fmt" is the proxy's gap
+    # rather than the format's: at least 2x the Bfp8_b step (its 7 magnitude bits include
+    # an explicit leading 1, leaving 6 fractional against bfloat16's 7) and far more where
+    # the shared block exponent coarsens a small element. So the signed_ulp_error column
+    # for Bfp8_b reads in bf16 steps -- worth knowing, since the CSV is where someone
+    # picks a budget. See _ULP_PROXY_DTYPES in helpers.ulp.
     if not has_ulp_gate(out_fmt):
         return np.full(golden.shape, np.nan, dtype=np.float64)
 
