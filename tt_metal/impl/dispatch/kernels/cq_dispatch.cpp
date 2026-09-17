@@ -197,7 +197,7 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(sem_id).up(pages);
+        fd_semaphore<sem_id, fd_upstream_sem_scope>().up(pages);
 #else
         uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
@@ -431,6 +431,7 @@ void process_exec_buf_end_h() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+// Default mechanism rather than fd_upstream_sem_scope: dispatch_h's upstream stage is on another core.
 CBWriter<my_downstream_cb_sem_id, 0, 0, 0> dispatch_h_cb_writer{};
 
 // Relay, potentially through the mux/dmux/tunneller path
@@ -1119,6 +1120,7 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
+        // Worker completion counter, incremented by workers with a NoC atomic.
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr));
         // DPRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
@@ -1153,11 +1155,12 @@ static void process_wait() {
     }
     if (clear_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
+        // Same counter as above; a cached store here would race the workers' atomics.
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr)) = 0;
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
+        fd_semaphore<upstream_sync_sem, fd_upstream_sem_scope>().up(1);
 #else
         noc_semaphore_inc(
             get_noc_addr_helper(upstream_noc_xy, get_semaphore<programmable_core_type>(upstream_sync_sem)),

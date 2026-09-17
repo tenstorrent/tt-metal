@@ -126,7 +126,8 @@ FORCE_INLINE void fd_seed_upstream_sem() {
 // Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
 // into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
 // selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
-// is the index of the first stream used by this CQ.
+// is the index of the first stream used by this CQ. Workers increment it with a NoC atomic, so every
+// access to it uses the uncached view.
 FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
     uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
     return uncached_l1_ptr<uint32_t>(
@@ -371,6 +372,8 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
+// my_sem_scope applies only to my_sem_id, the credits a consumer returns here; downstream_sem_id is
+// always reached over the NoC.
 template <
     uint32_t my_sem_id,
     uint8_t noc_idx,
@@ -378,39 +381,20 @@ template <
     uint32_t downstream_sem_id,
     uint32_t buffer_base = 0,
     uint32_t buffer_end = 0,
-    uint32_t buffer_page_size = 0>
+    uint32_t buffer_page_size = 0,
+    SemScope my_sem_scope = SemScope::LOCAL_NONATOMIC>
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
         auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
-=======
-<<<<<<< HEAD
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
-=======
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
->>>>>>> 0219f39d96e (optimizations)
->>>>>>> ab390d534a8 (optimizations)
-=======
-        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
->>>>>>> fde858c1e44 (semaphore cache opt)
-=======
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
->>>>>>> b9e3116ea0c (semaphore optimization removed)
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
         do {
-            invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        } while (wrap_gt(n, additional_count + *sem_addr));
+        } while (wrap_gt(n, additional_count + my_sem.value()));
         WAYPOINT("DAPD");
         additional_count -= n;
     }
@@ -418,30 +402,15 @@ public:
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
         auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
-=======
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
->>>>>>> ab390d534a8 (optimizations)
-=======
-        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
->>>>>>> fde858c1e44 (semaphore cache opt)
-=======
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
->>>>>>> b9e3116ea0c (semaphore optimization removed)
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
         n &= 0x7fffffff;
 
         WAYPOINT("TAPW");
-        do {
-            invalidate_l1_cache();
-        } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
+        while (((additional_count + my_sem.value()) & 0x7fffffff) != n) {  // mask off terminate bit
+        }
         WAYPOINT("TAPD");
     }
 

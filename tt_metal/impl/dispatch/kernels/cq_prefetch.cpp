@@ -287,7 +287,8 @@ struct DispatchRelayInlineState {
         downstream_cb_sem,
         downstream_cb_base,
         downstream_cb_end,
-        downstream_cb_page_size>
+        downstream_cb_page_size,
+        fd_upstream_sem_scope>
         cb_writer{};
 };
 
@@ -313,7 +314,8 @@ struct DispatchSRelayInlineState {
         downstream_dispatch_s_cb_sem_id,
         dispatch_s_buffer_base,
         dispatch_s_buffer_end,
-        dispatch_s_cb_page_size>
+        dispatch_s_cb_page_size,
+        fd_upstream_sem_scope>
         cb_writer{};
 };
 
@@ -662,7 +664,6 @@ FORCE_INLINE uint32_t read_from_pcie(
     // so the value lands in L1 SRAM directly (otherwise it sits in DM0's L1 D$ and the host's
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
     *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
-    *uncached_l1_ptr<uint32_t>(prefetch_q_pcie_rd_ptr_addr) = pcie_read_ptr;
 
     ++prefetch_q_rd_ptr;
 
@@ -1030,7 +1031,6 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 // NOTE: this routine assumes we're sending a command header and that is LESS THAN A PAGE
 template <bool cmddat_wrap_enable>
 static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& dispatch_data_ptr) {
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
 #if FD_BENCH_PF_TIMELINE
     fd_copy_bench::pf_mark(fd_copy_bench::kPfHeaderEnter, fd_copy_bench::bench_cycle());
 #endif
@@ -2089,13 +2089,12 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
     count++;
 
     WAYPOINT("PSW");
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(my_downstream_sync_sem_id));
+    // Not Semaphore::wait(): the target is a local running total, and the heartbeat must run in the spin.
+    auto sync_sem = fd_semaphore<my_downstream_sync_sem_id, fd_upstream_sem_scope>();
     uint32_t heartbeat = 0;
     do {
-        invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
-    } while (*sem_addr != count);
+    } while (sync_sem.value() != count);
     WAYPOINT("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -3525,6 +3524,13 @@ void kernel_main_hd() {
     uint32_t heartbeat = 0;
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
+
+    // Must precede any downstream traffic. Only these three qualify for the cached pool: every writer is
+    // a co-resident DM using a local AMO. The downstream_* credits publish payload, so they must ride the
+    // NoC with it; my_upstream_cb_sem_id is host-written. A NoC write must never target the pool.
+    fd_seed_upstream_sem<my_downstream_cb_sem_id>();
+    fd_seed_upstream_sem<my_downstream_sync_sem_id>();
+    fd_seed_upstream_sem<my_dispatch_s_cb_sem_id>();
 
     asm volatile("csrw 0x323, %0" ::"r"(STALL_DCACHE));
     asm volatile("csrw 0x324, %0" ::"r"(STALL_ICACHE));
