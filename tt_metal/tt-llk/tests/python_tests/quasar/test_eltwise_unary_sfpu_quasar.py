@@ -657,6 +657,14 @@ TYPECAST_CASES = tuple(
 
 _RANGE_SAFETY_FACTOR = 0.9
 
+# Integers around the bf16 ulp=2 boundary (256). 255/256/258 are exact; 257 and 259
+# are halfway cases that round-nearest-even must resolve (257→256, 259→260).
+_INT32_TO_FP16B_RNE_BOUNDARIES = (255, 256, 257, 258, 259)
+
+
+def _is_int32_to_fp16b(src_format: DataFormat, dst_format: DataFormat) -> bool:
+    return src_format == DataFormat.Int32 and dst_format == DataFormat.Float16_b
+
 
 def _prepare_typecast_input(
     src_A: torch.Tensor,
@@ -689,7 +697,22 @@ def _prepare_typecast_input(
         span = af.max() - af.min()
         norm = (af - af.min()) / span if span > 0 else torch.zeros_like(af)
         vals = lo + norm * (cap - lo)
-        return vals.round().to(format_dict[src_format])
+        result = vals.round().to(format_dict[src_format])
+
+        # Int32 → Float16_b: plant bf16 spacing-boundary integers (and their negatives)
+        # so FP32_TO_FP16B nearest-even is actually exercised. The random band above
+        # stays in [-200, 200], which is integer-exact in bf16 and would not catch a
+        # missing or wrong rounding step.
+        if _is_int32_to_fp16b(src_format, dst_format):
+            flat = result.flatten()
+            seeds = list(_INT32_TO_FP16B_RNE_BOUNDARIES) + [
+                -v for v in _INT32_TO_FP16B_RNE_BOUNDARIES
+            ]
+            for i, seed in enumerate(seeds):
+                if i < flat.numel():
+                    flat[i] = seed
+            result = flat.reshape(result.shape)
+        return result
 
     # Float endpoints: log-uniform magnitudes inside both formats' representable ranges,
     # so values stay accurate through the narrowing cast.
@@ -916,11 +939,16 @@ def test_eltwise_unary_sfpu_quasar(
             # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
             # the op per element keeps integers intact, and for an element-wise op row-major order
             # already matches the packed result. A non-element-wise integer op would need its own path.
-            ops = UnarySFPUGolden().ops
-            op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
-            golden_tensor = torch.tensor(
-                op_res, dtype=format_dict[formats.output_format]
-            )
+            if _is_int32_to_fp16b(formats.input_format, formats.output_format):
+                # Explicit fp32 → bf16 RNE so planted 257/259 (and negatives) check the
+                # kernel's FP32_TO_FP16B nearest-even step, not an identity bit copy.
+                golden_tensor = src_A.to(torch.float32).to(torch.bfloat16)
+            else:
+                ops = UnarySFPUGolden().ops
+                op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
+                golden_tensor = torch.tensor(
+                    op_res, dtype=format_dict[formats.output_format]
+                )
 
     # A layout-sensitive op reads the tile's face structure, so it gets the tilized buffer tt-metal
     # would feed it, and its result is read back through the matching untilize. UnarySFPUGolden
@@ -981,6 +1009,11 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            # Unpack-to-Dest copies Int32 L1 as two's-complement. Only Int32 → Float16_b
+            # converts 2SC → SM in the kernel; other integer typecasts still pack SM.
+            twos_complement=_is_int32_to_fp16b(
+                formats.input_format, formats.output_format
+            ),
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
