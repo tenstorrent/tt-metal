@@ -1080,7 +1080,10 @@ class LTXPipeline:
         with Watchdog("gemma text-encode"):
             results = self.gemma_encoder_pair.encode(prompts)
 
-        if use_cache:
+        # A kernel-prewarm capture pass runs the encoder with dispatch off, so these embeddings are
+        # garbage; writing them would poison every later gen of this prompt (a served box rendered an
+        # unrelated subject twice from one such entry). The capture pass records recipes, nothing else.
+        if use_cache and not cache_module._kernel_capture_only():
             torch.save(results, cache_path)
             logger.info(f"Cached device embeddings to {cache_path}")
         return results
