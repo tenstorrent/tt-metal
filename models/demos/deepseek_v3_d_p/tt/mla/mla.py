@@ -770,7 +770,7 @@ class ttMLA:
     def _select_cfg(self, entry, weight_name: str | None = None) -> dict | None:
         """Pick the first tuned config whose tags match, from a single dict or a list of candidates.
 
-        A slot holds several candidates when variants share a seq_len (Kimi-K2.6 at 64 heads and K3 at
+        A slot holds several candidates when variants share a seq_len (Kimi-K2.7 at 64 heads and K3 at
         96 both want ``640``), because the tags only reject -- they cannot choose. List order is
         priority order; most specific first.
         """
