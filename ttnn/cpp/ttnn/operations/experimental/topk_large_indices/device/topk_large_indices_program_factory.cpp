@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_large_indices_program_factory.hpp"
+#include "kernels/topk_large_indices_runtime_args.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -75,54 +76,38 @@ uint32_t rows_for_core(
 
 void set_runtime_args(
     tt::tt_metal::Program& program,
-    const TopkLargeIndicesSharedVariables& shared,
+    TopkLargeIndicesSharedVariables& shared,
     const Tensor& input,
-    const Tensor& indices,
-    std::optional<uint32_t> valid_length,
-    // 0 when the scalar path is in use. Re-applied on every dispatch (including cache hits), which is what
-    // keeps a moved metadata buffer addressable.
-    uint32_t meta_addr) {
+    std::optional<uint32_t> valid_length) {
     const auto runtime_args = get_runtime_shape_args(input, valid_length);
-    const auto work_split = tt::tt_metal::split_work_to_cores(
-        input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
-    const auto num_active_cores = std::get<0>(work_split);
-    const auto& core_group_1 = std::get<2>(work_split);
-    const auto& core_group_2 = std::get<3>(work_split);
-    const auto num_rows_per_core_group_1 = std::get<4>(work_split);
-    const auto num_rows_per_core_group_2 = std::get<5>(work_split);
-    TT_FATAL(num_active_cores > 0, "topk_large_indices requires at least one row of work");
-
-    uint32_t start_row = 0;
-    for (const auto& core : shared.cores) {
-        const uint32_t rows =
-            rows_for_core(core, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
-        TT_FATAL(
-            rows <= num_rows_per_core_group_1,
-            "topk_large_indices assigned {} rows to a core, expected at most {}",
-            rows,
-            num_rows_per_core_group_1);
-
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            shared.reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             start_row,
-             rows,
-             runtime_args.search_len,
-             runtime_args.input_row_bytes,
-             meta_addr});
-        tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, core, {rows, runtime_args.search_len});
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
-
-        start_row += rows;
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
+    reader_args[topk_common_args::search_length] = runtime_args.search_len;
+    reader_args[topk_common_args::input_row_bytes] = runtime_args.input_row_bytes;
+    tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id)[topk_common_args::compute_search_length] =
+        runtime_args.search_len;
+    // Width and prefix changes do not change the row assignment.
+    if (shared.num_rows == runtime_args.num_rows) {
+        return;
     }
+    const auto assignments = derive_core_row_assignments(shared.core_grid, runtime_args.num_rows);
     TT_FATAL(
-        start_row == runtime_args.num_rows,
-        "topk_large_indices assigned {} rows, expected {}",
-        start_row,
-        runtime_args.num_rows);
+        assignments.size() == shared.cores.size(),
+        "topk_large_indices runtime assignment core count {} differs from compiled core count {}",
+        assignments.size(),
+        shared.cores.size());
+    for (uint32_t i = 0; i < assignments.size(); ++i) {
+        const auto& [core, start_row, rows] = assignments[i];
+        TT_FATAL(
+            core == shared.cores[i],
+            "topk_large_indices runtime assignment core {} differs from compiled core {} at position {}",
+            core,
+            shared.cores[i],
+            i);
+        tt::tt_metal::SetRuntimeArgs(program, shared.reader_kernel_id, core, {start_row, rows});
+        tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, core, {rows});
+        tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, {start_row, rows});
+    }
+    shared.num_rows = runtime_args.num_rows;
 }
 
 }  // namespace
@@ -142,6 +127,34 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::Classic;
 }
 
+std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows) {
+    const auto work_split = tt::tt_metal::split_work_to_cores(core_grid, num_rows, true);
+    const auto num_active_cores = std::get<0>(work_split);
+    const auto& core_group_1 = std::get<2>(work_split);
+    const auto& core_group_2 = std::get<3>(work_split);
+    const auto num_rows_per_core_group_1 = std::get<4>(work_split);
+    const auto num_rows_per_core_group_2 = std::get<5>(work_split);
+    TT_FATAL(num_active_cores > 0, "topk_large_indices requires at least one row of work");
+
+    const auto cores = corerange_to_cores(core_grid, std::nullopt, true);
+    std::vector<CoreRowAssignment> assignments;
+    assignments.reserve(cores.size());
+    uint32_t start_row = 0;
+    for (const auto& core : cores) {
+        const uint32_t rows =
+            rows_for_core(core, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
+        TT_FATAL(
+            rows <= num_rows_per_core_group_1,
+            "topk_large_indices assigned {} rows to a core, expected at most {}",
+            rows,
+            num_rows_per_core_group_1);
+        assignments.push_back(CoreRowAssignment{.core = core, .start_row = start_row, .num_rows = rows});
+        start_row += rows;
+    }
+    TT_FATAL(start_row == num_rows, "topk_large_indices assigned {} rows, expected {}", start_row, num_rows);
+    return assignments;
+}
+
 TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -156,11 +169,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t llk_k = to_uint32(llk_target_k);
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
 
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    const CoreRangeSet all_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const auto& all_cores = operation_attributes.resolved_worker_core_grid;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
-    // Runtime row counts are intentionally patched through runtime args instead of the program hash.
-    // Create kernels/CBs across the full worker grid so cache hits can use a different active core subset.
+    // Runtime row counts are intentionally patched through runtime args instead of the program hash. The
+    // caller-selected structural core grid is fixed in the hash, so cache hits can change shape without ever
+    // creating kernels or CBs on cores owned by another subdevice.
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
@@ -255,10 +268,16 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .reader_kernel_id = reader_kernel,
         .compute_kernel_id = compute_kernel,
         .writer_kernel_id = writer_kernel,
-        .cores = cores};
+        .core_grid = all_cores,
+        .cores = cores,
+        .input_shape = input.logical_shape(),
+        .valid_length = operation_attributes.valid_length};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
-    set_runtime_args(program, shared, input, indices, operation_attributes.valid_length, meta_addr);
+    tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0});
+    tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernel, {0});
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.buffer()->address()});
+    set_runtime_args(program, shared, input, operation_attributes.valid_length);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -268,13 +287,30 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    set_runtime_args(
-        cached_program.program,
-        cached_program.shared_variables,
-        tensor_args.input_tensor,
-        tensor_return_value,
-        operation_attributes.valid_length,
-        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u);
+    TT_FATAL(
+        operation_attributes.resolved_worker_core_grid == cached_program.shared_variables.core_grid,
+        "topk_large_indices cache hit resolved grid {} differs from compiled grid {}",
+        operation_attributes.resolved_worker_core_grid,
+        cached_program.shared_variables.core_grid);
+    auto& shared = cached_program.shared_variables;
+    const auto& input = tensor_args.input_tensor;
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(cached_program.program, shared.reader_kernel_id);
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(cached_program.program, shared.writer_kernel_id);
+    reader_args[topk_common_args::input_address] = input.buffer()->address();
+    reader_args[topk_common_args::metadata_address] =
+        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
+    writer_args[topk_common_args::output_address] = tensor_return_value.buffer()->address();
+
+    // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
+    // are runtime controls: update their common arguments when either changes, and
+    // rebuild the per-core row assignment only when the flattened row count changes.
+    if (shared.input_shape == input.logical_shape() && shared.valid_length == operation_attributes.valid_length) {
+        return;
+    }
+
+    set_runtime_args(cached_program.program, shared, input, operation_attributes.valid_length);
+    shared.input_shape = input.logical_shape();
+    shared.valid_length = operation_attributes.valid_length;
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

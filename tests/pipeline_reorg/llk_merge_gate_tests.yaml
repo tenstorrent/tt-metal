@@ -11,6 +11,7 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
@@ -23,6 +24,7 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
@@ -35,6 +37,7 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
@@ -47,6 +50,7 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: fd
@@ -59,6 +63,7 @@
     bh_p150b_civ2_viommu:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: fd
@@ -71,6 +76,7 @@
     bh_p150b_civ2_viommu:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: fd
@@ -84,6 +90,7 @@
     wh_n150_civ2:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: wormhole_b0
   dispatch_mode: sd
@@ -94,6 +101,7 @@
     bh_p150b_civ2_viommu:
       timeout: 10
   team: llk
+  budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: sd

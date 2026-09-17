@@ -101,20 +101,19 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
     }
 
     // Dataflow buffer identities and tensor parameters.
-    const m2::DFBSpecName INPUT_PAGES{"input_pages"};  // legacy c_0 — reader-private L1 scratchpad (self-loop)
+    const m2::ScratchpadSpecName INPUT_PAGES{"input_pages"};  // reader-private L1 scratchpad
     const m2::DFBSpecName OUTPUT_PAGE{"output_page"};  // legacy c_1 — reader->writer output-page FIFO (double buffered)
     const m2::TensorParamName INPUT{"input"};
     const m2::TensorParamName OUTPUT{"output"};
     const m2::KernelSpecName READER{"reader"};
     const m2::KernelSpecName WRITER{"writer"};
 
-    // The DFB that stores input pages (a reader-private scratchpad, single entry).
-    const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    m2::DataflowBufferSpec input_pages_dfb{
+    // Reader-private scratchpad for staging input pages (single entry). Formerly a self-loop DFB:
+    // the reader both filled and drained it, so the FIFO machinery synchronized nothing — a shape
+    // Quasar rejects. Converted to Scratchpad.
+    m2::ScratchpadSpec input_pages_scratch{
         .unique_id = INPUT_PAGES,
-        .entry_size = input_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .size_per_node = input_page_size * 1,  // entry_size * num_entries
     };
 
     // The DFB that stores output pages. This one is double buffered, since it is shared between the reader
@@ -132,24 +131,18 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = KERNEL_READER,
-        // input_pages is touched by the reader alone (fill + drain) — self-loop, one accessor name.
         .dfb_bindings =
             {
-                m2::DFBBinding{
-                    .dfb_spec_name = INPUT_PAGES,
-                    .accessor_name = "in0",
-                    .endpoint_type = m2::DFBEndpointType::PRODUCER,
-                },
-                m2::DFBBinding{
-                    .dfb_spec_name = INPUT_PAGES,
-                    .accessor_name = "in0",
-                    .endpoint_type = m2::DFBEndpointType::CONSUMER,
-                },
                 m2::DFBBinding{
                     .dfb_spec_name = OUTPUT_PAGE,
                     .accessor_name = "in1",
                     .endpoint_type = m2::DFBEndpointType::PRODUCER,
                 },
+            },
+        // input_pages is touched by the reader alone (fill + drain): a private scratchpad.
+        .scratchpad_bindings =
+            {
+                m2::ScratchpadBinding{.scratchpad_spec_name = INPUT_PAGES, .accessor_name = "in0"},
             },
         .tensor_bindings =
             {
@@ -226,7 +219,8 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
     m2::ProgramSpec spec{
         .name = "copy_default_row_major",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(input_pages_dfb), std::move(output_page_dfb)},
+        .dataflow_buffers = {std::move(output_page_dfb)},
+        .scratchpads = {std::move(input_pages_scratch)},
         .tensor_parameters =
             {
                 m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
