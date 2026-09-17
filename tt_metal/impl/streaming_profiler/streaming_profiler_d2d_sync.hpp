@@ -228,6 +228,14 @@ private:
     // The largest disagreement of a solved link with the tree's composition around its loop: the fleet's path
     // asymmetry as far as its loops reveal it.
     double max_closure_ns() const;
+    // One solution per chip pair: a pair's solved links combined by precision-weighted means of their rates and of
+    // their offsets at a common midpoint, so parallel links average their path asymmetries. `members` gets the
+    // links behind each.
+    std::vector<LinkSolution> pair_solutions(std::vector<std::vector<size_t>>* members) const;
+    // How many solved links share link li's chip pair.
+    size_t pair_size(size_t li) const;
+    // The tree over the pair solutions. `used` marks the links whose pair the tree took and that are that pair's
+    // only member: a loop through such a link closes to zero by construction.
     std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
     void publish_all();
     void log_summary() const;

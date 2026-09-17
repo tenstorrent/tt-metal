@@ -1327,18 +1327,16 @@ void Devices::plan_link_sync() {
         const uint32_t chip_a = devices_[a].chip_id;
         for (size_t b = a + 1; b < devices_.size(); b++) {
             const uint32_t chip_b = devices_[b].chip_id;
-            const auto link = link_sync::link_between(cluster, chip_a, chip_b);
-            if (!link) {
-                continue;
+            for (const link_sync::Link& link : link_sync::links_between(cluster, chip_a, chip_b)) {
+                const bool flip = link.chip_a != chip_a;  // the lower chip sends
+                links_.push_back(CaptureContext::Link{
+                    .dev_a = static_cast<uint32_t>(flip ? b : a),
+                    .dev_b = static_cast<uint32_t>(flip ? a : b),
+                    .chip_a = link.chip_a,
+                    .chip_b = link.chip_b,
+                    .eth_a = link.eth_a,
+                    .eth_b = link.eth_b});
             }
-            const bool flip = link->chip_a != chip_a;  // the lower chip sends
-            links_.push_back(CaptureContext::Link{
-                .dev_a = static_cast<uint32_t>(flip ? b : a),
-                .dev_b = static_cast<uint32_t>(flip ? a : b),
-                .chip_a = link->chip_a,
-                .chip_b = link->chip_b,
-                .eth_a = link->eth_a,
-                .eth_b = link->eth_b});
         }
     }
     if (links_.empty() && devices_.size() > 1) {

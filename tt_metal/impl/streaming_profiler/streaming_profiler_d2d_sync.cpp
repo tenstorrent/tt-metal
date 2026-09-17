@@ -257,6 +257,75 @@ double D2dSyncConsumer::path_median(const std::vector<Round>& rounds, size_t beg
 // relaxation over the links (few devices, so O(links^2) is nothing) fills them from the root outward; a device
 // no path reaches keeps its own anchor and the local term alone. `used`, when given, marks the links the tree
 // took; the others close loops and their disagreement with the tree is path asymmetry (see log_summary).
+std::vector<D2dSyncConsumer::LinkSolution> D2dSyncConsumer::pair_solutions(
+    std::vector<std::vector<size_t>>* members) const {
+    std::vector<LinkSolution> out;
+    std::vector<std::vector<size_t>> groups;
+    for (size_t li = 0; li < solved_.size(); li++) {
+        if (!solved_[li].ok) {
+            continue;
+        }
+        size_t g = 0;
+        while (g < groups.size() && (solved_[groups[g][0]].dev_snd != solved_[li].dev_snd ||
+                                     solved_[groups[g][0]].dev_rcv != solved_[li].dev_rcv)) {
+            g++;
+        }
+        if (g == groups.size()) {
+            groups.emplace_back();
+        }
+        groups[g].push_back(li);
+    }
+    for (const std::vector<size_t>& g : groups) {
+        LinkSolution c = solved_[g[0]];
+        if (g.size() > 1) {
+            const auto weight = [&](size_t li) {
+                const double p = std::max(solved_[li].precision_ns, 1e-3);
+                return 1.0 / (p * p);
+            };
+            double wsum = 0, mid = 0;
+            for (size_t li : g) {
+                wsum += weight(li);
+                mid += weight(li) * solved_[li].mid;
+            }
+            mid /= wsum;
+            double rate = 0, offset = 0, rr = 0;
+            c.rounds = c.kept = c.path_dropped = 0;
+            c.solved_at = 0.0;
+            for (size_t li : g) {
+                const LinkSolution& s = solved_[li];
+                const double w = weight(li) / wsum;
+                rate += w * s.rate;
+                offset += w * (s.offset_ticks + s.rate * (mid - s.mid));
+                rr += w * s.residual_rms_ns * s.residual_rms_ns;
+                c.rounds += s.rounds;
+                c.kept += s.kept;
+                c.path_dropped += s.path_dropped;
+                c.solved_at = std::max(c.solved_at, s.solved_at);
+            }
+            c.mid = mid;
+            c.rate = rate;
+            c.offset_ticks = offset;
+            c.offset_ns = offset * 20.0;
+            c.rate_ppm = rate * 1e6;
+            c.residual_rms_ns = std::sqrt(rr);
+            c.precision_ns = 1.0 / std::sqrt(wsum);
+        }
+        out.push_back(c);
+    }
+    if (members != nullptr) {
+        *members = std::move(groups);
+    }
+    return out;
+}
+
+size_t D2dSyncConsumer::pair_size(size_t li) const {
+    size_t n = 0;
+    for (const LinkSolution& s : solved_) {
+        n += s.ok && s.dev_snd == solved_[li].dev_snd && s.dev_rcv == solved_[li].dev_rcv;
+    }
+    return n;
+}
+
 std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
     uint32_t root, std::vector<bool>* used) const {
     std::map<uint32_t, RootXf> to_root;
@@ -264,11 +333,14 @@ std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
     if (used != nullptr) {
         used->assign(solved_.size(), false);
     }
+    std::vector<std::vector<size_t>> members;
+    const std::vector<LinkSolution> pairs = pair_solutions(&members);
+    std::vector<bool> taken(pairs.size(), false);
     for (bool progress = true; progress;) {
         progress = false;
-        for (size_t li = 0; li < solved_.size(); li++) {
-            const LinkSolution& s = solved_[li];
-            if (!s.ok) {
+        for (size_t pi = 0; pi < pairs.size(); pi++) {
+            const LinkSolution& s = pairs[pi];
+            if (taken[pi]) {
                 continue;
             }
             const double m = 1.0 + s.rate;  // receiver = m * sender + o
@@ -293,8 +365,9 @@ std::map<uint32_t, D2dSyncConsumer::RootXf> D2dSyncConsumer::root_transforms(
             } else {
                 continue;
             }
-            if (used != nullptr) {
-                (*used)[li] = true;
+            taken[pi] = true;
+            if (used != nullptr && members[pi].size() == 1) {
+                (*used)[members[pi][0]] = true;
             }
         }
     }
@@ -668,14 +741,26 @@ void D2dSyncConsumer::log_summary() const {
             }
             const double direct = (1.0 + s.rate) * s.mid + (s.offset_ticks - s.rate * s.mid);
             const double via_tree = (S->second.scale * s.mid + S->second.shift - R->second.shift) / R->second.scale;
-            log_info(
-                tt::LogMetal,
-                "[streaming profiler] d2d sync loop through link chip {} -> chip {}: closes to {:+.1f} ns (path asymmetry "
-                "around the loop, solutions good to ~{:.1f} ns each)",
-                ctx_.links[li].chip_a,
-                ctx_.links[li].chip_b,
-                (via_tree - direct) * 20.0,
-                s.precision_ns);
+            if (pair_size(li) > 1) {
+                log_info(
+                    tt::LogMetal,
+                    "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {}: {:+.1f} ns off its pair's mean "
+                    "(the parallel links' path-asymmetry difference, shared out)",
+                    ctx_.links[li].chip_a,
+                    ctx_.links[li].eth_a.x,
+                    ctx_.links[li].eth_a.y,
+                    ctx_.links[li].chip_b,
+                    (via_tree - direct) * 20.0);
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "[streaming profiler] d2d sync loop through link chip {} -> chip {}: closes to {:+.1f} ns (path "
+                    "asymmetry around the loop, solutions good to ~{:.1f} ns each)",
+                    ctx_.links[li].chip_a,
+                    ctx_.links[li].chip_b,
+                    (via_tree - direct) * 20.0,
+                    s.precision_ns);
+            }
         }
     }
     if (dropped_kind_ != 0) {
@@ -1192,7 +1277,9 @@ void D2dSyncConsumer::publish_error_plots() const {
                   worst);
           }
           if (const std::string& csv = ctx_.d2d_csv_path; !csv.empty()) {
-              if (std::FILE* ef = std::fopen(fmt::format("{}.err_{}_{}.csv", csv, L.chip_b, L.chip_a).c_str(), "w");
+              if (std::FILE* ef = std::fopen(
+                      fmt::format("{}.err_{}_{}_eth{}_{}.csv", csv, L.chip_b, L.chip_a, L.eth_a.x, L.eth_a.y).c_str(),
+                      "w");
                   ef != nullptr) {
                   std::fprintf(
                       ef,

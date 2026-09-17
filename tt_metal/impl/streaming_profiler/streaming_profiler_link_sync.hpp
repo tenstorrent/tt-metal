@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
+#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 
@@ -39,9 +39,10 @@ struct Link {
     CoreCoord eth_a, eth_b;           // logical eth cores
 };
 
-// The one link two connected chips sync over: the lower chip's first eth core connected to the higher, in the
-// cluster's order, and the core it connects to; with fabric on, the first such link whose two cores hold routers.
-std::optional<Link> link_between(const tt::Cluster& cluster, uint32_t chip_x, uint32_t chip_y);
+// Every eligible link between two connected chips, in the cluster's order: the lower chip's eth cores connected to
+// the higher and the cores they connect to; with fabric on, only links whose two cores hold routers. The sync runs
+// over all of them and averages a pair's links, so their path asymmetries average too.
+std::vector<Link> links_between(const tt::Cluster& cluster, uint32_t chip_x, uint32_t chip_y);
 // What the router on this eth core does for the sync.
 Role role_of(const tt::Cluster& cluster, uint32_t chip, const CoreCoord& eth_logical);
 
