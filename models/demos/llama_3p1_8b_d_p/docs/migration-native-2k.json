@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-17",
+  "scope": "Two complete aligned 2K native prefill-to-passive transfers",
+  "model": "Llama-3.1-8B-Instruct",
+  "layers": 32,
+  "source_mesh": [
+    4,
+    8
+  ],
+  "sp": 4,
+  "tp": 8,
+  "slots": 2,
+  "capacity": 2048,
+  "chunk_tokens": 1024,
+  "cache_dtype": "BFP8_B",
+  "configs": 16,
+  "call_order": [
+    [
+      0,
+      0,
+      1024
+    ],
+    [
+      1,
+      0,
+      1024
+    ],
+    [
+      0,
+      1024,
+      2048
+    ],
+    [
+      1,
+      1024,
+      2048
+    ]
+  ],
+  "destination_slot_map": [
+    1,
+    0
+  ],
+  "prefix_reused": 0,
+  "layer_acknowledgements": 128,
+  "native_command_counts": {
+    "register": 2,
+    "peer_ready": 2,
+    "layer": 128,
+    "seal": 2,
+    "completion": 2
+  },
+  "packed_pages": 65536,
+  "packed_bytes": 285212672,
+  "mismatches": 0,
+  "source_preserved": true,
+  "actual_exit": 0,
+  "verified_exit": 0,
+  "both_managers_stopped_before_either_owner_close": true,
+  "runtime_repository_head": "4714492b08e31c5cb0835f92dd754c319e5ab244",
+  "published_bridge_commit": "c3d7d46bc18de442a698063a29e7844d2c34b814",
+  "published_bridge_binary_ran_in_this_test": false,
+  "binary_sha256": {
+    "manager_binary": "c4a86ba26ac642b46e67769b88a4626b159c8e173910105a0ba64c9fd462832f",
+    "dmk_elf": "ac7a03bc11ddf762693900f92bef204e6ccc3ef595c0c2a9efb691a13b5fb6d4",
+    "source_client": "26b520978f8f978e981ebfedd5bb9f45b5d9f01def9827f8adb570e084ce5775",
+    "passive_client": "407b28cd9b6fd4977f6c0125bab54304e63ccd12e3ce8126fc77ef27a33c6a9a",
+    "etcd_binary": "4421fd959f17fcd222a35d70694b7633ea2558de780545c4c43e931bddb145a8"
+  },
+  "evidence": {
+    "relative_directory": "evidence/task-10-native-migration/prefill-transfer-launch-003",
+    "root_verification_sha256": "f1845d16f374b3a8e523ce4b041181e1fdca4b70cfecaef34c4f62da534c4d13",
+    "plan_sha256": "44b904ccdb59a1637257ed444d63412021b8af6b7c44433878a6ed1db2d05400",
+    "verified_result_sha256": "06c28a12ffeaae5c68da4a6a847400ed71df58e2e5461d6000eca2fb24f1d4be",
+    "source_pin_count": 168,
+    "jit_artifacts_checked": 956
+  },
+  "limitations": [
+    "Complete aligned 2K prefixes, two slots, reversed mapping, zero prefix reuse.",
+    "No partial ranges, slot reuse, injected in-flight failure, restart or larger capacity acceptance.",
+    "Destination readbacks were compared on device owners by the frozen tested comparator; root reproduced the expected saved-source hashes without repeating hardware readback.",
+    "No decoder, SC4 or new numerical/golden-model acceptance.",
+    "No per-layer compute/transfer overlap or migration performance claim.",
+    "The fixture is not yet a portable public paired-device test; publication and edge-case coverage remain."
+  ]
+}
