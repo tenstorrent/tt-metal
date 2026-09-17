@@ -571,7 +571,7 @@
     wh_llmbox:
       timeout: 52
       tier: 2
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: vllm
 

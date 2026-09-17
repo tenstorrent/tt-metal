@@ -17,8 +17,7 @@
 
 // Point atomic return values back at the slot init_at_cmd_buf() programmed at startup.
 inline __attribute__((always_inline)) void noc_restore_default_atomic_ret_addr(uint32_t atomic_ret_val) {
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
 }
 
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
@@ -248,8 +247,14 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t customized_src_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
-    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
-                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
+    // Register recipe per cmdbuff_api.hpp: an inline write is a plain write
+    // transaction whose data arrives with the inline-issue instruction and LEN
+    // is the transfer size. The INLINE_WR/BYTE_ENABLE bits with a byte-enable
+    // mask in LEN never complete on this NIU (no ack, no data) and wedge the
+    // simple command buffer's ack tracking, hanging every later barrier.
+    ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) |
+                    (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
 
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
@@ -257,8 +262,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
         mcast ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
 
-    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, sizeof(uint32_t));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)dest_addr);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -290,8 +295,10 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     uint32_t num_dests = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
-    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
-                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
+    // Same register recipe as noc_fast_write_dw_inline (see there).
+    ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) |
+                    (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
 
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
@@ -299,8 +306,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
         mcast ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
 
-    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, sizeof(uint32_t));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)dest_addr);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -724,11 +731,21 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
  * | set_val (template parameter) | Whether to set the value for the write here            | bool     | true or false                    | False    |
  */
 // clang-format on
+// The value a set_state<set_val> call latches for with_state<update_val =
+// false> issues. The RoCC inline write takes its data from the issue
+// instruction, not from a sticky register, so the reuse contract of the
+// stateful pair is kept in software.
+inline uint32_t noc_inline_write_state_val = 0;
+
 template <bool posted = false, bool set_val = false>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
-    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
-                    (posted ? CMD_BUF_MISC_POSTED : 0);
+    // Same register recipe as noc_fast_write_dw_inline (see there).
+    ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
+    if constexpr (set_val) {
+        noc_inline_write_state_val = val;
+    }
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -739,8 +756,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8,
         (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 
-    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, sizeof(uint32_t));
 }
 
 // clang-format off
@@ -790,7 +807,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, dest_addr);
     }
-    __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
+    // update_val == false reuses the value set_state<set_val> latched.
+    __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(update_val ? val : noc_inline_write_state_val);
 
     if constexpr (update_counter) {
         if constexpr (posted) {
@@ -909,7 +927,8 @@ template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
 inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32_t noc, uint32_t vc) {
     static_assert(cmd_buf <= 2, "Qsr has 2 complex cmd buffers (0,1) and one simple (2) command buffer");
     (void)noc;
-    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
+    // Same register recipe as noc_fast_write_dw_inline (see there).
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS |
                     ((cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) |
                     ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? CMD_BUF_MISC_POSTED : 0);
 
@@ -930,6 +949,10 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32
     }
 }
 
+// The value the last CQ_NOC_INLINE_FLAG_VAL call latched per command buffer;
+// a send without that flag issues it again (see noc_inline_write_state_val).
+inline uint32_t noc_cq_inline_write_state_val[3] = {};
+
 // Wormhole API compatibility wrapper for stateful inline direct writes.
 template <
     uint32_t cmd_buf,
@@ -942,13 +965,9 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
     (void)noc;
 
     if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-        if constexpr (cmd_buf == 2) {
-            __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
-        } else {
-            static_assert(cmd_buf <= 1, "normal cmdbuf operations are only valid for cmd_buf 0 or 1");
-            __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
-        }
+        // The data travels with the inline-issue instruction (below), not
+        // through the INLINE_DATA register; hold it for value-less sends.
+        noc_cq_inline_write_state_val[cmd_buf] = val;
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         if constexpr (cmd_buf == 2) {
@@ -976,24 +995,26 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
         }
     }
     if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
-        uint32_t be32 = be << (dst_addr & (NOC_WORD_BYTES - 1));
+        // LEN is the transfer size (one dword), never a byte-enable mask.
+        ASSERT(be == 0xF);  // the Quasar RoCC path exposes no byte-enable mask for inline writes
+        const uint32_t len = sizeof(uint32_t);
         if constexpr (cmd_buf == 2) {
-            __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+            __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len);
         } else {
             static_assert(cmd_buf <= 1, "normal cmdbuf operations are only valid for cmd_buf 0 or 1");
             __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, len);
         }
     }
     if constexpr (send) {
+        // Always the inline-issue instruction: with the plain WRITE_TRANS
+        // recipe a non-inline issue would copy from the stale SRC_ADDR instead.
+        const uint32_t data = (flags & CQ_NOC_INLINE_FLAG_VAL) ? val : noc_cq_inline_write_state_val[cmd_buf];
         if constexpr (cmd_buf == 2) {
-            if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-                __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
-            } else {
-                __builtin_riscv_ttrocc_scmdbuf_issue_trans();
-            }
+            __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(data);
         } else {
-            __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+            static_assert(cmd_buf <= 1, "normal cmdbuf operations are only valid for cmd_buf 0 or 1");
+            __builtin_riscv_ttrocc_cmdbuf_issue_inline_trans(cmd_buf, data);
         }
     }
 }

@@ -14,10 +14,11 @@
 // on the Metal 2.0 named-arg API.
 //
 // The cos/sin caches are SP-sharded in block-cyclic order keyed by the per-device chunk size
-// (chunk_local == Ht), so each device's shard already holds, in contiguous local-row order, the
-// rope values for every global position that device will ever carry. This kernel only needs to
-// derive WHERE in that shard the current chunk starts -- `update_idxt` -- exactly as the per-chip
-// kv-cache writer does, then read cos/sin contiguously from there. The wrap of the boundary chip
+// (chunk_local_t may be larger than the input Ht when queries are TP-subsharded), so each device's
+// shard already holds, in contiguous local-row order, the rope values for every global position
+// that device will ever carry. This kernel only needs to derive WHERE in that shard the current
+// chunk starts -- `update_idxt` -- exactly as the per-chip kv-cache writer does, then read cos/sin
+// contiguously from there. The wrap of the boundary chip
 // (older tokens finishing the current slab block, then newer tokens spilling into the next block)
 // is absorbed by the shard layout, so the read stays contiguous.
 //
@@ -47,6 +48,8 @@ void kernel_main() {
     // Per-device structural constants, baked when this device's program is built for its coordinate.
     constexpr auto my_sp_coord = get_arg(args::my_sp_coord);
     constexpr auto sp_factor = get_arg(args::sp_factor);
+    constexpr auto chunk_local_t = get_arg(args::chunk_local_t);
+    constexpr auto query_offset_t = get_arg(args::query_offset_t);
 
 #ifdef HAS_METADATA
     // Metadata path: read kv_actual_global from element [0] of the 1-element uint32 tensor (4 bytes).
@@ -76,17 +79,18 @@ void kernel_main() {
     // Convert the per-call kv_actual_global (tokens) to tiles.
     const uint32_t kv_actual_global_t = kv_actual_global / tile_height;
     // Derive this chip's tile-row offset into its (block-cyclic) cos/sin shard from the global
-    // valid KV length. Ht == chunk_local_t (per-device new chunk in tiles); chunk_global == sp*Ht.
+    // valid KV length using the ORIGINAL SP slab, then select this query subshard within it.
     // Identical math to the per-chip kv-cache writer's update_idxt -- see writer_update_padded_kv_cache.
-    const uint32_t chunk_global_t = sp_factor * Ht;
+    const uint32_t chunk_global_t = sp_factor * chunk_local_t;
     const uint32_t boundary_slab_idx = chunk_global_t == 0 ? 0 : kv_actual_global_t / chunk_global_t;
-    const uint32_t boundary_chip = Ht == 0 ? 0 : (kv_actual_global_t / Ht) % sp_factor;
-    const uint32_t boundary_offset_t = Ht == 0 ? 0 : kv_actual_global_t % Ht;
+    const uint32_t boundary_chip = chunk_local_t == 0 ? 0 : (kv_actual_global_t / chunk_local_t) % sp_factor;
+    const uint32_t boundary_offset_t = chunk_local_t == 0 ? 0 : kv_actual_global_t % chunk_local_t;
     // From the current slab base, chips before the boundary advance a full slab, the boundary chip
     // advances by its pad offset, and chips after it stay at the base.
     const uint32_t update_idxt =
-        boundary_slab_idx * Ht +
-        (my_sp_coord < boundary_chip ? Ht : (my_sp_coord == boundary_chip ? boundary_offset_t : 0));
+        boundary_slab_idx * chunk_local_t +
+        (my_sp_coord < boundary_chip ? chunk_local_t : (my_sp_coord == boundary_chip ? boundary_offset_t : 0)) +
+        query_offset_t;
 
     const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;
     const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
