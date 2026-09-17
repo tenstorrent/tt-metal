@@ -112,6 +112,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    if constexpr (tilize_en)
+    {
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
+    }
 }
 
 #endif

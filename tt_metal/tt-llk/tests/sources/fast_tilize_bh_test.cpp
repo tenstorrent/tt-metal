@@ -105,7 +105,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         {
-            ZONE_SCOPED("UNINIT")
             _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, 4 /* num_faces */));
         }
         return;
@@ -179,7 +178,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
     }
     {
-        ZONE_SCOPED("UNINIT")
         _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
     }
 }
@@ -228,7 +226,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         {
-            ZONE_SCOPED("UNINIT")
         }
         return;
     }
@@ -265,7 +262,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
     }
     {
-        ZONE_SCOPED("UNINIT")
         _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
     }
 }
@@ -337,7 +333,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         {
-            ZONE_SCOPED("UNINIT")
         }
         // Fall through to sentinel check below
     }
@@ -399,7 +394,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
         {
-            ZONE_SCOPED("UNINIT")
             if constexpr (pack_free_runs)
             {
                 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);

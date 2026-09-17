@@ -129,7 +129,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("UNINIT")
         ckernel::_llk_unpack_fast_untilize_uninit_();
     }
 }
@@ -214,7 +213,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         // Keep this zone on a distinct line to avoid 16-bit profiler hash collisions.
-        ZONE_SCOPED("UNINIT")
+
         llk_math_fast_untilize_uninit();
     }
 }
@@ -336,7 +335,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
     }
     {
-        ZONE_SCOPED("UNINIT")
         ckernel::_llk_pack_fast_untilize_uninit_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src);
     }
 
