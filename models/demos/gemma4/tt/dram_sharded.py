@@ -359,6 +359,97 @@ def decode_progcfg(m, k, n, dtype=None):
     )
 
 
+# Swept decode matmul program configs for Wormhole T3K (1x8), keyed by the
+# per-device (K, N) of each decode projection. Wormhole only, 8 devices only.
+#
+# On Blackhole these matmuls run the DRAM-sharded kernel (``can_dram_shard``);
+# on Wormhole that kernel is a large loss (1.8-3.4x, measured previously), so
+# the MLP and o_proj projections fall through to ttnn's *auto* program config
+# and QKV takes the generic ``decode_1d_matmul_config`` below. Both leave time
+# on the table at M=32, where these matmuls are weight-streaming bound.
+#
+# Measured on a real T3K, each arm captured into a metal trace and timed over
+# replays (eager timing on an 8-device mesh is host-dispatch bound and hides
+# the differences). Each candidate used the same compute-kernel config as the
+# call site it replaces, so these are program-config-only deltas:
+#
+#   12B (bf16 attention + shared_mlp at 1x8)   ships -> swept
+#     qkv sliding   3840x1024   49.0 -> 43.7 us   (-11%)
+#     qkv global    3840x2048   84.4 -> 78.1 us   (-7.5%)
+#     gate_up       3840x3840  156.6 -> 147.6 us  (-5.7%)   [auto today]
+#     down_proj     1920x3840   80.6 -> 76.5 us   (-5.1%)   [auto today]
+#     o_proj slide   512x3840   24.6 -> 23.9 us   (-3%)     [auto today]
+#     o_proj global 1024x3840   45.1 -> 42.8 us   (-5%)     [auto today]
+#   31B (bfp8 everywhere)
+#     qkv sliding   5376x2048   65.6 -> 59.1 us   (-10%)
+#
+# 31B's gate_up / down_proj / o_proj / qkv-global are deliberately ABSENT: they
+# already stream at ~209 GB/s (73% of Wormhole peak) and every swept arm tied or
+# lost to what ships. The 12B entries exist because its bf16 weights only reach
+# ~188 GB/s (65%), which is where the headroom is. Do not "complete" this table
+# by deriving the missing shapes -- they were swept and auto won.
+#
+# The winning in0_block_w is NOT a function of K (12B gate_up wants 2 while
+# 31B qkv wants 8, and raising 31B qkv-global from 4 to 8 costs 11%), so this
+# is a table of measurements rather than a heuristic. A shape that is not
+# listed keeps today's behaviour exactly.
+#
+# Set GEMMA4_WH_T3K_DECODE_MM=0 to fall back to the pre-sweep configs.
+_WH_T3K_DECODE_1D = {
+    # (k, n): (grid_x, grid_y, in0_block_w, per_core_N, out_subblock_w)
+    (3840, 1024): (8, 4, 4, 1, 1),
+    (3840, 2048): (8, 8, 4, 1, 1),
+    (3840, 3840): (8, 5, 2, 3, 3),
+    (1920, 3840): (8, 5, 2, 3, 3),
+    (512, 3840): (8, 5, 1, 3, 3),
+    (1024, 3840): (8, 5, 2, 3, 3),
+    (5376, 2048): (8, 8, 8, 1, 1),
+}
+
+
+def wh_t3k_decode_enabled(mesh_device) -> bool:
+    """True on a full Wormhole T3K (1x8, unharvested 8x8 grid).
+
+    Deliberately narrow. The swept table above was measured on this one system;
+    a different Wormhole mesh (N150 1x1, N300 1x2) has different per-device K/N
+    and would not match a key anyway, but an x2-harvested part has an 8x7 grid
+    where the 8x5 / 8x8 grids below would be illegal. Blackhole keeps its
+    DRAM-sharded path untouched.
+    """
+    if os.environ.get("GEMMA4_WH_T3K_DECODE_MM", "1").lower() in ("0", "false", "no"):
+        return False
+    if is_blackhole():
+        return False
+    try:
+        if mesh_device.get_num_devices() != 8:
+            return False
+        grid = mesh_device.compute_with_storage_grid_size()
+    except (AttributeError, RuntimeError):
+        return False
+    return (grid.x, grid.y) == (8, 8)
+
+
+def wh_t3k_decode_progcfg(mesh_device, k, n):
+    """Swept 1D-mcast decode program config for ``(k, n)``, or ``None``."""
+    if not wh_t3k_decode_enabled(mesh_device):
+        return None
+    entry = _WH_T3K_DECODE_1D.get((int(k), int(n)))
+    if entry is None:
+        return None
+    grid_x, grid_y, in0_block_w, per_core_n, out_subblock_w = entry
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE, dest_acc=None):
     """Tuned narrow-N decode config; wide shapes retain ttnn auto."""
     if k % TILE_SIZE or n % TILE_SIZE or m > TILE_SIZE:
@@ -366,27 +457,33 @@ def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE, dest_acc=None):
     grid = mesh_device.compute_with_storage_grid_size()
     grid_cores = grid.x * grid.y
     k_tiles, n_tiles = k // TILE_SIZE, n // TILE_SIZE
-    if n_tiles >= 2 * grid_cores:
-        return None
-    cap = min(grid_cores, n_tiles // 2)
-    cores = next((c for c in range(cap, 0, -1) if n_tiles % c == 0), 0)
-    if cores < 2:
-        return None
-    rows = next((y for y in range(1, grid.y + 1) if cores % y == 0 and cores // y <= grid.x), None)
-    if rows is None:
-        return None
-    per_core_n = n_tiles // cores
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(cores // rows, rows),
-        in0_block_w=_find_largest_divisor(k_tiles, max_div=4),
-        out_subblock_h=1,
-        out_subblock_w=_find_largest_divisor(per_core_n, max_div=4),
-        per_core_M=1,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
+    # A swept T3K entry wins outright over the generic pick below, including for
+    # the wide-N shapes the generic picker declines (12B qkv-global is exactly
+    # n_tiles == 2*grid_cores). The compute config is shared by both paths -- it
+    # carries its own measured PCC pairing and must not diverge.
+    program_config = wh_t3k_decode_progcfg(mesh_device, k, n)
+    if program_config is None:
+        if n_tiles >= 2 * grid_cores:
+            return None
+        cap = min(grid_cores, n_tiles // 2)
+        cores = next((c for c in range(cap, 0, -1) if n_tiles % c == 0), 0)
+        if cores < 2:
+            return None
+        rows = next((y for y in range(1, grid.y + 1) if cores % y == 0 and cores // y <= grid.x), None)
+        if rows is None:
+            return None
+        per_core_n = n_tiles // cores
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(cores // rows, rows),
+            in0_block_w=_find_largest_divisor(k_tiles, max_div=4),
+            out_subblock_h=1,
+            out_subblock_w=_find_largest_divisor(per_core_n, max_div=4),
+            per_core_M=1,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     # HiFi2 is this config's own measured pairing and is kept -- raising it to
     # HiFi3 costs 12B decode 0.9783 -> 0.9760 and an extra FPU pass. What it must
     # NOT do is hardcode the accumulator: this config only fires at tp>1, so a

@@ -33,6 +33,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_progcfg_1d_for_width_sharded_in0,
     should_prefill_long_2d,
     single_tile_matmul_ckc,
+    wh_t3k_decode_progcfg,
 )
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -242,6 +243,19 @@ class SharedMLP:
 
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
+        swept = wh_t3k_decode_progcfg(self.mesh_device, k, n) if rows <= TILE_SIZE else None
+        if swept is not None:
+            activation, owned = self._prepare_prefill_act(hidden_states, None)
+            output = linear_l1_safe(
+                activation,
+                self.gate_up_proj,
+                program_config=swept,
+                memory_config=decode_memory_config,
+                compute_kernel_config=single_tile_matmul_ckc(rows, self._single_tile_dest_acc),
+            )
+            if owned:
+                activation.deallocate(True)
+            return output
         if should_prefill_long_2d(rows) and rows >= 4096:
             activation, owned = self._prepare_prefill_act(hidden_states, None)
             output = prefill_linear_above_cutoff(activation, self.gate_up_proj)
@@ -293,6 +307,23 @@ class SharedMLP:
         if isinstance(self.down_proj, DramShardedLinear):
             return self.down_proj(hidden, out_memory_config=decode_memory_config)
 
+        swept = (
+            wh_t3k_decode_progcfg(self.mesh_device, int(hidden.shape[-1]), int(self.down_proj.shape[-1]))
+            if rows <= TILE_SIZE
+            else None
+        )
+        if swept is not None:
+            activation, owned = self._prepare_prefill_act(hidden, None)
+            output = linear_l1_safe(
+                activation,
+                self.down_proj,
+                program_config=swept,
+                memory_config=decode_memory_config,
+                compute_kernel_config=single_tile_matmul_ckc(rows, self._single_tile_dest_acc),
+            )
+            if owned:
+                activation.deallocate(True)
+            return output
         if should_prefill_long_2d(rows):
             activation, owned = self._prepare_prefill_act(hidden, None)
             output = prefill_linear_above_cutoff(activation, self.down_proj)

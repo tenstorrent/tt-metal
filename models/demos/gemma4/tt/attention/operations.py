@@ -29,6 +29,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_linear_above_cutoff,
     should_prefill_long_2d,
     single_tile_matmul_ckc,
+    wh_t3k_decode_progcfg,
 )
 
 from .weights import AttentionWeights
@@ -705,11 +706,18 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
         return out
     if memory_config is None and rows <= TILE_SIZE:
         memory_config = ttnn.L1_MEMORY_CONFIG
+    # Decode (M<=32) on a Wormhole T3K takes the swept 1D-mcast config; every
+    # other mesh keeps ttnn's auto pick. Prefill is untouched.
+    program_config = (
+        wh_t3k_decode_progcfg(tensor.device(), int(tensor.shape[-1]), int(weights.o_proj.shape[-1]))
+        if rows <= TILE_SIZE
+        else None
+    )
     activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor, None)
     out = linear_l1_safe(
         activation,
         weights.o_proj,
-        program_config=None,
+        program_config=program_config,
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
     )
