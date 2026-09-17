@@ -2150,9 +2150,42 @@ def _hf_snapshot_glob(repo_dir):
     return None
 
 
+def _hf_resolve_repo(repo_id, cache_dir_name):
+    """Cache first, then the hub -- the way the TARGET model is resolved.
+
+    transformers ``from_pretrained`` looks in HF_HUB_CACHE and downloads what
+    is missing, honouring HF_HUB_OFFLINE and HF_TOKEN. A drafter that only
+    globbed the cache diverged from that: on a SKU whose weights-cache-mode
+    permits downloads the target model appears and the drafter does not, and
+    the failure reads as a missing checkpoint rather than "nobody fetched it".
+
+    Returns a local path, or None when the repo is neither cached nor
+    fetchable. Offline is not an error here: the caller reports the miss with
+    the env var that overrides it, which is more use than an HF stack trace.
+    """
+    hit = _hf_snapshot_glob(cache_dir_name)
+    if hit:
+        return hit
+    if os.environ.get("HF_HUB_OFFLINE", "").strip() in ("1", "true", "yes"):
+        logger.info(
+            f"Gemma4: {repo_id} is not in the HF cache and HF_HUB_OFFLINE is set, "
+            "so it will not be fetched; the cache must be seeded out of band"
+        )
+        return None
+    try:
+        from huggingface_hub import snapshot_download
+
+        path = snapshot_download(repo_id=repo_id)
+        logger.info(f"Gemma4: fetched {repo_id} to {path}")
+        return path
+    except Exception as exc:  # network, auth, or a repo that does not exist
+        logger.warning(f"Gemma4: could not fetch {repo_id}: {type(exc).__name__}: {exc}")
+        return None
+
+
 def _dflash_default_snapshot():
-    """Locate the z-lab drafter snapshot in the HF cache (harness parity)."""
-    return _hf_snapshot_glob("models--z-lab--gemma-4-31B-it-DFlash")
+    """Locate the z-lab drafter snapshot, cached or fetched (target parity)."""
+    return _hf_resolve_repo("z-lab/gemma-4-31B-it-DFlash", "models--z-lab--gemma-4-31B-it-DFlash")
 
 
 def _assistant_default_snapshot(hf_model):
@@ -2168,7 +2201,7 @@ def _assistant_default_snapshot(hf_model):
     if os.path.isdir(cand):
         return cand
     size = "12B" if "12B" in str(hf_model) else "31B"
-    hit = _hf_snapshot_glob(f"models--google--gemma-4-{size}-it-assistant")
+    hit = _hf_resolve_repo(f"google/gemma-4-{size}-it-assistant", f"models--google--gemma-4-{size}-it-assistant")
     return hit if hit else cand
 
 

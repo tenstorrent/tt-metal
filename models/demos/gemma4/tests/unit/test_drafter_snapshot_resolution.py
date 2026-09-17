@@ -72,3 +72,65 @@ def test_a_missing_drafter_still_reports_absence(monkeypatch, tmp_path):
     # the drafter cached there. Absence is only asserted for the configured
     # roots, which is what the resolver adds.
     assert gv._hf_snapshot_glob("models--z-lab--does-not-exist") is None
+
+
+def test_offline_miss_does_not_attempt_a_fetch(monkeypatch, tmp_path):
+    """HF_HUB_OFFLINE means the shared cache is authoritative.
+
+    A shared NFS weights mount is :ro, and HF writes metadata on every HEAD
+    call, so a fetch there fails with "Read-only file system" rather than
+    populating anything. The caller reports the miss with the env var that
+    overrides it instead.
+    """
+    monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(tmp_path / "empty")])
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    called = []
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda *a, **k: called.append(k) or "/never",
+    )
+    assert gv._hf_resolve_repo("z-lab/nope", "models--z-lab--nope") is None
+    assert called == []
+
+
+def test_a_cache_hit_never_reaches_the_hub(monkeypatch, tmp_path):
+    root = str(tmp_path / "hub")
+    snap = _mk(root, "models--z-lab--gemma-4-31B-it-DFlash")
+    monkeypatch.setenv("HF_HUB_CACHE", root)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    called = []
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download",
+        lambda *a, **k: called.append(k) or "/never",
+    )
+    assert gv._dflash_default_snapshot().rstrip("/") == snap
+    assert called == []
+
+
+def test_an_online_miss_fetches_the_repo(monkeypatch, tmp_path):
+    """Cache-then-hub, the way transformers resolves the target model."""
+    # Pin the search roots: ~/.cache is the final fallback and a dev box may
+    # genuinely have the drafter cached there, which would mask the fetch.
+    monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(tmp_path / "empty")])
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    asked = {}
+
+    def fake_download(*a, **k):
+        asked.update(k)
+        return str(tmp_path / "fetched")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_download)
+    got = gv._dflash_default_snapshot()
+    assert got == str(tmp_path / "fetched")
+    assert asked.get("repo_id") == "z-lab/gemma-4-31B-it-DFlash"
+
+
+def test_a_failed_fetch_is_reported_as_a_miss_not_an_exception(monkeypatch, tmp_path):
+    monkeypatch.setattr(gv, "_hf_hub_cache_dirs", lambda: [str(tmp_path / "empty")])
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    def boom(*a, **k):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", boom)
+    assert gv._dflash_default_snapshot() is None
