@@ -6,10 +6,8 @@
 // hw/inc/internal/ethernet/eth_ptp.hpp) on real links, with no profiler pipeline: the two product link ends run as
 // resident kernels on every ethernet link between local chips and record their stamp averages into an L1 table the
 // host reads back; the kernels are the product's own resident ends. Per link: rounds issued, complete at both ends
-// and inside the path band; each end's stamp drops;
-// one way, turnaround and round trip inside the stamps; the offset-and-rate fit with its residual; the stamps' own
-// noise. Per chip pair with several links: the fits' disagreement, which is the difference of the links' path
-// asymmetries, the one term the sync cannot see from a single link.
+// and inside the path band; each end's stamp drops; one way, turnaround and round trip inside the stamps; the
+// offset-and-rate fit with its residual; the stamps' own noise.
 //
 //   test_eth_ptp_link [--seconds S] [--pace-ms M] [--links-per-pair N]
 
@@ -304,12 +302,6 @@ int main(int argc, char** argv) {
     };
 
     bool all_ok = true;
-    struct LinkFit {
-        uint32_t a, b;
-        CoreCoord eth_a, eth_b;
-        Fit f;  // clock_b - clock_a at the sender's time, ns
-    };
-    std::vector<LinkFit> fits;
     for (Link& L : links) {
         // Sender first: its round in flight completes off the live receiver; then the receiver sees no more frames.
         const bool stopped_a = stop_end(L.chip_a, L.virt_a);
@@ -418,118 +410,6 @@ int main(int argc, char** argv) {
             window_med,
             window_max,
             noise);
-        if (fit.ok) {
-            fits.push_back({L.chip_a, L.chip_b, L.eth_a, L.eth_b, fit});
-        }
-    }
-    // Around any loop of links the true clock offsets sum to zero, so a loop's closure is the sum of its links' path
-    // asymmetries. Two links of one chip pair give their asymmetry difference outright. Over one link per pair, a
-    // spanning tree gives every chip a time at one instant and each remaining pair closes one multi-chip loop, which
-    // samples one port per chip. Were the ports' TX-RX latencies independent draws of spread sigma, a k-link closure
-    // would be sigma * sqrt(k / 2) rms with sigma the pair differences' rms; a chip-wide common part shows as loops
-    // beyond that, and a shared sign across pairs as structure by port.
-    if (!fits.empty()) {
-        std::map<std::pair<uint32_t, uint32_t>, size_t> first;  // pair -> the link the tree may use
-        for (size_t i = 0; i < fits.size(); i++) {
-            first.emplace(std::pair{fits[i].a, fits[i].b}, i);
-        }
-        std::map<uint32_t, double> t;
-        std::map<uint32_t, std::pair<uint32_t, uint32_t>> tree;  // chip -> (parent, depth)
-        std::vector<char> in_tree(fits.size(), 0);
-        t[fits.front().a] = fits.front().f.x0;
-        tree[fits.front().a] = {fits.front().a, 0};
-        for (bool grew = true; grew;) {
-            grew = false;
-            for (const auto& [pair, i] : first) {
-                const LinkFit& L = fits[i];
-                const bool ha = t.count(L.a) != 0, hb = t.count(L.b) != 0;
-                if (in_tree[i] || ha == hb) {
-                    continue;
-                }
-                if (ha) {
-                    t[L.b] = t[L.a] + L.f.at(t[L.a]);
-                    tree[L.b] = {L.a, tree[L.a].second + 1};
-                } else {
-                    // The fit runs on the sender's time; one correction of a ppm-rate line is exact enough.
-                    const double ta = t[L.b] - L.f.at(t[L.b]);
-                    t[L.a] = t[L.b] - L.f.at(ta);
-                    tree[L.a] = {L.b, tree[L.b].second + 1};
-                }
-                in_tree[i] = 1;
-                grew = true;
-            }
-        }
-        const auto tree_hops = [&](uint32_t a, uint32_t b) {
-            uint32_t hops = 0;
-            while (a != b) {
-                if (tree[a].second >= tree[b].second) {
-                    a = tree[a].first;
-                } else {
-                    b = tree[b].first;
-                }
-                hops++;
-            }
-            return hops;
-        };
-        std::vector<double> pairs, loops, predicted;
-        for (size_t i = 0; i < fits.size(); i++) {
-            const LinkFit& L = fits[i];
-            if (in_tree[i] || t.count(L.a) == 0 || t.count(L.b) == 0) {
-                continue;
-            }
-            const size_t rep = first.at({L.a, L.b});
-            if (rep != i) {
-                const double d = L.f.at(t[L.a]) - fits[rep].f.at(t[L.a]);
-                pairs.push_back(d);
-                std::printf(
-                    "[eth_ptp_link] parallel links chips %u-%u: eth(%zu,%zu)->(%zu,%zu) minus eth(%zu,%zu)->(%zu,%zu) "
-                    "%+.2f ns asymmetry difference\n",
-                    L.a,
-                    L.b,
-                    L.eth_a.x,
-                    L.eth_a.y,
-                    L.eth_b.x,
-                    L.eth_b.y,
-                    fits[rep].eth_a.x,
-                    fits[rep].eth_a.y,
-                    fits[rep].eth_b.x,
-                    fits[rep].eth_b.y,
-                    d);
-                continue;
-            }
-            const double closure = t[L.a] + L.f.at(t[L.a]) - t[L.b];
-            const uint32_t k = tree_hops(L.a, L.b) + 1;
-            loops.push_back(closure);
-            predicted.push_back(std::sqrt(0.5 * k));
-            std::printf(
-                "[eth_ptp_link] loop closure chips %u-%u over %u links (this link minus the tree): %+.2f ns\n",
-                L.a,
-                L.b,
-                k,
-                closure);
-        }
-        const auto rms = [](const std::vector<double>& v) {
-            double ss = 0;
-            for (double x : v) {
-                ss += x * x;
-            }
-            return v.empty() ? NAN : std::sqrt(ss / static_cast<double>(v.size()));
-        };
-        const double sigma = rms(pairs);
-        double pred = 0;
-        for (double p : predicted) {
-            pred += sigma * sigma * p * p;
-        }
-        pred = predicted.empty() ? NAN : std::sqrt(pred / static_cast<double>(predicted.size()));
-        std::printf(
-            "[eth_ptp_link] %zu parallel pairs: per-port TX-RX spread sigma %.2f ns rms, so one link's asymmetry is "
-            "%.2f ns rms; %zu multi-chip loops close to %.2f ns rms against %.2f ns predicted from independent draws\n",
-            pairs.size(),
-            sigma,
-            sigma / std::sqrt(2.0),
-            loops.size(),
-            rms(loops),
-            pred);
     }
     std::printf("[eth_ptp_link] %s\n", all_ok ? "PASS" : "FAIL");
     mesh_device->close();

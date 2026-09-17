@@ -307,15 +307,14 @@ int main(int argc, char** argv) {
     };
     std::printf(
         "pair        rounds   one-way A->B ns (p10 / min / mean / sd)   one-way B->A ns (p10 / min / mean / sd)   "
-        "offset error B-A ns (p10, mean)\n");
+        "offset error B-A ns (p10)\n");
     // Half the difference of the two directions' 10th percentiles: the latency floor is the same path both ways,
     // while the mean carries router queueing tails of hundreds of ns that differ by direction.
     auto p10 = [](std::vector<double> v) {
         std::nth_element(v.begin(), v.begin() + v.size() / 10, v.end());
         return v[v.size() / 10];
     };
-    std::map<std::pair<uint32_t, uint32_t>, double> err;  // (a,b) -> estimated placement error of B relative to A
-    std::vector<double> errs, errs_mean;
+    std::vector<double> errs;
     for (const Pair& p : pairs) {
         auto ia = by_core.find({p.chip_a, p.core_a}), ib = by_core.find({p.chip_b, p.core_b});
         if (ia == by_core.end() || ib == by_core.end()) {
@@ -351,13 +350,10 @@ int main(int argc, char** argv) {
             continue;
         }
         const double e = (p10(fwd) - p10(bwd)) / 2;
-        const double e_mean = (mean(fwd) - mean(bwd)) / 2;
-        err[{p.chip_a, p.chip_b}] = e;
         errs.push_back(e);
-        errs_mean.push_back(e_mean);
         std::printf(
             "chip %u - chip %u  %5zu   %7.1f / %7.1f / %7.1f / %6.1f        %7.1f / %7.1f / %7.1f / %6.1f        "
-            "%+6.2f  (%+6.2f)\n",
+            "%+6.2f\n",
             p.chip_a,
             p.chip_b,
             fwd.size(),
@@ -369,53 +365,19 @@ int main(int argc, char** argv) {
             *std::min_element(bwd.begin(), bwd.end()),
             mean(bwd),
             stdev(bwd),
-            e,
-            e_mean);
+            e);
     }
-    for (const auto& [name, v] : {std::pair{"p10", &errs}, std::pair{"mean", &errs_mean}}) {
-        if (v->empty()) {
-            continue;
-        }
+    if (!errs.empty()) {
         double ss = 0, worst = 0;
-        for (double e : *v) {
+        for (double e : errs) {
             ss += e * e;
             worst = std::max(worst, std::fabs(e));
         }
         std::printf(
-            "offset error over %zu links (%s): rms %.2f ns, worst %.2f ns\n",
-            v->size(),
-            name,
-            std::sqrt(ss / static_cast<double>(v->size())),
+            "offset error over %zu links (p10): rms %.2f ns, worst %.2f ns\n",
+            errs.size(),
+            std::sqrt(ss / static_cast<double>(errs.size())),
             worst);
-    }
-    // Closures around 4-cycles of links: a per-link bias common to the sync and this test cancels around a loop
-    // only if it is a real clock offset; a path asymmetry does not.
-    auto signed_err = [&](uint32_t a, uint32_t b, double& out) {
-        if (auto it = err.find({std::min(a, b), std::max(a, b)}); it != err.end()) {
-            out = a < b ? it->second : -it->second;
-            return true;
-        }
-        return false;
-    };
-    std::vector<uint32_t> chips;
-    for (const auto& [chip, _] : node_of) {
-        chips.push_back(chip);
-    }
-    std::set<std::vector<uint32_t>> seen;
-    for (uint32_t a : chips) {
-        for (uint32_t b : chips) {
-            for (uint32_t c : chips) {
-                for (uint32_t d : chips) {
-                    if (a >= b || a >= c || a >= d || b == c || b == d || c == d || b > d) {
-                        continue;
-                    }
-                    double e1, e2, e3, e4;
-                    if (signed_err(a, b, e1) && signed_err(b, c, e2) && signed_err(c, d, e3) && signed_err(d, a, e4)) {
-                        std::printf("loop %u-%u-%u-%u closes to %+.2f ns\n", a, b, c, d, e1 + e2 + e3 + e4);
-                    }
-                }
-            }
-        }
     }
     sp::UnregisterCallback(sub);
     return 0;
