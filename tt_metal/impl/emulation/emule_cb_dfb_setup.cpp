@@ -7,6 +7,7 @@
 
 #include "emule_device_map.hpp"
 #include "emule_kernel_defines.hpp"
+#include "emule_program_descriptor.hpp"
 #include "emule_sanitizers.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/buffers/circular_buffer.hpp"
@@ -54,83 +55,127 @@ static void init_core_cb_sync(
     tt_emule::Core* core,
     detail::ProgramImpl& impl,
     const CoreCoord& logical_core,
+    const tt_emule::CoreDescriptor& cd,
     std::vector<uint64_t>& persistent_cb_ranges) {
     core->reset_cb_sync();
+
+    // DIFF-GUARD: the POD CBs must mirror circular_buffers_on_core 1:1, same order.
+    {
+        size_t gi = 0;
+        for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
+            if (!cb_impl) {
+                continue;
+            }
+            TT_FATAL(
+                gi < cd.cbs.size() && cd.cbs[gi].address == cb_impl->address() &&
+                    cd.cbs[gi].total_size == cb_impl->size() &&
+                    cd.cbs[gi].globally_allocated == cb_impl->globally_allocated(),
+                "descriptor CB header mismatch on core ({},{}) cb {}",
+                logical_core.x,
+                logical_core.y,
+                gi);
+            size_t bi = 0;
+            for (uint8_t idx : cb_impl->local_buffer_indices()) {
+                TT_FATAL(
+                    bi < cd.cbs[gi].buffers.size() && cd.cbs[gi].buffers[bi].index == idx &&
+                        cd.cbs[gi].buffers[bi].page_size == cb_impl->page_size(idx) &&
+                        cd.cbs[gi].buffers[bi].num_pages == cb_impl->num_pages(idx),
+                    "descriptor CB buffer mismatch on core ({},{}) cb {} idx {}",
+                    logical_core.x,
+                    logical_core.y,
+                    gi,
+                    idx);
+                ++bi;
+            }
+            TT_FATAL(
+                bi == cd.cbs[gi].buffers.size(),
+                "descriptor CB buffer count mismatch on core ({},{}) cb {}",
+                logical_core.x,
+                logical_core.y,
+                gi);
+            ++gi;
+        }
+        TT_FATAL(gi == cd.cbs.size(), "descriptor CB count mismatch on core ({},{})", logical_core.x, logical_core.y);
+    }
+
     // Record this core's globally-allocated (persistent) CB extents so Object-Intent
     // exempts kernel writes anywhere in them (§12). Separate pass so the exempt set
     // stays exactly the local CBs.
-    for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
-        if (cb_impl->globally_allocated()) {
-            uint32_t start = cb_impl->address();
-            persistent_cb_ranges.push_back((static_cast<uint64_t>(start) << 32) | (start + cb_impl->size()));
+    for (const auto& cbd : cd.cbs) {
+        if (cbd.globally_allocated) {
+            uint32_t start = cbd.address;
+            persistent_cb_ranges.push_back((static_cast<uint64_t>(start) << 32) | (start + cbd.total_size));
         }
     }
 
-    bool configured[EMULE_NUM_CBS] = {};
-    auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
-        for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            // Loud, not clamped: a silent skip leaves the CB's sync state uninitialised, which
-            // resurfaces far away as wrong tile data.
-            TT_FATAL(
-                idx < EMULE_NUM_CBS,
-                "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap at the "
-                "arch's NUM_CIRCULAR_BUFFERS.",
-                idx,
-                EMULE_NUM_CBS);
-            if (configured[idx]) {
-                continue;
-            }
-            uint32_t cb_addr = cb_impl->address();
-            uint32_t page_size = cb_impl->page_size(idx);
-            uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
-            uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
-            // Face geometry is a compile-time descriptor on silicon and reaches the
-            // kernel as a JIT define, not through this runtime CB state.
-            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated());
-            configured[idx] = true;
-            log_debug(
-                tt::LogMetal,
-                "  Core({},{}) CB[{}]: addr=0x{:x} page_size={} num_pages={} base={:p}",
-                lc.x,
-                lc.y,
-                idx,
-                cb_addr,
-                page_size,
-                num_pages,
-                (void*)base);
-        }
-    };
     // core_ranges-scoped, no global fill: blaze shares one cb_id across CBs on disjoint
     // grids, so binding a CB whose grid excludes this core would install the wrong
     // (addr, num_pages) for that shared cb_id.
-    for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
-        configure(cb_impl, logical_core);
+    bool configured[EMULE_NUM_CBS] = {};
+    for (const auto& cbd : cd.cbs) {
+        for (const auto& b : cbd.buffers) {
+            // Loud, not clamped: a silent skip leaves the CB's sync state uninitialised, which
+            // resurfaces far away as wrong tile data.
+            TT_FATAL(
+                b.index < EMULE_NUM_CBS,
+                "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap at the "
+                "arch's NUM_CIRCULAR_BUFFERS.",
+                b.index,
+                EMULE_NUM_CBS);
+            if (configured[b.index]) {
+                continue;
+            }
+            uint32_t page_size = b.page_size;
+            uint32_t num_pages = (page_size > 0) ? b.num_pages : 0;
+            uint8_t* base = (page_size > 0) ? core->l1_ptr(cbd.address) : nullptr;
+            // Face geometry is a compile-time descriptor on silicon and reaches the
+            // kernel as a JIT define, not through this runtime CB state.
+            core->init_cb_sync(b.index, base, page_size, num_pages, cbd.globally_allocated);
+            configured[b.index] = true;
+        }
     }
 }
 
 // Write semaphore initial values into L1 at the HAL-derived semaphore base.
 static void init_core_semaphores(
-    tt_emule::Core* core, detail::ProgramImpl& impl, const CoreCoord& logical_core, uint32_t emule_sem_base) {
-    for (auto& sem : impl.semaphores()) {
-        if (!sem.initialized_on_logical_core(logical_core)) {
-            continue;
+    tt_emule::Core* core,
+    detail::ProgramImpl& impl,
+    const CoreCoord& logical_core,
+    const tt_emule::CoreDescriptor& cd,
+    const std::vector<tt_emule::SemaphoreDescriptor>& sems,
+    uint32_t emule_sem_base) {
+    auto initial_value_of = [&sems](uint32_t sem_id) -> uint32_t {
+        for (const auto& sd : sems) {
+            if (sd.id == sem_id) {
+                return sd.initial_value;
+            }
         }
-        uint32_t sem_id = sem.id();
-        uint32_t initial_value = sem.initial_value();
+        return 0;
+    };
+
+    // DIFF-GUARD: the POD (id, initial_value) list must match the semaphores initialized
+    // on this core by impl.semaphores(), in order.
+    {
+        std::vector<std::pair<uint32_t, uint32_t>> ref;
+        for (auto& sem : impl.semaphores()) {
+            if (sem.initialized_on_logical_core(logical_core)) {
+                ref.emplace_back(sem.id(), sem.initial_value());
+            }
+        }
+        std::vector<std::pair<uint32_t, uint32_t>> pod;
+        for (uint32_t sid : cd.semaphore_ids) {
+            pod.emplace_back(sid, initial_value_of(sid));
+        }
+        TT_FATAL(ref == pod, "descriptor semaphore mismatch on core ({},{})", logical_core.x, logical_core.y);
+    }
+
+    for (uint32_t sem_id : cd.semaphore_ids) {
         uint32_t sem_addr = emule_sem_base + sem_id * EMULE_SEM_ALIGN;
         if (sem_addr + sizeof(uint32_t) > core->l1_size()) {
             continue;
         }
         auto* sem_ptr = reinterpret_cast<uint32_t*>(core->l1_ptr(sem_addr));
-        *sem_ptr = initial_value;
-        log_debug(
-            tt::LogMetal,
-            "  Core({},{}) Sem[{}]: addr=0x{:x} initial={}",
-            logical_core.x,
-            logical_core.y,
-            sem_id,
-            sem_addr,
-            initial_value);
+        *sem_ptr = initial_value_of(sem_id);
     }
 }
 
@@ -259,6 +304,7 @@ void setup_core_state(
     tt::umd::SWEmuleChip* sw_emu,
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
+    const tt_emule::EmuleProgramDescriptor& pd,
     std::vector<CoreSetup>& core_setups) {
     auto& metal_ctx = MetalContext::instance(impl.get_context_id());
     const auto fabric_node = metal_ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
@@ -281,9 +327,19 @@ void setup_core_state(
         uint8_t phys_x = static_cast<uint8_t>(phys.x);
         uint8_t phys_y = static_cast<uint8_t>(phys.y);
 
+        const tt_emule::CoreDescriptor* cd = nullptr;
+        for (const auto& c : pd.cores) {
+            if (c.logical_x == static_cast<uint32_t>(logical_core.x) &&
+                c.logical_y == static_cast<uint32_t>(logical_core.y)) {
+                cd = &c;
+                break;
+            }
+        }
+        TT_FATAL(cd != nullptr, "no CoreDescriptor for core ({},{})", logical_core.x, logical_core.y);
+
         std::vector<uint64_t> persistent_cb_ranges;
-        init_core_cb_sync(core, impl, logical_core, persistent_cb_ranges);
-        init_core_semaphores(core, impl, logical_core, emule_sem_base);
+        init_core_cb_sync(core, impl, logical_core, *cd, persistent_cb_ranges);
+        init_core_semaphores(core, impl, logical_core, *cd, pd.semaphores, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
         // Quasar-only. Null on WH/BH keeps the cb_api CB->DFB bridge short-circuited, and stops

@@ -709,11 +709,12 @@ static void dispatch_to_device(
     uint32_t num_dram_channels = 0;
     uint32_t num_l1_banks = 0;
     const auto emule_soc = tt_emule::build_soc_view(device);
+    const auto emule_desc = tt_emule::build_emule_descriptor(program, device);
     populate_bank_mapping(sw_emu, device, device_id, emule_soc, dram_core, num_dram_channels, num_l1_banks);
 
     auto* core_map_ptr = build_core_map(sw_emu, device, device_id);
     std::vector<CoreSetup> core_setups;
-    setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, core_setups);
+    setup_core_state(impl, device, sw_emu, resolved.core_kernels, resolved.emule_sem_base, emule_desc, core_setups);
 
     uint8_t* dram_data = dram_core ? dram_core->l1_data() : nullptr;
 

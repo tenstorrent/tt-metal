@@ -30,6 +30,9 @@ struct DataflowBufferConfig;
 namespace tt::umd {
 class SWEmuleChip;
 }
+namespace tt_emule {
+struct EmuleProgramDescriptor;
+}
 
 namespace tt::tt_metal::emule {
 
@@ -95,6 +98,7 @@ void setup_core_state(
     tt::umd::SWEmuleChip* sw_emu,
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
+    const tt_emule::EmuleProgramDescriptor& pd,
     std::vector<CoreSetup>& core_setups);
 
 std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thread_dfb_interfaces(
