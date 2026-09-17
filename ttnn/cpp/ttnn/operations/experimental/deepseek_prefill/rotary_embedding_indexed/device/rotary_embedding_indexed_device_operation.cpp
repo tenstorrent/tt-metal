@@ -722,14 +722,43 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
         run_args.kernel_run_args = {reader_run};
     }
 
-    // All stamped programs declare identical tensor specs and runtime schemas; only my_sp_coord
-    // differs. Validate this update once, then refresh every program's bindings without repeating
-    // the same spec/name checks. Validation still runs on every invocation, including fresh metadata.
-    bool validated = false;
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
-        validated = true;
+    // These parameters have strict (non-dynamic) TensorSpecs and the DFBs own their memory: their
+    // only mutable binding words are base addresses. Changing tensor contents at an unchanged
+    // address therefore requires no host patch. Compare values, never Tensor/Buffer identities,
+    // so allocator reuse and in-place metadata updates remain valid.
+    const std::array<const TensorParamName*, 6> names = {
+        &INPUT_PARAM, &COS_PARAM, &SIN_PARAM, &TRANS_MAT_PARAM, &OUTPUT_PARAM, &METADATA_PARAM};
+    const size_t num_tensors = tensor_args.metadata.has_value() ? names.size() : names.size() - 1;
+    std::array<uint64_t, 6> addresses{};
+    auto& previous = cached_workload.shared_variables.begin()->second;
+    ProgramRunArgs changed_args;
+    for (size_t i = 0; i < num_tensors; ++i) {
+        const auto& tensor = *run_args.tensor_args.get(*names[i]);
+        addresses[i] = mesh_tensor_of(tensor).address();
+        if (!previous.tensor_addresses || (*previous.tensor_addresses)[i] != addresses[i]) {
+            changed_args.tensor_args.emplace(*names[i], tensor);
+        }
     }
+    if (!tensor_args.metadata.has_value() &&
+        (!previous.tensor_addresses || previous.kv_actual_global != args.kv_actual_global)) {
+        changed_args.kernel_run_args = run_args.kernel_run_args;
+    }
+
+    // Retain full validation on every invocation, even when every address is unchanged. The first
+    // program validates and applies the full update; remaining programs only need changed words.
+    // All stamped programs have identical specs/schemas and receive the same values. Updating the
+    // cached state only after the whole loop also makes a failed update safe to retry.
+    bool first = true;
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        if (first) {
+            UpdateProgramRunArgs(program, run_args);
+            first = false;
+        } else if (!changed_args.tensor_args.empty() || !changed_args.kernel_run_args.empty()) {
+            UpdateProgramRunArgs(program, changed_args, /*skip_validation=*/true);
+        }
+    }
+    previous.tensor_addresses = addresses;
+    previous.kv_actual_global = args.kv_actual_global;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed

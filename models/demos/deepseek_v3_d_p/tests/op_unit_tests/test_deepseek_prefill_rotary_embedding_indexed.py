@@ -353,12 +353,15 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)
-def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
+@pytest.mark.parametrize("refresh_bindings", [False, True], ids=["stable-bindings", "fresh-bindings"])
+@pytest.mark.parametrize("rotary_offset", [0, 64], ids=["full-rope", "partial-rope"])
+def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device, refresh_bindings, rotary_offset):
     """The per-element-tensor (traceable) path and the scalar path must produce bit-identical outputs.
 
     Drives the traceable path from a 1-element uint32 DRAM tensor holding kv_actual_global (the reader
-    reads its element [0] on-device), and compares the rotated output against the same call done via
-    the original scalar kv_actual_global. Exact equality over chunk-0 and a mid-cache offset."""
+    reads its element [0] on-device), and compares with scalar execution and a CPU reference. Repeat
+    and change the start position, exercise full/partial rotation, and optionally replace every
+    binding with a distinct allocation and changed contents to catch stale cached addresses."""
     sp_axis, tp_axis = 0, 1
     sp = mesh_device.shape[sp_axis]
     tile = ttnn.TILE_SIZE
@@ -418,11 +421,31 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
     # a slab — the hard indexing case for this op — is exercised through the metadata path too, not just
     # slab-aligned cases. kv_actual_global is a runtime arg (not hashed), so every case reuses the same
     # cached program regardless of alignment (asserted after the loop).
-    cases = [0, chunk_global, C + tile]
+    cases = [0, 0, chunk_global, C + tile, C + tile, 0]
     entries_after_first = None
+    retained = []  # keep replaced allocations alive so fresh bindings cannot reuse their addresses
 
-    for kv_actual in cases:
-        torch_input = torch.randn(1, n_heads, chunk_global, ROPE_HEAD_DIM, dtype=torch.bfloat16)
+    for iteration, kv_actual in enumerate(cases):
+        trans_sign = 1
+        if refresh_bindings:
+            retained.extend((cos_tt, sin_tt, trans_tt))
+            cos_full, sin_full = _make_cos_sin(cache_global, ROPE_HEAD_DIM)
+            cos_full = cos_full.roll(iteration * tile, dims=2)
+            sin_full = sin_full.roll(iteration * tile, dims=2)
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims)
+            cos_tt = ttnn.from_torch(
+                block_cyclic_reorder(cos_full, C, sp, seq_dim=2), mesh_mapper=mapper, **from_torch_kwargs
+            )
+            sin_tt = ttnn.from_torch(
+                block_cyclic_reorder(sin_full, C, sp, seq_dim=2), mesh_mapper=mapper, **from_torch_kwargs
+            )
+            trans_sign = -1 if iteration % 2 else 1
+            trans_tt = ttnn.from_torch(
+                get_rot_transformation_mat() * trans_sign,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                **from_torch_kwargs,
+            )
+        torch_input = torch.randn(1, n_heads, chunk_global, ROPE_HEAD_DIM + rotary_offset, dtype=torch.bfloat16)
         tt_input = ttnn.from_torch(
             torch_input,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
@@ -432,10 +455,24 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
         kv_t = _make_scalar_tensor(kv_actual)
 
         out_scalar = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-            tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_actual, cluster_axis=sp_axis
+            tt_input,
+            cos_tt,
+            sin_tt,
+            trans_tt,
+            kv_actual_global=kv_actual,
+            cluster_axis=sp_axis,
+            rotary_dim=ROPE_HEAD_DIM,
+            rotary_offset=rotary_offset,
         )
         out_meta = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
-            tt_input, cos_tt, sin_tt, trans_tt, kv_actual_global=kv_t, cluster_axis=sp_axis
+            tt_input,
+            cos_tt,
+            sin_tt,
+            trans_tt,
+            kv_actual_global=kv_t,
+            cluster_axis=sp_axis,
+            rotary_dim=ROPE_HEAD_DIM,
+            rotary_offset=rotary_offset,
         )
         ttnn.synchronize_device(mesh_device)
 
@@ -445,13 +482,26 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
             f"kv_actual={kv_actual}: per-element-tensor-path output differs from scalar-path "
             f"(max abs diff {(meta_host - scalar_host).abs().max().item()})"
         )
+        positions = torch.tensor(_rotated_chip_positions(kv_actual, sp, C)).flatten()
+        pe = torch_input[..., rotary_offset:].float()
+        expected = torch_input.float().clone()
+        expected[..., rotary_offset:] = (
+            pe * cos_full[:, :, positions].float()
+            + trans_sign * rotate_half(pe, meta_style=True) * sin_full[:, :, positions].float()
+        )
+        assert_with_pcc(expected, scalar_host, 0.999)
+        if rotary_offset:
+            assert torch.equal(torch_input[..., :rotary_offset].float(), scalar_host[..., :rotary_offset])
         logger.success(f"kv_actual={kv_actual}: per-element-tensor path == scalar path (bit-exact)")
         # After the first chunk both programs (scalar + metadata, distinct by metadata.has_value()) are
         # compiled; capture the count so we can assert no further growth across the remaining chunks.
         if entries_after_first is None:
             entries_after_first = mesh_device.num_program_cache_entries()
-        ttnn.deallocate(kv_t)
-        ttnn.deallocate(tt_input)
+        if refresh_bindings:
+            retained.extend((kv_t, tt_input, out_scalar, out_meta))
+        else:
+            for tensor in (kv_t, tt_input, out_scalar, out_meta):
+                ttnn.deallocate(tensor)
 
     # The whole point of this path: kv_actual_global is a runtime arg (metadata address patched on cache
     # hits), NOT part of the program hash, so successive chunks — including the non-slab-aligned one —
@@ -464,7 +514,7 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} chunks")
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4)], ids=["2x2", "2x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("rotary_offset", [0, 32])
 @pytest.mark.parametrize("subshard", [False, True], ids=["keys", "queries"])

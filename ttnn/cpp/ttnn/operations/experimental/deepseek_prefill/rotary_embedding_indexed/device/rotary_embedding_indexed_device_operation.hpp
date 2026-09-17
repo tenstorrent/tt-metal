@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -52,11 +53,13 @@ struct RotaryEmbeddingIndexedDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    // Per-device sharding means each mesh coordinate gets its own program (my_sp_coord is a per-device
-    // compile-time arg), so the op builds the mesh workload itself rather than stamping one coord-blind
-    // ProgramSpec. No per-coordinate state is needed on cache hits (override re-derives everything from
-    // attributes/tensor_args), but the mesh-workload adapter requires a shared-variables type.
-    struct SharedVariables {};
+    // Programs differ by their compile-time SP coordinate, but mesh tensor addresses and the scalar
+    // position are uniform. Keep the last successfully applied values in one workload entry. These
+    // are values, not pointers into runtime-argument storage (dispatch can retarget that storage).
+    struct SharedVariables {
+        std::optional<std::array<uint64_t, 6>> tensor_addresses;
+        uint32_t kv_actual_global = 0;
+    };
 
     struct MeshWorkloadFactory {
         using shared_variables_t = SharedVariables;
