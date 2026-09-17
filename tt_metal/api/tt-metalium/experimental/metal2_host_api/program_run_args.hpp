@@ -132,8 +132,9 @@ struct ProgramRunArgs {
     // rejected.
     //
     // Parameters that share a kernel accessor (one KernelSpec::PrefetcherPipeBinding naming several
-    // pipes) resolve to one device slot; the pipes supplied for them must share ring and config
-    // addresses (come from one space) and are cross-checked here, when the objects exist.
+    // pipes) resolve to one device slot, filled per node from whichever pipe is present there. When
+    // a relay DFB aliases that group, the supplied pipes must share a ring address (come from one
+    // space); this is cross-checked here, when the objects exist.
     //
     // CAUTION: PrefetcherPipe is an RAII object owning durable L1. The user is responsible for keeping
     //          it alive until the last Program execution that uses it has completed on the device.

@@ -14,6 +14,7 @@
 #include "hostdev/remote_dfb_config_layout.h"
 #include "hostdev/remote_dfb_constants.h"
 #include "internal/risc_attribs.h"
+#include "api/dataflow/dfb_binding_token.h"
 
 #if !defined(COMPILE_FOR_TRISC)
 #include <optional>
@@ -260,6 +261,11 @@ public:
         }
 #endif
     }
+
+    // Metal 2.0: construct from a `pipe::<accessor>` token (kernel_bindings_generated.h). The
+    // token is the program slot id; on every node the slot record names the pipe present there.
+    FORCE_INLINE explicit PrefetcherPipe(PrefetcherPipeBindingToken token) :
+        PrefetcherPipe(token.prefetcher_pipe_id()) {}
 
     FORCE_INLINE ~PrefetcherPipe() {
         commit();

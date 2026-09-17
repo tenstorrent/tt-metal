@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <memory>
@@ -28,7 +29,11 @@
 
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -2563,6 +2568,357 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
         /*counter_base=*/total_entries_e1));
 
     mesh_device->clear_loaded_sub_device_manager();
+}
+
+// ============================================================================
+// Metal 2.0 path: PrefetcherPipeParameter in a ProgramSpec, PrefetcherPipe supplied through
+// ProgramRunArgs. Kernels reach the pipe through pipe::<accessor> and the relay through the
+// relay DFB's dfb::<accessor> token.
+// ============================================================================
+
+namespace {
+
+namespace m2 = tt::tt_metal::experimental;
+
+// DM / compute KernelSpecs for the running arch. Gen1 pins every DM kernel to RISCV_0/NOC_0, which
+// is fine here because the Metal 2.0 pipe tests never place two DM kernels on one node.
+m2::KernelSpec make_m2_dm_kernel(const std::string& name, const std::string& source, uint32_t num_threads = 1) {
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{name},
+        .source = std::filesystem::path{source},
+        .num_threads = num_threads,
+    };
+    if (is_quasar_arch()) {
+        kernel.hw_config = m2::DataMovementGen2Config{};
+    } else {
+        TT_FATAL(num_threads == 1, "Non-Quasar PrefetcherPipe tests only support 1 DM thread");
+        kernel.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+    }
+    return kernel;
+}
+
+m2::KernelSpec make_m2_compute_kernel(const std::string& name, const std::string& source, uint32_t num_threads = 1) {
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{name},
+        .source = std::filesystem::path{source},
+        .num_threads = num_threads,
+    };
+    if (is_quasar_arch()) {
+        kernel.hw_config = m2::ComputeGen2Config{};
+    } else {
+        TT_FATAL(num_threads == 1, "Non-Quasar PrefetcherPipe tests only support 1 compute thread");
+        kernel.hw_config = m2::ComputeGen1Config{};
+    }
+    return kernel;
+}
+
+m2::PrefetcherPipeParameter make_m2_pipe_parameter(
+    const std::string& name, CoreCoord sender, const CoreRangeSet& receivers, uint32_t ring_size, uint32_t entry_size) {
+    return m2::PrefetcherPipeParameter{
+        .unique_id = m2::PrefetcherPipeParamName{name},
+        .sender = sender,
+        .receivers = receivers,
+        .ring_size = ring_size,
+        .entry_size = entry_size,
+    };
+}
+
+// Sender kernel spec: prefetcher_pipe_metal2_sender.cpp on `sender_cores`, accessor "out" naming
+// `pipes`. Staging address is a per-node RTA.
+m2::KernelSpec make_m2_sender_kernel(
+    std::vector<m2::PrefetcherPipeParamName> pipes, uint32_t entry_size, uint32_t num_entries) {
+    m2::KernelSpec sender =
+        make_m2_dm_kernel("sender", "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_metal2_sender.cpp");
+    sender.prefetcher_pipe_bindings.push_back(
+        m2::PrefetcherPipeBinding{.pipe_parameter_names = std::move(pipes), .accessor_name = "out"});
+    sender.compile_time_args = {{"entry_size", entry_size}, {"num_entries", num_entries}};
+    sender.runtime_arg_schema.runtime_arg_names = {"staging_addr"};
+    return sender;
+}
+
+// Receiver DM (relay producer) + TRISC (relay consumer) kernel specs and the relay DFB naming
+// `pipes`. `num_lanes` is the receiver's thread count (= the pipe's credit lanes).
+struct M2RelayConsumer {
+    m2::KernelSpec receiver;
+    m2::KernelSpec compute;
+    m2::DataflowBufferSpec relay;
+};
+
+M2RelayConsumer make_m2_relay_consumer(
+    std::vector<m2::PrefetcherPipeParamName> pipes,
+    uint32_t entry_size,
+    uint32_t ring_depth,
+    uint32_t total_entries,
+    uint32_t num_lanes = 1,
+    uint32_t num_compute_threads = 1) {
+    M2RelayConsumer c{
+        .receiver = make_m2_dm_kernel(
+            "receiver",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/prefetcher_pipe_metal2_relay_receiver.cpp",
+            num_lanes),
+        .compute = make_m2_compute_kernel(
+            "compute",
+            "tests/tt_metal/tt_metal/test_kernels/compute/prefetcher_pipe_metal2_relay_trisc.cpp",
+            num_compute_threads),
+        .relay =
+            m2::DataflowBufferSpec{
+                .unique_id = m2::DFBSpecName{"relay"},
+                .entry_size = entry_size,
+                .num_entries = ring_depth,
+                .data_format_metadata = tt::DataFormat::Float16_b,
+                .prefetcher_pipe_relays = pipes,
+            },
+    };
+    c.receiver.prefetcher_pipe_bindings.push_back(
+        m2::PrefetcherPipeBinding{.pipe_parameter_names = std::move(pipes), .accessor_name = "in"});
+    c.receiver.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{"relay"}, "relay"));
+    c.receiver.compile_time_args = {{"total_entries", total_entries}, {"batch_size", 1u}};
+    c.compute.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{"relay"}, "relay"));
+    c.compute.compile_time_args = {{"entries_this_thread", total_entries / num_compute_threads}, {"batch_size", 1u}};
+    c.compute.runtime_arg_schema.runtime_arg_names = {"result_addr"};
+    return c;
+}
+
+// Per-receiver-core [entries, checksum] check of the TRISC relay consumer output.
+bool verify_m2_relay_results(
+    distributed::MeshDevice& device,
+    const CoreRangeSet& receiver_cores,
+    uint32_t result_addr,
+    uint32_t num_compute_threads,
+    uint32_t entries_per_thread,
+    uint32_t total_entries) {
+    const uint32_t expected_checksum = prefetcher_pipe_relay_expected_checksum(total_entries);
+    bool ok = true;
+    for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
+        std::vector<uint32_t> result(num_compute_threads * 2, 0);
+        slow_dispatch::ReadFromL1(
+            device,
+            core,
+            result_addr,
+            std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
+            CoreType::WORKER);
+        uint32_t got_entries = 0;
+        uint32_t got_checksum = 0;
+        for (uint32_t tid = 0; tid < num_compute_threads; ++tid) {
+            if (result[tid * 2 + 0] != entries_per_thread) {
+                ok = false;
+                log_error(
+                    tt::LogTest,
+                    "Metal 2.0 relay mismatch on {} tid {}: count {} (expected {})",
+                    core.str(),
+                    tid,
+                    result[tid * 2 + 0],
+                    entries_per_thread);
+            }
+            got_entries += result[tid * 2 + 0];
+            got_checksum += result[tid * 2 + 1];
+        }
+        if (got_entries != total_entries || got_checksum != expected_checksum) {
+            ok = false;
+            log_error(
+                tt::LogTest,
+                "Metal 2.0 relay mismatch on {}: entries {} (expected {}), checksum 0x{:08x} (expected 0x{:08x})",
+                core.str(),
+                got_entries,
+                total_entries,
+                got_checksum,
+                expected_checksum);
+        }
+    }
+    return ok;
+}
+
+}  // namespace
+
+// One Program: sender DM on (0,0), receiver DM + TRISC on (1,0) joined by a relay DFB. The pipe is
+// created first (persistent), the program is built from a ProgramSpec with a
+// PrefetcherPipeParameter, and the pipe object arrives through ProgramRunArgs.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_Metal2_SenderRelayReceiver_1S1R) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 4;
+    constexpr uint32_t ring_size = entry_size * ring_depth;
+    constexpr uint32_t total_entries = 8;
+    const CoreCoord sender_core(0, 0);
+    const CoreCoord receiver_core(1, 0);
+    const CoreRangeSet receiver_cores = CoreRangeSet(CoreRange(receiver_core));
+
+    auto pipe = experimental::CreatePrefetcherPipe(mesh_device.get(), sender_core, receiver_cores, ring_size);
+    auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, 32, 1);
+
+    const m2::PrefetcherPipeParamName pipe_name{"weights"};
+    M2RelayConsumer consumer = make_m2_relay_consumer({pipe_name}, entry_size, ring_depth, total_entries);
+    m2::ProgramSpec spec{
+        .name = "m2_pipe_1s1r",
+        .kernels = {make_m2_sender_kernel({pipe_name}, entry_size, total_entries), consumer.receiver, consumer.compute},
+        .dataflow_buffers = {consumer.relay},
+        .prefetcher_pipe_parameters = {make_m2_pipe_parameter(
+            pipe_name.get(), sender_core, receiver_cores, ring_size, entry_size)},
+        .work_units =
+            {m2::WorkUnitSpec{
+                 .name = "sender_wu", .kernels = {m2::KernelSpecName{"sender"}}, .target_nodes = sender_core},
+             m2::WorkUnitSpec{
+                 .name = "receiver_wu",
+                 .kernels = {m2::KernelSpecName{"receiver"}, m2::KernelSpecName{"compute"}},
+                 .target_nodes = receiver_core}},
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+    // The relay DFB has no address until the pipe binds.
+    EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("relay"))->borrowed_addr_, 0u);
+
+    const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(0);
+    prefetcher_pipe_test::write_sender_l1_staging(
+        device, pipe.sender_cores(), pipe, data_pattern, entry_size, total_entries, 1);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{"sender"},
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
+                sender_core, {{"staging_addr", prefetcher_pipe_test::sender_l1_staging_address(pipe)}})},
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{"compute"},
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(
+                receiver_core, {{"result_addr", static_cast<uint32_t>(result_buffer->address())}})},
+    };
+    params.prefetcher_pipe_args = {{pipe_name, m2::PrefetcherPipeArgument{pipe}}};
+    m2::SetProgramRunArgs(program, params);
+    EXPECT_EQ(
+        program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("relay"))->borrowed_addr_,
+        pipe.buffer_address());
+
+    distributed::MeshWorkload workload;
+    persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
+
+    // After total_entries pushes the ring's slots hold the last ring_depth entries.
+    EXPECT_TRUE(prefetcher_pipe_test::verify_receiver_ring(
+        device, pipe, receiver_core, data_pattern, entry_size, ring_depth, 0, 1, total_entries - ring_depth));
+    EXPECT_TRUE(verify_m2_relay_results(
+        device, receiver_cores, static_cast<uint32_t>(result_buffer->address()), 1, total_entries, total_entries));
+}
+
+// Two pipes, one accessor per side, two Programs. Sender Program: one DM kernel on both sender
+// nodes whose accessor "out" names {a, b}; each node pushes into its own pipe. Receiver Program:
+// one DM kernel on both receiver nodes whose accessor "in" names {a, b}, relaying to TRISC through
+// one DFB that names both pipes. The pipes are created back to back so they share a ring address,
+// which is what lets one relay DFB alias both.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_Metal2_MultiPipeAccessor_CrossProgram_2S2R) {
+    if (const auto reason = insufficient_worker_grid_reason(2, 2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_fast_dispatch()) {
+        GTEST_SKIP() << "Two-program overlap uses asynchronous slow dispatch";
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 4;
+    constexpr uint32_t ring_size = entry_size * ring_depth;
+    constexpr uint32_t total_entries = 8;
+    const CoreCoord sender_a(0, 0);
+    const CoreCoord sender_b(1, 0);
+    const CoreCoord receiver_a(0, 1);
+    const CoreCoord receiver_b(1, 1);
+    const CoreRangeSet receivers_a = CoreRangeSet(CoreRange(receiver_a));
+    const CoreRangeSet receivers_b = CoreRangeSet(CoreRange(receiver_b));
+    const CoreRangeSet sender_cores(std::vector<CoreRange>{CoreRange(sender_a), CoreRange(sender_b)});
+    const CoreRangeSet receiver_cores(std::vector<CoreRange>{CoreRange(receiver_a), CoreRange(receiver_b)});
+
+    auto pipe_a = experimental::CreatePrefetcherPipe(mesh_device.get(), sender_a, receivers_a, ring_size);
+    auto pipe_b = experimental::CreatePrefetcherPipe(mesh_device.get(), sender_b, receivers_b, ring_size);
+    ASSERT_EQ(pipe_a.buffer_address(), pipe_b.buffer_address());
+    auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, 32, 1);
+
+    const m2::PrefetcherPipeParamName name_a{"a"};
+    const m2::PrefetcherPipeParamName name_b{"b"};
+    const std::vector<m2::PrefetcherPipeParameter> pipe_params = {
+        make_m2_pipe_parameter("a", sender_a, receivers_a, ring_size, entry_size),
+        make_m2_pipe_parameter("b", sender_b, receivers_b, ring_size, entry_size),
+    };
+
+    // Receiver Program first: binding its receivers arms the pipes' lanes before any sender runs.
+    M2RelayConsumer consumer = make_m2_relay_consumer({name_a, name_b}, entry_size, ring_depth, total_entries);
+    m2::ProgramSpec receiver_spec{
+        .name = "m2_pipe_2s2r_receivers",
+        .kernels = {consumer.receiver, consumer.compute},
+        .dataflow_buffers = {consumer.relay},
+        .prefetcher_pipe_parameters = pipe_params,
+        .work_units = {m2::WorkUnitSpec{
+            .name = "receiver_wu",
+            .kernels = {m2::KernelSpecName{"receiver"}, m2::KernelSpecName{"compute"}},
+            .target_nodes = receiver_cores}},
+    };
+    Program receiver_program = m2::MakeProgramFromSpec(device, receiver_spec);
+    EXPECT_EQ(receiver_program.impl().num_prefetcher_pipe_slots(), 1u);
+    {
+        m2::ProgramRunArgs params;
+        m2::ProgramRunArgs::KernelRunArgs compute_args{.kernel = m2::KernelSpecName{"compute"}};
+        for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
+            m2::AddRuntimeArgsForNode(
+                compute_args.runtime_arg_values,
+                core,
+                {{"result_addr", static_cast<uint32_t>(result_buffer->address())}});
+        }
+        params.kernel_run_args = {std::move(compute_args)};
+        params.prefetcher_pipe_args = {
+            {name_a, m2::PrefetcherPipeArgument{pipe_a}}, {name_b, m2::PrefetcherPipeArgument{pipe_b}}};
+        m2::SetProgramRunArgs(receiver_program, params);
+    }
+    // Each receiver node's slot record resolved to the pipe present there.
+    {
+        const auto& per_core = receiver_program.impl().get_per_core_prefetcher_pipes();
+        ASSERT_EQ(per_core.at(receiver_a).size(), 1u);
+        ASSERT_EQ(per_core.at(receiver_b).size(), 1u);
+        EXPECT_EQ(per_core.at(receiver_a)[0].pipe, &pipe_a.impl());
+        EXPECT_EQ(per_core.at(receiver_b)[0].pipe, &pipe_b.impl());
+    }
+
+    m2::ProgramSpec sender_spec{
+        .name = "m2_pipe_2s2r_senders",
+        .kernels = {make_m2_sender_kernel({name_a, name_b}, entry_size, total_entries)},
+        .prefetcher_pipe_parameters = pipe_params,
+        .work_units = {m2::WorkUnitSpec{
+            .name = "sender_wu", .kernels = {m2::KernelSpecName{"sender"}}, .target_nodes = sender_cores}},
+    };
+    Program sender_program = m2::MakeProgramFromSpec(device, sender_spec);
+    EXPECT_EQ(sender_program.impl().num_prefetcher_pipe_slots(), 1u);
+
+    const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(0);
+    prefetcher_pipe_test::write_sender_l1_staging(
+        device, pipe_a.sender_cores(), pipe_a, data_pattern, entry_size, total_entries, 1);
+    prefetcher_pipe_test::write_sender_l1_staging(
+        device, pipe_b.sender_cores(), pipe_b, data_pattern, entry_size, total_entries, 1);
+    {
+        m2::ProgramRunArgs params;
+        m2::ProgramRunArgs::KernelRunArgs sender_args{.kernel = m2::KernelSpecName{"sender"}};
+        m2::AddRuntimeArgsForNode(
+            sender_args.runtime_arg_values,
+            sender_a,
+            {{"staging_addr", prefetcher_pipe_test::sender_l1_staging_address(pipe_a)}});
+        m2::AddRuntimeArgsForNode(
+            sender_args.runtime_arg_values,
+            sender_b,
+            {{"staging_addr", prefetcher_pipe_test::sender_l1_staging_address(pipe_b)}});
+        params.kernel_run_args = {std::move(sender_args)};
+        params.prefetcher_pipe_args = {
+            {name_a, m2::PrefetcherPipeArgument{pipe_a}}, {name_b, m2::PrefetcherPipeArgument{pipe_b}}};
+        m2::SetProgramRunArgs(sender_program, params);
+    }
+
+    persistent_run_overlapping_programs(mesh_device, std::move(sender_program), std::move(receiver_program));
+
+    EXPECT_TRUE(prefetcher_pipe_test::verify_receiver_ring(
+        device, pipe_a, receiver_a, data_pattern, entry_size, ring_depth, 0, 1, total_entries - ring_depth));
+    EXPECT_TRUE(prefetcher_pipe_test::verify_receiver_ring(
+        device, pipe_b, receiver_b, data_pattern, entry_size, ring_depth, 0, 1, total_entries - ring_depth));
+    EXPECT_TRUE(verify_m2_relay_results(
+        device, receiver_cores, static_cast<uint32_t>(result_buffer->address()), 1, total_entries, total_entries));
 }
 
 }  // namespace tt::tt_metal

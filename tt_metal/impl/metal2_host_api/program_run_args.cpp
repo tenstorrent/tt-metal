@@ -14,6 +14,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -196,6 +198,102 @@ void ValidateTensorArgs(
                 "TensorParameter '{}' is declared in the Program but has no TensorArgument entry.",
                 declared);
         }
+    }
+}
+
+// A PrefetcherPipe relay DFB is exactly the pipe ring (entry_size * num_entries == ring_size, entry
+// size == the pipe's dense entry size), so its size cannot be overridden per run.
+void RejectPrefetcherPipeRelayResize(
+    const detail::ProgramImpl& program_impl, const ProgramRunArgs::DFBRunOverrides& dfb_params) {
+    if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
+        return;
+    }
+    const uint32_t dfb_id = program_impl.get_dfb_handle(dfb_params.dfb.get());
+    TT_FATAL(
+        !program_impl.get_prefetcher_pipe_id_for_relay(dfb_id).has_value(),
+        "dfb_run_overrides resizes DFB '{}', which relays a PrefetcherPipe. A relay DFB's geometry is the pipe's "
+        "(entry_size and ring_size are fixed by the PrefetcherPipeParameter) and cannot be overridden per run.",
+        dfb_params.dfb);
+}
+
+// Validates a PrefetcherPipeArgument list against the Program's PrefetcherPipeParameters.
+// Shared by the full path (SetProgramRunArgs; require_all=true) and the partial-update path
+// (UpdateProgramRunArgs; require_all=false).
+//   - Every entry references a PrefetcherPipeParameter declared in the ProgramSpec.
+//   - The supplied pipe's geometry (sender node, receiver nodes, ring size) matches the parameter's.
+//   - The binding is sticky: a parameter already bound to a different pipe object is rejected
+//     (re-supplying the same object is a no-op).
+//   - When require_all is true: every declared parameter must be supplied, unless it is already
+//     bound (the binding is program-lifetime state, so a later full SetProgramRunArgs may omit it).
+// Pipe-object-dependent checks that need the slot (lane capacity, relay ring agreement) run at
+// bind time in ProgramImpl::bind_prefetcher_pipe_parameter.
+void ValidatePrefetcherPipeArgs(
+    const Program& program,
+    const Table<PrefetcherPipeParamName, ProgramRunArgs::PrefetcherPipeArgument>& pipe_args,
+    bool require_all) {
+    const detail::ProgramImpl& program_impl = program.impl();
+
+    std::unordered_set<std::string> supplied;
+    for (const auto& [param_name, pipe_arg] : pipe_args) {
+        supplied.insert(param_name.get());
+        const auto* binding = program_impl.get_prefetcher_pipe_parameter(param_name.get());
+        TT_FATAL(
+            binding != nullptr,
+            "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
+            "PrefetcherPipeParameter of that name.",
+            param_name);
+        const PrefetcherPipe& pipe = pipe_arg.get();
+        TT_FATAL(
+            binding->bound_pipe == nullptr || binding->bound_pipe == &pipe.impl(),
+            "PrefetcherPipeArgument for '{}' supplies a different PrefetcherPipe object than the one this Program "
+            "is bound to. A Program binds a parameter to one pipe for its lifetime; build a new Program to use "
+            "another pipe.",
+            param_name);
+        TT_FATAL(
+            pipe.sender_core() == binding->sender,
+            "PrefetcherPipeArgument for '{}' supplies a pipe whose sender node ({},{}) differs from the declared "
+            "sender ({},{}).",
+            param_name,
+            pipe.sender_core().x,
+            pipe.sender_core().y,
+            binding->sender.x,
+            binding->sender.y);
+        TT_FATAL(
+            pipe.receiver_cores().num_cores() == binding->receivers.num_cores() &&
+                pipe.receiver_cores().intersection(binding->receivers).num_cores() == binding->receivers.num_cores(),
+            "PrefetcherPipeArgument for '{}' supplies a pipe whose receiver nodes {} differ from the declared "
+            "receivers {}.",
+            param_name,
+            pipe.receiver_cores().str(),
+            binding->receivers.str());
+        TT_FATAL(
+            pipe.ring_size() == binding->ring_size,
+            "PrefetcherPipeArgument for '{}' supplies a pipe with ring_size {} but the parameter declares ring_size "
+            "{}.",
+            param_name,
+            pipe.ring_size(),
+            binding->ring_size);
+    }
+    if (require_all) {
+        for (const std::string& declared : program_impl.get_registered_prefetcher_pipe_parameter_names()) {
+            if (supplied.contains(declared)) {
+                continue;
+            }
+            TT_FATAL(
+                program_impl.get_prefetcher_pipe_parameter(declared)->bound_pipe != nullptr,
+                "PrefetcherPipeParameter '{}' is declared in the Program but has no PrefetcherPipeArgument entry.",
+                declared);
+        }
+    }
+}
+
+// Bind every supplied PrefetcherPipe to its parameter's slots. Sticky: an already-bound parameter
+// re-supplied with the same object is a no-op (validation rejected a different object).
+void BindPrefetcherPipeArgs(
+    detail::ProgramImpl& program_impl,
+    const Table<PrefetcherPipeParamName, ProgramRunArgs::PrefetcherPipeArgument>& pipe_args) {
+    for (const auto& [param_name, pipe_arg] : pipe_args) {
+        program_impl.bind_prefetcher_pipe_parameter(param_name.get(), pipe_arg.get().impl());
     }
 }
 
@@ -393,6 +491,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
                 "non-zero value.",
                 dfb_spec_name);
         }
+        RejectPrefetcherPipeRelayResize(program_impl, dfb_params);
     }
 
     // Unlike kernels, DFBs don't require DFBRunOverrides.
@@ -403,16 +502,8 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     // Validate tensor runtime parameters (delegated to shared helper).
     ValidateTensorArgs(program, params.tensor_args);
 
-    // Validate PrefetcherPipe arguments. A Program created from a spec does not yet carry
-    // PrefetcherPipeParameter slots (MakeProgramFromSpec rejects such specs), so any supplied pipe
-    // argument names a parameter the Program does not declare.
-    for (const auto& [param_name, pipe_arg] : params.prefetcher_pipe_args) {
-        (void)pipe_arg;
-        TT_THROW(
-            "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
-            "PrefetcherPipeParameter of that name.",
-            param_name);
-    }
+    // Validate PrefetcherPipe arguments (delegated to shared helper; full path requires all).
+    ValidatePrefetcherPipeArgs(program, params.prefetcher_pipe_args, /*require_all=*/true);
 }
 
 // Emit the CRTA words for a single tensor binding, in order:
@@ -863,6 +954,10 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     }
     program_impl.apply_dfb_size_overrides(size_overrides);
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+
+    // Bind PrefetcherPipe objects to their parameters' slots (per node; a relay DFB over them is
+    // pointed at the pipe ring here). Sticky across calls.
+    BindPrefetcherPipeArgs(program_impl, params.prefetcher_pipe_args);
     program_impl.mark_program_run_args_initialized();
 }
 
@@ -1140,6 +1235,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
                 "non-zero value.",
                 dfb_params.dfb);
         }
+        RejectPrefetcherPipeRelayResize(program_impl, dfb_params);
         // A resized borrowed-memory DFB needs its backing tensor supplied here so the per-bank fit check
         // in AttachBorrowedDFBBuffers re-runs against the new size (see the block comment above).
         const bool resizes = dfb_params.entry_size.has_value() || dfb_params.num_entries.has_value();
@@ -1162,15 +1258,9 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // ones are validated against their declared spec.
     ValidateTensorArgs(program, params.tensor_args, /*require_all=*/false);
 
-    // PrefetcherPipe args: may be omitted; a supplied one must name a declared parameter (none can
-    // exist yet, see ValidateProgramRunArgs).
-    for (const auto& [param_name, pipe_arg] : params.prefetcher_pipe_args) {
-        (void)pipe_arg;
-        TT_THROW(
-            "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
-            "PrefetcherPipeParameter of that name.",
-            param_name);
-    }
+    // PrefetcherPipe args: any may be omitted (the binding is sticky); a supplied one must name a
+    // declared parameter and match its geometry.
+    ValidatePrefetcherPipeArgs(program, params.prefetcher_pipe_args, /*require_all=*/false);
 }
 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
@@ -1342,6 +1432,10 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted ones).
         AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
     }
+
+    // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound
+    //      (no-op when it is the already-bound object) ----
+    BindPrefetcherPipeArgs(program_impl, params.prefetcher_pipe_args);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {

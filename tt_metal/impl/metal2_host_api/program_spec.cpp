@@ -7,6 +7,7 @@
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <map>
 #include <set>
 #include <string_view>
 #include <unordered_map>
@@ -3146,8 +3147,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
-        // The actual backing memory L1 address is attached at runtime.
-        .borrows_memory = dfb_spec->borrowed_from.has_value()};
+        // The actual backing memory L1 address is attached at runtime: from the borrowed
+        // TensorParameter's MeshTensor, or (relay) from the PrefetcherPipe ring the relay aliases.
+        .borrows_memory = dfb_spec->borrowed_from.has_value() || !dfb_spec->prefetcher_pipe_relays.empty(),
+        // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
+        .is_relay = !dfb_spec->prefetcher_pipe_relays.empty()};
 }
 
 // ----------------------------------------------------------------------------
@@ -3377,6 +3381,126 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 
 namespace {
 
+// ----------------------------------------------------------------------------
+// ReservePrefetcherPipeSlots: PrefetcherPipeParameters -> Program slots
+// ----------------------------------------------------------------------------
+//
+// One Program slot per accessor group (a KernelSpec::PrefetcherPipeBinding), reserved on the
+// kernel's nodes from spec geometry alone. The group's role (sender / receiver; validated exact
+// by ValidateProgramSpec) decides the slot's receiver cores and credit lanes P (the receiver
+// kernel's num_threads). A relay DFB whose prefetcher_pipe_relays equals the group's pipe set is
+// registered against the slot (its base address is supplied when the pipe binds).
+//
+// Every parameter named by the group is recorded with the slot and the cores it owns inside the
+// kernel's nodes (its sender node or its receivers -- the group tiles the nodes, so this is one
+// pipe per node). SetProgramRunArgs later binds the supplied pipe object onto exactly those cores,
+// so a multi-pipe accessor resolves per node on the host and the kernel binary sees one slot.
+using PrefetcherPipeHandlesByKernel =
+    std::unordered_map<const KernelSpec*, std::vector<tt::tt_metal::PrefetcherPipeBindingHandle>>;
+
+PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
+    const ProgramSpec& spec,
+    const CollectedSpecData& collected,
+    detail::ProgramImpl& program_impl,
+    const DFBNameToIdMap& dfb_name_to_id) {
+    PrefetcherPipeHandlesByKernel handles;
+    if (spec.prefetcher_pipe_parameters.empty()) {
+        return handles;
+    }
+
+    // Per-parameter placement, accumulated across the accessor groups that name it.
+    std::unordered_map<PrefetcherPipeParamName, detail::ProgramImpl::PrefetcherPipeParameterBinding> placements;
+    for (const auto& pipe : spec.prefetcher_pipe_parameters) {
+        placements[pipe.unique_id] = detail::ProgramImpl::PrefetcherPipeParameterBinding{
+            .sender = pipe.sender,
+            .receivers = to_node_range_set(pipe.receivers),
+            .ring_size = pipe.ring_size,
+            .slots = {},
+            .bound_pipe = nullptr};
+    }
+
+    // Relay DFBs keyed by their (sorted) relayed pipe set, so a group can find its relay.
+    auto sorted_names = [](std::vector<PrefetcherPipeParamName> names) {
+        std::sort(names.begin(), names.end());
+        return names;
+    };
+    std::map<std::vector<PrefetcherPipeParamName>, const DataflowBufferSpec*> relay_by_pipe_set;
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.prefetcher_pipe_relays.empty()) {
+            continue;
+        }
+        auto [it, inserted] = relay_by_pipe_set.try_emplace(sorted_names(dfb.prefetcher_pipe_relays), &dfb);
+        TT_FATAL(
+            inserted,
+            "DFBs '{}' and '{}' both relay the same PrefetcherPipe set; a pipe set has at most one relay DFB",
+            it->second->unique_id,
+            dfb.unique_id);
+    }
+    std::unordered_set<const DataflowBufferSpec*> relays_registered;
+
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.prefetcher_pipe_bindings.empty()) {
+            continue;
+        }
+        const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
+        for (const auto& binding : kernel.prefetcher_pipe_bindings) {
+            const PrefetcherPipeParameter* first =
+                collected.prefetcher_pipe_by_name.at(binding.pipe_parameter_names[0]);
+            NodeRangeSet group_senders;
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                group_senders = group_senders.merge(NodeRangeSet(NodeRange(pipe->sender, pipe->sender)));
+            }
+            const bool is_sender_role = nodes.num_cores() == group_senders.num_cores() &&
+                                        nodes.intersection(group_senders).num_cores() == nodes.num_cores();
+
+            const NodeRangeSet receiver_cores = is_sender_role ? NodeRangeSet() : nodes;
+            const uint32_t num_credit_lanes = is_sender_role ? 1u : kernel.num_threads;
+            const uint8_t prefetcher_pipe_id = program_impl.reserve_prefetcher_pipe_slot(
+                nodes, receiver_cores, first->ring_size, first->entry_size, num_credit_lanes);
+            handles[&kernel].push_back(
+                {.accessor_name = binding.accessor_name, .prefetcher_pipe_id = prefetcher_pipe_id});
+
+            for (const auto& pipe_name : binding.pipe_parameter_names) {
+                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                const NodeRangeSet pipe_cores = is_sender_role ? NodeRangeSet(NodeRange(pipe->sender, pipe->sender))
+                                                               : to_node_range_set(pipe->receivers);
+                placements.at(pipe_name).slots.push_back(
+                    {.prefetcher_pipe_id = prefetcher_pipe_id, .cores = pipe_cores});
+            }
+
+            // A relay over exactly this group's pipes hangs off the receiver kernel's slot.
+            if (!is_sender_role) {
+                auto relay_it = relay_by_pipe_set.find(sorted_names(binding.pipe_parameter_names));
+                if (relay_it != relay_by_pipe_set.end()) {
+                    const DataflowBufferSpec* relay = relay_it->second;
+                    TT_FATAL(
+                        relays_registered.insert(relay).second,
+                        "Relay DFB '{}' matches PrefetcherPipe accessor groups in more than one receiver kernel",
+                        relay->unique_id);
+                    program_impl.register_prefetcher_pipe_relay_dfb(
+                        prefetcher_pipe_id, dfb_name_to_id.at(relay->unique_id));
+                }
+            }
+        }
+    }
+
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (!dfb.prefetcher_pipe_relays.empty()) {
+            TT_FATAL(
+                relays_registered.contains(&dfb),
+                "Relay DFB '{}' has no data-movement kernel binding its relayed PrefetcherPipe set as receiver; the "
+                "relay's PRODUCER must bind those pipes under one accessor",
+                dfb.unique_id);
+        }
+    }
+
+    for (auto& [pipe_name, placement] : placements) {
+        program_impl.register_prefetcher_pipe_parameter(pipe_name.get(), std::move(placement));
+    }
+    return handles;
+}
+
 Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&mesh_device));
@@ -3394,15 +3518,6 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
     }
-
-    // PrefetcherPipeParameters are validated above but not yet bound to Program slots; the
-    // MakeProgramFromSpec reserve / SetProgramRunArgs bind split lands next.
-    TT_FATAL(
-        spec.prefetcher_pipe_parameters.empty(),
-        "ProgramSpec '{}' declares {} PrefetcherPipeParameter(s), but PrefetcherPipe binding through "
-        "MakeProgramFromSpec is not yet implemented.",
-        spec.name,
-        spec.prefetcher_pipe_parameters.size());
 
     // Step 2a: Build kernel risc masks (arch-specific)
     //  - Gen2: backtracking solver assigns DM cores automatically
@@ -3533,6 +3648,13 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
         }
     }
+
+    // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register
+    // relay DFBs against them, and record each parameter's placement for SetProgramRunArgs. Must
+    // precede kernel creation: the slot id is baked into the kernel's `pipe::<accessor>` token and
+    // a relay DFB's `dfb::` token.
+    const PrefetcherPipeHandlesByKernel prefetcher_pipe_handles =
+        ReservePrefetcherPipeSlots(spec, collected, *program_impl, dfb_name_to_id);
 
     std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_prefetcher_pipe_id;
     for (const auto& [dfb_name, dfb_id] : dfb_name_to_id) {
@@ -3712,6 +3834,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+        // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).
+        if (auto pipe_it = prefetcher_pipe_handles.find(&kernel_spec); pipe_it != prefetcher_pipe_handles.end()) {
+            kernel->set_prefetcher_pipe_binding_handles(pipe_it->second);
+        }
 
         std::vector<TensorBindingSequenceHandle> tensor_binding_sequences;
         tensor_binding_sequences.reserve(kernel_spec.advanced_options.tensor_binding_sequences.size());

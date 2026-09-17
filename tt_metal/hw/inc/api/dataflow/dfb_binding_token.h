@@ -63,3 +63,21 @@ private:
     uint16_t id_;
     uint8_t prefetcher_pipe_id_;
 };
+
+// Compile-time handle for a PrefetcherPipe accessor (KernelSpec::PrefetcherPipeBinding),
+// emitted into kernel_bindings_generated.h in the `pipe::` namespace. Carries the program's
+// PrefetcherPipe slot id; the slot resolves, on the executing node, to whichever pipe of the
+// accessor's group is present there (the host fills every node's slot record from that pipe).
+//
+// Usage example:
+//   // (Host code declares "weights" as the PrefetcherPipe accessor name for this kernel.)
+//   experimental::PrefetcherPipe weights(pipe::weights);
+struct PrefetcherPipeBindingToken {
+    explicit constexpr PrefetcherPipeBindingToken(uint8_t prefetcher_pipe_id) noexcept :
+        prefetcher_pipe_id_(prefetcher_pipe_id) {}
+
+    constexpr uint8_t prefetcher_pipe_id() const noexcept { return prefetcher_pipe_id_; }
+
+private:
+    uint8_t prefetcher_pipe_id_;
+};
