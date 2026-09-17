@@ -83,7 +83,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
@@ -258,6 +257,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                     }
+                    TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::PACK);
                 }
             }
         }
