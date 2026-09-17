@@ -204,6 +204,83 @@ Caveat: `CORE COUNT` for `RingJointSDPADeviceOperation` reads 71, not 63, becaus
 counts the fused CCL workers — `ccl_core_grid_offset=(7, 0)` with `use_column_major_ccl=True`
 (`attention_minimax_h3.py:572-573`) places them in the reserved last column.
 
+## Roofline — speed of light on this part
+
+Back-of-envelope, derived 2026-09-17 from the shapes above and the part constants the repo already
+uses (`tests/nightly/sdpa_perf_utils.py`: Wormhole 1.0 GHz, 2048 FLOP/cycle/core at HiFi2, i.e.
+4096 at LoFi halved). Every linear and the ring SDPA run at HiFi2 with bf16 weights, so HiFi2 is the
+right peak. Galaxy WH exposes 8x9 = 72 compute cores per chip:
+
+    72 cores x 2048 FLOP/cycle x 1.0 GHz = 147.5 TFLOPS / chip  ->  4.72 PFLOPS / 32-chip Galaxy
+
+Per token per layer, with hidden 5376, inner 7168 (56 x 128), SwiGLU ffn 14336 and full joint
+attention over the packed sequence `S`:
+
+    dense     = 2 x (5376x21504 + 7168x5376 + 5376x28672 + 14336x5376) = 0.771 GFLOP  (385 M params/layer)
+    attention = 4 x S x 7168                                            = 28.7 kFLOP x S
+
+| duration | padded S | attention share | FLOP / forward | FLOP / device / layer |
+|---|---|---|---|---|
+| 5 s | 37888 | 58% | 3.52 PFLOP | 2.20 TFLOP |
+| 10 s | 73472 | 73% | 10.57 PFLOP | 6.61 TFLOP |
+| 15 s | 109312 | 80% | 21.34 PFLOP | 13.34 TFLOP |
+
+Dividing by the Galaxy peak gives the floor per forward; the measured column is the FSDP-on 16:9
+row of each duration's table above. "RT" is the realtime factor (denoise seconds per video
+second, lower is better), over 49 forwards.
+
+| duration | roofline ms/fwd | measured ms/fwd | achieved FPU util | headroom | denoise @100% | @70% | @50% | measured |
+|---|---|---|---|---|---|---|---|---|
+| 5 s | **746** | 2761 | 27% | 3.7x | 37 s (7.1x RT) | 52 s (10x) | 73 s (14x) | 135 s (26x) |
+| 10 s | **2240** | 6422 | 35% | 2.9x | 110 s (10.8x) | 157 s (15.5x) | 220 s (22x) | 315 s (31x) |
+| 15 s | **4523** | 12435 | 36% | 2.75x | 222 s (14.7x) | 317 s (21x) | 443 s (29x) | 609 s (40x) |
+
+The 70% tier is the realistic ceiling: `tech_reports/GEMM_FLOPS/GEMM_FLOPS.md` has well-tuned
+Wormhole matmuls at 80-93% of HiFi2 peak, and a full block also carries norms, embeddings, layout
+conversions and collectives that do no FLOPs.
+
+### Cross-check against the Tracy block breakdown (15 s, per device, per layer)
+
+Same arithmetic per op, on the grid each op actually runs on:
+
+| op | FLOP | min at HiFi2 peak on its grid | measured | util |
+|---|---|---|---|---|
+| RingJointSDPA (63 cores) | 10.71 T | 83.0 ms | 174.6 ms | **48%** — Tracy's `PM FPU UTIL` reads 47.5-48.7% |
+| ff1 AGMM (8x8) | 1.05 T | 8.0 ms | 15.7 ms | 51% |
+| qkv AGMM (8x8) | 0.79 T | 6.0 ms | 10.4 ms | 58% |
+| to_out AGMM (8x8) | 0.26 T | 2.0 ms | 4.3 ms | 46% |
+| ff2 matmul (8x9) | 0.53 T | 3.6 ms | 6.8 ms | 53% |
+| **block** | **13.34 T** | **90 ms** (72 cores) | **247 ms** | **36%** |
+
+The derived SDPA utilization lands on the profiler's FPU-utilization counter exactly, which
+validates both the FLOP count and the 2048 FLOP/cycle/core constant.
+
+### Nothing but the FPU binds
+
+Per device per layer at 15 s, against 4 links x 12.5 GB/s = 50 GB/s of ring ingress
+(`tech_reports/EthernetMultichip/BasicEthernetGuide.md`):
+
+| traffic | bytes | time at 50 GB/s | overlaps |
+|---|---|---|---|
+| KV ring all-gather (14 heads x 7/8 x S x 128 x 2 x bf16) | 686 MB | ~14 ms | 175 ms of SDPA |
+| three AGMM activation gathers | ~370 MB | ~7 ms | 30 ms of matmul |
+| FSDP weight gather (7/8 x 193 MB bf16) | ~170 MB | ~3.4 ms | (measured FSDP cost 13.5 ms is mostly the extra ops + layout, not the bytes) |
+| DRAM: 193 MB weights + ~1-2 GB activation passes at 288 GB/s | | < 10 ms | everything |
+
+Even at 100% FPU the collectives sit under compute by 5-10x. The floor is the matrix engine.
+
+### What this says about the tuning below
+
+1. Speed of light at HiFi2 is ~2.75x today's 15 s forward and ~3.7x the 5 s one; a realistic
+   70%-util target is ~6.5 s/fwd at 15 s (317 s, 21x RT) and ~1.1 s/fwd at 5 s (52 s, 10x RT).
+2. Ring SDPA is 71-80% of the FLOPs at 48% util. Chunk tuning is exhausted (below), so the
+   remaining ~2x on that op is kernel work — `use_exp_ring_sdpa` (experiment 7) is the one
+   untried lever.
+3. 5 s is occupancy-limited, not FLOP-limited: 27% util against 36% at 15 s, from SDPA slot
+   waste (q=320 idles 16.7% of the 63 slots) and small per-device M in the matmuls.
+4. Going below HiFi2 (bfp8 / LoFi operands) doubles the ceiling again, to ~2.3 s/fwd at 15 s,
+   but that is a quality decision rather than a tuning one.
+
 ## Optimization target — 15 s / 768P / 16:9
 
 Tuning work is scoped to this one configuration. Baseline is `c825d089e31` (the per-op breakdown
