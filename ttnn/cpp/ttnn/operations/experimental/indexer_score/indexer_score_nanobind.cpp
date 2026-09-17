@@ -51,8 +51,8 @@ void bind_indexer_score(nb::module_& mod) {
                 K sequence/output/kv_len are compressed rows, while query and
                 chunk_start_idx geometry remain token units.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
-                head_group_size; elements, tile-aligned). Defaults always fit
-                L1; raise head_group_size (0 = all resident) for performance.
+                head_group_size; elements, tile-aligned). Omitted: every head
+                resident and the widest k chunk that fits L1 (the full strip path).
             compute_kernel_config: optional DeviceComputeKernelConfig. Only
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
@@ -112,7 +112,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("chunk_start_idx") = std::nullopt,
         nb::arg("key_compression_ratio") = 1,
-        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
@@ -200,7 +200,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("chunk_start_idx") = std::nullopt,
         nb::arg("scale") = 1.0f,
         nb::arg("block_size") = 0,
-        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
@@ -303,7 +303,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("ag_sub_device_id") = nb::none(),
         nb::arg("chunk_start_idx") = nb::none(),
         nb::arg("key_compression_ratio") = 1,
-        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("kv_len") = nb::none(),
