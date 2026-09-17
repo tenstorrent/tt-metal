@@ -3594,7 +3594,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         (!separate_out_and_interm0 && output_is_sharded) ? std::optional<TensorParamName>(OUTPUT) : std::nullopt;
     auto alias_with_others = [&](const DFBSpecName& self) {
         Group<DFBSpecName> others;
-        if (has_alias_group) {
+        // A DFB that is not a member of the group aliases nothing. The output is exactly that case
+        // when it has its own region: filtering only `self` would hand it the partials as aliases
+        // while the partials never name it back, and the transitivity rule rejects a group whose
+        // members disagree on their membership.
+        const bool self_in_group = std::find(alias_group.begin(), alias_group.end(), self) != alias_group.end();
+        if (has_alias_group && self_in_group) {
             for (const auto& name : alias_group) {
                 if (name != self) {
                     others.push_back(name);
@@ -4801,7 +4806,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
         (!separate_out_and_interm0 && output_is_sharded) ? std::optional<TensorParamName>(OUTPUT) : std::nullopt;
     auto alias_with_others = [&](const DFBSpecName& self) {
         Group<DFBSpecName> others;
-        if (has_alias_group) {
+        // A DFB that is not a member of the group aliases nothing. The output is exactly that case
+        // when it has its own region: filtering only `self` would hand it the partials as aliases
+        // while the partials never name it back, and the transitivity rule rejects a group whose
+        // members disagree on their membership.
+        const bool self_in_group = std::find(alias_group.begin(), alias_group.end(), self) != alias_group.end();
+        if (has_alias_group && self_in_group) {
             for (const auto& name : alias_group) {
                 if (name != self) {
                     others.push_back(name);
