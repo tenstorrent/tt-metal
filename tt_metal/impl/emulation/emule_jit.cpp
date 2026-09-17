@@ -384,9 +384,9 @@ std::string get_extra_include_flags() {
 // ---------------------------------------------------------------------------
 // Resolve a kernel's source to an on-disk path. FILE_PATH sources are used as-is;
 // inline sources are spilled to a temp file and tracked for cleanup.
-std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std::string>& inline_src_temps) {
-    if (ksrc.source_type_ == KernelSource::FILE_PATH) {
-        return ksrc.path_.string();
+std::string resolve_kernel_source_path(const tt_emule::SourceRef& src, std::vector<std::string>& inline_src_temps) {
+    if (src.is_file) {
+        return src.path;
     }
     static constexpr int kTmpSuffixLen = 4;  // length of ".cpp" suffix
     char tmpf[] = "/tmp/tt_emule_src_XXXXXX.cpp";
@@ -394,7 +394,7 @@ std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std
     if (fd < 0) {
         throw std::runtime_error("execute_program_emulated: mkstemps failed");
     }
-    const std::string& content = ksrc.source_;
+    const std::string& content = src.inline_src;
     const char* buf = content.c_str();
     size_t remaining = content.size();
     while (remaining > 0) {
@@ -413,14 +413,14 @@ std::string resolve_kernel_source_path(const KernelSource& ksrc, std::vector<std
 }
 
 // A same-relative-path source in jit_hw is emule's implementation of a Metal file kernel.
-std::string resolve_emule_kernel_source_shadow(const std::string& src_path, ContextId context_id) {
+std::string resolve_emule_kernel_source_shadow(const std::string& src_path, uint32_t context_id) {
     std::error_code ec;
     const auto source = std::filesystem::weakly_canonical(src_path, ec);
     if (ec) {
         return src_path;
     }
-    const auto root =
-        std::filesystem::weakly_canonical(MetalContext::instance(context_id).rtoptions().get_root_dir(), ec);
+    const auto root = std::filesystem::weakly_canonical(
+        MetalContext::instance(ContextId{static_cast<int>(context_id)}).rtoptions().get_root_dir(), ec);
     if (ec) {
         return src_path;
     }
