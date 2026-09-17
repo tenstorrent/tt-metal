@@ -117,6 +117,57 @@ def test_all_gather_linear_2D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
+# Multicast writer with pages that do not use scatter writes: one page per packet (fp32 tile, 4096 B
+# against the 4352 B fabric payload) and a page larger than the packet (fp32 row-major, 8192 B rows).
+# The small volume keeps the op on the multicast factory. Run with Watcher enabled to catch the
+# scatter-state assert of the first class; the second class overruns the packet header in every build.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim, ag_input_dtype, layout",
+    [
+        (4, [1, 1, 32, 512], 3, ttnn.float32, ttnn.TILE_LAYOUT),
+        (4, [1, 1, 32, 8192], 3, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["fp32_tile_one_page_per_packet", "fp32_rm_page_larger_than_packet"],
+)
+@pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("cluster_axis", [0])
+def test_all_gather_multicast_non_scatter_pages(
+    bh_1d_mesh_device,
+    num_devices,
+    ag_output_shape,
+    dim,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    cluster_axis,
+):
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    run_all_gather_impl(
+        submesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=False,
+        num_iters=3,
+        cluster_axis=cluster_axis,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize(

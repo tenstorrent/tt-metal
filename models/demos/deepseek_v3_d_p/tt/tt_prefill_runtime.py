@@ -54,7 +54,7 @@ class TtPrefillRuntimeConfig:
     # l1_small_size > 0. Enable for Kimi (single expert group, device gate). See TtMoERoutingSetup.
     routing_use_l1_small_for_semaphores: bool = False
     # Static model-dimension constants for the model being built
-    # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
+    # (DeepSeekV3Config | KimiK27Config). Drives expert counts, dense-layer
     # count, route groups, etc. in the TT layer code. Supplied by the model
     # adapter — no default, so the runtime never bakes in a specific model.
     model_cfg: Optional[type] = None
@@ -809,6 +809,11 @@ class TtPrefillRuntime:
         release = getattr(self.model, "release_sub_device_managers", None)
         if release is not None:
             release()
+        # The D2H ack service is baked into the capture, so this holds the last reference to it once
+        # the caller has dropped its own. Its device-side teardown -- barrier, termination signal,
+        # service-core L1 release -- only works while the mesh is open, so it has to run from here
+        # rather than from wherever the last reference happens to drop.
+        self._trace_d2h_service = None
 
     def warmup_ack_count(self) -> int:
         """How many D2H ack records capture_trace()'s warm pass will emit — one per layer of this rank's
