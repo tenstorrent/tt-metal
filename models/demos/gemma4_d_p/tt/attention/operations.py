@@ -23,10 +23,10 @@ from .weights import AttentionWeights
 
 
 def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
-    """Choose DRAM or optional L1 storage for short-lived attention activations."""
-    if os.environ.get("GEMMA4_PREFILL_L1_ACT", "0").lower() in ("1", "true", "yes"):
-        return ttnn.L1_MEMORY_CONFIG
-    return ttnn.DRAM_MEMORY_CONFIG
+    """Some ops improve overall perf by leaving their activations in L1. This function returns L1 interleaved config, unless overriden to DRAM."""
+    if os.environ.get("GEMMA4_ACTIVATIONS_DRAM_ONLY", "0").lower() in ("1", "true", "yes"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
