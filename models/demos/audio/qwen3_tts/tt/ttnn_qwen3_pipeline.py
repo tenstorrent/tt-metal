@@ -100,6 +100,35 @@ REFERENCE_TAIL_IDS = 2
 DEFAULT_MAX_FRAMES = 400
 
 
+class Stopwatch:
+    """Wall clock split across the blocks of one utterance.
+
+    `split(name)` charges everything since the last split to `name`, so the loop reads as a
+    sequence of named blocks. Device work is asynchronous, so a block that ends without a
+    read would be charged to whichever later block waits for it; `strict` syncs the device
+    at every split to stop that. The loop already reads logits per frame, so the unstrict
+    numbers are close, and the perf test uses `strict` to be sure.
+    """
+
+    def __init__(self, device=None, strict=False):
+        self.device = device
+        self.strict = strict and device is not None
+        self.totals = {}
+        self.mark = time.time()
+
+    def split(self, name):
+        if self.strict:
+            ttnn.synchronize_device(self.device)
+        now = time.time()
+        self.totals[name] = self.totals.get(name, 0.0) + now - self.mark
+        self.mark = now
+
+    def restart(self):
+        if self.strict:
+            ttnn.synchronize_device(self.device)
+        self.mark = time.time()
+
+
 class HostEmbeddings:
     """The lookup tables and the small projection that the prompt is built from."""
 
@@ -386,9 +415,13 @@ class Qwen3TTSPipeline:
     then captures the two step traces, since the two cannot coexist.
     """
 
-    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None):
+    def __init__(self, device, max_frames=DEFAULT_MAX_FRAMES, seed=None, profile=False):
         self.device = device
         self.max_frames = max_frames
+        # Charges each block of the frame loop separately, and syncs the device between them
+        # so the charge lands on the block that did the work. The syncs cost a little, so
+        # this is off unless a caller asks: see `tests/perf/test_perf.py`.
+        self.profile = profile
         self.tables = HostEmbeddings()
         self.talker_config = checkpoint.talker_config()
         self.groups = self.talker_config["code_predictor_config"]["num_code_groups"]
@@ -479,6 +512,31 @@ class Qwen3TTSPipeline:
         self.talker.release()
         self.predictor.release()
 
+    def _decode_waveform(self, codes):
+        """Codes [1, 16, T] -> waveform, making room for the decode's programs first.
+
+        A length the decoder has not compiled yet needs L1_SMALL scratch that the device
+        holds until its program cache is dropped, so a process speaking many lengths runs
+        the region out. Dropping the cache costs about a tenth of a second and this is the
+        one point in an utterance where it is safe: the frames are in, and both traces come
+        down anyway before the next prefill.
+
+        Releasing first is not optional. A trace built from programs that have been dropped
+        is a hang, and `clear_program_cache` drops every program on the device.
+        """
+        frames = codes.shape[-1]
+        if self.codec.program_room_needed(frames):
+            self.release()
+            self.device.clear_program_cache()
+            self.codec.forget_programs()
+            self.last_timings["program_cache_cleared"] = True
+
+        started = time.time()
+        waveform = self.codec.decode(codes)
+        self.last_timings["codec_s"] = time.time() - started
+        self.last_timings["codec_frames"] = frames
+        return waveform
+
     def _decode_frames(self, embeddings, limit, on_frame=None):
         """Prefill the prompt, then sample frames until end of speech. Returns codes [T, 16].
 
@@ -508,24 +566,34 @@ class Qwen3TTSPipeline:
         inner = self._inner_pick()
         penalty = self.generation.get("repetition_penalty", 1.0)
         frames, seen = [], []
+        watch = Stopwatch(self.device, strict=self.profile)
         started = time.time()
         for step in range(limit):
             logits = ttnn.linear(last, self.codec_head)
             row = ttnn.to_torch(logits).float().reshape(-1)
             ttnn.deallocate(logits)  # released before the next trace runs, or it aliases trace memory
+            watch.split("codec_head")
             first = self._pick(row, seen=seen, penalty=penalty)
+            watch.split("sample")
             if first == self.eos:
                 break
             seen.append(first)
 
-            rest = self.predictor.generate(ttnn.to_torch(last).float().reshape(1, 1, -1), first, pick=inner)
+            rest = self.predictor.generate(
+                ttnn.to_torch(last).float().reshape(1, 1, -1), first, pick=inner, watch=watch
+            )
             frame = [first] + list(rest)
             frames.append(frame)
             if on_frame is not None:
                 on_frame(step, frame)
-            last = self.talker.step(self._frame_embedding(frame), prompt + step)
+            watch.restart()
+            embedding = self._frame_embedding(frame)
+            watch.split("embed")
+            last = self.talker.step(embedding, prompt + step)
+            watch.split("talker")
 
         timings["decode_s"] = time.time() - started
+        timings["blocks"] = watch.totals
         timings["frames"] = len(frames)
         timings["ms_per_frame"] = 1000 * timings["decode_s"] / max(len(frames), 1)
         self.last_timings = timings
@@ -533,6 +601,18 @@ class Qwen3TTSPipeline:
         if not frames:
             raise RuntimeError("the talker emitted end-of-speech before any frame")
         return torch.tensor(frames, dtype=torch.long)
+
+    def codes(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None):
+        """The frames for `text` without decoding them, [frames, 16].
+
+        `generate` is this plus the codec. Separate because the codec is the one block that
+        compiles per length, so anything measuring the frame loop over many utterances
+        wants to skip it: `tests/pcc/test_generation_stops.py` does, and a caller feeding
+        the codes to something other than this codec can use it too.
+        """
+        limit = min(max_frames or self.max_frames, self.max_frames)
+        embeddings, _ = build_custom_voice_prefill(text, speaker, language, self.tables)
+        return self._decode_frames(embeddings, limit, on_frame)
 
     def generate(self, text, speaker="ryan", language="English", max_frames=None, on_frame=None):
         """text -> (waveform [1, N] at 24 kHz, codes [frames, 16]).
@@ -543,9 +623,7 @@ class Qwen3TTSPipeline:
         limit = min(max_frames or self.max_frames, self.max_frames)
         embeddings, _ = build_custom_voice_prefill(text, speaker, language, self.tables)
         codes = self._decode_frames(embeddings, limit, on_frame)
-        started = time.time()
-        waveform = self.codec.decode(codes.t().unsqueeze(0)).reshape(1, -1)
-        self.last_timings["codec_s"] = time.time() - started
+        waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
         return waveform, codes
 
     def generate_design(self, text, instruction, language="Auto", max_frames=None, on_frame=None):
@@ -562,9 +640,7 @@ class Qwen3TTSPipeline:
         limit = min(max_frames or self.max_frames, self.max_frames)
         embeddings, _ = build_voice_design_prefill(text, instruction, language, self.tables)
         codes = self._decode_frames(embeddings, limit, on_frame)
-        started = time.time()
-        waveform = self.codec.decode(codes.t().unsqueeze(0)).reshape(1, -1)
-        self.last_timings["codec_s"] = time.time() - started
+        waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
         return waveform, codes
 
     def generate_clone(self, text, reference, language="Auto", max_frames=None, on_frame=None):
@@ -584,8 +660,5 @@ class Qwen3TTSPipeline:
         codes = self._decode_frames(embeddings, limit, on_frame)
 
         together = torch.cat([reference.codes.t(), codes], dim=0)
-        started = time.time()
-        waveform = self.codec.decode(together.t().unsqueeze(0)).reshape(1, -1)
-        self.last_timings["codec_s"] = time.time() - started
-        self.last_timings["codec_frames"] = together.shape[0]
+        waveform = self._decode_waveform(together.t().unsqueeze(0)).reshape(1, -1)
         return waveform[:, reference.frames * self.codec.upsample :], codes

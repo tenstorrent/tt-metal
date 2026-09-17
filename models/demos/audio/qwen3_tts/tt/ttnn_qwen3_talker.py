@@ -189,15 +189,16 @@ class TtTalkerAttention:
         x = ttnn.reshape(x, (1, length, heads, self.head_dim))
         return ttnn.permute(x, (0, 2, 1, 3))
 
-    def _rotate_half(self, x):
-        """Upstream's rotate_half: swap the halves of the last dimension, negating the first."""
-        half = self.head_dim // 2
-        first = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], x.shape[2], half])
-        second = ttnn.slice(x, [0, 0, 0, half], [x.shape[0], x.shape[1], x.shape[2], self.head_dim])
-        return ttnn.concat([ttnn.neg(second), first], dim=-1)
-
     def _apply_rotation(self, x, cos, sin):
-        return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(self._rotate_half(x), sin))
+        """Upstream's rotation in one kernel: `x * cos + rotate_half(x) * sin`.
+
+        The HF layout, which `rotary_tables` already builds: cos and sin duplicated across
+        the two halves. Spelled out it took a slice per half, a negate, a concatenation and
+        three elementwise ops; it measured the same to seven digits and cost three times as
+        much. The cached decoder rotates through the same op, which is what keeps the two
+        graphs comparable in `test_decode_pcc.py`.
+        """
+        return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, compute_kernel_config=self.cc)
 
     def __call__(self, x, cos, sin, mask, length):
         query = self._split_heads(ttnn.linear(x, self.p["q_proj"], compute_kernel_config=self.cc), self.heads, length)

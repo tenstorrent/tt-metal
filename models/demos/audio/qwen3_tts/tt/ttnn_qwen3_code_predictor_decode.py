@@ -31,6 +31,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, c
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     CACHE_TILE_MULTIPLE,
     NORM_SHARD_HEIGHT,
+    ROPE_ROWS,
     decode_matmul_config,
     sharded_norm_plan,
 )
@@ -128,10 +129,10 @@ class TtCodePredictorCachedDecoder:
         self._pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), device=device)
         self._in = ttnn.from_torch(torch.zeros(1, 1, 2048), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         self._cos = ttnn.from_torch(
-            torch.zeros(1, 1, 1, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._sin = ttnn.from_torch(
-            torch.zeros(1, 1, 1, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._k_shard = self._single_core_shard(0)
         self._v_shard = self._single_core_shard(1)
@@ -187,12 +188,15 @@ class TtCodePredictorCachedDecoder:
         return ttnn.sharded_to_interleaved(out)
 
     def _rotate(self, x, cos, sin):
-        half = self.head_dim // 2
-        shape = x.shape
-        first = ttnn.slice(x, [0, 0, 0, 0], [shape[0], shape[1], shape[2], half])
-        second = ttnn.slice(x, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim])
-        spun = ttnn.concat([ttnn.neg(second), first], dim=-1)
-        return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(spun, sin))
+        """The same fused rotation the talker uses, for the same reason.
+
+        15 steps a frame over five layers means 150 rotations per frame, and spelled out
+        each cost seven ops. See `TtTalkerCachedDecoder._rotate` for why prefill mode
+        serves the step and why `cos` carries a row per head.
+        """
+        return ttnn.experimental.rotary_embedding_hf(
+            x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
+        )
 
     def _mlp(self, x, layer):
         gate = ttnn.linear(
@@ -224,9 +228,8 @@ class TtCodePredictorCachedDecoder:
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.full((1,), int(position), dtype=torch.int32)), self._pos)
         cos, sin = self._rotary(1, offset=int(position))
         for source, target in ((cos, self._cos), (sin, self._sin)):
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(source.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), target
-            )
+            rows = source.reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous()
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(rows, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), target)
 
     def prefill(self, embeddings):
         """Seed the cache from the two-position prompt and return its last hidden state."""
@@ -387,7 +390,7 @@ class TtCodePredictorCachedDecoder:
             return self._out
         return self._step_ops(self._in)
 
-    def generate(self, talker_hidden, first_code, pick=None):
+    def generate(self, talker_hidden, first_code, pick=None, watch=None):
         """Codebooks 1 to 15, from the talker's hidden state and codebook 0.
 
         `pick` maps one row of logits to an id, and defaults to argmax. Upstream samples
@@ -400,6 +403,7 @@ class TtCodePredictorCachedDecoder:
         corrupt once it runs unless released first. Priming this way leaves exactly one
         allocation per step, the output head's, which is released immediately.
         """
+        charge = watch.split if watch is not None else (lambda name: None)
         self.reset()
         self._run(talker_hidden.reshape(1, 1, -1), 0)
         hidden = self._run(self.p["talker_codec_embedding"][int(first_code)].reshape(1, 1, -1), 1)
@@ -408,8 +412,11 @@ class TtCodePredictorCachedDecoder:
         codes = []
         for step in range(self.groups - 1):
             logits = self._head(hidden, step)
-            code = int(pick(ttnn.to_torch(logits).float().reshape(-1)))
+            row = ttnn.to_torch(logits).float().reshape(-1)
             ttnn.deallocate(logits)  # released before the next trace execution
+            charge("predictor")
+            code = int(pick(row))
+            charge("predictor_sample")
             codes.append(code)
             if step == self.groups - 2:
                 break

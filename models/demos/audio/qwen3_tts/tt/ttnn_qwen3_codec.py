@@ -140,9 +140,11 @@ def conv_parameters(state, name, dtype=ttnn.bfloat16, depthwise=False):
     bias = state.get(f"{name}.bias")
     return {
         "weight": ttnn.from_torch(weight, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
-        "bias": None
-        if bias is None
-        else ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT),
+        "bias": (
+            None
+            if bias is None
+            else ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ),
         "out_channels": weight.shape[0],
         "in_channels": weight.shape[1] * (weight.shape[0] if depthwise else 1),
         "kernel": weight.shape[2],
@@ -365,6 +367,46 @@ class TtCodecDecoder:
             torch.tensor(self.config["upsample_rates"] + self.config["upsampling_ratios"], dtype=torch.long).prod()
         )
         self._prepared = {}
+        # Lengths whose convolution programs are on the device. Cleared by
+        # `forget_programs` when the caller drops the device's program cache.
+        self._compiled = set()
+
+    # ── program room ────────────────────────────────────────────────────────
+
+    def padded_frames(self, frames, bucket=LENGTH_BUCKET):
+        """What `decode` will actually run: `frames` rounded up to a bucket."""
+        return frames if bucket <= 1 else -(-frames // bucket) * bucket
+
+    def program_room_needed(self, frames, bucket=LENGTH_BUCKET):
+        """Does this decode need the device's program cache dropped before it runs?
+
+        True when the length is one the decoder has not compiled since the last drop.
+        Every distinct frame count compiles its own convolution programs and tt-metal holds
+        each one's L1_SMALL scratch until the cache goes, so a process that speaks many
+        lengths runs the 64 KB region out however coarse the buckets are: measured 16 KB,
+        32 KB, 50 KB and 58 KB after four lengths, then a failed allocation on the fifth.
+
+        **Why a new length gets an empty region rather than a spare-capacity check.** The
+        footprint is neither constant nor proportional to the length: the four lengths
+        above cost 16, 15, 19 and 8 KB, while a 288-frame decode failed with 33 KB free.
+        Nothing here can predict the next one, so the rule is the one that cannot be wrong,
+        and it is cheap: the kernels stay built on the host, so the utterance after a drop
+        measured 2.71 s against 2.59 s warm. Buckets are what keep it rare, since a drop
+        only happens on a frame count no utterance has landed in since the last one.
+
+        The caller drops the cache rather than this object, because no captured trace may
+        be live when the programs it was built from go away:
+
+            if pipeline.codec.program_room_needed(frames):
+                pipeline.release()
+                device.clear_program_cache()
+                pipeline.codec.forget_programs()
+        """
+        return bool(self._compiled) and self.padded_frames(frames, bucket) not in self._compiled
+
+    def forget_programs(self):
+        """Forget which lengths are resident, after the caller cleared the program cache."""
+        self._compiled.clear()
 
     # ── primitives ──────────────────────────────────────────────────────────
 
@@ -561,7 +603,8 @@ class TtCodecDecoder:
         so their measurements are not reading padded audio.
         """
         frames = codes.shape[-1]
-        padded = frames if bucket <= 1 else -(-frames // bucket) * bucket
+        padded = self.padded_frames(frames, bucket)
+        self._compiled.add(padded)
         if padded > frames:
             # The last frame repeated: a valid code, in distribution, and thrown away after.
             codes = torch.cat([codes, codes[..., -1:].expand(-1, -1, padded - frames)], dim=-1)

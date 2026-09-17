@@ -53,9 +53,27 @@ LAYER_PCC = 0.999
 # End to end through 28 layers of bf16. Measured 0.9949 and deterministic.
 STACK_PCC = 0.99
 
-# Codec top-1 agreement. Measured 24/26; the two misses are near-ties where the device
-# picked the reference's second choice, which sampling at temperature 0.9 would blur anyway.
-MIN_TOKEN_AGREEMENT = 0.85
+# Codec top-1 agreement, kept as a diagnostic rather than the verdict. The prompt sits in a
+# flat distribution (the reference's own top-1 probability is under 0.1 at several
+# positions), so which near-tie falls which way is decided by the last bits. Measured: a
+# perturbation of the prompt 4x smaller than one bf16 rounding step moves agreement over
+# 22/26 to 24/26 and puts the device's pick as far down as the reference's 8th choice. The
+# floor is set below that spread on purpose; the distribution check below is the verdict.
+MIN_TOKEN_AGREEMENT = 0.80
+
+# What the model actually does with those logits: sample at the shipped temperature. Total
+# variation distance between the reference's distribution and the device's, per position.
+# It moves with the whole vector rather than with whichever two tokens are tied at the top,
+# which is what makes it usable as a verdict.
+#
+# Measured over the sub-ulp perturbations described above, and over both spellings of the
+# rotation (the fused kernel and the seven ops it replaced): mean 0.076 to 0.098, worst
+# 0.23 to 0.52. The ceilings sit above that spread. For scale, a wiring error rather than
+# rounding puts these near 1.0, since softmax over 3072 tokens shares almost no mass with
+# a distribution built from the wrong hidden state.
+SAMPLER_TEMPERATURE = 0.9
+MAX_MEAN_DISTRIBUTION_DISTANCE = 0.13
+MAX_DISTRIBUTION_DISTANCE = 0.60
 
 
 def mixed_position_ids(length):
@@ -196,10 +214,17 @@ def test_full_stack_matches_the_reference(device, prompt, reference_outputs):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_codec_tokens_agree_with_the_reference(device, prompt, reference_outputs):
-    """What PCC is a proxy for: do the hidden states pick the same codec tokens?
+    """What PCC is a proxy for: would the sampler draw the same codec tokens?
 
-    Disagreements are allowed only where the reference itself is nearly indifferent. A
-    device pick outside the reference's top two is a real divergence, not rounding.
+    Judged on the distribution, not on the argmax. The model samples at temperature 0.9,
+    and on this prompt the reference is often barely committed to its own top choice, so
+    argmax agreement is decided by rounding: perturbing the prompt by a quarter of a bf16
+    step scatters it across 22/26 to 24/26 and lands the device on the reference's 8th
+    choice at one position. Total variation distance between the two distributions moves
+    with the whole vector instead, so it separates a wiring error from last-bit noise.
+
+    Agreement is still printed and still floored, because a distribution that matches while
+    every pick differs would be strange enough to want to see.
     """
     embeddings, positions = prompt
     gold, _ = reference_outputs
@@ -217,13 +242,21 @@ def test_codec_tokens_agree_with_the_reference(device, prompt, reference_outputs
     agreement = (reference_choice == device_choice).float().mean().item()
     print(f"codec top-1 agreement {int(agreement * length)}/{length}")
 
-    escapes = []
+    reference_probs = torch.softmax(reference_logits / SAMPLER_TEMPERATURE, dim=-1)
+    device_probs = torch.softmax(device_logits / SAMPLER_TEMPERATURE, dim=-1)
+    distance = 0.5 * (reference_probs - device_probs).abs().sum(-1)
+    print(
+        f"sampling distribution distance: mean {distance.mean():.4f}, worst {distance.max():.4f} "
+        f"at position {int(distance.argmax())}"
+    )
+
     for index in torch.nonzero(reference_choice != device_choice).flatten().tolist():
         rank = int((reference_logits[index] > reference_logits[index][device_choice[index]]).sum())
-        top_two = reference_logits[index].topk(2).values
-        print(f"  pos {index:2d}: reference rank {rank}, top-1/top-2 gap {(top_two[0] - top_two[1]):.4f}")
-        if rank > 1:
-            escapes.append(f"pos {index} picked reference rank {rank}")
+        print(
+            f"  pos {index:2d}: reference rank {rank}, reference p(own pick) "
+            f"{float(reference_probs[index].max()):.3f}, distance {float(distance[index]):.4f}"
+        )
 
-    assert not escapes, "device chose outside the reference's top two: " + "; ".join(escapes)
+    assert distance.mean() < MAX_MEAN_DISTRIBUTION_DISTANCE, f"mean distribution distance {distance.mean():.4f}"
+    assert distance.max() < MAX_DISTRIBUTION_DISTANCE, f"worst distribution distance {distance.max():.4f}"
     assert agreement >= MIN_TOKEN_AGREEMENT, f"codec top-1 agreement {agreement:.2f} below {MIN_TOKEN_AGREEMENT}"

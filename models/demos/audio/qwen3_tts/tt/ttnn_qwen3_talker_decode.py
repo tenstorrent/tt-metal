@@ -51,22 +51,81 @@ CACHE_TILE_MULTIPLE = 64
 # against the math, and out_subblock_h * w must stay under this ceiling because
 # fp32_dest_acc_en halves the register budget.
 DECODE_IN0_BLOCK_W = 4
+
 DECODE_MAX_SUBBLOCK = 4
+
+# Output tiles per core the row count aims for, which is what decides how many grid rows
+# each matmul gets. Scanned end to end on both decoders, as whole traced steps rather than
+# per matmul:
+#
+#   target        3      4      5      6      9     12
+#   talker    11.63  11.39  11.32  11.32  11.52  12.01 ms
+#   predictor  1.084  1.080  1.080  1.122  1.136  1.137 ms
+#
+# Flat from 4 to 6 and worse outside on both, so one number serves all eight shapes. See
+# `decode_matmul_config` for why the optimum sits at a couple of grid rows and not the
+# whole grid.
+TARGET_PER_CORE_N = 5
+
+# The MLP's three matmuls in block float, everything else in bf16. They are 53% of the
+# step's time and 60% of its weight bytes, and a single-position decode is bandwidth bound
+# on weights, so halving theirs took the step from 12.5 to 10.0 ms: a fifth off the frame.
+#
+# What it costs, measured three ways against bf16:
+#
+#   * Against the fp32 reference over a 26-position prompt, PCC 0.99529 against 0.99539,
+#     and the sampling distribution moved 0.0991 against 0.0981. Both inside what
+#     perturbing the prompt by a quarter of a bf16 step does.
+#   * Run to completion over eight seeds and two sentences, the frames per word this model
+#     spends came out no worse and mostly better: worst 10.0 and 10.6 against bf16's 17.0
+#     and 15.1. `tests/pcc/test_generation_stops.py` carries that table, including how
+#     badly the same measurement scatters between seeds, which is why it takes eight of
+#     them and not one.
+#
+# Two groups that are not worth it. **Attention's two matmuls as well** takes the step to
+# 9.2 ms but moves the sampling distribution to 0.1455, outside the noise band. **Norm
+# weights** in block float are ruinous: every value clusters around 1 and a shared-exponent
+# block of 16 quantises that to almost nothing, giving PCC 0.9751 and three times the
+# distance. That is why `dtype` and `mlp_dtype` are separate arguments rather than one
+# precision for the whole checkpoint.
+MLP_WEIGHT_DTYPE = ttnn.bfloat8_b
+
+# Rows in the step's rotary tables. The fused rotation pairs row i of `cos` with row i of
+# its input, so the table needs at least as many rows as the widest tensor it rotates has
+# heads. A tile's worth covers every head count this model uses.
+ROPE_ROWS = 32
 
 
 def decode_matmul_config(device, in_features, out_features, fused_activation=None):
     """1D-multicast matmul config for a single-position (M=1) decode linear.
 
-    Spreads the output across the largest usable core grid and chunks the reduction, and
-    returns None when the shapes cannot express one, leaving ttnn's own heuristic in place.
-    `per_core_M=1` makes these decode-only; prefill shares the same weights and passes
-    nothing.
+    A few full grid rows, each core holding a wide slice of the output. Returns None when
+    the reduction will not chunk, leaving ttnn's own heuristic in place. `per_core_M=1`
+    makes these decode-only; prefill shares the same weights and passes nothing.
 
-    The search considers every cols x rows sub-rectangle rather than only full-width ones.
-    Blackhole's grid is 11 wide and none of this model's decode widths divide by 11, while
-    8-wide rectangles divide all of them: Nt is 128 for the fused QKV, 64 for o_proj and
-    down_proj, 192 for gate and up. Widest rectangle wins ties, since a contiguous multicast
-    row is the shape these configs behave best in.
+    **More cores is not better here, and exact division is the wrong constraint.** Swept
+    every rectangle of Blackhole's 11 x 10 grid against every decode shape in this model,
+    in a trace so dispatch does not hide in the numbers:
+
+    | matmul              | ttnn default | swept best              |
+    |---|---|---|
+    | talker QKV, 2048 x 4096   |  46.0 us | 46.0 (the default)      |
+    | talker o_proj, 2048 x 2048 |  39.7 us | 26.3 at 11x2, N=3      |
+    | talker gate/up, 2048 x 6144 | 71.8 us | 70.7 at 11x2, N=9     |
+    | talker down, 6144 x 2048   | 112.8 us | 69.6 at 11x1, N=6      |
+    | predictor o_proj, 1024 x 1024 | 17.4 us | 9.4 at 8x4, N=1     |
+    | predictor down, 3072 x 1024 | 47.0 us | 22.0 at 11x1, N=3     |
+
+    Every winner spends 11 to 22 cores, not the 64 the old search picked by insisting the
+    output tiles divide evenly across them. At M=1 each core does almost no arithmetic, so
+    the multicast and per-core setup dominate and a wider spread costs more than it buys.
+    Dropping the divisibility rule is what makes the 11-wide grid reachable at all: no
+    width in this model divides by 11, and `per_core_N` rounds up instead, leaving the last
+    core with less to do rather than leaving 47 cores idle.
+
+    `TARGET_PER_CORE_N` picks the row count and carries its own scan. Every candidate
+    within a couple of rows of it measured inside 5% of its shape's best, a plateau rather
+    than a peak, which is what lets one number serve every shape here.
 
     `fused_activation` folds an elementwise op into the matmul. Passing `activation=` to
     `ttnn.linear` alongside an explicit program_config does NOT fuse, it runs a second
@@ -74,22 +133,19 @@ def decode_matmul_config(device, in_features, out_features, fused_activation=Non
     """
     k_tiles, n_tiles = in_features // 32, out_features // 32
     grid = device.compute_with_storage_grid_size()
-    if k_tiles % DECODE_IN0_BLOCK_W:
+
+    # A long reduction pipelines better in bigger chunks: down_proj reads 192 K-tiles and
+    # measured 69.6 us at 8 against 74.3 at 4. Shorter ones do not care.
+    in0_block_w = 8 if k_tiles % 8 == 0 and k_tiles > 64 else DECODE_IN0_BLOCK_W
+    if k_tiles % in0_block_w:
         return None
 
-    best = None
-    for cols in range(grid.x, 0, -1):
-        rows = next((r for r in range(grid.y, 0, -1) if n_tiles % (cols * r) == 0), None)
-        if rows is not None and (best is None or cols * rows > best[0] * best[1]):
-            best = (cols, rows)
-    if best is None:
-        return None
-
-    cols, rows = best
-    per_core_n = n_tiles // (cols * rows)
+    cols = grid.x
+    rows = max(1, min(grid.y, round(n_tiles / (cols * TARGET_PER_CORE_N))))
+    per_core_n = -(-n_tiles // (cols * rows))
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(cols, rows),
-        in0_block_w=DECODE_IN0_BLOCK_W,
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=next(w for w in range(min(per_core_n, DECODE_MAX_SUBBLOCK), 0, -1) if per_core_n % w == 0),
         per_core_M=1,
@@ -100,26 +156,35 @@ def decode_matmul_config(device, in_features, out_features, fused_activation=Non
     )
 
 
-def preprocess_cached_talker_parameters(device, config=None, state=None, num_layers=None, dtype=ttnn.bfloat16):
+def preprocess_cached_talker_parameters(
+    device, config=None, state=None, num_layers=None, dtype=ttnn.bfloat16, mlp_dtype=MLP_WEIGHT_DTYPE
+):
     """Weights for the cached decoder, with Q, K and V fused into one matmul.
 
     The checkpoint stores `q_proj`, `k_proj` and `v_proj` separately. Concatenating them
     here turns three matmuls into one per layer and streams one weight instead of three.
     Purely a repacking: the outputs are the same columns in the same order, which is what
     lets the head split recover them.
+
+    `mlp_dtype` is the one place the two precisions meet; see `MLP_WEIGHT_DTYPE`. Pass
+    `mlp_dtype=ttnn.bfloat16` to measure against a uniform-precision model.
     """
     cfg = dict(config or checkpoint.talker_config())
     if num_layers is not None:
         cfg["num_hidden_layers"] = num_layers
     state = checkpoint.load_talker_state() if state is None else state
 
-    def to_device(tensor, layout=ttnn.TILE_LAYOUT):
+    def to_device(tensor, layout=ttnn.TILE_LAYOUT, as_dtype=None):
         return ttnn.from_torch(
-            tensor.contiguous(), dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            tensor.contiguous(),
+            dtype=as_dtype or dtype,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def linear(name):
-        return to_device(state[f"{name}.weight"].t())
+    def linear(name, as_dtype=None):
+        return to_device(state[f"{name}.weight"].t(), as_dtype=as_dtype)
 
     def norm(name):
         return to_device(state[f"{name}.weight"].reshape(1, 1, 1, -1))
@@ -139,9 +204,9 @@ def preprocess_cached_talker_parameters(device, config=None, state=None, num_lay
                 "o_proj": linear(f"{prefix}.o_proj"),
                 "q_norm": norm(f"{prefix}.q_norm"),
                 "k_norm": norm(f"{prefix}.k_norm"),
-                "gate_proj": linear(f"layers.{index}.mlp.gate_proj"),
-                "up_proj": linear(f"layers.{index}.mlp.up_proj"),
-                "down_proj": linear(f"layers.{index}.mlp.down_proj"),
+                "gate_proj": linear(f"layers.{index}.mlp.gate_proj", mlp_dtype),
+                "up_proj": linear(f"layers.{index}.mlp.up_proj", mlp_dtype),
+                "down_proj": linear(f"layers.{index}.mlp.down_proj", mlp_dtype),
             }
         )
 
@@ -219,11 +284,13 @@ class TtTalkerCachedDecoder:
         self._in = ttnn.from_torch(
             torch.zeros(1, 1, self.hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
+        # One row per head, all identical: the fused rotation reads a row per row of its
+        # input, and the step's Q carries `heads` of them. 32 covers both Q and K.
         self._cos = ttnn.from_torch(
-            torch.zeros(1, 1, 1, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._sin = ttnn.from_torch(
-            torch.zeros(1, 1, 1, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         # `paged_update_cache` requires a sharded input, so the step hands it L1-sharded K and
         # V. They go on different cores because the fused K+V variant needs them not to
@@ -294,15 +361,23 @@ class TtTalkerCachedDecoder:
 
     # ── shared pieces ───────────────────────────────────────────────────────
 
-    def _rotate_half(self, x):
-        half = self.head_dim // 2
-        shape = x.shape
-        first = ttnn.slice(x, [0, 0, 0, 0], [shape[0], shape[1], shape[2], half])
-        second = ttnn.slice(x, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim])
-        return ttnn.concat([ttnn.neg(second), first], dim=-1)
-
     def _rotate(self, x, cos, sin):
-        return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(self._rotate_half(x), sin))
+        """RoPE in one kernel, where the arithmetic spelled out took seven.
+
+        `rotary_embedding_hf` is the HF-layout rotation: cos and sin duplicated across the
+        two halves, `rotate_half` inside. That is what `rotary_tables` already builds, so
+        this is the same rotation the slice-neg-concat version did, measured at 7.8 us
+        against 26.7 for eight heads.
+
+        `is_decode_mode=False` despite this serving the step. Decode mode wants the tensor
+        height-sharded with one row per batch slot, and at batch 1 the step's rows are
+        heads, not batch. Prefill mode reads the rows as a sequence and broadcasts nothing,
+        which is the same elementwise work: what it costs is that `cos` needs as many rows
+        as the tensor has heads, hence the replicated table `set_position` writes.
+        """
+        return ttnn.experimental.rotary_embedding_hf(
+            x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
+        )
 
     def _mlp(self, x, layer, configs=None):
         configs = configs or {}
@@ -474,12 +549,9 @@ class TtTalkerCachedDecoder:
         """Where the step writes and how far attention reads."""
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.full((1,), int(position), dtype=torch.int32)), self._pos)
         cos, sin = rotary_tables(self.config, torch.full((3, 1, 1), int(position), dtype=torch.long))
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(cos.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._cos
-        )
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(sin.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._sin
-        )
+        for source, target in ((cos, self._cos), (sin, self._sin)):
+            rows = source.reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous()
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(rows, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), target)
 
     def release(self):
         """Drop the captured trace so eager work is safe again.
