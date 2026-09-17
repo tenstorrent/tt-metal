@@ -674,18 +674,18 @@ inline auto invoke_binary_ng_impl(
     // below already handles the equivalent mismatch by promoting for DIV/MUL and rejecting for the
     // rest; do the same for a scalar rather than truncating it.
     //
-    // Only a scalar that the integer path would actually corrupt is worth promoting. float32 carries
-    // a 24-bit mantissa, so typecasting the tensor caps exact integers at 2^24 -- 16777217 * 2.0
-    // comes back as 33554432 rather than 33554434. An in-range integral scalar reaches the kernel
-    // intact either way, so it stays on the integer path and keeps that exactness.
+    // Promotion keys off the scalar's type, not its value, which is what torch does and what
+    // ttnn::div already does for its rounding modes (promote_int32_scalar_input). Deciding by value
+    // would keep 2.0 on the integer path and so keep int32 results exact past 2^24, where float32's
+    // 24-bit mantissa cannot represent them -- but it would also make the output dtype depend on a
+    // runtime value, and it costs nothing to give up: an integer scalar stays on the integer path
+    // in either scheme, so multiply(int32_tensor, 2) is still exact above 2^24. 2.0 says float, and
+    // returning float is the honest answer to it.
     const bool scalar_needs_promotion = [&] {
         if constexpr (requires { rhs.dtype(); }) {
             return false;
         } else {
-            if (!is_float_arith || !is_32bit_int(a_dtype) || !std::holds_alternative<float>(rhs)) {
-                return false;
-            }
-            return !integer_path_is_exact(std::get<float>(rhs), a_dtype);
+            return is_float_arith && is_32bit_int(a_dtype) && std::holds_alternative<float>(rhs);
         }
     }();
 

@@ -608,6 +608,8 @@ def test_scalar_tensor_row_major_sharded(device, op_name):
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
+
+
 @pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
 @pytest.mark.parametrize("scalar", [2.5, 0.5, -1.5])
 @pytest.mark.parametrize("ttnn_op", [ttnn.multiply, ttnn.div])
@@ -639,14 +641,15 @@ def test_int_tensor_fractional_scalar_rejected(device, ttnn_op, tensor_dtype, ex
 
 @pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
 @pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.multiply])
-def test_int_tensor_integral_float_scalar_stays_exact(device, ttnn_op, tensor_dtype):
-    # float32 carries a 24-bit mantissa, so promoting the tensor would cap exact integers at 2^24 --
-    # 16777217 * 2.0 would come back as 33554432 rather than 33554434. An integral scalar reaches the
-    # kernel intact on the integer path, so it stays there and keeps these exact.
+def test_int_tensor_integer_scalar_stays_exact_above_2_24(device, ttnn_op, tensor_dtype):
+    # float32 carries a 24-bit mantissa, so a promoted tensor cannot represent integers past 2^24:
+    # 16777217 * 2 would come back as 33554432 rather than 33554434. An integer scalar reaches the
+    # kernel intact on the integer path, so it stays there and keeps these exact -- this is how a
+    # caller asks for exactness now that an integral *float* like 2.0 promotes instead.
     torch_input = torch.tensor([[2**24 - 1, 2**24, 2**24 + 1, 2**24 + 3]], dtype=torch.int32)
     a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = ttnn_op(a, 2.0)
+    output = ttnn_op(a, 2)
     torch_golden = {
         ttnn.add: torch_input + 2,
         ttnn.subtract: torch_input - 2,
@@ -656,6 +659,23 @@ def test_int_tensor_integral_float_scalar_stays_exact(device, ttnn_op, tensor_dt
     # compared as integers: routing these through float32 would silently round them
     assert output.dtype == tensor_dtype
     assert ttnn.to_torch(output).flatten().tolist() == torch_golden.flatten().tolist()
+
+
+@pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
+def test_int_tensor_integral_float_scalar_promotes_like_torch(device, tensor_dtype):
+    # Promotion keys off the scalar's type, not its value, so 2.0 promotes exactly as 2.5 does.
+    # torch agrees -- int32_tensor * 2.0 is float32 there too -- and deciding by value instead would
+    # make the output dtype depend on a runtime number. add/subtract are not here because they
+    # reject a mixed int/float pair rather than promoting, which is separate policy (#55685).
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for ttnn_op, torch_op in ((ttnn.multiply, torch.mul), (ttnn.div, torch.div)):
+        output = ttnn_op(a, 2.0)
+        expected = torch_op(torch_input.float(), 2.0)
+
+        assert output.dtype == ttnn.float32, f"{ttnn_op} with 2.0 should promote like torch"
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
