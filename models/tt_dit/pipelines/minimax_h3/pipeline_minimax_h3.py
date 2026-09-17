@@ -160,6 +160,9 @@ _AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
 # Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
 # stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
 _AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
+# Separate the audio stage's phases (host prep, upload, projection, vocoder, readback). Costs a synchronize
+# between each, so the total it reports is inflated and only the shares mean anything.
+_AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
 # Dtype of the video VAE's tile blend when the caller passes none. "fp32" is the gated default; "bf16" keeps the
 # precision the decoder emits and halves the bytes through unpatchify, the gathers and the blend.
 
@@ -1533,6 +1536,7 @@ class MiniMaxH3Pipeline:
                 split_mode=self.audio_split_mode,
                 pack_bands=_audio_pack_bands(),
                 resampler_split_mode=_audio_resampler_split_mode(),
+                profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
             )
             logger.info(
                 f"Audio trace: {'on' if self.audio_trace else 'off'} ({_AUDIO_TRACE_ENV}); "

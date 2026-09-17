@@ -12,6 +12,7 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 
 from __future__ import annotations
 
+import time
 from typing import List, Sequence
 
 import torch
@@ -424,17 +425,25 @@ class Vocoder(Module):
         return per_shard * factor - t_rows
 
     def forward_device_BTC(
-        self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None
+        self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None, timings: dict | None = None
     ) -> torch.Tensor:
         """``(B, T + t_pad, C_in)`` ROW_MAJOR already on device (padded per ``t_pad_for``) -> ``(B, C_out, T_out)``
         torch. Lets a caller that produces the vocoder input on device (MiniMax-H3's ``dec_in_proj``) skip the
         readback + re-upload that ``forward_BCT`` implies."""
         self._t_pad = t_pad
+        mark = time.perf_counter()
         if traced:
             y_dev = self._forward_device(x_dev, traced=True, tracer_trace_key=trace_key)
         else:
             y_dev = self._forward_device(x_dev)
-        return self._device_to_host(y_dev)
+        if timings is not None:
+            ttnn.synchronize_device(self.mesh_device)
+            timings["vocoder"] = time.perf_counter() - mark
+            mark = time.perf_counter()
+        waveform = self._device_to_host(y_dev)
+        if timings is not None:
+            timings["readback"] = time.perf_counter() - mark
+        return waveform
 
     def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
         """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.
